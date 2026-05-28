@@ -783,6 +783,9 @@ impl<'a> RustLowerer<'a> {
             "Path" => "std::path::PathBuf".to_string(),
             "File" => "rsscript_runtime::File".to_string(),
             "FileError" | "IOError" => "std::io::Error".to_string(),
+            "Request" => "rsscript_runtime::Request".to_string(),
+            "Response" => "rsscript_runtime::Response".to_string(),
+            "HttpError" => "rsscript_runtime::HttpError".to_string(),
             "Image" => "rsscript_runtime::Image".to_string(),
             "ImageError" => "rsscript_runtime::ImageError".to_string(),
             "JsonValue" => "rsscript_runtime::JsonValue".to_string(),
@@ -1066,6 +1069,13 @@ fn lower_callee(callee: &Callee) -> String {
         }
         callee if is_file_read_all_callee(callee) => "rsscript_runtime::file_read_all".to_string(),
         callee if is_file_write_callee(callee) => "rsscript_runtime::file_write".to_string(),
+        callee if is_request_new_callee(callee) => "rsscript_runtime::request_new".to_string(),
+        callee if is_request_path_callee(callee) => "rsscript_runtime::request_path".to_string(),
+        callee if is_response_ok_callee(callee) => "rsscript_runtime::response_ok".to_string(),
+        callee if is_response_status_callee(callee) => {
+            "rsscript_runtime::response_status".to_string()
+        }
+        callee if is_response_body_callee(callee) => "rsscript_runtime::response_body".to_string(),
         callee if is_image_load_callee(callee) => "rsscript_runtime::image_load".to_string(),
         callee if is_image_resize_callee(callee) => "rsscript_runtime::image_resize".to_string(),
         callee if is_image_normalize_callee(callee) => {
@@ -1127,6 +1137,26 @@ fn is_file_read_all_callee(callee: &Callee) -> bool {
 
 fn is_file_write_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && name == "write")
+}
+
+fn is_request_new_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Request" && name == "new")
+}
+
+fn is_request_path_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Request" && name == "path")
+}
+
+fn is_response_ok_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Response" && name == "ok")
+}
+
+fn is_response_status_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Response" && name == "status")
+}
+
+fn is_response_body_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Response" && name == "body")
 }
 
 fn is_image_load_callee(callee: &Callee) -> bool {

@@ -31,8 +31,6 @@ pub fn Cache.lookup(cache: read Cache, key: read String)
 
 pub fn Cache.get(cache: read Cache)
 
-pub fn Request.path(request: read Request) -> String
-
 pub fn Counter.add(counter: mut Counter, amount: Int) -> Unit
 
 pub fn Counter.value(counter: read Counter) -> Int

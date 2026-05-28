@@ -1,0 +1,15 @@
+fn handle_request(request: read Request) -> Result<fresh Response, HttpError> {
+    let path = Request.path(request: read request)
+    let body = String.concat(left: read "handled ", right: read path)
+    return Response.ok(body: read body)
+}
+
+fn main() -> Result<Unit, HttpError> {
+    let request = Request.new(path: read "/users")
+    let response = handle_request(request: read request)?
+    let body = Response.body(response: read response)
+
+    Assert.equal(left: read body, right: read "handled /users")
+    Log.write(message: read body)
+    return Ok(Unit)
+}

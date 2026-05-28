@@ -406,6 +406,31 @@ fn process(input: read Path, output: read Path) -> Result<Unit, ImageError> {
 }
 
 #[test]
+fn rust_lowering_maps_http_handler_core_calls_to_runtime_hooks() {
+    let source = r#"
+fn handle_request(request: read Request) -> Result<fresh Response, HttpError> {
+    let path = Request.path(request: read request)
+    let body = String.concat(left: read "handled ", right: read path)
+    return Response.ok(body: read body)
+}
+
+fn main() -> Result<Unit, HttpError> {
+    let request = Request.new(path: read "/users")
+    let response = handle_request(request: read request)?
+    return Ok(Unit)
+}
+"#;
+    let rust = lower_source_to_rust("http.rss", source).expect("source should lower");
+
+    assert!(rust.contains("request: &rsscript_runtime::Request"));
+    assert!(rust.contains("-> Result<rsscript_runtime::Response, rsscript_runtime::HttpError>"));
+    assert!(rust.contains("let path = rsscript_runtime::request_path(&request);"));
+    assert!(rust.contains("return rsscript_runtime::response_ok(&body);"));
+    assert!(rust.contains("let request = rsscript_runtime::request_new(&\"/users\".to_string());"));
+    assert!(rust.contains("let response = handle_request(&request)?;"));
+}
+
+#[test]
 fn rust_lowering_decodes_string_escape_sequences() {
     let source = r#"
 fn json_text() -> String {

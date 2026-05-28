@@ -18,6 +18,30 @@ pub struct File {
 
 impl Resource for File {}
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Request {
+    path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Response {
+    status: i64,
+    body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpError {
+    message: String,
+}
+
+impl fmt::Display for HttpError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.message)
+    }
+}
+
+impl std::error::Error for HttpError {}
+
 #[derive(Debug, Clone)]
 pub struct Image {
     bytes: Vec<u8>,
@@ -204,6 +228,31 @@ pub fn file_read_all(file: &mut File) -> std::io::Result<Vec<u8>> {
 
 pub fn file_write<B: RuntimeBytes + ?Sized>(file: &mut File, data: &B) -> std::io::Result<()> {
     file.inner.write_all(data.as_bytes_slice())
+}
+
+pub fn request_new(path: &str) -> Request {
+    Request {
+        path: path.to_string(),
+    }
+}
+
+pub fn request_path(request: &Request) -> String {
+    request.path.clone()
+}
+
+pub fn response_ok(body: &str) -> Result<Response, HttpError> {
+    Ok(Response {
+        status: 200,
+        body: body.to_string(),
+    })
+}
+
+pub fn response_status(response: &Response) -> i64 {
+    response.status
+}
+
+pub fn response_body(response: &Response) -> String {
+    response.body.clone()
 }
 
 pub fn image_load<P: RuntimePath + ?Sized>(path: &P) -> Result<Image, ImageError> {
@@ -748,5 +797,17 @@ mod tests {
 
         let _ = std::fs::remove_file(input);
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn http_runtime_hooks_create_request_and_response() {
+        let request = super::request_new("/users");
+        let path = super::request_path(&request);
+        let response =
+            super::response_ok(&format!("handled {path}")).expect("response should build");
+
+        assert_eq!(path, "/users");
+        assert_eq!(super::response_status(&response), 200);
+        assert_eq!(super::response_body(&response), "handled /users");
     }
 }
