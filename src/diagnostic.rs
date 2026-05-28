@@ -23,6 +23,7 @@ pub mod code {
     pub const RESOURCE_ESCAPE: &str = "RS0702";
     pub const INVALID_RESOURCE_POOL_TYPE: &str = "RS0703";
     pub const RESOURCE_GENERIC_ARGUMENT: &str = "RS0704";
+    pub const RESOURCE_POOL_NOT_LOCAL: &str = "RS0705";
     pub const LOCAL_CAPTURED_BY_MANAGED_CLOSURE: &str = "RS0801";
     pub const TAKE_HANDLE_FIELD: &str = "RS0901";
     pub const OPERATOR_OVERLOAD_ATTEMPT: &str = "RS1001";
@@ -301,6 +302,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::RESOURCE_GENERIC_ARGUMENT,
         title: "resource in ordinary generic type",
         explanation: "Resource values may only be held by explicit resource APIs such as `ResourcePool<T: Resource>`; ordinary generic containers must not be instantiated with resource types.",
+    },
+    DiagnosticExplanation {
+        code: code::RESOURCE_POOL_NOT_LOCAL,
+        title: "ResourcePool must be local",
+        explanation: "`ResourcePool<T>` must be held in a local binding so its resource lifetime and pool ownership stay explicit.",
     },
     DiagnosticExplanation {
         code: code::LOCAL_CAPTURED_BY_MANAGED_CLOSURE,

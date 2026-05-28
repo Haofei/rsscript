@@ -29,9 +29,25 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
         check_retained_closure_captures(analyzer, &local_analysis);
         check_take_handle_fields(analyzer, &local_analysis);
         check_fresh_returns(analyzer, &local_analysis, &function);
+        if let Some(body) = &hir_body {
+            check_resource_pool_bindings(analyzer, body);
+        }
         let mut state = local_analysis.initial_state();
         if let Some(block) = hir_body.as_ref().and_then(|body| body.block.as_ref()) {
             check_block(analyzer, &local_analysis, block, &mut state);
+        }
+    }
+}
+
+fn check_resource_pool_bindings(analyzer: &mut Analyzer<'_>, body: &crate::hir::HirFunctionBody) {
+    for binding in &body.bindings {
+        if binding.kind == HirBindingKind::ManagedLet
+            && binding
+                .type_name
+                .as_deref()
+                .is_some_and(is_resource_pool_type)
+        {
+            resource_pool_not_local_diagnostic(analyzer, &binding.name, binding.span.clone());
         }
     }
 }
@@ -549,6 +565,10 @@ fn type_root_name(type_name: &str) -> &str {
         .map_or(type_name, |(root, _)| root)
 }
 
+fn is_resource_pool_type(type_name: &str) -> bool {
+    type_root_name(type_name) == "ResourcePool"
+}
+
 fn resource_is_active_at(
     local_analysis: &LocalAnalysis,
     binding: &str,
@@ -591,6 +611,27 @@ fn resource_pool_lease_escape_diagnostic(
             "wrap_with",
             "Use `with ResourcePool.borrow(pool: mut pool) as lease { ... }`.",
             "manual",
+        ),
+    );
+}
+
+fn resource_pool_not_local_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    binding: &str,
+    span: crate::diagnostic::Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::RESOURCE_POOL_NOT_LOCAL,
+            format!("ResourcePool binding `{binding}` must be local."),
+            span,
+            "ResourcePool must be local",
+        )
+        .with_cause("ResourcePool owns long-lived resources and must not be hidden behind an ordinary managed binding.")
+        .with_fix(
+            "make_resource_pool_local",
+            format!("Declare `{binding}` with `local` instead of `let`."),
+            "machine-applicable",
         ),
     );
 }
