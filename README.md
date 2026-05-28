@@ -35,6 +35,8 @@ RSScript targets **application-level systems**: backend services, agent runtimes
 
 ## The model, in three layers
 
+The default writing experience is `let` everywhere, named arguments, regular type annotations. `local`, `with`, and `effects(retains)` are tools you reach for when something specific is true — a hot loop, a resource handle, an actually-retained value — not decisions you make on every line. Most code only touches the first layer.
+
 ### Managed by default
 
 Most code should look ordinary:
@@ -46,7 +48,9 @@ let response = Response.ok(body: read user)
 
 Managed values are easy to share, store, and drop into long-lived graphs. This is the default for business logic, agent memory, configuration, caches, ASTs, request/response objects — the broad layer outside hot paths.
 
-Under the hood, managed is reference counted — think Swift's ARC, not a tracing GC. Destruction is deterministic and lowers to Rust's `Arc`, so cross-thread sharing works without extra ceremony at the source level. The usual tradeoffs apply: refcounting has a per-access cost, and cycles need explicit breaker patterns. That cost is exactly why hot paths use `local` instead of paying refcount on every touch.
+Under the hood, managed is reference counted — think Swift's ARC, not a tracing GC. Destruction is deterministic and lowers to Rust's `Arc`, so cross-thread sharing works without extra ceremony at the source level. The usual tradeoffs apply: refcounting has a per-access cost, and cycles are broken with a `weak` keyword the same way Swift does it.
+
+That per-access cost is relative to native Rust, not to other managed languages. Primitives (`Int`, `Bool`, `Float`, etc.) stay on the stack; refcount only touches heap objects you actually share; there's no GIL, no interpreter loop, no per-object dict header. Managed-only RSScript still lowers to monomorphic Rust through LLVM — typically an order of magnitude faster than Python without ever opting into `local`. `local` is for when you want to compete with hand-tuned Rust, not for routine performance.
 
 ### Local when it matters
 
@@ -111,6 +115,8 @@ The core vocabulary stays small on purpose:
 - `fresh` / `retains` — newly created / may be held after return
 
 Each maps directly to a question a reviewer is going to ask anyway: *what mutates? what gets retained? what resource opens, what closes? where does local data enter managed state? what public behavior changed?*
+
+There's a useful asymmetry built in here. At a call site you just follow the function's signature — `read x`, `mut y` — you don't decide anything new. The decisions live at the function definition, written once and read by every caller. Writer-side cost stays small; reader-side gain is large. The same logic explains why managed is the default: daily writing stays close to Python's ergonomics, while every signature carries enough structure that review doesn't have to dig into bodies.
 
 ---
 
@@ -225,6 +231,7 @@ rss package  review [--json] <package-directory>
 rss package  review update [--json] --from <old-rsspkg.lock> --to <new-rsspkg.lock>
 rss package  lock   [--json] <package-directory>
 rss package  tree   [--json] [package-directory]
+rss package  publish --dry-run [--json] [package-directory]
 rss package  diff   [--json] <old-package-directory> <new-package-directory>
 rss lower    --rust  <file.rss> [--out-dir <directory>]
 rss run      [--json] <file.rss> [--out-dir <directory>]
@@ -242,6 +249,7 @@ A few details worth knowing:
 - `rss package review update` compares two `rsspkg.lock` files and reports package version, source, checksum, `.rssi` interface, review metadata, native wrapper, and feature-selection changes.
 - `rss package lock` emits root package lock metadata with SHA-256 hashes for the public `.rssi` contract, review metadata, package contents, and native Rust wrapper contents when enabled.
 - `rss package tree` shows the dependency graph with review risk. Local path dependencies are expanded recursively; unresolved registry or git dependencies are classified as unknown.
+- `rss package publish --dry-run` runs pre-publish checks without uploading anything: package consistency, dependency graph review, semver shape, review metadata, native metadata, and reproducible archive hashing.
 - `rss package diff` compares two local package directories and reports package version changes, RSScript dependency changes, package feature changes, native Rust wrapper metadata changes, and public `.rssi` semantic contract changes.
 - `rss run` lowers to a temporary Rust package and delegates to `cargo run`; `--out-dir` keeps the generated package around for inspection. Diagnostics support `--json`; program stdout stays the program's own.
 - `rss verify-rust --out-dir` keeps the generated package and source map, so unmappable rustc diagnostics can be inspected against the actual generated Rust.

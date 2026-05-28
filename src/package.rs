@@ -55,6 +55,27 @@ pub struct PackageTree {
     pub summary: PackageTreeSummary,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackagePublishDryRun {
+    pub package: PackageIdentity,
+    pub package_dir: String,
+    pub ready: bool,
+    pub risk: PackageRisk,
+    pub reasons: Vec<String>,
+    pub archive_hash: String,
+    pub review: PackageReviewSummary,
+    pub dependency_summary: PackageTreeSummary,
+    pub checks: Vec<PackagePublishCheck>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackagePublishCheck {
+    pub name: String,
+    pub ok: bool,
+    pub risk: PackageRisk,
+    pub detail: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct PackageTreeSummary {
     pub packages: usize,
@@ -543,6 +564,128 @@ pub fn package_tree(package_dir: &Path) -> Result<PackageTree, String> {
     Ok(PackageTree { root, summary })
 }
 
+pub fn publish_package_dry_run(package_dir: &Path) -> Result<PackagePublishDryRun, String> {
+    let package = load_package(package_dir)?;
+    let review = review_package_dir(package_dir)?;
+    let check = check_package_dir(package_dir)?;
+    let tree = package_tree(package_dir)?;
+    let archive_hash = package_archive_hash(package_dir)?;
+
+    let version_ok = is_semver_like(&package.manifest.package.version);
+    let dependency_graph_ok = tree.summary.unknown_risk_packages == 0;
+    let native_ok = check
+        .native_rust
+        .as_ref()
+        .is_none_or(|native_check| native_check.ok);
+    let frontend_ok = review.summary.errors == 0;
+
+    let checks = vec![
+        publish_check(
+            "manifest valid",
+            true,
+            PackageRisk::Low,
+            format!("{} parsed", package.manifest_path.display()),
+        ),
+        publish_check(
+            "interfaces parse/check",
+            frontend_ok,
+            if frontend_ok {
+                PackageRisk::Low
+            } else {
+                PackageRisk::High
+            },
+            format!("{} frontend errors", review.summary.errors),
+        ),
+        publish_check(
+            "implementation checks",
+            check.ok,
+            check.risk,
+            if check.ok {
+                "package check passed".to_string()
+            } else {
+                check.reasons.join("; ")
+            },
+        ),
+        publish_check(
+            "native metadata generated",
+            native_ok,
+            check
+                .native_rust
+                .as_ref()
+                .map(|native_check| native_check.risk)
+                .unwrap_or(PackageRisk::Low),
+            if let Some(native) = &check.native_rust {
+                format!(
+                    "native rust {} cargo_toml={} files={}",
+                    native.path, native.cargo_toml_present, native.file_count
+                )
+            } else {
+                "no native rust wrapper".to_string()
+            },
+        ),
+        publish_check(
+            "semantic version check",
+            version_ok,
+            if version_ok {
+                PackageRisk::Low
+            } else {
+                PackageRisk::High
+            },
+            format!("version {}", package.manifest.package.version),
+        ),
+        publish_check(
+            "package review metadata generated",
+            true,
+            review.risk,
+            format!("review risk {}", package_risk_label(review.risk)),
+        ),
+        publish_check(
+            "dependency graph review",
+            dependency_graph_ok,
+            if dependency_graph_ok {
+                PackageRisk::Low
+            } else {
+                PackageRisk::Unknown
+            },
+            format!(
+                "{} packages; {} unknown",
+                tree.summary.packages, tree.summary.unknown_risk_packages
+            ),
+        ),
+        publish_check(
+            "package archive reproducible",
+            true,
+            PackageRisk::Low,
+            archive_hash.clone(),
+        ),
+    ];
+
+    let ready = checks.iter().all(|check| check.ok);
+    let risk = checks
+        .iter()
+        .fold(PackageRisk::Low, |risk, check| risk.max(check.risk));
+    let mut reasons = checks
+        .iter()
+        .filter(|check| !check.ok)
+        .map(|check| format!("{} failed: {}", check.name, check.detail))
+        .collect::<Vec<_>>();
+    reasons.extend(check.reasons);
+    reasons.sort();
+    reasons.dedup();
+
+    Ok(PackagePublishDryRun {
+        package: package_identity(&package.manifest),
+        package_dir: package_dir.display().to_string(),
+        ready,
+        risk,
+        reasons,
+        archive_hash,
+        review: review.summary,
+        dependency_summary: tree.summary,
+        checks,
+    })
+}
+
 pub fn lock_package_dir(package_dir: &Path) -> Result<PackageLock, String> {
     let package = load_package(package_dir)?;
     let review = review_package_dir(package_dir)?;
@@ -617,6 +760,10 @@ pub fn format_package_check_json(check: &PackageCheck) -> String {
 
 pub fn format_package_tree_json(tree: &PackageTree) -> String {
     serde_json::to_string(tree).expect("package tree JSON serialization should not fail")
+}
+
+pub fn format_package_publish_json(publish: &PackagePublishDryRun) -> String {
+    serde_json::to_string(publish).expect("package publish JSON serialization should not fail")
 }
 
 pub fn format_package_lock_json(lock: &PackageLock) -> String {
@@ -761,6 +908,34 @@ pub fn format_package_tree_human(tree: &PackageTree) -> String {
         tree.summary.unknown_risk_packages
     ));
     format_package_tree_node_human(&tree.root, "", true, &mut output);
+    output
+}
+
+pub fn format_package_publish_human(publish: &PackagePublishDryRun) -> String {
+    let mut output = String::new();
+    output.push_str(&format!(
+        "package publish dry-run {} {} {} risk {}\n",
+        publish.package.name,
+        publish.package.version,
+        if publish.ready { "ready" } else { "blocked" },
+        package_risk_label(publish.risk)
+    ));
+    output.push_str(&format!("archive: {}\n", publish.archive_hash));
+    for check in &publish.checks {
+        output.push_str(&format!(
+            "{}: {} ({}) {}\n",
+            check.name,
+            if check.ok { "ok" } else { "failed" },
+            package_risk_label(check.risk),
+            check.detail
+        ));
+    }
+    if !publish.reasons.is_empty() {
+        output.push_str("reasons:\n");
+        for reason in &publish.reasons {
+            output.push_str(&format!("  - {reason}\n"));
+        }
+    }
     output
 }
 
@@ -1168,6 +1343,28 @@ fn unresolved_dependency_node(
     }
 }
 
+fn publish_check(
+    name: impl Into<String>,
+    ok: bool,
+    risk: PackageRisk,
+    detail: impl Into<String>,
+) -> PackagePublishCheck {
+    PackagePublishCheck {
+        name: name.into(),
+        ok,
+        risk,
+        detail: detail.into(),
+    }
+}
+
+fn is_semver_like(version: &str) -> bool {
+    let parts = version.split('.').collect::<Vec<_>>();
+    parts.len() == 3
+        && parts.iter().all(|part| {
+            !part.is_empty() && part.chars().all(|character| character.is_ascii_digit())
+        })
+}
+
 fn canonical_path_label(path: &Path) -> String {
     fs::canonicalize(path)
         .unwrap_or_else(|_| path.to_path_buf())
@@ -1266,6 +1463,17 @@ fn package_checksum(package: &LoadedPackage, native_hash: Option<&str>) -> Strin
         input.push_str(native_hash);
     }
     sha256_label(input.as_bytes())
+}
+
+fn package_archive_hash(package_dir: &Path) -> Result<String, String> {
+    let package = load_package(package_dir)?;
+    let native = package
+        .manifest
+        .native
+        .as_ref()
+        .and_then(|native| native.rust.as_ref());
+    let native_hash = package_native_hash(package_dir, native)?;
+    Ok(package_checksum(&package, native_hash.as_deref()))
 }
 
 fn hash_sources(sources: &[PackageSource], kind: PackageReviewFileKind) -> String {

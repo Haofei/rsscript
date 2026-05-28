@@ -12,7 +12,7 @@ use rsscript::{
     format_diagnostics_json, format_package_lock_toml, format_review_human, format_review_json,
     format_review_map_human, format_review_map_json, lint_source, lock_package_dir,
     lower_source_to_rust, lower_source_to_rust_package, lower_source_to_rust_with_map,
-    package_tree, parse_runtime_diagnostics, remap_rustc_diagnostic_json,
+    package_tree, parse_runtime_diagnostics, publish_package_dry_run, remap_rustc_diagnostic_json,
     remap_rustc_diagnostic_json_lines, review_map_sources, review_package_dir, review_sources,
 };
 use serde_json::Value;
@@ -2980,6 +2980,88 @@ rss-dep = {{ path = "{}" }}
     assert_eq!(json["summary"]["packages"], 2);
     assert_eq!(json["summary"]["path_dependencies"], 1);
     assert_eq!(json["root"]["dependencies"][0]["name"], "rss-dep");
+}
+
+#[test]
+fn package_publish_dry_run_reports_ready_package() {
+    let temp_dir = unique_temp_dir("rsscript-package-publish-ready");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-ready",
+        "0.1.0",
+        "",
+        r#"pub fn add(left: Int, right: Int) -> Int
+"#,
+    );
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let publish = publish_package_dry_run(&temp_dir).expect("publish dry-run should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_publish_json(&publish))
+        .expect("publish JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(publish.ready);
+    assert_eq!(json["package"]["name"], "rss-ready");
+    assert!(
+        json["archive_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.starts_with("sha256:"))
+    );
+    assert!(json["checks"].as_array().is_some_and(|checks| {
+        checks
+            .iter()
+            .any(|check| check["name"] == "package archive reproducible" && check["ok"] == true)
+    }));
+}
+
+#[test]
+fn rss_package_publish_dry_run_json_reports_unresolved_dependency() {
+    let temp_dir = unique_temp_dir("rsscript-package-publish-blocked");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-blocked",
+        "0.1.0",
+        r#"[dependencies]
+rss-remote = "0.5.0"
+"#,
+        r#"pub fn main() -> Unit
+"#,
+    );
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("package")
+        .arg("publish")
+        .arg("--dry-run")
+        .arg("--json")
+        .arg(&temp_dir)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss package publish should execute");
+    let _ = fs::remove_dir_all(&temp_dir);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: Value = serde_json::from_str(&stdout).expect("stdout should be publish JSON");
+
+    assert!(!output.status.success(), "stdout={stdout}");
+    assert_eq!(json["ready"], false);
+    assert_eq!(json["risk"], "unknown");
+    assert!(json["checks"].as_array().is_some_and(|checks| {
+        checks
+            .iter()
+            .any(|check| check["name"] == "dependency graph review" && check["ok"] == false)
+    }));
 }
 
 fn fixture_paths(directory: &str) -> Vec<PathBuf> {

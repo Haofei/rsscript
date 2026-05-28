@@ -11,10 +11,11 @@ use rsscript::{
     format_diagnostics_json, format_package_check_human, format_package_check_json,
     format_package_diff_human, format_package_diff_json, format_package_lock_diff_human,
     format_package_lock_diff_json, format_package_lock_json, format_package_lock_toml,
-    format_package_review_human, format_package_review_json, format_package_tree_human,
-    format_package_tree_json, format_review_human, format_review_json, format_review_map_human,
-    format_review_map_json, lint_source, lock_package_dir, lower_source_to_rust,
-    lower_source_to_rust_package, package_tree, parse_runtime_diagnostics, parse_source_map_json,
+    format_package_publish_human, format_package_publish_json, format_package_review_human,
+    format_package_review_json, format_package_tree_human, format_package_tree_json,
+    format_review_human, format_review_json, format_review_map_human, format_review_map_json,
+    lint_source, lock_package_dir, lower_source_to_rust, lower_source_to_rust_package,
+    package_tree, parse_runtime_diagnostics, parse_source_map_json, publish_package_dry_run,
     remap_rustc_diagnostic_json_lines, review_map_sources, review_package_dir, review_sources,
     write_generated_rust_package,
 };
@@ -54,6 +55,11 @@ fn run_package(args: &[String]) -> ExitCode {
         } => run_package_review_update(json, old_lock_path, new_lock_path),
         PackageCommand::Lock { json, path } => run_package_lock(json, path),
         PackageCommand::Tree { json, path } => run_package_tree(json, path),
+        PackageCommand::Publish {
+            json,
+            dry_run,
+            path,
+        } => run_package_publish(json, dry_run, path),
         PackageCommand::Diff {
             json,
             old_path,
@@ -817,6 +823,11 @@ enum PackageCommand<'a> {
         json: bool,
         path: &'a str,
     },
+    Publish {
+        json: bool,
+        dry_run: bool,
+        path: &'a str,
+    },
     Diff {
         json: bool,
         old_path: &'a str,
@@ -827,6 +838,7 @@ enum PackageCommand<'a> {
 
 fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
     let mut json = false;
+    let mut dry_run = false;
     let mut words = Vec::new();
     let mut from_path = None;
     let mut to_path = None;
@@ -836,6 +848,8 @@ fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
     while let Some(arg) = args.get(index) {
         if arg == "--json" {
             json = true;
+        } else if arg == "--dry-run" {
+            dry_run = true;
         } else if arg == "--from" {
             let Some(path) = args.get(index + 1) else {
                 return PackageCommand::Invalid;
@@ -850,7 +864,7 @@ fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
             index += 1;
         } else if matches!(
             arg.as_str(),
-            "check" | "review" | "update" | "lock" | "tree" | "diff"
+            "check" | "review" | "update" | "lock" | "tree" | "publish" | "diff"
         ) {
             words.push(arg.as_str());
         } else {
@@ -873,6 +887,16 @@ fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
         (["lock"], [path], None, None) => PackageCommand::Lock { json, path },
         (["tree"], [], None, None) => PackageCommand::Tree { json, path: "." },
         (["tree"], [path], None, None) => PackageCommand::Tree { json, path },
+        (["publish"], [], None, None) => PackageCommand::Publish {
+            json,
+            dry_run,
+            path: ".",
+        },
+        (["publish"], [path], None, None) => PackageCommand::Publish {
+            json,
+            dry_run,
+            path,
+        },
         (["diff"], [old_path, new_path], None, None) => PackageCommand::Diff {
             json,
             old_path,
@@ -1089,6 +1113,32 @@ fn run_package_tree(json: bool, path: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn run_package_publish(json: bool, dry_run: bool, path: &str) -> ExitCode {
+    if !dry_run {
+        eprintln!("rsscript package publish currently requires --dry-run");
+        return ExitCode::from(2);
+    }
+    let publish = match publish_package_dry_run(Path::new(path)) {
+        Ok(publish) => publish,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+
+    if json {
+        println!("{}", format_package_publish_json(&publish));
+    } else {
+        print!("{}", format_package_publish_human(&publish));
+    }
+
+    if publish.ready {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
 fn run_package_diff(json: bool, old_path: &str, new_path: &str) -> ExitCode {
     let diff = match diff_package_dirs(Path::new(old_path), Path::new(new_path)) {
         Ok(diff) => diff,
@@ -1189,5 +1239,6 @@ fn print_usage() {
     );
     eprintln!("  rsscript package lock [--json] <package-directory>");
     eprintln!("  rsscript package tree [--json] [package-directory]");
+    eprintln!("  rsscript package publish --dry-run [--json] [package-directory]");
     eprintln!("  rsscript package diff [--json] <old-package-directory> <new-package-directory>");
 }
