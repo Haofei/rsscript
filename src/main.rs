@@ -18,9 +18,9 @@ use rsscript::{
     format_review_map_json, lint_source, lock_package_dir, lower_source_to_rust,
     lower_source_to_rust_package, lower_sources_to_rust_package_with_options,
     package_lowering_input, package_metadata, package_tree, parse_runtime_diagnostics,
-    parse_source_map_json, publish_package_dry_run, remap_rustc_diagnostic_json_lines,
-    review_map_sources, review_package_dir, review_sources, vendor_package_dir,
-    write_generated_rust_package,
+    parse_source_map_json, publish_package_dry_run_with_registry,
+    remap_rustc_diagnostic_json_lines, review_map_sources, review_package_dir, review_sources,
+    vendor_package_dir, write_generated_rust_package,
 };
 
 fn main() -> ExitCode {
@@ -62,7 +62,8 @@ fn run_package(args: &[String]) -> ExitCode {
             json,
             dry_run,
             path,
-        } => run_package_publish(json, dry_run, path),
+            registry,
+        } => run_package_publish(json, dry_run, path, registry),
         PackageCommand::Vendor {
             json,
             dry_run,
@@ -849,6 +850,7 @@ enum PackageCommand<'a> {
         json: bool,
         dry_run: bool,
         path: &'a str,
+        registry: Option<&'a str>,
     },
     Vendor {
         json: bool,
@@ -873,6 +875,7 @@ fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
     let mut dry_run = false;
     let mut words = Vec::new();
     let mut from_path = None;
+    let mut registry_path = None;
     let mut to_path = None;
     let mut paths = Vec::new();
     let mut index = 0;
@@ -887,6 +890,12 @@ fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
                 return PackageCommand::Invalid;
             };
             from_path = Some(path.as_str());
+            index += 1;
+        } else if arg == "--registry" {
+            let Some(path) = args.get(index + 1) else {
+                return PackageCommand::Invalid;
+            };
+            registry_path = Some(path.as_str());
             index += 1;
         } else if arg == "--to" {
             let Some(path) = args.get(index + 1) else {
@@ -931,11 +940,13 @@ fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
             json,
             dry_run,
             path: ".",
+            registry: registry_path,
         },
         (["publish"], [path], None, None) => PackageCommand::Publish {
             json,
             dry_run,
             path,
+            registry: registry_path,
         },
         (["vendor"], [], None, None) => PackageCommand::Vendor {
             json,
@@ -1173,12 +1184,13 @@ fn run_package_tree(json: bool, path: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn run_package_publish(json: bool, dry_run: bool, path: &str) -> ExitCode {
+fn run_package_publish(json: bool, dry_run: bool, path: &str, registry: Option<&str>) -> ExitCode {
     if !dry_run {
         eprintln!("rsscript package publish currently requires --dry-run");
         return ExitCode::from(2);
     }
-    let publish = match publish_package_dry_run(Path::new(path)) {
+    let registry_path = registry.map(Path::new);
+    let publish = match publish_package_dry_run_with_registry(Path::new(path), registry_path) {
         Ok(publish) => publish,
         Err(error) => {
             eprintln!("{error}");
@@ -1354,7 +1366,9 @@ fn print_usage() {
     );
     eprintln!("  rsscript package lock [--json] <package-directory>");
     eprintln!("  rsscript package tree [--json] [package-directory]");
-    eprintln!("  rsscript package publish --dry-run [--json] [package-directory]");
+    eprintln!(
+        "  rsscript package publish --dry-run [--json] [--registry <directory>] [package-directory]"
+    );
     eprintln!("  rsscript package vendor [--dry-run] [--json] [package-directory]");
     eprintln!("  rsscript package metadata [--dry-run] [--json] [package-directory]");
     eprintln!("  rsscript package diff [--json] <old-package-directory> <new-package-directory>");

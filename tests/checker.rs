@@ -4247,6 +4247,10 @@ fn package_publish_dry_run_reports_ready_package() {
     let publish = publish_package_dry_run(&temp_dir).expect("publish dry-run should succeed");
     let publish_again =
         publish_package_dry_run(&temp_dir).expect("publish dry-run should be deterministic");
+    let registry_dir = temp_dir.join("registry");
+    let publish_with_registry =
+        rsscript::publish_package_dry_run_with_registry(&temp_dir, Some(&registry_dir))
+            .expect("publish dry-run should report registry paths");
     let json: Value = serde_json::from_str(&rsscript::format_package_publish_json(&publish))
         .expect("publish JSON should parse");
     let _ = fs::remove_dir_all(&temp_dir);
@@ -4258,6 +4262,20 @@ fn package_publish_dry_run_reports_ready_package() {
 
     assert!(publish.ready);
     assert_eq!(publish.archive_hash, publish_again.archive_hash);
+    assert!(
+        publish_with_registry
+            .registry_target
+            .as_ref()
+            .is_some_and(|target| target.index_path.ends_with("index/rss-ready/0.1.0.json"))
+    );
+    assert!(
+        publish_with_registry
+            .registry_target
+            .as_ref()
+            .is_some_and(|target| target
+                .archive_manifest_path
+                .ends_with("archives/rss-ready/0.1.0/archive-manifest.json"))
+    );
     assert_eq!(json["package"]["name"], "rss-ready");
     assert_eq!(json["registry_index"]["schema"], "rss.registry.index.v1");
     assert_eq!(json["registry_index"]["name"], "rss-ready");
@@ -4311,6 +4329,65 @@ fn package_publish_dry_run_reports_ready_package() {
             .iter()
             .any(|check| check["name"] == "package archive reproducible" && check["ok"] == true)
     }));
+}
+
+#[test]
+fn rss_package_publish_dry_run_reports_local_registry_target() {
+    let temp_dir = unique_temp_dir("rsscript-package-publish-registry-cli");
+    let registry_dir = unique_temp_dir("rsscript-package-publish-registry-target");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-registry",
+        "0.1.0",
+        "",
+        r#"pub fn Registry.value() -> Int
+"#,
+    );
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("package")
+        .arg("publish")
+        .arg("--dry-run")
+        .arg("--json")
+        .arg("--registry")
+        .arg(&registry_dir)
+        .arg(&temp_dir)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss package publish should execute");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: Value = serde_json::from_str(&stdout).expect("stdout should be publish JSON");
+    let index_written = registry_dir
+        .join("index")
+        .join("rss-registry")
+        .join("0.1.0.json")
+        .exists();
+    let _ = fs::remove_dir_all(&temp_dir);
+    let _ = fs::remove_dir_all(&registry_dir);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert_eq!(
+        json["registry_target"]["index_path"]
+            .as_str()
+            .map(|path| path.ends_with("index/rss-registry/0.1.0.json")),
+        Some(true)
+    );
+    assert_eq!(
+        json["registry_target"]["archive_manifest_path"]
+            .as_str()
+            .map(|path| path.ends_with("archives/rss-registry/0.1.0/archive-manifest.json")),
+        Some(true)
+    );
+    assert!(!index_written);
 }
 
 #[test]

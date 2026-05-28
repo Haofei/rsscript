@@ -120,12 +120,20 @@ pub struct PackagePublishDryRun {
     pub risk: PackageRisk,
     pub reasons: Vec<String>,
     pub registry_index: PackageRegistryIndexEntry,
+    pub registry_target: Option<PackageRegistryPublishTarget>,
     pub archive_format: String,
     pub archive_hash: String,
     pub archive_files: Vec<PackageArchiveFile>,
     pub review: PackageReviewSummary,
     pub dependency_summary: PackageTreeSummary,
     pub checks: Vec<PackagePublishCheck>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageRegistryPublishTarget {
+    pub registry_dir: String,
+    pub index_path: String,
+    pub archive_manifest_path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -867,6 +875,13 @@ pub fn package_tree(package_dir: &Path) -> Result<PackageTree, String> {
 }
 
 pub fn publish_package_dry_run(package_dir: &Path) -> Result<PackagePublishDryRun, String> {
+    publish_package_dry_run_with_registry(package_dir, None)
+}
+
+pub fn publish_package_dry_run_with_registry(
+    package_dir: &Path,
+    registry_dir: Option<&Path>,
+) -> Result<PackagePublishDryRun, String> {
     let package = load_package(package_dir)?;
     let review = review_package_dir(package_dir)?;
     let check = check_package_dir(package_dir)?;
@@ -989,6 +1004,13 @@ pub fn publish_package_dry_run(package_dir: &Path) -> Result<PackagePublishDryRu
         risk,
         &archive_hash,
     );
+    let registry_target = registry_dir.map(|registry_dir| {
+        package_registry_publish_target(
+            registry_dir,
+            &package.manifest.package.name,
+            &package.manifest.package.version,
+        )
+    });
 
     Ok(PackagePublishDryRun {
         package: package_identity(&package.manifest),
@@ -997,6 +1019,7 @@ pub fn publish_package_dry_run(package_dir: &Path) -> Result<PackagePublishDryRu
         risk,
         reasons,
         registry_index,
+        registry_target,
         archive_format: "rss.package.archive.v1".to_string(),
         archive_hash,
         archive_files,
@@ -1404,6 +1427,12 @@ pub fn format_package_publish_human(publish: &PackagePublishDryRun) -> String {
         publish.registry_index.native,
         publish.registry_index.unsafe_boundary
     ));
+    if let Some(target) = &publish.registry_target {
+        output.push_str(&format!(
+            "registry target: {} index={} archive_manifest={}\n",
+            target.registry_dir, target.index_path, target.archive_manifest_path
+        ));
+    }
     for check in &publish.checks {
         output.push_str(&format!(
             "{}: {} ({}) {}\n",
@@ -2842,6 +2871,31 @@ fn package_registry_index_entry(
             .is_some_and(|native| native.enabled),
         unsafe_boundary: package_index_unsafe_boundary(&package.manifest, native_check),
         dependencies: package_index_dependencies(&package.manifest.dependencies),
+    }
+}
+
+fn package_registry_publish_target(
+    registry_dir: &Path,
+    package_name: &str,
+    package_version: &str,
+) -> PackageRegistryPublishTarget {
+    let package_component = sanitize_vendor_path_component(package_name);
+    let version_component = sanitize_vendor_path_component(package_version);
+    PackageRegistryPublishTarget {
+        registry_dir: registry_dir.display().to_string(),
+        index_path: registry_dir
+            .join("index")
+            .join(&package_component)
+            .join(format!("{version_component}.json"))
+            .display()
+            .to_string(),
+        archive_manifest_path: registry_dir
+            .join("archives")
+            .join(&package_component)
+            .join(&version_component)
+            .join("archive-manifest.json")
+            .display()
+            .to_string(),
     }
 }
 
