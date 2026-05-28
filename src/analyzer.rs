@@ -63,6 +63,27 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) diagnostics: Vec<Diagnostic>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeGuarantee {
+    Noalloc,
+    Pure,
+    NoBlock,
+    NoPanic,
+}
+
+impl RuntimeGuarantee {
+    const ALL: [Self; 4] = [Self::Noalloc, Self::Pure, Self::NoBlock, Self::NoPanic];
+
+    fn effect_name(self) -> &'static str {
+        match self {
+            Self::Noalloc => "noalloc",
+            Self::Pure => "pure",
+            Self::NoBlock => "no_block",
+            Self::NoPanic => "no_panic",
+        }
+    }
+}
+
 impl Analyzer<'_> {
     fn run(&mut self) {
         self.check_single_feature_declaration();
@@ -73,10 +94,7 @@ impl Analyzer<'_> {
         self.check_duplicate_declarations();
         self.check_signature_explicitness();
         self.check_generic_constraints();
-        self.check_pure_bodies();
-        self.check_no_block_bodies();
-        self.check_no_panic_bodies();
-        self.check_noalloc_allocations();
+        self.check_runtime_guarantee_bodies();
         self.check_try_operator_result_returns();
         self.check_resource_fields();
         self.check_resource_pool_type_arguments();
@@ -654,60 +672,76 @@ impl Analyzer<'_> {
         }
     }
 
-    fn check_noalloc_allocations(&mut self) {
+    fn check_runtime_guarantee_bodies(&mut self) {
         let items = self.syntax_program.items.clone();
         for item in &items {
             let Item::Function(function) = item else {
                 continue;
             };
-            if !function_has_effect(function, "noalloc") {
-                continue;
+            for guarantee in RuntimeGuarantee::ALL {
+                if function_has_effect(function, guarantee.effect_name()) {
+                    self.check_runtime_guarantee_block(guarantee, &function.name, &function.body);
+                }
             }
-            self.check_noalloc_block(&function.name, &function.body);
         }
     }
 
-    fn check_noalloc_block(&mut self, function_name: &str, block: &crate::syntax::ast::Block) {
+    fn check_runtime_guarantee_block(
+        &mut self,
+        guarantee: RuntimeGuarantee,
+        function_name: &str,
+        block: &Block,
+    ) {
         for statement in &block.statements {
-            self.check_noalloc_stmt(function_name, statement);
+            self.check_runtime_guarantee_stmt(guarantee, function_name, statement);
         }
     }
 
-    fn check_noalloc_stmt(&mut self, function_name: &str, statement: &Stmt) {
+    fn check_runtime_guarantee_stmt(
+        &mut self,
+        guarantee: RuntimeGuarantee,
+        function_name: &str,
+        statement: &Stmt,
+    ) {
         match statement {
             Stmt::Let(stmt) => {
                 if let Some(value) = &stmt.value {
-                    self.check_noalloc_expr(function_name, value);
+                    self.check_runtime_guarantee_expr(guarantee, function_name, value);
                 }
             }
             Stmt::Return(stmt) => {
                 if let Some(value) = &stmt.value {
-                    self.check_noalloc_expr(function_name, value);
+                    self.check_runtime_guarantee_expr(guarantee, function_name, value);
                 }
             }
-            Stmt::Expr(value) => self.check_noalloc_expr(function_name, value),
+            Stmt::Expr(value) => self.check_runtime_guarantee_expr(guarantee, function_name, value),
             Stmt::With(stmt) => {
-                self.check_noalloc_expr(function_name, &stmt.resource);
-                self.check_noalloc_block(function_name, &stmt.body);
+                self.check_runtime_guarantee_expr(guarantee, function_name, &stmt.resource);
+                self.check_runtime_guarantee_block(guarantee, function_name, &stmt.body);
             }
             Stmt::If(stmt) => {
-                self.check_noalloc_expr(function_name, &stmt.condition);
-                self.check_noalloc_block(function_name, &stmt.then_body);
+                self.check_runtime_guarantee_expr(guarantee, function_name, &stmt.condition);
+                self.check_runtime_guarantee_block(guarantee, function_name, &stmt.then_body);
                 if let Some(else_body) = &stmt.else_body {
-                    self.check_noalloc_block(function_name, else_body);
+                    self.check_runtime_guarantee_block(guarantee, function_name, else_body);
                 }
             }
             Stmt::Loop(stmt) => {
                 if let Some(condition) = &stmt.condition {
-                    self.check_noalloc_expr(function_name, condition);
+                    self.check_runtime_guarantee_expr(guarantee, function_name, condition);
                 }
-                self.check_noalloc_block(function_name, &stmt.body);
+                self.check_runtime_guarantee_block(guarantee, function_name, &stmt.body);
             }
             Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
         }
     }
 
-    fn check_noalloc_expr(&mut self, function_name: &str, expr: &Expr) {
+    fn check_runtime_guarantee_expr(
+        &mut self,
+        guarantee: RuntimeGuarantee,
+        function_name: &str,
+        expr: &Expr,
+    ) {
         match expr {
             Expr::Call {
                 callee, args, span, ..
@@ -715,312 +749,62 @@ impl Analyzer<'_> {
                 match self.hir.resolve_call(callee) {
                     CallResolution::Resolved { signature, kind } => {
                         if matches!(kind, ResolvedCalleeKind::Constructor { .. }) {
-                            self.noalloc_allocation_diagnostic(
+                            if guarantee == RuntimeGuarantee::Noalloc {
+                                self.noalloc_allocation_diagnostic(
+                                    function_name,
+                                    span,
+                                    format!(
+                                        "constructor `{}` creates a new value.",
+                                        callee_display(callee)
+                                    ),
+                                );
+                            }
+                        } else if !signature
+                            .effects
+                            .iter()
+                            .any(|effect| effect == guarantee.effect_name())
+                        {
+                            self.runtime_guarantee_call_diagnostic(
+                                guarantee,
                                 function_name,
+                                callee,
                                 span,
-                                format!(
-                                    "constructor `{}` creates a new value.",
-                                    callee_display(callee)
-                                ),
                             );
-                        } else if !signature.effects.iter().any(|effect| effect == "noalloc") {
-                            self.allocating_call_diagnostic(function_name, callee, span);
                         }
                     }
                     CallResolution::EnumVariant | CallResolution::Unknown => {}
                 }
                 for arg in args {
-                    self.check_noalloc_expr(function_name, &arg.value);
+                    self.check_runtime_guarantee_expr(guarantee, function_name, &arg.value);
                 }
             }
             Expr::Manage { value, span } => {
-                self.noalloc_allocation_diagnostic(
-                    function_name,
-                    span,
-                    "`manage` may allocate while migrating a local graph.".to_string(),
-                );
-                self.check_noalloc_expr(function_name, value);
+                if guarantee == RuntimeGuarantee::Noalloc {
+                    self.noalloc_allocation_diagnostic(
+                        function_name,
+                        span,
+                        "`manage` may allocate while migrating a local graph.".to_string(),
+                    );
+                }
+                self.check_runtime_guarantee_expr(guarantee, function_name, value);
             }
             Expr::Effect { value, .. } | Expr::Try { value, .. } => {
-                self.check_noalloc_expr(function_name, value);
+                self.check_runtime_guarantee_expr(guarantee, function_name, value);
             }
             Expr::Binary { left, right, .. } => {
-                self.check_noalloc_expr(function_name, left);
-                self.check_noalloc_expr(function_name, right);
+                self.check_runtime_guarantee_expr(guarantee, function_name, left);
+                self.check_runtime_guarantee_expr(guarantee, function_name, right);
             }
-            Expr::Field { base, .. } => self.check_noalloc_expr(function_name, base),
+            Expr::Field { base, .. } => {
+                self.check_runtime_guarantee_expr(guarantee, function_name, base);
+            }
             Expr::Index { base, index, .. } => {
-                self.check_noalloc_expr(function_name, base);
-                self.check_noalloc_expr(function_name, index);
+                self.check_runtime_guarantee_expr(guarantee, function_name, base);
+                self.check_runtime_guarantee_expr(guarantee, function_name, index);
             }
-            Expr::Closure { body, .. } => self.check_noalloc_block(function_name, body),
-            Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
-        }
-    }
-
-    fn check_pure_bodies(&mut self) {
-        let items = self.syntax_program.items.clone();
-        for item in &items {
-            let Item::Function(function) = item else {
-                continue;
-            };
-            if !function_has_effect(function, "pure") {
-                continue;
+            Expr::Closure { body, .. } => {
+                self.check_runtime_guarantee_block(guarantee, function_name, body);
             }
-            self.check_pure_block(&function.name, &function.body);
-        }
-    }
-
-    fn check_pure_block(&mut self, function_name: &str, block: &Block) {
-        for statement in &block.statements {
-            self.check_pure_stmt(function_name, statement);
-        }
-    }
-
-    fn check_pure_stmt(&mut self, function_name: &str, statement: &Stmt) {
-        match statement {
-            Stmt::Let(stmt) => {
-                if let Some(value) = &stmt.value {
-                    self.check_pure_expr(function_name, value);
-                }
-            }
-            Stmt::Return(stmt) => {
-                if let Some(value) = &stmt.value {
-                    self.check_pure_expr(function_name, value);
-                }
-            }
-            Stmt::Expr(value) => self.check_pure_expr(function_name, value),
-            Stmt::With(stmt) => {
-                self.check_pure_expr(function_name, &stmt.resource);
-                self.check_pure_block(function_name, &stmt.body);
-            }
-            Stmt::If(stmt) => {
-                self.check_pure_expr(function_name, &stmt.condition);
-                self.check_pure_block(function_name, &stmt.then_body);
-                if let Some(else_body) = &stmt.else_body {
-                    self.check_pure_block(function_name, else_body);
-                }
-            }
-            Stmt::Loop(stmt) => {
-                if let Some(condition) = &stmt.condition {
-                    self.check_pure_expr(function_name, condition);
-                }
-                self.check_pure_block(function_name, &stmt.body);
-            }
-            Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
-        }
-    }
-
-    fn check_pure_expr(&mut self, function_name: &str, expr: &Expr) {
-        match expr {
-            Expr::Call {
-                callee, args, span, ..
-            } => {
-                match self.hir.resolve_call(callee) {
-                    CallResolution::Resolved { signature, kind } => {
-                        if !matches!(kind, ResolvedCalleeKind::Constructor { .. })
-                            && !signature.effects.iter().any(|effect| effect == "pure")
-                        {
-                            self.non_pure_call_diagnostic(function_name, callee, span);
-                        }
-                    }
-                    CallResolution::EnumVariant | CallResolution::Unknown => {}
-                }
-                for arg in args {
-                    self.check_pure_expr(function_name, &arg.value);
-                }
-            }
-            Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
-                self.check_pure_expr(function_name, value);
-            }
-            Expr::Binary { left, right, .. } => {
-                self.check_pure_expr(function_name, left);
-                self.check_pure_expr(function_name, right);
-            }
-            Expr::Field { base, .. } => self.check_pure_expr(function_name, base),
-            Expr::Index { base, index, .. } => {
-                self.check_pure_expr(function_name, base);
-                self.check_pure_expr(function_name, index);
-            }
-            Expr::Closure { body, .. } => self.check_pure_block(function_name, body),
-            Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
-        }
-    }
-
-    fn check_no_block_bodies(&mut self) {
-        let items = self.syntax_program.items.clone();
-        for item in &items {
-            let Item::Function(function) = item else {
-                continue;
-            };
-            if !function_has_effect(function, "no_block") {
-                continue;
-            }
-            self.check_no_block_block(&function.name, &function.body);
-        }
-    }
-
-    fn check_no_block_block(&mut self, function_name: &str, block: &Block) {
-        for statement in &block.statements {
-            self.check_no_block_stmt(function_name, statement);
-        }
-    }
-
-    fn check_no_block_stmt(&mut self, function_name: &str, statement: &Stmt) {
-        match statement {
-            Stmt::Let(stmt) => {
-                if let Some(value) = &stmt.value {
-                    self.check_no_block_expr(function_name, value);
-                }
-            }
-            Stmt::Return(stmt) => {
-                if let Some(value) = &stmt.value {
-                    self.check_no_block_expr(function_name, value);
-                }
-            }
-            Stmt::Expr(value) => self.check_no_block_expr(function_name, value),
-            Stmt::With(stmt) => {
-                self.check_no_block_expr(function_name, &stmt.resource);
-                self.check_no_block_block(function_name, &stmt.body);
-            }
-            Stmt::If(stmt) => {
-                self.check_no_block_expr(function_name, &stmt.condition);
-                self.check_no_block_block(function_name, &stmt.then_body);
-                if let Some(else_body) = &stmt.else_body {
-                    self.check_no_block_block(function_name, else_body);
-                }
-            }
-            Stmt::Loop(stmt) => {
-                if let Some(condition) = &stmt.condition {
-                    self.check_no_block_expr(function_name, condition);
-                }
-                self.check_no_block_block(function_name, &stmt.body);
-            }
-            Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
-        }
-    }
-
-    fn check_no_block_expr(&mut self, function_name: &str, expr: &Expr) {
-        match expr {
-            Expr::Call {
-                callee, args, span, ..
-            } => {
-                match self.hir.resolve_call(callee) {
-                    CallResolution::Resolved { signature, kind } => {
-                        if !matches!(kind, ResolvedCalleeKind::Constructor { .. })
-                            && !signature.effects.iter().any(|effect| effect == "no_block")
-                        {
-                            self.blocking_call_diagnostic(function_name, callee, span);
-                        }
-                    }
-                    CallResolution::EnumVariant | CallResolution::Unknown => {}
-                }
-                for arg in args {
-                    self.check_no_block_expr(function_name, &arg.value);
-                }
-            }
-            Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
-                self.check_no_block_expr(function_name, value);
-            }
-            Expr::Binary { left, right, .. } => {
-                self.check_no_block_expr(function_name, left);
-                self.check_no_block_expr(function_name, right);
-            }
-            Expr::Field { base, .. } => self.check_no_block_expr(function_name, base),
-            Expr::Index { base, index, .. } => {
-                self.check_no_block_expr(function_name, base);
-                self.check_no_block_expr(function_name, index);
-            }
-            Expr::Closure { body, .. } => self.check_no_block_block(function_name, body),
-            Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
-        }
-    }
-
-    fn check_no_panic_bodies(&mut self) {
-        let items = self.syntax_program.items.clone();
-        for item in &items {
-            let Item::Function(function) = item else {
-                continue;
-            };
-            if !function_has_effect(function, "no_panic") {
-                continue;
-            }
-            self.check_no_panic_block(&function.name, &function.body);
-        }
-    }
-
-    fn check_no_panic_block(&mut self, function_name: &str, block: &Block) {
-        for statement in &block.statements {
-            self.check_no_panic_stmt(function_name, statement);
-        }
-    }
-
-    fn check_no_panic_stmt(&mut self, function_name: &str, statement: &Stmt) {
-        match statement {
-            Stmt::Let(stmt) => {
-                if let Some(value) = &stmt.value {
-                    self.check_no_panic_expr(function_name, value);
-                }
-            }
-            Stmt::Return(stmt) => {
-                if let Some(value) = &stmt.value {
-                    self.check_no_panic_expr(function_name, value);
-                }
-            }
-            Stmt::Expr(value) => self.check_no_panic_expr(function_name, value),
-            Stmt::With(stmt) => {
-                self.check_no_panic_expr(function_name, &stmt.resource);
-                self.check_no_panic_block(function_name, &stmt.body);
-            }
-            Stmt::If(stmt) => {
-                self.check_no_panic_expr(function_name, &stmt.condition);
-                self.check_no_panic_block(function_name, &stmt.then_body);
-                if let Some(else_body) = &stmt.else_body {
-                    self.check_no_panic_block(function_name, else_body);
-                }
-            }
-            Stmt::Loop(stmt) => {
-                if let Some(condition) = &stmt.condition {
-                    self.check_no_panic_expr(function_name, condition);
-                }
-                self.check_no_panic_block(function_name, &stmt.body);
-            }
-            Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
-        }
-    }
-
-    fn check_no_panic_expr(&mut self, function_name: &str, expr: &Expr) {
-        match expr {
-            Expr::Call {
-                callee, args, span, ..
-            } => {
-                match self.hir.resolve_call(callee) {
-                    CallResolution::Resolved { signature, kind } => {
-                        if !matches!(kind, ResolvedCalleeKind::Constructor { .. })
-                            && !signature.effects.iter().any(|effect| effect == "no_panic")
-                        {
-                            self.panic_call_diagnostic(function_name, callee, span);
-                        }
-                    }
-                    CallResolution::EnumVariant | CallResolution::Unknown => {}
-                }
-                for arg in args {
-                    self.check_no_panic_expr(function_name, &arg.value);
-                }
-            }
-            Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
-                self.check_no_panic_expr(function_name, value);
-            }
-            Expr::Binary { left, right, .. } => {
-                self.check_no_panic_expr(function_name, left);
-                self.check_no_panic_expr(function_name, right);
-            }
-            Expr::Field { base, .. } => self.check_no_panic_expr(function_name, base),
-            Expr::Index { base, index, .. } => {
-                self.check_no_panic_expr(function_name, base);
-                self.check_no_panic_expr(function_name, index);
-            }
-            Expr::Closure { body, .. } => self.check_no_panic_block(function_name, body),
             Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
         }
     }
@@ -1430,6 +1214,23 @@ impl Analyzer<'_> {
                 "manual",
             ),
         );
+    }
+
+    fn runtime_guarantee_call_diagnostic(
+        &mut self,
+        guarantee: RuntimeGuarantee,
+        function_name: &str,
+        callee: &Callee,
+        span: &crate::diagnostic::Span,
+    ) {
+        match guarantee {
+            RuntimeGuarantee::Noalloc => {
+                self.allocating_call_diagnostic(function_name, callee, span)
+            }
+            RuntimeGuarantee::Pure => self.non_pure_call_diagnostic(function_name, callee, span),
+            RuntimeGuarantee::NoBlock => self.blocking_call_diagnostic(function_name, callee, span),
+            RuntimeGuarantee::NoPanic => self.panic_call_diagnostic(function_name, callee, span),
+        }
     }
 
     fn non_pure_call_diagnostic(
