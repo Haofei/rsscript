@@ -192,6 +192,16 @@ fn run_lower_rust_package(path: &str, source: &str, out_dir: &str) -> ExitCode {
         );
         return ExitCode::from(2);
     }
+    if let Err(error) = fs::write(
+        out_dir.join("rsscript-source-map.json"),
+        package.source_map_json,
+    ) {
+        eprintln!(
+            "failed to write {}: {error}",
+            out_dir.join("rsscript-source-map.json").display()
+        );
+        return ExitCode::from(2);
+    }
 
     println!(
         "wrote Rust package `{}` to {}",

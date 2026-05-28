@@ -19,5 +19,7 @@ pub use review::{
     review_sources,
 };
 pub use rust_lower::{
-    GeneratedRustPackage, lower_program_to_rust, lower_source_to_rust, lower_source_to_rust_package,
+    GeneratedRustPackage, LoweredRust, RustSourceMapEntry, lower_program_to_rust,
+    lower_program_to_rust_with_map, lower_source_to_rust, lower_source_to_rust_package,
+    lower_source_to_rust_with_map,
 };

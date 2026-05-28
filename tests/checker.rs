@@ -7,7 +7,8 @@ use rsscript::{
     ReviewMapClassification, ReviewRisk, analyze_source, explain_diagnostic_code,
     format_diagnostic_explanation, format_diagnostics_json, format_review_human,
     format_review_json, format_review_map_human, format_review_map_json, lower_source_to_rust,
-    lower_source_to_rust_package, review_map_sources, review_sources,
+    lower_source_to_rust_package, lower_source_to_rust_with_map, review_map_sources,
+    review_sources,
 };
 use serde_json::Value;
 
@@ -99,6 +100,45 @@ pub fn make_point(x: Int, y: Int) -> fresh Point {
     assert!(rust.contains("pub x: i64"));
     assert!(rust.contains("pub fn make_point(x: i64, y: i64) -> Point"));
     assert!(rust.contains("return Point { x: x, y: y };"));
+}
+
+#[test]
+fn rust_lowering_emits_machine_readable_source_map() {
+    let source = r#"
+mode: uses-local
+
+class Session {
+    id: Int
+}
+
+fn save(session: read Session) -> Unit
+
+pub fn make_session(id: Int) -> Session {
+    local session = Session(id: id)
+    save(session: read session)
+    return manage session
+}
+"#;
+    let lowered =
+        lower_source_to_rust_with_map("session.rss", source).expect("source should lower");
+    let kinds: Vec<&str> = lowered
+        .source_map
+        .iter()
+        .map(|entry| entry.kind.as_str())
+        .collect();
+
+    assert!(kinds.contains(&"function"));
+    assert!(kinds.contains(&"statement"));
+    assert!(kinds.contains(&"call"));
+    assert!(kinds.contains(&"named_arg"));
+    assert!(kinds.contains(&"manage"));
+    assert!(kinds.contains(&"field"));
+    assert!(lowered.source_map.iter().any(|entry| {
+        entry.source.file == "session.rss"
+            && entry.generated.file == "src/lib.rs"
+            && entry.generated.line > 0
+            && entry.generated.column > 0
+    }));
 }
 
 #[test]
@@ -202,6 +242,9 @@ pub fn make_point(x: Int, y: Int) -> fresh Point {
             .contains("rsscript-runtime = { path = \"/workspace/rsscript/runtime\" }")
     );
     assert!(package.lib_rs.contains("pub struct Point"));
+    let source_map: Value =
+        serde_json::from_str(&package.source_map_json).expect("source map JSON should parse");
+    assert!(source_map.as_array().is_some_and(|items| !items.is_empty()));
 }
 
 #[test]
