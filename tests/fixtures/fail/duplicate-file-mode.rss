@@ -1,0 +1,7 @@
+// expect: RS0006
+mode: managed
+mode: uses-local
+
+fn duplicate_mode() -> Unit {
+    return Unit
+}

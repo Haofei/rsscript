@@ -9,6 +9,7 @@ pub enum FileMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
     pub mode: Option<FileMode>,
+    pub mode_spans: Vec<Span>,
     pub items: Vec<Item>,
 }
 

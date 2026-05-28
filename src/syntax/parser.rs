@@ -22,10 +22,12 @@ struct Parser<'a> {
 impl Parser<'_> {
     fn parse_program(&mut self) -> Program {
         let mut mode = None;
+        let mut mode_spans = Vec::new();
         let mut items = Vec::new();
 
         while !self.is_eof() {
             if self.at_ident("mode") && self.peek_symbol(1, ":") {
+                mode_spans.push(self.tokens[self.index].span.clone());
                 mode = self.parse_mode();
             } else if self.at_ident("class") || self.at_ident("struct") || self.at_ident("resource")
             {
@@ -41,7 +43,11 @@ impl Parser<'_> {
             }
         }
 
-        Program { mode, items }
+        Program {
+            mode,
+            mode_spans,
+            items,
+        }
     }
 
     fn parse_mode(&mut self) -> Option<FileMode> {

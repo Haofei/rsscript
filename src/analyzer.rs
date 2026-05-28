@@ -29,6 +29,7 @@ pub(crate) struct Analyzer<'a> {
 impl Analyzer<'_> {
     fn run(&mut self) {
         self.check_file_mode_present();
+        self.check_single_file_mode();
         self.check_duplicate_declarations();
         self.check_signature_explicitness();
         self.check_resource_fields();
@@ -53,6 +54,25 @@ impl Analyzer<'_> {
                 .with_fix(
                     "add_mode",
                     "Add `mode: managed` or `mode: uses-local`.",
+                    "manual",
+                ),
+            );
+        }
+    }
+
+    fn check_single_file_mode(&mut self) {
+        for span in self.syntax_program.mode_spans.iter().skip(1) {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::DUPLICATE_FILE_MODE,
+                    "RSScript files must declare exactly one file mode.",
+                    span.clone(),
+                    "duplicate mode",
+                )
+                .with_cause("Only one top-level `mode:` declaration is allowed.")
+                .with_fix(
+                    "remove_duplicate_mode",
+                    "Remove the extra `mode:` declaration.",
                     "manual",
                 ),
             );
