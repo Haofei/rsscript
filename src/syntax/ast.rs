@@ -135,7 +135,7 @@ pub enum Expr {
     },
     Call {
         callee: Callee,
-        args: Vec<NamedArg>,
+        args: Vec<CallArg>,
         span: Span,
     },
     Effect {
@@ -161,8 +161,8 @@ pub enum Callee {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NamedArg {
-    pub name: String,
+pub struct CallArg {
+    pub name: Option<String>,
     pub value: Expr,
     pub span: Span,
 }

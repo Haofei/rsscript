@@ -1,0 +1,14 @@
+// expect: RS0101
+mode: managed
+
+resource DbConnection {
+    fd: Int
+
+    drop {
+        Db.close(fd: fd)
+    }
+}
+
+fn bad_pool(pool: read ResourcePool<DbConnection>) -> Unit {
+    ResourcePool.borrow(pool: mut pool)
+}

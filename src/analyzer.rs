@@ -1,15 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::ast::{
-    FileMode, FunctionDecl as IndexedFunctionDecl, Program, TypeKind, find_matching, ident_name,
-    parse_program,
-};
+use crate::ast::{Program, TypeKind, parse_program};
 use crate::diagnostic::Diagnostic;
 use crate::hir::{FunctionSig, Hir};
 use crate::lexer::{Token, TokenKind, lex};
 use crate::syntax::ast::{
-    Block as SyntaxBlock, Callee, DataEffect, Expr, FunctionDecl as SyntaxFunctionDecl, Item,
-    LetKind, Stmt,
+    Block as SyntaxBlock, CallArg, Callee, DataEffect, Expr, FileMode as SyntaxFileMode,
+    FunctionDecl as SyntaxFunctionDecl, Item, LetKind, Stmt,
 };
 use crate::syntax::parse_source;
 
@@ -42,8 +39,8 @@ impl Analyzer<'_> {
         self.check_file_mode_present();
         self.check_signature_explicitness();
         self.check_resource_fields();
-        self.check_mode_violations();
-        self.check_calls();
+        self.check_ast_mode_violations();
+        self.check_ast_calls();
         self.check_ast_functions();
         self.check_operator_overload_attempts();
     }
@@ -173,71 +170,189 @@ impl Analyzer<'_> {
         }
     }
 
-    fn check_mode_violations(&mut self) {
-        let Some((mode, _)) = self.program.mode else {
+    fn check_ast_mode_violations(&mut self) {
+        let Some(mode) = self.syntax_program.mode else {
             return;
         };
-        if mode != FileMode::Managed {
+        if mode != SyntaxFileMode::Managed {
             return;
         }
 
-        for token in self.tokens {
-            let violation = if token.is_ident_text("local") {
-                Some("`local` requires `mode: uses-local`.")
-            } else if token.is_ident_text("manage") {
-                Some("`manage` requires `mode: uses-local`.")
-            } else if token.is_ident_text("take") {
-                Some("`take` requires `mode: uses-local`.")
-            } else if token.is_ident_text("ResourcePool") {
-                Some("`ResourcePool<T>` requires `mode: uses-local`.")
-            } else {
-                None
-            };
-
-            if let Some(summary) = violation {
-                self.diagnostics.push(
-                    Diagnostic::error("RS0101", summary, token.span.clone(), "mode violation")
-                        .with_fix(
-                            "change_mode",
-                            "Change the file declaration to `mode: uses-local`.",
-                            "manual",
-                        ),
-                );
+        let items = self.syntax_program.items.clone();
+        for item in &items {
+            match item {
+                Item::Function(function) => {
+                    self.check_mode_violations_in_block(&function.body);
+                    for param in &function.params {
+                        if param.effect == Some(DataEffect::Take) {
+                            self.mode_violation(
+                                "`take` requires `mode: uses-local`.",
+                                param.span.clone(),
+                            );
+                        }
+                        self.check_mode_violations_in_type_ref(&param.ty);
+                    }
+                    if let Some(return_ty) = &function.return_ty {
+                        self.check_mode_violations_in_type_ref(return_ty);
+                    }
+                }
+                Item::Type(decl) => {
+                    for field in &decl.fields {
+                        self.check_mode_violations_in_type_ref(&field.ty);
+                    }
+                }
             }
         }
     }
 
-    fn check_calls(&mut self) {
-        let mut i = 0;
-        while i + 1 < self.tokens.len() {
-            let Some(call) = self.call_at(i) else {
-                i += 1;
-                continue;
-            };
-            if is_control_or_declaration_call(&call.name) || is_enum_variant_call(&call.name) {
-                i = call.close + 1;
-                continue;
+    fn check_mode_violations_in_block(&mut self, block: &SyntaxBlock) {
+        for statement in &block.statements {
+            match statement {
+                Stmt::Let(stmt) => {
+                    if stmt.kind == LetKind::Local {
+                        self.mode_violation(
+                            "`local` requires `mode: uses-local`.",
+                            stmt.span.clone(),
+                        );
+                    }
+                    if let Some(value) = &stmt.value {
+                        self.check_mode_violations_in_expr(value);
+                    }
+                }
+                Stmt::Return(stmt) => {
+                    if let Some(value) = &stmt.value {
+                        self.check_mode_violations_in_expr(value);
+                    }
+                }
+                Stmt::With(stmt) => {
+                    self.check_mode_violations_in_expr(&stmt.resource);
+                    self.check_mode_violations_in_block(&stmt.body);
+                }
+                Stmt::Expr(expr) => self.check_mode_violations_in_expr(expr),
+                Stmt::Unknown(_) => {}
             }
-
-            let args = split_top_level_args(self.tokens, call.open + 1, call.close);
-            self.check_named_arguments(&call, &args);
-            self.check_call_site_effects(&call, &args);
-            self.check_retaining_local_values(&call, &args);
-            i = call.close + 1;
         }
     }
 
-    fn check_named_arguments(&mut self, call: &CallSite, args: &[ArgRange]) {
+    fn check_mode_violations_in_expr(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Manage { value, span } => {
+                self.mode_violation("`manage` requires `mode: uses-local`.", span.clone());
+                self.check_mode_violations_in_expr(value);
+            }
+            Expr::Effect {
+                effect: DataEffect::Take,
+                value,
+                span,
+            } => {
+                self.mode_violation("`take` requires `mode: uses-local`.", span.clone());
+                self.check_mode_violations_in_expr(value);
+            }
+            Expr::Effect { value, .. } => self.check_mode_violations_in_expr(value),
+            Expr::Call { callee, args, .. } => {
+                if matches!(callee, Callee::Qualified { namespace, .. } if namespace == "ResourcePool")
+                    || matches!(callee, Callee::Name(name) if name == "ResourcePool")
+                {
+                    self.mode_violation(
+                        "`ResourcePool<T>` requires `mode: uses-local`.",
+                        expr.span().clone(),
+                    );
+                }
+                for arg in args {
+                    self.check_mode_violations_in_expr(&arg.value);
+                }
+            }
+            Expr::Field { base, .. } => self.check_mode_violations_in_expr(base),
+            Expr::Closure { body, .. } => self.check_mode_violations_in_block(body),
+            Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        }
+    }
+
+    fn check_mode_violations_in_type_ref(&mut self, ty: &crate::syntax::ast::TypeRef) {
+        if ty.name == "ResourcePool" {
+            self.mode_violation(
+                "`ResourcePool<T>` requires `mode: uses-local`.",
+                ty.span.clone(),
+            );
+        }
+        for arg in &ty.args {
+            self.check_mode_violations_in_type_ref(arg);
+        }
+    }
+
+    fn mode_violation(&mut self, summary: &str, span: crate::diagnostic::Span) {
+        self.diagnostics.push(
+            Diagnostic::error("RS0101", summary, span, "mode violation").with_fix(
+                "change_mode",
+                "Change the file declaration to `mode: uses-local`.",
+                "manual",
+            ),
+        );
+    }
+
+    fn check_ast_calls(&mut self) {
+        let items = self.syntax_program.items.clone();
+        for item in &items {
+            if let Item::Function(function) = item {
+                let locals = collect_local_bindings_from_block(&function.body);
+                self.check_calls_in_block(&function.body, &locals);
+            }
+        }
+    }
+
+    fn check_calls_in_block(&mut self, block: &SyntaxBlock, locals: &HashSet<String>) {
+        for statement in &block.statements {
+            match statement {
+                Stmt::Let(stmt) => {
+                    if let Some(value) = &stmt.value {
+                        self.check_calls_in_expr(value, locals);
+                    }
+                }
+                Stmt::Return(stmt) => {
+                    if let Some(value) = &stmt.value {
+                        self.check_calls_in_expr(value, locals);
+                    }
+                }
+                Stmt::With(stmt) => {
+                    self.check_calls_in_expr(&stmt.resource, locals);
+                    self.check_calls_in_block(&stmt.body, locals);
+                }
+                Stmt::Expr(expr) => self.check_calls_in_expr(expr, locals),
+                Stmt::Unknown(_) => {}
+            }
+        }
+    }
+
+    fn check_calls_in_expr(&mut self, expr: &Expr, locals: &HashSet<String>) {
+        match expr {
+            Expr::Call { callee, args, .. } => {
+                self.check_call_args(callee, args, locals);
+                for arg in args {
+                    self.check_calls_in_expr(&arg.value, locals);
+                }
+            }
+            Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
+                self.check_calls_in_expr(value, locals);
+            }
+            Expr::Field { base, .. } => self.check_calls_in_expr(base, locals),
+            Expr::Closure { body, .. } => self.check_calls_in_block(body, locals),
+            Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        }
+    }
+
+    fn check_call_args(&mut self, callee: &Callee, args: &[CallArg], locals: &HashSet<String>) {
+        let call_name = callee_name(callee);
+        if is_enum_variant_call(&call_name) {
+            return;
+        }
+
         for arg in args {
-            if arg.start >= arg.end {
-                continue;
-            }
-            if !is_named_arg(self.tokens, arg) {
+            if arg.name.is_none() {
                 self.diagnostics.push(
                     Diagnostic::error(
                         "RS0201",
-                        format!("call to `{}` uses an unnamed argument.", call.name),
-                        self.tokens[arg.start].span.clone(),
+                        format!("call to `{call_name}` uses an unnamed argument."),
+                        arg.span.clone(),
                         "argument must be named",
                     )
                     .with_cause(
@@ -251,13 +366,11 @@ impl Analyzer<'_> {
                 );
             }
         }
-    }
 
-    fn check_call_site_effects(&mut self, call: &CallSite, args: &[ArgRange]) {
-        let Some(function) = self.resolve_call(call) else {
+        let Some(signature) = self.resolve_callee(callee) else {
             return;
         };
-        let param_effects: HashMap<String, &'static str> = function
+        let param_effects: HashMap<String, &'static str> = signature
             .params
             .iter()
             .filter_map(|param| {
@@ -266,20 +379,21 @@ impl Analyzer<'_> {
                     .map(|effect| (param.name.clone(), effect.as_str()))
             })
             .collect();
+        let retained_params = signature.retained_params.clone();
 
         for arg in args {
-            let Some((name, value_start, value_end)) = named_arg_parts(self.tokens, arg) else {
+            let Some(name) = &arg.name else {
                 continue;
             };
             let Some(expected) = param_effects.get(name) else {
                 continue;
             };
-            if value_start >= value_end || !self.tokens[value_start].is_ident_text(expected) {
+            if expr_data_effect(&arg.value) != Some(*expected) {
                 self.diagnostics.push(
                     Diagnostic::error(
                         "RS0202",
-                        format!("argument `{name}` for `{}` is missing `{expected}`.", call.name),
-                        self.tokens[value_start.min(value_end.saturating_sub(1))].span.clone(),
+                        format!("argument `{name}` for `{call_name}` is missing `{expected}`."),
+                        arg.value.span().clone(),
                         "missing data effect",
                     )
                     .with_cause("Non-Copy parameters require an explicit `read`, `mut`, or `take` call-site effect.")
@@ -291,46 +405,31 @@ impl Analyzer<'_> {
                 );
             }
         }
-    }
-
-    fn check_retaining_local_values(&mut self, call: &CallSite, args: &[ArgRange]) {
-        let Some(function) = self.resolve_call(call) else {
-            return;
-        };
-        let retained_params = function.retained_params.clone();
-        if retained_params.is_empty() {
-            return;
-        }
-        let Some(owner) = self.enclosing_function(call.open) else {
-            return;
-        };
-        let locals = collect_local_bindings(self.tokens, owner.body_start, owner.body_end);
 
         for arg in args {
-            let Some((name, value_start, value_end)) = named_arg_parts(self.tokens, arg) else {
+            let Some(name) = &arg.name else {
                 continue;
             };
             if !retained_params.contains(name) {
                 continue;
             }
-            if value_start + 1 < value_end
-                && self.tokens[value_start].is_ident_text("read")
-                && ident_name(&self.tokens[value_start + 1]).is_some_and(|var| locals.contains(var))
+            if let Expr::Effect {
+                effect: DataEffect::Read,
+                value,
+                ..
+            } = &arg.value
+                && let Expr::Ident(var, span) = value.as_ref()
+                && locals.contains(var)
             {
-                let var = self.tokens[value_start + 1].text();
                 self.diagnostics.push(
                     Diagnostic::error(
                         "RS0501",
-                        format!(
-                            "retaining API `{}` cannot retain local value `{var}`.",
-                            call.name
-                        ),
-                        self.tokens[value_start + 1].span.clone(),
+                        format!("retaining API `{call_name}` cannot retain local value `{var}`."),
+                        span.clone(),
                         "local value retained",
                     )
                     .with_cause(format!(
-                        "`{}` declares `effects(retains({name}))`.",
-                        call.name
+                        "`{call_name}` declares `effects(retains({name}))`."
                     ))
                     .with_fix(
                         "manage_local",
@@ -503,12 +602,7 @@ impl Analyzer<'_> {
         }
     }
 
-    fn apply_retention_effects(
-        &self,
-        callee: &Callee,
-        args: &[crate::syntax::ast::NamedArg],
-        state: &mut BodyState,
-    ) {
+    fn apply_retention_effects(&self, callee: &Callee, args: &[CallArg], state: &mut BodyState) {
         let Some(signature) = self.resolve_callee(callee) else {
             return;
         };
@@ -517,7 +611,10 @@ impl Analyzer<'_> {
         }
 
         for arg in args {
-            if !signature.retained_params.contains(&arg.name) {
+            let Some(name) = &arg.name else {
+                continue;
+            };
+            if !signature.retained_params.contains(name) {
                 continue;
             }
             if let Expr::Effect {
@@ -854,51 +951,6 @@ impl Analyzer<'_> {
         }
     }
 
-    fn call_at(&self, index: usize) -> Option<CallSite> {
-        let direct_name = ident_name(self.tokens.get(index)?)?;
-        if self
-            .tokens
-            .get(index + 1)
-            .is_some_and(|token| token.symbol("("))
-        {
-            let open = index + 1;
-            let close = find_matching(self.tokens, open, "(", ")")?;
-            return Some(CallSite {
-                namespace: None,
-                name: direct_name.to_string(),
-                open,
-                close,
-            });
-        }
-
-        if self
-            .tokens
-            .get(index + 1)
-            .is_some_and(|token| token.symbol("."))
-            && self.tokens.get(index + 2).and_then(ident_name).is_some()
-            && self
-                .tokens
-                .get(index + 3)
-                .is_some_and(|token| token.symbol("("))
-        {
-            let open = index + 3;
-            let close = find_matching(self.tokens, open, "(", ")")?;
-            return Some(CallSite {
-                namespace: Some(self.tokens[index].text()),
-                name: self.tokens[index + 2].text(),
-                open,
-                close,
-            });
-        }
-
-        None
-    }
-
-    fn resolve_call(&self, call: &CallSite) -> Option<&FunctionSig> {
-        self.hir
-            .resolve_function(call.namespace.as_deref(), &call.name)
-    }
-
     fn resolve_callee(&self, callee: &Callee) -> Option<&FunctionSig> {
         match callee {
             Callee::Name(name) => self.hir.resolve_function(None, name),
@@ -907,27 +959,6 @@ impl Analyzer<'_> {
             }
         }
     }
-
-    fn enclosing_function(&self, token_index: usize) -> Option<&IndexedFunctionDecl> {
-        self.program
-            .functions
-            .values()
-            .find(|function| token_index >= function.body_start && token_index < function.body_end)
-    }
-}
-
-#[derive(Debug)]
-struct CallSite {
-    namespace: Option<String>,
-    name: String,
-    open: usize,
-    close: usize,
-}
-
-#[derive(Debug)]
-struct ArgRange {
-    start: usize,
-    end: usize,
 }
 
 #[derive(Debug, Default)]
@@ -984,74 +1015,77 @@ fn collect_expr_idents(expr: &Expr, uses: &mut Vec<(String, crate::diagnostic::S
     }
 }
 
-fn split_top_level_args(tokens: &[Token], start: usize, end: usize) -> Vec<ArgRange> {
-    let mut args = Vec::new();
-    let mut depth = 0usize;
-    let mut arg_start = start;
-    for (index, token) in tokens.iter().enumerate().take(end).skip(start) {
-        if token.symbol("(") || token.symbol("<") || token.symbol("[") || token.symbol("{") {
-            depth += 1;
-        } else if token.symbol(")") || token.symbol(">") || token.symbol("]") || token.symbol("}") {
-            depth = depth.saturating_sub(1);
-        } else if depth == 0 && token.symbol(",") {
-            args.push(ArgRange {
-                start: arg_start,
-                end: index,
-            });
-            arg_start = index + 1;
-        }
-    }
-    if arg_start < end {
-        args.push(ArgRange {
-            start: arg_start,
-            end,
-        });
-    }
-    args
-}
-
-fn is_named_arg(tokens: &[Token], arg: &ArgRange) -> bool {
-    tokens.get(arg.start).and_then(ident_name).is_some_and(|_| {
-        tokens
-            .get(arg.start + 1)
-            .is_some_and(|token| token.symbol(":"))
-    })
-}
-
-fn named_arg_parts<'a>(tokens: &'a [Token], arg: &ArgRange) -> Option<(&'a str, usize, usize)> {
-    let name = tokens.get(arg.start).and_then(ident_name)?;
-    if !tokens
-        .get(arg.start + 1)
-        .is_some_and(|token| token.symbol(":"))
-    {
-        return None;
-    }
-    Some((name, arg.start + 2, arg.end))
-}
-
-fn is_control_or_declaration_call(name: &str) -> bool {
-    matches!(
-        name,
-        "fn" | "effects" | "retains" | "if" | "for" | "while" | "match" | "return"
-    )
-}
-
 fn is_enum_variant_call(name: &str) -> bool {
     matches!(name, "Ok" | "Err" | "Some" | "None" | "Result" | "Option")
 }
 
-fn collect_local_bindings(tokens: &[Token], start: usize, end: usize) -> HashSet<String> {
-    collect_bindings(tokens, start, end, "local")
+fn callee_name(callee: &Callee) -> String {
+    match callee {
+        Callee::Name(name) => name.clone(),
+        Callee::Qualified { name, .. } => name.clone(),
+    }
 }
 
-fn collect_bindings(tokens: &[Token], start: usize, end: usize, keyword: &str) -> HashSet<String> {
-    let mut bindings = HashSet::new();
-    for index in start..end.saturating_sub(1) {
-        if tokens[index].is_ident_text(keyword)
-            && let Some(name) = tokens.get(index + 1).and_then(ident_name)
-        {
-            bindings.insert(name.to_string());
+fn expr_data_effect(expr: &Expr) -> Option<&'static str> {
+    match expr {
+        Expr::Effect { effect, .. } => Some(match effect {
+            DataEffect::Read => "read",
+            DataEffect::Mut => "mut",
+            DataEffect::Take => "take",
+        }),
+        _ => None,
+    }
+}
+
+fn collect_local_bindings_from_block(block: &SyntaxBlock) -> HashSet<String> {
+    let mut locals = HashSet::new();
+    collect_local_bindings_from_statements(&block.statements, &mut locals);
+    locals
+}
+
+fn collect_local_bindings_from_statements(statements: &[Stmt], locals: &mut HashSet<String>) {
+    for statement in statements {
+        match statement {
+            Stmt::Let(stmt) if stmt.kind == LetKind::Local => {
+                locals.insert(stmt.name.clone());
+                if let Some(value) = &stmt.value {
+                    collect_local_bindings_from_expr(value, locals);
+                }
+            }
+            Stmt::Let(stmt) => {
+                if let Some(value) = &stmt.value {
+                    collect_local_bindings_from_expr(value, locals);
+                }
+            }
+            Stmt::Return(stmt) => {
+                if let Some(value) = &stmt.value {
+                    collect_local_bindings_from_expr(value, locals);
+                }
+            }
+            Stmt::With(stmt) => {
+                collect_local_bindings_from_expr(&stmt.resource, locals);
+                collect_local_bindings_from_statements(&stmt.body.statements, locals);
+            }
+            Stmt::Expr(expr) => collect_local_bindings_from_expr(expr, locals),
+            Stmt::Unknown(_) => {}
         }
     }
-    bindings
+}
+
+fn collect_local_bindings_from_expr(expr: &Expr, locals: &mut HashSet<String>) {
+    match expr {
+        Expr::Call { args, .. } => {
+            for arg in args {
+                collect_local_bindings_from_expr(&arg.value, locals);
+            }
+        }
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
+            collect_local_bindings_from_expr(value, locals);
+        }
+        Expr::Field { base, .. } => collect_local_bindings_from_expr(base, locals),
+        Expr::Closure { body, .. } => {
+            collect_local_bindings_from_statements(&body.statements, locals);
+        }
+        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+    }
 }

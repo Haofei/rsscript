@@ -44,7 +44,6 @@ pub struct FunctionDecl {
     pub return_type: Option<String>,
     pub effects: Vec<String>,
     pub body_start: usize,
-    pub body_end: usize,
 }
 
 #[derive(Debug, Default)]
@@ -211,13 +210,13 @@ impl Parser<'_> {
             self.index = close + 1;
         }
 
-        let (body_start, body_end) = if self.at_symbol("{") {
+        let body_start = if self.at_symbol("{") {
             let open = self.index;
             let close = self.find_matching(open, "{", "}").unwrap_or(open);
             self.index = close + 1;
-            (open + 1, close)
+            open + 1
         } else {
-            (self.index, self.index)
+            self.index
         };
 
         self.program.functions.insert(
@@ -228,7 +227,6 @@ impl Parser<'_> {
                 return_type,
                 effects,
                 body_start,
-                body_end,
             },
         );
     }

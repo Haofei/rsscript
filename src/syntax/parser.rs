@@ -1,7 +1,7 @@
 use crate::lexer::{Token, TokenKind, lex};
 use crate::syntax::ast::{
-    Block, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileMode, FunctionDecl, Item, LetKind,
-    LetStmt, NamedArg, Param, Program, ReturnStmt, Stmt, TypeDecl, TypeKind, TypeRef, WithStmt,
+    Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileMode, FunctionDecl, Item,
+    LetKind, LetStmt, Param, Program, ReturnStmt, Stmt, TypeDecl, TypeKind, TypeRef, WithStmt,
 };
 
 pub fn parse_source(file: &str, source: &str) -> Program {
@@ -500,7 +500,7 @@ fn parse_call_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
     if close >= end {
         return None;
     }
-    let args = parse_named_args(tokens, open + 1, close);
+    let args = parse_call_args(tokens, open + 1, close);
     Some(Expr::Call {
         callee,
         args,
@@ -519,20 +519,27 @@ fn parse_field_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> 
     })
 }
 
-fn parse_named_args(tokens: &[Token], start: usize, end: usize) -> Vec<NamedArg> {
+fn parse_call_args(tokens: &[Token], start: usize, end: usize) -> Vec<CallArg> {
     split_top_level(tokens, start, end, ",")
         .into_iter()
         .filter_map(|(start, end)| {
-            let name = tokens.get(start).and_then(ident_name)?;
-            if !tokens.get(start + 1).is_some_and(|token| token.symbol(":")) {
-                return None;
+            if let Some(name) = tokens.get(start).and_then(ident_name)
+                && tokens.get(start + 1).is_some_and(|token| token.symbol(":"))
+            {
+                let value = parse_expr(tokens, start + 2, end)?;
+                Some(CallArg {
+                    name: Some(name.to_string()),
+                    value,
+                    span: tokens[start].span.clone(),
+                })
+            } else {
+                let value = parse_expr(tokens, start, end)?;
+                Some(CallArg {
+                    name: None,
+                    value,
+                    span: tokens[start].span.clone(),
+                })
             }
-            let value = parse_expr(tokens, start + 2, end)?;
-            Some(NamedArg {
-                name: name.to_string(),
-                value,
-                span: tokens[start].span.clone(),
-            })
         })
         .collect()
 }

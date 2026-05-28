@@ -1,0 +1,6 @@
+// expect: RS0201
+mode: managed
+
+fn bad_nested(path: read Path) -> Unit {
+    Log.write(message: String.concat("prefix", right: read path))
+}
