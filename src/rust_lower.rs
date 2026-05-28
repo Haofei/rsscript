@@ -811,6 +811,9 @@ impl<'a> RustLowerer<'a> {
             "Fd" => "i64".to_string(),
             "Bytes" | "Buffer" => "Vec<u8>".to_string(),
             "Path" => "std::path::PathBuf".to_string(),
+            "Cache" if !self.type_kinds.contains_key("Cache") => {
+                "rsscript_runtime::Cache".to_string()
+            }
             "Rule" if !self.type_kinds.contains_key("Rule") => "rsscript_runtime::Rule".to_string(),
             "Config" if !self.type_kinds.contains_key("Config") => {
                 "rsscript_runtime::Config".to_string()
@@ -1197,6 +1200,10 @@ fn lower_callee(callee: &Callee) -> String {
         callee if is_buffer_consume_callee(callee) => {
             "rsscript_runtime::buffer_consume".to_string()
         }
+        callee if is_cache_new_callee(callee) => "rsscript_runtime::cache_new".to_string(),
+        callee if is_cache_insert_callee(callee) => "rsscript_runtime::cache_insert".to_string(),
+        callee if is_cache_lookup_callee(callee) => "rsscript_runtime::cache_lookup".to_string(),
+        callee if is_cache_get_callee(callee) => "rsscript_runtime::cache_get".to_string(),
         callee if is_file_open_callee(callee) => "rsscript_runtime::file_open".to_string(),
         callee if is_file_open_read_callee(callee) => {
             "rsscript_runtime::file_open_read".to_string()
@@ -1329,6 +1336,22 @@ fn is_list_consume_callee(callee: &Callee) -> bool {
 
 fn is_buffer_consume_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Buffer" && name == "consume")
+}
+
+fn is_cache_new_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Cache" && name == "new")
+}
+
+fn is_cache_insert_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Cache" && name == "insert")
+}
+
+fn is_cache_lookup_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Cache" && name == "lookup")
+}
+
+fn is_cache_get_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Cache" && name == "get")
 }
 
 fn is_string_concat_callee(callee: &Callee) -> bool {

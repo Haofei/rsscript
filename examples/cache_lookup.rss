@@ -1,0 +1,13 @@
+fn main() -> Unit {
+    let cache = Cache.new()
+    Cache.insert(
+        cache: mut cache,
+        key: read "/users",
+        value: read "handled /users",
+    )
+
+    let body = Cache.lookup(cache: read cache, key: read "/users")
+    Assert.equal(left: read body, right: read "handled /users")
+    Log.write(message: read body)
+    return Unit
+}

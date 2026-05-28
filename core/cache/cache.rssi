@@ -1,0 +1,12 @@
+pub fn Cache.new() -> fresh Cache
+
+pub fn Cache.insert(
+    cache: mut Cache,
+    key: read String,
+    value: read String,
+) -> Unit
+    effects(retains(value))
+
+pub fn Cache.lookup(cache: read Cache, key: read String) -> String
+
+pub fn Cache.get(cache: read Cache) -> Image

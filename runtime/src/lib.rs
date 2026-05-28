@@ -1,5 +1,5 @@
 use std::cell::{BorrowError, BorrowMutError, Ref, RefCell, RefMut};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io::{Read, Write};
 use std::ops::{Deref, DerefMut};
@@ -38,6 +38,11 @@ pub struct ConfigValue {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigStore {
     current: ConfigValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cache {
+    entries: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -381,6 +386,35 @@ pub fn list_consume<T>(list: Vec<T>) {
 
 pub fn buffer_consume(buffer: Vec<u8>) {
     drop(buffer);
+}
+
+pub fn cache_new() -> Cache {
+    Cache {
+        entries: HashMap::new(),
+    }
+}
+
+pub fn cache_insert(cache: &mut Cache, key: &str, value: &str) {
+    cache.entries.insert(key.to_string(), value.to_string());
+}
+
+pub fn cache_lookup(cache: &Cache, key: &str) -> String {
+    cache.entries.get(key).cloned().unwrap_or_default()
+}
+
+pub fn cache_get(cache: &Cache) -> Image {
+    let bytes = cache
+        .entries
+        .values()
+        .next()
+        .map(|value| value.as_bytes().to_vec())
+        .unwrap_or_default();
+    Image {
+        bytes,
+        width: None,
+        height: None,
+        operations: vec!["cache-get"],
+    }
 }
 
 pub fn request_new(path: &str) -> Request {
@@ -1120,6 +1154,16 @@ mod tests {
         super::list_consume(vec![1_i64, 2, 3]);
         super::buffer_consume(b"bytes".to_vec());
         super::os_close(0);
+    }
+
+    #[test]
+    fn cache_runtime_hooks_insert_and_lookup_values() {
+        let mut cache = super::cache_new();
+
+        super::cache_insert(&mut cache, "/users", "handled /users");
+
+        assert_eq!(super::cache_lookup(&cache, "/users"), "handled /users");
+        assert_eq!(super::cache_get(&cache).bytes, b"handled /users");
     }
 
     #[test]

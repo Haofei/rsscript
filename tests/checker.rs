@@ -90,6 +90,11 @@ fn bundled_core_interfaces_are_available_to_checker() {
     assert!(
         core_interfaces()
             .iter()
+            .any(|(path, _)| *path == "core/cache/cache.rssi")
+    );
+    assert!(
+        core_interfaces()
+            .iter()
             .any(|(path, _)| *path == "core/collections/buffer.rssi")
     );
     assert!(
@@ -370,6 +375,30 @@ fn consume_buffer(buffer: take Buffer) -> Unit {
     assert!(rust.contains("rsscript_runtime::list_consume(list);"));
     assert!(rust.contains("fn consume_buffer(buffer: Vec<u8>)"));
     assert!(rust.contains("rsscript_runtime::buffer_consume(buffer);"));
+}
+
+#[test]
+fn rust_lowering_maps_cache_core_calls_to_runtime_hooks() {
+    let source = r#"
+fn main() -> Unit {
+    let cache = Cache.new()
+    Cache.insert(cache: mut cache, key: read "/users", value: read "handled /users")
+    let body = Cache.lookup(cache: read cache, key: read "/users")
+    Log.write(message: read body)
+    return Unit
+}
+"#;
+    let rust = lower_source_to_rust("cache.rss", source).expect("source should lower");
+
+    assert!(rust.contains("let mut cache = rsscript_runtime::cache_new();"));
+    assert!(rust.contains(
+        "rsscript_runtime::cache_insert(&mut cache, &\"/users\".to_string(), &\"handled /users\".to_string());"
+    ));
+    assert!(
+        rust.contains(
+            "let body = rsscript_runtime::cache_lookup(&cache, &\"/users\".to_string());"
+        )
+    );
 }
 
 #[test]

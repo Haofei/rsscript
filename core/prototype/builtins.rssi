@@ -1,3 +1,0 @@
-pub fn Cache.lookup(cache: read Cache, key: read String)
-
-pub fn Cache.get(cache: read Cache)

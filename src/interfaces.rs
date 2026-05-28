@@ -1,5 +1,9 @@
 pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
     (
+        "core/cache/cache.rssi",
+        include_str!("../core/cache/cache.rssi"),
+    ),
+    (
         "core/cache/image_cache.rssi",
         include_str!("../core/cache/image_cache.rssi"),
     ),
@@ -62,14 +66,6 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
     ),
 ];
 
-pub(crate) const PROTOTYPE_INTERFACES: &[(&str, &str)] = &[(
-    "core/prototype/builtins.rssi",
-    include_str!("../core/prototype/builtins.rssi"),
-)];
-
 pub(crate) fn builtin_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
-    CORE_INTERFACES
-        .iter()
-        .chain(PROTOTYPE_INTERFACES.iter())
-        .copied()
+    CORE_INTERFACES.iter().copied()
 }
