@@ -1,0 +1,8 @@
+
+struct Settings {
+    features: String
+}
+
+fn load_settings() -> Settings {
+    return Settings(features: "safe")
+}

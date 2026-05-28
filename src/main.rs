@@ -532,20 +532,20 @@ enum ReviewCommand<'a> {
 
 fn parse_review_args(args: &[String]) -> ReviewCommand<'_> {
     let mut json = false;
-    let mut mode = None;
+    let mut command = None;
     let mut paths = Vec::new();
 
     for arg in args {
         if arg == "--json" {
             json = true;
         } else if arg == "--diff" || arg == "--map" {
-            mode = Some(arg.as_str());
+            command = Some(arg.as_str());
         } else {
             paths.push(arg.as_str());
         }
     }
 
-    match (mode, paths.as_slice()) {
+    match (command, paths.as_slice()) {
         (Some("--map"), [path]) => ReviewCommand::Map { json, path },
         (Some("--diff") | None, [old_path, new_path]) => ReviewCommand::Diff {
             json,

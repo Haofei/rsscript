@@ -1,5 +1,4 @@
 // expect: RS0101
-mode: managed
 
 resource DbConnection {
     fd: Int

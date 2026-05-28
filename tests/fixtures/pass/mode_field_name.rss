@@ -1,9 +1,0 @@
-mode: managed
-
-struct Settings {
-    mode: String
-}
-
-fn load_settings() -> Settings {
-    return Settings(mode: "safe")
-}

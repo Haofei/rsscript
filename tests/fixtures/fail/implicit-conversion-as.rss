@@ -1,5 +1,4 @@
 // expect: RS1002
-mode: managed
 
 fn widen(value: Int) -> Int64 {
     let widened = value as Int64

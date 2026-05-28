@@ -1,5 +1,5 @@
 // expect: RS0601
-mode: uses-local
+features: local
 
 class ImageCache {
     entries: List<Image>

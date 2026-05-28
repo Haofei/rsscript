@@ -134,7 +134,7 @@ Users should not need ownership or lifetime reasoning for ordinary application c
 Performance-sensitive code can opt into local exclusive values.
 
 ```rust
-mode: uses-local
+features: local
 
 fn process(path: read Path) -> Result<fresh Image, ImageError> {
     local image = Image.load(path: read path)?
@@ -602,31 +602,26 @@ RSScript users review RSScript semantics, not Rust lowering mechanics.
 
 ---
 
-# 8. File Modes
+# 8. File Features
 
-A file may declare a semantic mode.
+A file may declare advanced review-relevant capabilities.
 
-If omitted, the file is managed-only by default.
+If omitted, the file is managed-only and enables no advanced capability.
 
 ---
 
-## 8.1 Omitted mode
+## 8.1 Omitted features
 
-A file without a mode declaration is equivalent to:
+A file without a `features:` declaration is managed-only:
 
 ```rust
-mode: managed
 ```
 
 This lowers entry friction for ordinary scripts.
 
 ---
 
-## 8.2 `mode: managed`
-
-```rust
-mode: managed
-```
+## 8.2 Default Managed File
 
 Allowed:
 
@@ -651,12 +646,12 @@ ResourcePool<T>
 
 ---
 
-## 8.3 `mode: uses-local`
+## 8.3 `features: local`
 
 Required if a file uses local capability.
 
 ```rust
-mode: uses-local
+features: local
 ```
 
 Required for:
@@ -670,7 +665,47 @@ ResourcePool<T: Resource>
 local containers
 ```
 
-Mode describes semantic capability, not style.
+Features describe semantic capability, not style.
+
+---
+
+## 8.4 Reserved Features
+
+Only `local` is implemented for the MVP.
+
+The following feature names are reserved for future review-relevant capabilities:
+
+```text
+native
+unsafe
+async
+device
+ffi
+reflection
+```
+
+They are reserved because they may affect review risk, checker behavior, source mapping, or runtime boundaries.
+
+Ordinary library areas are not features:
+
+```text
+Json
+File
+Map
+HTTP
+Image
+Regex
+```
+
+Do not add a feature unless it:
+
+```text
+opens a capability managed-only files cannot use
+changes review risk
+requires compiler or checker handling
+can be declared clearly at file scope
+preserves canonical style
+```
 
 There is only one canonical surface style.
 
@@ -938,7 +973,7 @@ cannot be stored in managed objects
 cannot be captured by managed closures
 ```
 
-`local` is allowed only in `mode: uses-local`.
+`local` is allowed only with `features: local`.
 
 ---
 
@@ -954,7 +989,7 @@ with File.open(path: read path) as file {
 
 The resource is dropped when the block exits.
 
-`with` is allowed in both file modes.
+`with` is allowed in managed-only files and files with advanced features.
 
 ---
 
@@ -1103,7 +1138,7 @@ consume(buffer: take buffer)
 
 After the call, `buffer` is moved.
 
-`take` is allowed only in `mode: uses-local`.
+`take` is allowed only with `features: local`.
 
 A managed value cannot be passed to `take`.
 
@@ -1542,7 +1577,7 @@ Resources are not fresh values.
 
 ---
 
-## 19.2 Caller selects mode
+## 19.2 Caller selects ownership capability
 
 ```rust
 let image = Image.load(path: read path)?
@@ -1761,7 +1796,7 @@ captured by a managed closure
 `ResourcePool<T: Resource>` is the standard-library escape hatch for long-lived resources.
 
 ```rust
-mode: uses-local
+features: local
 
 local pool = ResourcePool<DbConnection>.new(
     create: || DbConnection.open(url: read url),
@@ -1777,7 +1812,7 @@ Rules:
 
 ```text
 ResourcePool itself must be local
-ResourcePool is allowed only in mode: uses-local
+ResourcePool is allowed only with features: local
 borrow returns a with-compatible resource lease
 pool drop releases all held resources
 resource values cannot escape the pool lease
@@ -1818,7 +1853,7 @@ List.push(list: mut images, value: read (manage image))
 Local containers are advanced standard-library types.
 
 ```rust
-mode: uses-local
+features: local
 
 local buffers = LocalVec<Buffer>.new()
 ```
@@ -1974,7 +2009,7 @@ with-bound resources
 A closure bound with `local` is local and may move-capture local values.
 
 ```rust
-mode: uses-local
+features: local
 
 local buffer = Buffer.new(size: 1024)
 
@@ -2111,7 +2146,7 @@ let json = Json.parse(text: read body)?
 Library implementations should use local scratch buffers and `*_into` APIs where performance matters.
 
 ```rust
-mode: uses-local
+features: local
 
 pub fn parse(text: read String) -> Result<fresh JsonValue, JsonError> {
     local scratch = JsonScratch.new(
@@ -2323,7 +2358,7 @@ local captured by managed closure
 take of handle field
 implicit conversion attempt
 operator overload attempt
-mode violation
+feature violation
 unmappable rustc diagnostic
 native boundary violation
 ```
@@ -2502,6 +2537,7 @@ manage operation
 effects(retains(...))
 with resource
 ResourcePool
+file features such as local/native/unsafe/async/device
 native / unsafe
 unknown external call
 writes to managed state
@@ -2690,7 +2726,7 @@ fn write_text(path: read Path, text: read String) -> Result<Unit, IOError> {
 ## 36.2 Image pipeline
 
 ```rust
-mode: uses-local
+features: local
 
 fn make_thumbnail(input: read Path, output: read Path) -> Result<Unit, ImageError> {
     local image = Image.load(path: read input)?
@@ -2733,7 +2769,7 @@ cache_put(cache: mut cache, key: read key, value: read (manage image))
 ## 36.4 Config with handle fields
 
 ```rust
-mode: uses-local
+features: local
 
 struct Config {
     name: String
@@ -2758,7 +2794,7 @@ fn load_config(path: read Path) -> Result<fresh Config, ConfigError> {
 ## 36.5 Resource pool
 
 ```rust
-mode: uses-local
+features: local
 
 fn run_queries(url: read Url, queries: read List<Query>) -> Result<Unit, DbError> {
     local pool = ResourcePool<DbConnection>.new(

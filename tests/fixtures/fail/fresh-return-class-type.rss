@@ -1,5 +1,4 @@
 // expect: RS0603
-mode: managed
 
 class User {
     name: String

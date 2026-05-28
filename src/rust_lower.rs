@@ -6,7 +6,7 @@ use std::process::Command;
 use crate::analyzer::analyze_source;
 use crate::diagnostic::{Diagnostic, Severity, Span, code};
 use crate::syntax::ast::{
-    BinaryOp, Block, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileMode, FunctionDecl,
+    BinaryOp, Block, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature, FunctionDecl,
     GenericBound, GenericParam, Item, LetKind, Param, Program, Stmt, TypeDecl, TypeKind, TypeRef,
 };
 use crate::syntax::parse_source;
@@ -293,10 +293,10 @@ impl<'a> RustLowerer<'a> {
         out.push_str(
             "// Runtime hooks are intentionally explicit while Rust lowering is stabilizing.\n",
         );
-        if self.program.mode == Some(FileMode::UsesLocal) {
-            out.push_str("// RSScript mode: uses-local\n");
+        if self.program.has_feature(FileFeature::Local) {
+            out.push_str("// RSScript features: local\n");
         } else {
-            out.push_str("// RSScript mode: managed\n");
+            out.push_str("// RSScript features: <none>\n");
         }
         out.push('\n');
 

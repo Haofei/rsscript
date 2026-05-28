@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
 
 pub mod code {
-    pub const MISSING_FILE_MODE: &str = "RS0001";
+    pub const RESERVED_DIAGNOSTIC_RS0001: &str = "RS0001";
     pub const MISSING_RETURN_TYPE: &str = "RS0002";
     pub const MISSING_PARAMETER_TYPE: &str = "RS0003";
     pub const UNKNOWN_EFFECT: &str = "RS0004";
     pub const DUPLICATE_DECLARATION: &str = "RS0005";
-    pub const DUPLICATE_FILE_MODE: &str = "RS0006";
+    pub const DUPLICATE_FEATURE_DECLARATION: &str = "RS0006";
     pub const UNKNOWN_RETAINED_PARAMETER: &str = "RS0007";
     pub const MISSING_PARAMETER_EFFECT: &str = "RS0008";
     pub const INVALID_PURE_EFFECT: &str = "RS0009";
@@ -15,7 +15,7 @@ pub mod code {
     pub const REMOVED_RUNTIME_EFFECT: &str = "RS0012";
     pub const INVALID_TRY_OPERATOR: &str = "RS0013";
     pub const INVALID_NOALLOC_ALLOCATION: &str = "RS0014";
-    pub const FILE_MODE_VIOLATION: &str = "RS0101";
+    pub const FEATURE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
     pub const UNKNOWN_ARGUMENT: &str = "RS0203";
@@ -46,7 +46,7 @@ pub mod code {
     pub const RUSTC_DIAGNOSTIC_MAPPED: &str = "RS1101";
     pub const RUSTC_DIAGNOSTIC_UNMAPPABLE: &str = "RS1102";
 
-    pub const REVIEW_MODE_CHANGED: &str = "RSR001";
+    pub const REVIEW_FEATURES_CHANGED: &str = "RSR001";
     pub const REVIEW_FUNCTION_REMOVED: &str = "RSR002";
     pub const REVIEW_FUNCTION_ADDED: &str = "RSR003";
     pub const REVIEW_PARAMS_CHANGED: &str = "RSR004";
@@ -215,9 +215,9 @@ pub fn format_diagnostics_human(diagnostics: &[Diagnostic]) -> String {
 
 static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
-        code: code::MISSING_FILE_MODE,
-        title: "missing file mode",
-        explanation: "`mode: managed` is optional in RSScript v0.5. Omitted mode means managed-only; `mode: uses-local` is required for local ownership features.",
+        code: code::RESERVED_DIAGNOSTIC_RS0001,
+        title: "reserved diagnostic",
+        explanation: "RS0001 is reserved after RSScript migrated to `features:` declarations.",
     },
     DiagnosticExplanation {
         code: code::MISSING_RETURN_TYPE,
@@ -240,9 +240,9 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         explanation: "Top-level type, constructor, and function names must be unique so symbol resolution cannot silently overwrite an earlier declaration.",
     },
     DiagnosticExplanation {
-        code: code::DUPLICATE_FILE_MODE,
-        title: "duplicate file mode",
-        explanation: "RSScript files may declare at most one explicit semantic mode. Multiple `mode:` declarations make local-capability review ambiguous.",
+        code: code::DUPLICATE_FEATURE_DECLARATION,
+        title: "duplicate features declaration",
+        explanation: "RSScript files may declare at most one `features:` header. Multiple declarations make review capability boundaries ambiguous.",
     },
     DiagnosticExplanation {
         code: code::UNKNOWN_RETAINED_PARAMETER,
@@ -262,7 +262,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::REMOVED_PROFILE_DECLARATION,
         title: "removed profile declaration",
-        explanation: "RSScript v0.5 does not include `profile:` declarations. The only top-level semantic file declaration is `mode:`, and managed-only mode may be omitted.",
+        explanation: "RSScript v0.5 does not include `profile:` declarations. Use `features:` only for advanced file-level capabilities; omitted features means managed-only.",
     },
     DiagnosticExplanation {
         code: code::REMOVED_SHARE_EFFECT,
@@ -285,9 +285,9 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         explanation: "`effects(noalloc)` forbids obvious allocation sites such as value construction and `manage` migration.",
     },
     DiagnosticExplanation {
-        code: code::FILE_MODE_VIOLATION,
-        title: "file mode violation",
-        explanation: "`mode: managed` files cannot use local-only features such as `local`, `manage`, `take`, or `ResourcePool<T>`.",
+        code: code::FEATURE_VIOLATION,
+        title: "feature violation",
+        explanation: "Managed-only files cannot use advanced local capabilities such as `local`, `manage`, `take`, or `ResourcePool<T>` unless they declare `features: local`.",
     },
     DiagnosticExplanation {
         code: code::UNNAMED_ARGUMENT,

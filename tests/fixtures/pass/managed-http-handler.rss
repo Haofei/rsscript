@@ -1,4 +1,3 @@
-mode: managed
 
 class AppState {
     cache: Cache

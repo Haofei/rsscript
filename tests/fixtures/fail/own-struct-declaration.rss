@@ -1,5 +1,4 @@
 // expect: RS1003
-mode: managed
 
 own struct Buffer {
     bytes: Bytes

@@ -1,17 +1,30 @@
 use crate::diagnostic::Span;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FileMode {
-    Managed,
-    UsesLocal,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FileFeature {
+    Local,
+    Native,
+    Unsafe,
+    Async,
+    Device,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
-    pub mode: Option<FileMode>,
-    pub mode_spans: Vec<Span>,
+    pub features: Vec<FileFeature>,
+    pub feature_spans: Vec<Span>,
     pub profile_spans: Vec<Span>,
     pub items: Vec<Item>,
+}
+
+impl Program {
+    pub fn has_feature(&self, feature: FileFeature) -> bool {
+        self.features.contains(&feature)
+    }
+
+    pub fn local_capability_enabled(&self) -> bool {
+        self.has_feature(FileFeature::Local)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

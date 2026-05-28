@@ -1,5 +1,5 @@
 // expect: RS0501
-mode: uses-local
+features: local
 
 class ImageCache {
     entries: Map<String, Image>

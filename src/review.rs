@@ -5,8 +5,8 @@ use serde::Serialize;
 use crate::diagnostic::{Span, code};
 use crate::hir::{CallResolution, Hir, ResolvedCalleeKind};
 use crate::syntax::ast::{
-    Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileMode, FunctionDecl, Item,
-    LetKind, Param, Stmt, TypeDecl, TypeKind, TypeRef,
+    Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature, FunctionDecl,
+    Item, LetKind, Param, Stmt, TypeDecl, TypeKind, TypeRef,
 };
 use crate::syntax::parse_source;
 
@@ -94,6 +94,7 @@ pub struct ReviewMapCategorySummary {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReviewMapFile {
     pub file: String,
+    pub features: Vec<String>,
     pub regions: Vec<ReviewMapRegion>,
 }
 
@@ -119,7 +120,7 @@ pub enum ReviewMapClassification {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewRisk {
-    Mode,
+    Feature,
     Api,
     TypeLayout,
     Effect,
@@ -131,7 +132,7 @@ pub enum ReviewRisk {
 impl ReviewRisk {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Mode => "mode",
+            Self::Feature => "feature",
             Self::Api => "api",
             Self::TypeLayout => "type-layout",
             Self::Effect => "effect",
@@ -152,18 +153,18 @@ pub fn review_sources(
     let new_program = parse_source(new_file, new_source);
     let mut findings = Vec::new();
 
-    if normalized_file_mode(old_program.mode) != normalized_file_mode(new_program.mode) {
+    if feature_label(&old_program.features) != feature_label(&new_program.features) {
         findings.push(review_finding(
-            code::REVIEW_MODE_CHANGED,
-            ReviewRisk::Mode,
+            code::REVIEW_FEATURES_CHANGED,
+            ReviewRisk::Feature,
             format!(
-                "file mode changed from {} to {}.",
-                file_mode_label(old_program.mode),
-                file_mode_label(new_program.mode)
+                "file features changed from {} to {}.",
+                feature_label(&old_program.features),
+                feature_label(&new_program.features)
             ),
             Vec::new(),
-            Some(file_mode_label(old_program.mode).to_string()),
-            Some(file_mode_label(new_program.mode).to_string()),
+            Some(feature_label(&old_program.features)),
+            Some(feature_label(&new_program.features)),
         ));
     }
 
@@ -354,6 +355,7 @@ fn review_map_file(file: &str, source: &str) -> ReviewMapFile {
 
     ReviewMapFile {
         file: file.to_string(),
+        features: feature_names(&program.features),
         regions,
     }
 }
@@ -719,9 +721,9 @@ fn review_finding(
 
 fn review_fixes(code: &str) -> Vec<ReviewFix> {
     let (kind, title) = match code {
-        code::REVIEW_MODE_CHANGED => (
-            "review_file_mode",
-            "Review whether this file should allow local ownership features.",
+        code::REVIEW_FEATURES_CHANGED => (
+            "review_file_features",
+            "Review whether this file should enable the changed advanced capabilities.",
         ),
         code::REVIEW_FUNCTION_REMOVED => (
             "restore_or_migrate_function",
@@ -1032,18 +1034,32 @@ fn compare_type(old: &TypeSig, new: &TypeSig, findings: &mut Vec<ReviewFinding>)
     }
 }
 
-fn file_mode_label(mode: Option<FileMode>) -> &'static str {
-    file_mode_label_normalized(normalized_file_mode(mode))
+fn feature_label(features: &[FileFeature]) -> String {
+    let labels = feature_names(features);
+    if labels.is_empty() {
+        return "<none>".to_string();
+    }
+    labels.join(",")
 }
 
-fn normalized_file_mode(mode: Option<FileMode>) -> FileMode {
-    mode.unwrap_or(FileMode::Managed)
+fn feature_names(features: &[FileFeature]) -> Vec<String> {
+    let mut labels = features
+        .iter()
+        .map(feature_name)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    labels.sort_unstable();
+    labels.dedup();
+    labels
 }
 
-fn file_mode_label_normalized(mode: FileMode) -> &'static str {
-    match mode {
-        FileMode::Managed => "managed",
-        FileMode::UsesLocal => "uses-local",
+fn feature_name(feature: &FileFeature) -> &'static str {
+    match feature {
+        FileFeature::Local => "local",
+        FileFeature::Native => "native",
+        FileFeature::Unsafe => "unsafe",
+        FileFeature::Async => "async",
+        FileFeature::Device => "device",
     }
 }
 

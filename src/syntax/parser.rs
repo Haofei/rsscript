@@ -1,6 +1,6 @@
 use crate::lexer::{Token, TokenKind, lex};
 use crate::syntax::ast::{
-    BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileMode,
+    BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature,
     FunctionDecl, GenericBound, GenericParam, IfStmt, Item, LetKind, LetStmt, LoopStmt, Param,
     Program, ReturnStmt, Stmt, TypeDecl, TypeKind, TypeRef, WithStmt,
 };
@@ -21,15 +21,15 @@ struct Parser<'a> {
 
 impl Parser<'_> {
     fn parse_program(&mut self) -> Program {
-        let mut mode = None;
-        let mut mode_spans = Vec::new();
+        let mut features = Vec::new();
+        let mut feature_spans = Vec::new();
         let mut profile_spans = Vec::new();
         let mut items = Vec::new();
 
         while !self.is_eof() {
-            if self.at_ident("mode") && self.peek_symbol(1, ":") {
-                mode_spans.push(self.tokens[self.index].span.clone());
-                mode = self.parse_mode();
+            if self.at_ident("features") && self.peek_symbol(1, ":") {
+                feature_spans.push(self.tokens[self.index].span.clone());
+                features.extend(self.parse_features());
             } else if self.at_ident("profile") && self.peek_symbol(1, ":") {
                 profile_spans.push(self.tokens[self.index].span.clone());
                 self.index += 1;
@@ -48,27 +48,28 @@ impl Parser<'_> {
         }
 
         Program {
-            mode,
-            mode_spans,
+            features,
+            feature_spans,
             profile_spans,
             items,
         }
     }
 
-    fn parse_mode(&mut self) -> Option<FileMode> {
+    fn parse_features(&mut self) -> Vec<FileFeature> {
         self.index += 2;
-        let mode = if self.at_ident("managed") {
-            Some(FileMode::Managed)
-        } else if self.at_ident("uses") && self.peek_symbol(1, "-") && self.peek_ident(2, "local") {
-            self.index += 2;
-            Some(FileMode::UsesLocal)
-        } else if self.at_ident("uses-local") {
-            Some(FileMode::UsesLocal)
-        } else {
-            None
-        };
-        self.index += 1;
-        mode
+        let end = declaration_line_end(self.tokens, self.index);
+        let mut features = Vec::new();
+        while self.index < end {
+            if self.at_symbol(",") {
+                self.index += 1;
+                continue;
+            }
+            if let Some(feature) = parse_file_feature(self.tokens.get(self.index)) {
+                features.push(feature);
+            }
+            self.index += 1;
+        }
+        features
     }
 
     fn parse_type_decl(&mut self) -> Option<TypeDecl> {
@@ -191,12 +192,6 @@ impl Parser<'_> {
     fn at_ident(&self, text: &str) -> bool {
         self.tokens
             .get(self.index)
-            .is_some_and(|token| token.is_ident_text(text))
-    }
-
-    fn peek_ident(&self, offset: usize, text: &str) -> bool {
-        self.tokens
-            .get(self.index + offset)
             .is_some_and(|token| token.is_ident_text(text))
     }
 
@@ -328,7 +323,7 @@ fn starts_top_level_item(tokens: &[Token], index: usize) -> bool {
     if index > 0 && tokens[index - 1].span.line == token.span.line {
         return false;
     }
-    token.is_ident_text("mode")
+    token.is_ident_text("features")
         || token.is_ident_text("profile")
         || token.is_ident_text("class")
         || token.is_ident_text("struct")
@@ -970,6 +965,23 @@ fn parse_data_effect(token: Option<&Token>) -> Option<DataEffect> {
     }
 }
 
+fn parse_file_feature(token: Option<&Token>) -> Option<FileFeature> {
+    let token = token?;
+    if token.is_ident_text("local") {
+        Some(FileFeature::Local)
+    } else if token.is_ident_text("native") {
+        Some(FileFeature::Native)
+    } else if token.is_ident_text("unsafe") {
+        Some(FileFeature::Unsafe)
+    } else if token.is_ident_text("async") {
+        Some(FileFeature::Async)
+    } else if token.is_ident_text("device") {
+        Some(FileFeature::Device)
+    } else {
+        None
+    }
+}
+
 fn statement_end(tokens: &[Token], start: usize, limit: usize) -> usize {
     let line = tokens[start].span.line;
     let mut depth = 0usize;
@@ -1115,7 +1127,7 @@ mod tests {
         let program = parse_source(
             "test.rss",
             r#"
-mode: uses-local
+features: local
 
 fn run() -> Unit {
     local pool = ResourcePool<Image>.new(

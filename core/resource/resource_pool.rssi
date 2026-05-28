@@ -1,4 +1,4 @@
-mode: uses-local
+features: local
 
 struct ResourcePool<T: Resource>
 

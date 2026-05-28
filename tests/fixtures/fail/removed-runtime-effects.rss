@@ -1,5 +1,4 @@
 // expect: RS0012
-mode: managed
 
 struct Image {
     pixels: Buffer

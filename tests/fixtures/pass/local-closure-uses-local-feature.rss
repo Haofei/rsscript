@@ -1,4 +1,4 @@
-mode: uses-local
+features: local
 
 fn run() -> Unit {
     local callback = || {

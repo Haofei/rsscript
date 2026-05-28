@@ -1,5 +1,5 @@
 // expect: RS0303
-mode: uses-local
+features: local
 
 class Cache {
     entries: Entries

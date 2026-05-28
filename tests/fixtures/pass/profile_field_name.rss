@@ -1,4 +1,3 @@
-mode: managed
 
 struct Settings {
     profile: String

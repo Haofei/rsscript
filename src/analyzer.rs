@@ -87,7 +87,7 @@ pub(crate) struct Analyzer<'a> {
 
 impl Analyzer<'_> {
     fn run(&mut self) {
-        self.check_single_file_mode();
+        self.check_single_feature_declaration();
         self.check_removed_profile_declarations();
         self.check_duplicate_declarations();
         self.check_signature_explicitness();
@@ -97,25 +97,25 @@ impl Analyzer<'_> {
         self.check_resource_fields();
         self.check_resource_pool_type_arguments();
         self.check_resource_generic_arguments();
-        checks::mode::check(self);
+        checks::features::check(self);
         checks::calls::check(self);
         checks::body::check(self);
         checks::forbidden::check(self);
     }
 
-    fn check_single_file_mode(&mut self) {
-        for span in self.syntax_program.mode_spans.iter().skip(1) {
+    fn check_single_feature_declaration(&mut self) {
+        for span in self.syntax_program.feature_spans.iter().skip(1) {
             self.diagnostics.push(
                 Diagnostic::error(
-                    code::DUPLICATE_FILE_MODE,
-                    "RSScript files may declare at most one explicit file mode.",
+                    code::DUPLICATE_FEATURE_DECLARATION,
+                    "RSScript files may declare at most one explicit feature header.",
                     span.clone(),
-                    "duplicate mode",
+                    "duplicate features",
                 )
-                .with_cause("Only one top-level `mode:` declaration is allowed.")
+                .with_cause("Only one top-level `features:` declaration is allowed.")
                 .with_fix(
-                    "remove_duplicate_mode",
-                    "Remove the extra `mode:` declaration.",
+                    "remove_duplicate_features",
+                    "Merge the feature list into one `features:` declaration.",
                     "manual",
                 ),
             );
@@ -131,10 +131,10 @@ impl Analyzer<'_> {
                     span.clone(),
                     "removed profile declaration",
                 )
-                .with_cause("v0.5 uses `mode:` as the only top-level semantic file declaration, and `mode: managed` may be omitted.")
+                .with_cause("v0.5 uses `features:` for file-level advanced capabilities; omitted features means managed-only.")
                 .with_fix(
                     "remove_profile",
-                    "Remove `profile:` and add `mode: uses-local` only if the file uses local ownership features.",
+                    "Remove `profile:` and add `features: local` only if the file uses local ownership features.",
                     "manual",
                 ),
             );

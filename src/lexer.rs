@@ -252,9 +252,7 @@ fn is_ident_continue(ch: char) -> bool {
 
 fn keyword(text: &str) -> Option<&'static str> {
     Some(match text {
-        "mode" => "mode",
-        "managed" => "managed",
-        "uses-local" => "uses-local",
+        "features" => "features",
         "class" => "class",
         "struct" => "struct",
         "resource" => "resource",

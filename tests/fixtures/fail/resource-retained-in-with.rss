@@ -1,5 +1,5 @@
 // expect: RS0702
-mode: uses-local
+features: local
 
 resource File {
     fd: Int

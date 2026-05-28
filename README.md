@@ -91,6 +91,8 @@ application state
 Hot paths can opt into local exclusive values.
 
 ```rust
+features: local
+
 local scratch = Buffer.new(size: 4096)
 
 with File.open(path: read path) as file {
@@ -111,6 +113,16 @@ tool argument buffers
 compiler scratch space
 image/audio preprocessing
 ```
+
+### Features Are Review Signals
+
+Files are managed-only by default. Advanced capabilities must be declared with `features:`.
+
+```rust
+features: local
+```
+
+The MVP implements only `local`. Future feature names such as `native`, `unsafe`, `async`, and `device` are reserved for capabilities that change review risk or require checker/runtime support. Ordinary libraries like JSON, File, Image, HTTP, Map, and Regex are not features.
 
 ### Reviewable at the boundary
 

@@ -1,4 +1,3 @@
-mode: managed
 
 class Schema {
     name: String

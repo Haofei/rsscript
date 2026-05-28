@@ -1,5 +1,4 @@
 // expect: RS0010
-mode: managed
 profile: review
 
 fn main() -> Unit {

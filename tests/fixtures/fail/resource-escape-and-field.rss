@@ -1,5 +1,4 @@
 // expect: RS0701 RS0702
-mode: managed
 
 resource File {
     fd: Int

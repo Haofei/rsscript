@@ -105,7 +105,7 @@ pub struct HirCallSite {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HirModeUseKind {
+pub enum HirFeatureUseKind {
     LocalLet,
     LocalClosure,
     Manage,
@@ -114,9 +114,9 @@ pub enum HirModeUseKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HirModeUse {
+pub struct HirFeatureUse {
     pub function_name: Option<String>,
-    pub kind: HirModeUseKind,
+    pub kind: HirFeatureUseKind,
     pub span: Span,
 }
 
@@ -315,7 +315,7 @@ pub struct Hir {
     field_accesses: Vec<HirFieldAccess>,
     effect_events: Vec<HirEffectEvent>,
     returns: Vec<HirReturn>,
-    mode_uses: Vec<HirModeUse>,
+    feature_uses: Vec<HirFeatureUse>,
     function_bodies: HashMap<String, HirFunctionBody>,
 }
 
@@ -424,8 +424,8 @@ impl Hir {
         self.function_bodies.get(function_name)
     }
 
-    pub fn mode_uses(&self) -> &[HirModeUse] {
-        &self.mode_uses
+    pub fn feature_uses(&self) -> &[HirFeatureUse] {
+        &self.feature_uses
     }
 
     pub fn resolve_call(&self, callee: &Callee) -> CallResolution {
@@ -486,7 +486,7 @@ impl Hir {
         for item in &program.items {
             match item {
                 Item::Function(function) => collect_function_body_facts(self, function, &mut facts),
-                Item::Type(type_decl) => collect_type_mode_uses(type_decl, &mut facts),
+                Item::Type(type_decl) => collect_type_feature_uses(type_decl, &mut facts),
             }
         }
 
@@ -496,7 +496,7 @@ impl Hir {
         self.field_accesses = facts.field_accesses;
         self.effect_events = facts.effect_events;
         self.returns = facts.returns;
-        self.mode_uses = facts.mode_uses;
+        self.feature_uses = facts.feature_uses;
     }
 }
 
@@ -553,23 +553,23 @@ struct BodyFacts {
     field_accesses: Vec<HirFieldAccess>,
     effect_events: Vec<HirEffectEvent>,
     returns: Vec<HirReturn>,
-    mode_uses: Vec<HirModeUse>,
+    feature_uses: Vec<HirFeatureUse>,
 }
 
 fn collect_function_body_facts(hir: &Hir, function: &FunctionDecl, facts: &mut BodyFacts) {
     let mut value_types = HashMap::new();
     for param in &function.params {
         if param.effect == Some(DataEffect::Take) {
-            facts.mode_uses.push(HirModeUse {
+            facts.feature_uses.push(HirFeatureUse {
                 function_name: Some(function.name.clone()),
-                kind: HirModeUseKind::Take,
+                kind: HirFeatureUseKind::Take,
                 span: param.span.clone(),
             });
         }
-        collect_mode_uses_in_type_ref(
+        collect_feature_uses_in_type_ref(
             Some(&function.name),
             &param.ty,
-            HirModeUseKind::ResourcePool,
+            HirFeatureUseKind::ResourcePool,
             facts,
         );
         let param_type = type_ref_name(&param.ty);
@@ -583,10 +583,10 @@ fn collect_function_body_facts(hir: &Hir, function: &FunctionDecl, facts: &mut B
         });
     }
     if let Some(return_ty) = &function.return_ty {
-        collect_mode_uses_in_type_ref(
+        collect_feature_uses_in_type_ref(
             Some(&function.name),
             return_ty,
-            HirModeUseKind::ResourcePool,
+            HirFeatureUseKind::ResourcePool,
             facts,
         );
     }
@@ -603,27 +603,27 @@ fn collect_function_body_facts(hir: &Hir, function: &FunctionDecl, facts: &mut B
     collect_body_facts_in_block(hir, &function.name, &function.body, &mut value_types, facts);
 }
 
-fn collect_type_mode_uses(type_decl: &TypeDecl, facts: &mut BodyFacts) {
+fn collect_type_feature_uses(type_decl: &TypeDecl, facts: &mut BodyFacts) {
     for field in &type_decl.fields {
-        collect_mode_uses_in_type_ref(None, &field.ty, HirModeUseKind::ResourcePool, facts);
+        collect_feature_uses_in_type_ref(None, &field.ty, HirFeatureUseKind::ResourcePool, facts);
     }
 }
 
-fn collect_mode_uses_in_type_ref(
+fn collect_feature_uses_in_type_ref(
     function_name: Option<&str>,
     ty: &TypeRef,
-    kind: HirModeUseKind,
+    kind: HirFeatureUseKind,
     facts: &mut BodyFacts,
 ) {
     if ty.name == "ResourcePool" {
-        facts.mode_uses.push(HirModeUse {
+        facts.feature_uses.push(HirFeatureUse {
             function_name: function_name.map(str::to_string),
             kind,
             span: ty.span.clone(),
         });
     }
     for arg in &ty.args {
-        collect_mode_uses_in_type_ref(function_name, arg, kind, facts);
+        collect_feature_uses_in_type_ref(function_name, arg, kind, facts);
     }
 }
 
@@ -931,12 +931,12 @@ fn collect_body_facts_in_stmt(
     match statement {
         Stmt::Let(stmt) => {
             if stmt.kind == LetKind::Local {
-                facts.mode_uses.push(HirModeUse {
+                facts.feature_uses.push(HirFeatureUse {
                     function_name: Some(function_name.to_string()),
                     kind: if matches!(stmt.value, Some(Expr::Closure { .. })) {
-                        HirModeUseKind::LocalClosure
+                        HirFeatureUseKind::LocalClosure
                     } else {
-                        HirModeUseKind::LocalLet
+                        HirFeatureUseKind::LocalLet
                     },
                     span: stmt.span.clone(),
                 });
@@ -1019,9 +1019,9 @@ fn collect_body_facts_in_expr(
         Expr::Call { callee, args, span } => {
             let resolution = hir.resolve_call(callee);
             if is_resource_pool_callee(callee) {
-                facts.mode_uses.push(HirModeUse {
+                facts.feature_uses.push(HirFeatureUse {
                     function_name: Some(function_name.to_string()),
-                    kind: HirModeUseKind::ResourcePool,
+                    kind: HirFeatureUseKind::ResourcePool,
                     span: span.clone(),
                 });
             }
@@ -1037,9 +1037,9 @@ fn collect_body_facts_in_expr(
             }
         }
         Expr::Manage { value, span } => {
-            facts.mode_uses.push(HirModeUse {
+            facts.feature_uses.push(HirFeatureUse {
                 function_name: Some(function_name.to_string()),
-                kind: HirModeUseKind::Manage,
+                kind: HirFeatureUseKind::Manage,
                 span: span.clone(),
             });
             if let Some((binding_name, value_span)) = direct_ident(value) {
@@ -1058,9 +1058,9 @@ fn collect_body_facts_in_expr(
             value,
             span,
         } => {
-            facts.mode_uses.push(HirModeUse {
+            facts.feature_uses.push(HirFeatureUse {
                 function_name: Some(function_name.to_string()),
-                kind: HirModeUseKind::Take,
+                kind: HirFeatureUseKind::Take,
                 span: span.clone(),
             });
             if let Some((binding_name, value_span)) = direct_ident(value) {
@@ -1924,7 +1924,7 @@ mod tests {
     #[test]
     fn collects_type_kinds_and_handle_fields() {
         let source = r#"
-mode: uses-local
+features: local
 
 class User {
     name: String
@@ -1964,7 +1964,6 @@ struct Session {
     #[test]
     fn keeps_builtin_and_user_function_signatures() {
         let source = r#"
-mode: managed
 
 fn cache_put(cache: mut Cache, value: read Image) -> Unit
     effects(retains(value))
@@ -1994,7 +1993,6 @@ fn cache_put(cache: mut Cache, value: read Image) -> Unit
     #[test]
     fn records_duplicate_callable_symbols() {
         let source = r#"
-mode: managed
 
 struct Image {
     pixels: Buffer
@@ -2020,7 +2018,6 @@ fn Image(path: read Path) -> Image {
     #[test]
     fn records_duplicate_fields() {
         let source = r#"
-mode: managed
 
 struct Response {
     status: Int
@@ -2044,7 +2041,6 @@ struct Response {
     #[test]
     fn resolves_body_call_sites() {
         let source = r#"
-mode: managed
 
 struct Response {
     status: Int
@@ -2125,7 +2121,7 @@ fn render(body: read String) -> Result<fresh Response, HttpError> {
     #[test]
     fn records_local_binding_facts() {
         let source = r#"
-mode: uses-local
+features: local
 
 fn load(path: read Path) -> Unit {
     local image = Image.load(path: read path)
@@ -2158,7 +2154,7 @@ fn load(path: read Path) -> Unit {
     #[test]
     fn propagates_resource_pool_generic_lease_types() {
         let source = r#"
-mode: uses-local
+features: local
 
 resource DbConnection {
     fd: Int
@@ -2224,7 +2220,7 @@ fn run(pool: mut ResourcePool<DbConnection>) -> Unit {
     #[test]
     fn records_field_access_facts() {
         let source = r#"
-mode: uses-local
+features: local
 
 class Rules {
 }
@@ -2262,7 +2258,7 @@ fn take_rules(config: mut Config) -> Unit {
     #[test]
     fn records_effect_events() {
         let source = r#"
-mode: uses-local
+features: local
 
 fn publish(cache: mut ImageCache, path: read Path) -> Unit {
     local image = Image.load(path: read path)
@@ -2303,7 +2299,7 @@ fn publish(cache: mut ImageCache, path: read Path) -> Unit {
     #[test]
     fn lowers_resolved_statement_expression_tree_for_function_body() {
         let source = r#"
-mode: uses-local
+features: local
 
 class Rules {
 }
@@ -2379,7 +2375,6 @@ fn update(cache: mut ImageCache, config: mut Config, path: read Path) -> Unit {
     #[test]
     fn classifies_fresh_return_facts() {
         let source = r#"
-mode: managed
 
 struct Response {
     status: Int

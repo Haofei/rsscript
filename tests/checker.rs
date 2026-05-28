@@ -238,7 +238,7 @@ pub fn unit_result() -> Result<Unit, BuildError> {
 #[test]
 fn rust_lowering_maps_try_operator_to_rust_result_propagation() {
     let source = r#"
-mode: uses-local
+features: local
 
 struct BuildError {
     code: Int
@@ -289,7 +289,7 @@ fn rust_lowering_matches_golden_fixture() {
 #[test]
 fn rust_lowering_emits_machine_readable_source_map() {
     let source = r#"
-mode: uses-local
+features: local
 
 class Session {
     id: Int
@@ -328,7 +328,7 @@ pub fn make_session(id: Int) -> Session {
 #[test]
 fn rustc_diagnostics_map_back_to_rsscript_source_spans() {
     let source = r#"
-mode: uses-local
+features: local
 
 class Session {
     id: Int
@@ -395,7 +395,7 @@ fn rustc_diagnostic_line_remap_ignores_non_diagnostic_messages() {
 #[test]
 fn rust_lowering_targets_runtime_crate_hooks() {
     let source = r#"
-mode: uses-local
+features: local
 
 resource DbConnection {
     fd: Int
@@ -417,7 +417,7 @@ fn pooled(pool: mut ResourcePool<DbConnection>) -> Unit
 #[test]
 fn rust_lowering_emits_source_spans_for_resource_pool_borrow() {
     let source = r#"
-mode: uses-local
+features: local
 
 resource DbConnection {
     fd: Int
@@ -437,7 +437,7 @@ fn pooled(pool: mut ResourcePool<DbConnection>) -> Unit {
 #[test]
 fn rust_lowering_wraps_managed_class_returns_in_gc() {
     let source = r#"
-mode: uses-local
+features: local
 
 class Session {
     id: Int
@@ -459,7 +459,7 @@ pub fn make_session(id: Int) -> Session {
 #[test]
 fn rust_lowering_maps_read_and_mut_effects_to_rust_borrows() {
     let source = r#"
-mode: uses-local
+features: local
 
 struct Counter {
     value: Int
@@ -521,7 +521,7 @@ pub fn make_point(x: Int, y: Int) -> fresh Point {
 #[test]
 fn rust_lowering_is_gated_by_diagnostics() {
     let source = r#"
-mode: uses-local
+features: local
 
 struct Image {
     pixels: Buffer
@@ -545,7 +545,6 @@ fn bad(path: read Path) -> Unit {
 #[test]
 fn review_json_uses_protocol_shape() {
     let old_source = r#"
-mode: managed
 
 fn render(path: read Path) -> Image
     effects(no_panic)
@@ -554,7 +553,7 @@ fn render(path: read Path) -> Image
 }
 "#;
     let new_source = r#"
-mode: uses-local
+features: local
 
 fn render(path: take Path) -> fresh Image
     effects(retains(path))
@@ -570,7 +569,7 @@ fn render(path: take Path) -> fresh Image
     assert!(
         items
             .iter()
-            .any(|item| item["code"] == "RSR001" && item["risk"] == "mode")
+            .any(|item| item["code"] == "RSR001" && item["risk"] == "feature")
     );
     assert!(
         items
@@ -643,7 +642,6 @@ fn syntax_parser_accepts_all_fixtures() {
 #[test]
 fn review_reports_api_contract_changes() {
     let old_source = r#"
-mode: managed
 
 fn render(path: read Path) -> Image
     effects(no_panic)
@@ -652,7 +650,7 @@ fn render(path: read Path) -> Image
 }
 "#;
     let new_source = r#"
-mode: uses-local
+features: local
 
 fn render(path: take Path, width: Int) -> fresh Image
     effects(retains(path))
@@ -679,7 +677,7 @@ fn inspect(image: read Image) -> Unit {
     assert!(
         findings
             .iter()
-            .any(|finding| finding.code == "RSR001" && finding.risk == ReviewRisk::Mode)
+            .any(|finding| finding.code == "RSR001" && finding.risk == ReviewRisk::Feature)
     );
     assert!(
         findings
@@ -722,7 +720,6 @@ async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError> {
 #[test]
 fn review_reports_new_unsafe_native_usage() {
     let old_source = r#"
-mode: managed
 
 fn checksum(data: read Bytes) -> UInt64
     effects(no_panic)
@@ -731,7 +728,6 @@ fn checksum(data: read Bytes) -> UInt64
 }
 "#;
     let new_source = r#"
-mode: managed
 
 fn checksum(data: read Bytes) -> UInt64
     effects(no_panic, unsafe, native)
@@ -763,7 +759,6 @@ fn checksum(data: read Bytes) -> UInt64
 #[test]
 fn review_reports_removed_guarantees() {
     let old_source = r#"
-mode: managed
 
 fn checksum(data: read Bytes) -> UInt64
     effects(noalloc, no_panic, pure)
@@ -772,7 +767,6 @@ fn checksum(data: read Bytes) -> UInt64
 }
 "#;
     let new_source = r#"
-mode: managed
 
 fn checksum(data: read Bytes) -> UInt64
     effects(no_panic)
@@ -809,7 +803,6 @@ fn checksum(data: read Bytes) -> UInt64
 #[test]
 fn review_reports_type_layout_changes() {
     let old_source = r#"
-mode: managed
 
 struct Config {
     rules: List<Rule>
@@ -825,7 +818,6 @@ resource File {
 }
 "#;
     let new_source = r#"
-mode: managed
 
 class Config {
     rules: handle List<Rule>
@@ -857,7 +849,7 @@ struct Session {
 #[test]
 fn review_reports_local_manage_boundary_changes() {
     let old_source = r#"
-mode: uses-local
+features: local
 
 struct Image {
     pixels: Buffer
@@ -868,7 +860,7 @@ fn publish(path: read Path) -> Unit {
 }
 "#;
     let new_source = r#"
-mode: uses-local
+features: local
 
 struct Image {
     pixels: Buffer
@@ -959,6 +951,11 @@ fn delegated(value: read Int) -> Int {
             .as_array()
             .is_some_and(|files| files.len() == 1)
     );
+    assert!(
+        value["files"][0]["features"]
+            .as_array()
+            .is_some_and(|features| features.is_empty())
+    );
 
     assert!(regions.iter().any(|region| {
         region.function == "helper" && region.classification == ReviewMapClassification::Foldable
@@ -990,7 +987,7 @@ pub fn field_string(
 "#;
     let program = parse_source("json.rssi", source);
 
-    assert!(program.mode.is_none());
+    assert!(program.features.is_empty());
     assert_eq!(program.items.len(), 3);
     assert!(matches!(&program.items[0], Item::Type(type_decl) if type_decl.name == "JsonValue"));
     assert!(
@@ -1254,6 +1251,24 @@ fn update(counter: read Counter) -> Unit {
                 .iter()
                 .any(|reason| reason == "mut call-site effect")
     }));
+}
+
+#[test]
+fn review_map_reports_file_features() {
+    let source = r#"
+features: local, native
+
+fn process() -> Unit {
+    return Unit
+}
+"#;
+    let map = review_map_sources(vec![("features.rss", source)]);
+
+    assert_eq!(map.files[0].features, vec!["local", "native"]);
+    let json: Value =
+        serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
+    assert_eq!(json["files"][0]["features"][0], "local");
+    assert_eq!(json["files"][0]["features"][1], "native");
 }
 
 fn fixture_paths(directory: &str) -> Vec<PathBuf> {

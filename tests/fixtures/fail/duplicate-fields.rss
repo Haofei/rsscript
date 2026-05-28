@@ -1,5 +1,4 @@
 // expect: RS0005
-mode: managed
 
 struct Response {
     status: Int

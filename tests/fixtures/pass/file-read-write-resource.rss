@@ -1,4 +1,3 @@
-mode: managed
 
 resource File {
     fd: Int
