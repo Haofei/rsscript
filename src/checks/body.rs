@@ -100,10 +100,11 @@ fn check_stmt_semantics(
         }
         Stmt::Return(stmt) => {
             if let Some(value) = &stmt.value {
+                let return_state = local_analysis.flow_entry_state(&stmt.span).unwrap_or(state);
                 if function.returns_fresh {
-                    check_fresh_return(analyzer, local_analysis, function, value, state);
+                    check_fresh_return(analyzer, local_analysis, function, value, return_state);
                 }
-                check_take_of_handle_field(analyzer, local_analysis, value, state);
+                check_take_of_handle_field(analyzer, local_analysis, value, return_state);
             }
             Flow::Return
         }
