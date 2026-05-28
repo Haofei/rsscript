@@ -1,0 +1,12 @@
+// expect: RS0007
+mode: managed
+
+struct Image {
+    pixels: Buffer
+}
+
+fn cache_put(image: read Image) -> Unit
+    effects(retains(value))
+{
+    return Unit
+}

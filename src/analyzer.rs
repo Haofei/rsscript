@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::checks;
 use crate::diagnostic::{Diagnostic, code};
 use crate::hir::{DuplicateSymbolKind, Hir, HirTypeKind};
@@ -134,6 +136,36 @@ impl Analyzer<'_> {
                         function.span.clone(),
                         "unknown effect",
                     ));
+                }
+            }
+
+            let param_names: HashSet<&str> = function
+                .params
+                .iter()
+                .map(|param| param.name.as_str())
+                .collect();
+            for effect in &function.effects {
+                let EffectDecl::Retains(param) = effect else {
+                    continue;
+                };
+                if !param_names.contains(param.as_str()) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::UNKNOWN_RETAINED_PARAMETER,
+                            format!(
+                                "`{}` declares `effects(retains({param}))`, but `{param}` is not a parameter.",
+                                function.name
+                            ),
+                            function.span.clone(),
+                            "unknown retained parameter",
+                        )
+                        .with_cause("Retention effects must name a parameter from the same function signature.")
+                        .with_fix(
+                            "fix_retains_parameter",
+                            "Rename the retained parameter or remove this retention effect.",
+                            "manual",
+                        ),
+                    );
                 }
             }
         }
