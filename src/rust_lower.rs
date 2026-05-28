@@ -288,6 +288,7 @@ struct RustLowerer<'a> {
     program: &'a Program,
     type_kinds: BTreeMap<String, TypeKind>,
     param_effects: BTreeMap<String, DataEffect>,
+    mutated_bindings: BTreeSet<String>,
     source_map: Vec<RustSourceMapEntry>,
 }
 
@@ -306,6 +307,7 @@ impl<'a> RustLowerer<'a> {
             program,
             type_kinds,
             param_effects: BTreeMap::new(),
+            mutated_bindings: BTreeSet::new(),
             source_map: Vec::new(),
         }
     }
@@ -402,11 +404,13 @@ impl<'a> RustLowerer<'a> {
 
     fn lower_function(&mut self, function: &FunctionDecl, out: &mut String) {
         let previous_param_effects = std::mem::take(&mut self.param_effects);
+        let previous_mutated_bindings = std::mem::take(&mut self.mutated_bindings);
         self.param_effects = function
             .params
             .iter()
             .filter_map(|param| param.effect.map(|effect| (param.name.clone(), effect)))
             .collect();
+        self.mutated_bindings = collect_mutated_bindings(&function.body);
         self.record_source_marker(out, 0, "function", &function.span);
         let async_prefix = if function.is_async { "async " } else { "" };
         let is_public = function.is_public || is_runnable_main(function);
@@ -446,6 +450,7 @@ impl<'a> RustLowerer<'a> {
         }
         out.push_str("}\n");
         self.param_effects = previous_param_effects;
+        self.mutated_bindings = previous_mutated_bindings;
     }
 
     fn lower_param(&self, param: &Param) -> String {
@@ -479,11 +484,12 @@ impl<'a> RustLowerer<'a> {
         self.record_statement_source_map(statement, &marker.generated);
         match statement {
             Stmt::Let(stmt) => {
-                let mutable = if stmt.kind == LetKind::Local {
-                    "mut "
-                } else {
-                    ""
-                };
+                let mutable =
+                    if stmt.kind == LetKind::Local || self.mutated_bindings.contains(&stmt.name) {
+                        "mut "
+                    } else {
+                        ""
+                    };
                 if let Some(value) = &stmt.value {
                     out.push_str(&format!(
                         "{pad}let {mutable}{} = {};\n",
@@ -806,6 +812,7 @@ impl<'a> RustLowerer<'a> {
             "Fd" => "i64".to_string(),
             "Bytes" | "Buffer" => "Vec<u8>".to_string(),
             "Path" => "std::path::PathBuf".to_string(),
+            "Counter" => "rsscript_runtime::Counter".to_string(),
             "File" => "rsscript_runtime::File".to_string(),
             "FileError" | "IOError" => "std::io::Error".to_string(),
             "Request" => "rsscript_runtime::Request".to_string(),
@@ -891,6 +898,92 @@ impl<'a> RustLowerer<'a> {
             return false;
         }
         matches!(self.type_kinds.get(&ty.name), Some(TypeKind::Class))
+    }
+}
+
+fn collect_mutated_bindings(block: &Block) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    collect_mutated_bindings_from_block(block, &mut names);
+    names
+}
+
+fn collect_mutated_bindings_from_block(block: &Block, names: &mut BTreeSet<String>) {
+    for statement in &block.statements {
+        collect_mutated_bindings_from_stmt(statement, names);
+    }
+}
+
+fn collect_mutated_bindings_from_stmt(statement: &Stmt, names: &mut BTreeSet<String>) {
+    match statement {
+        Stmt::Let(stmt) => {
+            if let Some(value) = &stmt.value {
+                collect_mutated_bindings_from_expr(value, names);
+            }
+        }
+        Stmt::Return(stmt) => {
+            if let Some(value) = &stmt.value {
+                collect_mutated_bindings_from_expr(value, names);
+            }
+        }
+        Stmt::With(stmt) => {
+            collect_mutated_bindings_from_expr(&stmt.resource, names);
+            collect_mutated_bindings_from_block(&stmt.body, names);
+        }
+        Stmt::If(stmt) => {
+            collect_mutated_bindings_from_expr(&stmt.condition, names);
+            collect_mutated_bindings_from_block(&stmt.then_body, names);
+            if let Some(else_body) = &stmt.else_body {
+                collect_mutated_bindings_from_block(else_body, names);
+            }
+        }
+        Stmt::Loop(stmt) => {
+            if let Some(condition) = &stmt.condition {
+                collect_mutated_bindings_from_expr(condition, names);
+            }
+            collect_mutated_bindings_from_block(&stmt.body, names);
+        }
+        Stmt::Expr(expr) => collect_mutated_bindings_from_expr(expr, names),
+        Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
+    }
+}
+
+fn collect_mutated_bindings_from_expr(expr: &Expr, names: &mut BTreeSet<String>) {
+    match expr {
+        Expr::Binary { left, right, .. } => {
+            collect_mutated_bindings_from_expr(left, names);
+            collect_mutated_bindings_from_expr(right, names);
+        }
+        Expr::Field { base, .. } => collect_mutated_bindings_from_expr(base, names),
+        Expr::Index { base, index, .. } => {
+            collect_mutated_bindings_from_expr(base, names);
+            collect_mutated_bindings_from_expr(index, names);
+        }
+        Expr::Call { args, .. } => {
+            for arg in args {
+                collect_mutated_bindings_from_expr(&arg.value, names);
+            }
+        }
+        Expr::Effect { effect, value, .. } => {
+            if *effect == DataEffect::Mut
+                && let Some(name) = mutable_root_ident(value)
+            {
+                names.insert(name.to_string());
+            }
+            collect_mutated_bindings_from_expr(value, names);
+        }
+        Expr::Manage { value, .. } | Expr::Try { value, .. } => {
+            collect_mutated_bindings_from_expr(value, names);
+        }
+        Expr::Closure { body, .. } => collect_mutated_bindings_from_block(body, names),
+        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+    }
+}
+
+fn mutable_root_ident(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Ident(name, _) => Some(name.as_str()),
+        Expr::Field { base, .. } | Expr::Index { base, .. } => mutable_root_ident(base),
+        _ => None,
     }
 }
 
@@ -1117,6 +1210,9 @@ fn lower_callee(callee: &Callee) -> String {
         callee if is_config_store_name_callee(callee) => {
             "rsscript_runtime::config_store_name".to_string()
         }
+        callee if is_counter_new_callee(callee) => "rsscript_runtime::counter_new".to_string(),
+        callee if is_counter_add_callee(callee) => "rsscript_runtime::counter_add".to_string(),
+        callee if is_counter_value_callee(callee) => "rsscript_runtime::counter_value".to_string(),
         callee if is_db_connection_open_callee(callee) => {
             "rsscript_runtime::db_connection_open".to_string()
         }
@@ -1225,6 +1321,18 @@ fn is_config_store_replace_callee(callee: &Callee) -> bool {
 
 fn is_config_store_name_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ConfigStore" && name == "name")
+}
+
+fn is_counter_new_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Counter" && name == "new")
+}
+
+fn is_counter_add_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Counter" && name == "add")
+}
+
+fn is_counter_value_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Counter" && name == "value")
 }
 
 fn is_db_connection_open_callee(callee: &Callee) -> bool {

@@ -22,8 +22,4 @@ pub fn Cache.lookup(cache: read Cache, key: read String)
 
 pub fn Cache.get(cache: read Cache)
 
-pub fn Counter.add(counter: mut Counter, amount: Int) -> Unit
-
-pub fn Counter.value(counter: read Counter) -> Int
-
 pub fn FunctionObject.new(closure: read Environment) -> fresh FunctionObject

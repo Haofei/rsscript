@@ -87,6 +87,11 @@ fn bundled_core_interfaces_are_available_to_checker() {
             .iter()
             .any(|(path, _)| *path == "core/log/log.rssi")
     );
+    assert!(
+        core_interfaces()
+            .iter()
+            .any(|(path, _)| *path == "core/counter/counter.rssi")
+    );
 
     let source = r#"
 fn check_label(actual: read String, expected: read String) -> Unit {
@@ -483,6 +488,27 @@ fn reload_config(path: read String, store: mut ConfigStore) -> Result<Unit, Conf
 }
 
 #[test]
+fn rust_lowering_maps_counter_core_calls_to_runtime_hooks() {
+    let source = r#"
+fn main() -> Unit {
+    let counter = Counter.new(value: 1)
+    Counter.add(counter: mut counter, amount: 2)
+    let value = Counter.value(counter: read counter)
+    if value == 3 {
+        Log.write(message: read "counter ran")
+    }
+    return Unit
+}
+"#;
+    let rust = lower_source_to_rust("counter.rss", source).expect("source should lower");
+
+    assert!(rust.contains("let mut counter = rsscript_runtime::counter_new(1);"));
+    assert!(rust.contains("rsscript_runtime::counter_add(&mut counter, 2);"));
+    assert!(rust.contains("let value = rsscript_runtime::counter_value(&counter);"));
+    assert!(rust.contains("if value == 3 {"));
+}
+
+#[test]
 fn rust_lowering_decodes_string_escape_sequences() {
     let source = r#"
 fn json_text() -> String {
@@ -832,26 +858,26 @@ fn rust_lowering_maps_read_and_mut_effects_to_rust_borrows() {
     let source = r#"
 features: local
 
-struct Counter {
+struct Meter {
     value: Int
 }
 
-fn read_value(counter: read Counter) -> Int {
+fn read_value(counter: read Meter) -> Int {
     return counter.value
 }
 
-fn touch(counter: mut Counter) -> Unit
+fn touch(counter: mut Meter) -> Unit
 
 pub fn run() -> Int {
-    local counter = Counter(value: 1)
+    local counter = Meter(value: 1)
     touch(counter: mut counter)
     return read_value(counter: read counter)
 }
 "#;
     let rust = lower_source_to_rust("effects.rss", source).expect("source should lower");
 
-    assert!(rust.contains("fn read_value(counter: &Counter) -> i64"));
-    assert!(rust.contains("fn touch(counter: &mut Counter)"));
+    assert!(rust.contains("fn read_value(counter: &Meter) -> i64"));
+    assert!(rust.contains("fn touch(counter: &mut Meter)"));
     assert!(rust.contains("touch(&mut counter);"));
     assert!(rust.contains("return read_value(&counter);"));
 }

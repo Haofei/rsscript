@@ -40,6 +40,11 @@ pub struct ConfigStore {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Counter {
+    value: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigError {
     message: String,
 }
@@ -348,6 +353,18 @@ pub fn config_store_replace(store: &mut ConfigStore, value: &ConfigValue) {
 
 pub fn config_store_name(store: &ConfigStore) -> String {
     store.current.name.clone()
+}
+
+pub fn counter_new(value: i64) -> Counter {
+    Counter { value }
+}
+
+pub fn counter_add(counter: &mut Counter, amount: i64) {
+    counter.value += amount;
+}
+
+pub fn counter_value(counter: &Counter) -> i64 {
+    counter.value
 }
 
 pub fn db_connection_open(url: &str) -> DbConnection {
@@ -900,6 +917,15 @@ mod tests {
 
         assert_eq!(name, "RSScript");
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn counter_runtime_hooks_mutate_counter() {
+        let mut counter = super::counter_new(1);
+
+        super::counter_add(&mut counter, 2);
+
+        assert_eq!(super::counter_value(&counter), 3);
     }
 
     #[test]
