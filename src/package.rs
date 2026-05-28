@@ -3504,14 +3504,16 @@ fn package_review_hash(review: &PackageReview) -> String {
         input.push('\n');
     }
     input.push_str(&format!(
-        "{}:{}:{}:{}:{}:{}:{}\n",
+        "{}:{}:{}:{}:{}:{}:{}:{}:{}\n",
         review.summary.interface_files,
         review.summary.source_files,
         review.summary.diagnostics,
         review.summary.errors,
         review.summary.dependencies,
         review.summary.dev_dependencies,
-        review.summary.package_features
+        review.summary.package_features,
+        review.summary.native_apis,
+        review.summary.unsafe_apis
     ));
     if let Some(native) = &review.native_rust {
         input.push_str(&native.path);

@@ -3909,6 +3909,70 @@ unsafe = "forbid"
 }
 
 #[test]
+fn package_lock_review_hash_tracks_native_api_count_changes() {
+    let old_dir = unique_temp_dir("rsscript-package-lock-native-api-old");
+    let new_dir = unique_temp_dir("rsscript-package-lock-native-api-new");
+    let native_manifest = r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#;
+    write_package_fixture(
+        &old_dir,
+        "0.1.0",
+        native_manifest,
+        r#"features: native
+
+native fn Native.one(message: read String) -> String
+"#,
+    );
+    write_package_fixture(
+        &new_dir,
+        "0.1.0",
+        native_manifest,
+        r#"features: native
+
+native fn Native.one(message: read String) -> String
+native fn Native.two(message: read String) -> String
+"#,
+    );
+    fs::create_dir_all(old_dir.join("native")).expect("old native dir should be created");
+    fs::write(
+        old_dir.join("native/bindings.rssbind.toml"),
+        r#"[bindings]
+"Native.one" = "rss_native::one"
+"#,
+    )
+    .expect("old native bindings should be written");
+    fs::create_dir_all(new_dir.join("native")).expect("new native dir should be created");
+    fs::write(
+        new_dir.join("native/bindings.rssbind.toml"),
+        r#"[bindings]
+"Native.one" = "rss_native::one"
+"Native.two" = "rss_native::two"
+"#,
+    )
+    .expect("new native bindings should be written");
+
+    let old_review = review_package_dir(&old_dir).expect("old package review should succeed");
+    let new_review = review_package_dir(&new_dir).expect("new package review should succeed");
+    let old_lock = lock_package_dir(&old_dir).expect("old package lock should succeed");
+    let new_lock = lock_package_dir(&new_dir).expect("new package lock should succeed");
+    let _ = fs::remove_dir_all(&old_dir);
+    let _ = fs::remove_dir_all(&new_dir);
+
+    assert_eq!(old_review.summary.native_apis, 1);
+    assert_eq!(new_review.summary.native_apis, 2);
+    assert_ne!(
+        old_lock.packages[0].review_hash,
+        new_lock.packages[0].review_hash
+    );
+}
+
+#[test]
 fn package_lock_records_local_path_dependency_graph() {
     let root_dir = unique_temp_dir("rsscript-package-lock-graph-root");
     let dep_dir = unique_temp_dir("rsscript-package-lock-graph-dep");
