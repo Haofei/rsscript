@@ -313,6 +313,19 @@ fn main() -> Unit {
 }
 
 #[test]
+fn rust_lowering_maps_int_add_to_rust_std_expression() {
+    let source = r#"
+fn main() -> Unit {
+    let value = 20 + 22
+    return Unit
+}
+"#;
+    let rust = lower_source_to_rust("int.rss", source).expect("source should lower");
+
+    assert!(rust.contains("let value = 20 + 22;"));
+}
+
+#[test]
 fn rust_lowering_maps_try_operator_to_rust_result_propagation() {
     let source = r#"
 features: local

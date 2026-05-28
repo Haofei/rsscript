@@ -666,14 +666,11 @@ impl<'a> RustLowerer<'a> {
                 op, left, right, ..
             } => {
                 let op = match op {
+                    BinaryOp::Add => "+",
                     BinaryOp::LogicalAnd => "&&",
                     BinaryOp::LogicalOr => "||",
                 };
-                format!(
-                    "({} {op} {})",
-                    self.lower_expr(left),
-                    self.lower_expr(right)
-                )
+                format!("{} {op} {}", self.lower_expr(left), self.lower_expr(right))
             }
             Expr::Field { base, name, .. } => {
                 format!("{}.{}", self.lower_expr(base), rust_ident(name))
@@ -1044,19 +1041,23 @@ fn is_string_concat_callee(callee: &Callee) -> bool {
 }
 
 fn lower_string_concat_call(lowerer: &mut RustLowerer<'_>, args: &[CallArg]) -> String {
-    let left = args
-        .iter()
-        .find(|arg| arg.name.as_deref() == Some("left"))
-        .or_else(|| args.first())
-        .map(|arg| lowerer.lower_expr(&arg.value))
-        .unwrap_or_else(|| "\"\".to_string()".to_string());
-    let right = args
-        .iter()
-        .find(|arg| arg.name.as_deref() == Some("right"))
-        .or_else(|| args.get(1))
-        .map(|arg| lowerer.lower_expr(&arg.value))
-        .unwrap_or_else(|| "\"\".to_string()".to_string());
+    let left = lower_call_arg(lowerer, args, "left", 0, "\"\".to_string()");
+    let right = lower_call_arg(lowerer, args, "right", 1, "\"\".to_string()");
     format!("format!(\"{{}}{{}}\", {left}, {right})")
+}
+
+fn lower_call_arg(
+    lowerer: &mut RustLowerer<'_>,
+    args: &[CallArg],
+    name: &str,
+    index: usize,
+    default: &str,
+) -> String {
+    args.iter()
+        .find(|arg| arg.name.as_deref() == Some(name))
+        .or_else(|| args.get(index))
+        .map(|arg| lowerer.lower_expr(&arg.value))
+        .unwrap_or_else(|| default.to_string())
 }
 
 fn is_resource_pool_borrow_callee(callee: &Callee) -> bool {

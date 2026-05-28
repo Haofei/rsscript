@@ -738,9 +738,15 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
 fn parse_binary_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
     find_top_level_binary_operator(tokens, start, end, "|", "|")
         .or_else(|| find_top_level_binary_operator(tokens, start, end, "&", "&"))
+        .or_else(|| find_top_level_single_binary_operator(tokens, start, end, "+", BinaryOp::Add))
         .and_then(|(operator, op)| {
             let left = parse_expr(tokens, start, operator)?;
-            let right = parse_expr(tokens, operator + 2, end)?;
+            let right_start = if matches!(op, BinaryOp::Add) {
+                operator + 1
+            } else {
+                operator + 2
+            };
+            let right = parse_expr(tokens, right_start, end)?;
             Some(Expr::Binary {
                 op,
                 left: Box::new(left),
@@ -748,6 +754,31 @@ fn parse_binary_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr>
                 span: tokens[operator].span.clone(),
             })
         })
+}
+
+fn find_top_level_single_binary_operator(
+    tokens: &[Token],
+    start: usize,
+    end: usize,
+    symbol: &str,
+    op: BinaryOp,
+) -> Option<(usize, BinaryOp)> {
+    let mut depth = 0usize;
+    let mut found = None;
+    for (index, token) in tokens.iter().enumerate().take(end).skip(start) {
+        if token.symbol("(") || token.symbol("{") || token.symbol("[") || token.symbol("<") {
+            depth += 1;
+            continue;
+        }
+        if token.symbol(")") || token.symbol("}") || token.symbol("]") || token.symbol(">") {
+            depth = depth.saturating_sub(1);
+            continue;
+        }
+        if depth == 0 && token.symbol(symbol) {
+            found = Some((index, op));
+        }
+    }
+    found
 }
 
 fn find_trailing_top_level_question(tokens: &[Token], start: usize, end: usize) -> Option<usize> {

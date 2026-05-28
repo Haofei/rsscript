@@ -15,8 +15,6 @@ pub fn Csv.read_into(
 
 pub fn Csv.parse_row(buffer: read RowBuffer) -> Result<fresh Row, CsvError>
 
-pub fn Int.add(left: Int, right: Int) -> Int
-
 pub fn List.consume(list: take List) -> Unit
 
 pub fn Buffer.consume(buffer: take Buffer) -> Unit

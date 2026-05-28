@@ -223,6 +223,7 @@ pub enum Expr {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {
+    Add,
     LogicalAnd,
     LogicalOr,
 }
