@@ -712,14 +712,22 @@ impl Analyzer<'_> {
             Expr::Call {
                 callee, args, span, ..
             } => {
-                if let Callee::Name(name) = callee
-                    && self.hir.type_kind(name).is_some()
-                {
-                    self.noalloc_allocation_diagnostic(
-                        function_name,
-                        span,
-                        format!("constructor `{name}` creates a new value."),
-                    );
+                match self.hir.resolve_call(callee) {
+                    CallResolution::Resolved { signature, kind } => {
+                        if matches!(kind, ResolvedCalleeKind::Constructor { .. }) {
+                            self.noalloc_allocation_diagnostic(
+                                function_name,
+                                span,
+                                format!(
+                                    "constructor `{}` creates a new value.",
+                                    callee_display(callee)
+                                ),
+                            );
+                        } else if !signature.effects.iter().any(|effect| effect == "noalloc") {
+                            self.allocating_call_diagnostic(function_name, callee, span);
+                        }
+                    }
+                    CallResolution::EnumVariant | CallResolution::Unknown => {}
                 }
                 for arg in args {
                     self.check_noalloc_expr(function_name, &arg.value);
@@ -1392,6 +1400,33 @@ impl Analyzer<'_> {
             .with_fix(
                 "remove_allocation_or_noalloc",
                 "Remove the allocation site, or remove `noalloc` from the function effects.",
+                "manual",
+            ),
+        );
+    }
+
+    fn allocating_call_diagnostic(
+        &mut self,
+        function_name: &str,
+        callee: &Callee,
+        span: &crate::diagnostic::Span,
+    ) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::INVALID_NOALLOC_CALL,
+                format!(
+                    "`{function_name}` is declared noalloc but calls possibly allocating function `{}`.",
+                    callee_display(callee)
+                ),
+                span.clone(),
+                "possibly allocating call in noalloc function",
+            )
+            .with_cause(
+                "A `noalloc` function may only call enum variants or functions also declared `effects(noalloc)`.",
+            )
+            .with_fix(
+                "remove_noalloc_or_call_noalloc",
+                "Remove `noalloc`, or call only APIs whose signatures are declared `effects(noalloc)`.",
                 "manual",
             ),
         );
