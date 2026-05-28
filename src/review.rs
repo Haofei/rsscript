@@ -53,7 +53,7 @@ pub struct ReviewMapSummary {
     pub total_functions: usize,
     pub total_lines: usize,
     pub must_review_lines: usize,
-    pub safe_to_skip_lines: usize,
+    pub low_semantic_risk_lines: usize,
     pub unknown_lines: usize,
     pub suggested_review_lines: usize,
     pub review_ratio: ReviewRatio,
@@ -61,7 +61,7 @@ pub struct ReviewMapSummary {
     pub unknown_function_ratio: ReviewRatio,
     #[serde(rename = "must_review")]
     pub review_required: ReviewMapCategorySummary,
-    #[serde(rename = "safe_to_skip")]
+    #[serde(rename = "low_semantic_risk")]
     pub foldable: ReviewMapCategorySummary,
     pub unknown: ReviewMapCategorySummary,
 }
@@ -127,7 +127,7 @@ pub struct ReviewMapRegion {
 pub enum ReviewMapClassification {
     #[serde(rename = "must_review")]
     ReviewRequired,
-    #[serde(rename = "safe_to_skip")]
+    #[serde(rename = "low_semantic_risk")]
     Foldable,
     Unknown,
 }
@@ -342,7 +342,7 @@ fn review_map_summary(files: &[ReviewMapFile]) -> ReviewMapSummary {
         category.lines += region.line_count;
     }
     summary.must_review_lines = summary.review_required.lines;
-    summary.safe_to_skip_lines = summary.foldable.lines;
+    summary.low_semantic_risk_lines = summary.foldable.lines;
     summary.unknown_lines = summary.unknown.lines;
     summary.suggested_review_lines = summary.review_required.lines + summary.unknown.lines;
     summary.review_ratio =

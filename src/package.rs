@@ -1315,7 +1315,7 @@ pub fn lock_package_dir(package_dir: &Path) -> Result<PackageLock, String> {
         packages,
         metadata: PackageLockMetadata {
             rsscript_version: env!("CARGO_PKG_VERSION").to_string(),
-            created_by: "rsscript package lock".to_string(),
+            created_by: "rsscript pkg lock".to_string(),
         },
     })
 }

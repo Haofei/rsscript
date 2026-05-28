@@ -1566,7 +1566,7 @@ low_semantic_risk
 unknown
 ```
 
-`safe_to_skip` is deprecated as a primary name. Existing JSON schema v1 may retain it as a compatibility alias; schema v2 should use `low_semantic_risk`.
+`safe_to_skip` is removed as a review-map category. Implementations must emit `low_semantic_risk`.
 
 ### 16.3 Must-review facts
 

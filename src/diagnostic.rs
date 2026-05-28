@@ -50,6 +50,7 @@ pub mod code {
     pub const RESOURCE_GENERIC_ARGUMENT: &str = "RS0704";
     pub const RESOURCE_POOL_NOT_LOCAL: &str = "RS0705";
     pub const RESOURCE_PRODUCER_MISSING_TRY: &str = "RS0706";
+    pub const RESOURCE_POOL_FALLIBLE_FACTORY: &str = "RS0707";
     pub const LOCAL_CAPTURED_BY_MANAGED_CLOSURE: &str = "RS0801";
     pub const TAKE_HANDLE_FIELD: &str = "RS0901";
     pub const INVALID_WEAK_FIELD: &str = "RS0902";
@@ -481,6 +482,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::RESOURCE_PRODUCER_MISSING_TRY,
         title: "Result resource producer missing try",
         explanation: "A `with` resource context consuming `Result<Resource, E>` must use explicit `?` on the producer expression.",
+    },
+    DiagnosticExplanation {
+        code: code::RESOURCE_POOL_FALLIBLE_FACTORY,
+        title: "ResourcePool.new used with fallible factory",
+        explanation: "`ResourcePool.new` is the v0.5 eager noescape pool constructor and requires an infallible factory. Use an infallible factory, or introduce a distinct fallible pool API instead of hiding failure inside `new`.",
     },
     DiagnosticExplanation {
         code: code::LOCAL_CAPTURED_BY_MANAGED_CLOSURE,

@@ -3444,10 +3444,10 @@ fn delegated(value: read Int) -> Int {
     let value: Value = serde_json::from_str(&json).expect("review map JSON should parse");
     assert_eq!(value["summary"]["total_functions"], 3);
     assert_eq!(value["summary"]["must_review"]["functions"], 1);
-    assert_eq!(value["summary"]["safe_to_skip"]["functions"], 1);
+    assert_eq!(value["summary"]["low_semantic_risk"]["functions"], 1);
     assert_eq!(value["summary"]["unknown"]["functions"], 1);
     assert!(value["summary"]["must_review_lines"].is_number());
-    assert!(value["summary"]["safe_to_skip_lines"].is_number());
+    assert!(value["summary"]["low_semantic_risk_lines"].is_number());
     assert!(value["summary"]["suggested_review_lines"].is_number());
     assert!(value["summary"]["review_ratio"].is_number());
     assert!(value["summary"]["unknown_ratio"].is_number());
@@ -3464,7 +3464,7 @@ fn delegated(value: read Int) -> Int {
             .as_array()
             .is_some_and(|regions| regions
                 .iter()
-                .any(|region| region["classification"] == "safe_to_skip"))
+                .any(|region| region["classification"] == "low_semantic_risk"))
     );
     assert!(
         value["files"]
@@ -5094,7 +5094,7 @@ pub fn Api.overloaded<A, B, C, D>(
 }
 
 #[test]
-fn rss_package_review_json_reports_package_metadata() {
+fn rss_pkg_review_json_reports_package_metadata() {
     let temp_dir = unique_temp_dir("rsscript-package-review-cli");
     fs::create_dir_all(temp_dir.join("interface")).expect("interface dir should be created");
     fs::write(
@@ -5117,13 +5117,13 @@ paths = ["interface"]
     .expect("interface should be written");
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
-        .arg("package")
+        .arg("pkg")
         .arg("review")
         .arg("--json")
         .arg(&temp_dir)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
-        .expect("rss package review should execute");
+        .expect("rss pkg review should execute");
     let _ = fs::remove_dir_all(&temp_dir);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -5460,7 +5460,22 @@ risk = "unknown"
 }
 
 #[test]
-fn rss_package_metadata_json_writes_review_metadata_file() {
+fn rss_package_command_is_rejected() {
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("package")
+        .arg("check")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss package command should execute");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(!output.status.success(), "stderr={stderr}");
+    assert!(stderr.contains("rsscript pkg check"), "{stderr}");
+    assert!(!stderr.contains("rsscript package"), "{stderr}");
+}
+
+#[test]
+fn rss_pkg_metadata_json_writes_review_metadata_file() {
     let temp_dir = unique_temp_dir("rsscript-package-metadata-cli");
     write_named_package_fixture(
         &temp_dir,
@@ -5472,13 +5487,13 @@ fn rss_package_metadata_json_writes_review_metadata_file() {
     );
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
-        .arg("package")
+        .arg("pkg")
         .arg("metadata")
         .arg("--json")
         .arg(&temp_dir)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
-        .expect("rss package metadata should execute");
+        .expect("rss pkg metadata should execute");
     let metadata_path = temp_dir.join("review").join("package-review.json");
     let metadata_source =
         fs::read_to_string(&metadata_path).expect("metadata file should be written");
@@ -5565,7 +5580,7 @@ pub fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
 }
 
 #[test]
-fn rss_package_diff_json_reports_dependency_upgrade() {
+fn rss_pkg_diff_json_reports_dependency_upgrade() {
     let old_dir = unique_temp_dir("rsscript-package-diff-cli-old");
     let new_dir = unique_temp_dir("rsscript-package-diff-cli-new");
     write_package_fixture(
@@ -5588,14 +5603,14 @@ rss-core = "0.6"
     );
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
-        .arg("package")
+        .arg("pkg")
         .arg("diff")
         .arg("--json")
         .arg(&old_dir)
         .arg(&new_dir)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
-        .expect("rss package diff should execute");
+        .expect("rss pkg diff should execute");
     let _ = fs::remove_dir_all(&old_dir);
     let _ = fs::remove_dir_all(&new_dir);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -5769,7 +5784,7 @@ rss-dep = {{ path = "{}", features = ["fast"] }}
 }
 
 #[test]
-fn rss_package_lock_json_reports_hashes() {
+fn rss_pkg_lock_json_reports_hashes() {
     let temp_dir = unique_temp_dir("rsscript-package-lock-cli");
     write_package_fixture(
         &temp_dir,
@@ -5780,13 +5795,13 @@ fn rss_package_lock_json_reports_hashes() {
     );
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
-        .arg("package")
+        .arg("pkg")
         .arg("lock")
         .arg("--json")
         .arg(&temp_dir)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
-        .expect("rss package lock should execute");
+        .expect("rss pkg lock should execute");
     let _ = fs::remove_dir_all(&temp_dir);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -6031,7 +6046,7 @@ fast = []
 }
 
 #[test]
-fn rss_package_review_update_json_reports_lock_changes() {
+fn rss_pkg_review_update_json_reports_lock_changes() {
     let old_dir = unique_temp_dir("rsscript-package-update-cli-old");
     let new_dir = unique_temp_dir("rsscript-package-update-cli-new");
     let lock_dir = unique_temp_dir("rsscript-package-update-cli-locks");
@@ -6064,7 +6079,7 @@ fn rss_package_review_update_json_reports_lock_changes() {
     .expect("new lock should be written");
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
-        .arg("package")
+        .arg("pkg")
         .arg("review")
         .arg("update")
         .arg("--json")
@@ -6074,7 +6089,7 @@ fn rss_package_review_update_json_reports_lock_changes() {
         .arg(&new_lock_path)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
-        .expect("rss package review update should execute");
+        .expect("rss pkg review update should execute");
     let _ = fs::remove_dir_all(&old_dir);
     let _ = fs::remove_dir_all(&new_dir);
     let _ = fs::remove_dir_all(&lock_dir);
@@ -6136,7 +6151,7 @@ fn package_check_reports_stale_semantic_lock() {
 }
 
 #[test]
-fn rss_package_check_json_reports_consistent_package() {
+fn rss_pkg_check_json_reports_consistent_package() {
     let temp_dir = unique_temp_dir("rsscript-package-check-cli");
     write_package_fixture(
         &temp_dir,
@@ -6154,13 +6169,13 @@ fn rss_package_check_json_reports_consistent_package() {
     .expect("lock should be written");
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
-        .arg("package")
+        .arg("pkg")
         .arg("check")
         .arg("--json")
         .arg(&temp_dir)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
-        .expect("rss package check should execute");
+        .expect("rss pkg check should execute");
     let _ = fs::remove_dir_all(&temp_dir);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -6211,7 +6226,7 @@ fn rss_check_json_accepts_package_directory() {
 }
 
 #[test]
-fn rss_package_check_fails_when_lock_missing() {
+fn rss_pkg_check_fails_when_lock_missing() {
     let temp_dir = unique_temp_dir("rsscript-package-check-missing-lock");
     write_package_fixture(
         &temp_dir,
@@ -6222,13 +6237,13 @@ fn rss_package_check_fails_when_lock_missing() {
     );
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
-        .arg("package")
+        .arg("pkg")
         .arg("check")
         .arg("--json")
         .arg(&temp_dir)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
-        .expect("rss package check should execute");
+        .expect("rss pkg check should execute");
     let _ = fs::remove_dir_all(&temp_dir);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let json: Value = serde_json::from_str(&stdout).expect("stdout should be package check JSON");
@@ -7086,7 +7101,7 @@ rss-remote = "0.5"
 }
 
 #[test]
-fn rss_package_tree_json_reports_dependency_summary() {
+fn rss_pkg_tree_json_reports_dependency_summary() {
     let root_dir = unique_temp_dir("rsscript-package-tree-cli-root");
     let dep_dir = unique_temp_dir("rsscript-package-tree-cli-dep");
     write_named_package_fixture(
@@ -7111,13 +7126,13 @@ rss-dep = {{ path = "{}" }}
     );
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
-        .arg("package")
+        .arg("pkg")
         .arg("tree")
         .arg("--json")
         .arg(&root_dir)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
-        .expect("rss package tree should execute");
+        .expect("rss pkg tree should execute");
     let _ = fs::remove_dir_all(&root_dir);
     let _ = fs::remove_dir_all(&dep_dir);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -7286,7 +7301,7 @@ risk = "unknown"
 }
 
 #[test]
-fn rss_package_publish_dry_run_reports_local_registry_target() {
+fn rss_pkg_publish_dry_run_reports_local_registry_target() {
     let temp_dir = unique_temp_dir("rsscript-package-publish-registry-cli");
     let registry_dir = unique_temp_dir("rsscript-package-publish-registry-target");
     write_named_package_fixture(
@@ -7306,7 +7321,7 @@ fn rss_package_publish_dry_run_reports_local_registry_target() {
     .expect("lock should be written");
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
-        .arg("package")
+        .arg("pkg")
         .arg("publish")
         .arg("--dry-run")
         .arg("--json")
@@ -7315,7 +7330,7 @@ fn rss_package_publish_dry_run_reports_local_registry_target() {
         .arg(&temp_dir)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
-        .expect("rss package publish should execute");
+        .expect("rss pkg publish should execute");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let json: Value = serde_json::from_str(&stdout).expect("stdout should be publish JSON");
@@ -7388,7 +7403,7 @@ rss-dep = {{ version = "0.2.0", path = "{}" }}
 }
 
 #[test]
-fn rss_package_publish_dry_run_json_reports_unresolved_dependency() {
+fn rss_pkg_publish_dry_run_json_reports_unresolved_dependency() {
     let temp_dir = unique_temp_dir("rsscript-package-publish-blocked");
     write_named_package_fixture(
         &temp_dir,
@@ -7409,14 +7424,14 @@ rss-remote = "0.5.0"
     .expect("lock should be written");
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
-        .arg("package")
+        .arg("pkg")
         .arg("publish")
         .arg("--dry-run")
         .arg("--json")
         .arg(&temp_dir)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
-        .expect("rss package publish should execute");
+        .expect("rss pkg publish should execute");
     let _ = fs::remove_dir_all(&temp_dir);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let json: Value = serde_json::from_str(&stdout).expect("stdout should be publish JSON");
@@ -7474,7 +7489,7 @@ rss-remote = "0.5.0"
 }
 
 #[test]
-fn rss_package_vendor_json_writes_vendor_directory_and_metadata() {
+fn rss_pkg_vendor_json_writes_vendor_directory_and_metadata() {
     let root_dir = unique_temp_dir("rsscript-package-vendor-cli-root");
     let dep_dir = unique_temp_dir("rsscript-package-vendor-cli-dep");
     write_named_package_fixture(
@@ -7499,13 +7514,13 @@ rss-dep = {{ path = "{}" }}
     );
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
-        .arg("package")
+        .arg("pkg")
         .arg("vendor")
         .arg("--json")
         .arg(&root_dir)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
-        .expect("rss package vendor should execute");
+        .expect("rss pkg vendor should execute");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let json: Value = serde_json::from_str(&stdout).expect("stdout should be vendor JSON");

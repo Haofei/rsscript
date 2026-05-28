@@ -295,6 +295,7 @@ fn check_expr_semantics_with_context(
             check_async_call_consumed(analyzer, callee, resolution, span, async_call_consumed);
             check_constructor_field_initializers(analyzer, callee, args, expr, state);
             check_call_place_conflicts(analyzer, args, state);
+            check_resource_pool_new_factory_contract(analyzer, callee, args);
             let weak_upgrade = is_weak_upgrade_callee(callee);
             for arg in args {
                 check_expr_semantics_with_context(analyzer, &arg.value, state, weak_upgrade, false);
@@ -1844,6 +1845,88 @@ fn check_resource_pool_factory_expr(analyzer: &mut Analyzer<'_>, expr: &HirExpr)
     }
 }
 
+fn check_resource_pool_new_factory_contract(
+    analyzer: &mut Analyzer<'_>,
+    callee: &Callee,
+    args: &[HirCallArg],
+) {
+    if !is_resource_pool_new(callee) {
+        return;
+    }
+    let Some(create) = args
+        .iter()
+        .find(|arg| arg.name.as_deref() == Some("create"))
+        .or_else(|| args.first())
+    else {
+        return;
+    };
+    let Some(fallible) = resource_pool_fallible_factory_expr(&create.value) else {
+        return;
+    };
+    let type_name = hir_expr_type_name(fallible).unwrap_or("Result<T, E>");
+    resource_pool_fallible_factory_diagnostic(analyzer, hir_expr_span(fallible).clone(), type_name);
+}
+
+fn resource_pool_fallible_factory_expr(expr: &HirExpr) -> Option<&HirExpr> {
+    if hir_expr_type_name(expr).is_some_and(is_result_type) {
+        return Some(expr);
+    }
+    match expr {
+        HirExpr::Closure { body, .. } => resource_pool_fallible_factory_block(body),
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. } => resource_pool_fallible_factory_expr(value),
+        HirExpr::Try { .. }
+        | HirExpr::Call { .. }
+        | HirExpr::Field { .. }
+        | HirExpr::Index { .. }
+        | HirExpr::Binary { .. }
+        | HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => None,
+    }
+}
+
+fn resource_pool_fallible_factory_block(block: &HirBlock) -> Option<&HirExpr> {
+    for statement in &block.statements {
+        if let Some(expr) = resource_pool_fallible_factory_stmt(statement) {
+            return Some(expr);
+        }
+    }
+    None
+}
+
+fn resource_pool_fallible_factory_stmt(statement: &HirStmt) -> Option<&HirExpr> {
+    match statement {
+        HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => resource_pool_fallible_factory_expr(value),
+        HirStmt::If {
+            then_body,
+            else_body,
+            ..
+        } => resource_pool_fallible_factory_block(then_body).or_else(|| {
+            else_body
+                .as_ref()
+                .and_then(resource_pool_fallible_factory_block)
+        }),
+        HirStmt::Loop { body, .. } | HirStmt::With { body, .. } => {
+            resource_pool_fallible_factory_block(body)
+        }
+        HirStmt::Match { arms, .. } => arms
+            .iter()
+            .find_map(|arm| resource_pool_fallible_factory_block(&arm.body)),
+        HirStmt::Let { .. }
+        | HirStmt::Return { value: None, .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => None,
+    }
+}
+
 fn check_resource_pool_factory_stmt(analyzer: &mut Analyzer<'_>, statement: &HirStmt) {
     match statement {
         HirStmt::Return {
@@ -2114,6 +2197,30 @@ fn resource_pool_not_local_diagnostic(
             "make_resource_pool_local",
             format!("Declare `{binding}` with `local`, or pass it as a `mut` local-capability parameter."),
             "machine-applicable",
+        ),
+    );
+}
+
+fn resource_pool_fallible_factory_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    span: crate::diagnostic::Span,
+    type_name: &str,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::RESOURCE_POOL_FALLIBLE_FACTORY,
+            "`ResourcePool.new` requires an infallible factory.",
+            span,
+            "fallible ResourcePool factory",
+        )
+        .with_cause(format!(
+            "The factory expression has type `{type_name}`, but `ResourcePool.new` expects a resource value."
+        ))
+        .with_cause("v0.5 `ResourcePool.new` eagerly constructs the pool and does not hide `Result` handling inside the pool constructor.")
+        .with_fix(
+            "use_infallible_factory",
+            "Handle failure before constructing the pool, or use a future explicitly fallible ResourcePool API.",
+            "manual",
         ),
     );
 }

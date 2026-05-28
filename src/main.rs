@@ -37,7 +37,7 @@ fn main() -> ExitCode {
         "lint" => run_lint(&args[2..]),
         "fmt" => run_fmt(&args[2..]),
         "review" => run_review(&args[2..]),
-        "package" | "pkg" => run_package(&args[2..]),
+        "pkg" => run_package(&args[2..]),
         "lower" => run_lower(&args[2..]),
         "run" => run_generated_rust(&args[2..]),
         "remap-rustc" => run_remap_rustc(&args[2..]),
@@ -1214,7 +1214,7 @@ fn run_package_tree(json: bool, path: &str) -> ExitCode {
 
 fn run_package_publish(json: bool, dry_run: bool, path: &str, registry: Option<&str>) -> ExitCode {
     if !dry_run {
-        eprintln!("rsscript package publish currently requires --dry-run");
+        eprintln!("rsscript pkg publish currently requires --dry-run");
         return ExitCode::from(2);
     }
     let registry_path = registry.map(Path::new);
@@ -1400,5 +1400,4 @@ fn print_usage() {
     eprintln!("  rsscript pkg vendor [--dry-run] [--json] [package-directory]");
     eprintln!("  rsscript pkg metadata [--dry-run] [--json] [package-directory]");
     eprintln!("  rsscript pkg diff [--json] <old-package-directory> <new-package-directory>");
-    eprintln!("  rsscript package ... is accepted as a compatibility alias for rsscript pkg ...");
 }

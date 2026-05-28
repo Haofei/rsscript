@@ -903,7 +903,7 @@ unsafe = "forbid"
 
 ### 10.1 `rss pkg check`
 
-Canonical command name is `rss pkg`. `rss package` may remain a compatibility alias for prototype tooling.
+Canonical command name is `rss pkg`. v0.5 does not define command aliases.
 
 `rss pkg check` runs:
 
@@ -1309,7 +1309,7 @@ rss pkg vendor
 rss pkg clean
 ```
 
-`rss package ...` may be supported as a compatibility alias, but user-facing documentation should prefer `rss pkg ...`.
+No `rss package ...` command is defined for v0.5 tooling.
 
 ### 14.1 `rss pkg add`
 
@@ -1682,7 +1682,7 @@ MVP 6: Public registry
 9. Should .rssi normalization be part of the compiler or package manager?
 10. How should async runtime dependencies be represented without leaking Rust runtime details?
 11. Should future retained ResourcePool factory signatures use a first-class retained-closure syntax or remain expressed through effects(retains(create))?
-12. Should schema v2 rename safe_to_skip to low_semantic_risk while preserving schema v1 compatibility?
+12. Should schema v2 remove legacy review category names and emit only `low_semantic_risk`?
 ```
 
 ---
