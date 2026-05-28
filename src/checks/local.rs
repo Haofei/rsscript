@@ -980,17 +980,16 @@ fn collect_resource_escapes_in_block(
     for statement in &block.statements {
         match statement {
             HirStmt::Return {
-                value: Some(HirExpr::Ident { name, span, .. }),
-                ..
-            } if name == binding => {
-                push_resource_escape(escapes, binding, ResourceEscapeKind::Escape, span.clone());
+                value: Some(value), ..
+            } if let Some(span) = resource_escape_operand_span(value, binding) => {
+                push_resource_escape(escapes, binding, ResourceEscapeKind::Escape, span);
             }
             HirStmt::Let {
                 kind: HirBindingKind::ManagedLet,
-                value: Some(HirExpr::Ident { name, span, .. }),
+                value: Some(value),
                 ..
-            } if name == binding => {
-                push_resource_escape(escapes, binding, ResourceEscapeKind::Escape, span.clone());
+            } if let Some(span) = resource_escape_operand_span(value, binding) => {
+                push_resource_escape(escapes, binding, ResourceEscapeKind::Escape, span);
             }
             HirStmt::Return {
                 value: Some(value), ..
@@ -1052,7 +1051,7 @@ fn collect_resource_escapes_in_expr(
 ) {
     match expr {
         HirExpr::Manage { value, span, .. } => {
-            if hir_expr_is_ident(value, binding) {
+            if resource_escape_operand_span(value, binding).is_some() {
                 push_resource_escape(escapes, binding, ResourceEscapeKind::Escape, span.clone());
             }
             collect_resource_escapes_in_expr(binding, value, escapes);
@@ -1094,8 +1093,14 @@ fn collect_resource_escapes_in_expr(
     }
 }
 
-fn hir_expr_is_ident(expr: &HirExpr, binding: &str) -> bool {
-    matches!(expr, HirExpr::Ident { name, .. } if name == binding)
+fn resource_escape_operand_span(expr: &HirExpr, binding: &str) -> Option<Span> {
+    match expr {
+        HirExpr::Ident { name, span, .. } if name == binding => Some(span.clone()),
+        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => {
+            resource_escape_operand_span(value, binding)
+        }
+        _ => None,
+    }
 }
 
 fn hir_block_mentions_ident(block: &HirBlock, binding: &str) -> bool {

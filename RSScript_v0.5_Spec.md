@@ -1949,6 +1949,7 @@ Inside a `with` block, the resource cannot be:
 
 ```text
 returned
+returned through read/mut/take wrappers
 managed
 taken out of the block
 stored in a managed object

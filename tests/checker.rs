@@ -2325,6 +2325,40 @@ fn ok_capture(path: read Path) -> Unit {
 }
 
 #[test]
+fn checker_rejects_resource_escape_through_effect_wrapper() {
+    let source = r#"
+features: local
+
+resource File {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+fn bad_return(path: read Path) -> File {
+    with File.open(path: read path) as file {
+        return read file
+    }
+}
+
+fn bad_binding(path: read Path) -> Unit {
+    with File.open(path: read path) as file {
+        let saved = read file
+    }
+}
+"#;
+    let diagnostics = analyze_source("resource-effect-escape.rss", source);
+    let escape_count = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "RS0702" && diagnostic.label == "resource escapes")
+        .count();
+
+    assert_eq!(escape_count, 2, "{diagnostics:?}");
+}
+
+#[test]
 fn review_json_uses_protocol_shape() {
     let old_source = r#"
 
