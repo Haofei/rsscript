@@ -1,0 +1,16 @@
+// expect: RS0801 RS0601
+features: local
+
+struct Image {
+    pixels: Buffer
+}
+
+fn bad_fresh(path: read Path) -> fresh Image {
+    local image = Image.load(path: read path)
+
+    let callback = || {
+        Image.inspect(image: read image)
+    }
+
+    return image
+}

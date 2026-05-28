@@ -225,6 +225,72 @@ fn bad_take(path: read Path) -> Unit {
 }
 
 #[test]
+fn managed_closure_capture_makes_fresh_local_unclean() {
+    let source = r#"
+features: local
+
+struct Image {
+    pixels: Buffer
+}
+
+fn bad_fresh(path: read Path) -> fresh Image {
+    local image = Image.load(path: read path)
+
+    let callback = || {
+        Image.inspect(image: read image)
+    }
+
+    return image
+}
+"#;
+    let codes = analyze_source("fresh-closure-capture.rss", source)
+        .into_iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+
+    assert!(codes.contains(&"RS0801".to_string()));
+    assert!(codes.contains(&"RS0601".to_string()));
+}
+
+#[test]
+fn retained_closure_capture_makes_fresh_local_unclean() {
+    let source = r#"
+features: local
+
+class Scheduler {
+    callbacks: List<Callback>
+}
+
+struct Image {
+    pixels: Buffer
+}
+
+fn schedule(scheduler: mut Scheduler, callback: read Callback) -> Unit
+    effects(retains(callback))
+{
+}
+
+fn bad_schedule(scheduler: mut Scheduler, path: read Path) -> fresh Image {
+    local image = Image.load(path: read path)
+    schedule(
+        scheduler: mut scheduler,
+        callback: read || {
+            Image.inspect(image: read image)
+        },
+    )
+    return image
+}
+"#;
+    let codes = analyze_source("fresh-retained-closure-capture.rss", source)
+        .into_iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+
+    assert!(codes.contains(&"RS0801".to_string()));
+    assert!(codes.contains(&"RS0601".to_string()));
+}
+
+#[test]
 fn diagnostics_json_uses_protocol_shape() {
     let path = Path::new("tests/fixtures/fail/use-after-manage.rss");
     let source = read_fixture(path);

@@ -94,6 +94,7 @@ struct LocalFlowStep {
     span: Span,
     kind: LocalFlowStepKind,
     uses: Vec<(String, Span)>,
+    managed_closure_captures: Vec<String>,
     binding: Option<LocalFlowBinding>,
     resource_binding: Option<LocalFlowResourceBinding>,
     events: Vec<HirEffectEvent>,
@@ -1516,12 +1517,110 @@ fn push_local_flow_step(steps: &mut Vec<LocalFlowStep>, statement: &HirStmt) -> 
         span: hir_stmt_span(statement).clone(),
         kind: local_flow_step_kind(statement),
         uses,
+        managed_closure_captures: local_flow_step_managed_closure_captures(statement),
         binding: local_flow_step_binding(statement),
         resource_binding: local_flow_step_resource_binding(statement),
         events,
         successors: Vec::new(),
     });
     id
+}
+
+fn local_flow_step_managed_closure_captures(statement: &HirStmt) -> Vec<String> {
+    let mut captures = Vec::new();
+    collect_stmt_managed_closure_capture_names(statement, &mut captures);
+    captures
+}
+
+fn collect_stmt_managed_closure_capture_names(statement: &HirStmt, captures: &mut Vec<String>) {
+    match statement {
+        HirStmt::Let {
+            kind: HirBindingKind::ManagedLet,
+            value: Some(HirExpr::Closure { body, .. }),
+            ..
+        } => push_hir_block_ident_names(body, captures),
+        HirStmt::Let {
+            value: Some(value), ..
+        }
+        | HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => collect_expr_managed_closure_capture_names(value, captures),
+        HirStmt::With { resource, .. } => {
+            collect_expr_managed_closure_capture_names(resource, captures);
+        }
+        HirStmt::If { condition, .. } => {
+            collect_expr_managed_closure_capture_names(condition, captures);
+        }
+        HirStmt::Loop {
+            condition: Some(condition),
+            ..
+        } => {
+            collect_expr_managed_closure_capture_names(condition, captures);
+        }
+        HirStmt::Let { value: None, .. }
+        | HirStmt::Return { value: None, .. }
+        | HirStmt::Loop {
+            condition: None, ..
+        }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn collect_expr_managed_closure_capture_names(expr: &HirExpr, captures: &mut Vec<String>) {
+    match expr {
+        HirExpr::Call {
+            args, resolution, ..
+        } => {
+            if let CallResolution::Resolved { signature, .. } = resolution {
+                for arg in args {
+                    let Some(name) = arg.name.as_ref() else {
+                        continue;
+                    };
+                    if !signature.retained_params.contains(name) {
+                        continue;
+                    }
+                    if let Some((body, _)) = retained_closure_arg(&arg.value) {
+                        push_hir_block_ident_names(body, captures);
+                    }
+                }
+            }
+            for arg in args {
+                collect_expr_managed_closure_capture_names(&arg.value, captures);
+            }
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Try { value, .. } => {
+            collect_expr_managed_closure_capture_names(value, captures);
+        }
+        HirExpr::Binary { left, right, .. } => {
+            collect_expr_managed_closure_capture_names(left, captures);
+            collect_expr_managed_closure_capture_names(right, captures);
+        }
+        HirExpr::Field { base, .. } => collect_expr_managed_closure_capture_names(base, captures),
+        HirExpr::Index { base, index, .. } => {
+            collect_expr_managed_closure_capture_names(base, captures);
+            collect_expr_managed_closure_capture_names(index, captures);
+        }
+        HirExpr::Closure { .. }
+        | HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn push_hir_block_ident_names(block: &HirBlock, captures: &mut Vec<String>) {
+    let mut uses = Vec::new();
+    collect_hir_block_idents(block, &mut uses);
+    for (name, _) in uses {
+        if !captures.contains(&name) {
+            captures.push(name);
+        }
+    }
 }
 
 fn add_successor(steps: &mut [LocalFlowStep], from: LocalFlowExit, to: usize) {
@@ -1589,6 +1688,11 @@ fn transfer_flow_step(step: &LocalFlowStep, mut state: BodyState) -> BodyState {
         }
     }
 
+    for capture in &step.managed_closure_captures {
+        if state.is_local(capture) {
+            state.mark_retained(capture);
+        }
+    }
     state.apply_retention_events(&step.events);
     state.apply_move_events(&step.events);
     state
