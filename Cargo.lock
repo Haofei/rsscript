@@ -43,6 +43,9 @@ dependencies = [
 [[package]]
 name = "rsscript-runtime"
 version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "serde"

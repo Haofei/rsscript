@@ -2,8 +2,12 @@ struct JsonValue
 
 pub fn Json.parse(text: read String) -> Result<fresh JsonValue, JsonError>
 
+pub fn Json.field(
+    value: read JsonValue,
+    name: read String,
+) -> Result<fresh JsonValue, JsonError>
+
 pub fn Json.field_string(
     value: read JsonValue,
     name: read String,
 ) -> Result<String, JsonError>
-

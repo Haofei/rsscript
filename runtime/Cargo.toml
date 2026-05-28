@@ -10,3 +10,4 @@ name = "rsscript_runtime"
 path = "src/lib.rs"
 
 [dependencies]
+serde_json = "1"

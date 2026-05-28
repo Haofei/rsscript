@@ -1,0 +1,9 @@
+fn main() -> Result<Unit, JsonError> {
+    let value = Json.parse(text: read "{\"profile\":{\"name\":\"RSScript\"}}")?
+    let profile = Json.field(value: read value, name: read "profile")?
+    let name = Json.field_string(value: read profile, name: read "name")?
+
+    Assert.equal(left: read name, right: read "RSScript")
+    Log.write(message: read name)
+    return Ok(Unit)
+}

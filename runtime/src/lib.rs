@@ -17,6 +17,38 @@ pub struct File {
 
 impl Resource for File {}
 
+#[derive(Debug, Clone)]
+pub struct JsonValue {
+    inner: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JsonError {
+    message: String,
+}
+
+impl JsonError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for JsonError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.message)
+    }
+}
+
+impl std::error::Error for JsonError {}
+
+impl From<serde_json::Error> for JsonError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::new(error.to_string())
+    }
+}
+
 pub trait RuntimePath {
     fn as_path(&self) -> &std::path::Path;
 }
@@ -93,6 +125,31 @@ pub fn file_read_all(file: &mut File) -> std::io::Result<Vec<u8>> {
 
 pub fn file_write<B: RuntimeBytes + ?Sized>(file: &mut File, data: &B) -> std::io::Result<()> {
     file.inner.write_all(data.as_bytes_slice())
+}
+
+pub fn json_parse(text: &str) -> Result<JsonValue, JsonError> {
+    serde_json::from_str(text)
+        .map(|inner| JsonValue { inner })
+        .map_err(JsonError::from)
+}
+
+pub fn json_field(value: &JsonValue, name: &str) -> Result<JsonValue, JsonError> {
+    let Some(field) = value.inner.get(name) else {
+        return Err(JsonError::new(format!("missing JSON field `{name}`")));
+    };
+    Ok(JsonValue {
+        inner: field.clone(),
+    })
+}
+
+pub fn json_field_string(value: &JsonValue, name: &str) -> Result<String, JsonError> {
+    let field = json_field(value, name)?;
+    let Some(text) = field.inner.as_str() else {
+        return Err(JsonError::new(format!(
+            "JSON field `{name}` is not a string"
+        )));
+    };
+    Ok(text.to_string())
 }
 
 #[derive(Clone)]
@@ -467,5 +524,16 @@ mod tests {
 
         assert_eq!(bytes, b"hello file");
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn json_runtime_hooks_parse_nested_fields() {
+        let value =
+            super::json_parse(r#"{"profile":{"name":"RSScript"}}"#).expect("JSON should parse");
+        let profile = super::json_field(&value, "profile").expect("profile field should exist");
+        let name =
+            super::json_field_string(&profile, "name").expect("name field should be a string");
+
+        assert_eq!(name, "RSScript");
     }
 }

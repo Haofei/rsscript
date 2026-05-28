@@ -663,7 +663,7 @@ impl<'a> RustLowerer<'a> {
                 .map(str::to_string)
                 .unwrap_or_else(|| rust_ident(name)),
             Expr::Number(value, _) => value.clone(),
-            Expr::String(value, _) => format!("{value:?}.to_string()"),
+            Expr::String(value, _) => format!("{:?}.to_string()", decode_string_token(value)),
             Expr::Binary {
                 op, left, right, ..
             } => {
@@ -783,6 +783,8 @@ impl<'a> RustLowerer<'a> {
             "Path" => "std::path::PathBuf".to_string(),
             "File" => "rsscript_runtime::File".to_string(),
             "FileError" | "IOError" => "std::io::Error".to_string(),
+            "JsonValue" => "rsscript_runtime::JsonValue".to_string(),
+            "JsonError" => "rsscript_runtime::JsonError".to_string(),
             "Result" if ty.args.len() == 2 => format!(
                 "Result<{}, {}>",
                 self.lower_type_ref(&ty.args[0], ManagedPosition::Nested),
@@ -1059,6 +1061,11 @@ fn lower_callee(callee: &Callee) -> String {
         }
         callee if is_file_read_all_callee(callee) => "rsscript_runtime::file_read_all".to_string(),
         callee if is_file_write_callee(callee) => "rsscript_runtime::file_write".to_string(),
+        callee if is_json_parse_callee(callee) => "rsscript_runtime::json_parse".to_string(),
+        callee if is_json_field_callee(callee) => "rsscript_runtime::json_field".to_string(),
+        callee if is_json_field_string_callee(callee) => {
+            "rsscript_runtime::json_field_string".to_string()
+        }
         Callee::Name(name) => rust_ident(name),
         Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" => {
             format!("rsscript_runtime::ResourcePool::{}", rust_ident(name))
@@ -1101,6 +1108,18 @@ fn is_file_write_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && name == "write")
 }
 
+fn is_json_parse_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "parse")
+}
+
+fn is_json_field_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "field")
+}
+
+fn is_json_field_string_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "field_string")
+}
+
 fn is_file_open_expr(expr: &Expr) -> bool {
     matches!(expr, Expr::Call { callee, .. } if is_file_open_callee(callee) || is_file_open_read_callee(callee) || is_file_open_write_callee(callee))
 }
@@ -1141,6 +1160,31 @@ fn lower_builtin_value_ident(name: &str) -> Option<&'static str> {
         "None" => Some("None"),
         _ => None,
     }
+}
+
+fn decode_string_token(value: &str) -> String {
+    let mut decoded = String::new();
+    let mut chars = value.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            decoded.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => decoded.push('\n'),
+            Some('r') => decoded.push('\r'),
+            Some('t') => decoded.push('\t'),
+            Some('\\') => decoded.push('\\'),
+            Some('"') => decoded.push('"'),
+            Some('0') => decoded.push('\0'),
+            Some(other) => {
+                decoded.push('\\');
+                decoded.push(other);
+            }
+            None => decoded.push('\\'),
+        }
+    }
+    decoded
 }
 
 fn is_rust_enum_constructor(name: &str) -> bool {

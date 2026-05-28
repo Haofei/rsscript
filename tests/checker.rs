@@ -334,6 +334,43 @@ fn copy_file(input: read Path, output: read Path) -> Result<Unit, IOError> {
 }
 
 #[test]
+fn rust_lowering_maps_json_core_calls_to_runtime_hooks() {
+    let source = r#"
+fn read_name(text: read String) -> Result<String, JsonError> {
+    let value = Json.parse(text: read text)?
+    let profile = Json.field(value: read value, name: read "profile")?
+    return Json.field_string(value: read profile, name: read "name")
+}
+"#;
+    let rust = lower_source_to_rust("json.rss", source).expect("source should lower");
+
+    assert!(rust.contains("-> Result<String, rsscript_runtime::JsonError>"));
+    assert!(rust.contains("let value = rsscript_runtime::json_parse(&text)?;"));
+    assert!(rust.contains(
+        "let profile = rsscript_runtime::json_field(&value, &\"profile\".to_string())?;"
+    ));
+    assert!(
+        rust.contains(
+            "return rsscript_runtime::json_field_string(&profile, &\"name\".to_string());"
+        )
+    );
+}
+
+#[test]
+fn rust_lowering_decodes_string_escape_sequences() {
+    let source = r#"
+fn json_text() -> String {
+    return "{\"profile\":{\"name\":\"RSScript\"}}"
+}
+"#;
+    let rust = lower_source_to_rust("string-escapes.rss", source).expect("source should lower");
+
+    assert!(
+        rust.contains("return \"{\\\"profile\\\":{\\\"name\\\":\\\"RSScript\\\"}}\".to_string();")
+    );
+}
+
+#[test]
 fn rust_lowering_maps_log_write_to_runtime_output_hook() {
     let source = r#"
 fn main() -> Unit {
@@ -1241,6 +1278,11 @@ struct JsonValue
 
 pub fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
 
+pub fn field(
+    value: read JsonValue,
+    name: read String,
+) -> Result<fresh JsonValue, JsonError>
+
 pub fn field_string(
     value: read JsonValue,
     name: read String,
@@ -1249,13 +1291,16 @@ pub fn field_string(
     let program = parse_source("json.rssi", source);
 
     assert!(program.features.is_empty());
-    assert_eq!(program.items.len(), 3);
+    assert_eq!(program.items.len(), 4);
     assert!(matches!(&program.items[0], Item::Type(type_decl) if type_decl.name == "JsonValue"));
     assert!(
         matches!(&program.items[1], Item::Function(function) if function.name == "parse" && function.is_public && function.body.statements.is_empty())
     );
     assert!(
-        matches!(&program.items[2], Item::Function(function) if function.name == "field_string" && function.is_public && function.body.statements.is_empty())
+        matches!(&program.items[2], Item::Function(function) if function.name == "field" && function.is_public && function.body.statements.is_empty())
+    );
+    assert!(
+        matches!(&program.items[3], Item::Function(function) if function.name == "field_string" && function.is_public && function.body.statements.is_empty())
     );
     assert!(analyze_source("json.rssi", source).is_empty());
 }
