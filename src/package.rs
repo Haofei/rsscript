@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::analyzer::{analyze_source_with_interfaces, core_interfaces};
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, code};
 use crate::review::{
     ReviewFinding, ReviewMap, ReviewRisk, format_review_human, review_map_sources, review_sources,
 };
@@ -70,6 +70,7 @@ pub struct PackageCheck {
     pub risk: PackageRisk,
     pub reasons: Vec<String>,
     pub summary: PackageReviewSummary,
+    pub graph: PackageGraphCheck,
     pub lock: PackageCheckLock,
     pub native_rust: Option<PackageNativeRustCheck>,
     pub diagnostics: Vec<Diagnostic>,
@@ -79,6 +80,13 @@ pub struct PackageCheck {
 pub struct PackageTree {
     pub root: PackageTreeNode,
     pub summary: PackageTreeSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageGraphCheck {
+    pub ok: bool,
+    pub risk: PackageRisk,
+    pub reasons: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -412,16 +420,28 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
     external_interfaces.extend(dependency_interface_refs);
     let mut combined_interfaces = external_interfaces.clone();
     combined_interfaces.extend(interface_refs);
-    let diagnostics = sources
-        .iter()
-        .flat_map(|source| {
-            if source.kind == PackageReviewFileKind::Source {
-                analyze_source_with_interfaces(&source.path, &source.contents, &combined_interfaces)
-            } else {
-                analyze_source_with_interfaces(&source.path, &source.contents, &external_interfaces)
-            }
-        })
-        .collect::<Vec<_>>();
+    let mut diagnostics = package_interface_environment_diagnostics(&combined_interfaces);
+    diagnostics.extend(
+        sources
+            .iter()
+            .flat_map(|source| {
+                if source.kind == PackageReviewFileKind::Source {
+                    analyze_source_with_interfaces(
+                        &source.path,
+                        &source.contents,
+                        &combined_interfaces,
+                    )
+                } else {
+                    analyze_source_with_interfaces(
+                        &source.path,
+                        &source.contents,
+                        &external_interfaces,
+                    )
+                }
+            })
+            .collect::<Vec<_>>(),
+    );
+    dedup_diagnostics(&mut diagnostics);
     let review_map = review_map_sources(
         sources
             .iter()
@@ -617,10 +637,12 @@ pub fn diff_package_dirs(old_dir: &Path, new_dir: &Path) -> Result<PackageDiff, 
 pub fn check_package_dir(package_dir: &Path) -> Result<PackageCheck, String> {
     let review = review_package_dir(package_dir)?;
     let current_lock = lock_package_dir(package_dir)?;
+    let graph = check_package_graph(package_dir)?;
     let lock = check_package_lock(package_dir, &current_lock)?;
     let native_rust = check_package_native_rust(package_dir, review.native_rust.as_ref())?;
 
     let mut reasons = review.reasons.clone();
+    reasons.extend(graph.reasons.clone());
     reasons.extend(lock.reasons.clone());
     if let Some(native) = &native_rust {
         reasons.extend(native.reasons.clone());
@@ -635,8 +657,8 @@ pub fn check_package_dir(package_dir: &Path) -> Result<PackageCheck, String> {
     let native_ok = native_rust
         .as_ref()
         .is_none_or(|native_check| native_check.ok);
-    let ok = !diagnostics_have_errors && lock.matches && native_ok;
-    let mut risk = review.risk.max(lock.risk);
+    let ok = !diagnostics_have_errors && graph.ok && lock.matches && native_ok;
+    let mut risk = review.risk.max(graph.risk).max(lock.risk);
     if let Some(native) = &native_rust {
         risk = risk.max(native.risk);
     }
@@ -648,6 +670,7 @@ pub fn check_package_dir(package_dir: &Path) -> Result<PackageCheck, String> {
         risk,
         reasons,
         summary: review.summary,
+        graph,
         lock,
         native_rust,
         diagnostics: review.diagnostics,
@@ -1096,6 +1119,11 @@ pub fn format_package_check_human(check: &PackageCheck) -> String {
         check.summary.errors
     ));
     output.push_str(&format!(
+        "graph: {} ({})\n",
+        if check.graph.ok { "ok" } else { "failed" },
+        package_risk_label(check.graph.risk)
+    ));
+    output.push_str(&format!(
         "lock: {} {}\n",
         check.lock.path,
         if check.lock.matches {
@@ -1444,6 +1472,27 @@ fn read_package_lock(path: &Path) -> Result<PackageLock, String> {
     toml::from_str(&source).map_err(|error| format!("failed to parse {}: {error}", path.display()))
 }
 
+fn package_interface_environment_diagnostics(interfaces: &[(&str, &str)]) -> Vec<Diagnostic> {
+    analyze_source_with_interfaces("<package-interface-environment>", "", interfaces)
+        .into_iter()
+        .filter(|diagnostic| diagnostic.code == code::DUPLICATE_DECLARATION)
+        .collect()
+}
+
+fn dedup_diagnostics(diagnostics: &mut Vec<Diagnostic>) {
+    let mut seen = BTreeSet::new();
+    diagnostics.retain(|diagnostic| {
+        seen.insert((
+            diagnostic.code.clone(),
+            diagnostic.summary.clone(),
+            diagnostic.span.file.clone(),
+            diagnostic.span.line,
+            diagnostic.span.column,
+            diagnostic.span.length,
+        ))
+    });
+}
+
 fn package_review_metadata_from_review(review: &PackageReview) -> PackageReviewMetadata {
     PackageReviewMetadata {
         schema: "rss.review.package.v1".to_string(),
@@ -1497,6 +1546,56 @@ fn check_package_lock(
         reasons,
         package_changes,
     })
+}
+
+fn check_package_graph(package_dir: &Path) -> Result<PackageGraphCheck, String> {
+    let tree = package_tree(package_dir)?;
+    let mut packages_by_name: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    collect_package_graph_identities(&tree.root, &mut packages_by_name);
+
+    let mut reasons = Vec::new();
+    if tree.summary.unresolved_dependencies > 0 {
+        reasons.push(format!(
+            "dependency graph contains {} unresolved dependencies",
+            tree.summary.unresolved_dependencies
+        ));
+    }
+    for (name, identities) in packages_by_name {
+        if identities.len() > 1 {
+            reasons.push(format!(
+                "dependency `{name}` resolves to multiple package identities: {}",
+                identities.into_iter().collect::<Vec<_>>().join(", ")
+            ));
+        }
+    }
+    reasons.sort();
+    reasons.dedup();
+
+    let ok = reasons.is_empty();
+    let risk = if ok {
+        PackageRisk::Low
+    } else if tree.summary.unresolved_dependencies > 0 {
+        PackageRisk::Unknown
+    } else {
+        PackageRisk::High
+    };
+
+    Ok(PackageGraphCheck { ok, risk, reasons })
+}
+
+fn collect_package_graph_identities(
+    node: &PackageTreeNode,
+    packages_by_name: &mut BTreeMap<String, BTreeSet<String>>,
+) {
+    if let Some(version) = &node.version {
+        packages_by_name
+            .entry(node.name.clone())
+            .or_default()
+            .insert(format!("{version} {}", node.source));
+    }
+    for dependency in &node.dependencies {
+        collect_package_graph_identities(dependency, packages_by_name);
+    }
 }
 
 fn check_package_native_rust(

@@ -2424,6 +2424,44 @@ rss-dep = {{ path = "{}" }}
 }
 
 #[test]
+fn package_review_reports_dependency_interface_symbol_conflicts_without_sources() {
+    let root_dir = unique_temp_dir("rsscript-package-interface-conflict-root");
+    let dep_dir = unique_temp_dir("rsscript-package-interface-conflict-dep");
+    write_named_package_fixture(
+        &dep_dir,
+        "rss-dep",
+        "0.2.0",
+        "",
+        r#"pub fn Shared.parse(text: read String) -> String
+"#,
+    );
+    write_named_package_fixture(
+        &root_dir,
+        "rss-app",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-dep = {{ path = "{}" }}
+"#,
+            dep_dir.display()
+        ),
+        r#"pub fn Shared.parse(text: read String) -> String
+"#,
+    );
+
+    let review = review_package_dir(&root_dir).expect("package review should succeed");
+    let codes = review
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect::<Vec<_>>();
+    let _ = fs::remove_dir_all(&root_dir);
+    let _ = fs::remove_dir_all(&dep_dir);
+
+    assert!(codes.contains(&"RS0005"), "{codes:?}");
+}
+
+#[test]
 fn rss_package_review_json_reports_package_metadata() {
     let temp_dir = unique_temp_dir("rsscript-package-review-cli");
     fs::create_dir_all(temp_dir.join("interface")).expect("interface dir should be created");
@@ -2835,6 +2873,99 @@ rss-dep = {{ path = "{}" }}
                 })
             })
     );
+}
+
+#[test]
+fn package_check_reports_local_dependency_version_conflict() {
+    let root_dir = unique_temp_dir("rsscript-package-check-conflict-root");
+    let dep_a_dir = unique_temp_dir("rsscript-package-check-conflict-dep-a");
+    let dep_b_dir = unique_temp_dir("rsscript-package-check-conflict-dep-b");
+    let shared_v1_dir = unique_temp_dir("rsscript-package-check-conflict-shared-v1");
+    let shared_v2_dir = unique_temp_dir("rsscript-package-check-conflict-shared-v2");
+    write_named_package_fixture(
+        &shared_v1_dir,
+        "rss-shared",
+        "0.1.0",
+        "",
+        r#"pub fn Shared.value() -> Int
+"#,
+    );
+    write_named_package_fixture(
+        &shared_v2_dir,
+        "rss-shared",
+        "0.2.0",
+        "",
+        r#"pub fn Shared.value() -> Int
+"#,
+    );
+    write_named_package_fixture(
+        &dep_a_dir,
+        "rss-dep-a",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-shared = {{ path = "{}" }}
+"#,
+            shared_v1_dir.display()
+        ),
+        r#"pub fn DepA.run() -> Unit
+"#,
+    );
+    write_named_package_fixture(
+        &dep_b_dir,
+        "rss-dep-b",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-shared = {{ path = "{}" }}
+"#,
+            shared_v2_dir.display()
+        ),
+        r#"pub fn DepB.run() -> Unit
+"#,
+    );
+    write_named_package_fixture(
+        &root_dir,
+        "rss-app",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-dep-a = {{ path = "{}" }}
+rss-dep-b = {{ path = "{}" }}
+"#,
+            dep_a_dir.display(),
+            dep_b_dir.display()
+        ),
+        r#"pub fn App.run() -> Unit
+"#,
+    );
+    fs::write(
+        root_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&root_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&root_dir).expect("package check should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&root_dir);
+    let _ = fs::remove_dir_all(&dep_a_dir);
+    let _ = fs::remove_dir_all(&dep_b_dir);
+    let _ = fs::remove_dir_all(&shared_v1_dir);
+    let _ = fs::remove_dir_all(&shared_v2_dir);
+
+    assert!(!check.ok);
+    assert_eq!(json["graph"]["ok"], false);
+    assert_eq!(json["graph"]["risk"], "high");
+    assert!(json["graph"]["reasons"].as_array().is_some_and(|reasons| {
+        reasons.iter().any(|reason| {
+            reason
+                .as_str()
+                .is_some_and(|reason| reason.contains("rss-shared"))
+        })
+    }));
 }
 
 #[test]
