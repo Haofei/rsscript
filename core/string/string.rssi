@@ -1,0 +1,1 @@
+pub fn String.concat(left: read String, right: read String) -> fresh String

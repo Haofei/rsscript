@@ -296,6 +296,23 @@ fn main() -> Unit {
 }
 
 #[test]
+fn rust_lowering_maps_string_concat_to_rust_std_expression() {
+    let source = r#"
+fn main() -> Unit {
+    let message = String.concat(left: read "hello ", right: read "world")
+    Log.write(message: read message)
+    return Unit
+}
+"#;
+    let rust = lower_source_to_rust("string.rss", source).expect("source should lower");
+
+    assert!(rust.contains(
+        "let message = format!(\"{}{}\", &\"hello \".to_string(), &\"world\".to_string());"
+    ));
+    assert!(rust.contains("rsscript_runtime::log_write(&message);"));
+}
+
+#[test]
 fn rust_lowering_maps_try_operator_to_rust_result_propagation() {
     let source = r#"
 features: local

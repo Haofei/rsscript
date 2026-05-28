@@ -6,8 +6,9 @@ use std::process::Command;
 use crate::analyzer::analyze_source_with_core;
 use crate::diagnostic::{Diagnostic, Severity, Span, code};
 use crate::syntax::ast::{
-    BinaryOp, Block, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature, FunctionDecl,
-    GenericBound, GenericParam, Item, LetKind, Param, Program, Stmt, TypeDecl, TypeKind, TypeRef,
+    BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature,
+    FunctionDecl, GenericBound, GenericParam, Item, LetKind, Param, Program, Stmt, TypeDecl,
+    TypeKind, TypeRef,
 };
 use crate::syntax::parse_source;
 
@@ -707,6 +708,9 @@ impl<'a> RustLowerer<'a> {
                         return format!("{}({args})", rust_ident(name));
                     }
                 }
+                if is_string_concat_callee(callee) {
+                    return lower_string_concat_call(self, args);
+                }
                 let is_resource_pool_borrow = is_resource_pool_borrow_callee(callee);
                 let callee = if is_resource_pool_borrow {
                     "rsscript_runtime::ResourcePool::borrow_at".to_string()
@@ -1033,6 +1037,26 @@ fn is_log_write_callee(callee: &Callee) -> bool {
 
 fn is_assert_equal_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Assert" && name == "equal")
+}
+
+fn is_string_concat_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "String" && name == "concat")
+}
+
+fn lower_string_concat_call(lowerer: &mut RustLowerer<'_>, args: &[CallArg]) -> String {
+    let left = args
+        .iter()
+        .find(|arg| arg.name.as_deref() == Some("left"))
+        .or_else(|| args.first())
+        .map(|arg| lowerer.lower_expr(&arg.value))
+        .unwrap_or_else(|| "\"\".to_string()".to_string());
+    let right = args
+        .iter()
+        .find(|arg| arg.name.as_deref() == Some("right"))
+        .or_else(|| args.get(1))
+        .map(|arg| lowerer.lower_expr(&arg.value))
+        .unwrap_or_else(|| "\"\".to_string()".to_string());
+    format!("format!(\"{{}}{{}}\", {left}, {right})")
 }
 
 fn is_resource_pool_borrow_callee(callee: &Callee) -> bool {

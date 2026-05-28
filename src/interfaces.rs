@@ -18,6 +18,10 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../core/resource/resource_pool.rssi"),
     ),
     (
+        "core/string/string.rssi",
+        include_str!("../core/string/string.rssi"),
+    ),
+    (
         "core/test/assert.rssi",
         include_str!("../core/test/assert.rssi"),
     ),

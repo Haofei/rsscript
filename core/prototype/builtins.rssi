@@ -21,8 +21,6 @@ pub fn List.consume(list: take List) -> Unit
 
 pub fn Buffer.consume(buffer: take Buffer) -> Unit
 
-pub fn String.concat(left: read String, right: read String) -> fresh String
-
 pub fn DbConnection.open(url: read Url) -> fresh DbConnection
 
 pub fn DbConnection.query(
