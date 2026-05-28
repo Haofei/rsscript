@@ -218,6 +218,7 @@ rss lint     [--json] [--core|--no-core] [--interface <f.rssi> ...] <file.rss>
 rss fmt      <file.rss>
 rss review   [--json] --diff <old.rss> <new.rss>
 rss review   [--json] --map  <file-or-directory>
+rss package  check  [--json] [package-directory]
 rss package  review [--json] <package-directory>
 rss package  review update [--json] --from <old-rsspkg.lock> --to <new-rsspkg.lock>
 rss package  lock   [--json] <package-directory>
@@ -233,6 +234,7 @@ A few details worth knowing:
 - `rss check` loads bundled core `.rssi` signatures by default; `--no-core` is for testing against isolated user interfaces.
 - `rss lint` reuses the frontend checks and emits warnings. The first lint is `RSL001` — public signatures over the review budget for parameter count, generics, effects, or nested-type depth.
 - `rss review --map` validates inputs first, so files with frontend errors get diagnostics instead of misleading classifications.
+- `rss package check` validates a local package, runs package review, compares the current semantic lock against `rsspkg.lock`, and scans enabled native Rust wrapper metadata.
 - `rss package review` reads `rsspkg.toml`, treats `.rssi` files as the public semantic contract, and raises risk for native Rust wrappers, build scripts, proc macros, unsafe policy, external links, frontend diagnostics, and unknown review-map regions.
 - `rss package review update` compares two `rsspkg.lock` files and reports package version, source, checksum, `.rssi` interface, review metadata, native wrapper, and feature-selection changes.
 - `rss package lock` emits root package lock metadata with SHA-256 hashes for the public `.rssi` contract, review metadata, package contents, and native Rust wrapper contents when enabled.

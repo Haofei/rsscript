@@ -36,6 +36,39 @@ pub struct PackageDiff {
     pub new_review: PackageReviewSummary,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageCheck {
+    pub package: PackageIdentity,
+    pub package_dir: String,
+    pub ok: bool,
+    pub risk: PackageRisk,
+    pub reasons: Vec<String>,
+    pub summary: PackageReviewSummary,
+    pub lock: PackageCheckLock,
+    pub native_rust: Option<PackageNativeRustCheck>,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageCheckLock {
+    pub path: String,
+    pub present: bool,
+    pub matches: bool,
+    pub risk: PackageRisk,
+    pub reasons: Vec<String>,
+    pub package_changes: Vec<PackageLockPackageChange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageNativeRustCheck {
+    pub path: String,
+    pub cargo_toml_present: bool,
+    pub file_count: usize,
+    pub ok: bool,
+    pub risk: PackageRisk,
+    pub reasons: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackageLock {
     pub version: u32,
@@ -415,6 +448,46 @@ pub fn diff_package_dirs(old_dir: &Path, new_dir: &Path) -> Result<PackageDiff, 
     })
 }
 
+pub fn check_package_dir(package_dir: &Path) -> Result<PackageCheck, String> {
+    let review = review_package_dir(package_dir)?;
+    let current_lock = lock_package_dir(package_dir)?;
+    let lock = check_package_lock(package_dir, &current_lock)?;
+    let native_rust = check_package_native_rust(package_dir, review.native_rust.as_ref())?;
+
+    let mut reasons = review.reasons.clone();
+    reasons.extend(lock.reasons.clone());
+    if let Some(native) = &native_rust {
+        reasons.extend(native.reasons.clone());
+    }
+    reasons.sort();
+    reasons.dedup();
+
+    let diagnostics_have_errors = review
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity.is_error());
+    let native_ok = native_rust
+        .as_ref()
+        .is_none_or(|native_check| native_check.ok);
+    let ok = !diagnostics_have_errors && lock.matches && native_ok;
+    let mut risk = review.risk.max(lock.risk);
+    if let Some(native) = &native_rust {
+        risk = risk.max(native.risk);
+    }
+
+    Ok(PackageCheck {
+        package: review.package,
+        package_dir: package_dir.display().to_string(),
+        ok,
+        risk,
+        reasons,
+        summary: review.summary,
+        lock,
+        native_rust,
+        diagnostics: review.diagnostics,
+    })
+}
+
 pub fn lock_package_dir(package_dir: &Path) -> Result<PackageLock, String> {
     let package = load_package(package_dir)?;
     let review = review_package_dir(package_dir)?;
@@ -481,6 +554,10 @@ pub fn format_package_review_json(review: &PackageReview) -> String {
 
 pub fn format_package_diff_json(diff: &PackageDiff) -> String {
     serde_json::to_string(diff).expect("package diff JSON serialization should not fail")
+}
+
+pub fn format_package_check_json(check: &PackageCheck) -> String {
+    serde_json::to_string(check).expect("package check JSON serialization should not fail")
 }
 
 pub fn format_package_lock_json(lock: &PackageLock) -> String {
@@ -563,6 +640,51 @@ pub fn format_package_diff_human(diff: &PackageDiff) -> String {
         ));
         if !change.findings.is_empty() {
             output.push_str(&format_review_human(&change.findings));
+        }
+    }
+    output
+}
+
+pub fn format_package_check_human(check: &PackageCheck) -> String {
+    let mut output = String::new();
+    output.push_str(&format!(
+        "package check {} {} ({}) {} risk {}\n",
+        check.package.name,
+        check.package.version,
+        check.package.edition,
+        if check.ok { "ok" } else { "failed" },
+        package_risk_label(check.risk)
+    ));
+    output.push_str(&format!(
+        "summary: {} interface files; {} source files; {} dependencies; {} package features; {} diagnostics ({} errors)\n",
+        check.summary.interface_files,
+        check.summary.source_files,
+        check.summary.dependencies,
+        check.summary.package_features,
+        check.summary.diagnostics,
+        check.summary.errors
+    ));
+    output.push_str(&format!(
+        "lock: {} {}\n",
+        check.lock.path,
+        if check.lock.matches {
+            "matches"
+        } else if check.lock.present {
+            "stale"
+        } else {
+            "missing"
+        }
+    ));
+    if let Some(native) = &check.native_rust {
+        output.push_str(&format!(
+            "native rust: {} cargo_toml={} files={}\n",
+            native.path, native.cargo_toml_present, native.file_count
+        ));
+    }
+    if !check.reasons.is_empty() {
+        output.push_str("reasons:\n");
+        for reason in &check.reasons {
+            output.push_str(&format!("  - {reason}\n"));
         }
     }
     output
@@ -728,6 +850,87 @@ fn read_package_lock(path: &Path) -> Result<PackageLock, String> {
     let source = fs::read_to_string(path)
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
     toml::from_str(&source).map_err(|error| format!("failed to parse {}: {error}", path.display()))
+}
+
+fn check_package_lock(
+    package_dir: &Path,
+    current_lock: &PackageLock,
+) -> Result<PackageCheckLock, String> {
+    let lock_path = package_dir.join("rsspkg.lock");
+    if !lock_path.exists() {
+        return Ok(PackageCheckLock {
+            path: lock_path.display().to_string(),
+            present: false,
+            matches: false,
+            risk: PackageRisk::Elevated,
+            reasons: vec!["rsspkg.lock missing".to_string()],
+            package_changes: Vec::new(),
+        });
+    }
+
+    let locked = read_package_lock(&lock_path)?;
+    let package_changes = compare_locked_packages(&locked.packages, &current_lock.packages);
+    let mut reasons = package_lock_diff_reasons(&package_changes);
+    if locked.version != current_lock.version {
+        reasons.push("lockfile format version changed".to_string());
+    }
+    reasons.sort();
+    reasons.dedup();
+    let mut risk = package_changes
+        .iter()
+        .fold(PackageRisk::Low, |risk, change| risk.max(change.risk));
+    if locked.version != current_lock.version {
+        risk = risk.max(PackageRisk::Elevated);
+    }
+
+    Ok(PackageCheckLock {
+        path: lock_path.display().to_string(),
+        present: true,
+        matches: reasons.is_empty(),
+        risk,
+        reasons,
+        package_changes,
+    })
+}
+
+fn check_package_native_rust(
+    package_dir: &Path,
+    native: Option<&PackageNativeRustReview>,
+) -> Result<Option<PackageNativeRustCheck>, String> {
+    let Some(native) = native else {
+        return Ok(None);
+    };
+    let native_root = package_dir.join(&native.path);
+    let cargo_toml_present = native_root.join("Cargo.toml").exists();
+    let mut files = Vec::new();
+    if native_root.exists() {
+        collect_regular_files(&native_root, &mut files)?;
+    }
+    let mut reasons = Vec::new();
+    if !native_root.exists() {
+        reasons.push("native Rust path missing".to_string());
+    }
+    if !cargo_toml_present {
+        reasons.push("native Rust Cargo.toml missing".to_string());
+    }
+    if files.is_empty() {
+        reasons.push("native Rust source files missing".to_string());
+    }
+    let ok = reasons.is_empty();
+    let risk = if ok {
+        PackageRisk::Elevated
+    } else {
+        PackageRisk::High
+    };
+
+    Ok(Some(PackageNativeRustCheck {
+        path: native.path.clone(),
+        cargo_toml_present,
+        file_count: files.len(),
+        ok,
+        risk,
+        reasons,
+    }))
 }
 
 fn is_rsscript_source_path(path: &Path) -> bool {

@@ -6,8 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rsscript::{
     Diagnostic, analyze_source, analyze_source_with_interfaces, check_generated_rust_package,
-    core_interfaces, diff_package_dirs, diff_package_locks, explain_diagnostic_code,
-    format_diagnostic_explanation, format_diagnostics_human, format_diagnostics_json,
+    check_package_dir, core_interfaces, diff_package_dirs, diff_package_locks,
+    explain_diagnostic_code, format_diagnostic_explanation, format_diagnostics_human,
+    format_diagnostics_json, format_package_check_human, format_package_check_json,
     format_package_diff_human, format_package_diff_json, format_package_lock_diff_human,
     format_package_lock_diff_json, format_package_lock_json, format_package_lock_toml,
     format_package_review_human, format_package_review_json, format_review_human,
@@ -43,6 +44,7 @@ fn main() -> ExitCode {
 
 fn run_package(args: &[String]) -> ExitCode {
     match parse_package_args(args) {
+        PackageCommand::Check { json, path } => run_package_check(json, path),
         PackageCommand::Review { json, path } => run_package_review(json, path),
         PackageCommand::ReviewUpdate {
             json,
@@ -792,6 +794,10 @@ enum ReviewCommand<'a> {
 }
 
 enum PackageCommand<'a> {
+    Check {
+        json: bool,
+        path: &'a str,
+    },
     Review {
         json: bool,
         path: &'a str,
@@ -836,7 +842,10 @@ fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
             };
             to_path = Some(path.as_str());
             index += 1;
-        } else if matches!(arg.as_str(), "review" | "update" | "lock" | "diff") {
+        } else if matches!(
+            arg.as_str(),
+            "check" | "review" | "update" | "lock" | "diff"
+        ) {
             words.push(arg.as_str());
         } else {
             paths.push(arg.as_str());
@@ -845,6 +854,8 @@ fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
     }
 
     match (words.as_slice(), paths.as_slice(), from_path, to_path) {
+        (["check"], [], None, None) => PackageCommand::Check { json, path: "." },
+        (["check"], [path], None, None) => PackageCommand::Check { json, path },
         (["review"], [path], None, None) => PackageCommand::Review { json, path },
         (["review", "update"], [], Some(old_lock_path), Some(new_lock_path)) => {
             PackageCommand::ReviewUpdate {
@@ -963,6 +974,31 @@ fn run_review_map(json: bool, path: &str) -> ExitCode {
         print!("{}", format_review_map_human(&map));
     }
     ExitCode::SUCCESS
+}
+
+fn run_package_check(json: bool, path: &str) -> ExitCode {
+    let check = match check_package_dir(Path::new(path)) {
+        Ok(check) => check,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+
+    if json {
+        println!("{}", format_package_check_json(&check));
+    } else {
+        print!("{}", format_package_check_human(&check));
+        if !check.diagnostics.is_empty() {
+            print!("{}", format_diagnostics_human(&check.diagnostics));
+        }
+    }
+
+    if check.ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
 }
 
 fn run_package_review(json: bool, path: &str) -> ExitCode {
@@ -1121,6 +1157,7 @@ fn print_usage() {
     eprintln!("  rsscript verify-rust [--json] <file.rss> --out-dir <directory>");
     eprintln!("  rsscript review [--json] --diff <old.rss> <new.rss>");
     eprintln!("  rsscript review [--json] --map <file-or-directory>");
+    eprintln!("  rsscript package check [--json] [package-directory]");
     eprintln!("  rsscript package review [--json] <package-directory>");
     eprintln!(
         "  rsscript package review update [--json] --from <old-rsspkg.lock> --to <new-rsspkg.lock>"

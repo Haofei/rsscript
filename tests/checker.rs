@@ -7,8 +7,8 @@ use rsscript::syntax::ast::{EffectDecl, Item};
 use rsscript::syntax::parse_source;
 use rsscript::{
     ReviewMapClassification, ReviewMapFileRisk, ReviewRisk, analyze_source,
-    analyze_source_with_core, analyze_source_with_interfaces, core_interfaces, diff_package_dirs,
-    diff_package_locks, explain_diagnostic_code, format_diagnostic_explanation,
+    analyze_source_with_core, analyze_source_with_interfaces, check_package_dir, core_interfaces,
+    diff_package_dirs, diff_package_locks, explain_diagnostic_code, format_diagnostic_explanation,
     format_diagnostics_json, format_package_lock_toml, format_review_human, format_review_json,
     format_review_map_human, format_review_map_json, lint_source, lock_package_dir,
     lower_source_to_rust, lower_source_to_rust_package, lower_source_to_rust_with_map,
@@ -2704,6 +2704,165 @@ fn rss_package_review_update_json_reports_lock_changes() {
             .is_some_and(|changes| changes
                 .iter()
                 .any(|change| change["field"] == "interface_hash"))
+    );
+}
+
+#[test]
+fn package_check_reports_stale_semantic_lock() {
+    let temp_dir = unique_temp_dir("rsscript-package-check-stale");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        "",
+        r#"pub fn add(left: Int, right: Int) -> Int
+"#,
+    );
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+    fs::write(
+        temp_dir.join("interface/lib.rssi"),
+        r#"pub fn add(left: Int, right: Int) -> Result<Int, MathError>
+"#,
+    )
+    .expect("interface should be changed");
+
+    let check = check_package_dir(&temp_dir).expect("package check should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!check.ok);
+    assert_eq!(json["risk"], "high");
+    assert_eq!(json["lock"]["present"], true);
+    assert_eq!(json["lock"]["matches"], false);
+    assert!(json["lock"]["reasons"].as_array().is_some_and(|reasons| {
+        reasons
+            .iter()
+            .any(|reason| reason == ".rssi interface hash changed")
+    }));
+}
+
+#[test]
+fn rss_package_check_json_reports_consistent_package() {
+    let temp_dir = unique_temp_dir("rsscript-package-check-cli");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        "",
+        r#"pub fn add(left: Int, right: Int) -> Int
+"#,
+    );
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("package")
+        .arg("check")
+        .arg("--json")
+        .arg(&temp_dir)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss package check should execute");
+    let _ = fs::remove_dir_all(&temp_dir);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: Value = serde_json::from_str(&stdout).expect("stdout should be package check JSON");
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["lock"]["present"], true);
+    assert_eq!(json["lock"]["matches"], true);
+}
+
+#[test]
+fn rss_package_check_fails_when_lock_missing() {
+    let temp_dir = unique_temp_dir("rsscript-package-check-missing-lock");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        "",
+        r#"pub fn add(left: Int, right: Int) -> Int
+"#,
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("package")
+        .arg("check")
+        .arg("--json")
+        .arg(&temp_dir)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss package check should execute");
+    let _ = fs::remove_dir_all(&temp_dir);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: Value = serde_json::from_str(&stdout).expect("stdout should be package check JSON");
+
+    assert!(!output.status.success(), "stdout={stdout}");
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["lock"]["present"], false);
+    assert!(
+        json["lock"]["reasons"]
+            .as_array()
+            .is_some_and(|reasons| reasons.iter().any(|reason| reason == "rsspkg.lock missing"))
+    );
+}
+
+#[test]
+fn package_check_reports_native_rust_consistency_issues() {
+    let temp_dir = unique_temp_dir("rsscript-package-check-native");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_json_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+        r#"native fn Json.parse(text: read String) -> Result<fresh JsonValue, JsonError>
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
+    fs::write(
+        temp_dir.join("native/rust/src/lib.rs"),
+        "pub fn parse() {}\n",
+    )
+    .expect("native source should be written");
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&temp_dir).expect("package check should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!check.ok);
+    assert_eq!(json["native_rust"]["cargo_toml_present"], false);
+    assert_eq!(json["native_rust"]["risk"], "high");
+    assert!(
+        json["native_rust"]["reasons"]
+            .as_array()
+            .is_some_and(|reasons| reasons
+                .iter()
+                .any(|reason| reason == "native Rust Cargo.toml missing"))
     );
 }
 
