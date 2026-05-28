@@ -3,7 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 
 use crate::diagnostic::{Span, code};
-use crate::hir::{CallResolution, Hir, ResolvedCalleeKind};
+use crate::hir::{
+    CallResolution, Hir, HirBlock, HirExpr, HirStmt, ParamEffect, ResolvedCalleeKind,
+};
 use crate::syntax::ast::{
     Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature, FunctionDecl,
     Item, LetKind, Param, Stmt, TypeDecl, TypeKind, TypeRef,
@@ -396,6 +398,12 @@ fn review_map_region_draft(
 ) -> ReviewMapRegionDraft {
     let mut facts = ReviewMapFacts::default();
     collect_review_map_facts_block(&function.body, hir, &mut facts);
+    if let Some(body) = hir
+        .function_body(&function.name)
+        .and_then(|body| body.block.as_ref())
+    {
+        collect_review_map_hir_facts_block(body, &mut facts);
+    }
 
     let mut reasons = Vec::new();
     if function.is_public {
@@ -454,6 +462,9 @@ fn review_map_region_draft(
     if facts.has_resource_pool {
         reasons.push("ResourcePool usage".to_string());
     }
+    if facts.has_handle_field_write {
+        reasons.push("writes through handle field".to_string());
+    }
 
     let had_review_reason = !reasons.is_empty();
     let classification = if !facts.unresolved_calls.is_empty() {
@@ -507,6 +518,7 @@ struct ReviewMapFacts {
     has_mut: bool,
     has_take: bool,
     has_resource_pool: bool,
+    has_handle_field_write: bool,
     user_calls: BTreeSet<String>,
     unresolved_calls: BTreeSet<String>,
 }
@@ -673,6 +685,112 @@ fn collect_review_map_facts_expr(expr: &Expr, hir: &Hir, facts: &mut ReviewMapFa
         }
         Expr::Closure { body, .. } => collect_review_map_facts_block(body, hir, facts),
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+    }
+}
+
+fn collect_review_map_hir_facts_block(block: &HirBlock, facts: &mut ReviewMapFacts) {
+    for statement in &block.statements {
+        collect_review_map_hir_facts_stmt(statement, facts);
+    }
+}
+
+fn collect_review_map_hir_facts_stmt(statement: &HirStmt, facts: &mut ReviewMapFacts) {
+    match statement {
+        HirStmt::Let { value, .. } | HirStmt::Return { value, .. } => {
+            if let Some(value) = value {
+                collect_review_map_hir_facts_expr(value, facts);
+            }
+        }
+        HirStmt::With { resource, body, .. } => {
+            collect_review_map_hir_facts_expr(resource, facts);
+            collect_review_map_hir_facts_block(body, facts);
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            collect_review_map_hir_facts_expr(condition, facts);
+            collect_review_map_hir_facts_block(then_body, facts);
+            if let Some(else_body) = else_body {
+                collect_review_map_hir_facts_block(else_body, facts);
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                collect_review_map_hir_facts_expr(condition, facts);
+            }
+            collect_review_map_hir_facts_block(body, facts);
+        }
+        HirStmt::Expr(expr) => collect_review_map_hir_facts_expr(expr, facts),
+        HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn collect_review_map_hir_facts_expr(expr: &HirExpr, facts: &mut ReviewMapFacts) {
+    if hir_expr_writes_through_handle_field(expr) {
+        facts.has_handle_field_write = true;
+    }
+    match expr {
+        HirExpr::Binary { left, right, .. } => {
+            collect_review_map_hir_facts_expr(left, facts);
+            collect_review_map_hir_facts_expr(right, facts);
+        }
+        HirExpr::Field { base, .. } => collect_review_map_hir_facts_expr(base, facts),
+        HirExpr::Index { base, index, .. } => {
+            collect_review_map_hir_facts_expr(base, facts);
+            collect_review_map_hir_facts_expr(index, facts);
+        }
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                collect_review_map_hir_facts_expr(&arg.value, facts);
+            }
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Try { value, .. } => {
+            collect_review_map_hir_facts_expr(value, facts);
+        }
+        HirExpr::Closure { body, .. } => collect_review_map_hir_facts_block(body, facts),
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn hir_expr_writes_through_handle_field(expr: &HirExpr) -> bool {
+    match expr {
+        HirExpr::Effect {
+            effect: ParamEffect::Mut | ParamEffect::Take,
+            value,
+            ..
+        } => hir_place_path_crosses_handle_field(value),
+        _ => false,
+    }
+}
+
+fn hir_place_path_crosses_handle_field(expr: &HirExpr) -> bool {
+    match expr {
+        HirExpr::Field { base, access, .. } => {
+            access.is_handle || hir_place_path_crosses_handle_field(base)
+        }
+        HirExpr::Index { base, .. } | HirExpr::Manage { value: base, .. } => {
+            hir_place_path_crosses_handle_field(base)
+        }
+        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => {
+            hir_place_path_crosses_handle_field(value)
+        }
+        HirExpr::Ident { .. } => false,
+        HirExpr::Binary { .. }
+        | HirExpr::Call { .. }
+        | HirExpr::Closure { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => false,
     }
 }
 

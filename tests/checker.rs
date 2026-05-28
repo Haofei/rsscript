@@ -2805,6 +2805,35 @@ fn update(counter: read Counter) -> Unit {
 }
 
 #[test]
+fn review_map_marks_writes_through_handle_fields() {
+    let source = r#"
+class Cache {
+    value: Int
+}
+
+struct State {
+    cache: handle Cache
+}
+
+fn touch(cache: mut Cache) -> Unit
+
+fn update(state: read State) -> Unit {
+    touch(cache: mut state.cache)
+}
+"#;
+    let map = review_map_sources(vec![("handle-write.rss", source)]);
+
+    assert!(map.files[0].regions.iter().any(|region| {
+        region.function == "update"
+            && region.classification == ReviewMapClassification::ReviewRequired
+            && region
+                .reasons
+                .iter()
+                .any(|reason| reason == "writes through handle field")
+    }));
+}
+
+#[test]
 fn review_map_reports_file_features() {
     let source = r#"
 features: local, native, ffi, reflection
