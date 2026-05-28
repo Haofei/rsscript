@@ -1,0 +1,12 @@
+// expect: RS0012
+mode: managed
+
+struct Image {
+    pixels: Buffer
+}
+
+fn load(path: read Path) -> Result<fresh Image, ImageError>
+    effects(io, allocates, may_panic, may_fail, async)
+{
+    return Image.load(path: read path)
+}

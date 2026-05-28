@@ -187,6 +187,26 @@ impl Analyzer<'_> {
 
             for effect in &function.effects {
                 let effect_name = effect_name(effect);
+                if let Some(replacement) = removed_runtime_effect_replacement(effect_name) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::REMOVED_RUNTIME_EFFECT,
+                            format!(
+                                "`{effect_name}` is not a valid RSScript v0.4.1 effect in `{}`.",
+                                function.name
+                            ),
+                            function.span.clone(),
+                            "removed runtime effect",
+                        )
+                        .with_cause("v0.4.1 uses reductive guarantees such as `no_panic`, `noalloc`, `no_block`, and `pure`.")
+                        .with_fix(
+                            "replace_removed_effect",
+                            replacement,
+                            "manual",
+                        ),
+                    );
+                    continue;
+                }
                 let valid = effect_name == "no_panic"
                     || effect_name == "noalloc"
                     || effect_name == "no_block"
@@ -657,6 +677,27 @@ fn effect_display(effect: &EffectDecl) -> String {
     match effect {
         EffectDecl::Name(name) => name.clone(),
         EffectDecl::Retains(param) => format!("retains({param})"),
+    }
+}
+
+fn removed_runtime_effect_replacement(effect_name: &str) -> Option<&'static str> {
+    match effect_name {
+        "io" => Some(
+            "Remove `io`; I/O is allowed by default unless a guarantee such as `pure` or `no_block` forbids it.",
+        ),
+        "allocates" => Some(
+            "Remove `allocates`; allocation is allowed by default. Use `noalloc` only when the function guarantees no allocation.",
+        ),
+        "may_panic" => Some(
+            "Remove `may_panic`; panic is allowed by default. Use `no_panic` only when the function guarantees no panic.",
+        ),
+        "may_fail" => Some(
+            "Remove `may_fail`; represent failure in the return type, for example `Result<T, E>`.",
+        ),
+        "async" => Some(
+            "Remove `async` from `effects(...)`; write `async fn` when the function itself is async.",
+        ),
+        _ => None,
     }
 }
 
