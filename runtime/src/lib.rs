@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use std::cell::{RefCell, RefMut};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;

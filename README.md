@@ -78,6 +78,8 @@ That gives you a clear performance path for parser buffers, JSON decoding, promp
 
 The capability model is a gradual descent: managed is the default reviewable application layer; `features: local` opens explicit exclusive ownership for hot paths and resource-heavy internals; `features: native` crosses into Rust wrapper code and carries a higher review burden. `unsafe` is separate: it is not the next normal layer after native, but an explicit hazard marker for code that may violate RSScript's safety model. `features: native, unsafe` is therefore a native boundary with an additional unsafe review obligation.
 
+The safe RSScript surface is designed to have no user-visible undefined behavior. Managed aliasing and mutation conflicts are runtime errors or diagnostics, not hidden memory hazards, and the compiler/runtime crates forbid Rust `unsafe` internally. `features: native` and `features: unsafe` are explicit review boundaries for code outside that safe surface.
+
 ### Features are review signals
 
 Files are managed-only unless they declare otherwise:

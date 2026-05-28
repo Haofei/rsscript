@@ -710,6 +710,13 @@ contracts, and an unsafe function may be implemented without crossing a native
 wrapper boundary. When both appear, `features: native, unsafe` means the file
 crosses a native boundary and also exposes behavior that requires unsafe review.
 
+The safe RSScript surface has no specified undefined behavior. Managed aliasing,
+mutation conflicts, resource-pool borrow conflicts, and runtime ownership
+conflicts must become diagnostics or runtime errors, not unchecked memory
+behavior. The reference compiler and runtime forbid Rust `unsafe` internally;
+native wrappers and `effects(unsafe)` are explicit review boundaries outside this
+safe surface.
+
 The following feature names are reserved for future review-relevant capabilities:
 
 ```text

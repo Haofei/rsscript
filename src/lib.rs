@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 mod analyzer;
 mod checks;
 mod diagnostic;
