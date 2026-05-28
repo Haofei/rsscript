@@ -1,0 +1,24 @@
+mode: uses-local
+
+class Cache {
+    entries: Map<String, Image>
+}
+
+struct Image {
+    pixels: Buffer
+}
+
+fn cache_put(cache: mut Cache, value: read Image) -> Unit
+    effects(retains(value))
+{
+}
+
+fn run(cache: mut Cache, path: read Path, inspect_local: Bool) -> Unit {
+    if inspect_local {
+        local image = Image.load(path: read path)
+        Image.inspect(image: read image)
+    }
+
+    let image = Image.load(path: read path)
+    cache_put(cache: mut cache, value: read image)
+}

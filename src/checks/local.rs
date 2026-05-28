@@ -33,6 +33,14 @@ pub(crate) struct ManagedToLocalUse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RetainedLocalUse {
+    pub(crate) name: String,
+    pub(crate) callee: String,
+    pub(crate) param: String,
+    pub(crate) span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TakeHandleField {
     pub(crate) name: String,
     pub(crate) span: Span,
@@ -209,6 +217,32 @@ impl LocalAnalysis {
                     managed_name: managed_name.clone(),
                     span: span.clone(),
                 });
+            }
+        }
+        uses
+    }
+
+    pub(crate) fn retained_local_uses(&self) -> Vec<RetainedLocalUse> {
+        let mut uses = Vec::new();
+        for step in &self.flow_steps {
+            let Some(state) = self.flow_entry_states_by_span.get(&step.span) else {
+                continue;
+            };
+            for event in &step.events {
+                let HirEffectEventKind::Retain { callee, param } = &event.kind else {
+                    continue;
+                };
+                if state.is_local(&event.binding_name) {
+                    let retained = RetainedLocalUse {
+                        name: event.binding_name.clone(),
+                        callee: callee.clone(),
+                        param: param.clone(),
+                        span: event.value_span.clone(),
+                    };
+                    if !uses.contains(&retained) {
+                        uses.push(retained);
+                    }
+                }
             }
         }
         uses

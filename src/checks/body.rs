@@ -5,7 +5,7 @@ use crate::syntax::ast::{Callee, FunctionDecl, Item};
 
 use super::local::{
     BodyState, FreshReturnIssue, FreshReturnIssueKind, LocalAnalysis, ManagedToLocalUse, MovedUse,
-    ResourceEscapeKind, TakeHandleField, merge_if_state, merge_loop_state,
+    ResourceEscapeKind, RetainedLocalUse, TakeHandleField, merge_if_state, merge_loop_state,
 };
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
@@ -24,6 +24,7 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
         let local_analysis = LocalAnalysis::new(hir_body.as_ref());
         check_managed_to_local_uses(analyzer, &local_analysis);
         check_moved_uses(analyzer, &local_analysis);
+        check_retained_local_uses(analyzer, &local_analysis);
         check_take_handle_fields(analyzer, &local_analysis);
         check_fresh_returns(analyzer, &local_analysis, &function);
         let mut state = local_analysis.initial_state();
@@ -216,6 +217,12 @@ fn check_managed_to_local_uses(analyzer: &mut Analyzer<'_>, local_analysis: &Loc
     }
 }
 
+fn check_retained_local_uses(analyzer: &mut Analyzer<'_>, local_analysis: &LocalAnalysis) {
+    for retained in local_analysis.retained_local_uses() {
+        retained_local_diagnostic(analyzer, retained);
+    }
+}
+
 fn check_take_handle_fields(analyzer: &mut Analyzer<'_>, local_analysis: &LocalAnalysis) {
     for field in local_analysis.take_handle_fields() {
         take_handle_field_diagnostic(analyzer, field);
@@ -276,6 +283,32 @@ fn take_handle_field_diagnostic(analyzer: &mut Analyzer<'_>, field: &TakeHandleF
         )
         .with_cause(
             "Handle fields are managed references and cannot be consumed as local inline values.",
+        ),
+    );
+}
+
+fn retained_local_diagnostic(analyzer: &mut Analyzer<'_>, retained: RetainedLocalUse) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::LOCAL_VALUE_RETAINED,
+            format!(
+                "retaining API `{}` cannot retain local value `{}`.",
+                retained.callee, retained.name
+            ),
+            retained.span,
+            "local value retained",
+        )
+        .with_cause(format!(
+            "`{}` declares `effects(retains({}))`.",
+            retained.callee, retained.param
+        ))
+        .with_fix(
+            "manage_local",
+            format!(
+                "Pass `{}` through `manage {}` before retaining it.",
+                retained.param, retained.name
+            ),
+            "manual",
         ),
     );
 }

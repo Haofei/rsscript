@@ -32,9 +32,10 @@ It currently implements:
 - Initial local flow graph nodes with successor edges derived from resolved HIR statements, including branch and loop `break` / `continue` control flow, as the staging point for CFG-backed CleanLocal dataflow
 - Initial local flow state propagation for local bindings, managed bindings, scoped `with` resource bindings, `manage` / `take` moves, and retaining calls
 - HIR-driven mode checks for local-only features
-- HIR-driven call checks for named arguments, data effects, unknown callees, and retaining APIs
+- HIR-driven call checks for named arguments, data effects, and unknown callees
 - HIR-driven body traversal for body semantics and local state updates
 - Body checks for managed-to-local, use-after-move, HIR/local-flow `fresh` returns, active resource escape, resolved handle-field `take`, managed closure captures, and resource escape traversal now consume HIR body facts and local flow entry state
+- HIR/local-flow retaining API checks that only reject values local at the retaining call site
 - Local ownership, use-after-move, `fresh` return, managed closure capture, resource-retain escape, and handle-field `take` checks now index statement uses, binding types, fresh-return issue facts, take-handle facts, closure uses, and move/retain events from resolved HIR body trees
 - ResourcePool lease checks that require `ResourcePool.borrow(...)` to be scoped by `with`
 - Focused check modules for mode, calls, body semantics, and forbidden operator behavior

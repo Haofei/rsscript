@@ -2,10 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, Span, code};
-use crate::hir::{
-    CallResolution, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirFunctionBody, HirStmt,
-    ParamEffect,
-};
+use crate::hir::{CallResolution, HirBlock, HirCallArg, HirExpr, HirStmt};
 use crate::syntax::ast::{Callee, Item};
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
@@ -15,15 +12,14 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
             let Some(body) = analyzer.hir.function_body(&function.name).cloned() else {
                 continue;
             };
-            let locals = collect_local_bindings(&body);
             if let Some(block) = &body.block {
-                check_block(analyzer, block, &locals);
+                check_block(analyzer, block);
             }
         }
     }
 }
 
-fn check_block(analyzer: &mut Analyzer<'_>, block: &HirBlock, locals: &HashSet<String>) {
+fn check_block(analyzer: &mut Analyzer<'_>, block: &HirBlock) {
     for statement in &block.statements {
         match statement {
             HirStmt::Let {
@@ -32,10 +28,10 @@ fn check_block(analyzer: &mut Analyzer<'_>, block: &HirBlock, locals: &HashSet<S
             | HirStmt::Return {
                 value: Some(value), ..
             }
-            | HirStmt::Expr(value) => check_expr(analyzer, value, locals),
+            | HirStmt::Expr(value) => check_expr(analyzer, value),
             HirStmt::With { resource, body, .. } => {
-                check_expr(analyzer, resource, locals);
-                check_block(analyzer, body, locals);
+                check_expr(analyzer, resource);
+                check_block(analyzer, body);
             }
             HirStmt::If {
                 condition,
@@ -43,19 +39,19 @@ fn check_block(analyzer: &mut Analyzer<'_>, block: &HirBlock, locals: &HashSet<S
                 else_body,
                 ..
             } => {
-                check_expr(analyzer, condition, locals);
-                check_block(analyzer, then_body, locals);
+                check_expr(analyzer, condition);
+                check_block(analyzer, then_body);
                 if let Some(else_body) = else_body {
-                    check_block(analyzer, else_body, locals);
+                    check_block(analyzer, else_body);
                 }
             }
             HirStmt::Loop {
                 condition, body, ..
             } => {
                 if let Some(condition) = condition {
-                    check_expr(analyzer, condition, locals);
+                    check_expr(analyzer, condition);
                 }
-                check_block(analyzer, body, locals);
+                check_block(analyzer, body);
             }
             HirStmt::Let { value: None, .. }
             | HirStmt::Return { value: None, .. }
@@ -66,7 +62,7 @@ fn check_block(analyzer: &mut Analyzer<'_>, block: &HirBlock, locals: &HashSet<S
     }
 }
 
-fn check_expr(analyzer: &mut Analyzer<'_>, expr: &HirExpr, locals: &HashSet<String>) {
+fn check_expr(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
     match expr {
         HirExpr::Call {
             callee,
@@ -75,16 +71,16 @@ fn check_expr(analyzer: &mut Analyzer<'_>, expr: &HirExpr, locals: &HashSet<Stri
             resolution,
             ..
         } => {
-            check_call_args(analyzer, callee, args, span, resolution, locals);
+            check_call_args(analyzer, callee, args, span, resolution);
             for arg in args {
-                check_expr(analyzer, &arg.value, locals);
+                check_expr(analyzer, &arg.value);
             }
         }
         HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => {
-            check_expr(analyzer, value, locals);
+            check_expr(analyzer, value);
         }
-        HirExpr::Field { base, .. } => check_expr(analyzer, base, locals),
-        HirExpr::Closure { body, .. } => check_block(analyzer, body, locals),
+        HirExpr::Field { base, .. } => check_expr(analyzer, base),
+        HirExpr::Closure { body, .. } => check_block(analyzer, body),
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -98,7 +94,6 @@ fn check_call_args(
     args: &[HirCallArg],
     call_span: &Span,
     resolution: &CallResolution,
-    locals: &HashSet<String>,
 ) {
     let call_name = callee_name(callee);
     if matches!(resolution, CallResolution::EnumVariant) {
@@ -157,7 +152,6 @@ fn check_call_args(
                 .map(|effect| (param.name.clone(), effect.as_str()))
         })
         .collect();
-    let retained_params = signature.retained_params.clone();
     let param_names: HashSet<String> = signature_params
         .iter()
         .map(|param| param.name.clone())
@@ -257,44 +251,6 @@ fn check_call_args(
             );
         }
     }
-
-    for arg in args {
-        let Some(name) = &arg.name else {
-            continue;
-        };
-        if !retained_params.contains(name) {
-            continue;
-        }
-        if let HirExpr::Effect {
-            effect: ParamEffect::Read,
-            value,
-            ..
-        } = &arg.value
-            && let HirExpr::Ident {
-                name: var, span, ..
-            } = value.as_ref()
-            && locals.contains(var)
-        {
-            analyzer.diagnostics.push(
-                Diagnostic::error(
-                    code::LOCAL_VALUE_RETAINED,
-                    format!("retaining API `{call_name}` cannot retain local value `{var}`."),
-                    span.clone(),
-                    "local value retained",
-                )
-                .with_cause(format!(
-                    "`{call_name}` declares `effects(retains({name}))`."
-                ))
-                .with_fix(
-                    "manage_local",
-                    format!(
-                        "Pass `{name}: read (manage {var})` if the value should become managed."
-                    ),
-                    "manual",
-                ),
-            );
-        }
-    }
 }
 
 fn join_param_names(params: &[crate::hir::ParamSig]) -> String {
@@ -324,14 +280,6 @@ fn expr_data_effect(expr: &HirExpr) -> Option<&'static str> {
         HirExpr::Effect { effect, .. } => Some(effect.as_str()),
         _ => None,
     }
-}
-
-fn collect_local_bindings(body: &HirFunctionBody) -> HashSet<String> {
-    body.bindings
-        .iter()
-        .filter(|binding| binding.kind == HirBindingKind::LocalLet)
-        .map(|binding| binding.name.clone())
-        .collect()
 }
 
 fn hir_expr_span(expr: &HirExpr) -> &Span {
