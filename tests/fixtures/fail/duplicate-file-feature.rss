@@ -1,0 +1,6 @@
+// expect: RS0017
+features: local, local
+
+fn main() -> Unit {
+    return Unit
+}

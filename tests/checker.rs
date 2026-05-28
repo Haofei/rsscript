@@ -1665,6 +1665,28 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_rejects_duplicate_file_features() {
+    let source = r#"
+features: local, local
+
+fn main() -> Unit {
+    return Unit
+}
+"#;
+    let program = parse_source("features.rss", source);
+
+    assert_eq!(program.features.len(), 2);
+    assert_eq!(program.duplicate_features.len(), 1);
+    assert_eq!(program.duplicate_features[0].name, "local");
+    let diagnostics = analyze_source("features.rss", source);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0017")
+    );
+}
+
+#[test]
 fn review_map_marks_public_rssi_signatures_review_required() {
     let source = r#"
 struct JsonValue

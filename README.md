@@ -124,6 +124,8 @@ features: local
 
 The MVP implements only `local`. Future feature names such as `native`, `unsafe`, `async`, `device`, `ffi`, and `reflection` are reserved for capabilities that change review risk or require checker/runtime support. Ordinary libraries like JSON, File, Image, HTTP, Map, and Regex are not features.
 
+Each feature may appear only once. Unknown or repeated feature names are diagnostics so capability boundaries are not silently normalized.
+
 ### Reviewable at the boundary
 
 Function calls use named arguments and visible effects.

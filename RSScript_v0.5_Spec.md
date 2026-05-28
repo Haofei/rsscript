@@ -624,6 +624,8 @@ A file without a `features:` declaration is managed-only:
 
 This lowers entry friction for ordinary scripts.
 
+Each feature may appear at most once in a `features:` declaration. Duplicate feature names are diagnostics rather than silently ignored, because the header is a review capability boundary.
+
 ---
 
 ## 8.2 Default Managed File

@@ -18,9 +18,16 @@ pub struct UnknownFileFeature {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DuplicateFileFeature {
+    pub name: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
     pub features: Vec<FileFeature>,
     pub unknown_features: Vec<UnknownFileFeature>,
+    pub duplicate_features: Vec<DuplicateFileFeature>,
     pub feature_spans: Vec<Span>,
     pub profile_spans: Vec<Span>,
     pub items: Vec<Item>,

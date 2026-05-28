@@ -1,8 +1,11 @@
+use std::collections::HashSet;
+
 use crate::lexer::{Token, TokenKind, lex};
 use crate::syntax::ast::{
-    BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature,
-    FunctionDecl, GenericBound, GenericParam, IfStmt, Item, LetKind, LetStmt, LoopStmt, Param,
-    Program, ReturnStmt, Stmt, TypeDecl, TypeKind, TypeRef, UnknownFileFeature, WithStmt,
+    BinaryOp, Block, CallArg, Callee, DataEffect, DuplicateFileFeature, EffectDecl, Expr,
+    FieldDecl, FileFeature, FunctionDecl, GenericBound, GenericParam, IfStmt, Item, LetKind,
+    LetStmt, LoopStmt, Param, Program, ReturnStmt, Stmt, TypeDecl, TypeKind, TypeRef,
+    UnknownFileFeature, WithStmt,
 };
 
 pub fn parse_source(file: &str, source: &str) -> Program {
@@ -22,12 +25,14 @@ struct Parser<'a> {
 struct ParsedFeatures {
     features: Vec<FileFeature>,
     unknown_features: Vec<UnknownFileFeature>,
+    duplicate_features: Vec<DuplicateFileFeature>,
 }
 
 impl Parser<'_> {
     fn parse_program(&mut self) -> Program {
         let mut features = Vec::new();
         let mut unknown_features = Vec::new();
+        let mut duplicate_features = Vec::new();
         let mut feature_spans = Vec::new();
         let mut profile_spans = Vec::new();
         let mut items = Vec::new();
@@ -38,6 +43,7 @@ impl Parser<'_> {
                 let parsed = self.parse_features();
                 features.extend(parsed.features);
                 unknown_features.extend(parsed.unknown_features);
+                duplicate_features.extend(parsed.duplicate_features);
             } else if self.at_ident("profile") && self.peek_symbol(1, ":") {
                 profile_spans.push(self.tokens[self.index].span.clone());
                 self.index += 1;
@@ -58,6 +64,7 @@ impl Parser<'_> {
         Program {
             features,
             unknown_features,
+            duplicate_features,
             feature_spans,
             profile_spans,
             items,
@@ -69,6 +76,8 @@ impl Parser<'_> {
         let end = declaration_line_end(self.tokens, self.index);
         let mut features = Vec::new();
         let mut unknown_features = Vec::new();
+        let mut duplicate_features = Vec::new();
+        let mut seen_features = HashSet::new();
         while self.index < end {
             if self.at_symbol(",") {
                 self.index += 1;
@@ -76,6 +85,15 @@ impl Parser<'_> {
             }
             let token = self.tokens.get(self.index);
             if let Some(feature) = parse_file_feature(token) {
+                let name = file_feature_name(feature).to_string();
+                if !seen_features.insert(feature)
+                    && let Some(token) = token
+                {
+                    duplicate_features.push(DuplicateFileFeature {
+                        name,
+                        span: token.span.clone(),
+                    });
+                }
                 features.push(feature);
             } else if let Some(token) = token
                 && !matches!(token.kind, TokenKind::Eof)
@@ -90,6 +108,7 @@ impl Parser<'_> {
         ParsedFeatures {
             features,
             unknown_features,
+            duplicate_features,
         }
     }
 
@@ -1107,6 +1126,18 @@ fn parse_file_feature(token: Option<&Token>) -> Option<FileFeature> {
         Some(FileFeature::Reflection)
     } else {
         None
+    }
+}
+
+fn file_feature_name(feature: FileFeature) -> &'static str {
+    match feature {
+        FileFeature::Local => "local",
+        FileFeature::Native => "native",
+        FileFeature::Unsafe => "unsafe",
+        FileFeature::Async => "async",
+        FileFeature::Device => "device",
+        FileFeature::Ffi => "ffi",
+        FileFeature::Reflection => "reflection",
     }
 }
 

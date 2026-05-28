@@ -67,6 +67,7 @@ impl Analyzer<'_> {
     fn run(&mut self) {
         self.check_single_feature_declaration();
         self.check_unknown_file_features();
+        self.check_duplicate_file_features();
         self.check_removed_profile_declarations();
         self.check_unsupported_syntax();
         self.check_duplicate_declarations();
@@ -118,6 +119,27 @@ impl Analyzer<'_> {
                     "remove_or_correct_feature",
                     "Remove the feature name or replace it with a supported feature such as `local`.",
                     "manual",
+                ),
+            );
+        }
+    }
+
+    fn check_duplicate_file_features(&mut self) {
+        for feature in &self.syntax_program.duplicate_features {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::DUPLICATE_FILE_FEATURE,
+                    format!("Duplicate file feature `{}`.", feature.name),
+                    feature.span.clone(),
+                    "duplicate feature",
+                )
+                .with_cause(
+                    "File features are capability declarations; repeating one makes the review boundary noisier without changing semantics.",
+                )
+                .with_fix(
+                    "remove_duplicate_feature",
+                    format!("Remove the repeated `{}` feature.", feature.name),
+                    "machine-applicable",
                 ),
             );
         }
