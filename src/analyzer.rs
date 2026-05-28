@@ -217,6 +217,13 @@ impl Analyzer<'_> {
                 "This top-level construct is outside the current RSScript parser surface.",
             );
         }
+        for span in self.syntax_program.malformed_declaration_spans.clone() {
+            self.unsupported_syntax(
+                span,
+                "malformed declaration",
+                "This declaration starts like RSScript syntax but does not match the supported declaration grammar.",
+            );
+        }
         let items = self.syntax_program.items.clone();
         for item in &items {
             self.check_unsupported_syntax_item(item);

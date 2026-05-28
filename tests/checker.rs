@@ -2220,6 +2220,32 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_reports_malformed_declarations_as_unsupported() {
+    let source = r#"
+fn (value: read String) -> Unit {
+    return Unit
+}
+
+struct {
+    value: String
+}
+
+fn main() -> Unit {
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("malformed-declarations.rss", source);
+    let malformed_count = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == "RS0015" && diagnostic.label == "malformed declaration"
+        })
+        .count();
+
+    assert_eq!(malformed_count, 2, "{diagnostics:?}");
+}
+
+#[test]
 fn review_json_uses_protocol_shape() {
     let old_source = r#"
 

@@ -36,6 +36,7 @@ impl Parser<'_> {
         let mut feature_spans = Vec::new();
         let mut profile_spans = Vec::new();
         let mut unknown_top_level_spans = Vec::new();
+        let mut malformed_declaration_spans = Vec::new();
         let mut items = Vec::new();
 
         while !self.is_eof() {
@@ -50,16 +51,24 @@ impl Parser<'_> {
                 self.index += 1;
             } else if self.at_ident("class") || self.at_ident("struct") || self.at_ident("resource")
             {
+                let start = self.index;
                 if let Some(item) = self.parse_type_decl() {
                     items.push(Item::Type(item));
+                } else {
+                    malformed_declaration_spans.push(self.tokens[start].span.clone());
+                    self.index = skip_unknown_top_level(self.tokens, start);
                 }
             } else if self.at_ident("pub")
                 || self.at_ident("async")
                 || self.at_ident("native")
                 || self.at_ident("fn")
             {
+                let start = self.index;
                 if let Some(item) = self.parse_function_decl() {
                     items.push(Item::Function(item));
+                } else {
+                    malformed_declaration_spans.push(self.tokens[start].span.clone());
+                    self.index = skip_unknown_top_level(self.tokens, start);
                 }
             } else {
                 unknown_top_level_spans.push(self.tokens[self.index].span.clone());
@@ -74,6 +83,7 @@ impl Parser<'_> {
             feature_spans,
             profile_spans,
             unknown_top_level_spans,
+            malformed_declaration_spans,
             items,
         }
     }
