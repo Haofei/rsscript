@@ -625,7 +625,9 @@ impl<'a> RustLowerer<'a> {
 
     fn lower_expr(&mut self, expr: &Expr) -> String {
         match expr {
-            Expr::Ident(name, _) => rust_ident(name),
+            Expr::Ident(name, _) => lower_builtin_value_ident(name)
+                .map(str::to_string)
+                .unwrap_or_else(|| rust_ident(name)),
             Expr::Number(value, _) => value.clone(),
             Expr::String(value, _) => format!("{value:?}.to_string()"),
             Expr::Binary {
@@ -648,22 +650,31 @@ impl<'a> RustLowerer<'a> {
                 format!("{}[{}]", self.lower_expr(base), self.lower_expr(index))
             }
             Expr::Call { callee, args, span } => {
-                if let Callee::Name(name) = callee
-                    && self.type_kinds.contains_key(name)
-                {
-                    let fields = args
-                        .iter()
-                        .map(|arg| {
-                            let field = arg
-                                .name
-                                .as_deref()
-                                .map(rust_ident)
-                                .unwrap_or_else(|| "/* unnamed */".to_string());
-                            format!("{field}: {}", self.lower_expr(&arg.value))
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    return format!("{} {{ {fields} }}", rust_ident(name));
+                if let Callee::Name(name) = callee {
+                    if self.type_kinds.contains_key(name) {
+                        let fields = args
+                            .iter()
+                            .map(|arg| {
+                                let field = arg
+                                    .name
+                                    .as_deref()
+                                    .map(rust_ident)
+                                    .unwrap_or_else(|| "/* unnamed */".to_string());
+                                format!("{field}: {}", self.lower_expr(&arg.value))
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        return format!("{} {{ {fields} }}", rust_ident(name));
+                    }
+
+                    if is_rust_enum_constructor(name) {
+                        let args = args
+                            .iter()
+                            .map(|arg| self.lower_expr(&arg.value))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        return format!("{}({args})", rust_ident(name));
+                    }
                 }
                 let is_resource_pool_borrow = is_resource_pool_borrow_callee(callee);
                 let callee = if is_resource_pool_borrow {
@@ -988,6 +999,18 @@ fn is_resource_pool_borrow_callee(callee: &Callee) -> bool {
 
 fn is_resource_pool_borrow_expr(expr: &Expr) -> bool {
     matches!(expr, Expr::Call { callee, .. } if is_resource_pool_borrow_callee(callee))
+}
+
+fn lower_builtin_value_ident(name: &str) -> Option<&'static str> {
+    match name {
+        "Unit" => Some("()"),
+        "None" => Some("None"),
+        _ => None,
+    }
+}
+
+fn is_rust_enum_constructor(name: &str) -> bool {
+    matches!(name, "Ok" | "Err" | "Some")
 }
 
 fn lower_source_span(span: &Span) -> String {

@@ -203,6 +203,39 @@ pub fn make_point(x: Int, y: Int) -> fresh Point {
 }
 
 #[test]
+fn rust_lowering_maps_unit_and_result_constructors_to_rust() {
+    let source = r#"
+struct BuildError {
+    code: Int
+}
+
+struct Point {
+    x: Int
+    y: Int
+}
+
+pub fn make_result(x: Int, y: Int) -> Result<fresh Point, BuildError> {
+    return Ok(Point(x: x, y: y))
+}
+
+pub fn fail(code: Int) -> Result<fresh Point, BuildError> {
+    return Err(BuildError(code: code))
+}
+
+pub fn unit_result() -> Result<Unit, BuildError> {
+    return Ok(Unit)
+}
+"#;
+    let rust = lower_source_to_rust("result.rss", source).expect("source should lower");
+
+    assert!(rust.contains("pub fn make_result(x: i64, y: i64) -> Result<Point, BuildError>"));
+    assert!(rust.contains("return Ok(Point { x: x, y: y });"));
+    assert!(rust.contains("return Err(BuildError { code: code });"));
+    assert!(rust.contains("pub fn unit_result() -> Result<(), BuildError>"));
+    assert!(rust.contains("return Ok(());"));
+}
+
+#[test]
 fn rust_lowering_matches_golden_fixture() {
     let source = read_fixture(Path::new("tests/golden/lowering/simple.rss"));
     let expected_rust = read_fixture(Path::new("tests/golden/lowering/simple.rs"));
