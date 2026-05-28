@@ -486,23 +486,49 @@ fn run_generated_rust(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    if cleanup_package_dir {
-        cleanup_temp_dir(&package_dir);
-    }
-
     let stdout = String::from_utf8_lossy(&output.stdout);
     if !stdout.is_empty() {
         print!("{stdout}");
     }
     if output.status.success() {
+        if cleanup_package_dir {
+            cleanup_temp_dir(&package_dir);
+        }
         return ExitCode::SUCCESS;
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let diagnostics = parse_runtime_diagnostics(&stderr);
     if !diagnostics.is_empty() {
+        if cleanup_package_dir {
+            cleanup_temp_dir(&package_dir);
+        }
         print_diagnostics(options.json, &diagnostics);
         return ExitCode::from(1);
+    }
+    match check_generated_rust_package(&package_dir) {
+        Ok(result) if !result.diagnostics.is_empty() => {
+            if cleanup_package_dir {
+                cleanup_temp_dir(&package_dir);
+            }
+            print_diagnostics(options.json, &result.diagnostics);
+            return if result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.severity.is_error())
+            {
+                ExitCode::from(1)
+            } else {
+                ExitCode::SUCCESS
+            };
+        }
+        Ok(_) => {}
+        Err(error) => {
+            eprintln!("{error}");
+        }
+    }
+    if cleanup_package_dir {
+        cleanup_temp_dir(&package_dir);
     }
     if !stderr.trim().is_empty() {
         eprintln!("{}", stderr.trim());

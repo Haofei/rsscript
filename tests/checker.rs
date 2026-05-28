@@ -1555,6 +1555,89 @@ fn rss_run_accepts_multi_file_package_directory() {
 }
 
 #[test]
+fn rss_run_json_remaps_rustc_compile_errors() {
+    let temp_dir = unique_temp_dir("rsscript-run-rustc-remap");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-run-rustc-remap",
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_json_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+        r#"features: native
+
+native fn Native.echo(message: read String) -> String
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
+    fs::create_dir_all(temp_dir.join("native")).expect("native dir should be created");
+    fs::write(
+        temp_dir.join("src/main.rss"),
+        r#"features: native
+
+fn main() -> Unit {
+    let message = Native.echo(message: read "hello")
+    Log.write(message: read message)
+}
+"#,
+    )
+    .expect("source should be written");
+    fs::write(
+        temp_dir.join("native/bindings.rssbind.toml"),
+        r#"[bindings]
+"Native.echo" = "rss_json_native::echo"
+"#,
+    )
+    .expect("native binding manifest should be written");
+    fs::write(
+        temp_dir.join("native/rust/Cargo.toml"),
+        "[package]\nname = \"rss_json_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("native Cargo.toml should be written");
+    fs::write(
+        temp_dir.join("native/rust/src/lib.rs"),
+        "pub fn echo(message: String) -> String { message }\n",
+    )
+    .expect("native source should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("--json")
+        .arg(&temp_dir)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss run package directory should execute");
+    let _ = fs::remove_dir_all(&temp_dir);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: Value = serde_json::from_str(&stdout).expect("stdout should be diagnostics JSON");
+
+    assert!(!output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert_eq!(json[0]["code"], "RS1101");
+    assert!(
+        json[0]["spans"][0]["file"]
+            .as_str()
+            .is_some_and(|file| file.ends_with("src/main.rss"))
+    );
+    assert!(
+        json[0]["causes"]
+            .as_array()
+            .expect("causes should be an array")
+            .iter()
+            .any(|cause| cause
+                .as_str()
+                .is_some_and(|cause| cause.contains("rustc code: E0308")))
+    );
+}
+
+#[test]
 fn rss_verify_rust_json_accepts_package_directory() {
     let temp_dir = unique_temp_dir("rsscript-verify-package-cli");
     write_named_package_fixture(&temp_dir, "rss-verify-package", "0.1.0", "", "");
