@@ -854,8 +854,20 @@ impl<'a> RustLowerer<'a> {
                 };
                 format!("{} {op} {}", self.lower_expr(left), self.lower_expr(right))
             }
-            Expr::Field { base, name, .. } => {
-                format!("{}.{}", self.lower_expr(base), rust_ident(name))
+            Expr::Field { base, name, span } => {
+                if self
+                    .infer_expr_type(base)
+                    .is_some_and(|ty| self.is_class_type(&ty))
+                {
+                    format!(
+                        "rsscript_runtime::unwrap_runtime({}.try_read_at({})).{}.clone()",
+                        self.lower_expr(base),
+                        lower_source_span(span),
+                        rust_ident(name)
+                    )
+                } else {
+                    format!("{}.{}", self.lower_expr(base), rust_ident(name))
+                }
             }
             Expr::Index { base, index, .. } => {
                 format!("{}[{}]", self.lower_expr(base), self.lower_expr(index))

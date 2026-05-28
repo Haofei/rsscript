@@ -7,15 +7,16 @@ use rsscript::syntax::ast::{EffectDecl, Item};
 use rsscript::syntax::parse_source;
 use rsscript::{
     NativeRustDependency, ReviewMapClassification, ReviewMapFileRisk, ReviewRisk, analyze_source,
-    analyze_source_with_core, analyze_source_with_interfaces, check_package_dir, core_interfaces,
-    diff_package_dirs, diff_package_locks, explain_diagnostic_code, format_diagnostic_explanation,
-    format_diagnostics_json, format_package_lock_toml, format_review_human, format_review_json,
-    format_review_map_human, format_review_map_json, lint_source, lock_package_dir,
-    lower_source_to_rust, lower_source_to_rust_package, lower_source_to_rust_with_map,
+    analyze_source_with_core, analyze_source_with_interfaces, check_generated_rust_package,
+    check_package_dir, core_interfaces, diff_package_dirs, diff_package_locks,
+    explain_diagnostic_code, format_diagnostic_explanation, format_diagnostics_json,
+    format_package_lock_toml, format_review_human, format_review_json, format_review_map_human,
+    format_review_map_json, lint_source, lock_package_dir, lower_source_to_rust,
+    lower_source_to_rust_package, lower_source_to_rust_with_map,
     lower_sources_to_rust_package_with_options, package_lowering_input, package_metadata,
     package_tree, parse_runtime_diagnostics, publish_package_dry_run, remap_rustc_diagnostic_json,
     remap_rustc_diagnostic_json_lines, review_map_sources, review_package_dir, review_sources,
-    vendor_package_dir,
+    vendor_package_dir, write_generated_rust_package,
 };
 use serde_json::Value;
 
@@ -1476,6 +1477,51 @@ fn promote(id: Int) -> Unit {
     assert!(rust.contains("touch(&shared);"));
     assert!(!rust.contains("&mut rsscript_runtime::Managed<User>"));
     assert!(!rust.contains("touch(&mut shared);"));
+}
+
+#[test]
+fn rust_lowering_reads_managed_class_fields_through_runtime_handle() {
+    let source = r#"
+features: local
+
+class User {
+    id: Int
+}
+
+fn user_id(user: read User) -> Int {
+    return user.id
+}
+
+fn main() -> Unit {
+    local user = User(id: 42)
+    let shared = manage user
+    let id = user_id(user: read shared)
+    Assert.equal(left: read "42", right: read "42")
+    return Unit
+}
+"#;
+    let package = lower_source_to_rust_package(
+        "user.rss",
+        source,
+        "managed-class-field",
+        &format!("{}/runtime", env!("CARGO_MANIFEST_DIR")),
+    )
+    .expect("source should lower into package");
+    assert!(package.lib_rs.contains(
+        "return rsscript_runtime::unwrap_runtime(user.try_read_at(rsscript_runtime::SourceSpan::new(\"user.rss\", 9, 12, 4))).id.clone();"
+    ));
+
+    let temp_dir = unique_temp_dir("rsscript-managed-class-field");
+    write_generated_rust_package(&temp_dir, &package).expect("generated package should be written");
+    let check =
+        check_generated_rust_package(&temp_dir).expect("generated package should be checked");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(
+        check.success,
+        "diagnostics={:?}\nstderr={}",
+        check.diagnostics, check.stderr
+    );
 }
 
 #[test]
