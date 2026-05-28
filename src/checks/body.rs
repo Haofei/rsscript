@@ -4,7 +4,8 @@ use crate::hir::{CallResolution, HirReturnProof, HirTypeKind, ResolvedCalleeKind
 use crate::syntax::ast::{Block, Callee, DataEffect, Expr, FunctionDecl, Item, LetKind, Stmt};
 
 use super::local::{
-    BodyState, LocalAnalysis, MovedUse, ResourceEscapeKind, merge_if_state, merge_loop_state,
+    BodyState, LocalAnalysis, ManagedToLocalUse, MovedUse, ResourceEscapeKind, merge_if_state,
+    merge_loop_state,
 };
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
@@ -20,6 +21,7 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
 
     for function in functions {
         let local_analysis = LocalAnalysis::new(analyzer.hir.function_body(&function.name));
+        check_managed_to_local_uses(analyzer, &local_analysis);
         check_moved_uses(analyzer, &local_analysis);
         let mut state = local_analysis.initial_state();
         check_block(
@@ -67,29 +69,6 @@ fn check_stmt_semantics(
     match statement {
         Stmt::Let(stmt) => {
             let stmt_state = local_analysis.flow_entry_state(&stmt.span).unwrap_or(state);
-            if stmt.kind == LetKind::Local
-                && let Some(Expr::Ident(name, span)) = &stmt.value
-                && stmt_state.is_managed(name)
-            {
-                analyzer.diagnostics.push(
-                    Diagnostic::error(
-                        code::MANAGED_TO_LOCAL,
-                        format!(
-                            "managed value cannot be converted to local binding `{}`.",
-                            stmt.name
-                        ),
-                        span.clone(),
-                        "managed value used as local",
-                    )
-                    .with_cause("RSScript has no managed -> local conversion.")
-                    .with_fix(
-                        "create_local",
-                        "Create the value as `local` at its creation point.",
-                        "manual",
-                    ),
-                );
-            }
-
             if stmt.kind == LetKind::Managed {
                 check_managed_closure_captures(
                     analyzer,
@@ -265,6 +244,35 @@ fn check_moved_uses(analyzer: &mut Analyzer<'_>, local_analysis: &LocalAnalysis)
     for moved_use in local_analysis.moved_uses() {
         moved_use_diagnostic(analyzer, moved_use);
     }
+}
+
+fn check_managed_to_local_uses(analyzer: &mut Analyzer<'_>, local_analysis: &LocalAnalysis) {
+    for managed_to_local in local_analysis.managed_to_local_uses() {
+        managed_to_local_diagnostic(analyzer, managed_to_local);
+    }
+}
+
+fn managed_to_local_diagnostic(analyzer: &mut Analyzer<'_>, managed_to_local: ManagedToLocalUse) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::MANAGED_TO_LOCAL,
+            format!(
+                "managed value cannot be converted to local binding `{}`.",
+                managed_to_local.local_name
+            ),
+            managed_to_local.span,
+            "managed value used as local",
+        )
+        .with_cause(format!(
+            "`{}` is already managed; RSScript has no managed -> local conversion.",
+            managed_to_local.managed_name
+        ))
+        .with_fix(
+            "create_local",
+            "Create the value as `local` at its creation point.",
+            "manual",
+        ),
+    );
 }
 
 fn moved_use_diagnostic(analyzer: &mut Analyzer<'_>, moved_use: MovedUse) {

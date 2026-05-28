@@ -25,6 +25,13 @@ pub(crate) struct MovedUse {
     pub(crate) move_span: Span,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ManagedToLocalUse {
+    pub(crate) local_name: String,
+    pub(crate) managed_name: String,
+    pub(crate) span: Span,
+}
+
 pub(crate) struct LocalAnalysis {
     body: Option<HirFunctionBody>,
     events_by_span: HashMap<Span, Vec<HirEffectEvent>>,
@@ -64,6 +71,7 @@ struct LocalFlowBinding {
     name: String,
     kind: HirBindingKind,
     type_name: Option<String>,
+    value_ident: Option<(String, Span)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,6 +200,33 @@ impl LocalAnalysis {
             }
         }
         moved_uses
+    }
+
+    pub(crate) fn managed_to_local_uses(&self) -> Vec<ManagedToLocalUse> {
+        let mut uses = Vec::new();
+        for step in &self.flow_steps {
+            let Some(binding) = &step.binding else {
+                continue;
+            };
+            if binding.kind != HirBindingKind::LocalLet {
+                continue;
+            }
+            let Some((managed_name, span)) = &binding.value_ident else {
+                continue;
+            };
+            if self
+                .flow_entry_states_by_span
+                .get(&step.span)
+                .is_some_and(|state| state.is_managed(managed_name))
+            {
+                uses.push(ManagedToLocalUse {
+                    local_name: binding.name.clone(),
+                    managed_name: managed_name.clone(),
+                    span: span.clone(),
+                });
+            }
+        }
+        uses
     }
 
     fn effect_events(&self, span: &Span) -> &[HirEffectEvent] {
@@ -1336,12 +1371,24 @@ fn local_flow_step_binding(statement: &HirStmt) -> Option<LocalFlowBinding> {
         HirStmt::Let {
             kind,
             name,
+            value,
             type_name,
             ..
         } => Some(LocalFlowBinding {
             name: name.clone(),
             kind: *kind,
             type_name: type_name.clone(),
+            value_ident: value.as_ref().and_then(|value| match value {
+                HirExpr::Ident { name, span, .. } => Some((name.clone(), span.clone())),
+                HirExpr::Number { .. }
+                | HirExpr::String { .. }
+                | HirExpr::Field { .. }
+                | HirExpr::Call { .. }
+                | HirExpr::Effect { .. }
+                | HirExpr::Manage { .. }
+                | HirExpr::Closure { .. }
+                | HirExpr::Unknown(_) => None,
+            }),
         }),
         HirStmt::Return { .. }
         | HirStmt::With { .. }
@@ -2368,6 +2415,47 @@ mod tests {
                 name: "image".to_string(),
                 use_span: span(3),
                 move_span: span(2),
+            }]
+        );
+    }
+
+    #[test]
+    fn local_analysis_reports_managed_to_local_uses_from_flow_state() {
+        let body = HirFunctionBody {
+            function_name: "run".to_string(),
+            block: Some(HirBlock {
+                statements: vec![
+                    HirStmt::Let {
+                        kind: HirBindingKind::ManagedLet,
+                        name: "image".to_string(),
+                        value: None,
+                        type_name: Some("Image".to_string()),
+                        span: span(1),
+                    },
+                    HirStmt::Let {
+                        kind: HirBindingKind::LocalLet,
+                        name: "working".to_string(),
+                        value: Some(HirExpr::Ident {
+                            name: "image".to_string(),
+                            type_name: Some("Image".to_string()),
+                            span: span(2),
+                        }),
+                        type_name: Some("Image".to_string()),
+                        span: span(2),
+                    },
+                ],
+                span: span(1),
+            }),
+            ..HirFunctionBody::default()
+        };
+        let local_analysis = LocalAnalysis::new(Some(&body));
+
+        assert_eq!(
+            local_analysis.managed_to_local_uses(),
+            vec![ManagedToLocalUse {
+                local_name: "working".to_string(),
+                managed_name: "image".to_string(),
+                span: span(2),
             }]
         );
     }
