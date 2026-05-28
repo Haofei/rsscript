@@ -719,6 +719,9 @@ impl<'a> RustLowerer<'a> {
                 if is_string_concat_callee(callee) {
                     return lower_string_concat_call(self, args);
                 }
+                if is_resource_pool_new_callee(callee) {
+                    return lower_resource_pool_new_call(self, args);
+                }
                 let is_resource_pool_borrow = is_resource_pool_borrow_callee(callee);
                 let callee = if is_resource_pool_borrow {
                     "rsscript_runtime::ResourcePool::borrow_at".to_string()
@@ -749,6 +752,9 @@ impl<'a> RustLowerer<'a> {
             }
             Expr::Try { value, .. } => format!("{}?", self.lower_expr(value)),
             Expr::Closure { body, .. } => {
+                if let [Stmt::Expr(value)] = body.statements.as_slice() {
+                    return format!("|| {}", self.lower_expr(value));
+                }
                 let mut out = String::new();
                 out.push_str("|| {\n");
                 self.lower_block(body, &mut out, 1);
@@ -779,6 +785,8 @@ impl<'a> RustLowerer<'a> {
             "Float32" => "f32".to_string(),
             "Float64" => "f64".to_string(),
             "String" => "String".to_string(),
+            "Url" => "String".to_string(),
+            "Fd" => "i64".to_string(),
             "Bytes" | "Buffer" => "Vec<u8>".to_string(),
             "Path" => "std::path::PathBuf".to_string(),
             "File" => "rsscript_runtime::File".to_string(),
@@ -786,6 +794,8 @@ impl<'a> RustLowerer<'a> {
             "Request" => "rsscript_runtime::Request".to_string(),
             "Response" => "rsscript_runtime::Response".to_string(),
             "HttpError" => "rsscript_runtime::HttpError".to_string(),
+            "DbConnection" => "rsscript_runtime::DbConnection".to_string(),
+            "DbError" => "rsscript_runtime::DbError".to_string(),
             "Image" => "rsscript_runtime::Image".to_string(),
             "ImageError" => "rsscript_runtime::ImageError".to_string(),
             "JsonValue" => "rsscript_runtime::JsonValue".to_string(),
@@ -1076,6 +1086,13 @@ fn lower_callee(callee: &Callee) -> String {
             "rsscript_runtime::response_status".to_string()
         }
         callee if is_response_body_callee(callee) => "rsscript_runtime::response_body".to_string(),
+        callee if is_db_connection_open_callee(callee) => {
+            "rsscript_runtime::db_connection_open".to_string()
+        }
+        callee if is_db_connection_query_callee(callee) => {
+            "rsscript_runtime::db_connection_query".to_string()
+        }
+        callee if is_db_close_callee(callee) => "rsscript_runtime::db_close".to_string(),
         callee if is_image_load_callee(callee) => "rsscript_runtime::image_load".to_string(),
         callee if is_image_resize_callee(callee) => "rsscript_runtime::image_resize".to_string(),
         callee if is_image_normalize_callee(callee) => {
@@ -1159,6 +1176,18 @@ fn is_response_body_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Response" && name == "body")
 }
 
+fn is_db_connection_open_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "DbConnection" && name == "open")
+}
+
+fn is_db_connection_query_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "DbConnection" && name == "query")
+}
+
+fn is_db_close_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Db" && name == "close")
+}
+
 fn is_image_load_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Image" && name == "load")
 }
@@ -1239,8 +1268,24 @@ fn is_resource_pool_borrow_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && name == "borrow")
 }
 
+fn is_resource_pool_new_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && name == "new")
+}
+
 fn is_resource_pool_borrow_expr(expr: &Expr) -> bool {
     matches!(expr, Expr::Call { callee, .. } if is_resource_pool_borrow_callee(callee))
+}
+
+fn lower_resource_pool_new_call(lowerer: &mut RustLowerer<'_>, args: &[CallArg]) -> String {
+    let create = lower_call_arg(
+        lowerer,
+        args,
+        "create",
+        0,
+        "|| panic!(\"missing resource factory\")",
+    );
+    let max_size = lower_call_arg(lowerer, args, "max_size", 1, "0");
+    format!("rsscript_runtime::ResourcePool::from_factory({max_size}, {create})")
 }
 
 fn lower_builtin_value_ident(name: &str) -> Option<&'static str> {

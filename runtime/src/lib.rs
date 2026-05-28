@@ -30,6 +30,35 @@ pub struct Response {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DbConnection {
+    url: String,
+    queries: Vec<String>,
+}
+
+impl Resource for DbConnection {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DbError {
+    message: String,
+}
+
+impl DbError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for DbError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.message)
+    }
+}
+
+impl std::error::Error for DbError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpError {
     message: String,
 }
@@ -253,6 +282,26 @@ pub fn response_status(response: &Response) -> i64 {
 
 pub fn response_body(response: &Response) -> String {
     response.body.clone()
+}
+
+pub fn db_connection_open(url: &str) -> DbConnection {
+    DbConnection {
+        url: url.to_string(),
+        queries: Vec::new(),
+    }
+}
+
+pub fn db_connection_query(conn: &mut DbConnection, sql: &str) -> Result<(), DbError> {
+    if sql.trim().is_empty() {
+        return Err(DbError::new("SQL query is empty"));
+    }
+    conn.queries.push(sql.to_string());
+    println!("db query on {}: {sql}", conn.url);
+    Ok(())
+}
+
+pub fn db_close(fd: i64) {
+    let _ = fd;
 }
 
 pub fn image_load<P: RuntimePath + ?Sized>(path: &P) -> Result<Image, ImageError> {
@@ -575,6 +624,15 @@ impl<T: Resource> ResourcePool<T> {
         }
     }
 
+    pub fn from_factory<F>(max_size: i64, mut create: F) -> Self
+    where
+        F: FnMut() -> T,
+    {
+        let count = max_size.max(0) as usize;
+        let values = (0..count).map(|_| create()).collect();
+        Self::new(values)
+    }
+
     pub fn empty() -> Self {
         Self::new(Vec::new())
     }
@@ -601,6 +659,10 @@ impl<T: Resource> ResourcePool<T> {
 
     pub fn try_borrow_at(&self, span: SourceSpan) -> Result<ResourceLease<'_, T>, RuntimeError> {
         self.try_borrow().map_err(|error| error.with_span(span))
+    }
+
+    pub fn borrow_at(pool: &Self, span: SourceSpan) -> Result<ResourceLease<'_, T>, RuntimeError> {
+        pool.try_borrow_at(span)
     }
 
     pub fn borrow(&self) -> ResourceLease<'_, T> {
@@ -809,5 +871,16 @@ mod tests {
         assert_eq!(path, "/users");
         assert_eq!(super::response_status(&response), 200);
         assert_eq!(super::response_body(&response), "handled /users");
+    }
+
+    #[test]
+    fn db_runtime_hooks_pool_connections() {
+        let pool = ResourcePool::from_factory(2, || super::db_connection_open("db://local"));
+        {
+            let mut conn = pool.borrow();
+            super::db_connection_query(&mut conn, "select 1").expect("query should run");
+        }
+
+        assert_eq!(pool.values.borrow().len(), 2);
     }
 }

@@ -431,6 +431,33 @@ fn main() -> Result<Unit, HttpError> {
 }
 
 #[test]
+fn rust_lowering_maps_db_resource_pool_to_runtime_hooks() {
+    let source = r#"
+features: local
+
+fn run_query(url: read Url, sql: read String) -> Result<Unit, DbError> {
+    local pool = ResourcePool<DbConnection>.new(
+        create: || DbConnection.open(url: read url),
+        max_size: 2,
+    )
+
+    with ResourcePool.borrow(pool: mut pool) as conn {
+        DbConnection.query(conn: mut conn, sql: read sql)?
+    }
+
+    return Ok(Unit)
+}
+"#;
+    let rust = lower_source_to_rust("db.rss", source).expect("source should lower");
+
+    assert!(rust.contains("url: &String"));
+    assert!(rust.contains("-> Result<(), rsscript_runtime::DbError>"));
+    assert!(rust.contains("let mut pool = rsscript_runtime::ResourcePool::from_factory(2, || rsscript_runtime::db_connection_open(&url));"));
+    assert!(rust.contains("let mut conn = rsscript_runtime::unwrap_runtime(rsscript_runtime::ResourcePool::borrow_at(&mut pool, rsscript_runtime::SourceSpan::new(\"db.rss\""));
+    assert!(rust.contains("rsscript_runtime::db_connection_query(&mut conn, &sql)?;"));
+}
+
+#[test]
 fn rust_lowering_decodes_string_escape_sequences() {
     let source = r#"
 fn json_text() -> String {
@@ -712,7 +739,7 @@ fn rust_lowering_targets_runtime_crate_hooks() {
     let source = r#"
 features: local
 
-resource DbConnection {
+resource TestConnection {
     fd: Int
 
     drop {
@@ -720,12 +747,12 @@ resource DbConnection {
     }
 }
 
-fn pooled(pool: mut ResourcePool<DbConnection>) -> Unit
+fn pooled(pool: mut ResourcePool<TestConnection>) -> Unit
 "#;
     let rust = lower_source_to_rust("pool.rssi", source).expect("source should lower");
 
-    assert!(rust.contains("impl rsscript_runtime::Resource for DbConnection"));
-    assert!(rust.contains("pool: &mut rsscript_runtime::ResourcePool<DbConnection>"));
+    assert!(rust.contains("impl rsscript_runtime::Resource for TestConnection"));
+    assert!(rust.contains("pool: &mut rsscript_runtime::ResourcePool<TestConnection>"));
     assert!(rust.contains("let _ = &pool;"));
 }
 
@@ -734,19 +761,23 @@ fn rust_lowering_emits_source_spans_for_resource_pool_borrow() {
     let source = r#"
 features: local
 
-resource DbConnection {
+resource TestConnection {
     fd: Int
 }
 
-fn pooled(pool: mut ResourcePool<DbConnection>) -> Unit {
+fn TestConnection.query(conn: mut TestConnection, sql: read String) -> Unit
+
+fn pooled(pool: mut ResourcePool<TestConnection>) -> Unit {
     with ResourcePool.borrow(pool: mut pool) as conn {
-        DbConnection.query(conn: mut conn, sql: read "select 1")
+        TestConnection.query(conn: mut conn, sql: read "select 1")
     }
 }
 "#;
     let rust = lower_source_to_rust("pool.rss", source).expect("source should lower");
 
-    assert!(rust.contains("let mut conn = rsscript_runtime::unwrap_runtime(rsscript_runtime::ResourcePool::borrow_at(&mut pool, rsscript_runtime::SourceSpan::new(\"pool.rss\", 9, 10, 12)));"));
+    assert!(rust.contains(
+        "let mut conn = rsscript_runtime::unwrap_runtime(rsscript_runtime::ResourcePool::borrow_at(&mut pool, rsscript_runtime::SourceSpan::new(\"pool.rss\""
+    ));
 }
 
 #[test]

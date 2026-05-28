@@ -1,0 +1,10 @@
+resource DbConnection
+
+pub fn DbConnection.open(url: read Url) -> fresh DbConnection
+
+pub fn DbConnection.query(
+    conn: mut DbConnection,
+    sql: read String,
+) -> Result<Unit, DbError>
+
+pub fn Db.close(fd: Fd) -> Unit

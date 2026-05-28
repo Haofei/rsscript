@@ -1,0 +1,20 @@
+features: local
+
+fn run_query(url: read Url, sql: read String) -> Result<Unit, DbError> {
+    local pool = ResourcePool<DbConnection>.new(
+        create: || DbConnection.open(url: read url),
+        max_size: 2,
+    )
+
+    with ResourcePool.borrow(pool: mut pool) as conn {
+        DbConnection.query(conn: mut conn, sql: read sql)?
+    }
+
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, DbError> {
+    run_query(url: read "db://local", sql: read "select 1")?
+    Log.write(message: read "db pool ran")
+    return Ok(Unit)
+}
