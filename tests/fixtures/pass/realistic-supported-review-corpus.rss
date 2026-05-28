@@ -1,0 +1,147 @@
+features: local, native
+
+class User {
+    id: String
+}
+
+struct Session {
+    owner: weak User
+    trace_id: String
+}
+
+struct UploadPlan {
+    input: Path
+    output: Path
+    trace_id: String
+}
+
+struct WorkItem {
+    plan: UploadPlan
+    session: Session
+}
+
+fn User.lookup(id: read String) -> User
+fn User.touch(user: read User) -> Unit
+
+fn audit_step(callback: noescape Fn()) -> Unit {
+    callback()
+    return Unit
+}
+
+fn parse_plan(request: read Request) -> Result<fresh UploadPlan, JsonError> {
+    let body = Request.path(request: read request)
+    let json = Json.parse(text: read body)?
+    let input_text = Json.field_string(value: read json, name: read "input")?
+    let output_text = Json.field_string(value: read json, name: read "output")?
+    let trace_id = Json.field_string(value: read json, name: read "trace")?
+    let input = Path.from_string(value: read input_text)
+    let output = Path.from_string(value: read output_text)
+
+    return UploadPlan(
+        input: read input,
+        output: read output,
+        trace_id: read trace_id,
+    )
+}
+
+fn build_session(owner: read User, trace_id: read String) -> fresh Session {
+    return Session(
+        owner: Weak.from(value: read owner),
+        trace_id: read trace_id,
+    )
+}
+
+fn inspect_session(session: read Session) -> Unit {
+    let maybe_owner = Weak.upgrade(value: read session.owner)
+    audit_step(callback: || {
+        Log.write(message: read session.trace_id)
+    })
+
+    return Unit
+}
+
+fn build_work_item(request: read Request, owner_id: read String) -> Result<fresh WorkItem, JsonError> {
+    let plan = parse_plan(request: read request)?
+    let owner = User.lookup(id: read owner_id)
+    let session = build_session(owner: read owner, trace_id: read plan.trace_id)
+
+    return WorkItem(plan: read plan, session: read session)
+}
+
+fn load_first_row(path: read Path) -> Result<fresh Row, CsvError> {
+    local buffer = RowBuffer.new(size: 8192)
+
+    with File.open_read(path: read path) as file {
+        Csv.read_into(file: mut file, buffer: mut buffer)?
+    }
+
+    return Csv.parse_row(buffer: read buffer)
+}
+
+fn process_image(plan: read UploadPlan, cache: mut ImageCache) -> Result<Unit, ImageError> {
+    local image = Image.load(path: read plan.input)?
+
+    audit_step(callback: || {
+        Image.inspect(image: read image)
+    })
+
+    Image.resize(image: mut image, width: 1024, height: 768)
+    Image.normalize(image: mut image)
+    Image.sharpen(image: mut image)
+
+    let shared = manage image
+    ImageCache.store(cache: mut cache, image: read shared)
+    Image.save(image: read shared, path: read plan.output)?
+
+    return Ok(Unit)
+}
+
+fn refresh_config(path: read Path, store: mut ConfigStore) -> Result<Unit, ConfigError> {
+    let config = Config.load(path: read path)?
+    ConfigStore.replace(store: mut store, value: read config)
+
+    return Ok(Unit)
+}
+
+fn run_audit_query(url: read Url, trace_id: read String) -> Result<Unit, DbError> {
+    local pool = ResourcePool<DbConnection>.new(
+        create: || DbConnection.open(url: read url),
+        max_size: 2,
+    )
+
+    with ResourcePool.borrow(pool: mut pool) as conn {
+        DbConnection.query(conn: mut conn, sql: read trace_id)?
+    }
+
+    return Ok(Unit)
+}
+
+fn persist_trace(cache: mut Cache, trace_id: read String, status: read String) -> Unit {
+    Cache.insert(cache: mut cache, key: read trace_id, value: read status)
+    return Unit
+}
+
+fn handle_request(
+    request: read Request,
+    owner_id: read String,
+    image_cache: mut ImageCache,
+    config_store: mut ConfigStore,
+    status_cache: mut Cache,
+    counter: mut Counter,
+    db_url: read Url,
+) -> Result<fresh Response, HttpError> {
+    let config_path = Path.from_string(value: read "config.json")
+    refresh_config(path: read config_path, store: mut config_store)?
+
+    let item = build_work_item(request: read request, owner_id: read owner_id)?
+    inspect_session(session: read item.session)
+    process_image(plan: read item.plan, cache: mut image_cache)?
+    run_audit_query(url: read db_url, trace_id: read item.plan.trace_id)?
+
+    let status = ConfigStore.name(store: read config_store)
+    persist_trace(cache: mut status_cache, trace_id: read item.plan.trace_id, status: read status)
+    Counter.add(counter: mut counter, amount: 1)
+    Log.write(message: read item.plan.trace_id)
+
+    return Response.ok(body: read status)?
+}
