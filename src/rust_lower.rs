@@ -336,6 +336,7 @@ struct RustLowerer<'a> {
     native_boundary_callees: BTreeSet<String>,
     param_effects: BTreeMap<String, DataEffect>,
     mutated_bindings: BTreeSet<String>,
+    drop_field_names: BTreeSet<String>,
     source_map: Vec<RustSourceMapEntry>,
 }
 
@@ -357,6 +358,7 @@ impl<'a> RustLowerer<'a> {
             native_boundary_callees,
             param_effects: BTreeMap::new(),
             mutated_bindings: BTreeSet::new(),
+            drop_field_names: BTreeSet::new(),
             source_map: Vec::new(),
         }
     }
@@ -425,9 +427,14 @@ impl<'a> RustLowerer<'a> {
                 lower_generic_args(&ty.type_params)
             ));
             out.push_str("    fn drop(&mut self) {\n");
-            out.push_str(
-                "        // RSScript resource drop body is lowered by the runtime-aware pass.\n",
-            );
+            if let Some(drop_body) = &ty.drop_body {
+                let previous_drop_field_names = std::mem::take(&mut self.drop_field_names);
+                self.drop_field_names = ty.fields.iter().map(|field| field.name.clone()).collect();
+                self.lower_block(drop_body, out, 2);
+                self.drop_field_names = previous_drop_field_names;
+            } else {
+                out.push_str("        // RSScript resource has no explicit drop body.\n");
+            }
             out.push_str("    }\n");
             out.push_str("}\n");
         }
@@ -739,9 +746,15 @@ impl<'a> RustLowerer<'a> {
 
     fn lower_expr(&mut self, expr: &Expr) -> String {
         match expr {
-            Expr::Ident(name, _) => lower_builtin_value_ident(name)
-                .map(str::to_string)
-                .unwrap_or_else(|| rust_ident(name)),
+            Expr::Ident(name, _) => {
+                if self.drop_field_names.contains(name) {
+                    format!("self.{}", rust_ident(name))
+                } else {
+                    lower_builtin_value_ident(name)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| rust_ident(name))
+                }
+            }
             Expr::Number(value, _) => value.clone(),
             Expr::String(value, _) => format!("{:?}.to_string()", decode_string_token(value)),
             Expr::Binary {

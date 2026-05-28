@@ -124,11 +124,14 @@ impl Parser<'_> {
         self.index += 1;
         let name = self.take_function_name()?;
         let type_params = self.parse_generic_params();
-        let fields = if self.at_symbol("{") {
+        let (fields, drop_body) = if self.at_symbol("{") {
             let open = self.index;
             let close = find_matching(self.tokens, open, "{", "}").unwrap_or(open);
             self.index = close + 1;
-            parse_fields(self.tokens, open + 1, close)
+            (
+                parse_fields(self.tokens, open + 1, close),
+                parse_drop_body(self.tokens, open + 1, close),
+            )
         } else {
             if self
                 .tokens
@@ -138,7 +141,7 @@ impl Parser<'_> {
                 let end = declaration_line_end(self.tokens, self.index);
                 self.index = end;
             }
-            Vec::new()
+            (Vec::new(), None)
         };
 
         Some(TypeDecl {
@@ -146,6 +149,7 @@ impl Parser<'_> {
             name,
             type_params,
             fields,
+            drop_body,
             span,
         })
     }
@@ -327,6 +331,13 @@ fn parse_fields(tokens: &[Token], start: usize, end: usize) -> Vec<FieldDecl> {
         index += 1;
     }
     fields
+}
+
+fn parse_drop_body(tokens: &[Token], start: usize, end: usize) -> Option<Block> {
+    let drop_index = (start..end).find(|index| tokens[*index].is_ident_text("drop"))?;
+    let open = (drop_index + 1..end).find(|index| tokens[*index].symbol("{"))?;
+    let close = find_matching(tokens, open, "{", "}")?;
+    (close <= end).then(|| parse_block(tokens, open, close))
 }
 
 fn declaration_line_end(tokens: &[Token], start: usize) -> usize {

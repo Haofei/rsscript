@@ -1188,6 +1188,8 @@ fn pooled(pool: mut ResourcePool<TestConnection>) -> Unit
     let rust = lower_source_to_rust("pool.rssi", source).expect("source should lower");
 
     assert!(rust.contains("impl rsscript_runtime::Resource for TestConnection"));
+    assert!(rust.contains("impl Drop for TestConnection"));
+    assert!(rust.contains("rsscript_runtime::os_close(self.fd);"));
     assert!(rust.contains("pool: &mut rsscript_runtime::ResourcePool<TestConnection>"));
     assert!(rust.contains("let _ = &pool;"));
 }
