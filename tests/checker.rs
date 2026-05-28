@@ -4242,6 +4242,31 @@ fast = []
 }
 
 #[test]
+fn package_metadata_reports_unknown_review_risk_not_ok() {
+    let temp_dir = unique_temp_dir("rsscript-package-metadata-unknown-risk");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-metadata-unknown",
+        "0.1.0",
+        r#"[review]
+risk = "unknown"
+"#,
+        r#"pub fn Api.run() -> Unit
+"#,
+    );
+
+    let metadata = package_metadata(&temp_dir, true).expect("metadata dry-run should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_metadata_json(&metadata))
+        .expect("metadata JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!metadata.ok);
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["risk"], "unknown");
+    assert_eq!(json["metadata"]["summary"]["errors"], 0);
+}
+
+#[test]
 fn rss_package_metadata_json_writes_review_metadata_file() {
     let temp_dir = unique_temp_dir("rsscript-package-metadata-cli");
     write_named_package_fixture(

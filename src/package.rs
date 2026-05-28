@@ -738,7 +738,7 @@ pub fn package_metadata(
     let review = review_package_dir(package_dir)?;
     let metadata_path = package_dir.join("review").join("package-review.json");
     let metadata = package_review_metadata_from_review(&review);
-    let ok = review.summary.errors == 0;
+    let ok = review.summary.errors == 0 && review.risk != PackageRisk::Unknown;
 
     if !dry_run {
         let parent = metadata_path

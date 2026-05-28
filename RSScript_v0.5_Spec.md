@@ -2496,7 +2496,7 @@ Package review metadata treats `.rssi` files as the preferred public contract su
 
 `rss package vendor` copies local path dependencies into `vendor/<name>-<version>/` and writes `vendor/rss-vendor.json` for offline/reproducible review. Registry and git dependencies remain unresolved until the resolver exists.
 
-`rss package metadata` writes `review/package-review.json` with schema `rss.review.package.v1`, using the same local review result as `rss package review`.
+`rss package metadata` writes `review/package-review.json` with schema `rss.review.package.v1`, using the same local review result as `rss package review`. Metadata generation still records unknown risk, but the command result is not ok when the review risk is unknown.
 
 Package Rust lowering loads the package's own `.rssi` contracts plus dependency
 interfaces as the call-resolution environment. If `[native.rust]` is enabled,
