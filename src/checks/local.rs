@@ -636,16 +636,24 @@ fn collect_local_flow_steps(block: &HirBlock) -> Vec<LocalFlowStep> {
 struct LocalFlowFragment {
     entry: Option<usize>,
     exits: Vec<usize>,
+    breaks: Vec<usize>,
+    continues: Vec<usize>,
 }
 
 fn collect_block_local_flow(block: &HirBlock, steps: &mut Vec<LocalFlowStep>) -> LocalFlowFragment {
     let mut entry = None;
     let mut pending_exits = Vec::new();
+    let mut breaks = Vec::new();
+    let mut continues = Vec::new();
+    let mut reachable = true;
 
     for statement in &block.statements {
         let fragment = collect_stmt_local_flow(statement, steps);
         if entry.is_none() {
             entry = fragment.entry;
+        }
+        if !reachable {
+            continue;
         }
         if let Some(fragment_entry) = fragment.entry {
             for exit in pending_exits.drain(..) {
@@ -653,11 +661,16 @@ fn collect_block_local_flow(block: &HirBlock, steps: &mut Vec<LocalFlowStep>) ->
             }
         }
         pending_exits = fragment.exits;
+        breaks.extend(fragment.breaks);
+        continues.extend(fragment.continues);
+        reachable = !pending_exits.is_empty();
     }
 
     LocalFlowFragment {
         entry,
         exits: pending_exits,
+        breaks,
+        continues,
     }
 }
 
@@ -676,13 +689,29 @@ fn collect_stmt_local_flow(
             condition, body, ..
         } => collect_loop_local_flow(steps, node, condition.is_some(), body),
         HirStmt::With { body, .. } => collect_scoped_body_flow(steps, node, body),
-        HirStmt::Return { .. } | HirStmt::Break(_) | HirStmt::Continue(_) => LocalFlowFragment {
+        HirStmt::Return { .. } => LocalFlowFragment {
             entry: Some(node),
             exits: Vec::new(),
+            breaks: Vec::new(),
+            continues: Vec::new(),
+        },
+        HirStmt::Break(_) => LocalFlowFragment {
+            entry: Some(node),
+            exits: Vec::new(),
+            breaks: vec![node],
+            continues: Vec::new(),
+        },
+        HirStmt::Continue(_) => LocalFlowFragment {
+            entry: Some(node),
+            exits: Vec::new(),
+            breaks: Vec::new(),
+            continues: vec![node],
         },
         HirStmt::Let { .. } | HirStmt::Expr(_) | HirStmt::Unknown(_) => LocalFlowFragment {
             entry: Some(node),
             exits: vec![node],
+            breaks: Vec::new(),
+            continues: Vec::new(),
         },
     }
 }
@@ -699,12 +728,16 @@ fn collect_if_local_flow(
     }
 
     let mut exits = then_flow.exits;
+    let mut breaks = then_flow.breaks;
+    let mut continues = then_flow.continues;
     if let Some(else_body) = else_body {
         let else_flow = collect_block_local_flow(else_body, steps);
         if let Some(else_entry) = else_flow.entry {
             add_successor(steps, branch_node, else_entry);
         }
         exits.extend(else_flow.exits);
+        breaks.extend(else_flow.breaks);
+        continues.extend(else_flow.continues);
     } else {
         exits.push(branch_node);
     }
@@ -712,6 +745,8 @@ fn collect_if_local_flow(
     LocalFlowFragment {
         entry: Some(branch_node),
         exits,
+        breaks,
+        continues,
     }
 }
 
@@ -725,17 +760,22 @@ fn collect_loop_local_flow(
     if let Some(body_entry) = body_flow.entry {
         add_successor(steps, loop_node, body_entry);
     }
-    for exit in body_flow.exits {
-        add_successor(steps, exit, loop_node);
+    for exit in body_flow.exits.iter().chain(body_flow.continues.iter()) {
+        add_successor(steps, *exit, loop_node);
     }
+
+    let mut exits = if may_skip {
+        vec![loop_node]
+    } else {
+        Vec::new()
+    };
+    exits.extend(body_flow.breaks);
 
     LocalFlowFragment {
         entry: Some(loop_node),
-        exits: if may_skip {
-            vec![loop_node]
-        } else {
-            Vec::new()
-        },
+        exits,
+        breaks: Vec::new(),
+        continues: Vec::new(),
     }
 }
 
@@ -755,6 +795,8 @@ fn collect_scoped_body_flow(
         } else {
             vec![scoped_node]
         },
+        breaks: body_flow.breaks,
+        continues: body_flow.continues,
     }
 }
 
@@ -1247,5 +1289,110 @@ mod tests {
         assert_eq!(steps[2].successors, vec![4]);
         assert_eq!(steps[3].successors, vec![4]);
         assert!(steps[4].successors.is_empty());
+    }
+
+    #[test]
+    fn local_flow_steps_record_loop_break_and_continue_edges() {
+        let block = HirBlock {
+            statements: vec![
+                HirStmt::Loop {
+                    condition: Some(HirExpr::Ident {
+                        name: "keep_going".to_string(),
+                        type_name: Some("Bool".to_string()),
+                        span: span(1),
+                    }),
+                    body: HirBlock {
+                        statements: vec![HirStmt::If {
+                            condition: HirExpr::Ident {
+                                name: "again".to_string(),
+                                type_name: Some("Bool".to_string()),
+                                span: span(2),
+                            },
+                            then_body: HirBlock {
+                                statements: vec![HirStmt::Continue(span(3))],
+                                span: span(3),
+                            },
+                            else_body: Some(HirBlock {
+                                statements: vec![HirStmt::Break(span(4))],
+                                span: span(4),
+                            }),
+                            span: span(2),
+                        }],
+                        span: span(2),
+                    },
+                    span: span(1),
+                },
+                HirStmt::Return {
+                    value: Some(HirExpr::Ident {
+                        name: "done".to_string(),
+                        type_name: Some("Image".to_string()),
+                        span: span(5),
+                    }),
+                    proof: HirReturnProof::Ident {
+                        name: "done".to_string(),
+                    },
+                    span: span(5),
+                },
+            ],
+            span: span(1),
+        };
+
+        let steps = collect_local_flow_steps(&block);
+
+        assert_eq!(steps.len(), 5);
+        assert_eq!(steps[0].kind, LocalFlowStepKind::Loop);
+        assert_eq!(steps[0].successors, vec![1, 4]);
+        assert_eq!(steps[1].kind, LocalFlowStepKind::Branch);
+        assert_eq!(steps[1].successors, vec![2, 3]);
+        assert_eq!(steps[2].kind, LocalFlowStepKind::Continue);
+        assert_eq!(steps[2].successors, vec![0]);
+        assert_eq!(steps[3].kind, LocalFlowStepKind::Break);
+        assert_eq!(steps[3].successors, vec![4]);
+        assert!(steps[4].successors.is_empty());
+    }
+
+    #[test]
+    fn local_flow_steps_do_not_route_unreachable_body_exits() {
+        let block = HirBlock {
+            statements: vec![
+                HirStmt::Loop {
+                    condition: None,
+                    body: HirBlock {
+                        statements: vec![
+                            HirStmt::Break(span(2)),
+                            HirStmt::Expr(HirExpr::Ident {
+                                name: "unreachable".to_string(),
+                                type_name: Some("Image".to_string()),
+                                span: span(3),
+                            }),
+                        ],
+                        span: span(2),
+                    },
+                    span: span(1),
+                },
+                HirStmt::Return {
+                    value: Some(HirExpr::Ident {
+                        name: "done".to_string(),
+                        type_name: Some("Image".to_string()),
+                        span: span(4),
+                    }),
+                    proof: HirReturnProof::Ident {
+                        name: "done".to_string(),
+                    },
+                    span: span(4),
+                },
+            ],
+            span: span(1),
+        };
+
+        let steps = collect_local_flow_steps(&block);
+
+        assert_eq!(steps.len(), 4);
+        assert_eq!(steps[0].kind, LocalFlowStepKind::Loop);
+        assert_eq!(steps[0].successors, vec![1]);
+        assert_eq!(steps[1].kind, LocalFlowStepKind::Break);
+        assert_eq!(steps[1].successors, vec![3]);
+        assert!(steps[2].successors.is_empty());
+        assert!(steps[3].successors.is_empty());
     }
 }
