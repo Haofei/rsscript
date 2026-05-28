@@ -26,7 +26,7 @@ It currently implements:
 - Initial local flow graph nodes with successor edges derived from resolved HIR statements, including branch and loop `break` / `continue` control flow, as the staging point for CFG-backed CleanLocal dataflow
 - Initial local flow state propagation for local bindings, managed bindings, scoped `with` resource bindings, `manage` / `take` moves, and retaining calls
 - AST-driven mode and call checks for local-only features, named arguments, data effects, and retaining APIs
-- Body checks for local moves, early-exit-aware `fresh` returns, active resource escape, resolved handle-field `take`, and managed closure captures now consume HIR body facts and local flow entry state
+- Body checks for local moves, early-exit-aware `fresh` returns, active resource escape, resolved handle-field `take`, managed closure captures, and resource escape traversal now consume HIR body facts and local flow entry state
 - Local ownership, use-after-move, `fresh` return, managed closure capture, resource-retain escape, and handle-field `take` checks now index statement uses, binding types, return proofs, field accesses, closure uses, and move/retain events from resolved HIR body trees
 - Focused check modules for mode, calls, body semantics, and forbidden operator behavior
 - Fixture-based pass/fail scenario tests under `tests/fixtures`
@@ -65,7 +65,7 @@ Non-goals for this stage:
 Near-term roadmap:
 
 1. Continue moving body checkers from syntax AST plus lookup tables onto the resolved HIR statement/expression tree.
-2. Finish moving resource escape traversal onto the local flow state model instead of recursive AST state.
+2. Remove remaining recursive AST fallbacks from body diagnostics once HIR coverage is complete.
 3. Expand `rss review` local/manage boundary diffs from summaries into path-aware risk explanations.
 
 Run:

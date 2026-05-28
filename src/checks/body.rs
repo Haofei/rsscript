@@ -3,7 +3,9 @@ use crate::diagnostic::{Diagnostic, code};
 use crate::hir::{CallResolution, HirReturnProof, HirTypeKind, ResolvedCalleeKind};
 use crate::syntax::ast::{Block, Callee, DataEffect, Expr, FunctionDecl, Item, LetKind, Stmt};
 
-use super::local::{BodyState, LocalAnalysis, merge_if_state, merge_loop_state};
+use super::local::{
+    BodyState, LocalAnalysis, ResourceEscapeKind, merge_if_state, merge_loop_state,
+};
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
     let functions: Vec<FunctionDecl> = analyzer
@@ -116,7 +118,13 @@ fn check_stmt_semantics(
         Stmt::With(stmt) => {
             let stmt_state = local_analysis.flow_entry_state(&stmt.span).unwrap_or(state);
             check_take_of_handle_field(analyzer, local_analysis, &stmt.resource, stmt_state);
-            check_resource_escape(analyzer, local_analysis, &stmt.binding, &stmt.body);
+            check_resource_escape(
+                analyzer,
+                local_analysis,
+                &stmt.span,
+                &stmt.binding,
+                &stmt.body,
+            );
             check_block(analyzer, local_analysis, function, &stmt.body, state)
         }
         Stmt::If(stmt) => {
@@ -464,6 +472,33 @@ fn check_take_of_handle_in_stmt(
 fn check_resource_escape(
     analyzer: &mut Analyzer<'_>,
     local_analysis: &LocalAnalysis,
+    with_span: &crate::diagnostic::Span,
+    binding: &str,
+    body: &Block,
+) {
+    if let Some(escapes) = local_analysis.resource_escapes(with_span) {
+        for escape in escapes {
+            if !resource_is_active_at(local_analysis, &escape.binding, &escape.span) {
+                continue;
+            }
+            match escape.kind {
+                ResourceEscapeKind::Escape => {
+                    resource_escape_diagnostic(analyzer, &escape.binding, escape.span.clone());
+                }
+                ResourceEscapeKind::Capture => {
+                    resource_capture_diagnostic(analyzer, &escape.binding, escape.span.clone());
+                }
+            }
+        }
+        return;
+    }
+
+    check_resource_escape_fallback(analyzer, local_analysis, binding, body);
+}
+
+fn check_resource_escape_fallback(
+    analyzer: &mut Analyzer<'_>,
+    local_analysis: &LocalAnalysis,
     binding: &str,
     body: &Block,
 ) {
@@ -494,20 +529,20 @@ fn check_resource_escape(
             }
             Stmt::Expr(expr) => check_resource_escape_expr(analyzer, local_analysis, binding, expr),
             Stmt::With(stmt) => {
-                check_resource_escape(analyzer, local_analysis, binding, &stmt.body)
+                check_resource_escape_fallback(analyzer, local_analysis, binding, &stmt.body)
             }
             Stmt::If(stmt) => {
                 check_resource_escape_expr(analyzer, local_analysis, binding, &stmt.condition);
-                check_resource_escape(analyzer, local_analysis, binding, &stmt.then_body);
+                check_resource_escape_fallback(analyzer, local_analysis, binding, &stmt.then_body);
                 if let Some(else_body) = &stmt.else_body {
-                    check_resource_escape(analyzer, local_analysis, binding, else_body);
+                    check_resource_escape_fallback(analyzer, local_analysis, binding, else_body);
                 }
             }
             Stmt::Loop(stmt) => {
                 if let Some(condition) = &stmt.condition {
                     check_resource_escape_expr(analyzer, local_analysis, binding, condition);
                 }
-                check_resource_escape(analyzer, local_analysis, binding, &stmt.body);
+                check_resource_escape_fallback(analyzer, local_analysis, binding, &stmt.body);
             }
             Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Unknown(_) => {}
@@ -544,7 +579,7 @@ fn check_resource_escape_expr(
             check_resource_escape_expr(analyzer, local_analysis, binding, base);
         }
         Expr::Closure { body, .. } => {
-            check_resource_escape(analyzer, local_analysis, binding, body)
+            check_resource_escape_fallback(analyzer, local_analysis, binding, body)
         }
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
     }

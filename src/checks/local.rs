@@ -26,6 +26,7 @@ pub(crate) struct LocalAnalysis {
     return_proofs_by_span: HashMap<Span, HirReturnProof>,
     closure_uses_by_span: HashMap<Span, Vec<(String, Span)>>,
     managed_closure_uses_by_span: HashMap<Span, Vec<(String, Span)>>,
+    resource_escapes_by_with_span: HashMap<Span, Vec<ResourceEscape>>,
     flow_steps: Vec<LocalFlowStep>,
     flow_entry_states_by_span: HashMap<Span, BodyState>,
 }
@@ -65,6 +66,19 @@ struct LocalFlowEdge {
     drop_resources: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResourceEscapeKind {
+    Escape,
+    Capture,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResourceEscape {
+    pub(crate) binding: String,
+    pub(crate) kind: ResourceEscapeKind,
+    pub(crate) span: Span,
+}
+
 impl LocalAnalysis {
     pub(crate) fn new(body: Option<&HirFunctionBody>) -> Self {
         let body = body.cloned();
@@ -92,6 +106,10 @@ impl LocalAnalysis {
             .as_ref()
             .and_then(|body| body.block.as_ref())
             .map_or_else(HashMap::new, index_managed_closure_uses_from_block);
+        let resource_escapes_by_with_span = body
+            .as_ref()
+            .and_then(|body| body.block.as_ref())
+            .map_or_else(HashMap::new, index_resource_escapes_from_block);
         let flow_steps = body
             .as_ref()
             .and_then(|body| body.block.as_ref())
@@ -107,6 +125,7 @@ impl LocalAnalysis {
             return_proofs_by_span,
             closure_uses_by_span,
             managed_closure_uses_by_span,
+            resource_escapes_by_with_span,
             flow_steps,
             flow_entry_states_by_span,
         }
@@ -157,6 +176,12 @@ impl LocalAnalysis {
 
     pub(crate) fn managed_closure_ident_uses(&self, span: &Span) -> Option<&[(String, Span)]> {
         self.managed_closure_uses_by_span
+            .get(span)
+            .map(Vec::as_slice)
+    }
+
+    pub(crate) fn resource_escapes(&self, span: &Span) -> Option<&[ResourceEscape]> {
+        self.resource_escapes_by_with_span
             .get(span)
             .map(Vec::as_slice)
     }
@@ -528,6 +553,212 @@ fn index_managed_closure_uses_from_block(block: &HirBlock) -> HashMap<Span, Vec<
     let mut closures = HashMap::new();
     collect_block_managed_closure_uses(block, &mut closures);
     closures
+}
+
+fn index_resource_escapes_from_block(block: &HirBlock) -> HashMap<Span, Vec<ResourceEscape>> {
+    let mut escapes = HashMap::new();
+    collect_block_resource_escapes(block, &mut escapes);
+    escapes
+}
+
+fn collect_block_resource_escapes(
+    block: &HirBlock,
+    escapes_by_with_span: &mut HashMap<Span, Vec<ResourceEscape>>,
+) {
+    for statement in &block.statements {
+        match statement {
+            HirStmt::With {
+                binding,
+                body,
+                span,
+                ..
+            } => {
+                let mut escapes = Vec::new();
+                collect_resource_escapes_in_block(binding, body, &mut escapes);
+                escapes_by_with_span.insert(span.clone(), escapes);
+                collect_block_resource_escapes(body, escapes_by_with_span);
+            }
+            HirStmt::Let {
+                value: Some(value), ..
+            }
+            | HirStmt::Return {
+                value: Some(value), ..
+            }
+            | HirStmt::Expr(value) => collect_expr_resource_escapes(value, escapes_by_with_span),
+            HirStmt::If {
+                condition,
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_expr_resource_escapes(condition, escapes_by_with_span);
+                collect_block_resource_escapes(then_body, escapes_by_with_span);
+                if let Some(else_body) = else_body {
+                    collect_block_resource_escapes(else_body, escapes_by_with_span);
+                }
+            }
+            HirStmt::Loop {
+                condition, body, ..
+            } => {
+                if let Some(condition) = condition {
+                    collect_expr_resource_escapes(condition, escapes_by_with_span);
+                }
+                collect_block_resource_escapes(body, escapes_by_with_span);
+            }
+            HirStmt::Let { value: None, .. }
+            | HirStmt::Return { value: None, .. }
+            | HirStmt::Break(_)
+            | HirStmt::Continue(_)
+            | HirStmt::Unknown(_) => {}
+        }
+    }
+}
+
+fn collect_expr_resource_escapes(
+    expr: &HirExpr,
+    escapes_by_with_span: &mut HashMap<Span, Vec<ResourceEscape>>,
+) {
+    match expr {
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                collect_expr_resource_escapes(&arg.value, escapes_by_with_span);
+            }
+        }
+        HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => {
+            collect_expr_resource_escapes(value, escapes_by_with_span);
+        }
+        HirExpr::Field { base, .. } => collect_expr_resource_escapes(base, escapes_by_with_span),
+        HirExpr::Closure { body, .. } => collect_block_resource_escapes(body, escapes_by_with_span),
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn collect_resource_escapes_in_block(
+    binding: &str,
+    block: &HirBlock,
+    escapes: &mut Vec<ResourceEscape>,
+) {
+    for statement in &block.statements {
+        match statement {
+            HirStmt::Return {
+                value: Some(HirExpr::Ident { name, span, .. }),
+                ..
+            } if name == binding => {
+                push_resource_escape(escapes, binding, ResourceEscapeKind::Escape, span.clone());
+            }
+            HirStmt::Return {
+                value: Some(value), ..
+            }
+            | HirStmt::Let {
+                value: Some(value), ..
+            }
+            | HirStmt::Expr(value) => collect_resource_escapes_in_expr(binding, value, escapes),
+            HirStmt::With { body, .. } => collect_resource_escapes_in_block(binding, body, escapes),
+            HirStmt::If {
+                condition,
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_resource_escapes_in_expr(binding, condition, escapes);
+                collect_resource_escapes_in_block(binding, then_body, escapes);
+                if let Some(else_body) = else_body {
+                    collect_resource_escapes_in_block(binding, else_body, escapes);
+                }
+            }
+            HirStmt::Loop {
+                condition, body, ..
+            } => {
+                if let Some(condition) = condition {
+                    collect_resource_escapes_in_expr(binding, condition, escapes);
+                }
+                collect_resource_escapes_in_block(binding, body, escapes);
+            }
+            HirStmt::Let { value: None, .. }
+            | HirStmt::Return { value: None, .. }
+            | HirStmt::Break(_)
+            | HirStmt::Continue(_)
+            | HirStmt::Unknown(_) => {}
+        }
+
+        if let HirStmt::Let {
+            kind: HirBindingKind::ManagedLet,
+            value: Some(HirExpr::Closure { body, span }),
+            ..
+        } = statement
+            && hir_block_mentions_ident(body, binding)
+        {
+            push_resource_escape(escapes, binding, ResourceEscapeKind::Capture, span.clone());
+        }
+    }
+}
+
+fn collect_resource_escapes_in_expr(
+    binding: &str,
+    expr: &HirExpr,
+    escapes: &mut Vec<ResourceEscape>,
+) {
+    match expr {
+        HirExpr::Manage { value, span, .. } => {
+            if hir_expr_is_ident(value, binding) {
+                push_resource_escape(escapes, binding, ResourceEscapeKind::Escape, span.clone());
+            }
+            collect_resource_escapes_in_expr(binding, value, escapes);
+        }
+        HirExpr::Call { args, events, .. } => {
+            for event in events {
+                if matches!(event.kind, HirEffectEventKind::Retain { .. })
+                    && event.binding_name == binding
+                {
+                    push_resource_escape(
+                        escapes,
+                        binding,
+                        ResourceEscapeKind::Escape,
+                        event.value_span.clone(),
+                    );
+                }
+            }
+            for arg in args {
+                collect_resource_escapes_in_expr(binding, &arg.value, escapes);
+            }
+        }
+        HirExpr::Effect { value, .. } => collect_resource_escapes_in_expr(binding, value, escapes),
+        HirExpr::Field { base, .. } => collect_resource_escapes_in_expr(binding, base, escapes),
+        HirExpr::Closure { body, .. } => collect_resource_escapes_in_block(binding, body, escapes),
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn hir_expr_is_ident(expr: &HirExpr, binding: &str) -> bool {
+    matches!(expr, HirExpr::Ident { name, .. } if name == binding)
+}
+
+fn hir_block_mentions_ident(block: &HirBlock, binding: &str) -> bool {
+    let mut uses = Vec::new();
+    collect_hir_block_idents(block, &mut uses);
+    uses.iter().any(|(name, _)| name == binding)
+}
+
+fn push_resource_escape(
+    escapes: &mut Vec<ResourceEscape>,
+    binding: &str,
+    kind: ResourceEscapeKind,
+    span: Span,
+) {
+    let escape = ResourceEscape {
+        binding: binding.to_string(),
+        kind,
+        span,
+    };
+    if !escapes.contains(&escape) {
+        escapes.push(escape);
+    }
 }
 
 fn collect_block_managed_closure_uses(
@@ -1879,6 +2110,89 @@ mod tests {
             local_analysis
                 .flow_entry_state(&span(3))
                 .is_some_and(|state| !state.is_resource("file"))
+        );
+    }
+
+    #[test]
+    fn local_analysis_indexes_resource_escape_facts_by_with_span() {
+        let retain_event = HirEffectEvent {
+            function_name: "run".to_string(),
+            kind: HirEffectEventKind::Retain {
+                callee: "register".to_string(),
+                param: "file".to_string(),
+            },
+            binding_name: "file".to_string(),
+            span: span(3),
+            value_span: span(3),
+        };
+        let body = HirFunctionBody {
+            function_name: "run".to_string(),
+            block: Some(HirBlock {
+                statements: vec![HirStmt::With {
+                    resource: HirExpr::Call {
+                        callee: Callee::Name("File.open".to_string()),
+                        args: Vec::new(),
+                        resolution: CallResolution::Unknown,
+                        events: Vec::new(),
+                        type_name: Some("File".to_string()),
+                        span: span(1),
+                    },
+                    binding: "file".to_string(),
+                    body: HirBlock {
+                        statements: vec![
+                            HirStmt::Expr(HirExpr::Call {
+                                callee: Callee::Name("register".to_string()),
+                                args: Vec::new(),
+                                resolution: CallResolution::Unknown,
+                                events: vec![retain_event],
+                                type_name: None,
+                                span: span(3),
+                            }),
+                            HirStmt::Let {
+                                kind: HirBindingKind::ManagedLet,
+                                name: "callback".to_string(),
+                                value: Some(HirExpr::Closure {
+                                    body: HirBlock {
+                                        statements: vec![HirStmt::Expr(HirExpr::Ident {
+                                            name: "file".to_string(),
+                                            type_name: Some("File".to_string()),
+                                            span: span(5),
+                                        })],
+                                        span: span(4),
+                                    },
+                                    span: span(4),
+                                }),
+                                type_name: None,
+                                span: span(4),
+                            },
+                        ],
+                        span: span(2),
+                    },
+                    span: span(1),
+                }],
+                span: span(1),
+            }),
+            ..HirFunctionBody::default()
+        };
+        let local_analysis = LocalAnalysis::new(Some(&body));
+        let escapes = local_analysis
+            .resource_escapes(&span(1))
+            .expect("with should have resource escape facts");
+
+        assert_eq!(
+            escapes,
+            &[
+                ResourceEscape {
+                    binding: "file".to_string(),
+                    kind: ResourceEscapeKind::Escape,
+                    span: span(3),
+                },
+                ResourceEscape {
+                    binding: "file".to_string(),
+                    kind: ResourceEscapeKind::Capture,
+                    span: span(4),
+                },
+            ]
         );
     }
 
