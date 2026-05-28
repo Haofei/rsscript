@@ -185,22 +185,12 @@ impl LocalAnalysis {
 
     pub(crate) fn moved_uses(&self) -> Vec<MovedUse> {
         let mut moved_uses = Vec::new();
-        for step in &self.flow_steps {
-            if !step.kind.collects_statement_uses() {
-                continue;
-            }
-            let Some(state) = self.flow_entry_states_by_span.get(&step.span) else {
-                continue;
-            };
-            for (name, use_span) in &step.uses {
-                if let Some(move_span) = state.move_span(name) {
-                    moved_uses.push(MovedUse {
-                        name: name.clone(),
-                        use_span: use_span.clone(),
-                        move_span: move_span.clone(),
-                    });
-                }
-            }
+        if let Some(block) = self.body.as_ref().and_then(|body| body.block.as_ref()) {
+            collect_ordered_moved_uses_from_block(
+                block,
+                &self.flow_entry_states_by_span,
+                &mut moved_uses,
+            );
         }
         moved_uses
     }
@@ -289,15 +279,6 @@ fn initial_state_from_body(body: Option<&HirFunctionBody>) -> BodyState {
         state.seed_params(&body.bindings);
     }
     state
-}
-
-impl LocalFlowStepKind {
-    fn collects_statement_uses(self) -> bool {
-        matches!(
-            self,
-            Self::Statement | Self::Branch | Self::Loop | Self::Return
-        )
-    }
 }
 
 fn collect_take_handle_fields(block: &HirBlock) -> Vec<TakeHandleField> {
@@ -510,6 +491,118 @@ fn collect_retained_closure_captures_from_block(
 ) {
     for statement in &block.statements {
         collect_retained_closure_captures_from_stmt(statement, entry_states, captures);
+    }
+}
+
+fn collect_ordered_moved_uses_from_block(
+    block: &HirBlock,
+    entry_states: &HashMap<Span, BodyState>,
+    moved_uses: &mut Vec<MovedUse>,
+) {
+    for statement in &block.statements {
+        collect_ordered_moved_uses_from_stmt(statement, entry_states, moved_uses);
+    }
+}
+
+fn collect_ordered_moved_uses_from_stmt(
+    statement: &HirStmt,
+    entry_states: &HashMap<Span, BodyState>,
+    moved_uses: &mut Vec<MovedUse>,
+) {
+    let entry_state = entry_states.get(hir_stmt_span(statement)).cloned();
+    match statement {
+        HirStmt::Let {
+            value: Some(value), ..
+        }
+        | HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => {
+            if let Some(mut state) = entry_state {
+                collect_ordered_moved_uses_from_expr(value, &mut state, moved_uses);
+            }
+        }
+        HirStmt::With { resource, body, .. } => {
+            if let Some(mut state) = entry_state {
+                collect_ordered_moved_uses_from_expr(resource, &mut state, moved_uses);
+            }
+            collect_ordered_moved_uses_from_block(body, entry_states, moved_uses);
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            if let Some(mut state) = entry_state {
+                collect_ordered_moved_uses_from_expr(condition, &mut state, moved_uses);
+            }
+            collect_ordered_moved_uses_from_block(then_body, entry_states, moved_uses);
+            if let Some(else_body) = else_body {
+                collect_ordered_moved_uses_from_block(else_body, entry_states, moved_uses);
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let (Some(condition), Some(mut state)) = (condition, entry_state) {
+                collect_ordered_moved_uses_from_expr(condition, &mut state, moved_uses);
+            }
+            collect_ordered_moved_uses_from_block(body, entry_states, moved_uses);
+        }
+        HirStmt::Let { value: None, .. }
+        | HirStmt::Return { value: None, .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn collect_ordered_moved_uses_from_expr(
+    expr: &HirExpr,
+    state: &mut BodyState,
+    moved_uses: &mut Vec<MovedUse>,
+) {
+    match expr {
+        HirExpr::Ident { name, span, .. } => {
+            if let Some(move_span) = state.move_span(name) {
+                push_moved_use(moved_uses, name.clone(), span.clone(), move_span.clone());
+            }
+        }
+        HirExpr::Call { args, events, .. } => {
+            for arg in args {
+                collect_ordered_moved_uses_from_expr(&arg.value, state, moved_uses);
+            }
+            state.apply_move_events(events);
+        }
+        HirExpr::Effect { value, events, .. } | HirExpr::Manage { value, events, .. } => {
+            collect_ordered_moved_uses_from_expr(value, state, moved_uses);
+            state.apply_move_events(events);
+        }
+        HirExpr::Field { base, .. } => {
+            collect_ordered_moved_uses_from_expr(base, state, moved_uses);
+        }
+        HirExpr::Closure { body, .. } => {
+            let mut uses = Vec::new();
+            collect_hir_block_idents(body, &mut uses);
+            for (name, span) in uses {
+                if let Some(move_span) = state.move_span(&name) {
+                    push_moved_use(moved_uses, name, span, move_span.clone());
+                }
+            }
+        }
+        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn push_moved_use(moved_uses: &mut Vec<MovedUse>, name: String, use_span: Span, move_span: Span) {
+    let moved_use = MovedUse {
+        name,
+        use_span,
+        move_span,
+    };
+    if !moved_uses.contains(&moved_use) {
+        moved_uses.push(moved_use);
     }
 }
 

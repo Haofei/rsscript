@@ -26,6 +26,7 @@ It currently implements:
 - HIR effect events for `manage`, `take`, and retaining calls
 - HIR return facts with initial freshness proof classification
 - HIR/local-flow use-after-move facts derived from statement uses and flow entry state
+- Expression-order use-after-move checks for `manage` / `take` inside nested call arguments
 - HIR/local-flow managed-to-local facts derived from local bindings and flow entry state
 - Resolved HIR statement/expression trees for function bodies, including typed identifiers, resolved calls, field accesses, and per-expression ownership events
 - Per-function HIR body views that group bindings, calls, fields, effects, and returns
@@ -37,7 +38,7 @@ It currently implements:
 - Body checks for managed-to-local, use-after-move, HIR/local-flow `fresh` returns, active resource escape, resolved handle-field `take`, managed closure captures, and resource escape traversal now consume HIR body facts and local flow entry state
 - Retained-closure capture checks reject local captures in closures passed to `effects(retains(...))` APIs
 - HIR/local-flow retaining API checks that only reject values local at the retaining call site
-- Local ownership, use-after-move, `fresh` return, managed closure capture, resource-retain escape, and handle-field `take` checks now index statement uses, binding types, fresh-return issue facts, take-handle facts, closure uses, and move/retain events from resolved HIR body trees
+- Local ownership, use-after-move, `fresh` return, managed closure capture, resource-retain escape, and handle-field `take` checks now index ordered expression uses, binding types, fresh-return issue facts, take-handle facts, closure uses, and move/retain events from resolved HIR body trees
 - ResourcePool lease checks that require `ResourcePool.borrow(...)` to be scoped by `with`
 - Focused check modules for mode, calls, body semantics, and forbidden operator behavior
 - Fixture-based pass/fail scenario tests under `tests/fixtures`
@@ -77,7 +78,7 @@ Non-goals for this stage:
 
 Near-term roadmap:
 
-1. Expand local/resource dataflow precision around typed `ResourcePool<T>` lease propagation and deeper expression-order modeling.
+1. Expand local/resource dataflow precision around typed `ResourcePool<T>` lease propagation and expression-order coverage for short-circuiting/control expressions.
 2. Expand `rss review` boundary diffs from path-aware summaries into structured risk categories.
 
 Run:

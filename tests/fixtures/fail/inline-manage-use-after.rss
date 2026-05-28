@@ -1,0 +1,14 @@
+// expect: RS0401
+mode: uses-local
+
+struct Image {
+    pixels: Buffer
+}
+
+fn compare(left: read Image, right: read Image) -> Unit {
+}
+
+fn bad_inline(path: read Path) -> Unit {
+    local image = Image.load(path: read path)
+    compare(left: read (manage image), right: read image)
+}
