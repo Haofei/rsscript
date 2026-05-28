@@ -4,7 +4,7 @@ use crate::hir::{CallResolution, HirReturnProof, HirTypeKind, ResolvedCalleeKind
 use crate::syntax::ast::{Block, Callee, DataEffect, Expr, FunctionDecl, Item, LetKind, Stmt};
 
 use super::local::{
-    BodyState, LocalAnalysis, ResourceEscapeKind, merge_if_state, merge_loop_state,
+    BodyState, LocalAnalysis, MovedUse, ResourceEscapeKind, merge_if_state, merge_loop_state,
 };
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
@@ -20,6 +20,7 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
 
     for function in functions {
         let local_analysis = LocalAnalysis::new(analyzer.hir.function_body(&function.name));
+        check_moved_uses(analyzer, &local_analysis);
         let mut state = local_analysis.initial_state();
         check_block(
             analyzer,
@@ -47,7 +48,6 @@ fn check_block(
     state: &mut BodyState,
 ) -> Flow {
     for statement in &block.statements {
-        check_moved_uses_in_stmt(analyzer, local_analysis, statement, state);
         let flow = check_stmt_semantics(analyzer, local_analysis, function, statement, state);
         apply_stmt_effects(analyzer, local_analysis, statement, state);
         if flow != Flow::Fallthrough {
@@ -261,39 +261,33 @@ fn apply_expr_effects(local_analysis: &LocalAnalysis, expr: &Expr, state: &mut B
     }
 }
 
-fn check_moved_uses_in_stmt(
-    analyzer: &mut Analyzer<'_>,
-    local_analysis: &LocalAnalysis,
-    statement: &Stmt,
-    state: &BodyState,
-) {
-    let state = local_analysis
-        .flow_entry_state(stmt_span(statement))
-        .unwrap_or(state);
-    let uses = local_analysis
-        .statement_ident_uses(stmt_span(statement))
-        .unwrap_or(&[]);
-    for (name, span) in uses {
-        if let Some(move_span) = state.move_span(name) {
-            analyzer.diagnostics.push(
-                Diagnostic::error(
-                    code::USE_AFTER_MANAGE,
-                    format!("`{name}` was moved into the managed runtime by `manage {name}`."),
-                    span.clone(),
-                    "used after manage",
-                )
-                .with_cause(format!(
-                    "The move happened at {}:{}.",
-                    move_span.line, move_span.column
-                ))
-                .with_fix(
-                    "move_use_before_manage",
-                    format!("Move this use before `manage {name}`."),
-                    "manual",
-                ),
-            );
-        }
+fn check_moved_uses(analyzer: &mut Analyzer<'_>, local_analysis: &LocalAnalysis) {
+    for moved_use in local_analysis.moved_uses() {
+        moved_use_diagnostic(analyzer, moved_use);
     }
+}
+
+fn moved_use_diagnostic(analyzer: &mut Analyzer<'_>, moved_use: MovedUse) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::USE_AFTER_MANAGE,
+            format!(
+                "`{}` was moved into the managed runtime by `manage {}`.",
+                moved_use.name, moved_use.name
+            ),
+            moved_use.use_span,
+            "used after manage",
+        )
+        .with_cause(format!(
+            "The move happened at {}:{}.",
+            moved_use.move_span.line, moved_use.move_span.column
+        ))
+        .with_fix(
+            "move_use_before_manage",
+            format!("Move this use before `manage {}`.", moved_use.name),
+            "manual",
+        ),
+    );
 }
 
 fn check_managed_closure_captures(

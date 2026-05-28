@@ -18,6 +18,13 @@ pub(crate) struct BodyState {
     pub(crate) value_types: HashMap<String, String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MovedUse {
+    pub(crate) name: String,
+    pub(crate) use_span: Span,
+    pub(crate) move_span: Span,
+}
+
 pub(crate) struct LocalAnalysis {
     body: Option<HirFunctionBody>,
     events_by_span: HashMap<Span, Vec<HirEffectEvent>>,
@@ -161,25 +168,30 @@ impl LocalAnalysis {
             .map(Vec::as_slice)
     }
 
-    pub(crate) fn statement_ident_uses(&self, span: &Span) -> Option<&[(String, Span)]> {
-        debug_assert!(self.flow_steps.iter().all(|step| {
-            self.flow_steps
-                .get(step.id)
-                .is_some_and(|candidate| candidate.span == step.span)
-                && step
-                    .successors
-                    .iter()
-                    .all(|successor| successor.to < self.flow_steps.len())
-        }));
-
-        self.flow_steps
-            .iter()
-            .find(|step| step.span == *span && step.kind.collects_statement_uses())
-            .map(|step| step.uses.as_slice())
-    }
-
     pub(crate) fn flow_entry_state(&self, span: &Span) -> Option<&BodyState> {
         self.flow_entry_states_by_span.get(span)
+    }
+
+    pub(crate) fn moved_uses(&self) -> Vec<MovedUse> {
+        let mut moved_uses = Vec::new();
+        for step in &self.flow_steps {
+            if !step.kind.collects_statement_uses() {
+                continue;
+            }
+            let Some(state) = self.flow_entry_states_by_span.get(&step.span) else {
+                continue;
+            };
+            for (name, use_span) in &step.uses {
+                if let Some(move_span) = state.move_span(name) {
+                    moved_uses.push(MovedUse {
+                        name: name.clone(),
+                        use_span: use_span.clone(),
+                        move_span: move_span.clone(),
+                    });
+                }
+            }
+        }
+        moved_uses
     }
 
     fn effect_events(&self, span: &Span) -> &[HirEffectEvent] {
@@ -1758,11 +1770,6 @@ mod tests {
             local_analysis.return_proof(&span(23)),
             Some(HirReturnProof::FreshCall)
         ));
-        assert_eq!(
-            local_analysis.statement_ident_uses(&span(24)),
-            Some(&[("cached".to_string(), span(25))][..])
-        );
-
         local_analysis.apply_retention_events(&span(20), &mut state);
         local_analysis.apply_move_events(&span(21), &mut state);
 
@@ -2311,5 +2318,57 @@ mod tests {
             Some(3)
         );
         assert!(!return_state.is_clean_local("image"));
+    }
+
+    #[test]
+    fn local_analysis_reports_moved_uses_from_flow_state() {
+        let manage_event = HirEffectEvent {
+            function_name: "run".to_string(),
+            kind: HirEffectEventKind::Manage,
+            binding_name: "image".to_string(),
+            span: span(2),
+            value_span: span(2),
+        };
+        let body = HirFunctionBody {
+            function_name: "run".to_string(),
+            block: Some(HirBlock {
+                statements: vec![
+                    HirStmt::Let {
+                        kind: HirBindingKind::LocalLet,
+                        name: "image".to_string(),
+                        value: None,
+                        type_name: Some("Image".to_string()),
+                        span: span(1),
+                    },
+                    HirStmt::Expr(HirExpr::Manage {
+                        value: Box::new(HirExpr::Ident {
+                            name: "image".to_string(),
+                            type_name: Some("Image".to_string()),
+                            span: span(2),
+                        }),
+                        events: vec![manage_event],
+                        type_name: Some("Image".to_string()),
+                        span: span(2),
+                    }),
+                    HirStmt::Expr(HirExpr::Ident {
+                        name: "image".to_string(),
+                        type_name: Some("Image".to_string()),
+                        span: span(3),
+                    }),
+                ],
+                span: span(1),
+            }),
+            ..HirFunctionBody::default()
+        };
+        let local_analysis = LocalAnalysis::new(Some(&body));
+
+        assert_eq!(
+            local_analysis.moved_uses(),
+            vec![MovedUse {
+                name: "image".to_string(),
+                use_span: span(3),
+                move_span: span(2),
+            }]
+        );
     }
 }
