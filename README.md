@@ -25,7 +25,7 @@ It currently implements:
 - Per-function HIR body views that group bindings, calls, fields, effects, and returns
 - AST-driven mode and call checks for local-only features, named arguments, data effects, and retaining APIs
 - AST-driven body checks for local moves, early-exit-aware `fresh` returns, resource escape, resolved handle-field `take`, and managed closure captures
-- Local ownership, `fresh` return, resource-retain escape, and handle-field `take` checks now index binding types, return proofs, field accesses, and move/retain events from resolved HIR body trees
+- Local ownership, `fresh` return, managed closure capture, resource-retain escape, and handle-field `take` checks now index binding types, return proofs, field accesses, closure uses, and move/retain events from resolved HIR body trees
 - Focused check modules for mode, calls, body semantics, and forbidden operator behavior
 - Fixture-based pass/fail scenario tests under `tests/fixtures`
 

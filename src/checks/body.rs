@@ -88,9 +88,9 @@ fn check_stmt_semantics(
             }
 
             if stmt.kind == LetKind::Managed
-                && let Some(Expr::Closure { body, .. }) = &stmt.value
+                && let Some(Expr::Closure { body, span }) = &stmt.value
             {
-                check_managed_closure_captures(analyzer, body, state);
+                check_managed_closure_captures(analyzer, local_analysis, span, body, state);
             }
 
             if let Some(value) = &stmt.value {
@@ -272,16 +272,31 @@ fn check_moved_uses_in_stmt(analyzer: &mut Analyzer<'_>, statement: &Stmt, state
     }
 }
 
-fn check_managed_closure_captures(analyzer: &mut Analyzer<'_>, body: &Block, state: &BodyState) {
-    let mut uses = Vec::new();
-    collect_block_idents(body, &mut uses);
+fn check_managed_closure_captures(
+    analyzer: &mut Analyzer<'_>,
+    local_analysis: &LocalAnalysis,
+    closure_span: &crate::diagnostic::Span,
+    body: &Block,
+    state: &BodyState,
+) {
+    let fallback_uses;
+    let uses = if let Some(uses) = local_analysis.closure_ident_uses(closure_span) {
+        uses
+    } else {
+        fallback_uses = {
+            let mut uses = Vec::new();
+            collect_block_idents(body, &mut uses);
+            uses
+        };
+        fallback_uses.as_slice()
+    };
     for (name, span) in uses {
-        if state.is_local(&name) {
+        if state.is_local(name) {
             analyzer.diagnostics.push(
                 Diagnostic::error(
                     code::LOCAL_CAPTURED_BY_MANAGED_CLOSURE,
                     format!("managed closure captures local value `{name}`."),
-                    span,
+                    span.clone(),
                     "local captured here",
                 )
                 .with_cause("Closures bound with `let` are managed closures.")

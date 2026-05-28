@@ -23,6 +23,7 @@ pub(crate) struct LocalAnalysis {
     binding_types_by_span: HashMap<Span, String>,
     field_accesses_by_span: HashMap<Span, HirFieldAccess>,
     return_proofs_by_span: HashMap<Span, HirReturnProof>,
+    closure_uses_by_span: HashMap<Span, Vec<(String, Span)>>,
 }
 
 impl LocalAnalysis {
@@ -44,6 +45,10 @@ impl LocalAnalysis {
             .as_ref()
             .and_then(|body| body.block.as_ref())
             .map_or_else(HashMap::new, index_return_proofs_from_block);
+        let closure_uses_by_span = body
+            .as_ref()
+            .and_then(|body| body.block.as_ref())
+            .map_or_else(HashMap::new, index_closure_uses_from_block);
 
         Self {
             body,
@@ -51,6 +56,7 @@ impl LocalAnalysis {
             binding_types_by_span,
             field_accesses_by_span,
             return_proofs_by_span,
+            closure_uses_by_span,
         }
     }
 
@@ -95,6 +101,10 @@ impl LocalAnalysis {
 
     pub(crate) fn return_proof(&self, span: &Span) -> Option<&HirReturnProof> {
         self.return_proofs_by_span.get(span)
+    }
+
+    pub(crate) fn closure_ident_uses(&self, span: &Span) -> Option<&[(String, Span)]> {
+        self.closure_uses_by_span.get(span).map(Vec::as_slice)
     }
 
     fn effect_events(&self, span: &Span) -> &[HirEffectEvent] {
@@ -413,6 +423,155 @@ fn hir_expr_span(expr: &HirExpr) -> &Span {
         | HirExpr::Manage { span, .. }
         | HirExpr::Closure { span, .. }
         | HirExpr::Unknown(span) => span,
+    }
+}
+
+fn index_closure_uses_from_block(block: &HirBlock) -> HashMap<Span, Vec<(String, Span)>> {
+    let mut closures = HashMap::new();
+    collect_block_closure_uses(block, &mut closures);
+    closures
+}
+
+fn collect_block_closure_uses(block: &HirBlock, closures: &mut HashMap<Span, Vec<(String, Span)>>) {
+    for statement in &block.statements {
+        collect_stmt_closure_uses(statement, closures);
+    }
+}
+
+fn collect_stmt_closure_uses(
+    statement: &HirStmt,
+    closures: &mut HashMap<Span, Vec<(String, Span)>>,
+) {
+    match statement {
+        HirStmt::Let {
+            value: Some(value), ..
+        }
+        | HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => collect_expr_closure_uses(value, closures),
+        HirStmt::With { resource, body, .. } => {
+            collect_expr_closure_uses(resource, closures);
+            collect_block_closure_uses(body, closures);
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            collect_expr_closure_uses(condition, closures);
+            collect_block_closure_uses(then_body, closures);
+            if let Some(else_body) = else_body {
+                collect_block_closure_uses(else_body, closures);
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                collect_expr_closure_uses(condition, closures);
+            }
+            collect_block_closure_uses(body, closures);
+        }
+        HirStmt::Let { value: None, .. }
+        | HirStmt::Return { value: None, .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn collect_expr_closure_uses(expr: &HirExpr, closures: &mut HashMap<Span, Vec<(String, Span)>>) {
+    match expr {
+        HirExpr::Closure { body, span } => {
+            let mut uses = Vec::new();
+            collect_hir_block_idents(body, &mut uses);
+            closures.insert(span.clone(), uses);
+            collect_block_closure_uses(body, closures);
+        }
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                collect_expr_closure_uses(&arg.value, closures);
+            }
+        }
+        HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => {
+            collect_expr_closure_uses(value, closures);
+        }
+        HirExpr::Field { base, .. } => collect_expr_closure_uses(base, closures),
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn collect_hir_block_idents(block: &HirBlock, uses: &mut Vec<(String, Span)>) {
+    for statement in &block.statements {
+        collect_hir_stmt_idents(statement, uses);
+        match statement {
+            HirStmt::With { body, .. } => collect_hir_block_idents(body, uses),
+            HirStmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_hir_block_idents(then_body, uses);
+                if let Some(else_body) = else_body {
+                    collect_hir_block_idents(else_body, uses);
+                }
+            }
+            HirStmt::Loop { body, .. } => collect_hir_block_idents(body, uses),
+            HirStmt::Let { .. }
+            | HirStmt::Return { .. }
+            | HirStmt::Expr(_)
+            | HirStmt::Break(_)
+            | HirStmt::Continue(_)
+            | HirStmt::Unknown(_) => {}
+        }
+    }
+}
+
+fn collect_hir_stmt_idents(statement: &HirStmt, uses: &mut Vec<(String, Span)>) {
+    match statement {
+        HirStmt::Let {
+            value: Some(value), ..
+        }
+        | HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => collect_hir_expr_idents(value, uses),
+        HirStmt::With { resource, .. } => collect_hir_expr_idents(resource, uses),
+        HirStmt::If { condition, .. } => collect_hir_expr_idents(condition, uses),
+        HirStmt::Loop {
+            condition: Some(condition),
+            ..
+        } => collect_hir_expr_idents(condition, uses),
+        HirStmt::Let { value: None, .. }
+        | HirStmt::Return { value: None, .. }
+        | HirStmt::Loop {
+            condition: None, ..
+        }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn collect_hir_expr_idents(expr: &HirExpr, uses: &mut Vec<(String, Span)>) {
+    match expr {
+        HirExpr::Ident { name, span, .. } => uses.push((name.clone(), span.clone())),
+        HirExpr::Field { base, .. } => collect_hir_expr_idents(base, uses),
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                collect_hir_expr_idents(&arg.value, uses);
+            }
+        }
+        HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => {
+            collect_hir_expr_idents(value, uses);
+        }
+        HirExpr::Closure { body, .. } => collect_hir_block_idents(body, uses),
+        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
     }
 }
 
@@ -746,6 +905,17 @@ mod tests {
                         proof: HirReturnProof::FreshCall,
                         span: span(23),
                     },
+                    HirStmt::Expr(HirExpr::Closure {
+                        body: HirBlock {
+                            statements: vec![HirStmt::Expr(HirExpr::Ident {
+                                name: "cached".to_string(),
+                                type_name: Some("Image".to_string()),
+                                span: span(25),
+                            })],
+                            span: span(24),
+                        },
+                        span: span(24),
+                    }),
                 ],
                 span: span(1),
             }),
@@ -771,6 +941,10 @@ mod tests {
             local_analysis.return_proof(&span(23)),
             Some(HirReturnProof::FreshCall)
         ));
+        assert_eq!(
+            local_analysis.closure_ident_uses(&span(24)),
+            Some(&[("cached".to_string(), span(25))][..])
+        );
 
         local_analysis.apply_retention_events(&span(20), &mut state);
         local_analysis.apply_move_events(&span(21), &mut state);
