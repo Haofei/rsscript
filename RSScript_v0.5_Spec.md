@@ -1595,6 +1595,123 @@ fn load(path: read Path) -> Result<Image, ImageError>
 
 ---
 
+## 15.5 Async execution model, future executable subset
+
+In the current v0.5 implementation target, `async fn` is a review-visible
+signature boundary and executable async bodies are unsupported. The first
+executable async subset must stay narrow and review-first.
+
+RSScript async must not expose Rust's `Future`, `Pin`, `Poll`, `Waker`, executor
+internals, or lifetime-across-await machinery to RSScript users.
+
+Async is:
+
+```text
+visible suspension boundary
+visible task boundary
+visible non-blocking app-layer call model
+```
+
+It is not a general Future type-system surface.
+
+Any executable async function body, `await`, or `spawn` must require:
+
+```rust
+features: async
+```
+
+If local values are also used:
+
+```rust
+features: async, local
+```
+
+An async function:
+
+```rust
+async fn fetch_user(
+    client: read HttpClient,
+    id: read UserId,
+) -> Result<fresh User, HttpError>
+```
+
+means the function produces a logical result of that return type when awaited.
+RSScript users do not write `Future<T>`.
+
+Async calls must be consumed by `await` or `spawn`:
+
+```rust
+let user = await fetch_user(client: read client, id: read id)?
+let task = spawn fetch_user(client: read client, id: read id)
+let user = await task?
+```
+
+This is invalid:
+
+```rust
+let user = fetch_user(client: read client, id: read id)
+```
+
+Diagnostic:
+
+```text
+async call must be awaited or spawned
+```
+
+`await expr?` is parsed as:
+
+```text
+(await expr)?
+```
+
+`spawn` is an explicit task and retention boundary. It may retain non-Copy
+arguments until task completion. It may capture managed values and Copy values.
+It must not capture local values, local-inline fields, resources, or with-bound
+resources. To pass a local value to a spawned task, source must first cross the
+review-visible boundary:
+
+```rust
+let shared = manage local_value
+let task = spawn work(value: read shared)
+```
+
+Implicit fire-and-forget is not part of the first executable async subset.
+Detached tasks require an explicit API such as:
+
+```rust
+Task.detach(task: take task)
+```
+
+and should be elevated review risk because the task may outlive the caller.
+
+Async bodies must not directly call sync functions unless those functions are
+known constructors, enum variants, or declared `effects(no_block)`.
+
+Local values must not be live across `await`. Resources must not cross `await`.
+In particular, `await` inside an ordinary `with` resource scope is not allowed
+in this subset. Future versions may introduce `async with`, but v0.5 does not.
+
+Managed values may be used before and after `await`, and async callees may take
+`mut` managed parameters. The caller must not hold a managed read/write runtime
+guard across `await`.
+
+Review tools should mark these as must-review:
+
+```text
+public async entry point
+await native async call
+spawn task
+detached task
+async call with mut parameter
+async call with retains
+async function calling unresolved or non-no_block sync function
+```
+
+Unknown async callees, incomplete native async metadata, and unmappable backend
+async diagnostics must be classified as unknown, not safe.
+
+---
+
 # 16. Function Signatures
 
 Public functions must have explicit:
@@ -2139,6 +2256,180 @@ A function retaining a generic parameter must declare it:
 fn store<T: Managed>(box: mut Box<T>, value: read T) -> Unit
     effects(retains(value))
 ```
+
+---
+
+## 24.7 Minimal interfaces, future capability contracts
+
+RSScript should not expose Rust-style traits at the source level. Generated Rust
+may use Rust traits as a lowering strategy, but RSScript diagnostics and public
+contracts must speak in RSScript terms.
+
+A future language-level `interface` feature should be minimal:
+
+```text
+interface = app-layer capability contract
+```
+
+It is for capabilities such as:
+
+```text
+Logger
+Clock
+Store
+Cache
+HttpClient
+Queue
+Reader
+Writer
+MetricsSink
+ConfigSource
+Repository
+```
+
+It is not for library-layer type-system machinery:
+
+```text
+associated types
+blanket impls
+specialization
+trait objects
+object safety rules
+higher-ranked bounds
+lifetime bounds
+arbitrary where clauses
+operator overloading
+auto method resolution
+default methods
+```
+
+An interface declares function signatures:
+
+```rust
+interface Logger {
+    fn write(
+        self: mut Self,
+        message: read String,
+    ) -> Unit
+        effects(no_panic)
+}
+```
+
+Async methods are allowed as review-visible contracts:
+
+```rust
+interface HttpClient {
+    async fn send(
+        self: read Self,
+        request: read Request,
+    ) -> Result<fresh Response, HttpError>
+        effects(no_block)
+}
+```
+
+The default `Self` bound is `Managed`:
+
+```text
+interface X
+```
+
+means:
+
+```text
+interface X<Self: Managed>
+```
+
+Allowed `Self` bounds are:
+
+```text
+Managed
+Struct
+Resource
+Copy
+```
+
+Generic interfaces, inheritance, bound composition, associated types, and where
+clauses are not part of this minimal model:
+
+```rust
+interface Store<T> { ... }          // not v0.5
+interface A: B { ... }              // not v0.5
+interface X<Self: A + B> { ... }    // not v0.5
+```
+
+Conformance is explicit:
+
+```rust
+impl Logger for ConsoleLogger {
+    write = ConsoleLogger.write
+}
+```
+
+The mapped concrete function must already exist:
+
+```rust
+fn ConsoleLogger.write(
+    self: mut ConsoleLogger,
+    message: read String,
+) -> Unit
+    effects(no_panic)
+```
+
+Contract matching is strict in the first interface subset:
+
+```text
+parameter names must match
+parameter effects must match
+parameter types must match after Self substitution
+return type must match
+freshness must match
+async/sync kind must match
+retains effects must match
+native/unsafe effects must match
+guarantees must match
+```
+
+Interface calls are explicit. There is no hidden method dispatch:
+
+```rust
+Logger.write(self: mut logger, message: read message)
+```
+
+This is intentionally not interface dispatch syntax:
+
+```rust
+logger.write(message: read message)
+```
+
+Generic functions may use explicit interface bounds:
+
+```rust
+fn save_log<L: Logger>(
+    logger: mut L,
+    message: read String,
+) -> Unit {
+    Logger.write(self: mut logger, message: read message)
+    return Unit
+}
+```
+
+First-class interface values are not part of this model:
+
+```rust
+let logger: Logger = ConsoleLogger.new() // not v0.5
+let services = List<Logger>.new()        // not v0.5
+```
+
+If dynamic dispatch is added later, it must be a separate review-visible feature
+such as `features: dyn_interface`, with explicit syntax.
+
+`.rssi` public contracts may eventually declare interfaces and impl mappings.
+Semantic diff and review map must treat interface changes as review-relevant,
+including method additions/removals, effect changes, freshness changes,
+async/sync changes, native/unsafe changes, and impl mapping changes.
+
+The purpose of interfaces is app-layer composition with review-visible
+capability boundaries, not maximum type-system expressiveness.
 
 ---
 
@@ -3232,6 +3523,11 @@ LLVM backend
 JIT
 surface Rust lifetimes
 surface & / &mut
+Rust-style traits as source semantics
+associated types
+blanket impls
+trait objects
+Future / Pin / Poll / Waker source model
 general user-defined FFI
 GPU kernel language
 agent runtime as language core
