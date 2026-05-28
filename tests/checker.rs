@@ -2859,6 +2859,54 @@ fn delegated(value: read Int) -> Int {
 }
 
 #[test]
+fn review_map_marks_public_direct_unknown_calls_unknown() {
+    let source = r#"
+pub fn run(value: read Int) -> Int {
+    return Mystery.run(value: read value)
+}
+"#;
+    let map = review_map_sources(vec![("public-unknown.rss", source)]);
+    let region = map.files[0]
+        .regions
+        .iter()
+        .find(|region| region.function == "run")
+        .expect("expected run function in review map");
+
+    assert_eq!(region.classification, ReviewMapClassification::Unknown);
+    assert!(
+        region
+            .reasons
+            .iter()
+            .any(|reason| reason == "public entry point")
+    );
+    assert!(
+        region
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("Mystery.run"))
+    );
+    assert_eq!(map.summary.unknown.functions, 1);
+}
+
+#[test]
+fn checker_does_not_resolve_qualified_calls_by_short_name() {
+    let source = r#"
+fn run(value: read Int) -> Int {
+    return value
+}
+
+fn caller(value: read Int) -> Int {
+    return Mystery.run(value: read value)
+}
+"#;
+    let diagnostics = analyze_source("qualified-short-name.rss", source);
+
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS0206" && diagnostic.summary.contains("Mystery.run")
+    }));
+}
+
+#[test]
 fn review_map_marks_callers_of_unknown_functions_unknown() {
     let source = r#"
 fn delegated(value: read Int) -> Int {
@@ -2921,7 +2969,7 @@ fn review_map_marks_callers_of_review_required_functions() {
 fn store(value: read Payload) -> Unit
     effects(retains(value))
 {
-    Cache.store(value: read value)
+    return Unit
 }
 
 fn wrapper(value: read Payload) -> Unit {
@@ -2945,6 +2993,8 @@ fn wrapper(value: read Payload) -> Unit {
 #[test]
 fn review_map_marks_resourcepool_and_fresh_boundaries() {
     let source = r#"
+features: local
+
 resource DbConnection {
     fd: Int
 
@@ -2957,11 +3007,15 @@ struct Image {
     pixels: Buffer
 }
 
-fn make_image() -> fresh Image
+struct Buffer
+
+fn make_image() -> fresh Image {
+    return Image(pixels: Buffer())
+}
 
 fn pooled(pool: mut ResourcePool<DbConnection>) -> Unit {
     with ResourcePool.borrow(pool: mut pool) as conn {
-        DbConnection.ping(conn: mut conn)
+        return Unit
     }
 }
 "#;
@@ -3791,6 +3845,48 @@ fn helper() -> Unit {
     }));
     assert!(human.contains("function Api.run: unknown"));
     assert!(human.contains("unknown review-map region"));
+}
+
+#[test]
+fn package_review_json_counts_public_api_with_direct_unknown_call() {
+    let temp_dir = unique_temp_dir("rsscript-package-review-direct-unknown-api");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        "",
+        r#"pub fn Api.run() -> Unit
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("src/main.rss"),
+        r#"pub fn Api.run() -> Unit {
+    Missing.call()
+    return Unit
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(json["summary"]["public_functions"], 1);
+    assert_eq!(json["summary"]["unknown_apis"], 1);
+    assert_eq!(json["review_map"]["summary"]["unknown"]["functions"], 1);
+    assert!(json["exports"].as_array().is_some_and(|exports| {
+        exports.iter().any(|export| {
+            export["name"] == "Api.run"
+                && export["classification"] == "unknown"
+                && export["reasons"].as_array().is_some_and(|reasons| {
+                    reasons
+                        .iter()
+                        .any(|reason| reason == "unknown review-map region")
+                })
+        })
+    }));
 }
 
 #[test]

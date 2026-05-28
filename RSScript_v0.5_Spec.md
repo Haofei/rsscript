@@ -2783,6 +2783,10 @@ If the tool cannot classify a region, it must mark it unknown.
 
 Unknown must not be classified as safe-to-skip.
 
+An unresolved direct call makes the containing region unknown even when the
+function is public or otherwise review-required; the public/API reason should be
+retained as context, but the classification must remain unknown.
+
 Early implementations may over-report review area.
 
 They must not under-report risk.

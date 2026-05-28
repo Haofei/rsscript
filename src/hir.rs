@@ -400,7 +400,10 @@ impl Hir {
                 return Some(signature);
             }
         }
-        self.signatures.get(name)
+        namespace
+            .is_none()
+            .then(|| self.signatures.get(name))
+            .flatten()
     }
 
     pub fn type_info(&self, name: &str) -> Option<&TypeInfo> {
