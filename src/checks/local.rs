@@ -108,6 +108,7 @@ struct LocalFlowBinding {
     kind: HirBindingKind,
     type_name: Option<String>,
     value_ident: Option<(String, Span)>,
+    value_handle_field: Option<(String, Span)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,14 +213,19 @@ impl LocalAnalysis {
             if binding.kind != HirBindingKind::LocalLet {
                 continue;
             }
-            let Some((managed_name, span)) = &binding.value_ident else {
-                continue;
-            };
-            if self
-                .flow_entry_states_by_span
-                .get(&step.span)
-                .is_some_and(|state| state.is_managed(managed_name))
+            if let Some((managed_name, span)) = &binding.value_ident
+                && self
+                    .flow_entry_states_by_span
+                    .get(&step.span)
+                    .is_some_and(|state| state.is_managed(managed_name))
             {
+                uses.push(ManagedToLocalUse {
+                    local_name: binding.name.clone(),
+                    managed_name: managed_name.clone(),
+                    span: span.clone(),
+                });
+            }
+            if let Some((managed_name, span)) = &binding.value_handle_field {
                 uses.push(ManagedToLocalUse {
                     local_name: binding.name.clone(),
                     managed_name: managed_name.clone(),
@@ -2051,6 +2057,7 @@ fn local_flow_step_binding(statement: &HirStmt) -> Option<LocalFlowBinding> {
             kind: *kind,
             type_name: type_name.clone(),
             value_ident: value.as_ref().and_then(local_binding_source_ident),
+            value_handle_field: value.as_ref().and_then(local_binding_handle_field_source),
         }),
         HirStmt::Return { .. }
         | HirStmt::With { .. }
@@ -2076,6 +2083,35 @@ fn local_binding_source_ident(value: &HirExpr) -> Option<(String, Span)> {
         | HirExpr::String { .. }
         | HirExpr::Binary { .. }
         | HirExpr::Field { .. }
+        | HirExpr::Index { .. }
+        | HirExpr::Call { .. }
+        | HirExpr::Effect { .. }
+        | HirExpr::Manage { .. }
+        | HirExpr::Try { .. }
+        | HirExpr::Closure { .. }
+        | HirExpr::Unknown(_) => None,
+    }
+}
+
+fn local_binding_handle_field_source(value: &HirExpr) -> Option<(String, Span)> {
+    match value {
+        HirExpr::Field { base, access, .. } if access.is_handle => {
+            hir_expr_path(base).map(|(mut path, _)| {
+                path.push('.');
+                path.push_str(&access.name);
+                (path, access.span.clone())
+            })
+        }
+        HirExpr::Field { base, .. } => local_binding_handle_field_source(base),
+        HirExpr::Effect {
+            effect: ParamEffect::Read | ParamEffect::Mut,
+            value,
+            ..
+        } => local_binding_handle_field_source(value),
+        HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Binary { .. }
+        | HirExpr::Ident { .. }
         | HirExpr::Index { .. }
         | HirExpr::Call { .. }
         | HirExpr::Effect { .. }
