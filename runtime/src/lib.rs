@@ -7,6 +7,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::Utf8Error;
 
+pub const RUNTIME_DIAGNOSTIC_PREFIX: &str = "RSSCRIPT_RUNTIME_DIAGNOSTIC:";
+
 pub trait Managed {}
 
 impl<T: 'static> Managed for T {}
@@ -765,13 +767,17 @@ impl<T> Gc<T> {
     }
 
     pub fn read(&self) -> GcRead<'_, T> {
-        self.try_read()
-            .expect("RSScript runtime read conflict should be reported through diagnostics")
+        match self.try_read() {
+            Ok(value) => value,
+            Err(error) => panic_runtime_error(error),
+        }
     }
 
     pub fn write(&self) -> GcWrite<'_, T> {
-        self.try_write()
-            .expect("RSScript runtime write conflict should be reported through diagnostics")
+        match self.try_write() {
+            Ok(value) => value,
+            Err(error) => panic_runtime_error(error),
+        }
     }
 
     pub fn ptr_eq(left: &Self, right: &Self) -> bool {
@@ -798,7 +804,10 @@ pub fn manage_at<T>(value: T, span: SourceSpan) -> Gc<T> {
 }
 
 pub fn unwrap_runtime<T>(result: Result<T, RuntimeError>) -> T {
-    result.expect("RSScript runtime error should be reported through diagnostics")
+    match result {
+        Ok(value) => value,
+        Err(error) => panic_runtime_error(error),
+    }
 }
 
 pub fn log_write(message: &str) {
@@ -867,6 +876,25 @@ impl RuntimeError {
         self.span = Some(span);
         self
     }
+
+    pub fn diagnostic_json(&self) -> String {
+        let span = self
+            .span
+            .clone()
+            .unwrap_or_else(|| SourceSpan::new("<runtime>", 1, 1, 1));
+        serde_json::json!({
+            "code": "RS1201",
+            "severity": "error",
+            "summary": format!("RSScript runtime error: {}", self.message),
+            "file": span.file,
+            "line": span.line,
+            "column": span.column,
+            "length": span.length,
+            "label": self.message,
+            "kind": self.kind.as_str(),
+        })
+        .to_string()
+    }
 }
 
 impl fmt::Display for RuntimeError {
@@ -895,6 +923,21 @@ impl From<BorrowMutError> for RuntimeError {
             span: None,
         }
     }
+}
+
+impl RuntimeErrorKind {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::ManagedReadConflict => "managed_read_conflict",
+            Self::ManagedWriteConflict => "managed_write_conflict",
+            Self::ResourcePoolBorrowConflict => "resource_pool_borrow_conflict",
+            Self::ResourcePoolEmpty => "resource_pool_empty",
+        }
+    }
+}
+
+fn panic_runtime_error(error: RuntimeError) -> ! {
+    panic!("{}{}", RUNTIME_DIAGNOSTIC_PREFIX, error.diagnostic_json())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -48,6 +48,7 @@ pub mod code {
     pub const SURFACE_REFERENCE_ATTEMPT: &str = "RS1004";
     pub const RUSTC_DIAGNOSTIC_MAPPED: &str = "RS1101";
     pub const RUSTC_DIAGNOSTIC_UNMAPPABLE: &str = "RS1102";
+    pub const RUNTIME_DIAGNOSTIC: &str = "RS1201";
     pub const LINT_SIGNATURE_COMPLEXITY: &str = "RSL001";
     pub const LINT_DUPLICATE_EFFECT: &str = "RSL002";
 
@@ -453,6 +454,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::RUSTC_DIAGNOSTIC_UNMAPPABLE,
         title: "unmappable rustc diagnostic",
         explanation: "rustc reported a backend diagnostic whose generated Rust location could not be mapped back to RSScript source. The compiler should surface the generated Rust reference as secondary internal detail instead of exposing raw rustc output as the primary diagnostic.",
+    },
+    DiagnosticExplanation {
+        code: code::RUNTIME_DIAGNOSTIC,
+        title: "runtime diagnostic",
+        explanation: "The RSScript runtime reported a managed aliasing or resource conflict with an RSScript source span. Runtime diagnostics should be surfaced as RSScript diagnostics instead of raw Rust panics.",
     },
     DiagnosticExplanation {
         code: code::LINT_SIGNATURE_COMPLEXITY,

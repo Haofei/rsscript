@@ -1,5 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rsscript::syntax::ast::Item;
 use rsscript::syntax::parse_source;
@@ -9,8 +11,8 @@ use rsscript::{
     explain_diagnostic_code, format_diagnostic_explanation, format_diagnostics_json,
     format_review_human, format_review_json, format_review_map_human, format_review_map_json,
     lint_source, lower_source_to_rust, lower_source_to_rust_package, lower_source_to_rust_with_map,
-    remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines, review_map_sources,
-    review_sources,
+    parse_runtime_diagnostics, remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines,
+    review_map_sources, review_sources,
 };
 use serde_json::Value;
 
@@ -1075,6 +1077,79 @@ fn rustc_diagnostic_line_remap_ignores_non_diagnostic_messages() {
 
     assert_eq!(remapped.len(), 1);
     assert_eq!(remapped[0].diagnostic.code, "RS1102");
+}
+
+#[test]
+fn runtime_diagnostic_lines_parse_to_rsscript_diagnostics() {
+    let stderr = r#"thread 'main' panicked at runtime/src/lib.rs:1:1:
+RSSCRIPT_RUNTIME_DIAGNOSTIC:{"code":"RS1201","severity":"error","summary":"RSScript runtime error: resource pool has no available resources","file":"pool.rss","line":8,"column":10,"length":24,"label":"resource pool has no available resources","kind":"resource_pool_empty"}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"#;
+
+    let diagnostics = parse_runtime_diagnostics(stderr);
+
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code, "RS1201");
+    assert_eq!(
+        diagnostics[0].summary,
+        "RSScript runtime error: resource pool has no available resources"
+    );
+    assert_eq!(diagnostics[0].span.file, "pool.rss");
+    assert_eq!(diagnostics[0].span.line, 8);
+    assert!(
+        diagnostics[0]
+            .causes
+            .iter()
+            .any(|cause| cause == "runtime error kind: resource_pool_empty")
+    );
+}
+
+#[test]
+fn rss_run_maps_runtime_conflict_to_rsscript_diagnostic() {
+    let temp_dir = unique_temp_dir("rsscript-runtime-diagnostic");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    let source_path = temp_dir.join("empty_pool.rss");
+    fs::write(
+        &source_path,
+        r#"features: local
+
+fn main() -> Unit {
+    local pool = ResourcePool<DbConnection>.new(
+        create: || DbConnection.open(url: read "db://local"),
+        max_size: 0,
+    )
+
+    with ResourcePool.borrow(pool: mut pool) as conn {
+        Log.write(message: read "unreachable")
+    }
+
+    return Unit
+}
+"#,
+    )
+    .expect("runtime diagnostic fixture should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg(&source_path)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss run should execute");
+    let _ = fs::remove_dir_all(&temp_dir);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(!output.status.success());
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert!(stdout.contains("error[RS1201]"), "{stdout}");
+    assert!(
+        stdout.contains("RSScript runtime error: resource pool has no available resources"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("empty_pool.rss"), "{stdout}");
+    assert!(
+        stdout.contains("runtime error kind: resource_pool_empty"),
+        "{stdout}"
+    );
 }
 
 #[test]
@@ -2150,6 +2225,14 @@ fn collect_fixture_paths(directory: &Path, paths: &mut Vec<PathBuf>) {
 fn read_fixture(path: &Path) -> String {
     fs::read_to_string(path)
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()))
+}
+
+fn unique_temp_dir(prefix: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
 }
 
 fn expected_codes(source: &str) -> Vec<String> {

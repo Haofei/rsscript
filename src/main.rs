@@ -9,8 +9,9 @@ use rsscript::{
     core_interfaces, explain_diagnostic_code, format_diagnostic_explanation,
     format_diagnostics_human, format_diagnostics_json, format_review_human, format_review_json,
     format_review_map_human, format_review_map_json, lint_source, lower_source_to_rust,
-    lower_source_to_rust_package, parse_source_map_json, remap_rustc_diagnostic_json_lines,
-    review_map_sources, review_sources, write_generated_rust_package,
+    lower_source_to_rust_package, parse_runtime_diagnostics, parse_source_map_json,
+    remap_rustc_diagnostic_json_lines, review_map_sources, review_sources,
+    write_generated_rust_package,
 };
 
 fn main() -> ExitCode {
@@ -409,14 +410,14 @@ fn run_generated_rust(args: &[String]) -> ExitCode {
         }
         return ExitCode::from(2);
     }
-    let status = match Command::new("cargo")
+    let output = match Command::new("cargo")
         .arg("run")
         .arg("--quiet")
         .arg("--manifest-path")
         .arg(package_dir.join("Cargo.toml"))
-        .status()
+        .output()
     {
-        Ok(status) => status,
+        Ok(output) => output,
         Err(error) => {
             eprintln!("failed to run cargo: {error}");
             if cleanup_package_dir {
@@ -429,7 +430,25 @@ fn run_generated_rust(args: &[String]) -> ExitCode {
         cleanup_temp_dir(&package_dir);
     }
 
-    status
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !stdout.is_empty() {
+        print!("{stdout}");
+    }
+    if output.status.success() {
+        return ExitCode::SUCCESS;
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let diagnostics = parse_runtime_diagnostics(&stderr);
+    if !diagnostics.is_empty() {
+        print_diagnostics(false, &diagnostics);
+        return ExitCode::from(1);
+    }
+    if !stderr.trim().is_empty() {
+        eprintln!("{}", stderr.trim());
+    }
+    output
+        .status
         .code()
         .map(|code| ExitCode::from(code as u8))
         .unwrap_or_else(|| ExitCode::from(1))
