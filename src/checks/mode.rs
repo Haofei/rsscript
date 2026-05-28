@@ -4,10 +4,7 @@ use crate::hir::HirModeUseKind;
 use crate::syntax::ast::FileMode as SyntaxFileMode;
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
-    let Some(mode) = analyzer.syntax_program.mode else {
-        return;
-    };
-    if mode != SyntaxFileMode::Managed {
+    if analyzer.syntax_program.mode == Some(SyntaxFileMode::UsesLocal) {
         return;
     }
 
@@ -23,6 +20,7 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
 fn mode_violation_summary(kind: HirModeUseKind) -> &'static str {
     match kind {
         HirModeUseKind::LocalLet => "`local` requires `mode: uses-local`.",
+        HirModeUseKind::LocalClosure => "local closures require `mode: uses-local`.",
         HirModeUseKind::Manage => "`manage` requires `mode: uses-local`.",
         HirModeUseKind::Take => "`take` requires `mode: uses-local`.",
         HirModeUseKind::ResourcePool => "`ResourcePool<T>` requires `mode: uses-local`.",

@@ -1,0 +1,3 @@
+fn render(path: read Path) -> Image {
+    return Image.load(path: read path)
+}

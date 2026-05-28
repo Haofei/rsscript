@@ -1,2 +1,4 @@
 /target/
+tests/generated/**/target/
+tests/generated/**/Cargo.lock
 .DS_Store

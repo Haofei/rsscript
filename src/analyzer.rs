@@ -1,10 +1,12 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::checks;
 use crate::diagnostic::{Diagnostic, code};
 use crate::hir::{DuplicateSymbolKind, Hir, HirTypeKind};
 use crate::lexer::{Token, lex};
-use crate::syntax::ast::{Callee, DataEffect, EffectDecl, Expr, Item, Stmt, TypeRef};
+use crate::syntax::ast::{
+    Callee, DataEffect, EffectDecl, Expr, GenericBound, GenericParam, Item, Stmt, TypeKind, TypeRef,
+};
 use crate::syntax::parse_source;
 
 pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
@@ -30,11 +32,12 @@ pub(crate) struct Analyzer<'a> {
 
 impl Analyzer<'_> {
     fn run(&mut self) {
-        self.check_file_mode_present();
         self.check_single_file_mode();
         self.check_removed_profile_declarations();
         self.check_duplicate_declarations();
         self.check_signature_explicitness();
+        self.check_generic_constraints();
+        self.check_noalloc_allocations();
         self.check_try_operator_result_returns();
         self.check_resource_fields();
         self.check_resource_pool_type_arguments();
@@ -45,31 +48,12 @@ impl Analyzer<'_> {
         checks::forbidden::check(self);
     }
 
-    fn check_file_mode_present(&mut self) {
-        if self.syntax_program.mode.is_none() {
-            let span = self.tokens.first().map(|token| token.span.clone()).unwrap();
-            self.diagnostics.push(
-                Diagnostic::error(
-                    code::MISSING_FILE_MODE,
-                    "RSScript files must declare exactly one file mode.",
-                    span,
-                    "missing mode",
-                )
-                .with_fix(
-                    "add_mode",
-                    "Add `mode: managed` or `mode: uses-local`.",
-                    "manual",
-                ),
-            );
-        }
-    }
-
     fn check_single_file_mode(&mut self) {
         for span in self.syntax_program.mode_spans.iter().skip(1) {
             self.diagnostics.push(
                 Diagnostic::error(
                     code::DUPLICATE_FILE_MODE,
-                    "RSScript files must declare exactly one file mode.",
+                    "RSScript files may declare at most one explicit file mode.",
                     span.clone(),
                     "duplicate mode",
                 )
@@ -88,14 +72,14 @@ impl Analyzer<'_> {
             self.diagnostics.push(
                 Diagnostic::error(
                     code::REMOVED_PROFILE_DECLARATION,
-                    "`profile:` declarations were removed in RSScript v0.4.1.",
+                    "`profile:` declarations are not part of RSScript v0.5.",
                     span.clone(),
                     "removed profile declaration",
                 )
-                .with_cause("v0.4.1 has one canonical surface style and only `mode:` as the top-level semantic file declaration.")
+                .with_cause("v0.5 uses `mode:` as the only top-level semantic file declaration, and `mode: managed` may be omitted.")
                 .with_fix(
                     "remove_profile",
-                    "Remove `profile:` and keep exactly one `mode: managed` or `mode: uses-local` declaration.",
+                    "Remove `profile:` and add `mode: uses-local` only if the file uses local ownership features.",
                     "manual",
                 ),
             );
@@ -150,7 +134,7 @@ impl Analyzer<'_> {
                             param.ty.span.clone(),
                             "removed share data effect",
                         )
-                        .with_cause("RSScript v0.4.1 has exactly three data effects: `read`, `mut`, and `take`.")
+                        .with_cause("RSScript v0.5 has exactly three data effects: `read`, `mut`, and `take`.")
                         .with_fix(
                             "replace_share_effect",
                             format!(
@@ -194,13 +178,13 @@ impl Analyzer<'_> {
                         Diagnostic::error(
                             code::REMOVED_RUNTIME_EFFECT,
                             format!(
-                                "`{effect_name}` is not a valid RSScript v0.4.1 effect in `{}`.",
+                                "`{effect_name}` is not a valid RSScript v0.5 effect in `{}`.",
                                 function.name
                             ),
                             function.span.clone(),
                             "removed runtime effect",
                         )
-                        .with_cause("v0.4.1 uses reductive guarantees such as `no_panic`, `noalloc`, `no_block`, and `pure`.")
+                        .with_cause("v0.5 uses reductive guarantees such as `no_panic`, `noalloc`, `no_block`, and `pure`.")
                         .with_fix(
                             "replace_removed_effect",
                             replacement,
@@ -312,6 +296,126 @@ impl Analyzer<'_> {
         }
     }
 
+    fn check_generic_constraints(&mut self) {
+        let items = self.syntax_program.items.clone();
+        for item in &items {
+            match item {
+                Item::Type(decl) => {
+                    let bounds = generic_bounds(&decl.type_params);
+                    if decl.kind == TypeKind::Resource {
+                        for param in &decl.type_params {
+                            if param.bound.is_none() {
+                                self.generic_resource_argument_diagnostic(
+                                    &param.name,
+                                    &param.name,
+                                    &param.span,
+                                    "resource type parameters must declare an explicit bound.",
+                                );
+                            }
+                        }
+                        for field in &decl.fields {
+                            self.check_resource_type_param_field(&field.ty, &bounds, false);
+                        }
+                    }
+                    for field in &decl.fields {
+                        self.check_generic_resource_pool_type_ref(&field.ty, &bounds);
+                    }
+                }
+                Item::Function(function) => {
+                    let bounds = generic_bounds(&function.type_params);
+                    for param in &function.params {
+                        self.check_generic_resource_pool_type_ref(&param.ty, &bounds);
+                    }
+                    if let Some(return_ty) = &function.return_ty {
+                        self.check_generic_resource_pool_type_ref(return_ty, &bounds);
+                        if function.returns_fresh {
+                            self.check_fresh_generic_return_bound(
+                                &function.name,
+                                return_ty,
+                                &bounds,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn check_fresh_generic_return_bound(
+        &mut self,
+        function_name: &str,
+        return_ty: &TypeRef,
+        bounds: &HashMap<String, Option<GenericBound>>,
+    ) {
+        let target = fresh_return_target_type(return_ty);
+        if bounds.contains_key(&target.name)
+            && bounds.get(&target.name).copied().flatten() != Some(GenericBound::Struct)
+        {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::INVALID_FRESH_RETURN_TYPE,
+                    format!(
+                        "function `{function_name}` returns `fresh {}` but `{}` is not bounded by `Struct`.",
+                        target.name, target.name
+                    ),
+                    target.span.clone(),
+                    "invalid fresh generic type",
+                )
+                .with_cause("A generic `fresh T` return must require `T: Struct` so freshness is valid for every instantiation.")
+                .with_fix(
+                    "add_struct_bound",
+                    format!("Declare `{}` with `{}: Struct`, or remove `fresh`.", target.name, target.name),
+                    "manual",
+                ),
+            );
+        }
+    }
+
+    fn check_generic_resource_pool_type_ref(
+        &mut self,
+        ty: &TypeRef,
+        bounds: &HashMap<String, Option<GenericBound>>,
+    ) {
+        if ty.name == "ResourcePool"
+            && let Some(arg) = ty.args.first()
+            && let Some(bound) = bounds.get(&arg.name)
+            && *bound != Some(GenericBound::Resource)
+        {
+            self.invalid_resource_pool_type_diagnostic(
+                format!(
+                    "ResourcePool<{}> requires `{}` to be explicitly bounded by Resource.",
+                    arg.name, arg.name
+                ),
+                arg.span.clone(),
+            );
+        }
+        for arg in &ty.args {
+            self.check_generic_resource_pool_type_ref(arg, bounds);
+        }
+    }
+
+    fn check_resource_type_param_field(
+        &mut self,
+        ty: &TypeRef,
+        bounds: &HashMap<String, Option<GenericBound>>,
+        in_resource_pool: bool,
+    ) {
+        let next_in_resource_pool = in_resource_pool || ty.name == "ResourcePool";
+        if !next_in_resource_pool
+            && bounds.get(&ty.name).copied().flatten() == Some(GenericBound::Resource)
+        {
+            self.generic_resource_argument_diagnostic(
+                &ty.name,
+                &ty.name,
+                &ty.span,
+                "generic resources cannot directly contain `T: Resource`; use an approved resource container.",
+            );
+        }
+        for arg in &ty.args {
+            self.check_resource_type_param_field(arg, bounds, next_in_resource_pool);
+        }
+    }
+
     fn check_try_operator_result_returns(&mut self) {
         for (index, item) in self.syntax_program.items.iter().enumerate() {
             let Item::Function(function) = item else {
@@ -360,6 +464,100 @@ impl Analyzer<'_> {
                     );
                 }
             }
+        }
+    }
+
+    fn check_noalloc_allocations(&mut self) {
+        let items = self.syntax_program.items.clone();
+        for item in &items {
+            let Item::Function(function) = item else {
+                continue;
+            };
+            if !function_has_effect(function, "noalloc") {
+                continue;
+            }
+            self.check_noalloc_block(&function.name, &function.body);
+        }
+    }
+
+    fn check_noalloc_block(&mut self, function_name: &str, block: &crate::syntax::ast::Block) {
+        for statement in &block.statements {
+            self.check_noalloc_stmt(function_name, statement);
+        }
+    }
+
+    fn check_noalloc_stmt(&mut self, function_name: &str, statement: &Stmt) {
+        match statement {
+            Stmt::Let(stmt) => {
+                if let Some(value) = &stmt.value {
+                    self.check_noalloc_expr(function_name, value);
+                }
+            }
+            Stmt::Return(stmt) => {
+                if let Some(value) = &stmt.value {
+                    self.check_noalloc_expr(function_name, value);
+                }
+            }
+            Stmt::Expr(value) => self.check_noalloc_expr(function_name, value),
+            Stmt::With(stmt) => {
+                self.check_noalloc_expr(function_name, &stmt.resource);
+                self.check_noalloc_block(function_name, &stmt.body);
+            }
+            Stmt::If(stmt) => {
+                self.check_noalloc_expr(function_name, &stmt.condition);
+                self.check_noalloc_block(function_name, &stmt.then_body);
+                if let Some(else_body) = &stmt.else_body {
+                    self.check_noalloc_block(function_name, else_body);
+                }
+            }
+            Stmt::Loop(stmt) => {
+                if let Some(condition) = &stmt.condition {
+                    self.check_noalloc_expr(function_name, condition);
+                }
+                self.check_noalloc_block(function_name, &stmt.body);
+            }
+            Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
+        }
+    }
+
+    fn check_noalloc_expr(&mut self, function_name: &str, expr: &Expr) {
+        match expr {
+            Expr::Call {
+                callee, args, span, ..
+            } => {
+                if let Callee::Name(name) = callee
+                    && self.hir.type_kind(name).is_some()
+                {
+                    self.noalloc_allocation_diagnostic(
+                        function_name,
+                        span,
+                        format!("constructor `{name}` creates a new value."),
+                    );
+                }
+                for arg in args {
+                    self.check_noalloc_expr(function_name, &arg.value);
+                }
+            }
+            Expr::Manage { value, span } => {
+                self.noalloc_allocation_diagnostic(
+                    function_name,
+                    span,
+                    "`manage` may allocate while migrating a local graph.".to_string(),
+                );
+                self.check_noalloc_expr(function_name, value);
+            }
+            Expr::Effect { value, .. } => self.check_noalloc_expr(function_name, value),
+            Expr::Binary { left, right, .. } => {
+                self.check_noalloc_expr(function_name, left);
+                self.check_noalloc_expr(function_name, right);
+            }
+            Expr::Field { base, .. } => self.check_noalloc_expr(function_name, base),
+            Expr::Index { base, index, .. } => {
+                self.check_noalloc_expr(function_name, base);
+                self.check_noalloc_expr(function_name, index);
+            }
+            Expr::Closure { body, .. } => self.check_noalloc_block(function_name, body),
+            Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
         }
     }
 
@@ -554,6 +752,10 @@ impl Analyzer<'_> {
                 self.check_resource_pool_calls_in_expr(value);
             }
             Expr::Field { base, .. } => self.check_resource_pool_calls_in_expr(base),
+            Expr::Index { base, index, .. } => {
+                self.check_resource_pool_calls_in_expr(base);
+                self.check_resource_pool_calls_in_expr(index);
+            }
             Expr::Closure { body, .. } => self.check_resource_pool_calls_in_block(body),
             Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
         }
@@ -624,6 +826,10 @@ impl Analyzer<'_> {
                 self.check_resource_generic_calls_in_expr(value);
             }
             Expr::Field { base, .. } => self.check_resource_generic_calls_in_expr(base),
+            Expr::Index { base, index, .. } => {
+                self.check_resource_generic_calls_in_expr(base);
+                self.check_resource_generic_calls_in_expr(index);
+            }
             Expr::Closure { body, .. } => self.check_resource_generic_calls_in_block(body),
             Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
         }
@@ -687,6 +893,53 @@ impl Analyzer<'_> {
             ),
         );
     }
+
+    fn generic_resource_argument_diagnostic(
+        &mut self,
+        generic_name: &str,
+        resource_name: &str,
+        span: &crate::diagnostic::Span,
+        cause: &str,
+    ) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::RESOURCE_GENERIC_ARGUMENT,
+                format!(
+                    "generic type `{generic_name}` cannot be used with resource `{resource_name}`."
+                ),
+                span.clone(),
+                "resource generic misuse",
+            )
+            .with_cause(cause)
+            .with_fix(
+                "add_or_change_resource_bound",
+                "Use explicit `T: Resource` only with approved resource APIs such as `ResourcePool<T>`.",
+                "manual",
+            ),
+        );
+    }
+
+    fn noalloc_allocation_diagnostic(
+        &mut self,
+        function_name: &str,
+        span: &crate::diagnostic::Span,
+        cause: String,
+    ) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::INVALID_NOALLOC_ALLOCATION,
+                format!("`{function_name}` is declared noalloc but contains an allocation site."),
+                span.clone(),
+                "allocation in noalloc function",
+            )
+            .with_cause(cause)
+            .with_fix(
+                "remove_allocation_or_noalloc",
+                "Remove the allocation site, or remove `noalloc` from the function effects.",
+                "manual",
+            ),
+        );
+    }
 }
 
 fn resource_pool_namespace_arg(namespace: &str) -> Option<&str> {
@@ -731,6 +984,29 @@ fn effect_display(effect: &EffectDecl) -> String {
         EffectDecl::Name(name) => name.clone(),
         EffectDecl::Retains(param) => format!("retains({param})"),
     }
+}
+
+fn generic_bounds(params: &[GenericParam]) -> HashMap<String, Option<GenericBound>> {
+    params
+        .iter()
+        .map(|param| (param.name.clone(), param.bound))
+        .collect()
+}
+
+fn fresh_return_target_type(return_ty: &TypeRef) -> &TypeRef {
+    if matches!(return_ty.name.as_str(), "Result" | "Option")
+        && let Some(first_arg) = return_ty.args.first()
+    {
+        return first_arg;
+    }
+    return_ty
+}
+
+fn function_has_effect(function: &crate::syntax::ast::FunctionDecl, effect_name: &str) -> bool {
+    function
+        .effects
+        .iter()
+        .any(|effect| matches!(effect, EffectDecl::Name(name) if name == effect_name))
 }
 
 fn removed_runtime_effect_replacement(effect_name: &str) -> Option<&'static str> {

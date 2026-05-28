@@ -1,0 +1,27 @@
+// expect: RS0303
+mode: uses-local
+
+class Cache {
+    entries: Entries
+    stats: Stats
+}
+
+struct Entries {
+    count: Int
+}
+
+struct Stats {
+    count: Int
+}
+
+struct State {
+    cache: handle Cache
+}
+
+fn use_cache_parts(entries: mut Entries, stats: mut Stats) -> Unit
+fn make_state() -> fresh State
+
+fn run() -> Unit {
+    local state = make_state()
+    use_cache_parts(entries: mut state.cache.entries, stats: mut state.cache.stats)
+}

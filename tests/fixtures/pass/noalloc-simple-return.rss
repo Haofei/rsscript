@@ -1,0 +1,7 @@
+mode: managed
+
+fn zero() -> Int
+    effects(noalloc, no_panic, pure)
+{
+    return 0
+}

@@ -1,0 +1,19 @@
+mode: uses-local
+
+struct Workspace {
+    id: Int
+}
+
+struct Config {
+    workspace: Workspace
+}
+
+fn inspect_workspace(workspace: read Workspace) -> Unit
+fn publish(config: read Config) -> Unit
+fn make_config() -> fresh Config
+
+fn run() -> Unit {
+    local config = make_config()
+    inspect_workspace(workspace: read config.workspace)
+    publish(config: read (manage config))
+}

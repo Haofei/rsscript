@@ -3,9 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 
 use crate::diagnostic::{Span, code};
+use crate::hir::{CallResolution, Hir, ResolvedCalleeKind};
 use crate::syntax::ast::{
-    Block, CallArg, DataEffect, EffectDecl, Expr, FieldDecl, FileMode, FunctionDecl, Item, LetKind,
-    Param, Stmt, TypeDecl, TypeKind, TypeRef,
+    Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileMode, FunctionDecl, Item,
+    LetKind, Param, Stmt, TypeDecl, TypeKind, TypeRef,
 };
 use crate::syntax::parse_source;
 
@@ -36,6 +37,83 @@ pub struct ReviewFix {
     pub kind: String,
     pub title: String,
     pub applicability: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReviewMap {
+    pub summary: ReviewMapSummary,
+    pub files: Vec<ReviewMapFile>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ReviewMapSummary {
+    pub total_functions: usize,
+    pub total_lines: usize,
+    pub must_review_lines: usize,
+    pub safe_to_skip_lines: usize,
+    pub unknown_lines: usize,
+    pub suggested_review_lines: usize,
+    pub review_ratio: ReviewRatio,
+    #[serde(rename = "must_review")]
+    pub review_required: ReviewMapCategorySummary,
+    #[serde(rename = "safe_to_skip")]
+    pub foldable: ReviewMapCategorySummary,
+    pub unknown: ReviewMapCategorySummary,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReviewRatio {
+    scaled: u32,
+}
+
+impl Serialize for ReviewRatio {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_f64(f64::from(self.scaled) / 1000.0)
+    }
+}
+
+impl ReviewRatio {
+    fn from_parts(numerator: usize, denominator: usize) -> Self {
+        if denominator == 0 {
+            return Self { scaled: 0 };
+        }
+        let scaled = ((numerator.saturating_mul(1000)) / denominator).min(1000) as u32;
+        Self { scaled }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ReviewMapCategorySummary {
+    pub functions: usize,
+    pub lines: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReviewMapFile {
+    pub file: String,
+    pub regions: Vec<ReviewMapRegion>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReviewMapRegion {
+    pub function: String,
+    pub classification: ReviewMapClassification,
+    pub line: usize,
+    pub line_count: usize,
+    pub reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewMapClassification {
+    #[serde(rename = "must_review")]
+    ReviewRequired,
+    #[serde(rename = "safe_to_skip")]
+    Foldable,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -74,7 +152,7 @@ pub fn review_sources(
     let new_program = parse_source(new_file, new_source);
     let mut findings = Vec::new();
 
-    if old_program.mode != new_program.mode {
+    if normalized_file_mode(old_program.mode) != normalized_file_mode(new_program.mode) {
         findings.push(review_finding(
             code::REVIEW_MODE_CHANGED,
             ReviewRisk::Mode,
@@ -171,6 +249,454 @@ pub fn format_review_json(findings: &[ReviewFinding]) -> String {
     serde_json::to_string(findings).expect("review JSON serialization should not fail")
 }
 
+pub fn review_map_sources(sources: Vec<(&str, &str)>) -> ReviewMap {
+    let files: Vec<ReviewMapFile> = sources
+        .into_iter()
+        .map(|(file, source)| review_map_file(file, source))
+        .collect();
+    ReviewMap {
+        summary: review_map_summary(&files),
+        files,
+    }
+}
+
+pub fn format_review_map_human(map: &ReviewMap) -> String {
+    if map.files.iter().all(|file| file.regions.is_empty()) {
+        return "review map: no functions detected\n".to_string();
+    }
+
+    let mut output = String::new();
+    output.push_str(&format!(
+        "summary: must-review {} functions/{} lines; safe-to-skip {} functions/{} lines; unknown {} functions/{} lines; total {} functions/{} lines\n",
+        map.summary.review_required.functions,
+        map.summary.review_required.lines,
+        map.summary.foldable.functions,
+        map.summary.foldable.lines,
+        map.summary.unknown.functions,
+        map.summary.unknown.lines,
+        map.summary.total_functions,
+        map.summary.total_lines
+    ));
+    for file in &map.files {
+        output.push_str(&format!("{}:\n", file.file));
+        for region in &file.regions {
+            output.push_str(&format!(
+                "  {} [{}] line {} ({} lines): {}\n",
+                region.function,
+                review_map_classification_label(region.classification),
+                region.line,
+                region.line_count,
+                region.reasons.join("; ")
+            ));
+        }
+    }
+    output
+}
+
+pub fn format_review_map_json(map: &ReviewMap) -> String {
+    serde_json::to_string(map).expect("review map JSON serialization should not fail")
+}
+
+fn review_map_summary(files: &[ReviewMapFile]) -> ReviewMapSummary {
+    let mut summary = ReviewMapSummary::default();
+    for region in files.iter().flat_map(|file| file.regions.iter()) {
+        summary.total_functions += 1;
+        summary.total_lines += region.line_count;
+        let category = match region.classification {
+            ReviewMapClassification::ReviewRequired => &mut summary.review_required,
+            ReviewMapClassification::Foldable => &mut summary.foldable,
+            ReviewMapClassification::Unknown => &mut summary.unknown,
+        };
+        category.functions += 1;
+        category.lines += region.line_count;
+    }
+    summary.must_review_lines = summary.review_required.lines;
+    summary.safe_to_skip_lines = summary.foldable.lines;
+    summary.unknown_lines = summary.unknown.lines;
+    summary.suggested_review_lines = summary.review_required.lines + summary.unknown.lines;
+    summary.review_ratio =
+        ReviewRatio::from_parts(summary.suggested_review_lines, summary.total_lines);
+    summary
+}
+
+fn review_map_file(file: &str, source: &str) -> ReviewMapFile {
+    let program = parse_source(file, source);
+    let hir = Hir::from_syntax(&program);
+    let mut function_lines = program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(function) => Some((function.name.clone(), function.span.line)),
+            Item::Type(_) => None,
+        })
+        .collect::<Vec<_>>();
+    function_lines.sort_by_key(|(_, line)| *line);
+    let total_lines = source.lines().count().max(1);
+
+    let mut region_drafts = program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(function) => Some(review_map_region_draft(
+                function,
+                &hir,
+                &function_lines,
+                total_lines,
+            )),
+            Item::Type(_) => None,
+        })
+        .collect::<Vec<_>>();
+    propagate_review_map_call_classifications(&mut region_drafts);
+    let regions = region_drafts
+        .into_iter()
+        .map(|draft| draft.region)
+        .collect();
+
+    ReviewMapFile {
+        file: file.to_string(),
+        regions,
+    }
+}
+
+fn review_map_region_draft(
+    function: &FunctionDecl,
+    hir: &Hir,
+    function_lines: &[(String, usize)],
+    total_lines: usize,
+) -> ReviewMapRegionDraft {
+    let mut facts = ReviewMapFacts::default();
+    collect_review_map_facts_block(&function.body, hir, &mut facts);
+
+    let mut reasons = Vec::new();
+    if function.is_public {
+        reasons.push("public entry point".to_string());
+    }
+    if is_entry_function(&function.name) {
+        reasons.push("entry point".to_string());
+    }
+    for param in &function.params {
+        if matches!(param.effect, Some(DataEffect::Mut | DataEffect::Take)) {
+            reasons.push(format!(
+                "{} parameter `{}`",
+                effect_label(param.effect.expect("effect matched")),
+                param.name
+            ));
+        }
+        if type_ref_contains_name(&param.ty, "ResourcePool") {
+            reasons.push(format!("ResourcePool parameter `{}`", param.name));
+        }
+    }
+    if let Some(return_ty) = &function.return_ty
+        && type_ref_contains_name(return_ty, "ResourcePool")
+    {
+        reasons.push("ResourcePool return type".to_string());
+    }
+    if function.returns_fresh {
+        reasons.push("fresh guarantee boundary".to_string());
+    }
+    for effect in &function.effects {
+        match effect {
+            EffectDecl::Retains(param) => reasons.push(format!("retains `{param}`")),
+            EffectDecl::Name(name) if matches!(name.as_str(), "native" | "unsafe") => {
+                reasons.push(format!("{name} boundary"))
+            }
+            EffectDecl::Name(name) if is_runtime_guarantee_boundary(name) => {
+                reasons.push(format!("guarantee `{name}`"))
+            }
+            _ => {}
+        }
+    }
+    if facts.has_local {
+        reasons.push("local binding".to_string());
+    }
+    if facts.has_manage {
+        reasons.push("manage boundary".to_string());
+    }
+    if facts.has_with {
+        reasons.push("resource with block".to_string());
+    }
+    if facts.has_take {
+        reasons.push("take effect".to_string());
+    }
+    if facts.has_mut {
+        reasons.push("mut call-site effect".to_string());
+    }
+    if facts.has_resource_pool {
+        reasons.push("ResourcePool usage".to_string());
+    }
+
+    let classification = if !facts.unresolved_calls.is_empty() {
+        let calls = facts
+            .unresolved_calls
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        reasons.push(format!("unresolved call(s): {calls}"));
+        ReviewMapClassification::Unknown
+    } else if reasons.is_empty() {
+        reasons.push("private pure helper with no retention or resource boundary".to_string());
+        ReviewMapClassification::Foldable
+    } else {
+        ReviewMapClassification::ReviewRequired
+    };
+
+    ReviewMapRegionDraft {
+        region: ReviewMapRegion {
+            function: function.name.clone(),
+            classification,
+            line: function.span.line,
+            line_count: review_map_line_count(
+                &function.name,
+                function.span.line,
+                function_lines,
+                total_lines,
+            ),
+            reasons,
+        },
+        facts,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReviewMapRegionDraft {
+    region: ReviewMapRegion,
+    facts: ReviewMapFacts,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ReviewMapFacts {
+    has_local: bool,
+    has_manage: bool,
+    has_with: bool,
+    has_mut: bool,
+    has_take: bool,
+    has_resource_pool: bool,
+    user_calls: BTreeSet<String>,
+    unresolved_calls: BTreeSet<String>,
+}
+
+fn propagate_review_map_call_classifications(drafts: &mut [ReviewMapRegionDraft]) {
+    propagate_unknown_calls(drafts);
+    propagate_review_required_calls(drafts);
+}
+
+fn propagate_unknown_calls(drafts: &mut [ReviewMapRegionDraft]) {
+    loop {
+        let classifications = drafts
+            .iter()
+            .map(|draft| (draft.region.function.clone(), draft.region.classification))
+            .collect::<BTreeMap<_, _>>();
+        let mut changed = false;
+
+        for draft in drafts.iter_mut() {
+            if draft.region.classification == ReviewMapClassification::Unknown {
+                continue;
+            }
+            let Some(callee) = draft.facts.user_calls.iter().find(|callee| {
+                classifications.get(*callee) == Some(&ReviewMapClassification::Unknown)
+            }) else {
+                continue;
+            };
+            draft.region.classification = ReviewMapClassification::Unknown;
+            draft.region.reasons.retain(|reason| {
+                reason != "private pure helper with no retention or resource boundary"
+            });
+            draft
+                .region
+                .reasons
+                .push(format!("calls unknown `{callee}`"));
+            changed = true;
+        }
+
+        if !changed {
+            break;
+        }
+    }
+}
+
+fn propagate_review_required_calls(drafts: &mut [ReviewMapRegionDraft]) {
+    loop {
+        let classifications = drafts
+            .iter()
+            .map(|draft| (draft.region.function.clone(), draft.region.classification))
+            .collect::<BTreeMap<_, _>>();
+        let mut changed = false;
+
+        for draft in drafts.iter_mut() {
+            if draft.region.classification != ReviewMapClassification::Foldable {
+                continue;
+            }
+            let Some(callee) = draft.facts.user_calls.iter().find(|callee| {
+                classifications.get(*callee) == Some(&ReviewMapClassification::ReviewRequired)
+            }) else {
+                continue;
+            };
+            draft.region.classification = ReviewMapClassification::ReviewRequired;
+            draft.region.reasons.retain(|reason| {
+                reason != "private pure helper with no retention or resource boundary"
+            });
+            draft
+                .region
+                .reasons
+                .push(format!("calls must-review `{callee}`"));
+            changed = true;
+        }
+
+        if !changed {
+            break;
+        }
+    }
+}
+
+fn collect_review_map_facts_block(block: &Block, hir: &Hir, facts: &mut ReviewMapFacts) {
+    for statement in &block.statements {
+        collect_review_map_facts_stmt(statement, hir, facts);
+    }
+}
+
+fn collect_review_map_facts_stmt(statement: &Stmt, hir: &Hir, facts: &mut ReviewMapFacts) {
+    match statement {
+        Stmt::Let(stmt) => {
+            if stmt.kind == LetKind::Local {
+                facts.has_local = true;
+            }
+            if let Some(value) = &stmt.value {
+                collect_review_map_facts_expr(value, hir, facts);
+            }
+        }
+        Stmt::Return(stmt) => {
+            if let Some(value) = &stmt.value {
+                collect_review_map_facts_expr(value, hir, facts);
+            }
+        }
+        Stmt::With(stmt) => {
+            facts.has_with = true;
+            collect_review_map_facts_expr(&stmt.resource, hir, facts);
+            collect_review_map_facts_block(&stmt.body, hir, facts);
+        }
+        Stmt::If(stmt) => {
+            collect_review_map_facts_expr(&stmt.condition, hir, facts);
+            collect_review_map_facts_block(&stmt.then_body, hir, facts);
+            if let Some(else_body) = &stmt.else_body {
+                collect_review_map_facts_block(else_body, hir, facts);
+            }
+        }
+        Stmt::Loop(stmt) => {
+            if let Some(condition) = &stmt.condition {
+                collect_review_map_facts_expr(condition, hir, facts);
+            }
+            collect_review_map_facts_block(&stmt.body, hir, facts);
+        }
+        Stmt::Expr(expr) => collect_review_map_facts_expr(expr, hir, facts),
+        Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
+    }
+}
+
+fn collect_review_map_facts_expr(expr: &Expr, hir: &Hir, facts: &mut ReviewMapFacts) {
+    match expr {
+        Expr::Call { callee, args, .. } => {
+            if is_resource_pool_callee(callee) {
+                facts.has_resource_pool = true;
+            }
+            match hir.resolve_call(callee) {
+                CallResolution::Resolved { signature, kind } => {
+                    if kind == ResolvedCalleeKind::UserFunction {
+                        facts.user_calls.insert(signature.name);
+                    }
+                }
+                CallResolution::Unknown => {
+                    facts.unresolved_calls.insert(review_callee_display(callee));
+                }
+                CallResolution::EnumVariant => {}
+            }
+            for arg in args {
+                collect_review_map_facts_expr(&arg.value, hir, facts);
+            }
+        }
+        Expr::Effect { effect, value, .. } => {
+            match effect {
+                DataEffect::Mut => facts.has_mut = true,
+                DataEffect::Take => facts.has_take = true,
+                DataEffect::Read => {}
+            }
+            collect_review_map_facts_expr(value, hir, facts);
+        }
+        Expr::Manage { value, .. } => {
+            facts.has_manage = true;
+            collect_review_map_facts_expr(value, hir, facts);
+        }
+        Expr::Binary { left, right, .. } => {
+            collect_review_map_facts_expr(left, hir, facts);
+            collect_review_map_facts_expr(right, hir, facts);
+        }
+        Expr::Field { base, .. } => collect_review_map_facts_expr(base, hir, facts),
+        Expr::Index { base, index, .. } => {
+            collect_review_map_facts_expr(base, hir, facts);
+            collect_review_map_facts_expr(index, hir, facts);
+        }
+        Expr::Closure { body, .. } => collect_review_map_facts_block(body, hir, facts),
+        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+    }
+}
+
+fn review_callee_display(callee: &Callee) -> String {
+    match callee {
+        Callee::Name(name) => name.clone(),
+        Callee::Qualified { namespace, name } => format!("{namespace}.{name}"),
+    }
+}
+
+fn is_resource_pool_callee(callee: &Callee) -> bool {
+    match callee {
+        Callee::Name(name) => name == "ResourcePool",
+        Callee::Qualified { namespace, .. } => type_root_name(namespace) == "ResourcePool",
+    }
+}
+
+fn type_ref_contains_name(ty: &TypeRef, name: &str) -> bool {
+    ty.name == name || ty.args.iter().any(|arg| type_ref_contains_name(arg, name))
+}
+
+fn type_root_name(type_name: &str) -> &str {
+    type_name
+        .split_once('<')
+        .map_or(type_name, |(root, _)| root)
+}
+
+fn review_map_line_count(
+    function_name: &str,
+    start_line: usize,
+    function_lines: &[(String, usize)],
+    total_lines: usize,
+) -> usize {
+    let next_line = function_lines
+        .iter()
+        .find(|(name, line)| name != function_name && *line > start_line)
+        .map(|(_, line)| *line)
+        .unwrap_or(total_lines + 1);
+    next_line.saturating_sub(start_line).max(1)
+}
+
+fn review_map_classification_label(classification: ReviewMapClassification) -> &'static str {
+    match classification {
+        ReviewMapClassification::ReviewRequired => "must-review",
+        ReviewMapClassification::Foldable => "safe-to-skip",
+        ReviewMapClassification::Unknown => "unknown",
+    }
+}
+
+fn is_entry_function(name: &str) -> bool {
+    matches!(name, "main" | "run")
+        || name.starts_with("run_")
+        || name.starts_with("handle_")
+        || name.ends_with("_handler")
+}
+
+fn is_runtime_guarantee_boundary(effect: &str) -> bool {
+    matches!(effect, "no_panic" | "noalloc" | "no_block")
+}
+
 fn review_finding(
     code: &str,
     risk: ReviewRisk,
@@ -244,6 +770,10 @@ fn review_fixes(code: &str) -> Vec<ReviewFix> {
             "review_removed_guarantee",
             "Review callers that relied on the removed runtime guarantee.",
         ),
+        code::REVIEW_FUNCTION_KIND_CHANGED => (
+            "review_function_kind",
+            "Review callers and scheduling assumptions for the changed function kind.",
+        ),
         _ => ("review_change", "Review this source-level contract change."),
     };
     vec![ReviewFix {
@@ -256,6 +786,7 @@ fn review_fixes(code: &str) -> Vec<ReviewFix> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FunctionSig {
     name: String,
+    is_async: bool,
     params: Vec<ParamSig>,
     return_type: Option<String>,
     returns_fresh: bool,
@@ -347,6 +878,7 @@ fn collect_function_sigs(items: &[Item]) -> BTreeMap<String, FunctionSig> {
 fn function_sig(function: &FunctionDecl) -> FunctionSig {
     FunctionSig {
         name: function.name.clone(),
+        is_async: function.is_async,
         params: function.params.iter().map(param_sig).collect(),
         return_type: function.return_ty.as_ref().map(type_name),
         returns_fresh: function.returns_fresh,
@@ -365,6 +897,21 @@ fn param_sig(param: &Param) -> ParamSig {
 }
 
 fn compare_function(old: &FunctionSig, new: &FunctionSig, findings: &mut Vec<ReviewFinding>) {
+    if old.is_async != new.is_async {
+        findings.push(review_finding(
+            code::REVIEW_FUNCTION_KIND_CHANGED,
+            ReviewRisk::Api,
+            format!("function `{}` kind changed.", old.name),
+            paired_spans(
+                &old.span,
+                &new.span,
+                "old function kind",
+                "new function kind",
+            ),
+            Some(function_kind_contract(old)),
+            Some(function_kind_contract(new)),
+        ));
+    }
     if old.params != new.params {
         findings.push(review_finding(
             code::REVIEW_PARAMS_CHANGED,
@@ -485,10 +1032,17 @@ fn compare_type(old: &TypeSig, new: &TypeSig, findings: &mut Vec<ReviewFinding>)
 }
 
 fn file_mode_label(mode: Option<FileMode>) -> &'static str {
+    file_mode_label_normalized(normalized_file_mode(mode))
+}
+
+fn normalized_file_mode(mode: Option<FileMode>) -> FileMode {
+    mode.unwrap_or(FileMode::Managed)
+}
+
+fn file_mode_label_normalized(mode: FileMode) -> &'static str {
     match mode {
-        Some(FileMode::Managed) => "managed",
-        Some(FileMode::UsesLocal) => "uses-local",
-        None => "<missing>",
+        FileMode::Managed => "managed",
+        FileMode::UsesLocal => "uses-local",
     }
 }
 
@@ -524,7 +1078,8 @@ fn effect_label(effect: DataEffect) -> &'static str {
 
 fn function_contract(function: &FunctionSig) -> String {
     let mut contract = format!(
-        "fn {}({})",
+        "{} {}({})",
+        function_kind_contract(function),
         function.name,
         params_contract(&function.params)
     );
@@ -542,6 +1097,14 @@ fn function_contract(function: &FunctionSig) -> String {
         ));
     }
     contract
+}
+
+fn function_kind_contract(function: &FunctionSig) -> String {
+    if function.is_async {
+        "async fn".to_string()
+    } else {
+        "fn".to_string()
+    }
 }
 
 fn params_contract(params: &[ParamSig]) -> String {
@@ -738,6 +1301,10 @@ fn collect_boundary_expr(expr: &Expr, path: &str, boundary: &mut BoundarySig) {
             collect_boundary_expr(right, &format!("{path}.right"), boundary);
         }
         Expr::Field { base, .. } => collect_boundary_expr(base, path, boundary),
+        Expr::Index { base, index, .. } => {
+            collect_boundary_expr(base, path, boundary);
+            collect_boundary_expr(index, path, boundary);
+        }
         Expr::Closure { body, .. } => {
             collect_boundary_block(body, &format!("{path}.closure"), boundary)
         }
@@ -763,6 +1330,7 @@ fn boundary_expr_subject(expr: &Expr) -> Option<String> {
         Expr::Ident(name, _) => Some(name.clone()),
         Expr::Effect { value, .. } | Expr::Manage { value, .. } => boundary_expr_subject(value),
         Expr::Field { name, .. } => Some(format!(".{name}")),
+        Expr::Index { .. } => None,
         Expr::Call { .. }
         | Expr::Binary { .. }
         | Expr::Closure { .. }

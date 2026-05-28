@@ -31,8 +31,23 @@ pub enum TypeKind {
 pub struct TypeDecl {
     pub kind: TypeKind,
     pub name: String,
+    pub type_params: Vec<GenericParam>,
     pub fields: Vec<FieldDecl>,
     pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenericParam {
+    pub name: String,
+    pub bound: Option<GenericBound>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GenericBound {
+    Managed,
+    Struct,
+    Resource,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +68,9 @@ pub struct TypeRef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionDecl {
     pub name: String,
+    pub is_public: bool,
+    pub is_async: bool,
+    pub type_params: Vec<GenericParam>,
     pub params: Vec<Param>,
     pub return_ty: Option<TypeRef>,
     pub returns_fresh: bool,
@@ -160,6 +178,11 @@ pub enum Expr {
         name: String,
         span: Span,
     },
+    Index {
+        base: Box<Expr>,
+        index: Box<Expr>,
+        span: Span,
+    },
     Call {
         callee: Callee,
         args: Vec<CallArg>,
@@ -208,6 +231,7 @@ impl Expr {
             | Self::String(_, span)
             | Self::Binary { span, .. }
             | Self::Field { span, .. }
+            | Self::Index { span, .. }
             | Self::Call { span, .. }
             | Self::Effect { span, .. }
             | Self::Manage { span, .. }

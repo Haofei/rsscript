@@ -1,6 +1,8 @@
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, code};
-use crate::hir::{HirBindingKind, HirBlock, HirExpr, HirStmt, HirTypeKind};
+use crate::hir::{
+    HirBindingKind, HirBlock, HirCallArg, HirExpr, HirStmt, HirTypeKind, ParamEffect,
+};
 use crate::syntax::ast::{Callee, FunctionDecl, Item, TypeRef};
 
 use super::local::{
@@ -60,6 +62,22 @@ pub(crate) enum Flow {
     Continue,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CallPlaceAccess {
+    effect: ParamEffect,
+    path: PlacePath,
+    moves_path: bool,
+    span: crate::diagnostic::Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PlacePath {
+    base: String,
+    components: Vec<String>,
+    has_index: bool,
+    crosses_handle: bool,
+}
+
 fn check_block(
     analyzer: &mut Analyzer<'_>,
     local_analysis: &LocalAnalysis,
@@ -91,6 +109,7 @@ fn check_stmt_semantics(
                 check_managed_closure_captures(analyzer, local_analysis, span, stmt_state);
             }
             if let Some(value) = value {
+                check_expr_semantics(analyzer, value, stmt_state);
                 check_resource_pool_lease_expr(analyzer, value, false);
             }
 
@@ -98,6 +117,7 @@ fn check_stmt_semantics(
         }
         HirStmt::Return { value, .. } => {
             if let Some(value) = value {
+                check_expr_semantics(analyzer, value, state);
                 check_resource_pool_lease_expr(analyzer, value, false);
             }
             Flow::Return
@@ -108,6 +128,7 @@ fn check_stmt_semantics(
             span,
             ..
         } => {
+            check_expr_semantics(analyzer, resource, state);
             check_resource_pool_lease_expr(analyzer, resource, true);
             check_resource_escape(analyzer, local_analysis, span);
             check_block(analyzer, local_analysis, body, state)
@@ -118,6 +139,7 @@ fn check_stmt_semantics(
             else_body,
             ..
         } => {
+            check_expr_semantics(analyzer, condition, state);
             check_resource_pool_lease_expr(analyzer, condition, false);
             apply_expr_effects(condition, state);
 
@@ -137,6 +159,7 @@ fn check_stmt_semantics(
             condition, body, ..
         } => {
             if let Some(condition) = condition {
+                check_expr_semantics(analyzer, condition, state);
                 check_resource_pool_lease_expr(analyzer, condition, false);
                 apply_expr_effects(condition, state);
             }
@@ -154,6 +177,7 @@ fn check_stmt_semantics(
             )
         }
         HirStmt::Expr(expr) => {
+            check_expr_semantics(analyzer, expr, state);
             check_resource_pool_lease_expr(analyzer, expr, false);
             Flow::Fallthrough
         }
@@ -200,6 +224,369 @@ fn apply_stmt_effects(statement: &HirStmt, state: &mut BodyState) {
     }
 }
 
+fn check_expr_semantics(analyzer: &mut Analyzer<'_>, expr: &HirExpr, state: &BodyState) {
+    match expr {
+        HirExpr::Call { args, .. } => {
+            check_call_place_conflicts(analyzer, args, state);
+            for arg in args {
+                check_expr_semantics(analyzer, &arg.value, state);
+            }
+        }
+        HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => {
+            check_expr_semantics(analyzer, value, state);
+        }
+        HirExpr::Binary { left, right, .. } => {
+            check_expr_semantics(analyzer, left, state);
+            check_expr_semantics(analyzer, right, state);
+        }
+        HirExpr::Field { base, .. } => check_expr_semantics(analyzer, base, state),
+        HirExpr::Index { base, index, .. } => {
+            check_expr_semantics(analyzer, base, state);
+            check_expr_semantics(analyzer, index, state);
+        }
+        HirExpr::Closure { body, .. } => {
+            for statement in &body.statements {
+                check_stmt_expr_semantics(analyzer, statement, state);
+            }
+        }
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn check_stmt_expr_semantics(analyzer: &mut Analyzer<'_>, statement: &HirStmt, state: &BodyState) {
+    match statement {
+        HirStmt::Let {
+            value: Some(value), ..
+        }
+        | HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => check_expr_semantics(analyzer, value, state),
+        HirStmt::With { resource, body, .. } => {
+            check_expr_semantics(analyzer, resource, state);
+            for statement in &body.statements {
+                check_stmt_expr_semantics(analyzer, statement, state);
+            }
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            check_expr_semantics(analyzer, condition, state);
+            for statement in &then_body.statements {
+                check_stmt_expr_semantics(analyzer, statement, state);
+            }
+            if let Some(else_body) = else_body {
+                for statement in &else_body.statements {
+                    check_stmt_expr_semantics(analyzer, statement, state);
+                }
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                check_expr_semantics(analyzer, condition, state);
+            }
+            for statement in &body.statements {
+                check_stmt_expr_semantics(analyzer, statement, state);
+            }
+        }
+        HirStmt::Let { value: None, .. }
+        | HirStmt::Return { value: None, .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn check_call_place_conflicts(analyzer: &mut Analyzer<'_>, args: &[HirCallArg], state: &BodyState) {
+    let accesses = args
+        .iter()
+        .filter_map(|arg| call_place_access(arg, state))
+        .collect::<Vec<_>>();
+
+    for left_index in 0..accesses.len() {
+        for right in accesses.iter().skip(left_index + 1) {
+            check_place_pair_conflict(analyzer, &accesses[left_index], right);
+        }
+    }
+}
+
+fn call_place_access(arg: &HirCallArg, state: &BodyState) -> Option<CallPlaceAccess> {
+    let HirExpr::Effect {
+        effect,
+        value,
+        span,
+        ..
+    } = &arg.value
+    else {
+        return None;
+    };
+    let path = place_path(value)?;
+    if !state.is_local(&path.base) {
+        return None;
+    }
+    Some(CallPlaceAccess {
+        effect: *effect,
+        moves_path: expr_moves_path(&arg.value),
+        path,
+        span: span.clone(),
+    })
+}
+
+fn expr_moves_path(expr: &HirExpr) -> bool {
+    match expr {
+        HirExpr::Effect {
+            effect: ParamEffect::Take,
+            ..
+        }
+        | HirExpr::Manage { .. } => true,
+        HirExpr::Effect { value, .. } => expr_moves_path(value),
+        HirExpr::Field { base, .. } => expr_moves_path(base),
+        HirExpr::Index { base, index, .. } => expr_moves_path(base) || expr_moves_path(index),
+        HirExpr::Binary { left, right, .. } => expr_moves_path(left) || expr_moves_path(right),
+        HirExpr::Call { args, .. } => args.iter().any(|arg| expr_moves_path(&arg.value)),
+        HirExpr::Closure { .. }
+        | HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => false,
+    }
+}
+
+fn place_path(expr: &HirExpr) -> Option<PlacePath> {
+    match expr {
+        HirExpr::Ident { name, .. } => Some(PlacePath {
+            base: name.clone(),
+            components: Vec::new(),
+            has_index: false,
+            crosses_handle: false,
+        }),
+        HirExpr::Field {
+            base, name, access, ..
+        } => {
+            let mut path = place_path(base)?;
+            path.components.push(name.clone());
+            if access.is_handle {
+                path.crosses_handle = true;
+            }
+            Some(path)
+        }
+        HirExpr::Index { base, .. } => {
+            let mut path = place_path(base)?;
+            path.has_index = true;
+            Some(path)
+        }
+        HirExpr::Manage { value, .. } => place_path(value),
+        _ => None,
+    }
+}
+
+fn check_place_pair_conflict(
+    analyzer: &mut Analyzer<'_>,
+    left: &CallPlaceAccess,
+    right: &CallPlaceAccess,
+) {
+    if left.path.base != right.path.base {
+        return;
+    }
+
+    if move_base_field_conflict(left, right) {
+        move_base_field_conflict_diagnostic(analyzer, left, right);
+        return;
+    }
+
+    if !pair_mutates(left, right) {
+        return;
+    }
+
+    if left.path.has_index || right.path.has_index {
+        indexed_place_conflict_diagnostic(analyzer, left, right);
+        return;
+    }
+
+    if whole_base_or_prefix_access(&left.path, &right.path) {
+        field_partial_access_conflict_diagnostic(analyzer, left, right);
+        return;
+    }
+
+    if left.path.crosses_handle || right.path.crosses_handle {
+        field_prefix_conflict_diagnostic(
+            analyzer,
+            left,
+            right,
+            "handle fields terminate local-inline disjointness analysis.",
+        );
+        return;
+    }
+
+    if path_prefix_or_equal(&left.path.components, &right.path.components) {
+        field_prefix_conflict_diagnostic(
+            analyzer,
+            left,
+            right,
+            "one local field path is the same as, or a prefix of, the other.",
+        );
+    }
+}
+
+fn move_base_field_conflict(left: &CallPlaceAccess, right: &CallPlaceAccess) -> bool {
+    (left.moves_path && !right.path.components.is_empty())
+        || (right.moves_path && !left.path.components.is_empty())
+        || (left.moves_path && right.path.has_index)
+        || (right.moves_path && left.path.has_index)
+}
+
+fn pair_mutates(left: &CallPlaceAccess, right: &CallPlaceAccess) -> bool {
+    mutates(left.effect) || mutates(right.effect)
+}
+
+fn mutates(effect: ParamEffect) -> bool {
+    matches!(effect, ParamEffect::Mut | ParamEffect::Take)
+}
+
+fn whole_base_or_prefix_access(left: &PlacePath, right: &PlacePath) -> bool {
+    left.components.is_empty() != right.components.is_empty()
+        && (is_prefix(&left.components, &right.components)
+            || is_prefix(&right.components, &left.components))
+}
+
+fn path_prefix_or_equal(left: &[String], right: &[String]) -> bool {
+    is_prefix(left, right) || is_prefix(right, left)
+}
+
+fn is_prefix(left: &[String], right: &[String]) -> bool {
+    left.len() <= right.len()
+        && left
+            .iter()
+            .zip(right.iter())
+            .all(|(left, right)| left == right)
+}
+
+fn place_path_display(path: &PlacePath) -> String {
+    let mut output = path.base.clone();
+    for component in &path.components {
+        output.push('.');
+        output.push_str(component);
+    }
+    if path.has_index {
+        output.push_str("[...]");
+    }
+    output
+}
+
+fn field_partial_access_conflict_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    left: &CallPlaceAccess,
+    right: &CallPlaceAccess,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::FIELD_PARTIAL_ACCESS_CONFLICT,
+            format!(
+                "call mixes whole local access `{}` with field access `{}`.",
+                place_path_display(&left.path),
+                place_path_display(&right.path)
+            ),
+            right.span.clone(),
+            "whole-base field conflict",
+        )
+        .with_cause("A whole local base or prefix conflicts with a mutable or taking subpath in the same call.")
+        .with_fix(
+            "split_call",
+            "Split the whole-base read and field mutation into separate statements or pass disjoint fields explicitly.",
+            "manual",
+        ),
+    );
+}
+
+fn field_prefix_conflict_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    left: &CallPlaceAccess,
+    right: &CallPlaceAccess,
+    cause: &str,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::FIELD_PREFIX_CONFLICT,
+            format!(
+                "local field paths `{}` and `{}` are not disjoint.",
+                place_path_display(&left.path),
+                place_path_display(&right.path)
+            ),
+            right.span.clone(),
+            "field path conflict",
+        )
+        .with_cause(cause)
+        .with_fix(
+            "split_or_refactor_paths",
+            "Split the accesses into separate calls or refactor through explicit split APIs.",
+            "manual",
+        ),
+    );
+}
+
+fn indexed_place_conflict_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    left: &CallPlaceAccess,
+    right: &CallPlaceAccess,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::INDEXED_PARTIAL_ACCESS_CONFLICT,
+            format!(
+                "indexed local paths `{}` and `{}` cannot be proven disjoint.",
+                place_path_display(&left.path),
+                place_path_display(&right.path)
+            ),
+            right.span.clone(),
+            "indexed local access conflict",
+        )
+        .with_cause("RSScript v0.5 treats indexed access as access to the whole local container for alias checking.")
+        .with_fix(
+            "use_split_api",
+            "Use an explicit container split API that proves or checks disjoint element access.",
+            "manual",
+        ),
+    );
+}
+
+fn move_base_field_conflict_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    left: &CallPlaceAccess,
+    right: &CallPlaceAccess,
+) {
+    let (moved, accessed) = if left.moves_path {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::MOVE_BASE_FIELD_CONFLICT,
+            format!(
+                "call moves local path `{}` while also accessing `{}`.",
+                place_path_display(&moved.path),
+                place_path_display(&accessed.path)
+            ),
+            moved.span.clone(),
+            "move-base field conflict",
+        )
+        .with_cause("A local base cannot be `manage`d or `take`n in the same expression where one of its fields is accessed.")
+        .with_fix(
+            "split_move_from_field_access",
+            "Split the field access and `manage`/`take` into separate statements.",
+            "manual",
+        ),
+    );
+}
+
 fn apply_expr_effects(expr: &HirExpr, state: &mut BodyState) {
     match expr {
         HirExpr::Call { args, events, .. } => {
@@ -219,6 +606,10 @@ fn apply_expr_effects(expr: &HirExpr, state: &mut BodyState) {
             apply_expr_effects(right, state);
         }
         HirExpr::Field { base, .. } => apply_expr_effects(base, state),
+        HirExpr::Index { base, index, .. } => {
+            apply_expr_effects(base, state);
+            apply_expr_effects(index, state);
+        }
         HirExpr::Closure { .. }
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
@@ -493,6 +884,10 @@ fn check_resource_pool_lease_expr(
         }
         HirExpr::Field { base, .. } => {
             check_resource_pool_lease_expr(analyzer, base, within_with_resource);
+        }
+        HirExpr::Index { base, index, .. } => {
+            check_resource_pool_lease_expr(analyzer, base, within_with_resource);
+            check_resource_pool_lease_expr(analyzer, index, within_with_resource);
         }
         HirExpr::Closure { body, .. } => {
             for statement in &body.statements {

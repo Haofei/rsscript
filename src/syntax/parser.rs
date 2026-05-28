@@ -1,8 +1,8 @@
 use crate::lexer::{Token, TokenKind, lex};
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileMode,
-    FunctionDecl, IfStmt, Item, LetKind, LetStmt, LoopStmt, Param, Program, ReturnStmt, Stmt,
-    TypeDecl, TypeKind, TypeRef, WithStmt,
+    FunctionDecl, GenericBound, GenericParam, IfStmt, Item, LetKind, LetStmt, LoopStmt, Param,
+    Program, ReturnStmt, Stmt, TypeDecl, TypeKind, TypeRef, WithStmt,
 };
 
 pub fn parse_source(file: &str, source: &str) -> Program {
@@ -82,14 +82,22 @@ impl Parser<'_> {
         };
         self.index += 1;
         let name = self.take_ident_name()?;
-        let open = self.expect_symbol("{")?;
-        let close = find_matching(self.tokens, open, "{", "}").unwrap_or(open);
-        let fields = parse_fields(self.tokens, open + 1, close);
-        self.index = close + 1;
+        let type_params = self.parse_generic_params();
+        let fields = if self.at_symbol("{") {
+            let open = self.index;
+            let close = find_matching(self.tokens, open, "{", "}").unwrap_or(open);
+            self.index = close + 1;
+            parse_fields(self.tokens, open + 1, close)
+        } else {
+            let end = declaration_line_end(self.tokens, self.index);
+            self.index = end;
+            Vec::new()
+        };
 
         Some(TypeDecl {
             kind,
             name,
+            type_params,
             fields,
             span,
         })
@@ -97,7 +105,15 @@ impl Parser<'_> {
 
     fn parse_function_decl(&mut self) -> Option<FunctionDecl> {
         let span = self.current()?.span.clone();
+        let mut is_public = false;
+        let mut is_async = false;
         while self.at_ident("pub") || self.at_ident("async") {
+            if self.at_ident("pub") {
+                is_public = true;
+            }
+            if self.at_ident("async") {
+                is_async = true;
+            }
             self.index += 1;
         }
         if !self.at_ident("fn") {
@@ -105,6 +121,7 @@ impl Parser<'_> {
         }
         self.index += 1;
         let name = self.take_ident_name()?;
+        let type_params = self.parse_generic_params();
 
         let mut params = Vec::new();
         if self.at_symbol("(") {
@@ -114,12 +131,13 @@ impl Parser<'_> {
             self.index = close + 1;
         }
 
+        let signature_end = function_signature_end(self.tokens, self.index);
         let mut return_ty = None;
         let mut returns_fresh = false;
-        if self.at_symbol("->") {
+        if self.index < signature_end && self.at_symbol("->") {
             self.index += 1;
             let return_start = self.index;
-            while !self.is_eof() && !self.at_ident("effects") && !self.at_symbol("{") {
+            while self.index < signature_end && !self.at_ident("effects") && !self.at_symbol("{") {
                 if self.at_ident("fresh") {
                     returns_fresh = true;
                 }
@@ -129,7 +147,7 @@ impl Parser<'_> {
         }
 
         let mut effects = Vec::new();
-        if self.at_ident("effects") && self.peek_symbol(1, "(") {
+        if self.index < signature_end && self.at_ident("effects") && self.peek_symbol(1, "(") {
             let open = self.index + 1;
             let close = find_matching(self.tokens, open, "(", ")").unwrap_or(open);
             effects = parse_effects(self.tokens, open + 1, close);
@@ -142,6 +160,7 @@ impl Parser<'_> {
             self.index = close + 1;
             parse_block(self.tokens, open, close)
         } else {
+            self.index = signature_end;
             Block {
                 statements: Vec::new(),
                 span: self
@@ -153,6 +172,9 @@ impl Parser<'_> {
 
         Some(FunctionDecl {
             name,
+            is_public,
+            is_async,
+            type_params,
             params,
             return_ty,
             returns_fresh,
@@ -190,20 +212,23 @@ impl Parser<'_> {
             .is_some_and(|token| token.symbol(symbol))
     }
 
-    fn expect_symbol(&mut self, symbol: &str) -> Option<usize> {
-        if self.at_symbol(symbol) {
-            let index = self.index;
-            self.index += 1;
-            Some(index)
-        } else {
-            None
-        }
-    }
-
     fn take_ident_name(&mut self) -> Option<String> {
         let name = ident_name(self.tokens.get(self.index)?)?.to_string();
         self.index += 1;
         Some(name)
+    }
+
+    fn parse_generic_params(&mut self) -> Vec<GenericParam> {
+        if !self.at_symbol("<") {
+            return Vec::new();
+        }
+        let open = self.index;
+        let Some(close) = find_matching(self.tokens, open, "<", ">") else {
+            return Vec::new();
+        };
+        let params = parse_generic_params(self.tokens, open + 1, close);
+        self.index = close + 1;
+        params
     }
 
     fn is_eof(&self) -> bool {
@@ -250,6 +275,56 @@ fn parse_fields(tokens: &[Token], start: usize, end: usize) -> Vec<FieldDecl> {
         index += 1;
     }
     fields
+}
+
+fn declaration_line_end(tokens: &[Token], start: usize) -> usize {
+    if start >= tokens.len() {
+        return start;
+    }
+    let line = tokens[start].span.line;
+    (start..tokens.len())
+        .find(|index| {
+            tokens[*index].span.line > line || matches!(tokens[*index].kind, TokenKind::Eof)
+        })
+        .unwrap_or(tokens.len())
+}
+
+fn function_signature_end(tokens: &[Token], start: usize) -> usize {
+    let mut depth = 0usize;
+    for (index, token) in tokens.iter().enumerate().skip(start) {
+        if depth == 0 && token.symbol("{") {
+            return index;
+        }
+        if index > start && depth == 0 && starts_top_level_item(tokens, index) {
+            return index;
+        }
+        if token.symbol("(") || token.symbol("[") || token.symbol("<") {
+            depth += 1;
+        } else if token.symbol(")") || token.symbol("]") || token.symbol(">") {
+            depth = depth.saturating_sub(1);
+        }
+        if matches!(token.kind, TokenKind::Eof) {
+            return index;
+        }
+    }
+    tokens.len()
+}
+
+fn starts_top_level_item(tokens: &[Token], index: usize) -> bool {
+    let Some(token) = tokens.get(index) else {
+        return false;
+    };
+    if index > 0 && tokens[index - 1].span.line == token.span.line {
+        return false;
+    }
+    token.is_ident_text("mode")
+        || token.is_ident_text("profile")
+        || token.is_ident_text("class")
+        || token.is_ident_text("struct")
+        || token.is_ident_text("resource")
+        || token.is_ident_text("fn")
+        || token.is_ident_text("pub")
+        || token.is_ident_text("async")
 }
 
 fn parse_params(tokens: &[Token], start: usize, end: usize) -> Vec<Param> {
@@ -309,6 +384,36 @@ fn parse_effects(tokens: &[Token], start: usize, end: usize) -> Vec<EffectDecl> 
         index += 1;
     }
     effects
+}
+
+fn parse_generic_params(tokens: &[Token], start: usize, end: usize) -> Vec<GenericParam> {
+    split_top_level(tokens, start, end, ",")
+        .into_iter()
+        .filter_map(|(start, end)| {
+            let name = tokens.get(start).and_then(ident_name)?;
+            let bound = (start + 1..end)
+                .find(|index| tokens[*index].symbol(":"))
+                .and_then(|colon| tokens.get(colon + 1))
+                .and_then(parse_generic_bound);
+            Some(GenericParam {
+                name: name.to_string(),
+                bound,
+                span: tokens[start].span.clone(),
+            })
+        })
+        .collect()
+}
+
+fn parse_generic_bound(token: &Token) -> Option<GenericBound> {
+    if token.is_ident_text("Managed") {
+        Some(GenericBound::Managed)
+    } else if token.is_ident_text("Struct") {
+        Some(GenericBound::Struct)
+    } else if token.is_ident_text("Resource") {
+        Some(GenericBound::Resource)
+    } else {
+        None
+    }
 }
 
 fn parse_block(tokens: &[Token], open: usize, close: usize) -> Block {
@@ -586,6 +691,10 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
         return Some(field);
     }
 
+    if let Some(index) = parse_index_expr(tokens, start, end) {
+        return Some(index);
+    }
+
     match tokens.get(start).map(|token| &token.kind)? {
         TokenKind::Ident(value) => Some(Expr::Ident(value.to_string(), tokens[start].span.clone())),
         TokenKind::Keyword(value) => Some(Expr::Ident(
@@ -709,12 +818,41 @@ fn find_top_level_dot(tokens: &[Token], start: usize, end: usize) -> Option<usiz
 }
 
 fn parse_field_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
-    if start + 2 >= end || !tokens.get(start + 1).is_some_and(|token| token.symbol(".")) {
+    let dot = find_last_top_level_dot(tokens, start, end)?;
+    if dot + 1 >= end {
         return None;
     }
     Some(Expr::Field {
-        base: Box::new(parse_expr(tokens, start, start + 1)?),
-        name: ident_name(tokens.get(start + 2)?)?.to_string(),
+        base: Box::new(parse_expr(tokens, start, dot)?),
+        name: ident_name(tokens.get(dot + 1)?)?.to_string(),
+        span: tokens[start].span.clone(),
+    })
+}
+
+fn find_last_top_level_dot(tokens: &[Token], start: usize, end: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut dot = None;
+    for (index, token) in tokens.iter().enumerate().take(end).skip(start) {
+        if depth == 0 && token.symbol(".") {
+            dot = Some(index);
+        }
+        if token.symbol("(") || token.symbol("{") || token.symbol("[") || token.symbol("<") {
+            depth += 1;
+        } else if token.symbol(")") || token.symbol("}") || token.symbol("]") || token.symbol(">") {
+            depth = depth.saturating_sub(1);
+        }
+    }
+    dot
+}
+
+fn parse_index_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
+    if end < start + 3 || !tokens.get(end - 1).is_some_and(|token| token.symbol("]")) {
+        return None;
+    }
+    let open = find_matching_open(tokens, start, end - 1, "[", "]")?;
+    Some(Expr::Index {
+        base: Box::new(parse_expr(tokens, start, open)?),
+        index: Box::new(parse_expr(tokens, open + 1, end - 1)?),
         span: tokens[start].span.clone(),
     })
 }
@@ -897,6 +1035,28 @@ fn find_matching(
             depth += 1;
         } else if token.symbol(close_symbol) {
             depth -= 1;
+            if depth == 0 {
+                return Some(index);
+            }
+        }
+    }
+    None
+}
+
+fn find_matching_open(
+    tokens: &[Token],
+    start: usize,
+    close: usize,
+    open_symbol: &str,
+    close_symbol: &str,
+) -> Option<usize> {
+    let mut depth = 0usize;
+    for index in (start..=close).rev() {
+        let token = tokens.get(index)?;
+        if token.symbol(close_symbol) {
+            depth += 1;
+        } else if token.symbol(open_symbol) {
+            depth = depth.checked_sub(1)?;
             if depth == 0 {
                 return Some(index);
             }

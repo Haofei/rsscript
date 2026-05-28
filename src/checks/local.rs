@@ -363,6 +363,10 @@ fn collect_expr_take_handle_fields(expr: &HirExpr, fields: &mut Vec<TakeHandleFi
             collect_expr_take_handle_fields(right, fields);
         }
         HirExpr::Field { base, .. } => collect_expr_take_handle_fields(base, fields),
+        HirExpr::Index { base, index, .. } => {
+            collect_expr_take_handle_fields(base, fields);
+            collect_expr_take_handle_fields(index, fields);
+        }
         HirExpr::Call { args, .. } => {
             for arg in args {
                 collect_expr_take_handle_fields(&arg.value, fields);
@@ -596,6 +600,10 @@ fn collect_ordered_moved_uses_from_expr(
         HirExpr::Field { base, .. } => {
             collect_ordered_moved_uses_from_expr(base, state, moved_uses);
         }
+        HirExpr::Index { base, index, .. } => {
+            collect_ordered_moved_uses_from_expr(base, state, moved_uses);
+            collect_ordered_moved_uses_from_expr(index, state, moved_uses);
+        }
         HirExpr::Closure { body, .. } => {
             let mut uses = Vec::new();
             collect_hir_block_idents(body, &mut uses);
@@ -729,6 +737,10 @@ fn collect_retained_closure_captures_from_expr(
         HirExpr::Field { base, .. } => {
             collect_retained_closure_captures_from_expr(base, state, captures);
         }
+        HirExpr::Index { base, index, .. } => {
+            collect_retained_closure_captures_from_expr(base, state, captures);
+            collect_retained_closure_captures_from_expr(index, state, captures);
+        }
         HirExpr::Closure { body, .. } => {
             collect_retained_closure_captures_from_block(body, &HashMap::new(), captures);
         }
@@ -754,6 +766,7 @@ fn retained_closure_arg(expr: &HirExpr) -> Option<(&HirBlock, &Span)> {
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Field { .. }
+        | HirExpr::Index { .. }
         | HirExpr::Call { .. }
         | HirExpr::Unknown(_) => None,
     }
@@ -782,6 +795,7 @@ fn hir_expr_span(expr: &HirExpr) -> &Span {
         | HirExpr::String { span, .. }
         | HirExpr::Binary { span, .. }
         | HirExpr::Field { span, .. }
+        | HirExpr::Index { span, .. }
         | HirExpr::Call { span, .. }
         | HirExpr::Effect { span, .. }
         | HirExpr::Manage { span, .. }
@@ -873,6 +887,10 @@ fn collect_expr_resource_escapes(
             collect_expr_resource_escapes(right, escapes_by_with_span);
         }
         HirExpr::Field { base, .. } => collect_expr_resource_escapes(base, escapes_by_with_span),
+        HirExpr::Index { base, index, .. } => {
+            collect_expr_resource_escapes(base, escapes_by_with_span);
+            collect_expr_resource_escapes(index, escapes_by_with_span);
+        }
         HirExpr::Closure { body, .. } => collect_block_resource_escapes(body, escapes_by_with_span),
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
@@ -976,6 +994,10 @@ fn collect_resource_escapes_in_expr(
             collect_resource_escapes_in_expr(binding, right, escapes);
         }
         HirExpr::Field { base, .. } => collect_resource_escapes_in_expr(binding, base, escapes),
+        HirExpr::Index { base, index, .. } => {
+            collect_resource_escapes_in_expr(binding, base, escapes);
+            collect_resource_escapes_in_expr(binding, index, escapes);
+        }
         HirExpr::Closure { body, .. } => collect_resource_escapes_in_block(binding, body, escapes),
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
@@ -1092,6 +1114,10 @@ fn collect_expr_managed_closure_uses(
             collect_expr_managed_closure_uses(right, closures);
         }
         HirExpr::Field { base, .. } => collect_expr_managed_closure_uses(base, closures),
+        HirExpr::Index { base, index, .. } => {
+            collect_expr_managed_closure_uses(base, closures);
+            collect_expr_managed_closure_uses(index, closures);
+        }
         HirExpr::Closure { body, .. } => collect_block_managed_closure_uses(body, closures),
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
@@ -1208,6 +1234,10 @@ fn collect_hir_expr_effect_events(expr: &HirExpr, events: &mut Vec<HirEffectEven
             collect_hir_expr_effect_events(right, events);
         }
         HirExpr::Field { base, .. } => collect_hir_expr_effect_events(base, events),
+        HirExpr::Index { base, index, .. } => {
+            collect_hir_expr_effect_events(base, events);
+            collect_hir_expr_effect_events(index, events);
+        }
         HirExpr::Closure { .. }
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
@@ -1220,6 +1250,10 @@ fn collect_hir_expr_idents(expr: &HirExpr, uses: &mut Vec<(String, Span)>) {
     match expr {
         HirExpr::Ident { name, span, .. } => uses.push((name.clone(), span.clone())),
         HirExpr::Field { base, .. } => collect_hir_expr_idents(base, uses),
+        HirExpr::Index { base, index, .. } => {
+            collect_hir_expr_idents(base, uses);
+            collect_hir_expr_idents(index, uses);
+        }
         HirExpr::Call { args, .. } => {
             for arg in args {
                 collect_hir_expr_idents(&arg.value, uses);
@@ -1632,6 +1666,7 @@ fn local_flow_step_binding(statement: &HirStmt) -> Option<LocalFlowBinding> {
                 | HirExpr::String { .. }
                 | HirExpr::Binary { .. }
                 | HirExpr::Field { .. }
+                | HirExpr::Index { .. }
                 | HirExpr::Call { .. }
                 | HirExpr::Effect { .. }
                 | HirExpr::Manage { .. }
@@ -1676,7 +1711,7 @@ fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
         | HirExpr::Effect { type_name, .. }
         | HirExpr::Manage { type_name, .. } => type_name.as_deref(),
         HirExpr::Field { access, .. } => access.type_name.as_deref(),
-        HirExpr::Binary { .. } => None,
+        HirExpr::Binary { .. } | HirExpr::Index { .. } => None,
         HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Closure { .. }

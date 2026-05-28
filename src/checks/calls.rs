@@ -84,6 +84,10 @@ fn check_expr(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
             check_expr(analyzer, right);
         }
         HirExpr::Field { base, .. } => check_expr(analyzer, base),
+        HirExpr::Index { base, index, .. } => {
+            check_expr(analyzer, base);
+            check_expr(analyzer, index);
+        }
         HirExpr::Closure { body, .. } => check_block(analyzer, body),
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
@@ -113,7 +117,7 @@ fn check_call_args(
                     arg.span.clone(),
                     "argument must be named",
                 )
-                .with_cause("RSScript v0.4.1 requires all non-receiver call arguments to be named.")
+                .with_cause("RSScript v0.5 requires all non-receiver call arguments to be named.")
                 .with_fix(
                     "add_argument_name",
                     "Write the argument as `name: value`.",
@@ -293,6 +297,7 @@ fn hir_expr_span(expr: &HirExpr) -> &Span {
         | HirExpr::String { span, .. }
         | HirExpr::Binary { span, .. }
         | HirExpr::Field { span, .. }
+        | HirExpr::Index { span, .. }
         | HirExpr::Call { span, .. }
         | HirExpr::Effect { span, .. }
         | HirExpr::Manage { span, .. }

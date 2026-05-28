@@ -1,0 +1,12 @@
+// expect: RS0704
+resource BoxedResource<T: Resource> {
+    inner: T
+
+    drop {
+        OS.close()
+    }
+}
+
+fn inspect() -> Unit {
+    let code = 1
+}

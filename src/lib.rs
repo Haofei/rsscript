@@ -4,6 +4,7 @@ mod diagnostic;
 mod hir;
 mod lexer;
 mod review;
+mod rust_lower;
 pub mod syntax;
 
 pub use analyzer::analyze_source;
@@ -12,5 +13,11 @@ pub use diagnostic::{
     format_diagnostic_explanation, format_diagnostics_human, format_diagnostics_json,
 };
 pub use review::{
-    ReviewFinding, ReviewFix, ReviewRisk, format_review_human, format_review_json, review_sources,
+    ReviewFinding, ReviewFix, ReviewMap, ReviewMapCategorySummary, ReviewMapClassification,
+    ReviewMapFile, ReviewMapRegion, ReviewMapSummary, ReviewRisk, format_review_human,
+    format_review_json, format_review_map_human, format_review_map_json, review_map_sources,
+    review_sources,
+};
+pub use rust_lower::{
+    GeneratedRustPackage, lower_program_to_rust, lower_source_to_rust, lower_source_to_rust_package,
 };

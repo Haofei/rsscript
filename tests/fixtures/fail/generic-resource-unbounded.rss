@@ -1,0 +1,12 @@
+// expect: RS0704
+resource NativeHandle<T> {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+fn inspect() -> Unit {
+    let code = 1
+}

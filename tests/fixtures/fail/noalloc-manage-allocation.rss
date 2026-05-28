@@ -1,0 +1,13 @@
+// expect: RS0014
+mode: uses-local
+
+struct Image {
+    pixels: Buffer
+}
+
+fn publish(path: read Path) -> Image
+    effects(noalloc)
+{
+    local image = Image.load(path: read path)
+    return manage image
+}

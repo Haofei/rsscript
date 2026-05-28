@@ -1,0 +1,13 @@
+// expect: RS0014
+mode: managed
+
+struct Pair {
+    left: Int
+    right: Int
+}
+
+fn make_pair(left: Int, right: Int) -> fresh Pair
+    effects(noalloc)
+{
+    return Pair(left: left, right: right)
+}

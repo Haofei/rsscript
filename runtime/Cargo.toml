@@ -1,0 +1,12 @@
+[package]
+name = "rsscript-runtime"
+version = "0.1.0"
+edition = "2024"
+description = "Runtime hooks for RSScript Rust lowering"
+license = "MIT"
+
+[lib]
+name = "rsscript_runtime"
+path = "src/lib.rs"
+
+[dependencies]

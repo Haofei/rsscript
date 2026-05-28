@@ -1,0 +1,11 @@
+resource NativeHandle<T: Managed> {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+fn inspect() -> Unit {
+    let code = 1
+}

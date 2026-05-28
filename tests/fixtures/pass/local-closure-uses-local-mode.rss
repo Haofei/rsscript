@@ -1,0 +1,7 @@
+mode: uses-local
+
+fn run() -> Unit {
+    local callback = || {
+        let value = 1
+    }
+}

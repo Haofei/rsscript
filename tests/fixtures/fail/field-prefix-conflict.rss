@@ -1,0 +1,22 @@
+// expect: RS0303
+mode: uses-local
+
+struct Cache {
+    value: Int
+}
+
+struct Inner {
+    cache: Cache
+}
+
+struct State {
+    inner: Inner
+}
+
+fn use_inner(inner: mut Inner, cache: mut Cache) -> Unit
+fn make_state() -> fresh State
+
+fn run() -> Unit {
+    local state = make_state()
+    use_inner(inner: mut state.inner, cache: mut state.inner.cache)
+}

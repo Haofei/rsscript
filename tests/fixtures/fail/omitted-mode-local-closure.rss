@@ -1,0 +1,6 @@
+// expect: RS0101
+fn run() -> Unit {
+    local callback = || {
+        let value = 1
+    }
+}

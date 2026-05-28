@@ -34,6 +34,7 @@ pub struct ParamSig {
 pub struct FunctionSig {
     pub namespace: Option<String>,
     pub name: String,
+    pub is_async: bool,
     pub params: Vec<ParamSig>,
     pub return_type: Option<String>,
     pub returns_fresh: bool,
@@ -106,6 +107,7 @@ pub struct HirCallSite {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HirModeUseKind {
     LocalLet,
+    LocalClosure,
     Manage,
     Take,
     ResourcePool,
@@ -244,6 +246,11 @@ pub enum HirExpr {
         base: Box<HirExpr>,
         name: String,
         access: HirFieldAccess,
+        span: Span,
+    },
+    Index {
+        base: Box<HirExpr>,
+        index: Box<HirExpr>,
         span: Span,
     },
     Call {
@@ -749,6 +756,11 @@ fn lower_hir_expr(
                 span: span.clone(),
             }
         }
+        Expr::Index { base, index, span } => HirExpr::Index {
+            base: Box::new(lower_hir_expr(hir, function_name, base, value_types)),
+            index: Box::new(lower_hir_expr(hir, function_name, index, value_types)),
+            span: span.clone(),
+        },
         Expr::Call { callee, args, span } => {
             let resolution = hir.resolve_call(callee);
             let events = retain_events_for_call(function_name, callee, args, span, &resolution);
@@ -892,7 +904,11 @@ fn collect_body_facts_in_stmt(
             if stmt.kind == LetKind::Local {
                 facts.mode_uses.push(HirModeUse {
                     function_name: Some(function_name.to_string()),
-                    kind: HirModeUseKind::LocalLet,
+                    kind: if matches!(stmt.value, Some(Expr::Closure { .. })) {
+                        HirModeUseKind::LocalClosure
+                    } else {
+                        HirModeUseKind::LocalLet
+                    },
                     span: stmt.span.clone(),
                 });
             }
@@ -1048,6 +1064,10 @@ fn collect_body_facts_in_expr(
             });
             collect_body_facts_in_expr(hir, function_name, base, value_types, facts);
         }
+        Expr::Index { base, index, .. } => {
+            collect_body_facts_in_expr(hir, function_name, base, value_types, facts);
+            collect_body_facts_in_expr(hir, function_name, index, value_types, facts);
+        }
         Expr::Closure { body, .. } => {
             collect_body_facts_in_block(hir, function_name, body, value_types, facts);
         }
@@ -1147,6 +1167,7 @@ fn infer_hir_expr_type(
                 .get(name)
                 .map(|field| field.type_name.clone())
         }
+        Expr::Index { .. } => None,
         Expr::Closure { .. } | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => None,
     }
 }
@@ -1187,6 +1208,7 @@ fn resource_pool_arg_type(expr: &Expr, value_types: &HashMap<String, String>) ->
             return resource_pool_namespace_arg(callee).map(|resource| resource.to_string());
         }
         Expr::Field { .. }
+        | Expr::Index { .. }
         | Expr::Binary { .. }
         | Expr::Closure { .. }
         | Expr::Number(_, _)
@@ -1244,6 +1266,7 @@ fn classify_return_expr(hir: &Hir, expr: &Expr) -> HirReturnProof {
         },
         Expr::Effect { value, .. } | Expr::Manage { value, .. } => classify_return_expr(hir, value),
         Expr::Field { .. }
+        | Expr::Index { .. }
         | Expr::Binary { .. }
         | Expr::Closure { .. }
         | Expr::Number(_, _)
@@ -1281,6 +1304,7 @@ fn function_sig_from_decl(function: &FunctionDecl) -> FunctionSig {
     FunctionSig {
         namespace: None,
         name: function.name.clone(),
+        is_async: function.is_async,
         params: function.params.iter().map(param_sig_from_decl).collect(),
         return_type: function.return_ty.as_ref().map(type_ref_name),
         returns_fresh: function.returns_fresh,
@@ -1414,6 +1438,7 @@ fn constructor_sig_from_type(type_info: &TypeInfo) -> FunctionSig {
     FunctionSig {
         namespace: None,
         name: type_info.name.clone(),
+        is_async: false,
         params: fields
             .into_iter()
             .map(|field| ParamSig {
@@ -1786,6 +1811,7 @@ fn builtin(
     FunctionSig {
         namespace: Some(namespace.to_string()),
         name: name.to_string(),
+        is_async: false,
         params: params.to_vec(),
         return_type: return_type.map(str::to_string),
         returns_fresh,

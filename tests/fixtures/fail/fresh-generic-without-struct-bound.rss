@@ -1,0 +1,4 @@
+// expect: RS0603
+fn make_default<T>() -> fresh T {
+    return value
+}

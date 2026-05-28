@@ -1,0 +1,18 @@
+// expect: RS0304
+mode: uses-local
+
+struct Buffer {
+    value: Int
+}
+
+struct LocalVec {
+    length: Int
+}
+
+fn use_buffers(a: mut Buffer, b: mut Buffer) -> Unit
+fn make_buffers() -> fresh LocalVec
+
+fn run() -> Unit {
+    local buffers = make_buffers()
+    use_buffers(a: mut buffers[0], b: mut buffers[1])
+}

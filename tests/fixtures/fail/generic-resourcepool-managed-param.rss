@@ -1,0 +1,6 @@
+// expect: RS0703
+mode: uses-local
+
+fn use_pool<T: Managed>(pool: mut ResourcePool<T>) -> Unit {
+    ResourcePool.borrow(pool: mut pool)
+}

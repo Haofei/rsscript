@@ -14,6 +14,7 @@ pub mod code {
     pub const REMOVED_SHARE_EFFECT: &str = "RS0011";
     pub const REMOVED_RUNTIME_EFFECT: &str = "RS0012";
     pub const INVALID_TRY_OPERATOR: &str = "RS0013";
+    pub const INVALID_NOALLOC_ALLOCATION: &str = "RS0014";
     pub const FILE_MODE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
@@ -22,6 +23,10 @@ pub mod code {
     pub const DUPLICATE_ARGUMENT: &str = "RS0205";
     pub const UNKNOWN_CALLEE: &str = "RS0206";
     pub const MANAGED_TO_LOCAL: &str = "RS0301";
+    pub const FIELD_PARTIAL_ACCESS_CONFLICT: &str = "RS0302";
+    pub const FIELD_PREFIX_CONFLICT: &str = "RS0303";
+    pub const INDEXED_PARTIAL_ACCESS_CONFLICT: &str = "RS0304";
+    pub const MOVE_BASE_FIELD_CONFLICT: &str = "RS0305";
     pub const USE_AFTER_MANAGE: &str = "RS0401";
     pub const LOCAL_VALUE_RETAINED: &str = "RS0501";
     pub const FRESH_RETURN_NOT_CLEAN: &str = "RS0601";
@@ -52,6 +57,7 @@ pub mod code {
     pub const REVIEW_BOUNDARY_CHANGED: &str = "RSR011";
     pub const REVIEW_UNSAFE_NATIVE_ADDED: &str = "RSR012";
     pub const REVIEW_GUARANTEE_REMOVED: &str = "RSR013";
+    pub const REVIEW_FUNCTION_KIND_CHANGED: &str = "RSR014";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,7 +215,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::MISSING_FILE_MODE,
         title: "missing file mode",
-        explanation: "Every RSScript source file must declare `mode: managed` or `mode: uses-local` so reviewers can see whether local ownership features are allowed.",
+        explanation: "`mode: managed` is optional in RSScript v0.5. Omitted mode means managed-only; `mode: uses-local` is required for local ownership features.",
     },
     DiagnosticExplanation {
         code: code::MISSING_RETURN_TYPE,
@@ -234,7 +240,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::DUPLICATE_FILE_MODE,
         title: "duplicate file mode",
-        explanation: "Every RSScript source file must declare exactly one semantic mode. Multiple `mode:` declarations make local-capability review ambiguous.",
+        explanation: "RSScript files may declare at most one explicit semantic mode. Multiple `mode:` declarations make local-capability review ambiguous.",
     },
     DiagnosticExplanation {
         code: code::UNKNOWN_RETAINED_PARAMETER,
@@ -254,22 +260,27 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::REMOVED_PROFILE_DECLARATION,
         title: "removed profile declaration",
-        explanation: "RSScript v0.4.1 removed `profile:` declarations. The only top-level semantic file declaration is `mode:`.",
+        explanation: "RSScript v0.5 does not include `profile:` declarations. The only top-level semantic file declaration is `mode:`, and managed-only mode may be omitted.",
     },
     DiagnosticExplanation {
         code: code::REMOVED_SHARE_EFFECT,
         title: "removed share data effect",
-        explanation: "RSScript v0.4.1 removed `share` as a data effect. Retention must be declared with `effects(retains(param))`.",
+        explanation: "RSScript v0.5 does not include `share` as a data effect. Retention must be declared with `effects(retains(param))`.",
     },
     DiagnosticExplanation {
         code: code::REMOVED_RUNTIME_EFFECT,
         title: "removed runtime effect",
-        explanation: "RSScript v0.4.1 uses reductive guarantees. Additive runtime effects such as `io`, `allocates`, `may_panic`, and `may_fail` are not valid effects.",
+        explanation: "RSScript v0.5 uses reductive guarantees. Additive runtime effects such as `io`, `allocates`, `may_panic`, and `may_fail` are not valid effects.",
     },
     DiagnosticExplanation {
         code: code::INVALID_TRY_OPERATOR,
         title: "invalid try operator",
         explanation: "`?` may only be used inside functions that return a compatible `Result<T, E>` type.",
+    },
+    DiagnosticExplanation {
+        code: code::INVALID_NOALLOC_ALLOCATION,
+        title: "invalid noalloc allocation",
+        explanation: "`effects(noalloc)` forbids obvious allocation sites such as value construction and `manage` migration.",
     },
     DiagnosticExplanation {
         code: code::FILE_MODE_VIOLATION,
@@ -310,6 +321,26 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::MANAGED_TO_LOCAL,
         title: "managed-to-local conversion",
         explanation: "Managed values cannot be rebound as local values. Create the value locally at its origin if local ownership is required.",
+    },
+    DiagnosticExplanation {
+        code: code::FIELD_PARTIAL_ACCESS_CONFLICT,
+        title: "whole-base field partial access conflict",
+        explanation: "A call cannot mix a whole local base or whole local prefix access with a mutable or taking access to one of its fields.",
+    },
+    DiagnosticExplanation {
+        code: code::FIELD_PREFIX_CONFLICT,
+        title: "nested field prefix conflict",
+        explanation: "Two local field paths conflict when one path is the same as, or a prefix of, the other and either access mutates or takes the path.",
+    },
+    DiagnosticExplanation {
+        code: code::INDEXED_PARTIAL_ACCESS_CONFLICT,
+        title: "indexed container partial access conflict",
+        explanation: "RSScript v0.5 does not prove indexed element disjointness. Indexed local paths conflict with other accesses to the same local base when mutation or take is involved.",
+    },
+    DiagnosticExplanation {
+        code: code::MOVE_BASE_FIELD_CONFLICT,
+        title: "move-base field access conflict",
+        explanation: "A call cannot move a local base with `manage` or `take` in the same expression where another argument accesses one of that base's fields.",
     },
     DiagnosticExplanation {
         code: code::USE_AFTER_MANAGE,
@@ -384,7 +415,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::OWN_STRUCT_ATTEMPT,
         title: "own struct attempt",
-        explanation: "RSScript v0.4.1 has exactly three type declaration kinds: `class`, `struct`, and `resource`. There is no `own struct`.",
+        explanation: "RSScript v0.5 has exactly three type declaration kinds: `class`, `struct`, and `resource`. There is no `own struct`.",
     },
     DiagnosticExplanation {
         code: code::SURFACE_REFERENCE_ATTEMPT,

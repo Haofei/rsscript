@@ -556,6 +556,7 @@ The intended workflow is:
 rss check
 rss fmt
 rss review
+rss lower --rust
 rss test
 ```
 
@@ -590,12 +591,12 @@ Planned stages:
 2. Real AST parser
 3. HIR and symbol table
 4. Semantic checker
-5. Managed interpreter
-6. Resource runtime
-7. Local / fresh / manage runtime
-8. Core library MVP
-9. Semantic review tooling
-10. Runnable MVP
+5. Rust lowering shape contract
+6. Runtime crate type surface
+7. Rust source generation with source maps
+8. rustc diagnostic mapping
+9. Core library signatures
+10. Runnable MVP through rustc
 ```
 
 The project will grow by testing the language against real scenarios:

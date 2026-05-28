@@ -1,0 +1,26 @@
+mode: uses-local
+
+struct Cache {
+    value: Int
+}
+
+struct Buffer {
+    value: Int
+}
+
+struct Inner {
+    cache: Cache
+    buffer: Buffer
+}
+
+struct State {
+    inner: Inner
+}
+
+fn use_parts(cache: mut Cache, buffer: mut Buffer) -> Unit
+fn make_state() -> fresh State
+
+fn run() -> Unit {
+    local state = make_state()
+    use_parts(cache: mut state.inner.cache, buffer: mut state.inner.buffer)
+}
