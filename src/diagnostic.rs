@@ -22,6 +22,7 @@ pub mod code {
     pub const RESOURCE_FIELD: &str = "RS0701";
     pub const RESOURCE_ESCAPE: &str = "RS0702";
     pub const INVALID_RESOURCE_POOL_TYPE: &str = "RS0703";
+    pub const RESOURCE_GENERIC_ARGUMENT: &str = "RS0704";
     pub const LOCAL_CAPTURED_BY_MANAGED_CLOSURE: &str = "RS0801";
     pub const TAKE_HANDLE_FIELD: &str = "RS0901";
     pub const OPERATOR_OVERLOAD_ATTEMPT: &str = "RS1001";
@@ -295,6 +296,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::INVALID_RESOURCE_POOL_TYPE,
         title: "invalid ResourcePool type",
         explanation: "`ResourcePool<T>` is only valid when `T` is a resource type.",
+    },
+    DiagnosticExplanation {
+        code: code::RESOURCE_GENERIC_ARGUMENT,
+        title: "resource in ordinary generic type",
+        explanation: "Resource values may only be held by explicit resource APIs such as `ResourcePool<T: Resource>`; ordinary generic containers must not be instantiated with resource types.",
     },
     DiagnosticExplanation {
         code: code::LOCAL_CAPTURED_BY_MANAGED_CLOSURE,

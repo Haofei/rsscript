@@ -1,0 +1,18 @@
+// expect: RS0704
+mode: managed
+
+resource File {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+struct BadArchive {
+    files: List<File>
+}
+
+fn build_archive() -> Unit {
+    return Unit
+}

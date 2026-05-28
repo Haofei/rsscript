@@ -33,6 +33,7 @@ impl Analyzer<'_> {
         self.check_signature_explicitness();
         self.check_resource_fields();
         self.check_resource_pool_type_arguments();
+        self.check_resource_generic_arguments();
         checks::mode::check(self);
         checks::calls::check(self);
         checks::body::check(self);
@@ -191,6 +192,28 @@ impl Analyzer<'_> {
         }
     }
 
+    fn check_resource_generic_arguments(&mut self) {
+        let items = self.syntax_program.items.clone();
+        for item in &items {
+            match item {
+                Item::Type(decl) => {
+                    for field in &decl.fields {
+                        self.check_resource_generic_type_ref(&field.ty);
+                    }
+                }
+                Item::Function(function) => {
+                    for param in &function.params {
+                        self.check_resource_generic_type_ref(&param.ty);
+                    }
+                    if let Some(return_ty) = &function.return_ty {
+                        self.check_resource_generic_type_ref(return_ty);
+                    }
+                    self.check_resource_generic_calls_in_block(&function.body);
+                }
+            }
+        }
+    }
+
     fn check_resource_pool_type_ref(&mut self, ty: &TypeRef) {
         if ty.name == "ResourcePool" {
             match ty.args.first() {
@@ -209,6 +232,19 @@ impl Analyzer<'_> {
     fn check_resource_pool_calls_in_block(&mut self, block: &crate::syntax::ast::Block) {
         for statement in &block.statements {
             self.check_resource_pool_calls_in_stmt(statement);
+        }
+    }
+
+    fn check_resource_generic_type_ref(&mut self, ty: &TypeRef) {
+        if ty.name != "ResourcePool" {
+            for arg in &ty.args {
+                if self.hir.type_kind(&arg.name) == Some(HirTypeKind::Resource) {
+                    self.resource_generic_argument_diagnostic(&ty.name, &arg.name, &arg.span);
+                }
+            }
+        }
+        for arg in &ty.args {
+            self.check_resource_generic_type_ref(arg);
         }
     }
 
@@ -279,6 +315,76 @@ impl Analyzer<'_> {
         }
     }
 
+    fn check_resource_generic_calls_in_block(&mut self, block: &crate::syntax::ast::Block) {
+        for statement in &block.statements {
+            self.check_resource_generic_calls_in_stmt(statement);
+        }
+    }
+
+    fn check_resource_generic_calls_in_stmt(&mut self, statement: &Stmt) {
+        match statement {
+            Stmt::Let(stmt) => {
+                if let Some(value) = &stmt.value {
+                    self.check_resource_generic_calls_in_expr(value);
+                }
+            }
+            Stmt::Return(stmt) => {
+                if let Some(value) = &stmt.value {
+                    self.check_resource_generic_calls_in_expr(value);
+                }
+            }
+            Stmt::Expr(value) => self.check_resource_generic_calls_in_expr(value),
+            Stmt::With(stmt) => {
+                self.check_resource_generic_calls_in_expr(&stmt.resource);
+                self.check_resource_generic_calls_in_block(&stmt.body);
+            }
+            Stmt::If(stmt) => {
+                self.check_resource_generic_calls_in_expr(&stmt.condition);
+                self.check_resource_generic_calls_in_block(&stmt.then_body);
+                if let Some(else_body) = &stmt.else_body {
+                    self.check_resource_generic_calls_in_block(else_body);
+                }
+            }
+            Stmt::Loop(stmt) => {
+                if let Some(condition) = &stmt.condition {
+                    self.check_resource_generic_calls_in_expr(condition);
+                }
+                self.check_resource_generic_calls_in_block(&stmt.body);
+            }
+            Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
+        }
+    }
+
+    fn check_resource_generic_calls_in_expr(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Call { callee, args, span } => {
+                if let Callee::Qualified { namespace, .. } = callee
+                    && let Some((root, args)) = generic_namespace_args(namespace)
+                    && root != "ResourcePool"
+                {
+                    for arg in args {
+                        if self.hir.type_kind(arg) == Some(HirTypeKind::Resource) {
+                            self.resource_generic_argument_diagnostic(root, arg, span);
+                        }
+                    }
+                }
+                for arg in args {
+                    self.check_resource_generic_calls_in_expr(&arg.value);
+                }
+            }
+            Expr::Binary { left, right, .. } => {
+                self.check_resource_generic_calls_in_expr(left);
+                self.check_resource_generic_calls_in_expr(right);
+            }
+            Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
+                self.check_resource_generic_calls_in_expr(value);
+            }
+            Expr::Field { base, .. } => self.check_resource_generic_calls_in_expr(base),
+            Expr::Closure { body, .. } => self.check_resource_generic_calls_in_block(body),
+            Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        }
+    }
+
     fn check_resource_pool_arg(&mut self, type_name: &str, span: &crate::diagnostic::Span) {
         match self.hir.type_kind(type_name) {
             Some(HirTypeKind::Resource) | None => {}
@@ -313,12 +419,61 @@ impl Analyzer<'_> {
             ),
         );
     }
+
+    fn resource_generic_argument_diagnostic(
+        &mut self,
+        generic_name: &str,
+        resource_name: &str,
+        span: &crate::diagnostic::Span,
+    ) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::RESOURCE_GENERIC_ARGUMENT,
+                format!(
+                    "generic type `{generic_name}` cannot be instantiated with resource `{resource_name}`."
+                ),
+                span.clone(),
+                "resource generic argument",
+            )
+            .with_cause("Only explicit resource APIs such as `ResourcePool<T: Resource>` may hold resources.")
+            .with_fix(
+                "use_resource_api",
+                "Use `with`, `ResourcePool<T: Resource>`, or a non-resource value type.",
+                "manual",
+            ),
+        );
+    }
 }
 
 fn resource_pool_namespace_arg(namespace: &str) -> Option<&str> {
     namespace
         .strip_prefix("ResourcePool<")
         .and_then(|rest| rest.strip_suffix('>'))
+}
+
+fn generic_namespace_args(namespace: &str) -> Option<(&str, Vec<&str>)> {
+    let (root, rest) = namespace.split_once('<')?;
+    let args = rest.strip_suffix('>')?;
+    Some((root, split_top_level_type_args(args)))
+}
+
+fn split_top_level_type_args(args: &str) -> Vec<&str> {
+    let mut result = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (index, ch) in args.char_indices() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                result.push(args[start..index].trim());
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    result.push(args[start..].trim());
+    result
 }
 
 fn effect_name(effect: &EffectDecl) -> &str {
