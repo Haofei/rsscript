@@ -437,7 +437,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::RESOURCE_ESCAPE,
         title: "resource escape",
-        explanation: "A resource introduced by `with` must not escape the block through return, manage, retention, or managed closure capture.",
+        explanation: "A resource introduced by `with` must not escape the block through return, managed binding, manage, retention, or managed closure capture.",
     },
     DiagnosticExplanation {
         code: code::INVALID_RESOURCE_POOL_TYPE,

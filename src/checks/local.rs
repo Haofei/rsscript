@@ -923,6 +923,13 @@ fn collect_resource_escapes_in_block(
             } if name == binding => {
                 push_resource_escape(escapes, binding, ResourceEscapeKind::Escape, span.clone());
             }
+            HirStmt::Let {
+                kind: HirBindingKind::ManagedLet,
+                value: Some(HirExpr::Ident { name, span, .. }),
+                ..
+            } if name == binding => {
+                push_resource_escape(escapes, binding, ResourceEscapeKind::Escape, span.clone());
+            }
             HirStmt::Return {
                 value: Some(value), ..
             }

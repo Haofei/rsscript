@@ -1,0 +1,16 @@
+// expect: RS0702
+features: local
+
+resource File {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+fn bad_binding(path: read Path) -> Unit {
+    with File.open(path: read path) as file {
+        let saved = file
+    }
+}
