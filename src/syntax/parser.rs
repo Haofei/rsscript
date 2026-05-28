@@ -571,24 +571,8 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
 }
 
 fn parse_call_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
-    let (callee, open) = if tokens.get(start + 1).is_some_and(|token| token.symbol("(")) {
-        (
-            Callee::Name(ident_name(tokens.get(start)?)?.to_string()),
-            start + 1,
-        )
-    } else if tokens.get(start + 1).is_some_and(|token| token.symbol("."))
-        && tokens.get(start + 3).is_some_and(|token| token.symbol("("))
-    {
-        (
-            Callee::Qualified {
-                namespace: ident_name(tokens.get(start)?)?.to_string(),
-                name: ident_name(tokens.get(start + 2)?)?.to_string(),
-            },
-            start + 3,
-        )
-    } else {
-        return None;
-    };
+    let open = find_call_open(tokens, start, end)?;
+    let callee = parse_callee(tokens, start, open)?;
     let close = find_matching(tokens, open, "(", ")")?;
     if close >= end {
         return None;
@@ -599,6 +583,47 @@ fn parse_call_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
         args,
         span: tokens[start].span.clone(),
     })
+}
+
+fn find_call_open(tokens: &[Token], start: usize, end: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (index, token) in tokens.iter().enumerate().take(end).skip(start + 1) {
+        if depth == 0 && token.symbol("(") {
+            return Some(index);
+        }
+        if token.symbol("<") || token.symbol("[") {
+            depth += 1;
+        } else if token.symbol(">") || token.symbol("]") {
+            depth = depth.saturating_sub(1);
+        }
+    }
+    None
+}
+
+fn parse_callee(tokens: &[Token], start: usize, end: usize) -> Option<Callee> {
+    if start + 1 == end {
+        return Some(Callee::Name(ident_name(tokens.get(start)?)?.to_string()));
+    }
+
+    let dot = find_top_level_dot(tokens, start, end)?;
+    let namespace = parse_type_ref(tokens, start, dot)?.name;
+    let name = ident_name(tokens.get(dot + 1)?)?.to_string();
+    Some(Callee::Qualified { namespace, name })
+}
+
+fn find_top_level_dot(tokens: &[Token], start: usize, end: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (index, token) in tokens.iter().enumerate().take(end).skip(start) {
+        if depth == 0 && token.symbol(".") {
+            return Some(index);
+        }
+        if token.symbol("<") || token.symbol("[") {
+            depth += 1;
+        } else if token.symbol(">") || token.symbol("]") {
+            depth = depth.saturating_sub(1);
+        }
+    }
+    None
 }
 
 fn parse_field_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
