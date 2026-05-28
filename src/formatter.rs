@@ -296,6 +296,16 @@ impl Formatter {
                     self.expr(value, 6);
                 }
             }
+            Expr::Await { value, .. } => {
+                self.out.push_str("await ");
+                if matches!(**value, Expr::Binary { .. }) {
+                    self.out.push('(');
+                    self.expr(value, 0);
+                    self.out.push(')');
+                } else {
+                    self.expr(value, 6);
+                }
+            }
             Expr::Try { value, .. } => {
                 self.expr(value, 7);
                 self.out.push('?');

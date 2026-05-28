@@ -1981,6 +1981,7 @@ Review tools should mark these as must-review:
 ```text
 async function signature
 public async entry point
+await suspension boundary
 await native async call
 spawn task
 spawn retains-until-task-complete captures

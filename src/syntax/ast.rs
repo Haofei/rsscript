@@ -301,6 +301,10 @@ pub enum Expr {
         value: Box<Expr>,
         span: Span,
     },
+    Await {
+        value: Box<Expr>,
+        span: Span,
+    },
     Try {
         value: Box<Expr>,
         span: Span,
@@ -354,6 +358,7 @@ impl Expr {
             | Self::Effect { span, .. }
             | Self::Manage { span, .. }
             | Self::Spawn { span, .. }
+            | Self::Await { span, .. }
             | Self::Try { span, .. }
             | Self::Closure { span, .. }
             | Self::Unknown(span) => span,

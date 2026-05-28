@@ -3565,6 +3565,39 @@ fn schedule(client: read HttpClient, id: read UserId) -> Unit {
 }
 
 #[test]
+fn review_map_marks_await_suspension_boundary() {
+    let source = r#"
+features: async
+
+async fn fetch_user(client: read HttpClient, id: read UserId) -> Result<fresh User, HttpError>
+
+fn receive(client: read HttpClient, id: read UserId) -> Unit {
+    let user = await fetch_user(client: read client, id: read id)
+    return Unit
+}
+"#;
+
+    let map = review_map_sources(vec![("await-map.rss", source)]);
+    let region = map.files[0]
+        .regions
+        .iter()
+        .find(|region| region.function == "receive")
+        .expect("expected receive region");
+
+    assert_eq!(
+        region.classification,
+        ReviewMapClassification::ReviewRequired
+    );
+    assert!(
+        region
+            .reasons
+            .iter()
+            .any(|reason| reason == "await suspension boundary"),
+        "{region:?}"
+    );
+}
+
+#[test]
 fn review_map_marks_noescape_callback_calls_review_required_not_unknown() {
     let source = r#"
 features: local
@@ -3723,6 +3756,40 @@ fn schedule(url: read Url) -> Unit {
 }
 
 #[test]
+fn parser_preserves_await_expression() {
+    let source = r#"
+features: async
+
+async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError>
+
+fn receive(url: read Url) -> Unit {
+    let bytes = await fetch(url: read url)
+    return Unit
+}
+"#;
+    let program = parse_source("await.rss", source);
+    let receive = program
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Function(function) if function.name == "receive" => Some(function),
+            _ => None,
+        })
+        .expect("expected receive function");
+    let stmt = receive
+        .body
+        .statements
+        .first()
+        .expect("expected bytes binding");
+
+    assert!(matches!(
+        stmt,
+        rsscript::syntax::ast::Stmt::Let(let_stmt)
+            if matches!(let_stmt.value.as_ref(), Some(Expr::Await { .. }))
+    ));
+}
+
+#[test]
 fn checker_reports_async_bodies_as_unsupported_until_async_lowering_exists() {
     let source = r#"
 features: async
@@ -3738,6 +3805,29 @@ async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError> {
             .iter()
             .any(|diagnostic| diagnostic.code == "RS0015"
                 && diagnostic.label == "unsupported async function body")
+    );
+}
+
+#[test]
+fn checker_reports_await_as_unsupported_until_async_lowering_exists() {
+    let source = r#"
+features: async
+
+async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError>
+
+fn receive(url: read Url) -> Unit {
+    let bytes = await fetch(url: read url)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("await-body.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0015"
+                && diagnostic.label == "unsupported await expression"),
+        "{diagnostics:?}"
     );
 }
 
@@ -3760,6 +3850,26 @@ fn schedule(url: read Url) -> Unit {
             .iter()
             .any(|diagnostic| diagnostic.code == "RS0015"
                 && diagnostic.label == "unsupported spawn expression")
+    );
+}
+
+#[test]
+fn checker_gates_await_on_async_feature() {
+    let source = r#"
+async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError>
+
+fn receive(url: read Url) -> Unit {
+    let bytes = await fetch(url: read url)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("await-feature.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0101" && diagnostic.summary.contains("await")),
+        "{diagnostics:?}"
     );
 }
 

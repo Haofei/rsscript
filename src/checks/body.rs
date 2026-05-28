@@ -296,6 +296,9 @@ fn check_expr_semantics_with_context(
             check_spawn_captures(analyzer, value, state);
             check_expr_semantics_with_context(analyzer, value, state, false);
         }
+        HirExpr::Await { value, .. } => {
+            check_expr_semantics_with_context(analyzer, value, state, false);
+        }
         HirExpr::Effect {
             effect,
             value,
@@ -403,6 +406,7 @@ fn expr_is_fresh_shell(expr: &HirExpr) -> bool {
         | HirExpr::Index { .. }
         | HirExpr::Manage { .. }
         | HirExpr::Spawn { .. }
+        | HirExpr::Await { .. }
         | HirExpr::Closure { .. }
         | HirExpr::Unknown(_) => false,
     }
@@ -474,7 +478,8 @@ fn weak_field_access_requiring_upgrade(expr: &HirExpr) -> Option<&crate::hir::Hi
         HirExpr::Effect { value, .. }
         | HirExpr::Try { value, .. }
         | HirExpr::Manage { value, .. }
-        | HirExpr::Spawn { value, .. } => weak_field_access_requiring_upgrade(value),
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. } => weak_field_access_requiring_upgrade(value),
         HirExpr::Index { base, index, .. } => weak_field_access_requiring_upgrade(base)
             .or_else(|| weak_field_access_requiring_upgrade(index)),
         HirExpr::Binary { left, right, .. } => weak_field_access_requiring_upgrade(left)
@@ -704,6 +709,7 @@ fn constructor_arg_place_path(expr: &HirExpr) -> Option<PlacePath> {
         HirExpr::Ident { .. } | HirExpr::Field { .. } | HirExpr::Index { .. } => place_path(expr),
         HirExpr::Manage { .. }
         | HirExpr::Spawn { .. }
+        | HirExpr::Await { .. }
         | HirExpr::Call { .. }
         | HirExpr::Binary { .. }
         | HirExpr::Closure { .. }
@@ -817,7 +823,9 @@ fn collect_spawn_capture_idents(expr: &HirExpr, captures: &mut Vec<(String, Span
             collect_spawn_capture_idents(left, captures);
             collect_spawn_capture_idents(right, captures);
         }
-        HirExpr::Spawn { value, .. } => collect_spawn_capture_idents(value, captures),
+        HirExpr::Spawn { value, .. } | HirExpr::Await { value, .. } => {
+            collect_spawn_capture_idents(value, captures);
+        }
         HirExpr::Closure { body, .. } => {
             for statement in &body.statements {
                 collect_spawn_capture_idents_from_stmt(statement, captures);
@@ -929,6 +937,7 @@ fn expr_moves_path(expr: &HirExpr) -> bool {
         | HirExpr::Manage { .. } => true,
         HirExpr::Effect { value, .. }
         | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
         | HirExpr::Try { value, .. } => expr_moves_path(value),
         HirExpr::Field { base, .. } => expr_moves_path(base),
         HirExpr::Index { base, index, .. } => expr_moves_path(base) || expr_moves_path(index),
@@ -975,6 +984,7 @@ fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
         | HirExpr::Effect { type_name, .. }
         | HirExpr::Manage { type_name, .. }
         | HirExpr::Spawn { type_name, .. }
+        | HirExpr::Await { type_name, .. }
         | HirExpr::Try { type_name, .. } => type_name.as_deref(),
         HirExpr::Field { access, .. } => access.type_name.as_deref(),
         HirExpr::Binary { .. } | HirExpr::Index { .. } => None,
@@ -997,6 +1007,7 @@ fn hir_expr_span(expr: &HirExpr) -> &Span {
         | HirExpr::Effect { span, .. }
         | HirExpr::Manage { span, .. }
         | HirExpr::Spawn { span, .. }
+        | HirExpr::Await { span, .. }
         | HirExpr::Try { span, .. }
         | HirExpr::Closure { span, .. }
         | HirExpr::Unknown(span) => span,
@@ -1030,7 +1041,9 @@ fn place_path(expr: &HirExpr) -> Option<PlacePath> {
             path.has_index = true;
             Some(path)
         }
-        HirExpr::Manage { value, .. } | HirExpr::Spawn { value, .. } => place_path(value),
+        HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. } => place_path(value),
         _ => None,
     }
 }
@@ -1308,7 +1321,9 @@ fn apply_expr_effects(expr: &HirExpr, state: &mut BodyState) {
             state.apply_move_events(events);
             apply_expr_effects(value, state);
         }
-        HirExpr::Spawn { value, .. } => apply_expr_effects(value, state),
+        HirExpr::Spawn { value, .. } | HirExpr::Await { value, .. } => {
+            apply_expr_effects(value, state)
+        }
         HirExpr::Try { value, .. } => apply_expr_effects(value, state),
         HirExpr::Binary { left, right, .. } => {
             apply_expr_effects(left, state);
@@ -1587,6 +1602,7 @@ fn check_resource_pool_lease_expr(
         HirExpr::Effect { value, .. }
         | HirExpr::Manage { value, .. }
         | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
         | HirExpr::Try { value, .. } => {
             check_resource_pool_lease_expr(analyzer, value, within_with_resource);
         }
@@ -1644,6 +1660,7 @@ fn check_resource_producer_expr(
         HirExpr::Effect { value, .. }
         | HirExpr::Manage { value, .. }
         | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
         | HirExpr::Try { value, .. } => {
             check_resource_producer_expr(analyzer, value, allowed_resource_context);
         }

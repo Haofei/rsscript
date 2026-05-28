@@ -940,6 +940,14 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
         });
     }
 
+    if tokens[start].is_ident_text("await") {
+        let value = parse_expr(tokens, start + 1, end)?;
+        return Some(Expr::Await {
+            value: Box::new(value),
+            span: tokens[start].span.clone(),
+        });
+    }
+
     if let Some(call) = parse_call_expr(tokens, start, end) {
         return Some(call);
     }

@@ -468,6 +468,9 @@ fn review_map_region_draft(
     if facts.has_spawn {
         reasons.push("spawn task boundary".to_string());
     }
+    if facts.has_await {
+        reasons.push("await suspension boundary".to_string());
+    }
     if !facts.spawn_captures.is_empty() {
         let captures = facts
             .spawn_captures
@@ -546,6 +549,7 @@ struct ReviewMapFacts {
     has_local: bool,
     has_manage: bool,
     has_spawn: bool,
+    has_await: bool,
     has_with: bool,
     has_mut: bool,
     has_take: bool,
@@ -748,6 +752,10 @@ fn collect_review_map_facts_expr(
             collect_spawn_capture_names(value, &mut facts.spawn_captures);
             collect_review_map_facts_expr(value, hir, callback_params, facts);
         }
+        Expr::Await { value, .. } => {
+            facts.has_await = true;
+            collect_review_map_facts_expr(value, hir, callback_params, facts);
+        }
         Expr::Try { value, .. } => {
             facts.has_error_boundary = true;
             collect_review_map_facts_expr(value, hir, callback_params, facts);
@@ -810,6 +818,7 @@ fn collect_spawn_capture_names(expr: &Expr, captures: &mut BTreeSet<String>) {
             collect_spawn_capture_names(right, captures);
         }
         Expr::Spawn { value, .. } => collect_spawn_capture_names(value, captures),
+        Expr::Await { value, .. } => collect_spawn_capture_names(value, captures),
         Expr::Closure { body, .. } => {
             for statement in &body.statements {
                 collect_spawn_capture_names_from_stmt(statement, captures);
@@ -878,6 +887,7 @@ fn spawn_capture_path(expr: &Expr) -> Option<String> {
         Expr::Effect { value, .. } | Expr::Try { value, .. } => spawn_capture_path(value),
         Expr::Manage { .. }
         | Expr::Spawn { .. }
+        | Expr::Await { .. }
         | Expr::Index { .. }
         | Expr::Call { .. }
         | Expr::Binary { .. }
@@ -983,6 +993,7 @@ fn collect_review_map_hir_facts_expr(
         HirExpr::Effect { value, .. }
         | HirExpr::Manage { value, .. }
         | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
         | HirExpr::Try { value, .. } => {
             collect_review_map_hir_facts_expr(value, local_bindings, facts);
         }
@@ -1025,6 +1036,7 @@ fn hir_place_path_root(expr: &HirExpr) -> Option<&str> {
         HirExpr::Effect { value, .. }
         | HirExpr::Manage { value, .. }
         | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
         | HirExpr::Try { value, .. } => hir_place_path_root(value),
         HirExpr::Binary { .. }
         | HirExpr::Call { .. }
@@ -1042,7 +1054,8 @@ fn hir_place_path_crosses_handle_field(expr: &HirExpr) -> bool {
         }
         HirExpr::Index { base, .. }
         | HirExpr::Manage { value: base, .. }
-        | HirExpr::Spawn { value: base, .. } => hir_place_path_crosses_handle_field(base),
+        | HirExpr::Spawn { value: base, .. }
+        | HirExpr::Await { value: base, .. } => hir_place_path_crosses_handle_field(base),
         HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => {
             hir_place_path_crosses_handle_field(value)
         }
@@ -1778,7 +1791,10 @@ fn collect_boundary_expr(expr: &Expr, path: &str, boundary: &mut BoundarySig) {
             );
             collect_boundary_expr(value, &format!("{path}.take"), boundary);
         }
-        Expr::Effect { value, .. } | Expr::Spawn { value, .. } | Expr::Try { value, .. } => {
+        Expr::Effect { value, .. }
+        | Expr::Spawn { value, .. }
+        | Expr::Await { value, .. }
+        | Expr::Try { value, .. } => {
             collect_boundary_expr(value, path, boundary);
         }
         Expr::Manage { value, .. } => {
@@ -1834,6 +1850,7 @@ fn boundary_expr_subject(expr: &Expr) -> Option<String> {
         Expr::Effect { value, .. }
         | Expr::Manage { value, .. }
         | Expr::Spawn { value, .. }
+        | Expr::Await { value, .. }
         | Expr::Try { value, .. } => boundary_expr_subject(value),
         Expr::Field { name, .. } => Some(format!(".{name}")),
         Expr::Index { .. } => None,
