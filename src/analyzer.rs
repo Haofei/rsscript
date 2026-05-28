@@ -1,6 +1,6 @@
 use crate::checks;
-use crate::diagnostic::{Diagnostic, code};
-use crate::hir::{DuplicateSymbolKind, FunctionSig, Hir, HirTypeKind};
+use crate::diagnostic::{Diagnostic, Span, code};
+use crate::hir::{CallResolution, DuplicateSymbolKind, FunctionSig, Hir, HirTypeKind};
 use crate::lexer::{Token, lex};
 use crate::syntax::ast::{Callee, EffectDecl, Item};
 use crate::syntax::parse_source;
@@ -175,6 +175,13 @@ impl Analyzer<'_> {
                 self.hir.resolve_function(Some(namespace), name)
             }
         }
+    }
+
+    pub(crate) fn resolve_call_site(&self, callee: &Callee, span: &Span) -> CallResolution {
+        self.hir
+            .call_resolution(span)
+            .cloned()
+            .unwrap_or_else(|| self.hir.resolve_call(callee))
     }
 }
 

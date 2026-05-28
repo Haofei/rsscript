@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, Span, code};
+use crate::hir::CallResolution;
 use crate::syntax::ast::{Block, CallArg, Callee, DataEffect, Expr, Item, LetKind, Stmt};
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
@@ -78,7 +79,8 @@ fn check_call_args(
     locals: &HashSet<String>,
 ) {
     let call_name = callee_name(callee);
-    if is_enum_variant_call(&call_name) {
+    let resolution = analyzer.resolve_call_site(callee, call_span);
+    if matches!(resolution, CallResolution::EnumVariant) {
         return;
     }
 
@@ -101,8 +103,9 @@ fn check_call_args(
         }
     }
 
-    let Some(signature) = analyzer.resolve_callee(callee) else {
-        if !is_allowed_unresolved_callee(analyzer, callee) {
+    let signature = match resolution {
+        CallResolution::Resolved { signature, .. } => signature,
+        CallResolution::Unknown => {
             analyzer.diagnostics.push(
                 Diagnostic::error(
                     code::UNKNOWN_CALLEE,
@@ -119,8 +122,9 @@ fn check_call_args(
                     "manual",
                 ),
             );
+            return;
         }
-        return;
+        CallResolution::EnumVariant => return,
     };
     let signature_params = signature.params.clone();
     let param_effects: HashMap<String, &'static str> = signature
@@ -267,17 +271,6 @@ fn check_call_args(
                 ),
             );
         }
-    }
-}
-
-fn is_enum_variant_call(name: &str) -> bool {
-    matches!(name, "Ok" | "Err" | "Some" | "None" | "Result" | "Option")
-}
-
-fn is_allowed_unresolved_callee(analyzer: &Analyzer<'_>, callee: &Callee) -> bool {
-    match callee {
-        Callee::Name(name) => is_enum_variant_call(name) || analyzer.hir.type_info(name).is_some(),
-        Callee::Qualified { .. } => false,
     }
 }
 

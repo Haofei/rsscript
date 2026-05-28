@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::diagnostic::Span;
 use crate::syntax::ast::{
-    DataEffect, EffectDecl, FieldDecl, FunctionDecl, Item, Param, Program as SyntaxProgram,
-    TypeDecl, TypeKind,
+    Block, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl, Item, Param,
+    Program as SyntaxProgram, Stmt, TypeDecl, TypeKind,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,12 +78,39 @@ pub struct DuplicateSymbol {
     pub duplicate_span: Span,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolvedCalleeKind {
+    UserFunction,
+    BuiltinFunction,
+    Constructor { type_kind: HirTypeKind },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CallResolution {
+    Resolved {
+        signature: FunctionSig,
+        kind: ResolvedCalleeKind,
+    },
+    EnumVariant,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirCallSite {
+    pub function_name: String,
+    pub callee: Callee,
+    pub span: Span,
+    pub resolution: CallResolution,
+}
+
 #[derive(Debug, Default)]
 pub struct Hir {
     signatures: HashMap<String, FunctionSig>,
     types: HashMap<String, TypeInfo>,
     fields_by_name: HashMap<String, Vec<FieldInfo>>,
     duplicate_symbols: Vec<DuplicateSymbol>,
+    call_sites: Vec<HirCallSite>,
+    call_resolutions_by_span: HashMap<Span, CallResolution>,
 }
 
 impl Hir {
@@ -124,6 +151,7 @@ impl Hir {
                 }
             }
         }
+        hir.collect_call_sites(program);
         hir
     }
 
@@ -159,6 +187,37 @@ impl Hir {
         &self.duplicate_symbols
     }
 
+    pub fn call_resolution(&self, span: &Span) -> Option<&CallResolution> {
+        self.call_resolutions_by_span.get(span)
+    }
+
+    pub fn resolve_call(&self, callee: &Callee) -> CallResolution {
+        let call_name = callee_name(callee);
+        if is_enum_variant_call(call_name) {
+            return CallResolution::EnumVariant;
+        }
+
+        let signature = match callee {
+            Callee::Name(name) => self.resolve_function(None, name),
+            Callee::Qualified { namespace, name } => self.resolve_function(Some(namespace), name),
+        };
+        let Some(signature) = signature else {
+            return CallResolution::Unknown;
+        };
+        let kind = match callee {
+            Callee::Name(name) => self.type_kind(name).map_or_else(
+                || function_kind(signature),
+                |type_kind| ResolvedCalleeKind::Constructor { type_kind },
+            ),
+            Callee::Qualified { .. } => function_kind(signature),
+        };
+
+        CallResolution::Resolved {
+            signature: signature.clone(),
+            kind,
+        }
+    }
+
     fn insert_function(&mut self, signature: FunctionSig) {
         let key = match &signature.namespace {
             Some(namespace) => qualified_key(namespace, &signature.name),
@@ -183,6 +242,117 @@ impl Hir {
         for signature in builtin_signatures() {
             self.insert_function(signature);
         }
+    }
+
+    fn collect_call_sites(&mut self, program: &SyntaxProgram) {
+        let mut sites = Vec::new();
+        for item in &program.items {
+            let Item::Function(function) = item else {
+                continue;
+            };
+            collect_call_sites_in_block(self, &function.name, &function.body, &mut sites);
+        }
+
+        self.call_resolutions_by_span = sites
+            .iter()
+            .map(|site| (site.span.clone(), site.resolution.clone()))
+            .collect();
+        self.call_sites = sites;
+    }
+}
+
+fn collect_call_sites_in_block(
+    hir: &Hir,
+    function_name: &str,
+    block: &Block,
+    sites: &mut Vec<HirCallSite>,
+) {
+    for statement in &block.statements {
+        collect_call_sites_in_stmt(hir, function_name, statement, sites);
+    }
+}
+
+fn collect_call_sites_in_stmt(
+    hir: &Hir,
+    function_name: &str,
+    statement: &Stmt,
+    sites: &mut Vec<HirCallSite>,
+) {
+    match statement {
+        Stmt::Let(stmt) => {
+            if let Some(value) = &stmt.value {
+                collect_call_sites_in_expr(hir, function_name, value, sites);
+            }
+        }
+        Stmt::Return(stmt) => {
+            if let Some(value) = &stmt.value {
+                collect_call_sites_in_expr(hir, function_name, value, sites);
+            }
+        }
+        Stmt::With(stmt) => {
+            collect_call_sites_in_expr(hir, function_name, &stmt.resource, sites);
+            collect_call_sites_in_block(hir, function_name, &stmt.body, sites);
+        }
+        Stmt::If(stmt) => {
+            collect_call_sites_in_expr(hir, function_name, &stmt.condition, sites);
+            collect_call_sites_in_block(hir, function_name, &stmt.then_body, sites);
+            if let Some(else_body) = &stmt.else_body {
+                collect_call_sites_in_block(hir, function_name, else_body, sites);
+            }
+        }
+        Stmt::Loop(stmt) => {
+            if let Some(condition) = &stmt.condition {
+                collect_call_sites_in_expr(hir, function_name, condition, sites);
+            }
+            collect_call_sites_in_block(hir, function_name, &stmt.body, sites);
+        }
+        Stmt::Expr(expr) => collect_call_sites_in_expr(hir, function_name, expr, sites),
+        Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
+    }
+}
+
+fn collect_call_sites_in_expr(
+    hir: &Hir,
+    function_name: &str,
+    expr: &Expr,
+    sites: &mut Vec<HirCallSite>,
+) {
+    match expr {
+        Expr::Call { callee, args, span } => {
+            sites.push(HirCallSite {
+                function_name: function_name.to_string(),
+                callee: callee.clone(),
+                span: span.clone(),
+                resolution: hir.resolve_call(callee),
+            });
+            for arg in args {
+                collect_call_sites_in_expr(hir, function_name, &arg.value, sites);
+            }
+        }
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
+            collect_call_sites_in_expr(hir, function_name, value, sites);
+        }
+        Expr::Field { base, .. } => collect_call_sites_in_expr(hir, function_name, base, sites),
+        Expr::Closure { body, .. } => collect_call_sites_in_block(hir, function_name, body, sites),
+        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+    }
+}
+
+fn function_kind(signature: &FunctionSig) -> ResolvedCalleeKind {
+    if signature.is_builtin {
+        ResolvedCalleeKind::BuiltinFunction
+    } else {
+        ResolvedCalleeKind::UserFunction
+    }
+}
+
+fn is_enum_variant_call(name: &str) -> bool {
+    matches!(name, "Ok" | "Err" | "Some" | "None" | "Result" | "Option")
+}
+
+fn callee_name(callee: &Callee) -> &str {
+    match callee {
+        Callee::Name(name) | Callee::Qualified { name, .. } => name,
     }
 }
 
@@ -825,5 +995,46 @@ struct Response {
         assert_eq!(duplicate.name, "Response.status");
         assert_eq!(duplicate.first_span.line, 5);
         assert_eq!(duplicate.duplicate_span.line, 6);
+    }
+
+    #[test]
+    fn resolves_body_call_sites() {
+        let source = r#"
+mode: managed
+
+struct Response {
+    status: Int
+    body: String
+}
+
+fn render(body: read String) -> Result<fresh Response, HttpError> {
+    Log.write(message: read body)
+    Missing.call(value: read body)
+    return Response(status: 200, body: read body)
+}
+"#;
+
+        let program = parse_source("test.rss", source);
+        let hir = Hir::from_syntax(&program);
+        let sites = &hir.call_sites;
+
+        assert_eq!(sites.len(), 3);
+        assert!(matches!(
+            sites[0].resolution,
+            CallResolution::Resolved {
+                kind: ResolvedCalleeKind::BuiltinFunction,
+                ..
+            }
+        ));
+        assert!(matches!(sites[1].resolution, CallResolution::Unknown));
+        assert!(matches!(
+            sites[2].resolution,
+            CallResolution::Resolved {
+                kind: ResolvedCalleeKind::Constructor {
+                    type_kind: HirTypeKind::Struct
+                },
+                ..
+            }
+        ));
     }
 }
