@@ -1,0 +1,6 @@
+// expect: RS0308
+features: local
+
+fn bad(buffer: read Buffer) -> Unit {
+    Buffer.consume(buffer: take buffer)
+}

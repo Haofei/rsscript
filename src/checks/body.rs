@@ -245,7 +245,18 @@ fn check_expr_semantics(analyzer: &mut Analyzer<'_>, expr: &HirExpr, state: &Bod
                 check_expr_semantics(analyzer, &arg.value, state);
             }
         }
-        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => {
+        HirExpr::Effect {
+            effect,
+            value,
+            span,
+            ..
+        } => {
+            if *effect == ParamEffect::Take {
+                check_take_operand_is_local(analyzer, value, span, state);
+            }
+            check_expr_semantics(analyzer, value, state);
+        }
+        HirExpr::Try { value, .. } => {
             if let HirExpr::Try { span, .. } = expr {
                 check_try_value_is_result(analyzer, value, span);
             }
@@ -671,6 +682,32 @@ fn check_manage_operand_is_local(
         invalid_manage_operand_diagnostic(
             analyzer,
             format!("`{name}` is not a local binding and cannot be moved with `manage`."),
+            span.clone(),
+        );
+    }
+}
+
+fn check_take_operand_is_local(
+    analyzer: &mut Analyzer<'_>,
+    value: &HirExpr,
+    span: &Span,
+    state: &BodyState,
+) {
+    let Some(path) = place_path(value) else {
+        invalid_take_operand_diagnostic(
+            analyzer,
+            "`take` can only consume a named local binding or a local field path.",
+            span.clone(),
+        );
+        return;
+    };
+    if !state.is_local(&path.base) {
+        invalid_take_operand_diagnostic(
+            analyzer,
+            format!(
+                "`{}` is not a local binding and cannot be consumed with `take`.",
+                path.base
+            ),
             span.clone(),
         );
     }
@@ -1169,6 +1206,27 @@ fn invalid_manage_operand_diagnostic(
         .with_fix(
             "remove_manage_or_create_local",
             "Remove `manage`, or create the value as `local` at its origin.",
+            "manual",
+        ),
+    );
+}
+
+fn invalid_take_operand_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    cause: impl Into<String>,
+    span: crate::diagnostic::Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::INVALID_TAKE_OPERAND,
+            "`take` requires a local value.",
+            span,
+            "not a local value",
+        )
+        .with_cause(cause)
+        .with_fix(
+            "use_local_or_read",
+            "Pass a local value with `take`, or use `read`/`mut` for managed values.",
             "manual",
         ),
     );

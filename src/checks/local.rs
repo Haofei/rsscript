@@ -1762,6 +1762,9 @@ impl BodyState {
             if let Some(type_name) = &binding.type_name {
                 self.record_type(binding.name.clone(), type_name.clone());
             }
+            if matches!(binding.effect, Some(ParamEffect::Mut | ParamEffect::Take)) {
+                self.bind_local(binding.name.clone());
+            }
         }
     }
 
@@ -2051,6 +2054,7 @@ mod tests {
                 function_name: "run".to_string(),
                 name: "pool".to_string(),
                 kind: HirBindingKind::Param,
+                effect: Some(ParamEffect::Mut),
                 span: span(1),
                 type_name: Some("ResourcePool<File>".to_string()),
             }],

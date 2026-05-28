@@ -135,6 +135,7 @@ pub struct HirBinding {
     pub function_name: String,
     pub name: String,
     pub kind: HirBindingKind,
+    pub effect: Option<ParamEffect>,
     pub span: Span,
     pub type_name: Option<String>,
 }
@@ -607,6 +608,7 @@ fn collect_function_body_facts(hir: &Hir, function: &FunctionDecl, facts: &mut B
             function_name: function.name.clone(),
             name: param.name.clone(),
             kind: HirBindingKind::Param,
+            effect: param.effect.map(param_effect_from_data_effect),
             span: param.span.clone(),
             type_name: Some(param_type),
         });
@@ -978,6 +980,7 @@ fn collect_body_facts_in_stmt(
                 function_name: function_name.to_string(),
                 name: stmt.name.clone(),
                 kind: hir_binding_kind(stmt.kind),
+                effect: None,
                 span: stmt.span.clone(),
                 type_name: type_name.clone(),
             });

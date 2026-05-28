@@ -35,6 +35,7 @@ pub mod code {
     pub const MOVE_BASE_FIELD_CONFLICT: &str = "RS0305";
     pub const LOCAL_CLASS_BINDING: &str = "RS0306";
     pub const INVALID_MANAGE_OPERAND: &str = "RS0307";
+    pub const INVALID_TAKE_OPERAND: &str = "RS0308";
     pub const USE_AFTER_MANAGE: &str = "RS0401";
     pub const LOCAL_VALUE_RETAINED: &str = "RS0501";
     pub const FRESH_RETURN_NOT_CLEAN: &str = "RS0601";
@@ -396,6 +397,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::INVALID_MANAGE_OPERAND,
         title: "invalid manage operand",
         explanation: "`manage value` moves a local exclusive binding into the managed runtime. The operand must be a local binding that has not already become managed.",
+    },
+    DiagnosticExplanation {
+        code: code::INVALID_TAKE_OPERAND,
+        title: "invalid take operand",
+        explanation: "`take value` consumes a local value. Managed values cannot be passed to taking parameters because they may have aliases.",
     },
     DiagnosticExplanation {
         code: code::USE_AFTER_MANAGE,
