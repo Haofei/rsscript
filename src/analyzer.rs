@@ -1,6 +1,6 @@
 use crate::checks;
 use crate::diagnostic::{Diagnostic, Span, code};
-use crate::hir::{CallResolution, DuplicateSymbolKind, FunctionSig, Hir, HirTypeKind};
+use crate::hir::{CallResolution, DuplicateSymbolKind, Hir, HirTypeKind};
 use crate::lexer::{Token, lex};
 use crate::syntax::ast::{Callee, EffectDecl, Item};
 use crate::syntax::parse_source;
@@ -164,15 +164,6 @@ impl Analyzer<'_> {
                         .with_fix("use_with", "Use `with` or `ResourcePool<T: Resource>` instead.", "manual"),
                     );
                 }
-            }
-        }
-    }
-
-    pub(crate) fn resolve_callee(&self, callee: &Callee) -> Option<&FunctionSig> {
-        match callee {
-            Callee::Name(name) => self.hir.resolve_function(None, name),
-            Callee::Qualified { namespace, name } => {
-                self.hir.resolve_function(Some(namespace), name)
             }
         }
     }

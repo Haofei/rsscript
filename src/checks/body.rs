@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, code};
+use crate::hir::{CallResolution, HirTypeKind, ResolvedCalleeKind};
 use crate::syntax::ast::{
     Block, CallArg, Callee, DataEffect, Expr, FunctionDecl, Item, LetKind, Stmt,
 };
@@ -342,8 +343,10 @@ fn apply_expr_effects(analyzer: &mut Analyzer<'_>, expr: &Expr, state: &mut Body
             apply_expr_effects(analyzer, value, state);
         }
         Expr::Effect { value, .. } => apply_expr_effects(analyzer, value, state),
-        Expr::Call { callee, args, .. } => {
-            apply_retention_effects(analyzer, callee, args, state);
+        Expr::Call {
+            callee, args, span, ..
+        } => {
+            apply_retention_effects(analyzer, callee, span, args, state);
             for arg in args {
                 apply_expr_effects(analyzer, &arg.value, state);
             }
@@ -360,13 +363,15 @@ fn apply_expr_effects(analyzer: &mut Analyzer<'_>, expr: &Expr, state: &mut Body
 fn apply_retention_effects(
     analyzer: &Analyzer<'_>,
     callee: &Callee,
+    span: &crate::diagnostic::Span,
     args: &[CallArg],
     state: &mut BodyState,
 ) {
-    let Some(signature) = analyzer.resolve_callee(callee) else {
-        return;
+    let retained_params = match analyzer.resolve_call_site(callee, span) {
+        CallResolution::Resolved { signature, .. } => signature.retained_params,
+        CallResolution::EnumVariant | CallResolution::Unknown => return,
     };
-    if signature.retained_params.is_empty() {
+    if retained_params.is_empty() {
         return;
     }
 
@@ -374,7 +379,7 @@ fn apply_retention_effects(
         let Some(name) = &arg.name else {
             continue;
         };
-        if !signature.retained_params.contains(name) {
+        if !retained_params.contains(name) {
             continue;
         }
         if let Expr::Effect {
@@ -577,8 +582,10 @@ fn check_resource_escape_expr(analyzer: &mut Analyzer<'_>, binding: &str, expr: 
             check_resource_escape_expr(analyzer, binding, value);
         }
         Expr::Effect { value, .. } => check_resource_escape_expr(analyzer, binding, value),
-        Expr::Call { callee, args, .. } => {
-            check_resource_retained_by_call(analyzer, binding, callee, args);
+        Expr::Call {
+            callee, args, span, ..
+        } => {
+            check_resource_retained_by_call(analyzer, binding, callee, span, args);
             for arg in args {
                 check_resource_escape_expr(analyzer, binding, &arg.value);
             }
@@ -593,15 +600,16 @@ fn check_resource_retained_by_call(
     analyzer: &mut Analyzer<'_>,
     binding: &str,
     callee: &Callee,
+    span: &crate::diagnostic::Span,
     args: &[CallArg],
 ) {
-    let Some(signature) = analyzer.resolve_callee(callee) else {
-        return;
+    let retained_params = match analyzer.resolve_call_site(callee, span) {
+        CallResolution::Resolved { signature, .. } => signature.retained_params,
+        CallResolution::EnumVariant | CallResolution::Unknown => return,
     };
-    if signature.retained_params.is_empty() {
+    if retained_params.is_empty() {
         return;
     }
-    let retained_params = signature.retained_params.clone();
 
     for arg in args {
         let Some(name) = &arg.name else {
@@ -702,13 +710,20 @@ fn check_fresh_return(
             );
         }
         Expr::Call { callee, span, .. } => {
-            let constructor_is_struct = match callee {
-                Callee::Name(name) => is_struct_type(analyzer, name),
-                Callee::Qualified { .. } => false,
+            let resolution = analyzer.resolve_call_site(callee, span);
+            let constructor_is_struct = matches!(
+                resolution,
+                CallResolution::Resolved {
+                    kind: ResolvedCalleeKind::Constructor {
+                        type_kind: HirTypeKind::Struct
+                    },
+                    ..
+                }
+            );
+            let call_returns_fresh = match resolution {
+                CallResolution::Resolved { signature, .. } => signature.returns_fresh,
+                CallResolution::EnumVariant | CallResolution::Unknown => false,
             };
-            let call_returns_fresh = analyzer
-                .resolve_callee(callee)
-                .is_some_and(|signature| signature.returns_fresh);
             if !constructor_is_struct && !call_returns_fresh {
                 analyzer.diagnostics.push(
                     Diagnostic::warning(
@@ -781,7 +796,7 @@ fn infer_expr_type(analyzer: &Analyzer<'_>, expr: &Expr, state: &BodyState) -> O
         Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
             infer_expr_type(analyzer, value, state)
         }
-        Expr::Call { callee, .. } => infer_call_type(analyzer, callee),
+        Expr::Call { callee, span, .. } => infer_call_type(analyzer, callee, span),
         Expr::Field { base, name, .. } => {
             let base_type = infer_expr_type(analyzer, base, state)?;
             let field = analyzer.hir.type_info(&base_type)?.fields.get(name)?;
@@ -791,19 +806,14 @@ fn infer_expr_type(analyzer: &Analyzer<'_>, expr: &Expr, state: &BodyState) -> O
     }
 }
 
-fn infer_call_type(analyzer: &Analyzer<'_>, callee: &Callee) -> Option<String> {
-    if let Some(signature) = analyzer.resolve_callee(callee)
-        && let Some(return_type) = &signature.return_type
-    {
-        return Some(return_type.clone());
-    }
-
-    match callee {
-        Callee::Name(name) if analyzer.hir.type_info(name).is_some() => Some(name.clone()),
-        Callee::Qualified { namespace, name } if name == "new" => {
-            analyzer.hir.type_info(namespace).map(|_| namespace.clone())
-        }
-        Callee::Name(_) | Callee::Qualified { .. } => None,
+fn infer_call_type(
+    analyzer: &Analyzer<'_>,
+    callee: &Callee,
+    span: &crate::diagnostic::Span,
+) -> Option<String> {
+    match analyzer.resolve_call_site(callee, span) {
+        CallResolution::Resolved { signature, .. } => signature.return_type,
+        CallResolution::EnumVariant | CallResolution::Unknown => None,
     }
 }
 
