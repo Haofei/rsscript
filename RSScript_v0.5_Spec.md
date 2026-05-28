@@ -559,6 +559,17 @@ RSScript managed semantics allow shared object graphs.
 Rust ownership semantics do not directly model that surface language.
 ```
 
+The v0.5 runtime target is intentionally simple: managed handles may be
+implemented as reference-counted, lock-mediated Rust values such as
+`Arc<RwLock<T>>`. This allows managed handles to be shared across Rust threads
+when the lowered Rust types satisfy Rust's ordinary thread-safety rules.
+RSScript v0.5 does not require a custom global tracing heap, moving collector,
+or actor runtime to make that work.
+
+Reference-counting means strong cycles are representable but not automatically
+collected. Cyclic identity graphs should use `weak` fields at ownership
+back-edges so the cycle is review-visible.
+
 Therefore, generated Rust will usually represent managed values through runtime handles rather than direct Rust references.
 
 ---
@@ -3035,7 +3046,7 @@ surface & / &mut
 general user-defined FFI
 GPU kernel language
 agent runtime as language core
-thread-shared managed heap
+custom thread-shared tracing heap
 moving GC
 managed -> local demotion
 operator-overloaded numeric DSLs
