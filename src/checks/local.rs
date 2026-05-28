@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::diagnostic::Span;
+use crate::hir::{HirBinding, HirBindingKind, HirEffectEvent, HirEffectEventKind};
 
 use super::body::Flow;
 
@@ -14,6 +15,17 @@ pub(crate) struct BodyState {
 }
 
 impl BodyState {
+    pub(crate) fn seed_params(&mut self, bindings: &[HirBinding]) {
+        for binding in bindings {
+            if binding.kind != HirBindingKind::Param {
+                continue;
+            }
+            if let Some(type_name) = &binding.type_name {
+                self.record_type(binding.name.clone(), type_name.clone());
+            }
+        }
+    }
+
     pub(crate) fn bind_managed(&mut self, name: impl Into<String>) {
         self.managed.insert(name.into());
     }
@@ -35,6 +47,31 @@ impl BodyState {
 
     pub(crate) fn mark_retained(&mut self, name: &str) {
         self.clean_locals.remove(name);
+    }
+
+    pub(crate) fn apply_move_events(&mut self, events: &[HirEffectEvent]) {
+        for event in events {
+            if !matches!(
+                event.kind,
+                HirEffectEventKind::Manage | HirEffectEventKind::Take
+            ) {
+                continue;
+            }
+            if self.locals.contains(&event.binding_name) {
+                self.mark_moved(&event.binding_name, event.span.clone());
+            }
+        }
+    }
+
+    pub(crate) fn apply_retention_events(&mut self, events: &[HirEffectEvent]) {
+        for event in events {
+            if !matches!(event.kind, HirEffectEventKind::Retain { .. }) {
+                continue;
+            }
+            if self.locals.contains(&event.binding_name) {
+                self.mark_retained(&event.binding_name);
+            }
+        }
     }
 }
 
@@ -156,5 +193,48 @@ fn merge_fallthrough_states(base: &BodyState, left: &BodyState, right: &BodyStat
             .filter(|name| base.locals.contains(*name))
             .cloned()
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn span(line: usize) -> Span {
+        Span {
+            file: "test.rss".to_string(),
+            line,
+            column: 1,
+            length: 1,
+        }
+    }
+
+    #[test]
+    fn applies_move_and_retain_events_to_clean_local_state() {
+        let mut state = BodyState::default();
+        state.bind_local("image");
+        state.bind_local("cached");
+
+        state.apply_retention_events(&[HirEffectEvent {
+            function_name: "run".to_string(),
+            kind: HirEffectEventKind::Retain {
+                callee: "Cache.store".to_string(),
+                param: "value".to_string(),
+            },
+            binding_name: "cached".to_string(),
+            span: span(10),
+            value_span: span(10),
+        }]);
+        state.apply_move_events(&[HirEffectEvent {
+            function_name: "run".to_string(),
+            kind: HirEffectEventKind::Manage,
+            binding_name: "image".to_string(),
+            span: span(11),
+            value_span: span(11),
+        }]);
+
+        assert!(!state.clean_locals.contains("cached"));
+        assert!(!state.clean_locals.contains("image"));
+        assert_eq!(state.moved["image"].line, 11);
     }
 }

@@ -1,8 +1,7 @@
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, code};
 use crate::hir::{
-    CallResolution, HirBindingKind, HirEffectEventKind, HirReturnProof, HirTypeKind,
-    ResolvedCalleeKind,
+    CallResolution, HirEffectEventKind, HirReturnProof, HirTypeKind, ResolvedCalleeKind,
 };
 use crate::syntax::ast::{Block, Callee, DataEffect, Expr, FunctionDecl, Item, LetKind, Stmt};
 
@@ -30,14 +29,7 @@ fn seed_function_bindings(analyzer: &Analyzer<'_>, function: &FunctionDecl, stat
     let Some(body) = analyzer.hir.function_body(&function.name) else {
         return;
     };
-    for binding in &body.bindings {
-        if binding.kind != HirBindingKind::Param {
-            continue;
-        }
-        if let Some(type_name) = &binding.type_name {
-            state.record_type(binding.name.clone(), type_name.clone());
-        }
-    }
+    state.seed_params(&body.bindings);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -242,17 +234,7 @@ fn apply_move_events(
     span: &crate::diagnostic::Span,
     state: &mut BodyState,
 ) {
-    for event in analyzer.hir.effect_events(span) {
-        if !matches!(
-            event.kind,
-            HirEffectEventKind::Manage | HirEffectEventKind::Take
-        ) {
-            continue;
-        }
-        if state.locals.contains(&event.binding_name) {
-            state.mark_moved(&event.binding_name, event.span.clone());
-        }
-    }
+    state.apply_move_events(analyzer.hir.effect_events(span));
 }
 
 fn apply_retention_events(
@@ -260,15 +242,7 @@ fn apply_retention_events(
     span: &crate::diagnostic::Span,
     state: &mut BodyState,
 ) {
-    for event in analyzer.hir.effect_events(span) {
-        if !matches!(event.kind, HirEffectEventKind::Retain { .. }) {
-            continue;
-        }
-        if !state.locals.contains(&event.binding_name) {
-            continue;
-        }
-        state.mark_retained(&event.binding_name);
-    }
+    state.apply_retention_events(analyzer.hir.effect_events(span));
 }
 
 fn check_moved_uses_in_stmt(analyzer: &mut Analyzer<'_>, statement: &Stmt, state: &BodyState) {
