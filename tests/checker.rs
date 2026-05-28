@@ -3405,7 +3405,10 @@ fn delegated(value: read Int) -> Int {
     assert_eq!(map.summary.foldable.functions, 1);
     assert_eq!(map.summary.unknown.functions, 1);
     assert!(map.summary.total_lines >= 3);
-    assert!(format_review_map_human(&map).starts_with("summary: must-review 1 functions/"));
+    let human = format_review_map_human(&map);
+    assert!(human.starts_with("summary: must-review 1 functions/"));
+    assert!(human.contains("low-semantic-risk 1 functions/"));
+    assert!(human.contains("helper [low-semantic-risk]"));
     let json = format_review_map_json(&map);
     let value: Value = serde_json::from_str(&json).expect("review map JSON should parse");
     assert_eq!(value["summary"]["total_functions"], 3);

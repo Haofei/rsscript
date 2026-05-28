@@ -287,7 +287,7 @@ pub fn format_review_map_human(map: &ReviewMap) -> String {
 
     let mut output = String::new();
     output.push_str(&format!(
-        "summary: must-review {} functions/{} lines; safe-to-skip {} functions/{} lines; unknown {} functions/{} lines; total {} functions/{} lines\n",
+        "summary: must-review {} functions/{} lines; low-semantic-risk {} functions/{} lines; unknown {} functions/{} lines; total {} functions/{} lines\n",
         map.summary.review_required.functions,
         map.summary.review_required.lines,
         map.summary.foldable.functions,
@@ -1097,7 +1097,7 @@ fn review_map_line_count(
 fn review_map_classification_label(classification: ReviewMapClassification) -> &'static str {
     match classification {
         ReviewMapClassification::ReviewRequired => "must-review",
-        ReviewMapClassification::Foldable => "safe-to-skip",
+        ReviewMapClassification::Foldable => "low-semantic-risk",
         ReviewMapClassification::Unknown => "unknown",
     }
 }
