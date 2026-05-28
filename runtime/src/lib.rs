@@ -102,6 +102,8 @@ impl<T: fmt::Debug> fmt::Debug for GcWrite<'_, T> {
 pub enum RuntimeErrorKind {
     ManagedReadConflict,
     ManagedWriteConflict,
+    ResourcePoolBorrowConflict,
+    ResourcePoolEmpty,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,11 +176,29 @@ impl<T: Resource> ResourcePool<T> {
         self.values.borrow_mut().push(value);
     }
 
-    pub fn borrow(&self) -> ResourceLease<'_, T> {
-        ResourceLease {
-            values: self.values.borrow_mut(),
-            index: 0,
+    pub fn try_borrow(&self) -> Result<ResourceLease<'_, T>, RuntimeError> {
+        let values = self.values.try_borrow_mut().map_err(|_| RuntimeError {
+            kind: RuntimeErrorKind::ResourcePoolBorrowConflict,
+            message: "resource pool is already borrowed".to_string(),
+            span: None,
+        })?;
+        if values.is_empty() {
+            return Err(RuntimeError {
+                kind: RuntimeErrorKind::ResourcePoolEmpty,
+                message: "resource pool has no available resources".to_string(),
+                span: None,
+            });
         }
+        Ok(ResourceLease { values, index: 0 })
+    }
+
+    pub fn try_borrow_at(&self, span: SourceSpan) -> Result<ResourceLease<'_, T>, RuntimeError> {
+        self.try_borrow().map_err(|error| error.with_span(span))
+    }
+
+    pub fn borrow(&self) -> ResourceLease<'_, T> {
+        self.try_borrow()
+            .expect("RSScript resource pool conflict should be reported through diagnostics")
     }
 }
 
@@ -257,5 +277,24 @@ mod tests {
         let lease = pool.borrow();
 
         assert_eq!(lease.0, 7);
+    }
+
+    #[test]
+    fn resource_pool_reports_empty_pool() {
+        let pool = ResourcePool::<FileHandle>::empty();
+        let error = pool.try_borrow().expect_err("empty pool should error");
+
+        assert_eq!(error.kind, RuntimeErrorKind::ResourcePoolEmpty);
+    }
+
+    #[test]
+    fn resource_pool_reports_borrow_conflict() {
+        let pool = ResourcePool::new(vec![FileHandle(7)]);
+        let _lease = pool.try_borrow().expect("initial borrow should succeed");
+        let error = pool
+            .try_borrow()
+            .expect_err("second borrow should conflict");
+
+        assert_eq!(error.kind, RuntimeErrorKind::ResourcePoolBorrowConflict);
     }
 }
