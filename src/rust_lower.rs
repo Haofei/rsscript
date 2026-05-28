@@ -824,6 +824,7 @@ impl<'a> RustLowerer<'a> {
             "DbConnection" => "rsscript_runtime::DbConnection".to_string(),
             "DbError" => "rsscript_runtime::DbError".to_string(),
             "Image" => "rsscript_runtime::Image".to_string(),
+            "ImageCache" => "rsscript_runtime::ImageCache".to_string(),
             "ImageError" => "rsscript_runtime::ImageError".to_string(),
             "JsonValue" => "rsscript_runtime::JsonValue".to_string(),
             "JsonError" => "rsscript_runtime::JsonError".to_string(),
@@ -1228,6 +1229,15 @@ fn lower_callee(callee: &Callee) -> String {
         callee if is_image_sharpen_callee(callee) => "rsscript_runtime::image_sharpen".to_string(),
         callee if is_image_save_callee(callee) => "rsscript_runtime::image_save".to_string(),
         callee if is_image_inspect_callee(callee) => "rsscript_runtime::image_inspect".to_string(),
+        callee if is_image_cache_new_callee(callee) => {
+            "rsscript_runtime::image_cache_new".to_string()
+        }
+        callee if is_image_cache_store_callee(callee) => {
+            "rsscript_runtime::image_cache_store".to_string()
+        }
+        callee if is_image_cache_len_callee(callee) => {
+            "rsscript_runtime::image_cache_len".to_string()
+        }
         callee if is_json_parse_callee(callee) => "rsscript_runtime::json_parse".to_string(),
         callee if is_json_field_callee(callee) => "rsscript_runtime::json_field".to_string(),
         callee if is_json_field_string_callee(callee) => {
@@ -1369,6 +1379,18 @@ fn is_image_save_callee(callee: &Callee) -> bool {
 
 fn is_image_inspect_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Image" && name == "inspect")
+}
+
+fn is_image_cache_new_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ImageCache" && name == "new")
+}
+
+fn is_image_cache_store_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ImageCache" && name == "store")
+}
+
+fn is_image_cache_len_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ImageCache" && name == "len")
 }
 
 fn is_json_parse_callee(callee: &Callee) -> bool {

@@ -1,11 +1,5 @@
 pub fn OS.close(fd: Fd) -> Unit
 
-pub fn ImageCache.store(
-    cache: mut ImageCache,
-    image: read Image,
-) -> Unit
-    effects(retains(image))
-
 pub fn List.consume(list: take List) -> Unit
 
 pub fn Buffer.consume(buffer: take Buffer) -> Unit

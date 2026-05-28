@@ -90,6 +90,11 @@ fn bundled_core_interfaces_are_available_to_checker() {
     assert!(
         core_interfaces()
             .iter()
+            .any(|(path, _)| *path == "core/cache/image_cache.rssi")
+    );
+    assert!(
+        core_interfaces()
+            .iter()
             .any(|(path, _)| *path == "core/counter/counter.rssi")
     );
 
@@ -408,6 +413,33 @@ fn process(input: read Path, output: read Path) -> Result<Unit, ImageError> {
     assert!(rust.contains("rsscript_runtime::image_sharpen(&mut image);"));
     assert!(rust.contains("rsscript_runtime::image_inspect(&image);"));
     assert!(rust.contains("rsscript_runtime::image_save(&image, &output)?;"));
+}
+
+#[test]
+fn rust_lowering_maps_image_cache_core_calls_to_runtime_hooks() {
+    let source = r#"
+features: local
+
+fn cache_image(input: read Path, output: read Path) -> Result<Unit, ImageError> {
+    local cache = ImageCache.new(capacity: 1)
+    local image = Image.load(path: read input)?
+    let shared = manage image
+    ImageCache.store(cache: mut cache, image: read shared)
+    Image.save(image: read shared, path: read output)?
+    let count = ImageCache.len(cache: read cache)
+    if count == 1 {
+        Log.write(message: read "cached")
+    }
+    return Ok(Unit)
+}
+"#;
+    let rust = lower_source_to_rust("image-cache.rss", source).expect("source should lower");
+
+    assert!(rust.contains("let mut cache = rsscript_runtime::image_cache_new(1);"));
+    assert!(rust.contains("let shared = rsscript_runtime::manage_at(image,"));
+    assert!(rust.contains("rsscript_runtime::image_cache_store(&mut cache, &shared);"));
+    assert!(rust.contains("rsscript_runtime::image_save(&shared, &output)?;"));
+    assert!(rust.contains("let count = rsscript_runtime::image_cache_len(&cache);"));
 }
 
 #[test]

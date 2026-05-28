@@ -1,0 +1,25 @@
+features: local
+
+fn main() -> Result<Unit, ImageError> {
+    let input = "rsscript-cache-image-input.bin"
+    let output = "rsscript-cache-image-output.bin"
+
+    with File.open_write(path: read input) as file {
+        File.write(file: mut file, data: read "cached image bytes")?
+    }
+
+    local cache = ImageCache.new(capacity: 1)
+    local image = Image.load(path: read input)?
+    Image.resize(image: mut image, width: 128, height: 128)
+
+    let shared = manage image
+    ImageCache.store(cache: mut cache, image: read shared)
+    Image.save(image: read shared, path: read output)?
+
+    let count = ImageCache.len(cache: read cache)
+    if count == 1 {
+        Log.write(message: read "image cache retained managed image")
+    }
+
+    return Ok(Unit)
+}

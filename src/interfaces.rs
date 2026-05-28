@@ -1,5 +1,9 @@
 pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
     (
+        "core/cache/image_cache.rssi",
+        include_str!("../core/cache/image_cache.rssi"),
+    ),
+    (
         "core/collections/map.rssi",
         include_str!("../core/collections/map.rssi"),
     ),

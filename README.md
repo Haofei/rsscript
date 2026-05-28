@@ -412,13 +412,13 @@ rss verify-rust [--json] <file.rss> --out-dir <directory>
 
 `rss check` loads bundled core `.rssi` signatures by default. Use `--no-core` only when testing a file against user-supplied interfaces in isolation.
 
-The checker prototype also keeps a small `core/prototype` interface bundle for real-scenario fixtures such as CSV, DB, cache, and config examples. Those signatures are still `.rssi` sources, not a second Rust-side builtin table.
+The checker prototype also keeps a small `core/prototype` interface bundle for real-scenario fixtures that have not yet moved into `core/`. Those signatures are still `.rssi` sources, not a second Rust-side builtin table.
 
 If a lowered package contains `fn main() -> Unit` or `fn main() -> Result<Unit, E>`, `rss lower --rust --out-dir` also emits a Rust `src/main.rs` harness. `rss run <file.rss>` uses the same lowering path, writes a temporary Rust package, and delegates execution to `cargo run`. Use `rss run <file.rss> --out-dir <directory>` to keep the generated Rust package for inspection.
 
 `rss verify-rust <file.rss> --out-dir <directory>` keeps the generated package used for backend checking, including `rsscript-source-map.json`, so unmappable rustc diagnostics can be inspected against the generated Rust.
 
-The first observable runtime boundaries are `Log.write(message: read String)`, `Assert.equal(left: read String, right: read String)`, and the core `File`, `Json`, `Csv`, `Image`, HTTP handler, DB resource-pool, config reload, and `Counter` APIs, which lower to explicit runtime hooks. Simple core operations such as `String.concat(left: read String, right: read String)` keep RSScript `.rssi` signatures for checking and review, but lower directly to Rust standard-library expressions. Built-in boolean literals, numeric operators, comparison operators, `Option<T>` constructors, and core surface types such as `Bytes`, `Buffer`, `Path`, `List<T>`, `Map<K,V>`, and `Set<T>` lower to the corresponding Rust literals, operators, enum constructors, and standard-library types; user-defined operator overloading remains forbidden.
+The first observable runtime boundaries are `Log.write(message: read String)`, `Assert.equal(left: read String, right: read String)`, and the core `File`, `Json`, `Csv`, `Image`, `ImageCache`, HTTP handler, DB resource-pool, config reload, and `Counter` APIs, which lower to explicit runtime hooks. `ImageCache` is the first small retained managed-container hook: it stores managed image handles and enforces a capacity limit. Simple core operations such as `String.concat(left: read String, right: read String)` keep RSScript `.rssi` signatures for checking and review, but lower directly to Rust standard-library expressions. Built-in boolean literals, numeric operators, comparison operators, `Option<T>` constructors, and core surface types such as `Bytes`, `Buffer`, `Path`, `List<T>`, `Map<K,V>`, and `Set<T>` lower to the corresponding Rust literals, operators, enum constructors, and standard-library types; user-defined operator overloading remains forbidden.
 
 Smallest runnable example:
 

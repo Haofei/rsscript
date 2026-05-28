@@ -1,4 +1,5 @@
 use std::cell::{BorrowError, BorrowMutError, Ref, RefCell, RefMut};
+use std::collections::VecDeque;
 use std::fmt;
 use std::io::{Read, Write};
 use std::ops::{Deref, DerefMut};
@@ -121,6 +122,12 @@ pub struct Image {
     operations: Vec<&'static str>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ImageCache {
+    capacity: usize,
+    entries: VecDeque<Gc<Image>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageError {
     message: String,
@@ -145,6 +152,23 @@ impl std::error::Error for ImageError {}
 impl From<std::io::Error> for ImageError {
     fn from(error: std::io::Error) -> Self {
         Self::new(error.to_string())
+    }
+}
+
+pub trait RuntimeImageRef {
+    fn with_image<R>(&self, f: impl FnOnce(&Image) -> R) -> R;
+}
+
+impl RuntimeImageRef for Image {
+    fn with_image<R>(&self, f: impl FnOnce(&Image) -> R) -> R {
+        f(self)
+    }
+}
+
+impl RuntimeImageRef for Gc<Image> {
+    fn with_image<R>(&self, f: impl FnOnce(&Image) -> R) -> R {
+        let image = self.read();
+        f(&image)
     }
 }
 
@@ -411,29 +435,59 @@ pub fn image_sharpen(image: &mut Image) {
     image.operations.push("sharpen");
 }
 
-pub fn image_save<P: RuntimePath + ?Sized>(image: &Image, path: &P) -> Result<(), ImageError> {
-    let mut bytes = image.bytes.clone();
-    bytes.extend_from_slice(b"\n# rsscript-image-ops:");
-    bytes.extend_from_slice(image.operations.join(",").as_bytes());
-    if let (Some(width), Some(height)) = (image.width, image.height) {
-        bytes.extend_from_slice(format!(";size={width}x{height}").as_bytes());
-    }
+pub fn image_save<I: RuntimeImageRef + ?Sized, P: RuntimePath + ?Sized>(
+    image: &I,
+    path: &P,
+) -> Result<(), ImageError> {
+    let bytes = image.with_image(|image| {
+        let mut bytes = image.bytes.clone();
+        bytes.extend_from_slice(b"\n# rsscript-image-ops:");
+        bytes.extend_from_slice(image.operations.join(",").as_bytes());
+        if let (Some(width), Some(height)) = (image.width, image.height) {
+            bytes.extend_from_slice(format!(";size={width}x{height}").as_bytes());
+        }
+        bytes
+    });
     std::fs::write(path.as_path(), bytes)?;
     Ok(())
 }
 
-pub fn image_inspect(image: &Image) {
-    let size = image
-        .width
-        .zip(image.height)
-        .map(|(width, height)| format!("{width}x{height}"))
-        .unwrap_or_else(|| "unknown".to_string());
-    println!(
-        "image bytes={} size={} ops={}",
-        image.bytes.len(),
-        size,
-        image.operations.join(",")
-    );
+pub fn image_inspect<I: RuntimeImageRef + ?Sized>(image: &I) {
+    let summary = image.with_image(|image| {
+        let size = image
+            .width
+            .zip(image.height)
+            .map(|(width, height)| format!("{width}x{height}"))
+            .unwrap_or_else(|| "unknown".to_string());
+        format!(
+            "image bytes={} size={} ops={}",
+            image.bytes.len(),
+            size,
+            image.operations.join(",")
+        )
+    });
+    println!("{summary}");
+}
+
+pub fn image_cache_new(capacity: i64) -> ImageCache {
+    ImageCache {
+        capacity: capacity.max(0) as usize,
+        entries: VecDeque::new(),
+    }
+}
+
+pub fn image_cache_store(cache: &mut ImageCache, image: &Gc<Image>) {
+    if cache.capacity == 0 {
+        return;
+    }
+    while cache.entries.len() >= cache.capacity {
+        cache.entries.pop_front();
+    }
+    cache.entries.push_back(image.clone());
+}
+
+pub fn image_cache_len(cache: &ImageCache) -> i64 {
+    cache.entries.len() as i64
 }
 
 pub fn json_parse(text: &str) -> Result<JsonValue, JsonError> {
@@ -951,6 +1005,28 @@ mod tests {
 
         let _ = std::fs::remove_file(input);
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn image_cache_runtime_hooks_retain_managed_images_with_capacity() {
+        let mut cache = super::image_cache_new(1);
+        let first = super::manage(super::Image {
+            bytes: b"first".to_vec(),
+            width: None,
+            height: None,
+            operations: vec!["test"],
+        });
+        let second = super::manage(super::Image {
+            bytes: b"second".to_vec(),
+            width: None,
+            height: None,
+            operations: vec!["test"],
+        });
+
+        super::image_cache_store(&mut cache, &first);
+        super::image_cache_store(&mut cache, &second);
+
+        assert_eq!(super::image_cache_len(&cache), 1);
     }
 
     #[test]
