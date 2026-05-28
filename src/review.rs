@@ -465,6 +465,9 @@ fn review_map_region_draft(
     if facts.has_handle_field_write {
         reasons.push("writes through handle field".to_string());
     }
+    if facts.has_error_boundary {
+        reasons.push("error handling boundary".to_string());
+    }
 
     let had_review_reason = !reasons.is_empty();
     let classification = if !facts.unresolved_calls.is_empty() {
@@ -519,6 +522,7 @@ struct ReviewMapFacts {
     has_take: bool,
     has_resource_pool: bool,
     has_handle_field_write: bool,
+    has_error_boundary: bool,
     user_calls: BTreeSet<String>,
     unresolved_calls: BTreeSet<String>,
 }
@@ -673,7 +677,10 @@ fn collect_review_map_facts_expr(expr: &Expr, hir: &Hir, facts: &mut ReviewMapFa
             facts.has_manage = true;
             collect_review_map_facts_expr(value, hir, facts);
         }
-        Expr::Try { value, .. } => collect_review_map_facts_expr(value, hir, facts),
+        Expr::Try { value, .. } => {
+            facts.has_error_boundary = true;
+            collect_review_map_facts_expr(value, hir, facts);
+        }
         Expr::Binary { left, right, .. } => {
             collect_review_map_facts_expr(left, hir, facts);
             collect_review_map_facts_expr(right, hir, facts);

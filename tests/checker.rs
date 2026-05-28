@@ -2780,6 +2780,28 @@ fn pure_helper(value: read Int) -> Int
 }
 
 #[test]
+fn review_map_marks_error_handling_boundaries() {
+    let source = r#"
+fn may_fail() -> Result<Unit, IOError>
+
+fn load() -> Result<Unit, IOError> {
+    may_fail()?
+    return Ok(Unit)
+}
+"#;
+    let map = review_map_sources(vec![("error-boundary.rss", source)]);
+
+    assert!(map.files[0].regions.iter().any(|region| {
+        region.function == "load"
+            && region.classification == ReviewMapClassification::ReviewRequired
+            && region
+                .reasons
+                .iter()
+                .any(|reason| reason == "error handling boundary")
+    }));
+}
+
+#[test]
 fn review_map_marks_mut_call_site_effects() {
     let source = r#"
 struct Counter {
