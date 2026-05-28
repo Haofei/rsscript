@@ -88,10 +88,14 @@ fn check_stmt_semantics(
                 );
             }
 
-            if stmt.kind == LetKind::Managed
-                && let Some(Expr::Closure { body, span }) = &stmt.value
-            {
-                check_managed_closure_captures(analyzer, local_analysis, span, body, stmt_state);
+            if stmt.kind == LetKind::Managed {
+                check_managed_closure_captures(
+                    analyzer,
+                    local_analysis,
+                    &stmt.span,
+                    stmt.value.as_ref(),
+                    stmt_state,
+                );
             }
 
             if let Some(value) = &stmt.value {
@@ -301,17 +305,33 @@ fn check_moved_uses_in_stmt(
 fn check_managed_closure_captures(
     analyzer: &mut Analyzer<'_>,
     local_analysis: &LocalAnalysis,
-    closure_span: &crate::diagnostic::Span,
-    body: &Block,
+    statement_span: &crate::diagnostic::Span,
+    value: Option<&Expr>,
     state: &BodyState,
 ) {
     let fallback_uses;
-    let uses = if let Some(uses) = local_analysis.closure_ident_uses(closure_span) {
+    let closure_uses = value.and_then(|value| match value {
+        Expr::Closure { span, .. } => local_analysis.closure_ident_uses(span),
+        Expr::Effect { .. }
+        | Expr::Manage { .. }
+        | Expr::Call { .. }
+        | Expr::Field { .. }
+        | Expr::Ident(_, _)
+        | Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::Unknown(_) => None,
+    });
+    let uses = if let Some(uses) = local_analysis
+        .managed_closure_ident_uses(statement_span)
+        .or(closure_uses)
+    {
         uses
     } else {
         fallback_uses = {
             let mut uses = Vec::new();
-            collect_block_idents(body, &mut uses);
+            if let Some(Expr::Closure { body, .. }) = value {
+                collect_block_idents(body, &mut uses);
+            }
             uses
         };
         fallback_uses.as_slice()

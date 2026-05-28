@@ -25,6 +25,7 @@ pub(crate) struct LocalAnalysis {
     field_accesses_by_span: HashMap<Span, HirFieldAccess>,
     return_proofs_by_span: HashMap<Span, HirReturnProof>,
     closure_uses_by_span: HashMap<Span, Vec<(String, Span)>>,
+    managed_closure_uses_by_span: HashMap<Span, Vec<(String, Span)>>,
     flow_steps: Vec<LocalFlowStep>,
     flow_entry_states_by_span: HashMap<Span, BodyState>,
 }
@@ -87,6 +88,10 @@ impl LocalAnalysis {
             .as_ref()
             .and_then(|body| body.block.as_ref())
             .map_or_else(HashMap::new, index_closure_uses_from_block);
+        let managed_closure_uses_by_span = body
+            .as_ref()
+            .and_then(|body| body.block.as_ref())
+            .map_or_else(HashMap::new, index_managed_closure_uses_from_block);
         let flow_steps = body
             .as_ref()
             .and_then(|body| body.block.as_ref())
@@ -101,6 +106,7 @@ impl LocalAnalysis {
             field_accesses_by_span,
             return_proofs_by_span,
             closure_uses_by_span,
+            managed_closure_uses_by_span,
             flow_steps,
             flow_entry_states_by_span,
         }
@@ -147,6 +153,12 @@ impl LocalAnalysis {
 
     pub(crate) fn closure_ident_uses(&self, span: &Span) -> Option<&[(String, Span)]> {
         self.closure_uses_by_span.get(span).map(Vec::as_slice)
+    }
+
+    pub(crate) fn managed_closure_ident_uses(&self, span: &Span) -> Option<&[(String, Span)]> {
+        self.managed_closure_uses_by_span
+            .get(span)
+            .map(Vec::as_slice)
     }
 
     pub(crate) fn statement_ident_uses(&self, span: &Span) -> Option<&[(String, Span)]> {
@@ -510,6 +522,98 @@ fn index_closure_uses_from_block(block: &HirBlock) -> HashMap<Span, Vec<(String,
     let mut closures = HashMap::new();
     collect_block_closure_uses(block, &mut closures);
     closures
+}
+
+fn index_managed_closure_uses_from_block(block: &HirBlock) -> HashMap<Span, Vec<(String, Span)>> {
+    let mut closures = HashMap::new();
+    collect_block_managed_closure_uses(block, &mut closures);
+    closures
+}
+
+fn collect_block_managed_closure_uses(
+    block: &HirBlock,
+    closures: &mut HashMap<Span, Vec<(String, Span)>>,
+) {
+    for statement in &block.statements {
+        collect_stmt_managed_closure_uses(statement, closures);
+    }
+}
+
+fn collect_stmt_managed_closure_uses(
+    statement: &HirStmt,
+    closures: &mut HashMap<Span, Vec<(String, Span)>>,
+) {
+    match statement {
+        HirStmt::Let {
+            kind: HirBindingKind::ManagedLet,
+            value: Some(HirExpr::Closure { body, .. }),
+            span,
+            ..
+        } => {
+            let mut uses = Vec::new();
+            collect_hir_block_idents(body, &mut uses);
+            closures.insert(span.clone(), uses);
+            collect_block_managed_closure_uses(body, closures);
+        }
+        HirStmt::Let {
+            value: Some(value), ..
+        }
+        | HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => collect_expr_managed_closure_uses(value, closures),
+        HirStmt::With { resource, body, .. } => {
+            collect_expr_managed_closure_uses(resource, closures);
+            collect_block_managed_closure_uses(body, closures);
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            collect_expr_managed_closure_uses(condition, closures);
+            collect_block_managed_closure_uses(then_body, closures);
+            if let Some(else_body) = else_body {
+                collect_block_managed_closure_uses(else_body, closures);
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                collect_expr_managed_closure_uses(condition, closures);
+            }
+            collect_block_managed_closure_uses(body, closures);
+        }
+        HirStmt::Let { value: None, .. }
+        | HirStmt::Return { value: None, .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn collect_expr_managed_closure_uses(
+    expr: &HirExpr,
+    closures: &mut HashMap<Span, Vec<(String, Span)>>,
+) {
+    match expr {
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                collect_expr_managed_closure_uses(&arg.value, closures);
+            }
+        }
+        HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => {
+            collect_expr_managed_closure_uses(value, closures);
+        }
+        HirExpr::Field { base, .. } => collect_expr_managed_closure_uses(base, closures),
+        HirExpr::Closure { body, .. } => collect_block_managed_closure_uses(body, closures),
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
 }
 
 fn collect_block_closure_uses(block: &HirBlock, closures: &mut HashMap<Span, Vec<(String, Span)>>) {
@@ -1894,6 +1998,49 @@ mod tests {
             .expect("expression should be reachable");
 
         assert_eq!(expr_state.value_type("config"), Some("InlineConfig"));
+    }
+
+    #[test]
+    fn local_analysis_indexes_managed_closure_uses_by_statement_span() {
+        let body = HirFunctionBody {
+            function_name: "run".to_string(),
+            block: Some(HirBlock {
+                statements: vec![
+                    HirStmt::Let {
+                        kind: HirBindingKind::LocalLet,
+                        name: "image".to_string(),
+                        value: None,
+                        type_name: Some("Image".to_string()),
+                        span: span(1),
+                    },
+                    HirStmt::Let {
+                        kind: HirBindingKind::ManagedLet,
+                        name: "callback".to_string(),
+                        value: Some(HirExpr::Closure {
+                            body: HirBlock {
+                                statements: vec![HirStmt::Expr(HirExpr::Ident {
+                                    name: "image".to_string(),
+                                    type_name: Some("Image".to_string()),
+                                    span: span(3),
+                                })],
+                                span: span(2),
+                            },
+                            span: span(2),
+                        }),
+                        type_name: None,
+                        span: span(2),
+                    },
+                ],
+                span: span(1),
+            }),
+            ..HirFunctionBody::default()
+        };
+        let local_analysis = LocalAnalysis::new(Some(&body));
+
+        assert_eq!(
+            local_analysis.managed_closure_ident_uses(&span(2)),
+            Some(&[("image".to_string(), span(3))][..])
+        );
     }
 
     #[test]
