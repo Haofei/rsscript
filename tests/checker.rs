@@ -2202,6 +2202,24 @@ fn bad(path: read Path) -> Unit {
 }
 
 #[test]
+fn checker_reports_unknown_top_level_items_as_unsupported() {
+    let source = r#"
+enum Color {
+    Red
+}
+
+fn main() -> Unit {
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("unknown-top-level.rss", source);
+
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS0015" && diagnostic.label == "unsupported top-level item"
+    }));
+}
+
+#[test]
 fn review_json_uses_protocol_shape() {
     let old_source = r#"
 

@@ -661,9 +661,9 @@ unsupported  rejected before Rust lowering or reserved for later versions
 | review map/diff | Review tools classify semantic risk; `unknown` must not be treated as safe. | implemented as review metadata/diff/map; still conservative and not a proof of behavioral equivalence |
 | unsupported syntax | Unsupported source must not become generated Rust `todo!()` or silently skipped semantics. | static diagnostics for known unsupported constructs; parser completeness is still a hardening area |
 
-Open hardening requirement: parser errors and unknown top-level constructs must
-become stable diagnostics rather than silent recovery before v0.5 can be called
-semantically hard.
+Open hardening requirement: unknown top-level constructs are stable diagnostics,
+but parser recovery and expression/body parse errors still need broader
+grammar-driven diagnostics before v0.5 can be called semantically hard.
 
 ---
 

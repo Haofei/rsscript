@@ -1,0 +1,8 @@
+// expect: RS0015
+enum Color {
+    Red
+}
+
+fn main() -> Unit {
+    return Unit
+}

@@ -30,6 +30,7 @@ pub struct Program {
     pub duplicate_features: Vec<DuplicateFileFeature>,
     pub feature_spans: Vec<Span>,
     pub profile_spans: Vec<Span>,
+    pub unknown_top_level_spans: Vec<Span>,
     pub items: Vec<Item>,
 }
 
@@ -49,6 +50,7 @@ pub fn merge_programs(programs: impl IntoIterator<Item = Program>) -> Program {
     let mut duplicate_features = Vec::new();
     let mut feature_spans = Vec::new();
     let mut profile_spans = Vec::new();
+    let mut unknown_top_level_spans = Vec::new();
     let mut items = Vec::new();
 
     for program in programs {
@@ -59,6 +61,7 @@ pub fn merge_programs(programs: impl IntoIterator<Item = Program>) -> Program {
         }
         unknown_features.extend(program.unknown_features);
         duplicate_features.extend(program.duplicate_features);
+        unknown_top_level_spans.extend(program.unknown_top_level_spans);
         if program.feature_spans.len() > 1 {
             feature_spans.extend(program.feature_spans);
         }
@@ -72,6 +75,7 @@ pub fn merge_programs(programs: impl IntoIterator<Item = Program>) -> Program {
         duplicate_features,
         feature_spans,
         profile_spans,
+        unknown_top_level_spans,
         items,
     }
 }

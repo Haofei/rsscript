@@ -891,6 +891,7 @@ fn native_binding_interface_sources(
                 duplicate_features: Vec::new(),
                 feature_spans: Vec::new(),
                 profile_spans: Vec::new(),
+                unknown_top_level_spans: Vec::new(),
                 items: selected_items,
             };
             Some(PackageSource {

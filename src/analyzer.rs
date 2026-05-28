@@ -210,6 +210,13 @@ impl Analyzer<'_> {
     }
 
     fn check_unsupported_syntax(&mut self) {
+        for span in self.syntax_program.unknown_top_level_spans.clone() {
+            self.unsupported_syntax(
+                span,
+                "unsupported top-level item",
+                "This top-level construct is outside the current RSScript parser surface.",
+            );
+        }
         let items = self.syntax_program.items.clone();
         for item in &items {
             self.check_unsupported_syntax_item(item);

@@ -35,6 +35,7 @@ impl Parser<'_> {
         let mut duplicate_features = Vec::new();
         let mut feature_spans = Vec::new();
         let mut profile_spans = Vec::new();
+        let mut unknown_top_level_spans = Vec::new();
         let mut items = Vec::new();
 
         while !self.is_eof() {
@@ -61,7 +62,8 @@ impl Parser<'_> {
                     items.push(Item::Function(item));
                 }
             } else {
-                self.index += 1;
+                unknown_top_level_spans.push(self.tokens[self.index].span.clone());
+                self.index = skip_unknown_top_level(self.tokens, self.index);
             }
         }
 
@@ -71,6 +73,7 @@ impl Parser<'_> {
             duplicate_features,
             feature_spans,
             profile_spans,
+            unknown_top_level_spans,
             items,
         }
     }
@@ -1420,6 +1423,14 @@ fn trim_outer(tokens: &[Token], start: usize, end: usize) -> (usize, usize) {
 fn skip_braced_block(tokens: &[Token], start: usize) -> Option<usize> {
     let open = (start..tokens.len()).find(|index| tokens[*index].symbol("{"))?;
     find_matching(tokens, open, "{", "}").map(|close| close + 1)
+}
+
+fn skip_unknown_top_level(tokens: &[Token], start: usize) -> usize {
+    let line_end = declaration_line_end(tokens, start);
+    let block_end = (start..line_end)
+        .find(|index| tokens[*index].symbol("{"))
+        .and_then(|open| find_matching(tokens, open, "{", "}").map(|close| close + 1));
+    block_end.unwrap_or(line_end).max(start + 1)
 }
 
 fn find_matching(
