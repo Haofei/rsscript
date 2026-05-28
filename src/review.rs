@@ -95,7 +95,17 @@ pub struct ReviewMapCategorySummary {
 pub struct ReviewMapFile {
     pub file: String,
     pub features: Vec<String>,
+    pub risk: ReviewMapFileRisk,
+    pub reasons: Vec<String>,
     pub regions: Vec<ReviewMapRegion>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewMapFileRisk {
+    Low,
+    Elevated,
+    High,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -262,7 +272,11 @@ pub fn review_map_sources(sources: Vec<(&str, &str)>) -> ReviewMap {
 }
 
 pub fn format_review_map_human(map: &ReviewMap) -> String {
-    if map.files.iter().all(|file| file.regions.is_empty()) {
+    if map
+        .files
+        .iter()
+        .all(|file| file.regions.is_empty() && file.reasons.is_empty())
+    {
         return "review map: no functions detected\n".to_string();
     }
 
@@ -279,7 +293,18 @@ pub fn format_review_map_human(map: &ReviewMap) -> String {
         map.summary.total_lines
     ));
     for file in &map.files {
-        output.push_str(&format!("{}:\n", file.file));
+        output.push_str(&format!("{}:", file.file));
+        if !file.features.is_empty() {
+            output.push_str(&format!(
+                " features {}; risk {}",
+                file.features.join(", "),
+                review_map_file_risk_label(file.risk)
+            ));
+        }
+        if !file.reasons.is_empty() {
+            output.push_str(&format!("; {}", file.reasons.join("; ")));
+        }
+        output.push('\n');
         for region in &file.regions {
             output.push_str(&format!(
                 "  {} [{}] line {} ({} lines): {}\n",
@@ -353,9 +378,12 @@ fn review_map_file(file: &str, source: &str) -> ReviewMapFile {
         .map(|draft| draft.region)
         .collect();
 
+    let features = feature_names(&program.features);
     ReviewMapFile {
         file: file.to_string(),
-        features: feature_names(&program.features),
+        features,
+        risk: review_map_file_risk(&program.features),
+        reasons: review_map_file_reasons(&program.features),
         regions,
     }
 }
@@ -686,6 +714,14 @@ fn review_map_classification_label(classification: ReviewMapClassification) -> &
         ReviewMapClassification::ReviewRequired => "must-review",
         ReviewMapClassification::Foldable => "safe-to-skip",
         ReviewMapClassification::Unknown => "unknown",
+    }
+}
+
+fn review_map_file_risk_label(risk: ReviewMapFileRisk) -> &'static str {
+    match risk {
+        ReviewMapFileRisk::Low => "low",
+        ReviewMapFileRisk::Elevated => "elevated",
+        ReviewMapFileRisk::High => "high",
     }
 }
 
@@ -1060,6 +1096,42 @@ fn feature_name(feature: &FileFeature) -> &'static str {
         FileFeature::Unsafe => "unsafe",
         FileFeature::Async => "async",
         FileFeature::Device => "device",
+    }
+}
+
+fn review_map_file_risk(features: &[FileFeature]) -> ReviewMapFileRisk {
+    if features.iter().any(|feature| {
+        matches!(
+            feature,
+            FileFeature::Native | FileFeature::Unsafe | FileFeature::Device
+        )
+    }) {
+        ReviewMapFileRisk::High
+    } else if features
+        .iter()
+        .any(|feature| matches!(feature, FileFeature::Local | FileFeature::Async))
+    {
+        ReviewMapFileRisk::Elevated
+    } else {
+        ReviewMapFileRisk::Low
+    }
+}
+
+fn review_map_file_reasons(features: &[FileFeature]) -> Vec<String> {
+    feature_names(features)
+        .into_iter()
+        .filter_map(|feature| review_map_feature_reason(&feature).map(str::to_string))
+        .collect()
+}
+
+fn review_map_feature_reason(feature: &str) -> Option<&'static str> {
+    match feature {
+        "local" => Some("local capability enabled"),
+        "native" => Some("native boundary capability enabled"),
+        "unsafe" => Some("unsafe capability enabled"),
+        "async" => Some("async control-flow capability enabled"),
+        "device" => Some("device capability enabled"),
+        _ => None,
     }
 }
 

@@ -2547,6 +2547,18 @@ error handling boundary
 removed guarantee
 ```
 
+File-level features must also be reported as file-level review risk:
+
+```text
+local        elevated risk
+async        elevated risk
+native       high risk
+unsafe       high risk
+device       high risk
+```
+
+This file-level risk does not require every helper function in the file to be classified as must-review. Region classification still depends on the function's own semantic facts and propagated callee risk.
+
 ---
 
 ## 33.6 Safe to skip
@@ -2593,30 +2605,43 @@ Example:
 ```json
 {
   "kind": "review_map",
-  "file": "handler.rss",
-  "total_lines": 412,
   "summary": {
-    "entry_point_lines": 13,
+    "total_functions": 2,
+    "total_lines": 412,
     "must_review_lines": 41,
     "safe_to_skip_lines": 358,
     "unknown_lines": 0,
     "suggested_review_lines": 54,
-    "review_ratio": 0.131
+    "review_ratio": 0.131,
+    "must_review": { "functions": 1, "lines": 41 },
+    "safe_to_skip": { "functions": 1, "lines": 358 },
+    "unknown": { "functions": 0, "lines": 0 }
   },
-  "regions": [
+  "files": [
     {
-      "category": "entry_point",
-      "function": "run_agent",
-      "lines": { "start": 12, "end": 25 },
-      "risk": "medium",
-      "reasons": ["entry point", "mut parameter agent"]
-    },
-    {
-      "category": "must_review",
-      "function": "update_cache",
-      "lines": { "start": 120, "end": 137 },
-      "risk": "medium",
-      "reasons": ["mut parameter cache", "effects(retains(value))"]
+      "file": "handler.rss",
+      "features": ["local", "native"],
+      "risk": "high",
+      "reasons": [
+        "local capability enabled",
+        "native boundary capability enabled"
+      ],
+      "regions": [
+        {
+          "function": "run_agent",
+          "classification": "must_review",
+          "line": 12,
+          "line_count": 13,
+          "reasons": ["entry point", "mut parameter agent"]
+        },
+        {
+          "function": "pure_helper",
+          "classification": "safe_to_skip",
+          "line": 120,
+          "line_count": 8,
+          "reasons": ["private helper with no review-visible semantic risk"]
+        }
+      ]
     }
   ]
 }

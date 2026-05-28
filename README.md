@@ -294,6 +294,9 @@ What do I actually need to read?
 For AI-generated code, this is critical. If a file contains 400 generated lines, the reviewer should first see a review map:
 
 ```text
+FILE FEATURES
+  local, native      risk high
+
 ENTRY POINTS
   run_agent
 

@@ -4,12 +4,13 @@ use std::path::{Path, PathBuf};
 use rsscript::syntax::ast::Item;
 use rsscript::syntax::parse_source;
 use rsscript::{
-    ReviewMapClassification, ReviewRisk, analyze_source, analyze_source_with_core,
-    analyze_source_with_interfaces, core_interfaces, explain_diagnostic_code,
-    format_diagnostic_explanation, format_diagnostics_json, format_review_human,
-    format_review_json, format_review_map_human, format_review_map_json, lower_source_to_rust,
-    lower_source_to_rust_package, lower_source_to_rust_with_map, remap_rustc_diagnostic_json,
-    remap_rustc_diagnostic_json_lines, review_map_sources, review_sources,
+    ReviewMapClassification, ReviewMapFileRisk, ReviewRisk, analyze_source,
+    analyze_source_with_core, analyze_source_with_interfaces, core_interfaces,
+    explain_diagnostic_code, format_diagnostic_explanation, format_diagnostics_json,
+    format_review_human, format_review_json, format_review_map_human, format_review_map_json,
+    lower_source_to_rust, lower_source_to_rust_package, lower_source_to_rust_with_map,
+    remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines, review_map_sources,
+    review_sources,
 };
 use serde_json::Value;
 
@@ -1265,10 +1266,33 @@ fn process() -> Unit {
     let map = review_map_sources(vec![("features.rss", source)]);
 
     assert_eq!(map.files[0].features, vec!["local", "native"]);
+    assert_eq!(map.files[0].risk, ReviewMapFileRisk::High);
+    assert!(
+        map.files[0]
+            .reasons
+            .iter()
+            .any(|reason| reason == "local capability enabled")
+    );
+    assert!(
+        map.files[0]
+            .reasons
+            .iter()
+            .any(|reason| reason == "native boundary capability enabled")
+    );
+    let human = format_review_map_human(&map);
+    assert!(human.contains("features.rss: features local, native; risk high"));
     let json: Value =
         serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
     assert_eq!(json["files"][0]["features"][0], "local");
     assert_eq!(json["files"][0]["features"][1], "native");
+    assert_eq!(json["files"][0]["risk"], "high");
+    assert!(
+        json["files"][0]["reasons"]
+            .as_array()
+            .is_some_and(|reasons| reasons
+                .iter()
+                .any(|reason| reason == "native boundary capability enabled"))
+    );
 }
 
 fn fixture_paths(directory: &str) -> Vec<PathBuf> {
