@@ -15,6 +15,7 @@ It currently implements:
 - Lexer, lightweight parser, syntax AST, HIR signature table, and semantic checks for the review-critical v0.4.1 rules
 - Builtin signatures for the current fixture stdlib surface, including `Image`, `File`, `Map`, `ResourcePool`, `Json`, `Csv`, database/resource helpers, and cache/config helpers
 - HIR type and field tables for class/struct/resource declarations and handle fields
+- HIR constructor signatures derived from declared type fields
 - AST-driven mode and call checks for local-only features, named arguments, data effects, and retaining APIs
 - AST-driven body checks for local moves, early-exit-aware `fresh` returns, resource escape, resolved handle-field `take`, and managed closure captures
 - Focused check modules for mode, calls, body semantics, and forbidden operator behavior

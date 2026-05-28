@@ -1,0 +1,11 @@
+// expect: RS0203 RS0204
+mode: managed
+
+struct Response {
+    status: Int
+    body: String
+}
+
+fn bad_response(body: read String) -> Result<fresh Response, HttpError> {
+    return Response(status: 200, boody: read body)
+}

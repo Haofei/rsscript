@@ -118,6 +118,7 @@ impl Hir {
     }
 
     fn insert_type(&mut self, type_info: TypeInfo) {
+        let constructor = constructor_sig_from_type(&type_info);
         for field in type_info.fields.values() {
             self.fields_by_name
                 .entry(field.name.clone())
@@ -125,6 +126,7 @@ impl Hir {
                 .push(field.clone());
         }
         self.types.insert(type_info.name.clone(), type_info);
+        self.insert_function(constructor);
     }
 
     fn insert_builtins(&mut self) {
@@ -194,6 +196,28 @@ fn field_info_from_decl(field: &FieldDecl) -> FieldInfo {
         name: field.name.clone(),
         type_name: field.ty.name.clone(),
         is_handle: field.is_handle,
+    }
+}
+
+fn constructor_sig_from_type(type_info: &TypeInfo) -> FunctionSig {
+    let mut fields: Vec<&FieldInfo> = type_info.fields.values().collect();
+    fields.sort_by(|left, right| left.name.cmp(&right.name));
+
+    FunctionSig {
+        namespace: None,
+        name: type_info.name.clone(),
+        params: fields
+            .into_iter()
+            .map(|field| ParamSig {
+                name: field.name.clone(),
+                effect: None,
+                type_name: field.type_name.clone(),
+            })
+            .collect(),
+        return_type: Some(type_info.name.clone()),
+        returns_fresh: true,
+        retained_params: HashSet::new(),
+        is_builtin: false,
     }
 }
 
