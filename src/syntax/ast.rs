@@ -103,6 +103,7 @@ pub struct TypeDecl {
     pub name: String,
     pub type_params: Vec<GenericParam>,
     pub fields: Vec<FieldDecl>,
+    pub malformed_field_spans: Vec<Span>,
     pub drop_body: Option<Block>,
     pub span: Span,
 }

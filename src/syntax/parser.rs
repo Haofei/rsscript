@@ -141,12 +141,14 @@ impl Parser<'_> {
         self.index += 1;
         let name = self.take_function_name()?;
         let type_params = self.parse_generic_params();
-        let (fields, drop_body) = if self.at_symbol("{") {
+        let (fields, malformed_field_spans, drop_body) = if self.at_symbol("{") {
             let open = self.index;
             let close = find_matching(self.tokens, open, "{", "}")?;
             self.index = close + 1;
+            let parsed_fields = parse_fields(self.tokens, open + 1, close);
             (
-                parse_fields(self.tokens, open + 1, close),
+                parsed_fields.fields,
+                parsed_fields.malformed_spans,
                 parse_drop_body(self.tokens, open + 1, close),
             )
         } else {
@@ -158,7 +160,7 @@ impl Parser<'_> {
                 let end = declaration_line_end(self.tokens, self.index);
                 self.index = end;
             }
-            (Vec::new(), None)
+            (Vec::new(), Vec::new(), None)
         };
 
         Some(TypeDecl {
@@ -166,6 +168,7 @@ impl Parser<'_> {
             name,
             type_params,
             fields,
+            malformed_field_spans,
             drop_body,
             span,
         })
@@ -324,16 +327,27 @@ impl Parser<'_> {
     }
 }
 
-fn parse_fields(tokens: &[Token], start: usize, end: usize) -> Vec<FieldDecl> {
+struct ParsedFields {
+    fields: Vec<FieldDecl>,
+    malformed_spans: Vec<crate::diagnostic::Span>,
+}
+
+fn parse_fields(tokens: &[Token], start: usize, end: usize) -> ParsedFields {
     let mut fields = Vec::new();
+    let mut malformed_spans = Vec::new();
     let mut index = start;
     while index < end {
+        if is_trivia_boundary(&tokens[index]) {
+            index += 1;
+            continue;
+        }
         if tokens[index].is_ident_text("drop") {
             index = skip_braced_block(tokens, index).unwrap_or(end);
             continue;
         }
 
         let name_index = index;
+        let line_end = next_line_or_block_end(tokens, index, end);
         if let Some(name) = tokens.get(name_index).and_then(ident_name)
             && tokens
                 .get(name_index + 1)
@@ -362,12 +376,19 @@ fn parse_fields(tokens: &[Token], start: usize, end: usize) -> Vec<FieldDecl> {
                     is_weak,
                     span: tokens[name_index].span.clone(),
                 });
+            } else {
+                malformed_spans.push(tokens[name_index].span.clone());
             }
+        } else {
+            malformed_spans.push(tokens[name_index].span.clone());
         }
 
-        index += 1;
+        index = line_end.max(index + 1);
     }
-    fields
+    ParsedFields {
+        fields,
+        malformed_spans,
+    }
 }
 
 fn parse_drop_body(tokens: &[Token], start: usize, end: usize) -> Option<Block> {

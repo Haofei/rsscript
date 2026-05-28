@@ -1,0 +1,9 @@
+// expect: RS0015
+struct Broken {
+    name String
+    value:
+}
+
+fn main() -> Unit {
+    return Unit
+}

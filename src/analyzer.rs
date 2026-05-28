@@ -270,6 +270,13 @@ impl Analyzer<'_> {
                 self.check_unsupported_syntax_block(&function.body);
             }
             Item::Type(type_decl) => {
+                for span in &type_decl.malformed_field_spans {
+                    self.unsupported_syntax(
+                        span.clone(),
+                        "malformed field declaration",
+                        "Type fields must use `name: Type`, `name: handle Type`, or `name: weak Type`.",
+                    );
+                }
                 for field in &type_decl.fields {
                     self.check_unsupported_syntax_type_ref(&field.ty, false);
                 }
