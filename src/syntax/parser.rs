@@ -736,16 +736,44 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
 }
 
 fn parse_binary_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
-    find_top_level_binary_operator(tokens, start, end, "|", "|")
-        .or_else(|| find_top_level_binary_operator(tokens, start, end, "&", "&"))
-        .or_else(|| find_top_level_single_binary_operator(tokens, start, end, "+", BinaryOp::Add))
+    find_top_level_operator(tokens, start, end, &[(&["|", "|"], BinaryOp::LogicalOr)])
+        .or_else(|| {
+            find_top_level_operator(tokens, start, end, &[(&["&", "&"], BinaryOp::LogicalAnd)])
+        })
+        .or_else(|| {
+            find_top_level_operator(
+                tokens,
+                start,
+                end,
+                &[
+                    (&["=", "="], BinaryOp::Equal),
+                    (&["!", "="], BinaryOp::NotEqual),
+                    (&["<", "="], BinaryOp::LessEqual),
+                    (&[">", "="], BinaryOp::GreaterEqual),
+                    (&["<"], BinaryOp::Less),
+                    (&[">"], BinaryOp::Greater),
+                ],
+            )
+        })
+        .or_else(|| {
+            find_top_level_operator(
+                tokens,
+                start,
+                end,
+                &[(&["+"], BinaryOp::Add), (&["-"], BinaryOp::Subtract)],
+            )
+        })
+        .or_else(|| {
+            find_top_level_operator(
+                tokens,
+                start,
+                end,
+                &[(&["*"], BinaryOp::Multiply), (&["/"], BinaryOp::Divide)],
+            )
+        })
         .and_then(|(operator, op)| {
             let left = parse_expr(tokens, start, operator)?;
-            let right_start = if matches!(op, BinaryOp::Add) {
-                operator + 1
-            } else {
-                operator + 2
-            };
+            let right_start = operator + op_width(op);
             let right = parse_expr(tokens, right_start, end)?;
             Some(Expr::Binary {
                 op,
@@ -756,29 +784,98 @@ fn parse_binary_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr>
         })
 }
 
-fn find_top_level_single_binary_operator(
+fn op_width(op: BinaryOp) -> usize {
+    match op {
+        BinaryOp::LogicalAnd
+        | BinaryOp::LogicalOr
+        | BinaryOp::Equal
+        | BinaryOp::NotEqual
+        | BinaryOp::LessEqual
+        | BinaryOp::GreaterEqual => 2,
+        BinaryOp::Add
+        | BinaryOp::Subtract
+        | BinaryOp::Multiply
+        | BinaryOp::Divide
+        | BinaryOp::Less
+        | BinaryOp::Greater => 1,
+    }
+}
+
+fn find_top_level_operator(
     tokens: &[Token],
     start: usize,
     end: usize,
-    symbol: &str,
-    op: BinaryOp,
+    operators: &[(&[&str], BinaryOp)],
 ) -> Option<(usize, BinaryOp)> {
     let mut depth = 0usize;
+    let mut angle_depth = 0usize;
     let mut found = None;
     for (index, token) in tokens.iter().enumerate().take(end).skip(start) {
-        if token.symbol("(") || token.symbol("{") || token.symbol("[") || token.symbol("<") {
+        if token.symbol("(") || token.symbol("{") || token.symbol("[") {
             depth += 1;
             continue;
         }
-        if token.symbol(")") || token.symbol("}") || token.symbol("]") || token.symbol(">") {
+        if token.symbol(")") || token.symbol("}") || token.symbol("]") {
             depth = depth.saturating_sub(1);
             continue;
         }
-        if depth == 0 && token.symbol(symbol) {
-            found = Some((index, op));
+        if depth == 0 && token.symbol("<") && is_generic_angle_open(tokens, start, end, index) {
+            angle_depth += 1;
+            continue;
+        }
+        if depth == 0 && angle_depth > 0 {
+            if token.symbol(">") {
+                angle_depth -= 1;
+            }
+            continue;
+        }
+        if depth == 0 {
+            for (symbols, op) in operators {
+                if symbols_match(tokens, index, end, symbols) {
+                    if *op == BinaryOp::LogicalOr
+                        && tokens.get(index + 2).is_some_and(|token| token.symbol("{"))
+                    {
+                        continue;
+                    }
+                    found = Some((index, *op));
+                    break;
+                }
+            }
         }
     }
     found
+}
+
+fn symbols_match(tokens: &[Token], index: usize, end: usize, symbols: &[&str]) -> bool {
+    index + symbols.len() <= end
+        && symbols
+            .iter()
+            .enumerate()
+            .all(|(offset, symbol)| tokens[index + offset].symbol(symbol))
+}
+
+fn is_generic_angle_open(tokens: &[Token], start: usize, end: usize, open: usize) -> bool {
+    if open <= start
+        || tokens.get(open - 1).and_then(ident_name).is_none()
+        || !tokens[open].symbol("<")
+    {
+        return false;
+    }
+
+    let mut depth = 0usize;
+    for (index, token) in tokens.iter().enumerate().take(end).skip(open) {
+        if token.symbol("<") {
+            depth += 1;
+        } else if token.symbol(">") {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                return tokens
+                    .get(index + 1)
+                    .is_some_and(|token| token.symbol(".") || token.symbol("("));
+            }
+        }
+    }
+    false
 }
 
 fn find_trailing_top_level_question(tokens: &[Token], start: usize, end: usize) -> Option<usize> {
@@ -797,45 +894,6 @@ fn find_trailing_top_level_question(tokens: &[Token], start: usize, end: usize) 
         }
     }
     None
-}
-
-fn find_top_level_binary_operator(
-    tokens: &[Token],
-    start: usize,
-    end: usize,
-    first: &str,
-    second: &str,
-) -> Option<(usize, BinaryOp)> {
-    let mut depth = 0usize;
-    let mut found = None;
-    for index in start..end.saturating_sub(1) {
-        let token = &tokens[index];
-        if token.symbol("(") || token.symbol("{") || token.symbol("[") || token.symbol("<") {
-            depth += 1;
-            continue;
-        }
-        if token.symbol(")") || token.symbol("}") || token.symbol("]") || token.symbol(">") {
-            depth = depth.saturating_sub(1);
-            continue;
-        }
-        if depth == 0
-            && token.symbol(first)
-            && tokens
-                .get(index + 1)
-                .is_some_and(|token| token.symbol(second))
-        {
-            if first == "|" && tokens.get(index + 2).is_some_and(|token| token.symbol("{")) {
-                continue;
-            }
-            let op = if first == "|" {
-                BinaryOp::LogicalOr
-            } else {
-                BinaryOp::LogicalAnd
-            };
-            found = Some((index, op));
-        }
-    }
-    found
 }
 
 fn parse_call_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
@@ -1030,14 +1088,22 @@ fn parse_file_feature(token: Option<&Token>) -> Option<FileFeature> {
 fn statement_end(tokens: &[Token], start: usize, limit: usize) -> usize {
     let line = tokens[start].span.line;
     let mut depth = 0usize;
+    let mut angle_depth = 0usize;
     for (index, token) in tokens.iter().enumerate().take(limit).skip(start + 1) {
-        if depth == 0 && token.span.line > line {
+        if depth == 0 && angle_depth == 0 && token.span.line > line {
             return index;
         }
-        if token.symbol("(") || token.symbol("{") || token.symbol("[") || token.symbol("<") {
+        if token.symbol("(") || token.symbol("{") || token.symbol("[") {
             depth += 1;
-        } else if token.symbol(")") || token.symbol("}") || token.symbol("]") || token.symbol(">") {
+        } else if token.symbol(")") || token.symbol("}") || token.symbol("]") {
             depth = depth.saturating_sub(1);
+        } else if depth == 0
+            && token.symbol("<")
+            && is_generic_angle_open(tokens, start, limit, index)
+        {
+            angle_depth += 1;
+        } else if depth == 0 && angle_depth > 0 && token.symbol(">") {
+            angle_depth -= 1;
         }
     }
     limit
@@ -1045,14 +1111,22 @@ fn statement_end(tokens: &[Token], start: usize, limit: usize) -> usize {
 
 fn find_control_body_open(tokens: &[Token], start: usize, limit: usize) -> Option<usize> {
     let mut depth = 0usize;
+    let mut angle_depth = 0usize;
     for (index, token) in tokens.iter().enumerate().take(limit).skip(start + 1) {
-        if depth == 0 && token.symbol("{") {
+        if depth == 0 && angle_depth == 0 && token.symbol("{") {
             return Some(index);
         }
-        if token.symbol("(") || token.symbol("[") || token.symbol("<") {
+        if token.symbol("(") || token.symbol("[") {
             depth += 1;
-        } else if token.symbol(")") || token.symbol("]") || token.symbol(">") {
+        } else if token.symbol(")") || token.symbol("]") {
             depth = depth.saturating_sub(1);
+        } else if depth == 0
+            && token.symbol("<")
+            && is_generic_angle_open(tokens, start, limit, index)
+        {
+            angle_depth += 1;
+        } else if depth == 0 && angle_depth > 0 && token.symbol(">") {
+            angle_depth -= 1;
         }
     }
     None

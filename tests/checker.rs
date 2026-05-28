@@ -326,6 +326,35 @@ fn main() -> Unit {
 }
 
 #[test]
+fn rust_lowering_maps_builtin_operators_to_rust_expressions() {
+    let source = r#"
+fn main() -> Unit {
+    let difference = 44 - 2
+    let product = 6 * 7
+    let quotient = product / 2
+    let equal = product == 42
+    let different = quotient != 0
+    let less = quotient < product
+    let less_equal = quotient <= product
+    let greater = product > quotient
+    let greater_equal = product >= quotient
+    return Unit
+}
+"#;
+    let rust = lower_source_to_rust("operators.rss", source).expect("source should lower");
+
+    assert!(rust.contains("let difference = 44 - 2;"));
+    assert!(rust.contains("let product = 6 * 7;"));
+    assert!(rust.contains("let quotient = product / 2;"));
+    assert!(rust.contains("let equal = product == 42;"));
+    assert!(rust.contains("let different = quotient != 0;"));
+    assert!(rust.contains("let less = quotient < product;"));
+    assert!(rust.contains("let less_equal = quotient <= product;"));
+    assert!(rust.contains("let greater = product > quotient;"));
+    assert!(rust.contains("let greater_equal = product >= quotient;"));
+}
+
+#[test]
 fn rust_lowering_maps_try_operator_to_rust_result_propagation() {
     let source = r#"
 features: local

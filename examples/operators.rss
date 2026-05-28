@@ -1,0 +1,9 @@
+fn main() -> Unit {
+    let _ = 6 * 7 / 3 - 2 + 1
+    let _ = 1 < 2 && 3 >= 3
+    if 1 < 2 {
+        Log.write(message: read "comparison branch ran")
+    }
+    Log.write(message: read "operators ran")
+    return Unit
+}

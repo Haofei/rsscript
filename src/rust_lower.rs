@@ -667,6 +667,15 @@ impl<'a> RustLowerer<'a> {
             } => {
                 let op = match op {
                     BinaryOp::Add => "+",
+                    BinaryOp::Subtract => "-",
+                    BinaryOp::Multiply => "*",
+                    BinaryOp::Divide => "/",
+                    BinaryOp::Equal => "==",
+                    BinaryOp::NotEqual => "!=",
+                    BinaryOp::Less => "<",
+                    BinaryOp::LessEqual => "<=",
+                    BinaryOp::Greater => ">",
+                    BinaryOp::GreaterEqual => ">=",
                     BinaryOp::LogicalAnd => "&&",
                     BinaryOp::LogicalOr => "||",
                 };
