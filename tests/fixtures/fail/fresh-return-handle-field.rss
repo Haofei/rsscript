@@ -1,0 +1,17 @@
+// expect: RS0602
+features: local
+
+struct Image {
+    pixels: Buffer
+}
+
+struct ImageBox {
+    image: handle Image
+}
+
+fn load_box(path: read Path) -> fresh ImageBox
+
+fn bad_image(path: read Path) -> fresh Image {
+    local boxed = load_box(path: read path)
+    return boxed.image
+}

@@ -465,6 +465,15 @@ fn collect_fresh_return_issue(
             );
         }
         HirReturnProof::Unknown => {
+            if let Some(value) = value
+                && fresh_field_access_base(value).is_some_and(|name| {
+                    entry_states
+                        .get(return_span)
+                        .is_some_and(|state| state.is_local(name) && state.is_clean_local(name))
+                })
+            {
+                return;
+            }
             push_fresh_return_issue(
                 issues,
                 FreshReturnIssueKind::Unknown,
@@ -475,6 +484,25 @@ fn collect_fresh_return_issue(
         }
         HirReturnProof::NoValue | HirReturnProof::StructConstructor | HirReturnProof::FreshCall => {
         }
+    }
+}
+
+fn fresh_field_access_base(expr: &HirExpr) -> Option<&str> {
+    match expr {
+        HirExpr::Field { base, access, .. } if !access.is_handle => fresh_field_access_base(base),
+        HirExpr::Ident { name, .. } => Some(name),
+        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => {
+            fresh_field_access_base(value)
+        }
+        HirExpr::Manage { .. }
+        | HirExpr::Field { .. }
+        | HirExpr::Index { .. }
+        | HirExpr::Call { .. }
+        | HirExpr::Binary { .. }
+        | HirExpr::Closure { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => None,
     }
 }
 

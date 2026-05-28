@@ -291,6 +291,59 @@ fn bad_schedule(scheduler: mut Scheduler, path: read Path) -> fresh Image {
 }
 
 #[test]
+fn fresh_return_allows_inline_field_of_clean_local() {
+    let source = r#"
+features: local
+
+struct Image {
+    pixels: Buffer
+}
+
+struct DecodeResult {
+    image: Image
+    metadata: Metadata
+}
+
+fn decode(path: read Path) -> fresh DecodeResult
+
+fn load_image(path: read Path) -> fresh Image {
+    local decoded = decode(path: read path)
+    return decoded.image
+}
+"#;
+
+    assert_eq!(analyze_source("fresh-inline-field.rss", source), Vec::new());
+}
+
+#[test]
+fn fresh_return_rejects_handle_field_of_clean_local() {
+    let source = r#"
+features: local
+
+struct Image {
+    pixels: Buffer
+}
+
+struct ImageBox {
+    image: handle Image
+}
+
+fn load_box(path: read Path) -> fresh ImageBox
+
+fn bad_image(path: read Path) -> fresh Image {
+    local boxed = load_box(path: read path)
+    return boxed.image
+}
+"#;
+    let codes = analyze_source("fresh-handle-field.rss", source)
+        .into_iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+
+    assert!(codes.contains(&"RS0602".to_string()));
+}
+
+#[test]
 fn diagnostics_json_uses_protocol_shape() {
     let path = Path::new("tests/fixtures/fail/use-after-manage.rss");
     let source = read_fixture(path);
