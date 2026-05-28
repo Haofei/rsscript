@@ -1080,6 +1080,8 @@ fn is_resource_pool_borrow_expr(expr: &Expr) -> bool {
 fn lower_builtin_value_ident(name: &str) -> Option<&'static str> {
     match name {
         "Unit" => Some("()"),
+        "true" => Some("true"),
+        "false" => Some("false"),
         "None" => Some("None"),
         _ => None,
     }

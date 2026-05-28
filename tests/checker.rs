@@ -355,6 +355,23 @@ fn main() -> Unit {
 }
 
 #[test]
+fn rust_lowering_maps_bool_literals_to_rust_literals() {
+    let source = r#"
+fn main() -> Unit {
+    let enabled = true
+    let disabled = false
+    let changed = enabled != disabled
+    return Unit
+}
+"#;
+    let rust = lower_source_to_rust("bool.rss", source).expect("source should lower");
+
+    assert!(rust.contains("let enabled = true;"));
+    assert!(rust.contains("let disabled = false;"));
+    assert!(rust.contains("let changed = enabled != disabled;"));
+}
+
+#[test]
 fn rust_lowering_maps_try_operator_to_rust_result_propagation() {
     let source = r#"
 features: local
