@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use crate::diagnostic::code;
+use crate::diagnostic::{Span, code};
 use crate::syntax::ast::{
     Block, CallArg, DataEffect, EffectDecl, Expr, FieldDecl, FileMode, FunctionDecl, Item, LetKind,
     Param, Stmt, TypeDecl, TypeKind, TypeRef,
@@ -14,6 +14,20 @@ pub struct ReviewFinding {
     pub code: String,
     pub risk: ReviewRisk,
     pub summary: String,
+    pub spans: Vec<ReviewSpan>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReviewSpan {
+    pub file: String,
+    pub line: usize,
+    pub column: usize,
+    pub length: usize,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -57,6 +71,9 @@ pub fn review_sources(
                 file_mode_label(old_program.mode),
                 file_mode_label(new_program.mode)
             ),
+            Vec::new(),
+            Some(file_mode_label(old_program.mode).to_string()),
+            Some(file_mode_label(new_program.mode).to_string()),
         ));
     }
 
@@ -66,15 +83,21 @@ pub fn review_sources(
 
     for name in type_names {
         match (old_types.get(&name), new_types.get(&name)) {
-            (Some(_), None) => findings.push(review_finding(
+            (Some(old), None) => findings.push(review_finding(
                 code::REVIEW_TYPE_REMOVED,
                 ReviewRisk::TypeLayout,
                 format!("type `{name}` was removed."),
+                vec![review_span(&old.span, "removed type")],
+                Some(type_contract(old)),
+                None,
             )),
-            (None, Some(_)) => findings.push(review_finding(
+            (None, Some(new)) => findings.push(review_finding(
                 code::REVIEW_TYPE_ADDED,
                 ReviewRisk::TypeLayout,
                 format!("type `{name}` was added."),
+                vec![review_span(&new.span, "added type")],
+                None,
+                Some(type_contract(new)),
             )),
             (Some(old), Some(new)) => compare_type(old, new, &mut findings),
             (None, None) => {}
@@ -91,15 +114,21 @@ pub fn review_sources(
 
     for name in function_names {
         match (old_functions.get(&name), new_functions.get(&name)) {
-            (Some(_), None) => findings.push(review_finding(
+            (Some(old), None) => findings.push(review_finding(
                 code::REVIEW_FUNCTION_REMOVED,
                 ReviewRisk::Api,
                 format!("function `{name}` was removed."),
+                vec![review_span(&old.span, "removed function")],
+                Some(function_contract(old)),
+                None,
             )),
-            (None, Some(_)) => findings.push(review_finding(
+            (None, Some(new)) => findings.push(review_finding(
                 code::REVIEW_FUNCTION_ADDED,
                 ReviewRisk::Api,
                 format!("function `{name}` was added."),
+                vec![review_span(&new.span, "added function")],
+                None,
+                Some(function_contract(new)),
             )),
             (Some(old), Some(new)) => compare_function(old, new, &mut findings),
             (None, None) => {}
@@ -130,11 +159,21 @@ pub fn format_review_json(findings: &[ReviewFinding]) -> String {
     serde_json::to_string(findings).expect("review JSON serialization should not fail")
 }
 
-fn review_finding(code: &str, risk: ReviewRisk, summary: impl Into<String>) -> ReviewFinding {
+fn review_finding(
+    code: &str,
+    risk: ReviewRisk,
+    summary: impl Into<String>,
+    spans: Vec<ReviewSpan>,
+    before: Option<String>,
+    after: Option<String>,
+) -> ReviewFinding {
     ReviewFinding {
         code: code.to_string(),
         risk,
         summary: summary.into(),
+        spans,
+        before,
+        after,
     }
 }
 
@@ -146,6 +185,7 @@ struct FunctionSig {
     returns_fresh: bool,
     effects: BTreeSet<String>,
     boundary: BoundarySig,
+    span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,6 +219,7 @@ struct TypeSig {
     name: String,
     kind: TypeKind,
     fields: BTreeMap<String, FieldSig>,
+    span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -206,6 +247,7 @@ fn type_sig(type_decl: &TypeDecl) -> TypeSig {
             .iter()
             .map(|field| (field.name.clone(), field_sig(field)))
             .collect(),
+        span: type_decl.span.clone(),
     }
 }
 
@@ -234,6 +276,7 @@ fn function_sig(function: &FunctionDecl) -> FunctionSig {
         returns_fresh: function.returns_fresh,
         effects: function.effects.iter().map(effect_name).collect(),
         boundary: boundary_sig(&function.body),
+        span: function.span.clone(),
     }
 }
 
@@ -251,6 +294,9 @@ fn compare_function(old: &FunctionSig, new: &FunctionSig, findings: &mut Vec<Rev
             code::REVIEW_PARAMS_CHANGED,
             ReviewRisk::Api,
             format!("function `{}` parameters changed.", old.name),
+            paired_spans(&old.span, &new.span, "old function", "new function"),
+            Some(params_contract(&old.params)),
+            Some(params_contract(&new.params)),
         ));
     }
     if old.return_type != new.return_type || old.returns_fresh != new.returns_fresh {
@@ -258,6 +304,9 @@ fn compare_function(old: &FunctionSig, new: &FunctionSig, findings: &mut Vec<Rev
             code::REVIEW_RETURN_CHANGED,
             ReviewRisk::Api,
             format!("function `{}` return contract changed.", old.name),
+            paired_spans(&old.span, &new.span, "old function", "new function"),
+            Some(return_contract(old)),
+            Some(return_contract(new)),
         ));
     }
     if old.effects != new.effects {
@@ -265,6 +314,9 @@ fn compare_function(old: &FunctionSig, new: &FunctionSig, findings: &mut Vec<Rev
             code::REVIEW_EFFECTS_CHANGED,
             ReviewRisk::Effect,
             format!("function `{}` effects changed.", old.name),
+            paired_spans(&old.span, &new.span, "old function", "new function"),
+            Some(effects_contract(&old.effects)),
+            Some(effects_contract(&new.effects)),
         ));
     }
     if old.boundary != new.boundary {
@@ -276,6 +328,9 @@ fn compare_function(old: &FunctionSig, new: &FunctionSig, findings: &mut Vec<Rev
                 old.name,
                 boundary_change_summary(&old.boundary, &new.boundary)
             ),
+            paired_spans(&old.span, &new.span, "old function", "new function"),
+            Some(boundary_contract(&old.boundary)),
+            Some(boundary_contract(&new.boundary)),
         ));
     }
 }
@@ -291,6 +346,9 @@ fn compare_type(old: &TypeSig, new: &TypeSig, findings: &mut Vec<ReviewFinding>)
                 type_kind_label(old.kind),
                 type_kind_label(new.kind)
             ),
+            paired_spans(&old.span, &new.span, "old type", "new type"),
+            Some(type_kind_label(old.kind).to_string()),
+            Some(type_kind_label(new.kind).to_string()),
         ));
     }
     if old.fields != new.fields {
@@ -298,6 +356,9 @@ fn compare_type(old: &TypeSig, new: &TypeSig, findings: &mut Vec<ReviewFinding>)
             code::REVIEW_TYPE_FIELDS_CHANGED,
             ReviewRisk::TypeLayout,
             format!("type `{}` field layout changed.", old.name),
+            paired_spans(&old.span, &new.span, "old type", "new type"),
+            Some(fields_contract(&old.fields)),
+            Some(fields_contract(&new.fields)),
         ));
     }
 }
@@ -308,6 +369,20 @@ fn file_mode_label(mode: Option<FileMode>) -> &'static str {
         Some(FileMode::UsesLocal) => "uses-local",
         None => "<missing>",
     }
+}
+
+fn review_span(span: &Span, label: &str) -> ReviewSpan {
+    ReviewSpan {
+        file: span.file.clone(),
+        line: span.line,
+        column: span.column,
+        length: span.length,
+        label: label.to_string(),
+    }
+}
+
+fn paired_spans(old: &Span, new: &Span, old_label: &str, new_label: &str) -> Vec<ReviewSpan> {
+    vec![review_span(old, old_label), review_span(new, new_label)]
 }
 
 fn type_kind_label(kind: TypeKind) -> &'static str {
@@ -324,6 +399,92 @@ fn effect_label(effect: DataEffect) -> &'static str {
         DataEffect::Mut => "mut",
         DataEffect::Take => "take",
     }
+}
+
+fn function_contract(function: &FunctionSig) -> String {
+    let mut contract = format!(
+        "fn {}({})",
+        function.name,
+        params_contract(&function.params)
+    );
+    if let Some(return_type) = &function.return_type {
+        if function.returns_fresh {
+            contract.push_str(&format!(" -> fresh {return_type}"));
+        } else {
+            contract.push_str(&format!(" -> {return_type}"));
+        }
+    }
+    if !function.effects.is_empty() {
+        contract.push_str(&format!(
+            " effects({})",
+            effects_contract(&function.effects)
+        ));
+    }
+    contract
+}
+
+fn params_contract(params: &[ParamSig]) -> String {
+    params
+        .iter()
+        .map(|param| match param.effect {
+            Some(effect) => format!("{}: {} {}", param.name, effect, param.type_name),
+            None => format!("{}: {}", param.name, param.type_name),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn return_contract(function: &FunctionSig) -> String {
+    match (&function.return_type, function.returns_fresh) {
+        (Some(return_type), true) => format!("fresh {return_type}"),
+        (Some(return_type), false) => return_type.clone(),
+        (None, _) => "<missing>".to_string(),
+    }
+}
+
+fn effects_contract(effects: &BTreeSet<String>) -> String {
+    if effects.is_empty() {
+        return "<none>".to_string();
+    }
+    effects.iter().cloned().collect::<Vec<_>>().join(", ")
+}
+
+fn type_contract(ty: &TypeSig) -> String {
+    format!(
+        "{} {} {{ {} }}",
+        type_kind_label(ty.kind),
+        ty.name,
+        fields_contract(&ty.fields)
+    )
+}
+
+fn fields_contract(fields: &BTreeMap<String, FieldSig>) -> String {
+    if fields.is_empty() {
+        return "<none>".to_string();
+    }
+    fields
+        .iter()
+        .map(|(name, field)| {
+            if field.is_handle {
+                format!("{name}: handle {}", field.type_name)
+            } else {
+                format!("{name}: {}", field.type_name)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn boundary_contract(boundary: &BoundarySig) -> String {
+    if boundary.events.is_empty() {
+        return "<none>".to_string();
+    }
+    boundary
+        .events
+        .iter()
+        .map(boundary_event_label)
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn type_name(ty: &TypeRef) -> String {

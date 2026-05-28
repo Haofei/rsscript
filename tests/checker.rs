@@ -82,7 +82,9 @@ fn review_json_uses_protocol_shape() {
     let old_source = r#"
 mode: managed
 
-fn render(path: read Path) -> Image {
+fn render(path: read Path) -> Image
+    effects(no_panic)
+{
     Image.load(path: read path)
 }
 "#;
@@ -109,6 +111,17 @@ fn render(path: take Path) -> fresh Image
         items
             .iter()
             .any(|item| item["code"] == "RSR006" && item["risk"] == "effect")
+    );
+    let effect = items
+        .iter()
+        .find(|item| item["code"] == "RSR006")
+        .expect("expected effect review finding");
+    assert_eq!(effect["before"], "no_panic");
+    assert_eq!(effect["after"], "retains(path)");
+    assert!(
+        effect["spans"]
+            .as_array()
+            .is_some_and(|spans| spans.len() == 2)
     );
     assert!(items.iter().all(|item| {
         item["summary"]
