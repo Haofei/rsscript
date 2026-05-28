@@ -5,7 +5,7 @@ pub fn Cache.insert(
     key: read String,
     value: read String,
 ) -> Unit
-    effects(retains(value))
+    effects(retains(key), retains(value))
 
 pub fn Cache.lookup(cache: read Cache, key: read String) -> String
 

@@ -1,0 +1,20 @@
+fn put(
+    cache: mut Cache,
+    key: read String,
+    value: read String,
+) -> Unit
+    effects(retains(key), retains(value))
+{
+    Cache.insert(cache: mut cache, key: read key, value: read value)
+    return Unit
+}
+
+fn main() -> Unit {
+    let cache = Cache.new()
+    put(cache: mut cache, key: read "/users", value: read "handled /users")
+
+    let body = Cache.lookup(cache: read cache, key: read "/users")
+    Assert.equal(left: read body, right: read "handled /users")
+    Log.write(message: read body)
+    return Unit
+}
