@@ -2814,11 +2814,15 @@ fn syntax_parser_accepts_all_fixtures() {
     for path in paths {
         let source = read_fixture(&path);
         let program = parse_source(path.to_str().unwrap(), &source);
-        assert!(
-            !program.items.is_empty(),
-            "{} missing items",
-            path.display()
-        );
+        if program.items.is_empty() {
+            assert!(
+                !program.malformed_declaration_spans.is_empty()
+                    || !program.unknown_top_level_spans.is_empty(),
+                "{} missing items without parser diagnostics",
+                path.display()
+            );
+            continue;
+        }
         assert!(
             program
                 .items

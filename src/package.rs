@@ -569,9 +569,11 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         .iter()
         .map(|source| (source.path.as_str(), source.contents.as_str()))
         .collect::<Vec<_>>();
-    let mut external_interfaces = core_interfaces().to_vec();
+    let core_interface_refs = core_interfaces().to_vec();
+    let contract_external_interfaces = dependency_interface_refs.clone();
+    let mut external_interfaces = core_interface_refs;
     external_interfaces.extend(dependency_interface_refs);
-    let mut combined_interfaces = external_interfaces.clone();
+    let mut combined_interfaces = contract_external_interfaces.clone();
     combined_interfaces.extend(interface_refs.clone());
     let native_binding_interface_refs = native_binding_interfaces
         .iter()
@@ -587,7 +589,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
     let interface_frontend_diagnostics = interface_refs
         .iter()
         .flat_map(|(path, contents)| {
-            analyze_source_with_interfaces(path, contents, &external_interfaces)
+            analyze_source_with_interfaces(path, contents, &contract_external_interfaces)
         })
         .collect::<Vec<_>>();
     let interface_diagnostic_exports =
