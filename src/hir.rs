@@ -278,7 +278,6 @@ pub struct Hir {
     fields_by_name: HashMap<String, Vec<FieldInfo>>,
     duplicate_symbols: Vec<DuplicateSymbol>,
     call_sites: Vec<HirCallSite>,
-    call_resolutions_by_span: HashMap<Span, CallResolution>,
     bindings: Vec<HirBinding>,
     field_accesses: Vec<HirFieldAccess>,
     effect_events: Vec<HirEffectEvent>,
@@ -362,10 +361,6 @@ impl Hir {
         &self.duplicate_symbols
     }
 
-    pub fn call_resolution(&self, span: &Span) -> Option<&CallResolution> {
-        self.call_resolutions_by_span.get(span)
-    }
-
     pub fn function_body(&self, function_name: &str) -> Option<&HirFunctionBody> {
         self.function_bodies.get(function_name)
     }
@@ -432,11 +427,6 @@ impl Hir {
             collect_function_body_facts(self, function, &mut facts);
         }
 
-        self.call_resolutions_by_span = facts
-            .call_sites
-            .iter()
-            .map(|site| (site.span.clone(), site.resolution.clone()))
-            .collect();
         self.function_bodies = build_function_bodies(&facts);
         self.call_sites = facts.call_sites;
         self.bindings = facts.bindings;

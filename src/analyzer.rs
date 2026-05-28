@@ -1,8 +1,8 @@
 use crate::checks;
-use crate::diagnostic::{Diagnostic, Span, code};
-use crate::hir::{CallResolution, DuplicateSymbolKind, Hir, HirTypeKind};
+use crate::diagnostic::{Diagnostic, code};
+use crate::hir::{DuplicateSymbolKind, Hir, HirTypeKind};
 use crate::lexer::{Token, lex};
-use crate::syntax::ast::{Callee, EffectDecl, Item};
+use crate::syntax::ast::{EffectDecl, Item};
 use crate::syntax::parse_source;
 
 pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
@@ -166,13 +166,6 @@ impl Analyzer<'_> {
                 }
             }
         }
-    }
-
-    pub(crate) fn resolve_call_site(&self, callee: &Callee, span: &Span) -> CallResolution {
-        self.hir
-            .call_resolution(span)
-            .cloned()
-            .unwrap_or_else(|| self.hir.resolve_call(callee))
     }
 }
 

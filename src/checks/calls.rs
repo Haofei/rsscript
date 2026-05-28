@@ -2,84 +2,105 @@ use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, Span, code};
-use crate::hir::CallResolution;
-use crate::syntax::ast::{Block, CallArg, Callee, DataEffect, Expr, Item, LetKind, Stmt};
+use crate::hir::{
+    CallResolution, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirFunctionBody, HirStmt,
+    ParamEffect,
+};
+use crate::syntax::ast::{Callee, Item};
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
     let items = analyzer.syntax_program.items.clone();
     for item in &items {
         if let Item::Function(function) = item {
-            let locals = collect_local_bindings_from_block(&function.body);
-            check_block(analyzer, &function.body, &locals);
+            let Some(body) = analyzer.hir.function_body(&function.name).cloned() else {
+                continue;
+            };
+            let locals = collect_local_bindings(&body);
+            if let Some(block) = &body.block {
+                check_block(analyzer, block, &locals);
+            }
         }
     }
 }
 
-fn check_block(analyzer: &mut Analyzer<'_>, block: &Block, locals: &HashSet<String>) {
+fn check_block(analyzer: &mut Analyzer<'_>, block: &HirBlock, locals: &HashSet<String>) {
     for statement in &block.statements {
         match statement {
-            Stmt::Let(stmt) => {
-                if let Some(value) = &stmt.value {
-                    check_expr(analyzer, value, locals);
-                }
+            HirStmt::Let {
+                value: Some(value), ..
             }
-            Stmt::Return(stmt) => {
-                if let Some(value) = &stmt.value {
-                    check_expr(analyzer, value, locals);
-                }
+            | HirStmt::Return {
+                value: Some(value), ..
             }
-            Stmt::With(stmt) => {
-                check_expr(analyzer, &stmt.resource, locals);
-                check_block(analyzer, &stmt.body, locals);
+            | HirStmt::Expr(value) => check_expr(analyzer, value, locals),
+            HirStmt::With { resource, body, .. } => {
+                check_expr(analyzer, resource, locals);
+                check_block(analyzer, body, locals);
             }
-            Stmt::If(stmt) => {
-                check_expr(analyzer, &stmt.condition, locals);
-                check_block(analyzer, &stmt.then_body, locals);
-                if let Some(else_body) = &stmt.else_body {
+            HirStmt::If {
+                condition,
+                then_body,
+                else_body,
+                ..
+            } => {
+                check_expr(analyzer, condition, locals);
+                check_block(analyzer, then_body, locals);
+                if let Some(else_body) = else_body {
                     check_block(analyzer, else_body, locals);
                 }
             }
-            Stmt::Loop(stmt) => {
-                if let Some(condition) = &stmt.condition {
+            HirStmt::Loop {
+                condition, body, ..
+            } => {
+                if let Some(condition) = condition {
                     check_expr(analyzer, condition, locals);
                 }
-                check_block(analyzer, &stmt.body, locals);
+                check_block(analyzer, body, locals);
             }
-            Stmt::Expr(expr) => check_expr(analyzer, expr, locals),
-            Stmt::Break(_) | Stmt::Continue(_) => {}
-            Stmt::Unknown(_) => {}
+            HirStmt::Let { value: None, .. }
+            | HirStmt::Return { value: None, .. }
+            | HirStmt::Break(_)
+            | HirStmt::Continue(_)
+            | HirStmt::Unknown(_) => {}
         }
     }
 }
 
-fn check_expr(analyzer: &mut Analyzer<'_>, expr: &Expr, locals: &HashSet<String>) {
+fn check_expr(analyzer: &mut Analyzer<'_>, expr: &HirExpr, locals: &HashSet<String>) {
     match expr {
-        Expr::Call {
-            callee, args, span, ..
+        HirExpr::Call {
+            callee,
+            args,
+            span,
+            resolution,
+            ..
         } => {
-            check_call_args(analyzer, callee, args, span, locals);
+            check_call_args(analyzer, callee, args, span, resolution, locals);
             for arg in args {
                 check_expr(analyzer, &arg.value, locals);
             }
         }
-        Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
+        HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => {
             check_expr(analyzer, value, locals);
         }
-        Expr::Field { base, .. } => check_expr(analyzer, base, locals),
-        Expr::Closure { body, .. } => check_block(analyzer, body, locals),
-        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        HirExpr::Field { base, .. } => check_expr(analyzer, base, locals),
+        HirExpr::Closure { body, .. } => check_block(analyzer, body, locals),
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
     }
 }
 
 fn check_call_args(
     analyzer: &mut Analyzer<'_>,
     callee: &Callee,
-    args: &[CallArg],
+    args: &[HirCallArg],
     call_span: &Span,
+    resolution: &CallResolution,
     locals: &HashSet<String>,
 ) {
     let call_name = callee_name(callee);
-    let resolution = analyzer.resolve_call_site(callee, call_span);
     if matches!(resolution, CallResolution::EnumVariant) {
         return;
     }
@@ -224,7 +245,7 @@ fn check_call_args(
                 Diagnostic::error(
                     code::MISSING_DATA_EFFECT,
                     format!("argument `{name}` for `{call_name}` is missing `{expected}`."),
-                    arg.value.span().clone(),
+                    hir_expr_span(&arg.value).clone(),
                     "missing data effect",
                 )
                 .with_cause("Non-Copy parameters require an explicit `read`, `mut`, or `take` call-site effect.")
@@ -244,12 +265,14 @@ fn check_call_args(
         if !retained_params.contains(name) {
             continue;
         }
-        if let Expr::Effect {
-            effect: DataEffect::Read,
+        if let HirExpr::Effect {
+            effect: ParamEffect::Read,
             value,
             ..
         } = &arg.value
-            && let Expr::Ident(var, span) = value.as_ref()
+            && let HirExpr::Ident {
+                name: var, span, ..
+            } = value.as_ref()
             && locals.contains(var)
         {
             analyzer.diagnostics.push(
@@ -296,80 +319,31 @@ fn callee_display(callee: &Callee) -> String {
     }
 }
 
-fn expr_data_effect(expr: &Expr) -> Option<&'static str> {
+fn expr_data_effect(expr: &HirExpr) -> Option<&'static str> {
     match expr {
-        Expr::Effect { effect, .. } => Some(match effect {
-            DataEffect::Read => "read",
-            DataEffect::Mut => "mut",
-            DataEffect::Take => "take",
-        }),
+        HirExpr::Effect { effect, .. } => Some(effect.as_str()),
         _ => None,
     }
 }
 
-fn collect_local_bindings_from_block(block: &Block) -> HashSet<String> {
-    let mut locals = HashSet::new();
-    collect_local_bindings_from_statements(&block.statements, &mut locals);
-    locals
+fn collect_local_bindings(body: &HirFunctionBody) -> HashSet<String> {
+    body.bindings
+        .iter()
+        .filter(|binding| binding.kind == HirBindingKind::LocalLet)
+        .map(|binding| binding.name.clone())
+        .collect()
 }
 
-fn collect_local_bindings_from_statements(statements: &[Stmt], locals: &mut HashSet<String>) {
-    for statement in statements {
-        match statement {
-            Stmt::Let(stmt) if stmt.kind == LetKind::Local => {
-                locals.insert(stmt.name.clone());
-                if let Some(value) = &stmt.value {
-                    collect_local_bindings_from_expr(value, locals);
-                }
-            }
-            Stmt::Let(stmt) => {
-                if let Some(value) = &stmt.value {
-                    collect_local_bindings_from_expr(value, locals);
-                }
-            }
-            Stmt::Return(stmt) => {
-                if let Some(value) = &stmt.value {
-                    collect_local_bindings_from_expr(value, locals);
-                }
-            }
-            Stmt::With(stmt) => {
-                collect_local_bindings_from_expr(&stmt.resource, locals);
-                collect_local_bindings_from_statements(&stmt.body.statements, locals);
-            }
-            Stmt::If(stmt) => {
-                collect_local_bindings_from_expr(&stmt.condition, locals);
-                collect_local_bindings_from_statements(&stmt.then_body.statements, locals);
-                if let Some(else_body) = &stmt.else_body {
-                    collect_local_bindings_from_statements(&else_body.statements, locals);
-                }
-            }
-            Stmt::Loop(stmt) => {
-                if let Some(condition) = &stmt.condition {
-                    collect_local_bindings_from_expr(condition, locals);
-                }
-                collect_local_bindings_from_statements(&stmt.body.statements, locals);
-            }
-            Stmt::Expr(expr) => collect_local_bindings_from_expr(expr, locals),
-            Stmt::Break(_) | Stmt::Continue(_) => {}
-            Stmt::Unknown(_) => {}
-        }
-    }
-}
-
-fn collect_local_bindings_from_expr(expr: &Expr, locals: &mut HashSet<String>) {
+fn hir_expr_span(expr: &HirExpr) -> &Span {
     match expr {
-        Expr::Call { args, .. } => {
-            for arg in args {
-                collect_local_bindings_from_expr(&arg.value, locals);
-            }
-        }
-        Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
-            collect_local_bindings_from_expr(value, locals);
-        }
-        Expr::Field { base, .. } => collect_local_bindings_from_expr(base, locals),
-        Expr::Closure { body, .. } => {
-            collect_local_bindings_from_statements(&body.statements, locals);
-        }
-        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        HirExpr::Ident { span, .. }
+        | HirExpr::Number { span, .. }
+        | HirExpr::String { span, .. }
+        | HirExpr::Field { span, .. }
+        | HirExpr::Call { span, .. }
+        | HirExpr::Effect { span, .. }
+        | HirExpr::Manage { span, .. }
+        | HirExpr::Closure { span, .. }
+        | HirExpr::Unknown(span) => span,
     }
 }
