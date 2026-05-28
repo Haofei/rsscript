@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::analyzer::analyze_source;
-use crate::diagnostic::{Diagnostic, Span};
+use crate::diagnostic::{Diagnostic, Severity, Span, code};
 use crate::syntax::ast::{
     BinaryOp, Block, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileMode, FunctionDecl,
     GenericBound, GenericParam, Item, LetKind, Param, Program, Stmt, TypeDecl, TypeKind, TypeRef,
@@ -22,11 +22,17 @@ pub struct LoweredRust {
     pub source_map: Vec<RustSourceMapEntry>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RustSourceMapEntry {
     pub kind: String,
     pub source: Span,
     pub generated: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemappedRustcDiagnostic {
+    pub diagnostic: Diagnostic,
+    pub mapped: bool,
 }
 
 pub fn lower_source_to_rust(file: &str, source: &str) -> Result<String, Vec<Diagnostic>> {
@@ -78,6 +84,103 @@ pub fn lower_program_to_rust(program: &Program) -> String {
 
 pub fn lower_program_to_rust_with_map(program: &Program) -> LoweredRust {
     RustLowerer::new(program).lower()
+}
+
+pub fn parse_source_map_json(source_map_json: &str) -> Result<Vec<RustSourceMapEntry>, String> {
+    serde_json::from_str(source_map_json)
+        .map_err(|error| format!("failed to parse RSScript source map JSON: {error}"))
+}
+
+pub fn remap_rustc_diagnostic_json(
+    source_map: &[RustSourceMapEntry],
+    rustc_json: &str,
+) -> Result<Option<RemappedRustcDiagnostic>, String> {
+    let rustc: RustcJsonDiagnostic = serde_json::from_str(rustc_json)
+        .map_err(|error| format!("failed to parse rustc JSON diagnostic: {error}"))?;
+    if !matches!(rustc.level.as_str(), "error" | "warning") {
+        return Ok(None);
+    }
+
+    let rustc_span = rustc
+        .spans
+        .iter()
+        .find(|span| span.is_primary)
+        .or_else(|| rustc.spans.first());
+    let backend_code = rustc
+        .code
+        .as_ref()
+        .map(|code| code.code.as_str())
+        .unwrap_or("<none>");
+
+    if let Some(rustc_span) = rustc_span
+        && let Some(entry) = best_source_map_entry(
+            source_map,
+            &rustc_span.file_name,
+            rustc_span.line_start,
+            rustc_span.column_start,
+        )
+    {
+        let severity = rustc_severity(&rustc.level);
+        let summary = format!("backend diagnostic mapped to RSScript: {}", rustc.message);
+        let diagnostic = Diagnostic {
+            code: code::RUSTC_DIAGNOSTIC_MAPPED.to_string(),
+            severity,
+            summary,
+            span: entry.source.clone(),
+            label: "backend diagnostic maps to this RSScript construct".to_string(),
+            causes: vec![
+                format!("rustc code: {backend_code}"),
+                format!(
+                    "generated Rust: {}:{}:{}",
+                    rustc_span.file_name, rustc_span.line_start, rustc_span.column_start
+                ),
+                rustc.message,
+            ],
+            fixes: Vec::new(),
+        };
+        return Ok(Some(RemappedRustcDiagnostic {
+            diagnostic,
+            mapped: true,
+        }));
+    }
+
+    let generated = rustc_span
+        .map(generated_span_from_rustc)
+        .unwrap_or_else(|| Span {
+            file: "<rustc-json>".to_string(),
+            line: 1,
+            column: 1,
+            length: 1,
+        });
+    let diagnostic = Diagnostic {
+        code: code::RUSTC_DIAGNOSTIC_UNMAPPABLE.to_string(),
+        severity: rustc_severity(&rustc.level),
+        summary: format!("unmappable backend diagnostic: {}", rustc.message),
+        span: generated,
+        label: "generated Rust diagnostic could not be mapped to RSScript source".to_string(),
+        causes: vec![format!("rustc code: {backend_code}"), rustc.message],
+        fixes: Vec::new(),
+    };
+    Ok(Some(RemappedRustcDiagnostic {
+        diagnostic,
+        mapped: false,
+    }))
+}
+
+pub fn remap_rustc_diagnostic_json_lines(
+    source_map: &[RustSourceMapEntry],
+    rustc_json_lines: &str,
+) -> Result<Vec<RemappedRustcDiagnostic>, String> {
+    let mut diagnostics = Vec::new();
+    for line in rustc_json_lines
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+    {
+        if let Some(diagnostic) = remap_rustc_diagnostic_json(source_map, line)? {
+            diagnostics.push(diagnostic);
+        }
+    }
+    Ok(diagnostics)
 }
 
 struct RustLowerer<'a> {
@@ -587,6 +690,64 @@ fn stmt_span(statement: &Stmt) -> &Span {
         Stmt::Break(span) | Stmt::Continue(span) | Stmt::Unknown(span) => span,
         Stmt::Expr(expr) => expr.span(),
     }
+}
+
+fn best_source_map_entry<'a>(
+    source_map: &'a [RustSourceMapEntry],
+    file: &str,
+    line: usize,
+    column: usize,
+) -> Option<&'a RustSourceMapEntry> {
+    source_map
+        .iter()
+        .filter(|entry| entry.generated.file == file)
+        .filter(|entry| generated_span_starts_before_or_at(&entry.generated, line, column))
+        .max_by_key(|entry| (entry.generated.line, entry.generated.column))
+}
+
+fn generated_span_starts_before_or_at(span: &Span, line: usize, column: usize) -> bool {
+    span.line < line || (span.line == line && span.column <= column)
+}
+
+fn rustc_severity(level: &str) -> Severity {
+    if level == "warning" {
+        Severity::Warning
+    } else {
+        Severity::Error
+    }
+}
+
+fn generated_span_from_rustc(span: &RustcJsonSpan) -> Span {
+    Span {
+        file: span.file_name.clone(),
+        line: span.line_start,
+        column: span.column_start,
+        length: span.column_end.saturating_sub(span.column_start).max(1),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct RustcJsonDiagnostic {
+    message: String,
+    level: String,
+    code: Option<RustcJsonCode>,
+    #[serde(default)]
+    spans: Vec<RustcJsonSpan>,
+}
+
+#[derive(serde::Deserialize)]
+struct RustcJsonCode {
+    code: String,
+}
+
+#[derive(serde::Deserialize)]
+struct RustcJsonSpan {
+    file_name: String,
+    line_start: usize,
+    column_start: usize,
+    column_end: usize,
+    #[serde(default)]
+    is_primary: bool,
 }
 
 fn push_source_marker(

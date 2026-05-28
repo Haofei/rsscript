@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub mod code {
     pub const MISSING_FILE_MODE: &str = "RS0001";
@@ -43,6 +43,8 @@ pub mod code {
     pub const IMPLICIT_CONVERSION_ATTEMPT: &str = "RS1002";
     pub const OWN_STRUCT_ATTEMPT: &str = "RS1003";
     pub const SURFACE_REFERENCE_ATTEMPT: &str = "RS1004";
+    pub const RUSTC_DIAGNOSTIC_MAPPED: &str = "RS1101";
+    pub const RUSTC_DIAGNOSTIC_UNMAPPABLE: &str = "RS1102";
 
     pub const REVIEW_MODE_CHANGED: &str = "RSR001";
     pub const REVIEW_FUNCTION_REMOVED: &str = "RSR002";
@@ -79,7 +81,7 @@ impl Severity {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Span {
     pub file: String,
     pub line: usize,
@@ -421,6 +423,16 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::SURFACE_REFERENCE_ATTEMPT,
         title: "surface reference attempt",
         explanation: "RSScript does not expose `&T` or `&mut T` syntax. Use explicit parameter effects such as `read`, `mut`, and `take`.",
+    },
+    DiagnosticExplanation {
+        code: code::RUSTC_DIAGNOSTIC_MAPPED,
+        title: "mapped rustc diagnostic",
+        explanation: "A backend rustc diagnostic was translated through RSScript source-map metadata. Treat this as a compiler, runtime, native binding, or lowering issue unless the mapped RSScript source clearly violates the language rules.",
+    },
+    DiagnosticExplanation {
+        code: code::RUSTC_DIAGNOSTIC_UNMAPPABLE,
+        title: "unmappable rustc diagnostic",
+        explanation: "rustc reported a backend diagnostic whose generated Rust location could not be mapped back to RSScript source. The compiler should surface the generated Rust reference as secondary internal detail instead of exposing raw rustc output as the primary diagnostic.",
     },
 ];
 

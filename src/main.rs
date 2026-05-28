@@ -7,7 +7,8 @@ use rsscript::{
     analyze_source, explain_diagnostic_code, format_diagnostic_explanation,
     format_diagnostics_human, format_diagnostics_json, format_review_human, format_review_json,
     format_review_map_human, format_review_map_json, lower_source_to_rust,
-    lower_source_to_rust_package, review_map_sources, review_sources,
+    lower_source_to_rust_package, parse_source_map_json, remap_rustc_diagnostic_json_lines,
+    review_map_sources, review_sources,
 };
 
 fn main() -> ExitCode {
@@ -22,6 +23,7 @@ fn main() -> ExitCode {
         "fmt" => run_fmt(&args[2..]),
         "review" => run_review(&args[2..]),
         "lower" => run_lower(&args[2..]),
+        "remap-rustc" => run_remap_rustc(&args[2..]),
         _ => {
             print_usage();
             ExitCode::from(2)
@@ -211,6 +213,63 @@ fn run_lower_rust_package(path: &str, source: &str, out_dir: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn run_remap_rustc(args: &[String]) -> ExitCode {
+    let (json, paths) = parse_multi_path_args(args);
+    let [source_map_path, rustc_json_path] = paths.as_slice() else {
+        print_usage();
+        return ExitCode::from(2);
+    };
+
+    let source_map_json = match fs::read_to_string(source_map_path) {
+        Ok(source) => source,
+        Err(error) => {
+            eprintln!("failed to read {source_map_path}: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let rustc_json_lines = match fs::read_to_string(rustc_json_path) {
+        Ok(source) => source,
+        Err(error) => {
+            eprintln!("failed to read {rustc_json_path}: {error}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let source_map = match parse_source_map_json(&source_map_json) {
+        Ok(source_map) => source_map,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+    let remapped = match remap_rustc_diagnostic_json_lines(&source_map, &rustc_json_lines) {
+        Ok(remapped) => remapped,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+    let diagnostics = remapped
+        .into_iter()
+        .map(|remapped| remapped.diagnostic)
+        .collect::<Vec<_>>();
+
+    if json {
+        println!("{}", format_diagnostics_json(&diagnostics));
+    } else {
+        print!("{}", format_diagnostics_human(&diagnostics));
+    }
+
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity.is_error())
+    {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
 fn parse_explain_args(args: &[String]) -> Option<&str> {
     let [flag, code] = args else {
         return None;
@@ -231,6 +290,21 @@ fn parse_path_args(args: &[String]) -> (bool, Option<&str>) {
     }
 
     (json, path)
+}
+
+fn parse_multi_path_args(args: &[String]) -> (bool, Vec<&str>) {
+    let mut json = false;
+    let mut paths = Vec::new();
+
+    for arg in args {
+        if arg == "--json" {
+            json = true;
+        } else {
+            paths.push(arg.as_str());
+        }
+    }
+
+    (json, paths)
 }
 
 struct LowerOptions<'a> {
@@ -453,6 +527,7 @@ fn print_usage() {
     eprintln!("  rsscript fmt <file.rss>");
     eprintln!("  rsscript lower --rust <file.rss>");
     eprintln!("  rsscript lower --rust <file.rss> --out-dir <directory>");
+    eprintln!("  rsscript remap-rustc [--json] <rsscript-source-map.json> <rustc-json-lines>");
     eprintln!("  rsscript review [--json] --diff <old.rss> <new.rss>");
     eprintln!("  rsscript review [--json] --map <file-or-directory>");
 }

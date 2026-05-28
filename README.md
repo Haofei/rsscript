@@ -362,11 +362,25 @@ review map metadata
 Rust source lowering
 runtime crate type surface
 source map JSON for generated Rust packages
+rustc diagnostic remapping through source maps
 ```
 
 The first milestone is not a production runtime.
 
 The first milestone is a strong review-first checker that can validate the language model against real examples.
+
+Current CLI surface:
+
+```sh
+rss check [--json] <file.rss>
+rss check --explain <code>
+rss fmt <file.rss>
+rss review [--json] --diff <old.rss> <new.rss>
+rss review [--json] --map <file-or-directory>
+rss lower --rust <file.rss>
+rss lower --rust <file.rss> --out-dir <directory>
+rss remap-rustc [--json] <rsscript-source-map.json> <rustc-json-lines>
+```
 
 ---
 

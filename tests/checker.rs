@@ -7,8 +7,8 @@ use rsscript::{
     ReviewMapClassification, ReviewRisk, analyze_source, explain_diagnostic_code,
     format_diagnostic_explanation, format_diagnostics_json, format_review_human,
     format_review_json, format_review_map_human, format_review_map_json, lower_source_to_rust,
-    lower_source_to_rust_package, lower_source_to_rust_with_map, review_map_sources,
-    review_sources,
+    lower_source_to_rust_package, lower_source_to_rust_with_map, remap_rustc_diagnostic_json,
+    remap_rustc_diagnostic_json_lines, review_map_sources, review_sources,
 };
 use serde_json::Value;
 
@@ -139,6 +139,73 @@ pub fn make_session(id: Int) -> Session {
             && entry.generated.line > 0
             && entry.generated.column > 0
     }));
+}
+
+#[test]
+fn rustc_diagnostics_map_back_to_rsscript_source_spans() {
+    let source = r#"
+mode: uses-local
+
+class Session {
+    id: Int
+}
+
+pub fn make_session(id: Int) -> Session {
+    local session = Session(id: id)
+    return manage session
+}
+"#;
+    let lowered =
+        lower_source_to_rust_with_map("session.rss", source).expect("source should lower");
+    let rust_line = lowered
+        .rust_source
+        .lines()
+        .position(|line| line.contains("return rsscript_runtime::manage(session);"))
+        .map(|index| index + 1)
+        .expect("generated Rust should contain manage return");
+    let rustc_json = format!(
+        r#"{{"message":"mismatched types","code":{{"code":"E0308","explanation":null}},"level":"error","spans":[{{"file_name":"src/lib.rs","line_start":{rust_line},"line_end":{rust_line},"column_start":12,"column_end":40,"is_primary":true}}]}}"#
+    );
+
+    let remapped = remap_rustc_diagnostic_json(&lowered.source_map, &rustc_json)
+        .expect("rustc JSON should parse")
+        .expect("error should produce a diagnostic");
+
+    assert!(remapped.mapped);
+    assert_eq!(remapped.diagnostic.code, "RS1101");
+    assert_eq!(remapped.diagnostic.span.file, "session.rss");
+    assert!(
+        remapped
+            .diagnostic
+            .causes
+            .iter()
+            .any(|cause| cause.contains("rustc code: E0308"))
+    );
+}
+
+#[test]
+fn rustc_diagnostics_report_unmappable_generated_spans() {
+    let rustc_json = r#"{"message":"cannot find value","code":{"code":"E0425","explanation":null},"level":"error","spans":[{"file_name":"src/lib.rs","line_start":99,"line_end":99,"column_start":5,"column_end":10,"is_primary":true}]}"#;
+
+    let remapped = remap_rustc_diagnostic_json(&[], rustc_json)
+        .expect("rustc JSON should parse")
+        .expect("error should produce a diagnostic");
+
+    assert!(!remapped.mapped);
+    assert_eq!(remapped.diagnostic.code, "RS1102");
+    assert_eq!(remapped.diagnostic.span.file, "src/lib.rs");
+}
+
+#[test]
+fn rustc_diagnostic_line_remap_ignores_non_diagnostic_messages() {
+    let lines = r#"{"message":"build finished","level":"note","spans":[]}
+{"message":"cannot find value","code":{"code":"E0425","explanation":null},"level":"error","spans":[{"file_name":"src/lib.rs","line_start":99,"line_end":99,"column_start":5,"column_end":10,"is_primary":true}]}"#;
+
+    let remapped =
+        remap_rustc_diagnostic_json_lines(&[], lines).expect("rustc JSON lines should parse");
+
+    assert_eq!(remapped.len(), 1);
+    assert_eq!(remapped[0].diagnostic.code, "RS1102");
 }
 
 #[test]
