@@ -929,7 +929,7 @@ fn is_entry_function(name: &str) -> bool {
 }
 
 fn is_runtime_guarantee_boundary(effect: &str) -> bool {
-    matches!(effect, "no_panic" | "noalloc" | "no_block")
+    matches!(effect, "no_panic" | "noalloc" | "no_block" | "pure")
 }
 
 fn review_finding(

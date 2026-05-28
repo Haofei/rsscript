@@ -3160,6 +3160,7 @@ unknown external call
 writes to managed state
 writes through handle fields
 fresh guarantee boundary
+runtime guarantee boundary: no_panic/noalloc/no_block/pure
 error handling boundary
 removed guarantee
 ```

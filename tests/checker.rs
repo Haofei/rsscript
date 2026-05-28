@@ -3755,8 +3755,8 @@ fn pure_helper(value: read Int) -> Int
     let map = review_map_sources(vec![("guarantees.rss", source)]);
 
     assert_eq!(map.summary.total_functions, 2);
-    assert_eq!(map.summary.review_required.functions, 1);
-    assert_eq!(map.summary.foldable.functions, 1);
+    assert_eq!(map.summary.review_required.functions, 2);
+    assert_eq!(map.summary.foldable.functions, 0);
     assert!(map.files[0].regions.iter().any(|region| {
         region.function == "checksum"
             && region.classification == ReviewMapClassification::ReviewRequired
@@ -3771,7 +3771,11 @@ fn pure_helper(value: read Int) -> Int
     }));
     assert!(map.files[0].regions.iter().any(|region| {
         region.function == "pure_helper"
-            && region.classification == ReviewMapClassification::Foldable
+            && region.classification == ReviewMapClassification::ReviewRequired
+            && region
+                .reasons
+                .iter()
+                .any(|reason| reason == "guarantee `pure`")
     }));
 }
 
