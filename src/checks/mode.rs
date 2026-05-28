@@ -64,6 +64,13 @@ fn check_block(analyzer: &mut Analyzer<'_>, block: &crate::syntax::ast::Block) {
                 check_expr(analyzer, &stmt.resource);
                 check_block(analyzer, &stmt.body);
             }
+            Stmt::If(stmt) => {
+                check_expr(analyzer, &stmt.condition);
+                check_block(analyzer, &stmt.then_body);
+                if let Some(else_body) = &stmt.else_body {
+                    check_block(analyzer, else_body);
+                }
+            }
             Stmt::Expr(expr) => check_expr(analyzer, expr),
             Stmt::Unknown(_) => {}
         }

@@ -1,0 +1,18 @@
+// expect: RS0601
+mode: uses-local
+
+class ImageCache {
+    entries: List<Image>
+}
+
+struct Image {
+    pixels: Buffer
+}
+
+fn maybe_cached(cache: mut ImageCache, path: read Path, should_store: Bool) -> fresh Image {
+    local image = Image.load(path: read path)
+    if should_store {
+        ImageCache.store(cache: mut cache, image: read image)
+    }
+    return image
+}

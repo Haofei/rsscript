@@ -1,7 +1,8 @@
 use crate::lexer::{Token, TokenKind, lex};
 use crate::syntax::ast::{
-    Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileMode, FunctionDecl, Item,
-    LetKind, LetStmt, Param, Program, ReturnStmt, Stmt, TypeDecl, TypeKind, TypeRef, WithStmt,
+    Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileMode, FunctionDecl,
+    IfStmt, Item, LetKind, LetStmt, Param, Program, ReturnStmt, Stmt, TypeDecl, TypeKind, TypeRef,
+    WithStmt,
 };
 
 pub fn parse_source(file: &str, source: &str) -> Program {
@@ -322,6 +323,9 @@ fn parse_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
     if tokens[start].is_ident_text("with") {
         return parse_with_stmt(tokens, start, limit);
     }
+    if tokens[start].is_ident_text("if") {
+        return parse_if_stmt(tokens, start, limit);
+    }
 
     let end = statement_end(tokens, start, limit);
     let statement = parse_expr(tokens, start, end)
@@ -399,6 +403,56 @@ fn parse_with_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize
             span: tokens[start].span.clone(),
         }),
         close + 1,
+    )
+}
+
+fn parse_if_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
+    let Some(open) = find_if_body_open(tokens, start, limit) else {
+        return (
+            Stmt::Unknown(tokens[start].span.clone()),
+            statement_end(tokens, start, limit),
+        );
+    };
+    let close = find_matching(tokens, open, "{", "}").unwrap_or(open);
+    let condition = parse_expr(tokens, start + 1, open)
+        .unwrap_or_else(|| Expr::Unknown(tokens[start].span.clone()));
+    let then_body = parse_block(tokens, open, close);
+    let mut next = close + 1;
+    let else_body = if tokens
+        .get(next)
+        .is_some_and(|token| token.is_ident_text("else"))
+    {
+        if tokens.get(next + 1).is_some_and(|token| token.symbol("{")) {
+            let else_open = next + 1;
+            let else_close = find_matching(tokens, else_open, "{", "}").unwrap_or(else_open);
+            next = else_close + 1;
+            Some(parse_block(tokens, else_open, else_close))
+        } else if tokens
+            .get(next + 1)
+            .is_some_and(|token| token.is_ident_text("if"))
+        {
+            let span = tokens[next + 1].span.clone();
+            let (else_if, else_next) = parse_if_stmt(tokens, next + 1, limit);
+            next = else_next;
+            Some(Block {
+                statements: vec![else_if],
+                span,
+            })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    (
+        Stmt::If(IfStmt {
+            condition,
+            then_body,
+            else_body,
+            span: tokens[start].span.clone(),
+        }),
+        next,
     )
 }
 
@@ -595,6 +649,21 @@ fn statement_end(tokens: &[Token], start: usize, limit: usize) -> usize {
         }
     }
     limit
+}
+
+fn find_if_body_open(tokens: &[Token], start: usize, limit: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (index, token) in tokens.iter().enumerate().take(limit).skip(start + 1) {
+        if depth == 0 && token.symbol("{") {
+            return Some(index);
+        }
+        if token.symbol("(") || token.symbol("[") || token.symbol("<") {
+            depth += 1;
+        } else if token.symbol(")") || token.symbol("]") || token.symbol(">") {
+            depth = depth.saturating_sub(1);
+        }
+    }
+    None
 }
 
 fn next_line_or_block_end(tokens: &[Token], start: usize, end: usize) -> usize {

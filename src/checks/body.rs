@@ -28,7 +28,7 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 struct BodyState {
     locals: HashSet<String>,
     clean_locals: HashSet<String>,
@@ -103,6 +103,22 @@ fn check_stmt_semantics(
             check_resource_escape(analyzer, &stmt.binding, &stmt.body);
             check_block(analyzer, function, &stmt.body, state);
         }
+        Stmt::If(stmt) => {
+            check_take_of_handle_field(analyzer, &stmt.condition, state);
+            apply_expr_effects(analyzer, &stmt.condition, state);
+
+            let base_state = state.clone();
+            let mut then_state = base_state.clone();
+            check_block(analyzer, function, &stmt.then_body, &mut then_state);
+
+            let else_state = stmt.else_body.as_ref().map(|else_body| {
+                let mut else_state = base_state.clone();
+                check_block(analyzer, function, else_body, &mut else_state);
+                else_state
+            });
+
+            merge_if_state(state, &base_state, then_state, else_state);
+        }
         Stmt::Expr(expr) => {
             check_take_of_handle_field(analyzer, expr, state);
         }
@@ -137,9 +153,39 @@ fn apply_stmt_effects(analyzer: &mut Analyzer<'_>, statement: &Stmt, state: &mut
         Stmt::With(stmt) => {
             apply_expr_effects(analyzer, &stmt.resource, state);
         }
+        Stmt::If(_) => {}
         Stmt::Expr(expr) => apply_expr_effects(analyzer, expr, state),
         Stmt::Unknown(_) => {}
     }
+}
+
+fn merge_if_state(
+    state: &mut BodyState,
+    base: &BodyState,
+    then_state: BodyState,
+    else_state: Option<BodyState>,
+) {
+    let else_state = else_state.unwrap_or_else(|| base.clone());
+
+    let mut moved = base.moved.clone();
+    for branch in [&then_state, &else_state] {
+        for (name, span) in &branch.moved {
+            if base.locals.contains(name) || base.moved.contains_key(name) {
+                moved.entry(name.clone()).or_insert_with(|| span.clone());
+            }
+        }
+    }
+
+    state.locals = base.locals.clone();
+    state.managed = base.managed.clone();
+    state.value_types = base.value_types.clone();
+    state.moved = moved;
+    state.clean_locals = then_state
+        .clean_locals
+        .intersection(&else_state.clean_locals)
+        .filter(|name| base.locals.contains(*name))
+        .cloned()
+        .collect();
 }
 
 fn apply_expr_effects(analyzer: &mut Analyzer<'_>, expr: &Expr, state: &mut BodyState) {
@@ -321,6 +367,17 @@ fn check_take_of_handle_in_stmt(analyzer: &mut Analyzer<'_>, statement: &Stmt, s
                 check_take_of_handle_in_stmt(analyzer, statement, state);
             }
         }
+        Stmt::If(stmt) => {
+            check_take_of_handle_field(analyzer, &stmt.condition, state);
+            for statement in &stmt.then_body.statements {
+                check_take_of_handle_in_stmt(analyzer, statement, state);
+            }
+            if let Some(else_body) = &stmt.else_body {
+                for statement in &else_body.statements {
+                    check_take_of_handle_in_stmt(analyzer, statement, state);
+                }
+            }
+        }
         Stmt::Expr(expr) => check_take_of_handle_field(analyzer, expr, state),
         Stmt::Unknown(_) => {}
     }
@@ -352,6 +409,13 @@ fn check_resource_escape(analyzer: &mut Analyzer<'_>, binding: &str, body: &Bloc
             }
             Stmt::Expr(expr) => check_resource_escape_expr(analyzer, binding, expr),
             Stmt::With(stmt) => check_resource_escape(analyzer, binding, &stmt.body),
+            Stmt::If(stmt) => {
+                check_resource_escape_expr(analyzer, binding, &stmt.condition);
+                check_resource_escape(analyzer, binding, &stmt.then_body);
+                if let Some(else_body) = &stmt.else_body {
+                    check_resource_escape(analyzer, binding, else_body);
+                }
+            }
             Stmt::Unknown(_) => {}
         }
     }
@@ -634,6 +698,7 @@ fn collect_stmt_idents(statement: &Stmt, uses: &mut Vec<(String, crate::diagnost
         Stmt::With(stmt) => {
             collect_expr_idents(&stmt.resource, uses);
         }
+        Stmt::If(stmt) => collect_expr_idents(&stmt.condition, uses),
         Stmt::Expr(expr) => collect_expr_idents(expr, uses),
         Stmt::Unknown(_) => {}
     }
@@ -642,8 +707,15 @@ fn collect_stmt_idents(statement: &Stmt, uses: &mut Vec<(String, crate::diagnost
 fn collect_block_idents(block: &Block, uses: &mut Vec<(String, crate::diagnostic::Span)>) {
     for statement in &block.statements {
         collect_stmt_idents(statement, uses);
-        if let Stmt::With(stmt) = statement {
-            collect_block_idents(&stmt.body, uses);
+        match statement {
+            Stmt::With(stmt) => collect_block_idents(&stmt.body, uses),
+            Stmt::If(stmt) => {
+                collect_block_idents(&stmt.then_body, uses);
+                if let Some(else_body) = &stmt.else_body {
+                    collect_block_idents(else_body, uses);
+                }
+            }
+            Stmt::Let(_) | Stmt::Return(_) | Stmt::Expr(_) | Stmt::Unknown(_) => {}
         }
     }
 }

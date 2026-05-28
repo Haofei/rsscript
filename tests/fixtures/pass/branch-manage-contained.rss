@@ -1,0 +1,12 @@
+mode: uses-local
+
+struct Image {
+    pixels: Buffer
+}
+
+fn maybe_store(path: read Path, should_store: Bool) -> Unit {
+    local image = Image.load(path: read path)
+    if should_store {
+        let shared = manage image
+    }
+}

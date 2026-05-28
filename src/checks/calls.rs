@@ -31,6 +31,13 @@ fn check_block(analyzer: &mut Analyzer<'_>, block: &Block, locals: &HashSet<Stri
                 check_expr(analyzer, &stmt.resource, locals);
                 check_block(analyzer, &stmt.body, locals);
             }
+            Stmt::If(stmt) => {
+                check_expr(analyzer, &stmt.condition, locals);
+                check_block(analyzer, &stmt.then_body, locals);
+                if let Some(else_body) = &stmt.else_body {
+                    check_block(analyzer, else_body, locals);
+                }
+            }
             Stmt::Expr(expr) => check_expr(analyzer, expr, locals),
             Stmt::Unknown(_) => {}
         }
@@ -210,6 +217,13 @@ fn collect_local_bindings_from_statements(statements: &[Stmt], locals: &mut Hash
             Stmt::With(stmt) => {
                 collect_local_bindings_from_expr(&stmt.resource, locals);
                 collect_local_bindings_from_statements(&stmt.body.statements, locals);
+            }
+            Stmt::If(stmt) => {
+                collect_local_bindings_from_expr(&stmt.condition, locals);
+                collect_local_bindings_from_statements(&stmt.then_body.statements, locals);
+                if let Some(else_body) = &stmt.else_body {
+                    collect_local_bindings_from_statements(&else_body.statements, locals);
+                }
             }
             Stmt::Expr(expr) => collect_local_bindings_from_expr(expr, locals),
             Stmt::Unknown(_) => {}

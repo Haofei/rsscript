@@ -91,6 +91,7 @@ pub enum Stmt {
     Let(LetStmt),
     Return(ReturnStmt),
     With(WithStmt),
+    If(IfStmt),
     Expr(Expr),
     Unknown(Span),
 }
@@ -120,6 +121,14 @@ pub struct WithStmt {
     pub resource: Expr,
     pub binding: String,
     pub body: Block,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IfStmt {
+    pub condition: Expr,
+    pub then_body: Block,
+    pub else_body: Option<Block>,
     pub span: Span,
 }
 
