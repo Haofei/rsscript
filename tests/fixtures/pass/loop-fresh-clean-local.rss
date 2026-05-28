@@ -1,0 +1,14 @@
+mode: uses-local
+
+struct Image {
+    pixels: Buffer
+}
+
+fn inspect_until(path: read Path, keep_going: Bool) -> fresh Image {
+    local image = Image.load(path: read path)
+    while keep_going {
+        Image.inspect(image: read image)
+        break
+    }
+    return image
+}

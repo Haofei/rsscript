@@ -38,7 +38,14 @@ fn check_block(analyzer: &mut Analyzer<'_>, block: &Block, locals: &HashSet<Stri
                     check_block(analyzer, else_body, locals);
                 }
             }
+            Stmt::Loop(stmt) => {
+                if let Some(condition) = &stmt.condition {
+                    check_expr(analyzer, condition, locals);
+                }
+                check_block(analyzer, &stmt.body, locals);
+            }
             Stmt::Expr(expr) => check_expr(analyzer, expr, locals),
+            Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Unknown(_) => {}
         }
     }
@@ -225,7 +232,14 @@ fn collect_local_bindings_from_statements(statements: &[Stmt], locals: &mut Hash
                     collect_local_bindings_from_statements(&else_body.statements, locals);
                 }
             }
+            Stmt::Loop(stmt) => {
+                if let Some(condition) = &stmt.condition {
+                    collect_local_bindings_from_expr(condition, locals);
+                }
+                collect_local_bindings_from_statements(&stmt.body.statements, locals);
+            }
             Stmt::Expr(expr) => collect_local_bindings_from_expr(expr, locals),
+            Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Unknown(_) => {}
         }
     }

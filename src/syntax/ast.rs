@@ -92,6 +92,9 @@ pub enum Stmt {
     Return(ReturnStmt),
     With(WithStmt),
     If(IfStmt),
+    Loop(LoopStmt),
+    Break(Span),
+    Continue(Span),
     Expr(Expr),
     Unknown(Span),
 }
@@ -129,6 +132,13 @@ pub struct IfStmt {
     pub condition: Expr,
     pub then_body: Block,
     pub else_body: Option<Block>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoopStmt {
+    pub condition: Option<Expr>,
+    pub body: Block,
     pub span: Span,
 }
 

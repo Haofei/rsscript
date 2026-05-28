@@ -1,8 +1,8 @@
 use crate::lexer::{Token, TokenKind, lex};
 use crate::syntax::ast::{
     Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileMode, FunctionDecl,
-    IfStmt, Item, LetKind, LetStmt, Param, Program, ReturnStmt, Stmt, TypeDecl, TypeKind, TypeRef,
-    WithStmt,
+    IfStmt, Item, LetKind, LetStmt, LoopStmt, Param, Program, ReturnStmt, Stmt, TypeDecl, TypeKind,
+    TypeRef, WithStmt,
 };
 
 pub fn parse_source(file: &str, source: &str) -> Program {
@@ -326,6 +326,21 @@ fn parse_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
     if tokens[start].is_ident_text("if") {
         return parse_if_stmt(tokens, start, limit);
     }
+    if tokens[start].is_ident_text("while") || tokens[start].is_ident_text("loop") {
+        return parse_loop_stmt(tokens, start, limit);
+    }
+    if tokens[start].is_ident_text("break") {
+        return (
+            Stmt::Break(tokens[start].span.clone()),
+            statement_end(tokens, start, limit),
+        );
+    }
+    if tokens[start].is_ident_text("continue") {
+        return (
+            Stmt::Continue(tokens[start].span.clone()),
+            statement_end(tokens, start, limit),
+        );
+    }
 
     let end = statement_end(tokens, start, limit);
     let statement = parse_expr(tokens, start, end)
@@ -407,7 +422,7 @@ fn parse_with_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize
 }
 
 fn parse_if_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
-    let Some(open) = find_if_body_open(tokens, start, limit) else {
+    let Some(open) = find_control_body_open(tokens, start, limit) else {
         return (
             Stmt::Unknown(tokens[start].span.clone()),
             statement_end(tokens, start, limit),
@@ -453,6 +468,30 @@ fn parse_if_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) 
             span: tokens[start].span.clone(),
         }),
         next,
+    )
+}
+
+fn parse_loop_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
+    let Some(open) = find_control_body_open(tokens, start, limit) else {
+        return (
+            Stmt::Unknown(tokens[start].span.clone()),
+            statement_end(tokens, start, limit),
+        );
+    };
+    let close = find_matching(tokens, open, "{", "}").unwrap_or(open);
+    let condition = if tokens[start].is_ident_text("while") {
+        parse_expr(tokens, start + 1, open)
+    } else {
+        None
+    };
+
+    (
+        Stmt::Loop(LoopStmt {
+            condition,
+            body: parse_block(tokens, open, close),
+            span: tokens[start].span.clone(),
+        }),
+        close + 1,
     )
 }
 
@@ -651,7 +690,7 @@ fn statement_end(tokens: &[Token], start: usize, limit: usize) -> usize {
     limit
 }
 
-fn find_if_body_open(tokens: &[Token], start: usize, limit: usize) -> Option<usize> {
+fn find_control_body_open(tokens: &[Token], start: usize, limit: usize) -> Option<usize> {
     let mut depth = 0usize;
     for (index, token) in tokens.iter().enumerate().take(limit).skip(start + 1) {
         if depth == 0 && token.symbol("{") {

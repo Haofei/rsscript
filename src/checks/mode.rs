@@ -71,7 +71,14 @@ fn check_block(analyzer: &mut Analyzer<'_>, block: &crate::syntax::ast::Block) {
                     check_block(analyzer, else_body);
                 }
             }
+            Stmt::Loop(stmt) => {
+                if let Some(condition) = &stmt.condition {
+                    check_expr(analyzer, condition);
+                }
+                check_block(analyzer, &stmt.body);
+            }
             Stmt::Expr(expr) => check_expr(analyzer, expr),
+            Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Unknown(_) => {}
         }
     }

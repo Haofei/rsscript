@@ -278,6 +278,7 @@ fn keyword(text: &str) -> Option<&'static str> {
         "for" => "for",
         "in" => "in",
         "match" => "match",
+        "loop" => "loop",
         "while" => "while",
         "break" => "break",
         "continue" => "continue",

@@ -119,9 +119,22 @@ fn check_stmt_semantics(
 
             merge_if_state(state, &base_state, then_state, else_state);
         }
+        Stmt::Loop(stmt) => {
+            if let Some(condition) = &stmt.condition {
+                check_take_of_handle_field(analyzer, condition, state);
+                apply_expr_effects(analyzer, condition, state);
+            }
+
+            let base_state = state.clone();
+            let mut body_state = base_state.clone();
+            check_block(analyzer, function, &stmt.body, &mut body_state);
+
+            merge_loop_state(state, &base_state, body_state);
+        }
         Stmt::Expr(expr) => {
             check_take_of_handle_field(analyzer, expr, state);
         }
+        Stmt::Break(_) | Stmt::Continue(_) => {}
         Stmt::Unknown(_) => {}
     }
 }
@@ -154,7 +167,9 @@ fn apply_stmt_effects(analyzer: &mut Analyzer<'_>, statement: &Stmt, state: &mut
             apply_expr_effects(analyzer, &stmt.resource, state);
         }
         Stmt::If(_) => {}
+        Stmt::Loop(_) => {}
         Stmt::Expr(expr) => apply_expr_effects(analyzer, expr, state),
+        Stmt::Break(_) | Stmt::Continue(_) => {}
         Stmt::Unknown(_) => {}
     }
 }
@@ -183,6 +198,26 @@ fn merge_if_state(
     state.clean_locals = then_state
         .clean_locals
         .intersection(&else_state.clean_locals)
+        .filter(|name| base.locals.contains(*name))
+        .cloned()
+        .collect();
+}
+
+fn merge_loop_state(state: &mut BodyState, base: &BodyState, body_state: BodyState) {
+    let mut moved = base.moved.clone();
+    for (name, span) in &body_state.moved {
+        if base.locals.contains(name) || base.moved.contains_key(name) {
+            moved.entry(name.clone()).or_insert_with(|| span.clone());
+        }
+    }
+
+    state.locals = base.locals.clone();
+    state.managed = base.managed.clone();
+    state.value_types = base.value_types.clone();
+    state.moved = moved;
+    state.clean_locals = base
+        .clean_locals
+        .intersection(&body_state.clean_locals)
         .filter(|name| base.locals.contains(*name))
         .cloned()
         .collect();
@@ -378,7 +413,16 @@ fn check_take_of_handle_in_stmt(analyzer: &mut Analyzer<'_>, statement: &Stmt, s
                 }
             }
         }
+        Stmt::Loop(stmt) => {
+            if let Some(condition) = &stmt.condition {
+                check_take_of_handle_field(analyzer, condition, state);
+            }
+            for statement in &stmt.body.statements {
+                check_take_of_handle_in_stmt(analyzer, statement, state);
+            }
+        }
         Stmt::Expr(expr) => check_take_of_handle_field(analyzer, expr, state),
+        Stmt::Break(_) | Stmt::Continue(_) => {}
         Stmt::Unknown(_) => {}
     }
 }
@@ -416,6 +460,13 @@ fn check_resource_escape(analyzer: &mut Analyzer<'_>, binding: &str, body: &Bloc
                     check_resource_escape(analyzer, binding, else_body);
                 }
             }
+            Stmt::Loop(stmt) => {
+                if let Some(condition) = &stmt.condition {
+                    check_resource_escape_expr(analyzer, binding, condition);
+                }
+                check_resource_escape(analyzer, binding, &stmt.body);
+            }
+            Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Unknown(_) => {}
         }
     }
@@ -699,7 +750,13 @@ fn collect_stmt_idents(statement: &Stmt, uses: &mut Vec<(String, crate::diagnost
             collect_expr_idents(&stmt.resource, uses);
         }
         Stmt::If(stmt) => collect_expr_idents(&stmt.condition, uses),
+        Stmt::Loop(stmt) => {
+            if let Some(condition) = &stmt.condition {
+                collect_expr_idents(condition, uses);
+            }
+        }
         Stmt::Expr(expr) => collect_expr_idents(expr, uses),
+        Stmt::Break(_) | Stmt::Continue(_) => {}
         Stmt::Unknown(_) => {}
     }
 }
@@ -715,7 +772,13 @@ fn collect_block_idents(block: &Block, uses: &mut Vec<(String, crate::diagnostic
                     collect_block_idents(else_body, uses);
                 }
             }
-            Stmt::Let(_) | Stmt::Return(_) | Stmt::Expr(_) | Stmt::Unknown(_) => {}
+            Stmt::Loop(stmt) => collect_block_idents(&stmt.body, uses),
+            Stmt::Let(_)
+            | Stmt::Return(_)
+            | Stmt::Expr(_)
+            | Stmt::Break(_)
+            | Stmt::Continue(_)
+            | Stmt::Unknown(_) => {}
         }
     }
 }
