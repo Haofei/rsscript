@@ -441,9 +441,11 @@ Local verification:
 
 ```sh
 bash scripts/check.sh
+RSSCRIPT_FULL_TESTS=1 bash scripts/check.sh
+bash scripts/run_examples.sh
 ```
 
-CI sets `RSSCRIPT_FULL_TESTS=1` so the same script runs full `cargo test --workspace`.
+CI sets `RSSCRIPT_FULL_TESTS=1` so the same script runs full `cargo test --workspace` and executes every `examples/*.rss` file through `rss run`.
 
 ---
 
