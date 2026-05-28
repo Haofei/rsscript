@@ -2327,6 +2327,8 @@ rss package diff
 
 `rss package review update` compares two `rsspkg.lock` files and classifies package version, source, checksum, public interface hash, review metadata hash, native wrapper hash, and feature-selection changes.
 
+`rss package lock` records the root package plus recursively reachable local path dependencies. Registry and git dependencies remain unresolved until the resolver exists.
+
 `rss package tree` prints the package dependency graph with review risk. The prototype expands local path dependencies recursively and classifies unresolved registry or git dependencies as `unknown`.
 
 `rss package publish --dry-run` performs local pre-publish validation without uploading: package consistency, dependency graph review, semantic version shape, package review metadata, native metadata, and reproducible archive hashing.

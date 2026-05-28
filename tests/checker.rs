@@ -2692,6 +2692,49 @@ unsafe = "forbid"
 }
 
 #[test]
+fn package_lock_records_local_path_dependency_graph() {
+    let root_dir = unique_temp_dir("rsscript-package-lock-graph-root");
+    let dep_dir = unique_temp_dir("rsscript-package-lock-graph-dep");
+    write_named_package_fixture(
+        &dep_dir,
+        "rss-dep",
+        "0.2.0",
+        "",
+        r#"pub fn Dep.parse(text: read String) -> String
+"#,
+    );
+    write_named_package_fixture(
+        &root_dir,
+        "rss-app",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-dep = {{ path = "{}", features = ["fast"] }}
+"#,
+            dep_dir.display()
+        ),
+        r#"pub fn App.run() -> Unit
+"#,
+    );
+
+    let lock = lock_package_dir(&root_dir).expect("package lock should include path deps");
+    let json: Value = serde_json::from_str(&rsscript::format_package_lock_json(&lock))
+        .expect("package lock JSON should parse");
+    let _ = fs::remove_dir_all(&root_dir);
+    let _ = fs::remove_dir_all(&dep_dir);
+
+    assert_eq!(lock.packages.len(), 2);
+    assert_eq!(json["package"][0]["name"], "rss-app");
+    assert_eq!(json["package"][1]["name"], "rss-dep");
+    assert_eq!(json["package"][1]["features"][0], "fast");
+    assert!(
+        json["package"][1]["interface_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.starts_with("sha256:"))
+    );
+}
+
+#[test]
 fn rss_package_lock_json_reports_hashes() {
     let temp_dir = unique_temp_dir("rsscript-package-lock-cli");
     write_package_fixture(
@@ -2728,6 +2771,69 @@ fn rss_package_lock_json_reports_hashes() {
         json["package"][0]["review_hash"]
             .as_str()
             .is_some_and(|hash| hash.starts_with("sha256:"))
+    );
+}
+
+#[test]
+fn package_check_reports_stale_dependency_interface_lock() {
+    let root_dir = unique_temp_dir("rsscript-package-check-dep-lock-root");
+    let dep_dir = unique_temp_dir("rsscript-package-check-dep-lock-dep");
+    write_named_package_fixture(
+        &dep_dir,
+        "rss-dep",
+        "0.2.0",
+        "",
+        r#"pub fn Dep.parse(text: read String) -> String
+"#,
+    );
+    write_named_package_fixture(
+        &root_dir,
+        "rss-app",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-dep = {{ path = "{}" }}
+"#,
+            dep_dir.display()
+        ),
+        r#"pub fn App.run() -> Unit
+"#,
+    );
+    fs::write(
+        root_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&root_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+    fs::write(
+        dep_dir.join("interface/lib.rssi"),
+        r#"pub fn Dep.parse(value: read String) -> String
+"#,
+    )
+    .expect("dependency interface should be changed");
+
+    let check = check_package_dir(&root_dir).expect("package check should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&root_dir);
+    let _ = fs::remove_dir_all(&dep_dir);
+
+    assert!(!check.ok);
+    assert_eq!(json["lock"]["matches"], false);
+    assert!(
+        json["lock"]["package_changes"]
+            .as_array()
+            .is_some_and(|changes| {
+                changes.iter().any(|change| {
+                    change["name"] == "rss-dep"
+                        && change["changes"].as_array().is_some_and(|fields| {
+                            fields.iter().any(|field| {
+                                field["field"] == "interface_hash" && field["risk"] == "high"
+                            })
+                        })
+                })
+            })
     );
 }
 

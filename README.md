@@ -251,7 +251,7 @@ A few details worth knowing:
 - `rss package check` validates a local package, loads local path dependency `.rssi` contracts, runs package review, compares the current semantic lock against `rsspkg.lock`, and scans enabled native Rust wrapper metadata.
 - `rss package review` reads `rsspkg.toml`, treats `.rssi` files as the public semantic contract, and raises risk for native Rust wrappers, build scripts, proc macros, unsafe policy, external links, frontend diagnostics, and unknown review-map regions.
 - `rss package review update` compares two `rsspkg.lock` files and reports package version, source, checksum, `.rssi` interface, review metadata, native wrapper, and feature-selection changes.
-- `rss package lock` emits root package lock metadata with SHA-256 hashes for the public `.rssi` contract, review metadata, package contents, and native Rust wrapper contents when enabled.
+- `rss package lock` emits semantic lock metadata for the root package and local path dependency graph, with SHA-256 hashes for public `.rssi` contracts, review metadata, package contents, and native Rust wrapper contents when enabled.
 - `rss package tree` shows the dependency graph with review risk. Local path dependencies are expanded recursively; unresolved registry or git dependencies are classified as unknown.
 - `rss package publish --dry-run` runs pre-publish checks without uploading anything: package consistency, dependency graph review, semver shape, review metadata, native metadata, and reproducible archive hashing.
 - `rss package vendor` copies local path dependencies into `vendor/<name>-<version>/` and writes `vendor/rss-vendor.json`; unresolved registry or git dependencies stay unknown.

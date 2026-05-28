@@ -856,6 +856,45 @@ pub fn vendor_package_dir(
 
 pub fn lock_package_dir(package_dir: &Path) -> Result<PackageLock, String> {
     let package = load_package(package_dir)?;
+    let root_features = package
+        .manifest
+        .features
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut packages = vec![lock_package_entry(package_dir, &package, root_features)?];
+    let mut visiting = BTreeSet::new();
+    let root_key = canonical_path_label(package_dir);
+    visiting.insert(root_key.clone());
+    collect_lock_dependency_packages(
+        package_dir,
+        &package.manifest.dependencies,
+        &mut visiting,
+        &mut packages,
+    )?;
+    collect_lock_dependency_packages(
+        package_dir,
+        &package.manifest.dev_dependencies,
+        &mut visiting,
+        &mut packages,
+    )?;
+    visiting.remove(&root_key);
+
+    Ok(PackageLock {
+        version: 1,
+        packages,
+        metadata: PackageLockMetadata {
+            rsscript_version: env!("CARGO_PKG_VERSION").to_string(),
+            created_by: "rsscript package lock".to_string(),
+        },
+    })
+}
+
+fn lock_package_entry(
+    package_dir: &Path,
+    package: &LoadedPackage,
+    features: Vec<String>,
+) -> Result<PackageLockPackage, String> {
     let review = review_package_dir(package_dir)?;
     let native = package
         .manifest
@@ -863,29 +902,16 @@ pub fn lock_package_dir(package_dir: &Path) -> Result<PackageLock, String> {
         .as_ref()
         .and_then(|native| native.rust.as_ref());
     let native_hash = package_native_hash(package_dir, native)?;
-    let features = package
-        .manifest
-        .features
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>();
 
-    Ok(PackageLock {
-        version: 1,
-        packages: vec![PackageLockPackage {
-            name: package.manifest.package.name.clone(),
-            version: package.manifest.package.version.clone(),
-            source: format!("path+{}", package_dir.display()),
-            checksum: package_checksum(&package, native_hash.as_deref()),
-            interface_hash: hash_sources(&package.sources, PackageReviewFileKind::Interface),
-            review_hash: package_review_hash(&review),
-            native_hash,
-            features,
-        }],
-        metadata: PackageLockMetadata {
-            rsscript_version: env!("CARGO_PKG_VERSION").to_string(),
-            created_by: "rsscript package lock".to_string(),
-        },
+    Ok(PackageLockPackage {
+        name: package.manifest.package.name.clone(),
+        version: package.manifest.package.version.clone(),
+        source: format!("path+{}", package_dir.display()),
+        checksum: package_checksum(package, native_hash.as_deref()),
+        interface_hash: hash_sources(&package.sources, PackageReviewFileKind::Interface),
+        review_hash: package_review_hash(&review),
+        native_hash,
+        features,
     })
 }
 
@@ -1599,6 +1625,48 @@ fn package_tree_dependencies(
         }
     }
     Ok(nodes)
+}
+
+fn collect_lock_dependency_packages(
+    package_dir: &Path,
+    dependencies: &BTreeMap<String, toml::Value>,
+    visiting: &mut BTreeSet<String>,
+    packages: &mut Vec<PackageLockPackage>,
+) -> Result<(), String> {
+    for (name, value) in dependencies {
+        let spec = package_dependency_spec(name, value);
+        let Some(path) = &spec.path else {
+            continue;
+        };
+        let dependency_dir = package_dir.join(path);
+        if !dependency_dir.join("rsspkg.toml").exists() {
+            continue;
+        }
+        let canonical = canonical_path_label(&dependency_dir);
+        if !visiting.insert(canonical.clone()) {
+            continue;
+        }
+        let dependency_package = load_package(&dependency_dir)?;
+        packages.push(lock_package_entry(
+            &dependency_dir,
+            &dependency_package,
+            spec.features,
+        )?);
+        collect_lock_dependency_packages(
+            &dependency_dir,
+            &dependency_package.manifest.dependencies,
+            visiting,
+            packages,
+        )?;
+        collect_lock_dependency_packages(
+            &dependency_dir,
+            &dependency_package.manifest.dev_dependencies,
+            visiting,
+            packages,
+        )?;
+        visiting.remove(&canonical);
+    }
+    Ok(())
 }
 
 fn collect_vendor_dependencies(
