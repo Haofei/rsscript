@@ -13,6 +13,7 @@ use crate::analyzer::{
 };
 use crate::diagnostic::{Diagnostic, code};
 use crate::formatter::format_program;
+use crate::lint::lint_source;
 use crate::review::{
     ReviewFinding, ReviewMap, ReviewMapClassification, ReviewRisk, format_review_human,
     review_map_sources, review_sources,
@@ -604,6 +605,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
             .as_ref()
             .and_then(|native| native.rust.as_ref()),
     ));
+    diagnostics.extend(package_lint_diagnostics(sources));
     dedup_diagnostics(&mut diagnostics);
     let review_map = review_map_sources(
         sources
@@ -701,6 +703,13 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         review_map,
         diagnostics,
     })
+}
+
+fn package_lint_diagnostics(sources: &[PackageSource]) -> Vec<Diagnostic> {
+    sources
+        .iter()
+        .flat_map(|source| lint_source(&source.path, &source.contents))
+        .collect()
 }
 
 pub fn package_metadata(

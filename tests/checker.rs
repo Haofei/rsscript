@@ -3748,6 +3748,49 @@ rss-dep = {{ path = "{}" }}
 }
 
 #[test]
+fn package_review_includes_lint_warnings_for_public_contracts() {
+    let temp_dir = unique_temp_dir("rsscript-package-review-lint");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        "",
+        r#"features: native
+
+pub fn Api.overloaded<A, B, C, D>(
+    first: read Result<Option<List<Map<String, Image>>>, Error>,
+    second: read String,
+    third: read String,
+    fourth: read String,
+    fifth: read String,
+    sixth: read String,
+    seventh: read String,
+) -> Result<Option<List<Map<String, Image>>>, Error>
+    effects(no_panic, noalloc, no_block, pure, native)
+"#,
+    );
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(json["summary"]["errors"], 0);
+    assert!(json["reasons"].as_array().is_some_and(|reasons| {
+        reasons
+            .iter()
+            .any(|reason| reason == "package contains frontend warnings")
+    }));
+    assert!(json["diagnostics"].as_array().is_some_and(|diagnostics| {
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == "RSL001"
+                && diagnostic["summary"]
+                    .as_str()
+                    .is_some_and(|summary| summary.contains("7 parameters"))
+        })
+    }));
+}
+
+#[test]
 fn rss_package_review_json_reports_package_metadata() {
     let temp_dir = unique_temp_dir("rsscript-package-review-cli");
     fs::create_dir_all(temp_dir.join("interface")).expect("interface dir should be created");
