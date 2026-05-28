@@ -13,6 +13,7 @@ pub(crate) struct BodyState {
     pub(crate) locals: HashSet<String>,
     pub(crate) clean_locals: HashSet<String>,
     pub(crate) managed: HashSet<String>,
+    pub(crate) resources: HashSet<String>,
     pub(crate) moved: HashMap<String, Span>,
     pub(crate) value_types: HashMap<String, String>,
 }
@@ -45,8 +46,9 @@ struct LocalFlowStep {
     kind: LocalFlowStepKind,
     uses: Vec<(String, Span)>,
     binding: Option<LocalFlowBinding>,
+    resource_binding: Option<String>,
     events: Vec<HirEffectEvent>,
-    successors: Vec<usize>,
+    successors: Vec<LocalFlowEdge>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +56,12 @@ struct LocalFlowBinding {
     name: String,
     kind: HirBindingKind,
     type_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocalFlowEdge {
+    to: usize,
+    drop_resources: Vec<String>,
 }
 
 impl LocalAnalysis {
@@ -149,7 +157,7 @@ impl LocalAnalysis {
                 && step
                     .successors
                     .iter()
-                    .all(|successor| *successor < self.flow_steps.len())
+                    .all(|successor| successor.to < self.flow_steps.len())
         }));
 
         self.flow_steps
@@ -716,9 +724,35 @@ fn collect_local_flow_steps(block: &HirBlock) -> Vec<LocalFlowStep> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LocalFlowFragment {
     entry: Option<usize>,
-    exits: Vec<usize>,
-    breaks: Vec<usize>,
-    continues: Vec<usize>,
+    exits: Vec<LocalFlowExit>,
+    breaks: Vec<LocalFlowExit>,
+    continues: Vec<LocalFlowExit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocalFlowExit {
+    node: usize,
+    drop_resources: Vec<String>,
+}
+
+impl LocalFlowExit {
+    fn new(node: usize) -> Self {
+        Self {
+            node,
+            drop_resources: Vec::new(),
+        }
+    }
+
+    fn with_drop(mut self, resource: &str) -> Self {
+        if !self
+            .drop_resources
+            .iter()
+            .any(|existing| existing == resource)
+        {
+            self.drop_resources.push(resource.to_string());
+        }
+        self
+    }
 }
 
 fn collect_block_local_flow(block: &HirBlock, steps: &mut Vec<LocalFlowStep>) -> LocalFlowFragment {
@@ -769,7 +803,7 @@ fn collect_stmt_local_flow(
         HirStmt::Loop {
             condition, body, ..
         } => collect_loop_local_flow(steps, node, condition.is_some(), body),
-        HirStmt::With { body, .. } => collect_scoped_body_flow(steps, node, body),
+        HirStmt::With { binding, body, .. } => collect_scoped_body_flow(steps, node, binding, body),
         HirStmt::Return { .. } => LocalFlowFragment {
             entry: Some(node),
             exits: Vec::new(),
@@ -779,18 +813,18 @@ fn collect_stmt_local_flow(
         HirStmt::Break(_) => LocalFlowFragment {
             entry: Some(node),
             exits: Vec::new(),
-            breaks: vec![node],
+            breaks: vec![LocalFlowExit::new(node)],
             continues: Vec::new(),
         },
         HirStmt::Continue(_) => LocalFlowFragment {
             entry: Some(node),
             exits: Vec::new(),
             breaks: Vec::new(),
-            continues: vec![node],
+            continues: vec![LocalFlowExit::new(node)],
         },
         HirStmt::Let { .. } | HirStmt::Expr(_) | HirStmt::Unknown(_) => LocalFlowFragment {
             entry: Some(node),
-            exits: vec![node],
+            exits: vec![LocalFlowExit::new(node)],
             breaks: Vec::new(),
             continues: Vec::new(),
         },
@@ -805,7 +839,7 @@ fn collect_if_local_flow(
 ) -> LocalFlowFragment {
     let then_flow = collect_block_local_flow(then_body, steps);
     if let Some(then_entry) = then_flow.entry {
-        add_successor(steps, branch_node, then_entry);
+        add_successor(steps, LocalFlowExit::new(branch_node), then_entry);
     }
 
     let mut exits = then_flow.exits;
@@ -814,13 +848,13 @@ fn collect_if_local_flow(
     if let Some(else_body) = else_body {
         let else_flow = collect_block_local_flow(else_body, steps);
         if let Some(else_entry) = else_flow.entry {
-            add_successor(steps, branch_node, else_entry);
+            add_successor(steps, LocalFlowExit::new(branch_node), else_entry);
         }
         exits.extend(else_flow.exits);
         breaks.extend(else_flow.breaks);
         continues.extend(else_flow.continues);
     } else {
-        exits.push(branch_node);
+        exits.push(LocalFlowExit::new(branch_node));
     }
 
     LocalFlowFragment {
@@ -839,14 +873,14 @@ fn collect_loop_local_flow(
 ) -> LocalFlowFragment {
     let body_flow = collect_block_local_flow(body, steps);
     if let Some(body_entry) = body_flow.entry {
-        add_successor(steps, loop_node, body_entry);
+        add_successor(steps, LocalFlowExit::new(loop_node), body_entry);
     }
     for exit in body_flow.exits.iter().chain(body_flow.continues.iter()) {
-        add_successor(steps, *exit, loop_node);
+        add_successor(steps, exit.clone(), loop_node);
     }
 
     let mut exits = if may_skip {
-        vec![loop_node]
+        vec![LocalFlowExit::new(loop_node)]
     } else {
         Vec::new()
     };
@@ -863,22 +897,31 @@ fn collect_loop_local_flow(
 fn collect_scoped_body_flow(
     steps: &mut Vec<LocalFlowStep>,
     scoped_node: usize,
+    binding: &str,
     body: &HirBlock,
 ) -> LocalFlowFragment {
     let body_flow = collect_block_local_flow(body, steps);
     if let Some(body_entry) = body_flow.entry {
-        add_successor(steps, scoped_node, body_entry);
+        add_successor(steps, LocalFlowExit::new(scoped_node), body_entry);
     }
+    let empty_body_exit = LocalFlowExit::new(scoped_node).with_drop(binding);
     LocalFlowFragment {
         entry: Some(scoped_node),
         exits: if body_flow.entry.is_some() {
-            body_flow.exits
+            drop_resource_on_exits(body_flow.exits, binding)
         } else {
-            vec![scoped_node]
+            vec![empty_body_exit]
         },
-        breaks: body_flow.breaks,
-        continues: body_flow.continues,
+        breaks: drop_resource_on_exits(body_flow.breaks, binding),
+        continues: drop_resource_on_exits(body_flow.continues, binding),
     }
+}
+
+fn drop_resource_on_exits(exits: Vec<LocalFlowExit>, resource: &str) -> Vec<LocalFlowExit> {
+    exits
+        .into_iter()
+        .map(|exit| exit.with_drop(resource))
+        .collect()
 }
 
 fn push_local_flow_step(steps: &mut Vec<LocalFlowStep>, statement: &HirStmt) -> usize {
@@ -893,15 +936,21 @@ fn push_local_flow_step(steps: &mut Vec<LocalFlowStep>, statement: &HirStmt) -> 
         kind: local_flow_step_kind(statement),
         uses,
         binding: local_flow_step_binding(statement),
+        resource_binding: local_flow_step_resource_binding(statement),
         events,
         successors: Vec::new(),
     });
     id
 }
 
-fn add_successor(steps: &mut [LocalFlowStep], from: usize, to: usize) {
-    if !steps[from].successors.contains(&to) {
-        steps[from].successors.push(to);
+fn add_successor(steps: &mut [LocalFlowStep], from: LocalFlowExit, to: usize) {
+    let from_node = from.node;
+    let edge = LocalFlowEdge {
+        to,
+        drop_resources: from.drop_resources,
+    };
+    if !steps[from_node].successors.contains(&edge) {
+        steps[from_node].successors.push(edge);
     }
 }
 
@@ -923,9 +972,13 @@ fn collect_flow_entry_states(
         };
         let exit_state = transfer_flow_step(&steps[step_id], entry_state);
         for successor in &steps[step_id].successors {
-            let changed = merge_flow_entry_state(&mut entry_states[*successor], &exit_state);
+            let mut successor_state = exit_state.clone();
+            for resource in &successor.drop_resources {
+                successor_state.drop_resource(resource);
+            }
+            let changed = merge_flow_entry_state(&mut entry_states[successor.to], &successor_state);
             if changed {
-                worklist.push_back(*successor);
+                worklist.push_back(successor.to);
             }
         }
     }
@@ -947,6 +1000,9 @@ fn transfer_flow_step(step: &LocalFlowStep, mut state: BodyState) -> BodyState {
         if let Some(type_name) = &binding.type_name {
             state.record_type(binding.name.clone(), type_name.clone());
         }
+    }
+    if let Some(resource_binding) = &step.resource_binding {
+        state.bind_resource(resource_binding.clone());
     }
 
     state.apply_retention_events(&step.events);
@@ -980,6 +1036,11 @@ fn merge_flow_states(left: &BodyState, right: &BodyState) -> BodyState {
         .intersection(&right.managed)
         .cloned()
         .collect::<HashSet<_>>();
+    let resources = left
+        .resources
+        .intersection(&right.resources)
+        .cloned()
+        .collect::<HashSet<_>>();
     let value_types = left
         .value_types
         .iter()
@@ -1009,6 +1070,7 @@ fn merge_flow_states(left: &BodyState, right: &BodyState) -> BodyState {
         locals,
         clean_locals,
         managed,
+        resources,
         moved,
         value_types,
     }
@@ -1050,6 +1112,20 @@ fn local_flow_step_binding(statement: &HirStmt) -> Option<LocalFlowBinding> {
     }
 }
 
+fn local_flow_step_resource_binding(statement: &HirStmt) -> Option<String> {
+    match statement {
+        HirStmt::With { binding, .. } => Some(binding.clone()),
+        HirStmt::Let { .. }
+        | HirStmt::Return { .. }
+        | HirStmt::If { .. }
+        | HirStmt::Loop { .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Expr(_)
+        | HirStmt::Unknown(_) => None,
+    }
+}
+
 fn hir_stmt_span(statement: &HirStmt) -> &Span {
     match statement {
         HirStmt::Let { span, .. }
@@ -1080,6 +1156,14 @@ impl BodyState {
         self.managed.insert(name.into());
     }
 
+    pub(crate) fn bind_resource(&mut self, name: impl Into<String>) {
+        self.resources.insert(name.into());
+    }
+
+    pub(crate) fn drop_resource(&mut self, name: &str) {
+        self.resources.remove(name);
+    }
+
     pub(crate) fn bind_local(&mut self, name: impl Into<String>) {
         let name = name.into();
         self.locals.insert(name.clone());
@@ -1105,6 +1189,10 @@ impl BodyState {
 
     pub(crate) fn is_managed(&self, name: &str) -> bool {
         self.managed.contains(name)
+    }
+
+    pub(crate) fn is_resource(&self, name: &str) -> bool {
+        self.resources.contains(name)
     }
 
     pub(crate) fn is_clean_local(&self, name: &str) -> bool {
@@ -1205,6 +1293,7 @@ pub(crate) fn merge_loop_state(
 
     state.locals = base.locals.clone();
     state.managed = base.managed.clone();
+    state.resources = base.resources.clone();
     state.value_types = base.value_types.clone();
     state.moved = moved;
     state.clean_locals = base
@@ -1231,6 +1320,7 @@ fn fallthrough_projection(base: &BodyState, branch: &BodyState) -> BodyState {
     BodyState {
         locals: base.locals.clone(),
         managed: base.managed.clone(),
+        resources: base.resources.clone(),
         value_types: base.value_types.clone(),
         moved,
         clean_locals: branch
@@ -1255,6 +1345,7 @@ fn merge_fallthrough_states(base: &BodyState, left: &BodyState, right: &BodyStat
     BodyState {
         locals: base.locals.clone(),
         managed: base.managed.clone(),
+        resources: base.resources.clone(),
         value_types: base.value_types.clone(),
         moved,
         clean_locals: left
@@ -1279,6 +1370,17 @@ mod tests {
             column: 1,
             length: 1,
         }
+    }
+
+    fn successor_ids(step: &LocalFlowStep) -> Vec<usize> {
+        step.successors.iter().map(|edge| edge.to).collect()
+    }
+
+    fn successor_drop_resources(step: &LocalFlowStep, to: usize) -> Vec<String> {
+        step.successors
+            .iter()
+            .find(|edge| edge.to == to)
+            .map_or_else(Vec::new, |edge| edge.drop_resources.clone())
     }
 
     #[test]
@@ -1500,12 +1602,12 @@ mod tests {
 
         assert_eq!(steps.len(), 5);
         assert_eq!(steps[0].id, 0);
-        assert_eq!(steps[0].successors, vec![1]);
+        assert_eq!(successor_ids(&steps[0]), vec![1]);
         assert_eq!(steps[1].kind, LocalFlowStepKind::Branch);
-        assert_eq!(steps[1].successors, vec![2, 3]);
-        assert_eq!(steps[2].successors, vec![4]);
-        assert_eq!(steps[3].successors, vec![4]);
-        assert!(steps[4].successors.is_empty());
+        assert_eq!(successor_ids(&steps[1]), vec![2, 3]);
+        assert_eq!(successor_ids(&steps[2]), vec![4]);
+        assert_eq!(successor_ids(&steps[3]), vec![4]);
+        assert!(successor_ids(&steps[4]).is_empty());
     }
 
     #[test]
@@ -1558,14 +1660,14 @@ mod tests {
 
         assert_eq!(steps.len(), 5);
         assert_eq!(steps[0].kind, LocalFlowStepKind::Loop);
-        assert_eq!(steps[0].successors, vec![1, 4]);
+        assert_eq!(successor_ids(&steps[0]), vec![1, 4]);
         assert_eq!(steps[1].kind, LocalFlowStepKind::Branch);
-        assert_eq!(steps[1].successors, vec![2, 3]);
+        assert_eq!(successor_ids(&steps[1]), vec![2, 3]);
         assert_eq!(steps[2].kind, LocalFlowStepKind::Continue);
-        assert_eq!(steps[2].successors, vec![0]);
+        assert_eq!(successor_ids(&steps[2]), vec![0]);
         assert_eq!(steps[3].kind, LocalFlowStepKind::Break);
-        assert_eq!(steps[3].successors, vec![4]);
-        assert!(steps[4].successors.is_empty());
+        assert_eq!(successor_ids(&steps[3]), vec![4]);
+        assert!(successor_ids(&steps[4]).is_empty());
     }
 
     #[test]
@@ -1606,11 +1708,74 @@ mod tests {
 
         assert_eq!(steps.len(), 4);
         assert_eq!(steps[0].kind, LocalFlowStepKind::Loop);
-        assert_eq!(steps[0].successors, vec![1]);
+        assert_eq!(successor_ids(&steps[0]), vec![1]);
         assert_eq!(steps[1].kind, LocalFlowStepKind::Break);
-        assert_eq!(steps[1].successors, vec![3]);
-        assert!(steps[2].successors.is_empty());
-        assert!(steps[3].successors.is_empty());
+        assert_eq!(successor_ids(&steps[1]), vec![3]);
+        assert!(successor_ids(&steps[2]).is_empty());
+        assert!(successor_ids(&steps[3]).is_empty());
+    }
+
+    #[test]
+    fn local_flow_states_scope_with_resource_bindings() {
+        let body = HirFunctionBody {
+            function_name: "run".to_string(),
+            block: Some(HirBlock {
+                statements: vec![
+                    HirStmt::With {
+                        resource: HirExpr::Call {
+                            callee: Callee::Name("File.open".to_string()),
+                            args: Vec::new(),
+                            resolution: CallResolution::Unknown,
+                            events: Vec::new(),
+                            type_name: Some("File".to_string()),
+                            span: span(1),
+                        },
+                        binding: "file".to_string(),
+                        body: HirBlock {
+                            statements: vec![HirStmt::Expr(HirExpr::Ident {
+                                name: "file".to_string(),
+                                type_name: Some("File".to_string()),
+                                span: span(2),
+                            })],
+                            span: span(2),
+                        },
+                        span: span(1),
+                    },
+                    HirStmt::Return {
+                        value: Some(HirExpr::Ident {
+                            name: "done".to_string(),
+                            type_name: Some("Unit".to_string()),
+                            span: span(3),
+                        }),
+                        proof: HirReturnProof::Ident {
+                            name: "done".to_string(),
+                        },
+                        span: span(3),
+                    },
+                ],
+                span: span(1),
+            }),
+            ..HirFunctionBody::default()
+        };
+        let local_analysis = LocalAnalysis::new(Some(&body));
+        let steps = collect_local_flow_steps(body.block.as_ref().expect("block exists"));
+
+        assert_eq!(successor_ids(&steps[0]), vec![1]);
+        assert_eq!(successor_ids(&steps[1]), vec![2]);
+        assert_eq!(
+            successor_drop_resources(&steps[1], 2),
+            vec!["file".to_string()]
+        );
+        assert!(
+            local_analysis
+                .flow_entry_state(&span(2))
+                .is_some_and(|state| state.is_resource("file"))
+        );
+        assert!(
+            local_analysis
+                .flow_entry_state(&span(3))
+                .is_some_and(|state| !state.is_resource("file"))
+        );
     }
 
     #[test]

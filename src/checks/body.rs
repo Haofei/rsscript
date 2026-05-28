@@ -441,6 +441,7 @@ fn check_resource_escape(
             Stmt::Return(stmt) => {
                 if let Some(Expr::Ident(name, span)) = &stmt.value
                     && name == binding
+                    && resource_is_active_at(local_analysis, binding, span)
                 {
                     resource_escape_diagnostic(analyzer, binding, span.clone());
                 }
@@ -452,6 +453,7 @@ fn check_resource_escape(
                 if stmt.kind == LetKind::Managed
                     && let Some(Expr::Closure { body, span }) = &stmt.value
                     && block_mentions_ident(body, binding)
+                    && resource_is_active_at(local_analysis, binding, span)
                 {
                     resource_capture_diagnostic(analyzer, binding, span.clone());
                 }
@@ -492,6 +494,7 @@ fn check_resource_escape_expr(
         Expr::Manage { value, span } => {
             if let Expr::Ident(name, _) = value.as_ref()
                 && name == binding
+                && resource_is_active_at(local_analysis, binding, span)
             {
                 resource_escape_diagnostic(analyzer, binding, span.clone());
             }
@@ -523,8 +526,20 @@ fn check_resource_retained_by_call(
     span: &crate::diagnostic::Span,
 ) {
     for escaping_span in local_analysis.retained_value_spans(span, binding) {
-        resource_escape_diagnostic(analyzer, binding, escaping_span);
+        if resource_is_active_at(local_analysis, binding, &escaping_span) {
+            resource_escape_diagnostic(analyzer, binding, escaping_span);
+        }
     }
+}
+
+fn resource_is_active_at(
+    local_analysis: &LocalAnalysis,
+    binding: &str,
+    span: &crate::diagnostic::Span,
+) -> bool {
+    local_analysis
+        .flow_entry_state(span)
+        .is_none_or(|state| state.is_resource(binding))
 }
 
 fn block_mentions_ident(block: &Block, binding: &str) -> bool {
