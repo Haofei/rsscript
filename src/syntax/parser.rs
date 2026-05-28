@@ -143,7 +143,7 @@ impl Parser<'_> {
         let type_params = self.parse_generic_params();
         let (fields, drop_body) = if self.at_symbol("{") {
             let open = self.index;
-            let close = find_matching(self.tokens, open, "{", "}").unwrap_or(open);
+            let close = find_matching(self.tokens, open, "{", "}")?;
             self.index = close + 1;
             (
                 parse_fields(self.tokens, open + 1, close),
@@ -198,7 +198,7 @@ impl Parser<'_> {
         let mut params = Vec::new();
         if self.at_symbol("(") {
             let open = self.index;
-            let close = find_matching(self.tokens, open, "(", ")").unwrap_or(open);
+            let close = find_matching(self.tokens, open, "(", ")")?;
             params = parse_params(self.tokens, open + 1, close);
             self.index = close + 1;
         }
@@ -221,7 +221,7 @@ impl Parser<'_> {
         let mut effects = Vec::new();
         if self.index < signature_end && self.at_ident("effects") && self.peek_symbol(1, "(") {
             let open = self.index + 1;
-            let close = find_matching(self.tokens, open, "(", ")").unwrap_or(open);
+            let close = find_matching(self.tokens, open, "(", ")")?;
             effects = parse_effects(self.tokens, open + 1, close);
             self.index = close + 1;
         }
@@ -235,7 +235,7 @@ impl Parser<'_> {
 
         let body = if self.at_symbol("{") {
             let open = self.index;
-            let close = find_matching(self.tokens, open, "{", "}").unwrap_or(open);
+            let close = find_matching(self.tokens, open, "{", "}")?;
             self.index = close + 1;
             parse_block(self.tokens, open, close)
         } else {
@@ -636,7 +636,9 @@ fn parse_with_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize
             statement_end(tokens, start, limit),
         );
     };
-    let close = find_matching(tokens, open, "{", "}").unwrap_or(open);
+    let Some(close) = find_matching(tokens, open, "{", "}") else {
+        return (Stmt::Unknown(tokens[start].span.clone()), limit);
+    };
     let resource = parse_expr(tokens, start + 1, as_index)
         .unwrap_or_else(|| Expr::Unknown(tokens[start].span.clone()));
     let binding = tokens
@@ -664,7 +666,9 @@ fn parse_if_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) 
             statement_end(tokens, start, limit),
         );
     };
-    let close = find_matching(tokens, open, "{", "}").unwrap_or(open);
+    let Some(close) = find_matching(tokens, open, "{", "}") else {
+        return (Stmt::Unknown(tokens[start].span.clone()), limit);
+    };
     let condition = parse_expr(tokens, start + 1, open)
         .unwrap_or_else(|| Expr::Unknown(tokens[start].span.clone()));
     let then_body = parse_block(tokens, open, close);
@@ -675,7 +679,9 @@ fn parse_if_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) 
     {
         if tokens.get(next + 1).is_some_and(|token| token.symbol("{")) {
             let else_open = next + 1;
-            let else_close = find_matching(tokens, else_open, "{", "}").unwrap_or(else_open);
+            let Some(else_close) = find_matching(tokens, else_open, "{", "}") else {
+                return (Stmt::Unknown(tokens[start].span.clone()), limit);
+            };
             next = else_close + 1;
             Some(parse_block(tokens, else_open, else_close))
         } else if tokens
@@ -721,7 +727,9 @@ fn parse_loop_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize
             statement_end(tokens, start, limit),
         );
     };
-    let close = find_matching(tokens, open, "{", "}").unwrap_or(open);
+    let Some(close) = find_matching(tokens, open, "{", "}") else {
+        return (Stmt::Unknown(tokens[start].span.clone()), limit);
+    };
     let condition = if tokens[start].is_ident_text("while") {
         parse_expr(tokens, start + 1, open)
     } else {
@@ -745,7 +753,9 @@ fn parse_match_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usiz
             statement_end(tokens, start, limit),
         );
     };
-    let close = find_matching(tokens, open, "{", "}").unwrap_or(open);
+    let Some(close) = find_matching(tokens, open, "{", "}") else {
+        return (Stmt::Unknown(tokens[start].span.clone()), limit);
+    };
     let value = parse_expr(tokens, start + 1, open)
         .unwrap_or_else(|| Expr::Unknown(tokens[start].span.clone()));
 
@@ -779,7 +789,9 @@ fn parse_match_arms(tokens: &[Token], start: usize, end: usize) -> Vec<MatchArm>
             .get(body_start)
             .is_some_and(|token| token.symbol("{"))
         {
-            let body_close = find_matching(tokens, body_start, "{", "}").unwrap_or(body_start);
+            let Some(body_close) = find_matching(tokens, body_start, "{", "}") else {
+                break;
+            };
             (parse_block(tokens, body_start, body_close), body_close + 1)
         } else {
             let body_end = next_line_or_block_end(tokens, body_start, end);
@@ -851,7 +863,9 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
                 span: tokens[start].span.clone(),
             });
         };
-        let close = find_matching(tokens, open, "{", "}").unwrap_or(open);
+        let Some(close) = find_matching(tokens, open, "{", "}") else {
+            return Some(Expr::Unknown(tokens[start].span.clone()));
+        };
         if close + 1 != end {
             return Some(Expr::Unknown(tokens[start].span.clone()));
         }
@@ -879,8 +893,9 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
             .get(value_start)
             .is_some_and(|token| token.symbol("("))
         {
-            let close =
-                find_matching(tokens, value_start, "(", ")").unwrap_or(end.saturating_sub(1));
+            let Some(close) = find_matching(tokens, value_start, "(", ")") else {
+                return Some(Expr::Unknown(tokens[start].span.clone()));
+            };
             if close + 1 != end {
                 return Some(Expr::Unknown(tokens[start].span.clone()));
             }
@@ -901,8 +916,9 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
             .get(value_start)
             .is_some_and(|token| token.symbol("("))
         {
-            let close =
-                find_matching(tokens, value_start, "(", ")").unwrap_or(end.saturating_sub(1));
+            let Some(close) = find_matching(tokens, value_start, "(", ")") else {
+                return Some(Expr::Unknown(tokens[start].span.clone()));
+            };
             if close + 1 != end {
                 return Some(Expr::Unknown(tokens[start].span.clone()));
             }
@@ -1452,7 +1468,7 @@ fn skip_unknown_top_level(tokens: &[Token], start: usize) -> usize {
     let line_end = declaration_line_end(tokens, start);
     let block_end = (start..line_end)
         .find(|index| tokens[*index].symbol("{"))
-        .and_then(|open| find_matching(tokens, open, "{", "}").map(|close| close + 1));
+        .map(|open| find_matching(tokens, open, "{", "}").map_or(tokens.len(), |close| close + 1));
     block_end.unwrap_or(line_end).max(start + 1)
 }
 

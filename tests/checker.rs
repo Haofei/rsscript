@@ -2290,6 +2290,33 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_reports_unclosed_delimiters_on_own_construct() {
+    let unclosed_body = r#"
+fn main() -> Unit {
+    let x = 1
+"#;
+    let diagnostics = analyze_source("unclosed-function-body.rss", unclosed_body);
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS0015"
+            && diagnostic.label == "malformed declaration"
+            && diagnostic.span.line == 2
+    }));
+
+    let unclosed_call = r#"
+fn main() -> Unit {
+    let x = Log.write(message: read "hello"
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("unclosed-call-expression.rss", unclosed_call);
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS0015"
+            && diagnostic.label == "unsupported expression"
+            && diagnostic.span.line == 3
+    }));
+}
+
+#[test]
 fn checker_rejects_retaining_local_inline_field() {
     let source = r#"
 features: local

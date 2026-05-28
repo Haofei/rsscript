@@ -676,9 +676,9 @@ unsupported  rejected before Rust lowering or reserved for later versions
 
 Open hardening requirement: unknown top-level constructs, malformed
 declarations, malformed `let`/`local` bindings, missing call argument values,
-and trailing expression tokens are stable diagnostics. Broader expression/body
-parse errors still need grammar-driven diagnostics before v0.5 can be called
-semantically hard.
+trailing expression tokens, and unclosed function/call delimiters are stable
+diagnostics. Broader expression/body parse errors still need grammar-driven
+diagnostics before v0.5 can be called semantically hard.
 
 ---
 
