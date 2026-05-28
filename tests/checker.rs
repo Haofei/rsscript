@@ -3687,6 +3687,34 @@ fn wrapper(value: read Payload) -> Unit {
 }
 
 #[test]
+fn review_map_marks_callers_of_qualified_review_required_functions() {
+    let source = r#"
+struct Payload
+struct Cache
+
+fn Cache.remember(cache: read Cache, value: read Payload) -> Unit
+    effects(retains(value))
+
+fn wrapper(cache: read Cache, value: read Payload) -> Unit {
+    Cache.remember(cache: read cache, value: read value)
+}
+"#;
+    let map = review_map_sources(vec![("qualified-calls.rss", source)]);
+
+    assert_eq!(map.summary.total_functions, 2);
+    assert_eq!(map.summary.review_required.functions, 2);
+    assert_eq!(map.summary.foldable.functions, 0);
+    assert!(map.files[0].regions.iter().any(|region| {
+        region.function == "wrapper"
+            && region.classification == ReviewMapClassification::ReviewRequired
+            && region
+                .reasons
+                .iter()
+                .any(|reason| reason == "calls must-review `Cache.remember`")
+    }));
+}
+
+#[test]
 fn review_map_marks_resourcepool_and_fresh_boundaries() {
     let source = r#"
 features: local

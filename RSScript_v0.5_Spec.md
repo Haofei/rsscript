@@ -3200,6 +3200,10 @@ no writes through handle fields
 all callees are also safe or proven low-risk
 ```
 
+Call propagation must use the resolved fully qualified RSScript function name.
+For example, a call to `Cache.remember` must inherit the review classification
+of `Cache.remember`, not an unrelated short name `remember`.
+
 Safe-to-skip does not mean logically correct.
 
 It means no language-visible side-effect, resource, retention, native, or local/managed boundary risk.

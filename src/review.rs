@@ -4,8 +4,8 @@ use serde::Serialize;
 
 use crate::diagnostic::{Span, code};
 use crate::hir::{
-    CallResolution, Hir, HirBindingKind, HirBlock, HirExpr, HirStmt, ParamEffect,
-    ResolvedCalleeKind,
+    CallResolution, FunctionSig as HirFunctionSig, Hir, HirBindingKind, HirBlock, HirExpr, HirStmt,
+    ParamEffect, ResolvedCalleeKind,
 };
 use crate::syntax::ast::{
     Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature, FunctionDecl,
@@ -667,7 +667,7 @@ fn collect_review_map_facts_expr(expr: &Expr, hir: &Hir, facts: &mut ReviewMapFa
             match hir.resolve_call(callee) {
                 CallResolution::Resolved { signature, kind } => {
                     if kind == ResolvedCalleeKind::UserFunction {
-                        facts.user_calls.insert(signature.name);
+                        facts.user_calls.insert(function_sig_key(&signature));
                     }
                 }
                 CallResolution::Unknown => {
@@ -716,6 +716,14 @@ fn collect_review_map_hir_facts_block(
 ) {
     for statement in &block.statements {
         collect_review_map_hir_facts_stmt(statement, local_bindings, facts);
+    }
+}
+
+fn function_sig_key(signature: &HirFunctionSig) -> String {
+    if let Some(namespace) = &signature.namespace {
+        format!("{namespace}.{}", signature.name)
+    } else {
+        signature.name.clone()
     }
 }
 
