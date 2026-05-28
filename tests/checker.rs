@@ -360,7 +360,7 @@ fn pooled(pool: mut ResourcePool<DbConnection>) -> Unit {
 "#;
     let rust = lower_source_to_rust("pool.rss", source).expect("source should lower");
 
-    assert!(rust.contains("rsscript_runtime::ResourcePool::borrow_at(&mut pool, rsscript_runtime::SourceSpan::new(\"pool.rss\", 9, 10, 12))"));
+    assert!(rust.contains("let mut conn = rsscript_runtime::unwrap_runtime(rsscript_runtime::ResourcePool::borrow_at(&mut pool, rsscript_runtime::SourceSpan::new(\"pool.rss\", 9, 10, 12)));"));
 }
 
 #[test]

@@ -364,6 +364,7 @@ runtime crate type surface
 runtime-mediated managed handles
 explicit ResourcePool runtime errors
 source-span hooks for manage and ResourcePool borrow lowering
+central runtime unwrap boundary for generated resource operations
 source map JSON for generated Rust packages
 rustc diagnostic remapping through source maps
 core `.rssi` interface signatures

@@ -85,6 +85,10 @@ pub fn manage_at<T>(value: T, span: SourceSpan) -> Gc<T> {
     Gc::new_at(value, span)
 }
 
+pub fn unwrap_runtime<T>(result: Result<T, RuntimeError>) -> T {
+    result.expect("RSScript runtime error should be reported through diagnostics")
+}
+
 pub struct GcRead<'a, T>(Ref<'a, T>);
 
 impl<T> Deref for GcRead<'_, T> {

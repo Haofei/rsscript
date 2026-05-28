@@ -469,10 +469,16 @@ impl<'a> RustLowerer<'a> {
                 }
             }
             Stmt::With(stmt) => {
+                let resource = self.lower_expr(&stmt.resource);
+                let resource = if is_resource_pool_borrow_expr(&stmt.resource) {
+                    format!("rsscript_runtime::unwrap_runtime({resource})")
+                } else {
+                    resource
+                };
                 out.push_str(&format!(
                     "{pad}let mut {} = {};\n",
                     rust_ident(&stmt.binding),
-                    self.lower_expr(&stmt.resource)
+                    resource
                 ));
                 out.push_str(&format!("{pad}{{\n"));
                 self.lower_block(&stmt.body, out, indent + 1);
@@ -978,6 +984,10 @@ fn lower_callee(callee: &Callee) -> String {
 
 fn is_resource_pool_borrow_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && name == "borrow")
+}
+
+fn is_resource_pool_borrow_expr(expr: &Expr) -> bool {
+    matches!(expr, Expr::Call { callee, .. } if is_resource_pool_borrow_callee(callee))
 }
 
 fn lower_source_span(span: &Span) -> String {
