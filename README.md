@@ -16,6 +16,8 @@ RSScript is a new language front end that lowers to Rust. It keeps rustc, Cargo,
 
 Rust is excellent at library boundaries: generic abstractions, precise ownership, trait-driven APIs, async runtimes, and zero-cost escape hatches. Application code usually wants a different register: concrete data, direct control flow, visible mutation, visible retention, and few abstraction choices. RSScript makes that application register the default surface for AI-generated code, while keeping Rust as the place for library implementation and native wrapper work.
 
+That distinction matters more with AI in the loop. When a model writes Rust application code, it often reaches for library-author patterns: broad generics, layered traits, deeply nested shared state, and future-proof abstractions before the app needs them. RSScript narrows the default shape toward app-developer code, then uses `features: local` and `features: native` when the implementation really needs to cross into lower-level Rust.
+
 ---
 
 ## Why a Smaller Review Surface
