@@ -363,6 +363,7 @@ Rust source lowering
 runtime crate type surface
 source map JSON for generated Rust packages
 rustc diagnostic remapping through source maps
+core `.rssi` interface signatures
 ```
 
 The first milestone is not a production runtime.
@@ -372,7 +373,7 @@ The first milestone is a strong review-first checker that can validate the langu
 Current CLI surface:
 
 ```sh
-rss check [--json] <file.rss>
+rss check [--json] [--interface <file.rssi> ...] <file.rss>
 rss check --explain <code>
 rss fmt <file.rss>
 rss review [--json] --diff <old.rss> <new.rss>

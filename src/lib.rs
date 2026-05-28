@@ -7,7 +7,7 @@ mod review;
 mod rust_lower;
 pub mod syntax;
 
-pub use analyzer::analyze_source;
+pub use analyzer::{analyze_source, analyze_source_with_interfaces};
 pub use diagnostic::{
     Diagnostic, DiagnosticExplanation, Severity, explain_diagnostic_code,
     format_diagnostic_explanation, format_diagnostics_human, format_diagnostics_json,

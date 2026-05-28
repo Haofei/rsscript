@@ -1,0 +1,9 @@
+struct Map<K, V>
+
+pub fn Map.insert<K, V>(
+    map: mut Map<K, V>,
+    key: read K,
+    value: read V,
+) -> Unit
+    effects(retains(value))
+

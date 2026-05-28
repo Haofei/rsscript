@@ -4,11 +4,12 @@ use std::path::{Path, PathBuf};
 use rsscript::syntax::ast::Item;
 use rsscript::syntax::parse_source;
 use rsscript::{
-    ReviewMapClassification, ReviewRisk, analyze_source, explain_diagnostic_code,
-    format_diagnostic_explanation, format_diagnostics_json, format_review_human,
-    format_review_json, format_review_map_human, format_review_map_json, lower_source_to_rust,
-    lower_source_to_rust_package, lower_source_to_rust_with_map, remap_rustc_diagnostic_json,
-    remap_rustc_diagnostic_json_lines, review_map_sources, review_sources,
+    ReviewMapClassification, ReviewRisk, analyze_source, analyze_source_with_interfaces,
+    explain_diagnostic_code, format_diagnostic_explanation, format_diagnostics_json,
+    format_review_human, format_review_json, format_review_map_human, format_review_map_json,
+    lower_source_to_rust, lower_source_to_rust_package, lower_source_to_rust_with_map,
+    remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines, review_map_sources,
+    review_sources,
 };
 use serde_json::Value;
 
@@ -38,6 +39,15 @@ fn fail_fixtures_report_expected_diagnostic_codes() {
                 path.display()
             );
         }
+    }
+}
+
+#[test]
+fn core_interface_files_have_no_diagnostics() {
+    for path in fixture_paths("core") {
+        let source = read_fixture(&path);
+        let diagnostics = analyze_source(path.to_str().unwrap(), &source);
+        assert_eq!(diagnostics, Vec::new(), "{}", path.display());
     }
 }
 
@@ -78,6 +88,60 @@ fn diagnostic_explanations_are_available_by_code() {
     assert!(formatted.contains("RS0401"));
     assert!(formatted.contains("manage"));
     assert!(explain_diagnostic_code("RS9999").is_none());
+}
+
+#[test]
+fn parser_accepts_qualified_interface_function_signatures() {
+    let source = r#"
+struct HtmlEscaped
+
+pub fn Html.escape(text: read String) -> fresh HtmlEscaped
+"#;
+    let program = parse_source("html.rssi", source);
+
+    assert!(
+        matches!(&program.items[1], Item::Function(function) if function.name == "Html.escape")
+    );
+}
+
+#[test]
+fn checker_resolves_calls_from_interface_signatures() {
+    let interface = r#"
+struct HtmlEscaped
+
+pub fn Html.escape(text: read String) -> fresh HtmlEscaped
+"#;
+    let source = r#"
+fn render(body: read String) -> fresh HtmlEscaped {
+    return Html.escape(text: read body)
+}
+"#;
+
+    assert_eq!(
+        analyze_source_with_interfaces("page.rss", source, &[("html.rssi", interface)]),
+        Vec::new()
+    );
+}
+
+#[test]
+fn checker_reports_interface_signature_call_violations() {
+    let interface = r#"
+struct HtmlEscaped
+
+pub fn Html.escape(text: read String) -> fresh HtmlEscaped
+"#;
+    let source = r#"
+fn render(body: read String) -> fresh HtmlEscaped {
+    return Html.escape(value: read body)
+}
+"#;
+    let codes = analyze_source_with_interfaces("page.rss", source, &[("html.rssi", interface)])
+        .into_iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+
+    assert!(codes.contains(&"RS0203".to_string()));
+    assert!(codes.contains(&"RS0204".to_string()));
 }
 
 #[test]

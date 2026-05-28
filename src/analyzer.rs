@@ -13,6 +13,29 @@ pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
     let tokens = lex(file, source);
     let syntax_program = parse_source(file, source);
     let hir = Hir::from_syntax(&syntax_program);
+    analyze_program(tokens, syntax_program, hir)
+}
+
+pub fn analyze_source_with_interfaces(
+    file: &str,
+    source: &str,
+    interfaces: &[(&str, &str)],
+) -> Vec<Diagnostic> {
+    let tokens = lex(file, source);
+    let syntax_program = parse_source(file, source);
+    let interface_programs = interfaces
+        .iter()
+        .map(|(file, source)| parse_source(file, source))
+        .collect::<Vec<_>>();
+    let hir = Hir::from_syntax_with_interfaces(&syntax_program, &interface_programs);
+    analyze_program(tokens, syntax_program, hir)
+}
+
+fn analyze_program(
+    tokens: Vec<Token>,
+    syntax_program: crate::syntax::ast::Program,
+    hir: Hir,
+) -> Vec<Diagnostic> {
     let mut analyzer = Analyzer {
         tokens: &tokens,
         syntax_program,

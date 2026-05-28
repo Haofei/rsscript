@@ -1,0 +1,10 @@
+struct Image
+
+pub fn Image.load(path: read Path) -> fresh Image
+
+pub fn Image.resize(image: mut Image, width: Int, height: Int) -> Unit
+
+pub fn Image.save(image: read Image, path: read Path) -> Unit
+
+pub fn Image.inspect(image: read Image) -> Unit
+

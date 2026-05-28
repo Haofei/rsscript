@@ -81,7 +81,7 @@ impl Parser<'_> {
             TypeKind::Resource
         };
         self.index += 1;
-        let name = self.take_ident_name()?;
+        let name = self.take_function_name()?;
         let type_params = self.parse_generic_params();
         let fields = if self.at_symbol("{") {
             let open = self.index;
@@ -215,6 +215,17 @@ impl Parser<'_> {
     fn take_ident_name(&mut self) -> Option<String> {
         let name = ident_name(self.tokens.get(self.index)?)?.to_string();
         self.index += 1;
+        Some(name)
+    }
+
+    fn take_function_name(&mut self) -> Option<String> {
+        let mut name = self.take_ident_name()?;
+        while self.at_symbol(".") {
+            self.index += 1;
+            let segment = self.take_ident_name()?;
+            name.push('.');
+            name.push_str(&segment);
+        }
         Some(name)
     }
 

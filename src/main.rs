@@ -5,11 +5,11 @@ use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rsscript::{
-    Diagnostic, analyze_source, check_generated_rust_package, explain_diagnostic_code,
-    format_diagnostic_explanation, format_diagnostics_human, format_diagnostics_json,
-    format_review_human, format_review_json, format_review_map_human, format_review_map_json,
-    lower_source_to_rust, lower_source_to_rust_package, parse_source_map_json,
-    remap_rustc_diagnostic_json_lines, review_map_sources, review_sources,
+    Diagnostic, analyze_source, analyze_source_with_interfaces, check_generated_rust_package,
+    explain_diagnostic_code, format_diagnostic_explanation, format_diagnostics_human,
+    format_diagnostics_json, format_review_human, format_review_json, format_review_map_human,
+    format_review_map_json, lower_source_to_rust, lower_source_to_rust_package,
+    parse_source_map_json, remap_rustc_diagnostic_json_lines, review_map_sources, review_sources,
     write_generated_rust_package,
 };
 
@@ -44,8 +44,8 @@ fn run_check(args: &[String]) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let (json, path) = parse_path_args(args);
-    let Some(path) = path else {
+    let options = parse_check_args(args);
+    let Some(path) = options.path else {
         print_usage();
         return ExitCode::from(2);
     };
@@ -58,8 +58,23 @@ fn run_check(args: &[String]) -> ExitCode {
         }
     };
 
-    let diagnostics = analyze_source(path, &source);
-    if json {
+    let interfaces = match read_interface_sources(&options.interfaces) {
+        Ok(interfaces) => interfaces,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+    let interface_refs = interfaces
+        .iter()
+        .map(|interface| (interface.path.as_str(), interface.contents.as_str()))
+        .collect::<Vec<_>>();
+    let diagnostics = if interface_refs.is_empty() {
+        analyze_source(path, &source)
+    } else {
+        analyze_source_with_interfaces(path, &source, &interface_refs)
+    };
+    if options.json {
         println!("{}", format_diagnostics_json(&diagnostics));
     } else if diagnostics.is_empty() {
         println!("{path}: ok");
@@ -376,6 +391,39 @@ struct LowerOptions<'a> {
     out_dir: Option<&'a str>,
 }
 
+struct CheckOptions<'a> {
+    json: bool,
+    path: Option<&'a str>,
+    interfaces: Vec<&'a str>,
+}
+
+fn parse_check_args(args: &[String]) -> CheckOptions<'_> {
+    let mut json = false;
+    let mut path = None;
+    let mut interfaces = Vec::new();
+    let mut index = 0;
+
+    while let Some(arg) = args.get(index) {
+        if arg == "--json" {
+            json = true;
+        } else if arg == "--interface" {
+            index += 1;
+            if let Some(interface) = args.get(index) {
+                interfaces.push(interface.as_str());
+            }
+        } else if path.is_none() {
+            path = Some(arg.as_str());
+        }
+        index += 1;
+    }
+
+    CheckOptions {
+        json,
+        path,
+        interfaces,
+    }
+}
+
 fn parse_lower_args(args: &[String]) -> LowerOptions<'_> {
     let mut emit_rust = false;
     let mut path = None;
@@ -399,6 +447,25 @@ fn parse_lower_args(args: &[String]) -> LowerOptions<'_> {
         path,
         out_dir,
     }
+}
+
+struct InterfaceSource {
+    path: String,
+    contents: String,
+}
+
+fn read_interface_sources(paths: &[&str]) -> Result<Vec<InterfaceSource>, String> {
+    paths
+        .iter()
+        .map(|path| {
+            fs::read_to_string(path)
+                .map(|contents| InterfaceSource {
+                    path: (*path).to_string(),
+                    contents,
+                })
+                .map_err(|error| format!("failed to read interface {path}: {error}"))
+        })
+        .collect()
 }
 
 fn default_runtime_path() -> Result<PathBuf, String> {
@@ -600,7 +667,7 @@ fn read_review_map_file(path: &Path) -> Result<ReviewMapSource, String> {
 
 fn print_usage() {
     eprintln!("usage:");
-    eprintln!("  rsscript check [--json] <file.rss>");
+    eprintln!("  rsscript check [--json] [--interface <file.rssi> ...] <file.rss>");
     eprintln!("  rsscript check --explain <code>");
     eprintln!("  rsscript fmt <file.rss>");
     eprintln!("  rsscript lower --rust <file.rss>");

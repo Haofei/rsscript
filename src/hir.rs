@@ -316,44 +316,63 @@ pub struct Hir {
 
 impl Hir {
     pub fn from_syntax(program: &SyntaxProgram) -> Self {
+        Self::from_syntax_with_interfaces(program, &[])
+    }
+
+    pub fn from_syntax_with_interfaces(
+        program: &SyntaxProgram,
+        interfaces: &[SyntaxProgram],
+    ) -> Self {
         let mut hir = Self::default();
         hir.insert_builtins();
-        let mut type_symbols = HashMap::new();
-        let mut callable_symbols = HashMap::new();
+        let mut type_symbols: HashMap<String, (DuplicateSymbolKind, Span)> = HashMap::new();
+        let mut callable_symbols: HashMap<String, (DuplicateSymbolKind, Span)> = HashMap::new();
+        for interface in interfaces {
+            hir.collect_item_signatures(interface, &mut type_symbols, &mut callable_symbols);
+        }
+        hir.collect_item_signatures(program, &mut type_symbols, &mut callable_symbols);
+        hir.collect_body_facts(program);
+        hir
+    }
+
+    fn collect_item_signatures(
+        &mut self,
+        program: &SyntaxProgram,
+        type_symbols: &mut HashMap<String, (DuplicateSymbolKind, Span)>,
+        callable_symbols: &mut HashMap<String, (DuplicateSymbolKind, Span)>,
+    ) {
         for item in &program.items {
             match item {
                 Item::Function(function) => {
                     record_duplicate_symbol(
-                        &mut hir.duplicate_symbols,
-                        &mut callable_symbols,
+                        &mut self.duplicate_symbols,
+                        callable_symbols,
                         DuplicateSymbolKind::Function,
                         &function.name,
                         &function.span,
                     );
-                    hir.insert_function(function_sig_from_decl(function));
+                    self.insert_function(function_sig_from_decl(function));
                 }
                 Item::Type(type_decl) => {
-                    record_duplicate_fields(&mut hir.duplicate_symbols, type_decl);
+                    record_duplicate_fields(&mut self.duplicate_symbols, type_decl);
                     record_duplicate_symbol(
-                        &mut hir.duplicate_symbols,
-                        &mut type_symbols,
+                        &mut self.duplicate_symbols,
+                        type_symbols,
                         DuplicateSymbolKind::Type,
                         &type_decl.name,
                         &type_decl.span,
                     );
                     record_duplicate_symbol(
-                        &mut hir.duplicate_symbols,
-                        &mut callable_symbols,
+                        &mut self.duplicate_symbols,
+                        callable_symbols,
                         DuplicateSymbolKind::Constructor,
                         &type_decl.name,
                         &type_decl.span,
                     );
-                    hir.insert_type(type_info_from_decl(type_decl));
+                    self.insert_type(type_info_from_decl(type_decl));
                 }
             }
         }
-        hir.collect_body_facts(program);
-        hir
     }
 
     pub fn resolve_function(&self, namespace: Option<&str>, name: &str) -> Option<&FunctionSig> {
@@ -1301,9 +1320,10 @@ fn callee_display(callee: &Callee) -> String {
 }
 
 fn function_sig_from_decl(function: &FunctionDecl) -> FunctionSig {
+    let (namespace, name) = split_function_name(&function.name);
     FunctionSig {
-        namespace: None,
-        name: function.name.clone(),
+        namespace,
+        name,
         is_async: function.is_async,
         params: function.params.iter().map(param_sig_from_decl).collect(),
         return_type: function.return_ty.as_ref().map(type_ref_name),
@@ -1317,6 +1337,14 @@ fn function_sig_from_decl(function: &FunctionDecl) -> FunctionSig {
             })
             .collect(),
         is_builtin: false,
+    }
+}
+
+fn split_function_name(name: &str) -> (Option<String>, String) {
+    if let Some((namespace, name)) = name.rsplit_once('.') {
+        (Some(namespace.to_string()), name.to_string())
+    } else {
+        (None, name.to_string())
     }
 }
 
