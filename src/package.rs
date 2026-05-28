@@ -584,10 +584,16 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         .filter(|source| source.kind == PackageReviewFileKind::Source)
         .map(|source| (source.path.as_str(), source.contents.as_str()))
         .collect::<Vec<_>>();
+    let interface_frontend_diagnostics = interface_refs
+        .iter()
+        .flat_map(|(path, contents)| {
+            analyze_source_with_interfaces(path, contents, &external_interfaces)
+        })
+        .collect::<Vec<_>>();
+    let interface_diagnostic_exports =
+        package_interface_diagnostic_exports(sources, &interface_frontend_diagnostics);
     let mut diagnostics = package_interface_environment_diagnostics(&combined_interfaces);
-    diagnostics.extend(interface_refs.iter().flat_map(|(path, contents)| {
-        analyze_source_with_interfaces(path, contents, &external_interfaces)
-    }));
+    diagnostics.extend(interface_frontend_diagnostics);
     diagnostics.extend(analyze_sources_with_interfaces(
         &source_refs,
         &source_interfaces,
@@ -643,10 +649,17 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
     } else if !diagnostics.is_empty() {
         reasons.push("package contains frontend warnings".to_string());
     }
+    if !interface_diagnostic_exports.is_empty() {
+        reasons.push("public .rssi contract contains frontend errors".to_string());
+    }
     reasons.sort();
     reasons.dedup();
 
-    let risk = package_risk(manifest, native_rust.as_ref(), &review_map, &diagnostics);
+    let risk = if interface_diagnostic_exports.is_empty() {
+        package_risk(manifest, native_rust.as_ref(), &review_map, &diagnostics)
+    } else {
+        PackageRisk::Unknown
+    };
     let api_summary = package_api_effect_summary(sources, &review_map);
     let summary = PackageReviewSummary {
         interface_files: sources
@@ -674,7 +687,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         fresh_returning_apis: api_summary.fresh_returning_apis,
         native_apis: api_summary.native_apis,
         unsafe_apis: api_summary.unsafe_apis,
-        unknown_apis: api_summary.unknown_apis,
+        unknown_apis: api_summary.unknown_apis + interface_diagnostic_exports.len(),
     };
     let files = sources
         .iter()
@@ -684,7 +697,13 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         })
         .collect();
     let features = manifest.features.keys().cloned().collect::<Vec<_>>();
-    let exports = package_review_exports(sources, &review_map);
+    let mut exports = package_review_exports(sources, &review_map);
+    exports.extend(interface_diagnostic_exports);
+    exports.sort_by(|left, right| {
+        left.kind
+            .cmp(&right.kind)
+            .then_with(|| left.name.cmp(&right.name))
+    });
 
     Ok(PackageReview {
         package: PackageIdentity {
@@ -2475,6 +2494,51 @@ fn package_review_exports(
             .cmp(&right.kind)
             .then_with(|| left.name.cmp(&right.name))
     });
+    exports
+}
+
+fn package_interface_diagnostic_exports(
+    sources: &[PackageSource],
+    diagnostics: &[Diagnostic],
+) -> Vec<PackageReviewExport> {
+    let interface_paths = sources
+        .iter()
+        .filter(|source| source.kind == PackageReviewFileKind::Interface)
+        .map(|source| (source.path.as_str(), source.relative_path.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let mut seen = BTreeSet::new();
+    let mut exports = Vec::new();
+
+    for diagnostic in diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity.is_error())
+    {
+        let Some(relative_path) = interface_paths.get(diagnostic.span.file.as_str()) else {
+            continue;
+        };
+        let name = format!(
+            "{}:{}:{}",
+            relative_path, diagnostic.span.line, diagnostic.span.column
+        );
+        let key = (
+            name.clone(),
+            diagnostic.code.clone(),
+            diagnostic.label.clone(),
+        );
+        if !seen.insert(key) {
+            continue;
+        }
+        exports.push(PackageReviewExport {
+            name,
+            kind: "contract_diagnostic".to_string(),
+            classification: "unknown".to_string(),
+            reasons: vec![
+                format!("frontend error {}", diagnostic.code),
+                diagnostic.label.clone(),
+            ],
+        });
+    }
+
     exports
 }
 

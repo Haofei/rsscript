@@ -4126,6 +4126,44 @@ fn package_review_json_counts_public_api_with_direct_unknown_call() {
 }
 
 #[test]
+fn package_review_marks_broken_rssi_contract_diagnostics_unknown() {
+    let temp_dir = unique_temp_dir("rsscript-package-review-broken-rssi");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        "",
+        r#"fn (value: read String) -> Unit
+"#,
+    );
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let human = rsscript::format_package_review_human(&review);
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(json["risk"], "unknown");
+    assert_eq!(json["summary"]["unknown_apis"], 1);
+    assert!(json["reasons"].as_array().is_some_and(|reasons| {
+        reasons
+            .iter()
+            .any(|reason| reason == "public .rssi contract contains frontend errors")
+    }));
+    assert!(json["exports"].as_array().is_some_and(|exports| {
+        exports.iter().any(|export| {
+            export["kind"] == "contract_diagnostic"
+                && export["classification"] == "unknown"
+                && export["reasons"].as_array().is_some_and(|reasons| {
+                    reasons
+                        .iter()
+                        .any(|reason| reason == "frontend error RS0015")
+                })
+        })
+    }));
+    assert!(human.contains("contract_diagnostic interface/lib.rssi:1:1: unknown"));
+}
+
+#[test]
 fn package_metadata_dry_run_reports_review_metadata_without_writing() {
     let temp_dir = unique_temp_dir("rsscript-package-metadata-dry-run");
     write_named_package_fixture(
