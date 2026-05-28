@@ -1,11 +1,11 @@
-use std::cell::{BorrowError, BorrowMutError, Ref, RefCell, RefMut};
+use std::cell::{RefCell, RefMut};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io::{Read, Write};
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
-use std::rc::{Rc, Weak};
 use std::str::Utf8Error;
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError, Weak};
 
 pub const RUNTIME_DIAGNOSTIC_PREFIX: &str = "RSSCRIPT_RUNTIME_DIAGNOSTIC:";
 
@@ -746,7 +746,7 @@ pub fn row_field_string(row: &Row, index: i64) -> Result<String, CsvError> {
 
 #[derive(Clone)]
 pub struct Managed<T> {
-    inner: Rc<RefCell<T>>,
+    inner: Arc<RwLock<T>>,
     origin_span: Option<SourceSpan>,
 }
 
@@ -757,30 +757,30 @@ pub type Gc<T> = Managed<T>;
 impl<T> Managed<T> {
     pub fn new(value: T) -> Self {
         Self {
-            inner: Rc::new(RefCell::new(value)),
+            inner: Arc::new(RwLock::new(value)),
             origin_span: None,
         }
     }
 
     pub fn new_at(value: T, span: SourceSpan) -> Self {
         Self {
-            inner: Rc::new(RefCell::new(value)),
+            inner: Arc::new(RwLock::new(value)),
             origin_span: Some(span),
         }
     }
 
     pub fn try_read(&self) -> Result<ManagedRead<'_, T>, RuntimeError> {
         self.inner
-            .try_borrow()
+            .try_read()
             .map(ManagedRead)
-            .map_err(RuntimeError::from)
+            .map_err(managed_read_error)
     }
 
     pub fn try_write(&self) -> Result<ManagedWrite<'_, T>, RuntimeError> {
         self.inner
-            .try_borrow_mut()
+            .try_write()
             .map(ManagedWrite)
-            .map_err(RuntimeError::from)
+            .map_err(managed_write_error)
     }
 
     pub fn try_read_at(&self, span: SourceSpan) -> Result<ManagedRead<'_, T>, RuntimeError> {
@@ -806,7 +806,7 @@ impl<T> Managed<T> {
     }
 
     pub fn ptr_eq(left: &Self, right: &Self) -> bool {
-        Rc::ptr_eq(&left.inner, &right.inner)
+        Arc::ptr_eq(&left.inner, &right.inner)
     }
 
     pub fn origin_span(&self) -> Option<&SourceSpan> {
@@ -816,7 +816,7 @@ impl<T> Managed<T> {
 
 #[derive(Clone)]
 pub struct WeakManaged<T> {
-    inner: Weak<RefCell<T>>,
+    inner: Weak<RwLock<T>>,
     origin_span: Option<SourceSpan>,
 }
 
@@ -864,7 +864,7 @@ pub fn manage_at<T>(value: T, span: SourceSpan) -> Managed<T> {
 
 pub fn weak<T>(value: &Managed<T>) -> WeakManaged<T> {
     WeakManaged {
-        inner: Rc::downgrade(&value.inner),
+        inner: Arc::downgrade(&value.inner),
         origin_span: value.origin_span.clone(),
     }
 }
@@ -884,7 +884,7 @@ pub fn assert_equal(left: &str, right: &str) {
     assert_eq!(left, right);
 }
 
-pub struct ManagedRead<'a, T>(Ref<'a, T>);
+pub struct ManagedRead<'a, T>(RwLockReadGuard<'a, T>);
 
 pub type GcRead<'a, T> = ManagedRead<'a, T>;
 
@@ -902,7 +902,7 @@ impl<T: fmt::Debug> fmt::Debug for ManagedRead<'_, T> {
     }
 }
 
-pub struct ManagedWrite<'a, T>(RefMut<'a, T>);
+pub struct ManagedWrite<'a, T>(RwLockWriteGuard<'a, T>);
 
 pub type GcWrite<'a, T> = ManagedWrite<'a, T>;
 
@@ -975,26 +975,6 @@ impl fmt::Display for RuntimeError {
 
 impl std::error::Error for RuntimeError {}
 
-impl From<BorrowError> for RuntimeError {
-    fn from(_: BorrowError) -> Self {
-        Self {
-            kind: RuntimeErrorKind::ManagedReadConflict,
-            message: "managed value is already mutably borrowed".to_string(),
-            span: None,
-        }
-    }
-}
-
-impl From<BorrowMutError> for RuntimeError {
-    fn from(_: BorrowMutError) -> Self {
-        Self {
-            kind: RuntimeErrorKind::ManagedWriteConflict,
-            message: "managed value is already borrowed".to_string(),
-            span: None,
-        }
-    }
-}
-
 impl RuntimeErrorKind {
     fn as_str(&self) -> &'static str {
         match self {
@@ -1008,6 +988,30 @@ impl RuntimeErrorKind {
 
 fn panic_runtime_error(error: RuntimeError) -> ! {
     panic!("{}{}", RUNTIME_DIAGNOSTIC_PREFIX, error.diagnostic_json())
+}
+
+fn managed_read_error<T>(error: TryLockError<RwLockReadGuard<'_, T>>) -> RuntimeError {
+    let message = match error {
+        TryLockError::WouldBlock => "managed value is already being written",
+        TryLockError::Poisoned(_) => "managed value lock is poisoned after a previous panic",
+    };
+    RuntimeError {
+        kind: RuntimeErrorKind::ManagedReadConflict,
+        message: message.to_string(),
+        span: None,
+    }
+}
+
+fn managed_write_error<T>(error: TryLockError<RwLockWriteGuard<'_, T>>) -> RuntimeError {
+    let message = match error {
+        TryLockError::WouldBlock => "managed value is already being read or written",
+        TryLockError::Poisoned(_) => "managed value lock is poisoned after a previous panic",
+    };
+    RuntimeError {
+        kind: RuntimeErrorKind::ManagedWriteConflict,
+        message: message.to_string(),
+        span: None,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1158,6 +1162,23 @@ mod tests {
 
         assert_eq!(&*left.read(), "cached-updated");
         assert!(super::Managed::ptr_eq(&left, &right));
+    }
+
+    #[test]
+    fn managed_handles_are_thread_shareable_for_send_values() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<super::Managed<String>>();
+        assert_send_sync::<super::WeakManaged<String>>();
+
+        let value = manage(String::from("cached"));
+        let worker_value = value.clone();
+        std::thread::spawn(move || {
+            worker_value.write().push_str("-from-thread");
+        })
+        .join()
+        .expect("managed value should move across thread");
+
+        assert_eq!(&*value.read(), "cached-from-thread");
     }
 
     #[test]

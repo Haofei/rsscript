@@ -215,9 +215,9 @@ This is an architectural choice. The value is in the front end; the back end is 
 
 ## Status
 
-Experimental. The current implementation is a Rust-based front-end prototype: lexer, parser, semantic checker with the review-oriented rules, deterministic formatting for the supported AST surface, structured diagnostics, review-map metadata, package review/diff/lock metadata, Rust source lowering with source maps, rustc diagnostic remapping, a small runtime crate with `Managed<T>` and `WeakManaged<T>` handle surfaces, and core `.rssi` interface signatures parsed through the ordinary interface path. CI gates formatting, lint, tests, and generated-Rust fixtures; golden tests cover lowering and source-map shape.
+Experimental. The current implementation is a Rust-based front-end prototype: lexer, parser, semantic checker with the review-oriented rules, deterministic formatting for the supported AST surface, structured diagnostics, review-map metadata, package review/diff/lock metadata, Rust source lowering with source maps, rustc diagnostic remapping, a small runtime crate with `Managed<T>` and `WeakManaged<T>` handles backed by Rust `Arc`/`RwLock`, and core `.rssi` interface signatures parsed through the ordinary interface path. CI gates formatting, lint, tests, and generated-Rust fixtures; golden tests cover lowering and source-map shape.
 
-The first milestone is a checker strong enough to validate the language model against real examples.
+The v0.5 milestone is a runnable review-first frontend over Rust: strong enough to check real examples, lower them to inspectable Rust, map backend diagnostics back to RSScript source, and keep review risk visible. Self-hosting is a separate experiment, not a v0.5 requirement.
 
 Current CLI:
 
@@ -292,7 +292,7 @@ The runtime hooks wired through so far: `Log.write`, `Assert.equal`, `OS.close`,
 
 Near term: checker prototype → real AST parser → HIR and symbol table → semantic checker → Rust lowering contract → runtime crate type surface → Rust source generation with source maps → rustc diagnostic mapping → core library signatures → runnable MVP through rustc.
 
-Longer term: semantic review tooling, a core library MVP, agent and runtime examples, a self-hosted frontend, stronger optimization paths.
+Longer term: deeper semantic review tooling, a larger core library, agent and runtime examples, stronger optimization paths, and an experimental self-hosted frontend.
 
 ---
 
