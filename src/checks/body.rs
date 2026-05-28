@@ -494,11 +494,7 @@ fn fresh_return_diagnostic(
 }
 
 fn is_handle_field(analyzer: &Analyzer<'_>, field: &str) -> bool {
-    analyzer.program.types.values().any(|decl| {
-        decl.fields
-            .iter()
-            .any(|decl_field| decl_field.name == field && decl_field.is_handle)
-    })
+    analyzer.hir.is_handle_field_name(field)
 }
 
 fn collect_stmt_idents(statement: &Stmt, uses: &mut Vec<(String, crate::diagnostic::Span)>) {

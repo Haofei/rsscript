@@ -12,6 +12,7 @@ It currently implements:
 - `rss fmt <file.rss>` as a parse/check gate that prints the source unchanged when valid
 - Lexer, lightweight parser, syntax AST, HIR signature table, and semantic checks for the review-critical v0.4.1 rules
 - Builtin signatures for the current fixture stdlib surface, including `Image`, `File`, `Map`, `ResourcePool`, `Json`, `Csv`, and cache/config helpers
+- HIR type and field tables for class/struct/resource declarations and handle fields
 - AST-driven mode and call checks for local-only features, named arguments, data effects, and retaining APIs
 - AST-driven body checks for local moves, `fresh` returns, resource escape, handle-field `take`, and managed closure captures
 - Focused check modules for mode, calls, body semantics, and forbidden operator behavior
@@ -45,8 +46,8 @@ Non-goals for this stage:
 
 Near-term roadmap:
 
-1. Expand HIR from function signatures into resolved statements, expressions, fields, and type kinds.
-2. Expand HIR and body checks into resolved statements, expressions, fields, and type kinds.
+1. Expand HIR from declarations into resolved statements and expressions.
+2. Use resolved local/field types to make body checks less name-based.
 3. Add branch-aware CleanLocal dataflow for `fresh`, `manage`, `take`, retaining APIs, and closure capture.
 4. Add `rss review old.rss new.rss` for API/effect/freshness diffing.
 

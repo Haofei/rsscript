@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::syntax::ast::{
-    DataEffect, EffectDecl, FunctionDecl, Item, Param, Program as SyntaxProgram,
+    DataEffect, EffectDecl, FieldDecl, FunctionDecl, Item, Param, Program as SyntaxProgram,
+    TypeDecl, TypeKind,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,9 +39,32 @@ pub struct FunctionSig {
     pub is_builtin: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HirTypeKind {
+    Class,
+    Struct,
+    Resource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldInfo {
+    pub name: String,
+    pub type_name: String,
+    pub is_handle: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeInfo {
+    pub name: String,
+    pub kind: HirTypeKind,
+    pub fields: HashMap<String, FieldInfo>,
+}
+
 #[derive(Debug, Default)]
 pub struct Hir {
     signatures: HashMap<String, FunctionSig>,
+    types: HashMap<String, TypeInfo>,
+    fields_by_name: HashMap<String, Vec<FieldInfo>>,
 }
 
 impl Hir {
@@ -48,8 +72,9 @@ impl Hir {
         let mut hir = Self::default();
         hir.insert_builtins();
         for item in &program.items {
-            if let Item::Function(function) = item {
-                hir.insert(function_sig_from_decl(function));
+            match item {
+                Item::Function(function) => hir.insert_function(function_sig_from_decl(function)),
+                Item::Type(type_decl) => hir.insert_type(type_info_from_decl(type_decl)),
             }
         }
         hir
@@ -64,7 +89,26 @@ impl Hir {
         self.signatures.get(name)
     }
 
-    fn insert(&mut self, signature: FunctionSig) {
+    pub fn type_info(&self, name: &str) -> Option<&TypeInfo> {
+        self.types.get(name)
+    }
+
+    pub fn type_kind(&self, name: &str) -> Option<HirTypeKind> {
+        self.type_info(name).map(|info| info.kind)
+    }
+
+    pub fn fields_named(&self, field_name: &str) -> impl Iterator<Item = &FieldInfo> {
+        self.fields_by_name
+            .get(field_name)
+            .into_iter()
+            .flat_map(|fields| fields.iter())
+    }
+
+    pub fn is_handle_field_name(&self, field_name: &str) -> bool {
+        self.fields_named(field_name).any(|field| field.is_handle)
+    }
+
+    fn insert_function(&mut self, signature: FunctionSig) {
         let key = match &signature.namespace {
             Some(namespace) => qualified_key(namespace, &signature.name),
             None => signature.name.clone(),
@@ -72,9 +116,19 @@ impl Hir {
         self.signatures.insert(key, signature);
     }
 
+    fn insert_type(&mut self, type_info: TypeInfo) {
+        for field in type_info.fields.values() {
+            self.fields_by_name
+                .entry(field.name.clone())
+                .or_default()
+                .push(field.clone());
+        }
+        self.types.insert(type_info.name.clone(), type_info);
+    }
+
     fn insert_builtins(&mut self) {
         for signature in builtin_signatures() {
-            self.insert(signature);
+            self.insert_function(signature);
         }
     }
 }
@@ -110,6 +164,34 @@ fn param_effect_from_data_effect(effect: DataEffect) -> ParamEffect {
         DataEffect::Read => ParamEffect::Read,
         DataEffect::Mut => ParamEffect::Mut,
         DataEffect::Take => ParamEffect::Take,
+    }
+}
+
+fn type_info_from_decl(type_decl: &TypeDecl) -> TypeInfo {
+    TypeInfo {
+        name: type_decl.name.clone(),
+        kind: type_kind_from_decl(type_decl.kind),
+        fields: type_decl
+            .fields
+            .iter()
+            .map(|field| (field.name.clone(), field_info_from_decl(field)))
+            .collect(),
+    }
+}
+
+fn type_kind_from_decl(kind: TypeKind) -> HirTypeKind {
+    match kind {
+        TypeKind::Class => HirTypeKind::Class,
+        TypeKind::Struct => HirTypeKind::Struct,
+        TypeKind::Resource => HirTypeKind::Resource,
+    }
+}
+
+fn field_info_from_decl(field: &FieldDecl) -> FieldInfo {
+    FieldInfo {
+        name: field.name.clone(),
+        type_name: field.ty.name.clone(),
+        is_handle: field.is_handle,
     }
 }
 
@@ -372,5 +454,72 @@ fn copy_param(name: &str, type_name: &str) -> ParamSig {
         name: name.to_string(),
         effect: None,
         type_name: type_name.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::syntax::parse_source;
+
+    #[test]
+    fn collects_type_kinds_and_handle_fields() {
+        let source = r#"
+mode: uses-local
+
+class User {
+    name: String
+}
+
+resource File {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+struct Session {
+    user: handle User
+    file_name: String
+}
+"#;
+
+        let program = parse_source("test.rss", source);
+        let hir = Hir::from_syntax(&program);
+
+        assert_eq!(hir.type_kind("User"), Some(HirTypeKind::Class));
+        assert_eq!(hir.type_kind("File"), Some(HirTypeKind::Resource));
+        assert_eq!(hir.type_kind("Session"), Some(HirTypeKind::Struct));
+
+        let user_field = hir.fields_named("user").next().expect("user field exists");
+        assert_eq!(user_field.type_name, "User");
+        assert!(user_field.is_handle);
+        assert!(hir.is_handle_field_name("user"));
+        assert!(!hir.is_handle_field_name("file_name"));
+    }
+
+    #[test]
+    fn keeps_builtin_and_user_function_signatures() {
+        let source = r#"
+mode: managed
+
+fn cache_put(cache: mut Cache, value: read Image) -> Unit
+    effects(retains(value))
+{
+}
+"#;
+
+        let program = parse_source("test.rss", source);
+        let hir = Hir::from_syntax(&program);
+
+        assert!(hir.resolve_function(Some("Image"), "resize").is_some());
+
+        let signature = hir
+            .resolve_function(None, "cache_put")
+            .expect("user signature exists");
+        assert!(signature.retained_params.contains("value"));
+        assert_eq!(signature.params[0].effect, Some(ParamEffect::Mut));
+        assert_eq!(signature.params[1].effect, Some(ParamEffect::Read));
     }
 }

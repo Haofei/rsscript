@@ -18,9 +18,7 @@ pub enum TypeKind {
 
 #[derive(Debug, Clone)]
 pub struct FieldDecl {
-    pub name: String,
     pub type_name: String,
-    pub is_handle: bool,
     pub span: Span,
 }
 
@@ -131,7 +129,7 @@ impl Parser<'_> {
                 continue;
             }
             let field_name_index = i;
-            if let Some(field_name) = ident_name(&self.tokens[field_name_index])
+            if ident_name(&self.tokens[field_name_index]).is_some()
                 && self
                     .tokens
                     .get(field_name_index + 1)
@@ -147,9 +145,7 @@ impl Parser<'_> {
                 }
                 if let Some(type_name) = first_type_name(self.tokens, type_start, body_end) {
                     fields.push(FieldDecl {
-                        name: field_name.to_string(),
                         type_name,
-                        is_handle,
                         span: self.tokens[field_name_index].span.clone(),
                     });
                 }

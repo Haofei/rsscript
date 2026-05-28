@@ -1,9 +1,7 @@
-use std::collections::HashSet;
-
-use crate::ast::{Program, TypeKind, parse_program};
+use crate::ast::{Program, parse_program};
 use crate::checks;
 use crate::diagnostic::Diagnostic;
-use crate::hir::{FunctionSig, Hir};
+use crate::hir::{FunctionSig, Hir, HirTypeKind};
 use crate::lexer::{Token, lex};
 use crate::syntax::ast::Callee;
 use crate::syntax::parse_source;
@@ -139,20 +137,12 @@ impl Analyzer<'_> {
     }
 
     fn check_resource_fields(&mut self) {
-        let resources: HashSet<String> = self
-            .program
-            .types
-            .values()
-            .filter(|decl| decl.kind == TypeKind::Resource)
-            .map(|decl| decl.name.clone())
-            .collect();
-
         for decl in self.program.types.values() {
-            if decl.kind == TypeKind::Resource {
+            if self.hir.type_kind(&decl.name) == Some(HirTypeKind::Resource) {
                 continue;
             }
             for field in &decl.fields {
-                if resources.contains(&field.type_name) {
+                if self.hir.type_kind(&field.type_name) == Some(HirTypeKind::Resource) {
                     self.diagnostics.push(
                         Diagnostic::error(
                             "RS0701",
