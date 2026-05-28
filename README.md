@@ -363,6 +363,7 @@ Rust source lowering
 runtime crate type surface
 runtime-mediated managed handles
 explicit ResourcePool runtime errors
+source-span hooks for manage and ResourcePool borrow lowering
 source map JSON for generated Rust packages
 rustc diagnostic remapping through source maps
 core `.rssi` interface signatures

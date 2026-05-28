@@ -12,12 +12,21 @@ pub trait Resource {}
 #[derive(Clone)]
 pub struct Gc<T> {
     inner: Rc<RefCell<T>>,
+    origin_span: Option<SourceSpan>,
 }
 
 impl<T> Gc<T> {
     pub fn new(value: T) -> Self {
         Self {
             inner: Rc::new(RefCell::new(value)),
+            origin_span: None,
+        }
+    }
+
+    pub fn new_at(value: T, span: SourceSpan) -> Self {
+        Self {
+            inner: Rc::new(RefCell::new(value)),
+            origin_span: Some(span),
         }
     }
 
@@ -35,6 +44,14 @@ impl<T> Gc<T> {
             .map_err(RuntimeError::from)
     }
 
+    pub fn try_read_at(&self, span: SourceSpan) -> Result<GcRead<'_, T>, RuntimeError> {
+        self.try_read().map_err(|error| error.with_span(span))
+    }
+
+    pub fn try_write_at(&self, span: SourceSpan) -> Result<GcWrite<'_, T>, RuntimeError> {
+        self.try_write().map_err(|error| error.with_span(span))
+    }
+
     pub fn read(&self) -> GcRead<'_, T> {
         self.try_read()
             .expect("RSScript runtime read conflict should be reported through diagnostics")
@@ -48,6 +65,10 @@ impl<T> Gc<T> {
     pub fn ptr_eq(left: &Self, right: &Self) -> bool {
         Rc::ptr_eq(&left.inner, &right.inner)
     }
+
+    pub fn origin_span(&self) -> Option<&SourceSpan> {
+        self.origin_span.as_ref()
+    }
 }
 
 impl<T: fmt::Debug> fmt::Debug for Gc<T> {
@@ -58,6 +79,10 @@ impl<T: fmt::Debug> fmt::Debug for Gc<T> {
 
 pub fn manage<T>(value: T) -> Gc<T> {
     Gc::new(value)
+}
+
+pub fn manage_at<T>(value: T, span: SourceSpan) -> Gc<T> {
+    Gc::new_at(value, span)
 }
 
 pub struct GcRead<'a, T>(Ref<'a, T>);
@@ -154,6 +179,17 @@ pub struct SourceSpan {
     pub line: usize,
     pub column: usize,
     pub length: usize,
+}
+
+impl SourceSpan {
+    pub const fn new(file: &'static str, line: usize, column: usize, length: usize) -> Self {
+        Self {
+            file,
+            line,
+            column,
+            length,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -269,6 +305,26 @@ mod tests {
             .expect_err("read should conflict with write");
 
         assert_eq!(error.kind, RuntimeErrorKind::ManagedReadConflict);
+    }
+
+    #[test]
+    fn managed_handles_keep_origin_span() {
+        let span = super::SourceSpan::new("cache.rss", 3, 9, 6);
+        let value = super::manage_at(String::from("cached"), span.clone());
+
+        assert_eq!(value.origin_span(), Some(&span));
+    }
+
+    #[test]
+    fn managed_conflicts_can_attach_operation_span() {
+        let value = manage(String::from("cached"));
+        let _write = value.try_write().expect("initial write should succeed");
+        let span = super::SourceSpan::new("cache.rss", 4, 12, 5);
+        let error = value
+            .try_read_at(span.clone())
+            .expect_err("read should conflict with write");
+
+        assert_eq!(error.span, Some(span));
     }
 
     #[test]

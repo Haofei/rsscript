@@ -641,7 +641,7 @@ impl<'a> RustLowerer<'a> {
             Expr::Index { base, index, .. } => {
                 format!("{}[{}]", self.lower_expr(base), self.lower_expr(index))
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, span } => {
                 if let Callee::Name(name) = callee
                     && self.type_kinds.contains_key(name)
                 {
@@ -659,12 +659,20 @@ impl<'a> RustLowerer<'a> {
                         .join(", ");
                     return format!("{} {{ {fields} }}", rust_ident(name));
                 }
-                let callee = lower_callee(callee);
-                let args = args
+                let is_resource_pool_borrow = is_resource_pool_borrow_callee(callee);
+                let callee = if is_resource_pool_borrow {
+                    "rsscript_runtime::ResourcePool::borrow_at".to_string()
+                } else {
+                    lower_callee(callee)
+                };
+                let mut args = args
                     .iter()
                     .map(|arg| self.lower_expr(&arg.value))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                    .collect::<Vec<_>>();
+                if is_resource_pool_borrow {
+                    args.push(lower_source_span(span));
+                }
+                let args = args.join(", ");
                 format!("{callee}({args})")
             }
             Expr::Effect { effect, value, .. } => match effect {
@@ -672,8 +680,12 @@ impl<'a> RustLowerer<'a> {
                 DataEffect::Mut => format!("&mut {}", self.lower_expr(value)),
                 DataEffect::Take => self.lower_expr(value),
             },
-            Expr::Manage { value, .. } => {
-                format!("rsscript_runtime::manage({})", self.lower_expr(value))
+            Expr::Manage { value, span } => {
+                format!(
+                    "rsscript_runtime::manage_at({}, {})",
+                    self.lower_expr(value),
+                    lower_source_span(span)
+                )
             }
             Expr::Closure { body, .. } => {
                 let mut out = String::new();
@@ -962,6 +974,17 @@ fn lower_callee(callee: &Callee) -> String {
             format!("{}::{}", lower_namespace(namespace), rust_ident(name))
         }
     }
+}
+
+fn is_resource_pool_borrow_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && name == "borrow")
+}
+
+fn lower_source_span(span: &Span) -> String {
+    format!(
+        "rsscript_runtime::SourceSpan::new({:?}, {}, {}, {})",
+        span.file, span.line, span.column, span.length
+    )
 }
 
 fn lower_namespace(namespace: &str) -> String {

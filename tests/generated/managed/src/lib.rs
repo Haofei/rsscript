@@ -9,5 +9,5 @@ pub struct Session {
 
 pub fn make_session(id: i64) -> rsscript_runtime::Gc<Session> {
     let session = Session { id: id };
-    return rsscript_runtime::manage(session);
+    return rsscript_runtime::manage_at(session, rsscript_runtime::SourceSpan::new("session.rss", 10, 12, 6));
 }

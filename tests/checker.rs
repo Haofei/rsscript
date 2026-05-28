@@ -273,7 +273,7 @@ pub fn make_session(id: Int) -> Session {
     let rust_line = lowered
         .rust_source
         .lines()
-        .position(|line| line.contains("return rsscript_runtime::manage(session);"))
+        .position(|line| line.contains("return rsscript_runtime::manage_at(session,"))
         .map(|index| index + 1)
         .expect("generated Rust should contain manage return");
     let rustc_json = format!(
@@ -344,6 +344,26 @@ fn pooled(pool: mut ResourcePool<DbConnection>) -> Unit
 }
 
 #[test]
+fn rust_lowering_emits_source_spans_for_resource_pool_borrow() {
+    let source = r#"
+mode: uses-local
+
+resource DbConnection {
+    fd: Int
+}
+
+fn pooled(pool: mut ResourcePool<DbConnection>) -> Unit {
+    with ResourcePool.borrow(pool: mut pool) as conn {
+        DbConnection.query(conn: mut conn, sql: read "select 1")
+    }
+}
+"#;
+    let rust = lower_source_to_rust("pool.rss", source).expect("source should lower");
+
+    assert!(rust.contains("rsscript_runtime::ResourcePool::borrow_at(&mut pool, rsscript_runtime::SourceSpan::new(\"pool.rss\", 9, 10, 12))"));
+}
+
+#[test]
 fn rust_lowering_wraps_managed_class_returns_in_gc() {
     let source = r#"
 mode: uses-local
@@ -362,7 +382,7 @@ pub fn make_session(id: Int) -> Session {
     assert!(rust.contains("pub struct Session"));
     assert!(rust.contains("pub fn make_session(id: i64) -> rsscript_runtime::Gc<Session>"));
     assert!(rust.contains("let mut session = Session { id: id };"));
-    assert!(rust.contains("return rsscript_runtime::manage(session);"));
+    assert!(rust.contains("return rsscript_runtime::manage_at(session, rsscript_runtime::SourceSpan::new(\"session.rss\", 10, 12, 6));"));
 }
 
 #[test]
