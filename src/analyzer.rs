@@ -3,7 +3,7 @@ use crate::checks;
 use crate::diagnostic::Diagnostic;
 use crate::hir::{FunctionSig, Hir, HirTypeKind};
 use crate::lexer::{Token, lex};
-use crate::syntax::ast::Callee;
+use crate::syntax::ast::{Callee, Item};
 use crate::syntax::parse_source;
 
 pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
@@ -137,16 +137,19 @@ impl Analyzer<'_> {
     }
 
     fn check_resource_fields(&mut self) {
-        for decl in self.program.types.values() {
+        for item in &self.syntax_program.items {
+            let Item::Type(decl) = item else {
+                continue;
+            };
             if self.hir.type_kind(&decl.name) == Some(HirTypeKind::Resource) {
                 continue;
             }
             for field in &decl.fields {
-                if self.hir.type_kind(&field.type_name) == Some(HirTypeKind::Resource) {
+                if self.hir.type_kind(&field.ty.name) == Some(HirTypeKind::Resource) {
                     self.diagnostics.push(
                         Diagnostic::error(
                             "RS0701",
-                            format!("resource `{}` cannot be stored in `{}`.", field.type_name, decl.name),
+                            format!("resource `{}` cannot be stored in `{}`.", field.ty.name, decl.name),
                             field.span.clone(),
                             "resource field",
                         )

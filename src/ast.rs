@@ -10,18 +10,6 @@ pub enum FileMode {
 }
 
 #[derive(Debug, Clone)]
-pub struct FieldDecl {
-    pub type_name: String,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone)]
-pub struct TypeDecl {
-    pub name: String,
-    pub fields: Vec<FieldDecl>,
-}
-
-#[derive(Debug, Clone)]
 pub struct Param {
     pub name: String,
     pub type_name: String,
@@ -39,7 +27,6 @@ pub struct FunctionDecl {
 #[derive(Debug, Default)]
 pub struct Program {
     pub mode: Option<(FileMode, Span)>,
-    pub types: HashMap<String, TypeDecl>,
     pub functions: HashMap<String, FunctionDecl>,
 }
 
@@ -66,7 +53,7 @@ impl Parser<'_> {
                 self.parse_mode();
             } else if self.at_ident("class") || self.at_ident("struct") || self.at_ident("resource")
             {
-                self.parse_type_decl();
+                self.skip_type_decl();
             } else if self.at_ident("pub") || self.at_ident("async") || self.at_ident("fn") {
                 self.parse_function_decl();
             } else {
@@ -94,52 +81,17 @@ impl Parser<'_> {
         self.index += 1;
     }
 
-    fn parse_type_decl(&mut self) {
+    fn skip_type_decl(&mut self) {
         self.index += 1;
-        let Some(name) = self.take_ident_name() else {
+        if self.take_ident_name().is_none() {
             return;
-        };
-        let mut fields = Vec::new();
+        }
         if !self.at_symbol("{") {
             return;
         }
-        self.index += 1;
         let body_end = self
-            .find_matching(self.index - 1, "{", "}")
+            .find_matching(self.index, "{", "}")
             .unwrap_or(self.tokens.len() - 1);
-        let mut i = self.index;
-        while i < body_end {
-            if self.tokens[i].is_ident_text("drop") {
-                i = skip_block(self.tokens, i).unwrap_or(body_end);
-                continue;
-            }
-            let field_name_index = i;
-            if ident_name(&self.tokens[field_name_index]).is_some()
-                && self
-                    .tokens
-                    .get(field_name_index + 1)
-                    .is_some_and(|token| token.symbol(":"))
-            {
-                let mut type_start = field_name_index + 2;
-                let is_handle = self
-                    .tokens
-                    .get(type_start)
-                    .is_some_and(|token| token.is_ident_text("handle"));
-                if is_handle {
-                    type_start += 1;
-                }
-                if let Some(type_name) = first_type_name(self.tokens, type_start, body_end) {
-                    fields.push(FieldDecl {
-                        type_name,
-                        span: self.tokens[field_name_index].span.clone(),
-                    });
-                }
-            }
-            i += 1;
-        }
-        self.program
-            .types
-            .insert(name.clone(), TypeDecl { name, fields });
         self.index = body_end + 1;
     }
 
@@ -290,11 +242,6 @@ pub fn find_matching(
         }
     }
     None
-}
-
-fn skip_block(tokens: &[Token], start: usize) -> Option<usize> {
-    let open = (start..tokens.len()).find(|index| tokens[*index].symbol("{"))?;
-    find_matching(tokens, open, "{", "}").map(|index| index + 1)
 }
 
 fn first_type_name(tokens: &[Token], start: usize, end: usize) -> Option<String> {
