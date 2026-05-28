@@ -4126,6 +4126,55 @@ fn package_review_json_counts_public_api_with_direct_unknown_call() {
 }
 
 #[test]
+fn package_check_fails_unknown_review_when_configured_as_error() {
+    let temp_dir = unique_temp_dir("rsscript-package-check-unknown-is-error");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[sources]
+paths = ["src"]
+
+[review]
+risk = "unknown"
+unknown_is_error = true
+"#,
+        r#"pub fn Api.run() -> Unit
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("src/main.rss"),
+        r#"pub fn Api.run() -> Unit {
+    return Unit
+}
+"#,
+    )
+    .expect("source should be written");
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&temp_dir).expect("package check should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!check.ok);
+    assert_eq!(json["risk"], "unknown");
+    assert_eq!(json["lock"]["matches"], true);
+    assert_eq!(json["summary"]["errors"], 0);
+    assert!(json["reasons"].as_array().is_some_and(|reasons| {
+        reasons
+            .iter()
+            .any(|reason| reason == "unknown package risk is configured as an error")
+    }));
+}
+
+#[test]
 fn package_review_marks_broken_rssi_contract_diagnostics_unknown() {
     let temp_dir = unique_temp_dir("rsscript-package-review-broken-rssi");
     write_package_fixture(

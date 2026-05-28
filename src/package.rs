@@ -1000,6 +1000,12 @@ pub fn diff_package_dirs(old_dir: &Path, new_dir: &Path) -> Result<PackageDiff, 
 }
 
 pub fn check_package_dir(package_dir: &Path) -> Result<PackageCheck, String> {
+    let package = load_package(package_dir)?;
+    let unknown_is_error = package
+        .manifest
+        .review
+        .as_ref()
+        .is_some_and(|review| review.unknown_is_error == Some(true));
     let review = review_package_dir(package_dir)?;
     let current_lock = lock_package_dir(package_dir)?;
     let graph = check_package_graph(package_dir)?;
@@ -1022,7 +1028,8 @@ pub fn check_package_dir(package_dir: &Path) -> Result<PackageCheck, String> {
     let native_ok = native_rust
         .as_ref()
         .is_none_or(|native_check| native_check.ok);
-    let ok = !diagnostics_have_errors && graph.ok && lock.matches && native_ok;
+    let unknown_ok = !(unknown_is_error && review.risk == PackageRisk::Unknown);
+    let ok = !diagnostics_have_errors && unknown_ok && graph.ok && lock.matches && native_ok;
     let mut risk = review.risk.max(graph.risk).max(lock.risk);
     if let Some(native) = &native_rust {
         risk = risk.max(native.risk);
