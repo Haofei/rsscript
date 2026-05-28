@@ -363,6 +363,11 @@ pub struct PackageReviewSummary {
     pub dependencies: usize,
     pub dev_dependencies: usize,
     pub package_features: usize,
+    pub public_apis: usize,
+    pub mutating_apis: usize,
+    pub retaining_apis: usize,
+    pub resource_apis: usize,
+    pub fresh_returning_apis: usize,
     pub native_apis: usize,
     pub unsafe_apis: usize,
 }
@@ -642,6 +647,11 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         dependencies: manifest.dependencies.len(),
         dev_dependencies: manifest.dev_dependencies.len(),
         package_features: manifest.features.len(),
+        public_apis: api_summary.public_apis,
+        mutating_apis: api_summary.mutating_apis,
+        retaining_apis: api_summary.retaining_apis,
+        resource_apis: api_summary.resource_apis,
+        fresh_returning_apis: api_summary.fresh_returning_apis,
         native_apis: api_summary.native_apis,
         unsafe_apis: api_summary.unsafe_apis,
     };
@@ -1348,11 +1358,16 @@ pub fn format_package_review_human(review: &PackageReview) -> String {
         package_risk_label(review.risk)
     ));
     output.push_str(&format!(
-        "summary: {} interface files; {} source files; {} dependencies; {} package features; {} native APIs; {} unsafe APIs; {} diagnostics ({} errors)\n",
+        "summary: {} interface files; {} source files; {} dependencies; {} package features; {} public APIs; {} mutating APIs; {} retaining APIs; {} resource APIs; {} fresh-returning APIs; {} native APIs; {} unsafe APIs; {} diagnostics ({} errors)\n",
         review.summary.interface_files,
         review.summary.source_files,
         review.summary.dependencies,
         review.summary.package_features,
+        review.summary.public_apis,
+        review.summary.mutating_apis,
+        review.summary.retaining_apis,
+        review.summary.resource_apis,
+        review.summary.fresh_returning_apis,
         review.summary.native_apis,
         review.summary.unsafe_apis,
         review.summary.diagnostics,
@@ -1385,9 +1400,14 @@ pub fn format_package_metadata_human(metadata: &PackageMetadataReport) -> String
     ));
     output.push_str(&format!("metadata path: {}\n", metadata.metadata_path));
     output.push_str(&format!(
-        "summary: {} interface files; {} source files; {} native APIs; {} unsafe APIs; {} diagnostics ({} errors)\n",
+        "summary: {} interface files; {} source files; {} public APIs; {} mutating APIs; {} retaining APIs; {} resource APIs; {} fresh-returning APIs; {} native APIs; {} unsafe APIs; {} diagnostics ({} errors)\n",
         metadata.metadata.summary.interface_files,
         metadata.metadata.summary.source_files,
+        metadata.metadata.summary.public_apis,
+        metadata.metadata.summary.mutating_apis,
+        metadata.metadata.summary.retaining_apis,
+        metadata.metadata.summary.resource_apis,
+        metadata.metadata.summary.fresh_returning_apis,
         metadata.metadata.summary.native_apis,
         metadata.metadata.summary.unsafe_apis,
         metadata.metadata.summary.diagnostics,
@@ -1449,11 +1469,16 @@ pub fn format_package_check_human(check: &PackageCheck) -> String {
         package_risk_label(check.risk)
     ));
     output.push_str(&format!(
-        "summary: {} interface files; {} source files; {} dependencies; {} package features; {} native APIs; {} unsafe APIs; {} diagnostics ({} errors)\n",
+        "summary: {} interface files; {} source files; {} dependencies; {} package features; {} public APIs; {} mutating APIs; {} retaining APIs; {} resource APIs; {} fresh-returning APIs; {} native APIs; {} unsafe APIs; {} diagnostics ({} errors)\n",
         check.summary.interface_files,
         check.summary.source_files,
         check.summary.dependencies,
         check.summary.package_features,
+        check.summary.public_apis,
+        check.summary.mutating_apis,
+        check.summary.retaining_apis,
+        check.summary.resource_apis,
+        check.summary.fresh_returning_apis,
         check.summary.native_apis,
         check.summary.unsafe_apis,
         check.summary.diagnostics,
@@ -2219,15 +2244,23 @@ fn collect_package_function_contracts(
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct PackageApiEffectSummary {
+struct PackageApiSummary {
+    public_apis: usize,
+    mutating_apis: usize,
+    retaining_apis: usize,
+    resource_apis: usize,
+    fresh_returning_apis: usize,
     native_apis: usize,
     unsafe_apis: usize,
 }
 
-fn package_api_effect_summary(sources: &[PackageSource]) -> PackageApiEffectSummary {
+fn package_api_effect_summary(sources: &[PackageSource]) -> PackageApiSummary {
     let interface_contracts =
         collect_package_function_contracts(sources, PackageReviewFileKind::Interface);
+    let interface_type_contracts =
+        collect_package_type_contracts(sources, PackageReviewFileKind::Interface);
     let source_contracts;
+    let source_type_contracts;
     let contracts = if interface_contracts.is_empty() {
         source_contracts =
             collect_package_function_contracts(sources, PackageReviewFileKind::Source);
@@ -2235,8 +2268,47 @@ fn package_api_effect_summary(sources: &[PackageSource]) -> PackageApiEffectSumm
     } else {
         &interface_contracts
     };
+    let type_contracts = if interface_type_contracts.is_empty() {
+        source_type_contracts =
+            collect_package_type_contracts(sources, PackageReviewFileKind::Source);
+        &source_type_contracts
+    } else {
+        &interface_type_contracts
+    };
+    let resource_types = type_contracts
+        .values()
+        .filter(|contract| contract.kind == TypeKind::Resource)
+        .map(|contract| contract.name.as_str())
+        .collect::<BTreeSet<_>>();
 
-    PackageApiEffectSummary {
+    PackageApiSummary {
+        public_apis: contracts.len(),
+        mutating_apis: contracts
+            .values()
+            .filter(|contract| {
+                contract
+                    .params
+                    .iter()
+                    .any(|param| param.effect == Some("mut"))
+            })
+            .count(),
+        retaining_apis: contracts
+            .values()
+            .filter(|contract| {
+                contract
+                    .effects
+                    .iter()
+                    .any(|effect| effect.starts_with("retains("))
+            })
+            .count(),
+        resource_apis: contracts
+            .values()
+            .filter(|contract| package_contract_has_resource_boundary(contract, &resource_types))
+            .count(),
+        fresh_returning_apis: contracts
+            .values()
+            .filter(|contract| contract.returns_fresh)
+            .count(),
         native_apis: contracts
             .values()
             .filter(|contract| {
@@ -2256,6 +2328,30 @@ fn package_api_effect_summary(sources: &[PackageSource]) -> PackageApiEffectSumm
             })
             .count(),
     }
+}
+
+fn package_contract_has_resource_boundary(
+    contract: &PackageFunctionContract,
+    resource_types: &BTreeSet<&str>,
+) -> bool {
+    contract
+        .params
+        .iter()
+        .any(|param| package_type_name_has_resource_boundary(&param.type_name, resource_types))
+        || contract.return_type.as_ref().is_some_and(|return_type| {
+            package_type_name_has_resource_boundary(return_type, resource_types)
+        })
+}
+
+fn package_type_name_has_resource_boundary(
+    type_name: &str,
+    resource_types: &BTreeSet<&str>,
+) -> bool {
+    type_name
+        .split(|character: char| {
+            !(character.is_ascii_alphanumeric() || character == '_' || character == '.')
+        })
+        .any(|part| part == "ResourcePool" || resource_types.contains(part))
 }
 
 fn package_type_contract(type_decl: &TypeDecl) -> PackageTypeContract {
@@ -3504,7 +3600,7 @@ fn package_review_hash(review: &PackageReview) -> String {
         input.push('\n');
     }
     input.push_str(&format!(
-        "{}:{}:{}:{}:{}:{}:{}:{}:{}\n",
+        "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}\n",
         review.summary.interface_files,
         review.summary.source_files,
         review.summary.diagnostics,
@@ -3512,6 +3608,11 @@ fn package_review_hash(review: &PackageReview) -> String {
         review.summary.dependencies,
         review.summary.dev_dependencies,
         review.summary.package_features,
+        review.summary.public_apis,
+        review.summary.mutating_apis,
+        review.summary.retaining_apis,
+        review.summary.resource_apis,
+        review.summary.fresh_returning_apis,
         review.summary.native_apis,
         review.summary.unsafe_apis
     ));

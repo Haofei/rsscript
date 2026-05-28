@@ -3681,6 +3681,34 @@ fn Native.danger(message: read String) -> String
 }
 
 #[test]
+fn package_review_json_counts_public_api_review_categories() {
+    let temp_dir = unique_temp_dir("rsscript-package-review-api-categories");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        "",
+        r#"struct Image
+resource DbConnection
+
+pub fn Image.load(path: read String) -> fresh Image
+pub fn Cache.store(conn: mut DbConnection, image: read Image) -> Unit
+    effects(retains(image))
+"#,
+    );
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(json["summary"]["public_apis"], 2);
+    assert_eq!(json["summary"]["mutating_apis"], 1);
+    assert_eq!(json["summary"]["retaining_apis"], 1);
+    assert_eq!(json["summary"]["resource_apis"], 1);
+    assert_eq!(json["summary"]["fresh_returning_apis"], 1);
+}
+
+#[test]
 fn package_metadata_dry_run_reports_review_metadata_without_writing() {
     let temp_dir = unique_temp_dir("rsscript-package-metadata-dry-run");
     write_named_package_fixture(
