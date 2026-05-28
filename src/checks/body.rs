@@ -682,11 +682,7 @@ fn check_fresh_return(
             }
         }
         Expr::Ident(name, span)
-            if !analyzer
-                .program
-                .types
-                .get(name)
-                .is_some_and(|decl| decl.kind == crate::ast::TypeKind::Struct)
+            if !is_struct_type(analyzer, name)
                 && !analyzer
                     .hir
                     .resolve_function(None, name)
@@ -707,11 +703,7 @@ fn check_fresh_return(
         }
         Expr::Call { callee, span, .. } => {
             let constructor_is_struct = match callee {
-                Callee::Name(name) => analyzer
-                    .program
-                    .types
-                    .get(name)
-                    .is_some_and(|decl| decl.kind == crate::ast::TypeKind::Struct),
+                Callee::Name(name) => is_struct_type(analyzer, name),
                 Callee::Qualified { .. } => false,
             };
             let call_returns_fresh = analyzer
@@ -777,6 +769,10 @@ fn fresh_return_diagnostic(
             "manual",
         ),
     );
+}
+
+fn is_struct_type(analyzer: &Analyzer<'_>, name: &str) -> bool {
+    analyzer.hir.type_kind(name) == Some(crate::hir::HirTypeKind::Struct)
 }
 
 fn infer_expr_type(analyzer: &Analyzer<'_>, expr: &Expr, state: &BodyState) -> Option<String> {

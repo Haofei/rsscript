@@ -9,13 +9,6 @@ pub enum FileMode {
     UsesLocal,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TypeKind {
-    Class,
-    Struct,
-    Resource,
-}
-
 #[derive(Debug, Clone)]
 pub struct FieldDecl {
     pub type_name: String,
@@ -25,7 +18,6 @@ pub struct FieldDecl {
 #[derive(Debug, Clone)]
 pub struct TypeDecl {
     pub name: String,
-    pub kind: TypeKind,
     pub fields: Vec<FieldDecl>,
 }
 
@@ -103,13 +95,6 @@ impl Parser<'_> {
     }
 
     fn parse_type_decl(&mut self) {
-        let kind = if self.at_ident("class") {
-            TypeKind::Class
-        } else if self.at_ident("struct") {
-            TypeKind::Struct
-        } else {
-            TypeKind::Resource
-        };
         self.index += 1;
         let Some(name) = self.take_ident_name() else {
             return;
@@ -154,7 +139,7 @@ impl Parser<'_> {
         }
         self.program
             .types
-            .insert(name.clone(), TypeDecl { name, kind, fields });
+            .insert(name.clone(), TypeDecl { name, fields });
         self.index = body_end + 1;
     }
 
