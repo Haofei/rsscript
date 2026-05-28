@@ -496,6 +496,8 @@ impl<'a> RustLowerer<'a> {
                 let resource = self.lower_expr(&stmt.resource);
                 let resource = if is_resource_pool_borrow_expr(&stmt.resource) {
                     format!("rsscript_runtime::unwrap_runtime({resource})")
+                } else if is_file_open_expr(&stmt.resource) {
+                    format!("{resource}?")
                 } else {
                     resource
                 };
@@ -779,6 +781,8 @@ impl<'a> RustLowerer<'a> {
             "String" => "String".to_string(),
             "Bytes" | "Buffer" => "Vec<u8>".to_string(),
             "Path" => "std::path::PathBuf".to_string(),
+            "File" => "rsscript_runtime::File".to_string(),
+            "FileError" | "IOError" => "std::io::Error".to_string(),
             "Result" if ty.args.len() == 2 => format!(
                 "Result<{}, {}>",
                 self.lower_type_ref(&ty.args[0], ManagedPosition::Nested),
@@ -1046,6 +1050,15 @@ fn lower_callee(callee: &Callee) -> String {
     match callee {
         callee if is_log_write_callee(callee) => "rsscript_runtime::log_write".to_string(),
         callee if is_assert_equal_callee(callee) => "rsscript_runtime::assert_equal".to_string(),
+        callee if is_file_open_callee(callee) => "rsscript_runtime::file_open".to_string(),
+        callee if is_file_open_read_callee(callee) => {
+            "rsscript_runtime::file_open_read".to_string()
+        }
+        callee if is_file_open_write_callee(callee) => {
+            "rsscript_runtime::file_open_write".to_string()
+        }
+        callee if is_file_read_all_callee(callee) => "rsscript_runtime::file_read_all".to_string(),
+        callee if is_file_write_callee(callee) => "rsscript_runtime::file_write".to_string(),
         Callee::Name(name) => rust_ident(name),
         Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" => {
             format!("rsscript_runtime::ResourcePool::{}", rust_ident(name))
@@ -1066,6 +1079,30 @@ fn is_assert_equal_callee(callee: &Callee) -> bool {
 
 fn is_string_concat_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "String" && name == "concat")
+}
+
+fn is_file_open_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && name == "open")
+}
+
+fn is_file_open_read_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && name == "open_read")
+}
+
+fn is_file_open_write_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && name == "open_write")
+}
+
+fn is_file_read_all_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && name == "read_all")
+}
+
+fn is_file_write_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && name == "write")
+}
+
+fn is_file_open_expr(expr: &Expr) -> bool {
+    matches!(expr, Expr::Call { callee, .. } if is_file_open_callee(callee) || is_file_open_read_callee(callee) || is_file_open_write_callee(callee))
 }
 
 fn lower_string_concat_call(lowerer: &mut RustLowerer<'_>, args: &[CallArg]) -> String {

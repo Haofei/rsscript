@@ -312,6 +312,28 @@ pub fn inspect_core(
 }
 
 #[test]
+fn rust_lowering_maps_file_core_calls_to_runtime_hooks() {
+    let source = r#"
+fn copy_file(input: read Path, output: read Path) -> Result<Unit, IOError> {
+    with File.open_read(path: read input) as reader {
+        with File.open_write(path: read output) as writer {
+            let bytes = File.read_all(file: mut reader)?
+            File.write(file: mut writer, data: read bytes)?
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    let rust = lower_source_to_rust("file.rss", source).expect("source should lower");
+
+    assert!(rust.contains("-> Result<(), std::io::Error>"));
+    assert!(rust.contains("let mut reader = rsscript_runtime::file_open_read(&input)?;"));
+    assert!(rust.contains("let mut writer = rsscript_runtime::file_open_write(&output)?;"));
+    assert!(rust.contains("let bytes = rsscript_runtime::file_read_all(&mut reader)?;"));
+    assert!(rust.contains("rsscript_runtime::file_write(&mut writer, &bytes)?;"));
+}
+
+#[test]
 fn rust_lowering_maps_log_write_to_runtime_output_hook() {
     let source = r#"
 fn main() -> Unit {

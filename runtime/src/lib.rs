@@ -1,6 +1,8 @@
 use std::cell::{BorrowError, BorrowMutError, Ref, RefCell, RefMut};
 use std::fmt;
+use std::io::{Read, Write};
 use std::ops::{Deref, DerefMut};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 pub trait Managed {}
@@ -8,6 +10,90 @@ pub trait Managed {}
 impl<T: 'static> Managed for T {}
 
 pub trait Resource {}
+
+pub struct File {
+    inner: std::fs::File,
+}
+
+impl Resource for File {}
+
+pub trait RuntimePath {
+    fn as_path(&self) -> &std::path::Path;
+}
+
+impl RuntimePath for PathBuf {
+    fn as_path(&self) -> &std::path::Path {
+        self.as_path()
+    }
+}
+
+impl RuntimePath for String {
+    fn as_path(&self) -> &std::path::Path {
+        std::path::Path::new(self)
+    }
+}
+
+impl RuntimePath for str {
+    fn as_path(&self) -> &std::path::Path {
+        std::path::Path::new(self)
+    }
+}
+
+impl<T: RuntimePath + ?Sized> RuntimePath for &T {
+    fn as_path(&self) -> &std::path::Path {
+        (*self).as_path()
+    }
+}
+
+pub trait RuntimeBytes {
+    fn as_bytes_slice(&self) -> &[u8];
+}
+
+impl RuntimeBytes for Vec<u8> {
+    fn as_bytes_slice(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
+impl RuntimeBytes for String {
+    fn as_bytes_slice(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl RuntimeBytes for str {
+    fn as_bytes_slice(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl<T: RuntimeBytes + ?Sized> RuntimeBytes for &T {
+    fn as_bytes_slice(&self) -> &[u8] {
+        (*self).as_bytes_slice()
+    }
+}
+
+pub fn file_open<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<File> {
+    file_open_read(path)
+}
+
+pub fn file_open_read<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<File> {
+    std::fs::File::open(path.as_path()).map(|inner| File { inner })
+}
+
+pub fn file_open_write<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<File> {
+    std::fs::File::create(path.as_path()).map(|inner| File { inner })
+}
+
+pub fn file_read_all(file: &mut File) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    file.inner.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+pub fn file_write<B: RuntimeBytes + ?Sized>(file: &mut File, data: &B) -> std::io::Result<()> {
+    file.inner.write_all(data.as_bytes_slice())
+}
 
 #[derive(Clone)]
 pub struct Gc<T> {
@@ -364,5 +450,22 @@ mod tests {
             .expect_err("second borrow should conflict");
 
         assert_eq!(error.kind, RuntimeErrorKind::ResourcePoolBorrowConflict);
+    }
+
+    #[test]
+    fn file_runtime_hooks_write_and_read_bytes() {
+        let path =
+            std::env::temp_dir().join(format!("rsscript-runtime-file-{}.txt", std::process::id()));
+
+        {
+            let mut file = super::file_open_write(&path).expect("file should open for write");
+            super::file_write(&mut file, &"hello file").expect("write should succeed");
+        }
+
+        let mut file = super::file_open_read(&path).expect("file should open for read");
+        let bytes = super::file_read_all(&mut file).expect("read should succeed");
+
+        assert_eq!(bytes, b"hello file");
+        let _ = std::fs::remove_file(path);
     }
 }
