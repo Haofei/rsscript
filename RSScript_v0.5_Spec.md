@@ -2405,6 +2405,11 @@ native fn File.open(path: read Path) -> Result<File, IOError>
     effects(native)
 ```
 
+`native fn` declarations are bodyless in v0.5. A function with an RSScript body
+may be marked `effects(native)` only when that function's contract crosses a
+native boundary through calls or package wrapper bindings; the `native fn`
+keyword itself declares an external implementation.
+
 ---
 
 ## 30.2 Native safety obligations

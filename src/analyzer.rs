@@ -225,6 +225,13 @@ impl Analyzer<'_> {
                         "`async fn` is currently supported only in interface and review metadata; executable async lowering is not part of the v0.5 runtime yet.",
                     );
                 }
+                if function.is_native && !function.body.statements.is_empty() {
+                    self.unsupported_syntax(
+                        function.span.clone(),
+                        "unsupported native function body",
+                        "`native fn` declares an external/native boundary in v0.5. Provide a bodyless declaration and bind the implementation through the native wrapper path.",
+                    );
+                }
                 for param in &function.params {
                     self.check_unsupported_syntax_type_ref(&param.ty);
                 }

@@ -240,6 +240,7 @@ impl Parser<'_> {
             name,
             is_public,
             is_async,
+            is_native,
             type_params,
             params,
             return_ty,

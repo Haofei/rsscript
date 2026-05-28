@@ -96,6 +96,9 @@ impl Formatter {
         if function.is_async {
             self.out.push_str("async ");
         }
+        if function.is_native {
+            self.out.push_str("native ");
+        }
         self.out.push_str("fn ");
         self.out.push_str(&function.name);
         self.generic_params(&function.type_params);
@@ -495,6 +498,22 @@ fn save(image: read Image, path: read Path) -> Result<Unit, IOError>
     Image.save(image: read tmp, path: read path)
     return Unit
 }
+"#
+        );
+    }
+
+    #[test]
+    fn preserves_native_function_declarations() {
+        let source = r#"features: native
+native   fn Host.emit(message:read String)->Unit
+"#;
+
+        assert_eq!(
+            format_source("native.rssi", source),
+            r#"features: native
+
+native fn Host.emit(message: read String) -> Unit
+    effects(native)
 "#
         );
     }

@@ -134,6 +134,7 @@ pub struct FunctionDecl {
     pub name: String,
     pub is_public: bool,
     pub is_async: bool,
+    pub is_native: bool,
     pub type_params: Vec<GenericParam>,
     pub params: Vec<Param>,
     pub return_ty: Option<TypeRef>,

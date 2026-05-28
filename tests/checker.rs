@@ -2576,6 +2576,7 @@ native fn Host.emit(message: read String) -> Unit
         panic!("expected native function declaration");
     };
     assert_eq!(function.name, "Host.emit");
+    assert!(function.is_native);
     assert!(
         function
             .effects
@@ -2583,6 +2584,25 @@ native fn Host.emit(message: read String) -> Unit
             .any(|effect| matches!(effect, EffectDecl::Name(name) if name == "native"))
     );
     assert!(analyze_source("host.rssi", source).is_empty());
+}
+
+#[test]
+fn checker_reports_native_bodies_as_unsupported_until_native_binding_exists() {
+    let source = r#"
+features: native
+
+native fn Host.emit(message: read String) -> Unit {
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("native-body.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0015"
+                && diagnostic.label == "unsupported native function body")
+    );
 }
 
 #[test]
