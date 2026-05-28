@@ -175,6 +175,40 @@ struct Session {
     assert!(codes.contains(&"RSR010".to_string()));
 }
 
+#[test]
+fn review_reports_local_manage_boundary_changes() {
+    let old_source = r#"
+mode: uses-local
+
+struct Image {
+    pixels: Buffer
+}
+
+fn publish(path: read Path) -> Unit {
+    Image.inspect(image: read Image.load(path: read path))
+}
+"#;
+    let new_source = r#"
+mode: uses-local
+
+struct Image {
+    pixels: Buffer
+}
+
+fn publish(path: read Path) -> Unit {
+    local image = Image.load(path: read path)
+    let shared = manage image
+}
+"#;
+
+    let codes: Vec<String> = review_sources("old.rss", old_source, "new.rss", new_source)
+        .into_iter()
+        .map(|finding| finding.code)
+        .collect();
+
+    assert!(codes.contains(&"RSR011".to_string()));
+}
+
 fn fixture_paths(directory: &str) -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = fs::read_dir(directory)
         .unwrap_or_else(|error| panic!("failed to read {directory}: {error}"))

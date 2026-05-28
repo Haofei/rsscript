@@ -32,7 +32,7 @@ Implemented diagnostic classes include:
 - resource fields and resource escape from `with`
 - local capture by managed closures
 - `take` of handle fields
-- API, type layout, effect, mode, and freshness changes in `rss review`
+- API, type layout, local/manage boundary, effect, mode, and freshness changes in `rss review`
 - likely operator overload attempts
 
 Non-goals for this stage:
@@ -51,7 +51,7 @@ Near-term roadmap:
 
 1. Expand HIR from declarations into resolved statements and expressions.
 2. Extend CleanLocal dataflow from conservative loop summaries into explicit CFG early-exit paths.
-3. Expand `rss review` from API/type layout into local/manage boundary diffs.
+3. Expand `rss review` local/manage boundary diffs from summaries into path-aware risk explanations.
 
 Run:
 

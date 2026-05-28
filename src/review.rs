@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::syntax::ast::{
-    DataEffect, EffectDecl, FieldDecl, FileMode, FunctionDecl, Item, Param, TypeDecl, TypeKind,
-    TypeRef,
+    Block, CallArg, DataEffect, EffectDecl, Expr, FieldDecl, FileMode, FunctionDecl, Item, LetKind,
+    Param, Stmt, TypeDecl, TypeKind, TypeRef,
 };
 use crate::syntax::parse_source;
 
@@ -97,6 +97,7 @@ struct FunctionSig {
     return_type: Option<String>,
     returns_fresh: bool,
     effects: BTreeSet<String>,
+    boundary: BoundarySig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +105,13 @@ struct ParamSig {
     name: String,
     effect: Option<&'static str>,
     type_name: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct BoundarySig {
+    local_bindings: BTreeSet<String>,
+    manage_count: usize,
+    take_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,6 +173,7 @@ fn function_sig(function: &FunctionDecl) -> FunctionSig {
         return_type: function.return_ty.as_ref().map(type_name),
         returns_fresh: function.returns_fresh,
         effects: function.effects.iter().map(effect_name).collect(),
+        boundary: boundary_sig(&function.body),
     }
 }
 
@@ -193,6 +202,12 @@ fn compare_function(old: &FunctionSig, new: &FunctionSig, findings: &mut Vec<Rev
         findings.push(ReviewFinding {
             code: "RSR006".to_string(),
             summary: format!("function `{}` effects changed.", old.name),
+        });
+    }
+    if old.boundary != new.boundary {
+        findings.push(ReviewFinding {
+            code: "RSR011".to_string(),
+            summary: format!("function `{}` local/manage boundary changed.", old.name),
         });
     }
 }
@@ -254,5 +269,80 @@ fn effect_name(effect: &EffectDecl) -> String {
     match effect {
         EffectDecl::Name(name) => name.clone(),
         EffectDecl::Retains(param) => format!("retains({param})"),
+    }
+}
+
+fn boundary_sig(block: &Block) -> BoundarySig {
+    let mut boundary = BoundarySig::default();
+    collect_boundary_block(block, &mut boundary);
+    boundary
+}
+
+fn collect_boundary_block(block: &Block, boundary: &mut BoundarySig) {
+    for statement in &block.statements {
+        collect_boundary_stmt(statement, boundary);
+    }
+}
+
+fn collect_boundary_stmt(statement: &Stmt, boundary: &mut BoundarySig) {
+    match statement {
+        Stmt::Let(stmt) => {
+            if stmt.kind == LetKind::Local {
+                boundary.local_bindings.insert(stmt.name.clone());
+            }
+            if let Some(value) = &stmt.value {
+                collect_boundary_expr(value, boundary);
+            }
+        }
+        Stmt::Return(stmt) => {
+            if let Some(value) = &stmt.value {
+                collect_boundary_expr(value, boundary);
+            }
+        }
+        Stmt::With(stmt) => {
+            collect_boundary_expr(&stmt.resource, boundary);
+            collect_boundary_block(&stmt.body, boundary);
+        }
+        Stmt::If(stmt) => {
+            collect_boundary_expr(&stmt.condition, boundary);
+            collect_boundary_block(&stmt.then_body, boundary);
+            if let Some(else_body) = &stmt.else_body {
+                collect_boundary_block(else_body, boundary);
+            }
+        }
+        Stmt::Loop(stmt) => {
+            if let Some(condition) = &stmt.condition {
+                collect_boundary_expr(condition, boundary);
+            }
+            collect_boundary_block(&stmt.body, boundary);
+        }
+        Stmt::Expr(expr) => collect_boundary_expr(expr, boundary),
+        Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
+    }
+}
+
+fn collect_boundary_expr(expr: &Expr, boundary: &mut BoundarySig) {
+    match expr {
+        Expr::Effect {
+            effect: DataEffect::Take,
+            value,
+            ..
+        } => {
+            boundary.take_count += 1;
+            collect_boundary_expr(value, boundary);
+        }
+        Expr::Effect { value, .. } => collect_boundary_expr(value, boundary),
+        Expr::Manage { value, .. } => {
+            boundary.manage_count += 1;
+            collect_boundary_expr(value, boundary);
+        }
+        Expr::Call { args, .. } => {
+            for CallArg { value, .. } in args {
+                collect_boundary_expr(value, boundary);
+            }
+        }
+        Expr::Field { base, .. } => collect_boundary_expr(base, boundary),
+        Expr::Closure { body, .. } => collect_boundary_block(body, boundary),
+        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
     }
 }
