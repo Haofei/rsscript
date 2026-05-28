@@ -41,6 +41,22 @@ pub struct ConfigStore {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rule {
+    name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Config {
+    name: String,
+    rules: Vec<Rule>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GlobalConfig {
+    current: Config,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Counter {
     value: i64,
 }
@@ -419,6 +435,44 @@ pub fn config_store_replace(store: &mut ConfigStore, value: &ConfigValue) {
 
 pub fn config_store_name(store: &ConfigStore) -> String {
     store.current.name.clone()
+}
+
+pub fn rule_loader_load_rules<P: RuntimePath + ?Sized>(path: &P) -> Result<Vec<Rule>, ConfigError> {
+    let text = std::fs::read_to_string(path.as_path())?;
+    let rules = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|name| Rule {
+            name: name.to_string(),
+        })
+        .collect();
+    Ok(rules)
+}
+
+pub fn config_new(name: &str, rules: &[Rule]) -> Config {
+    Config {
+        name: name.to_string(),
+        rules: rules.to_owned(),
+    }
+}
+
+pub fn config_rule_count(config: &Config) -> i64 {
+    config.rules.len() as i64
+}
+
+pub fn global_config_new(value: &Config) -> GlobalConfig {
+    GlobalConfig {
+        current: value.clone(),
+    }
+}
+
+pub fn global_config_replace(global: &mut GlobalConfig, value: &Config) {
+    global.current = value.clone();
+}
+
+pub fn global_config_rule_count(global: &GlobalConfig) -> i64 {
+    global.current.rules.len() as i64
 }
 
 pub fn counter_new(value: i64) -> Counter {
@@ -1171,6 +1225,33 @@ mod tests {
         super::config_store_replace(&mut store, &reloaded);
 
         assert_eq!(super::config_store_name(&store), "reloaded");
+
+        let _ = std::fs::remove_file(first);
+        let _ = std::fs::remove_file(second);
+    }
+
+    #[test]
+    fn rules_config_runtime_hooks_load_and_replace_global() {
+        let first = std::env::temp_dir().join(format!(
+            "rsscript-runtime-rules-first-{}.txt",
+            std::process::id()
+        ));
+        let second = std::env::temp_dir().join(format!(
+            "rsscript-runtime-rules-second-{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(&first, "alpha\nbeta\n").expect("first rules should write");
+        std::fs::write(&second, "gamma\n").expect("second rules should write");
+
+        let first_rules = super::rule_loader_load_rules(&first).expect("first rules should load");
+        let initial = super::config_new("initial", &first_rules);
+        let mut global = super::global_config_new(&initial);
+        let second_rules =
+            super::rule_loader_load_rules(&second).expect("second rules should load");
+        let next = super::config_new("next", &second_rules);
+        super::global_config_replace(&mut global, &next);
+
+        assert_eq!(super::global_config_rule_count(&global), 1);
 
         let _ = std::fs::remove_file(first);
         let _ = std::fs::remove_file(second);

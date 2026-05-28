@@ -1,0 +1,22 @@
+struct Rule
+
+struct Config
+
+struct GlobalConfig
+
+pub fn RuleLoader.load_rules(path: read Path) -> Result<fresh List<Rule>, ConfigError>
+
+pub fn Config.new(name: read String, rules: read List<Rule>) -> fresh Config
+
+pub fn Config.rule_count(config: read Config) -> Int
+
+pub fn GlobalConfig.new(value: read Config) -> fresh GlobalConfig
+    effects(retains(value))
+
+pub fn GlobalConfig.replace(
+    global: mut GlobalConfig,
+    value: read Config,
+) -> Unit
+    effects(retains(value))
+
+pub fn GlobalConfig.rule_count(global: read GlobalConfig) -> Int

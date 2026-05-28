@@ -115,6 +115,11 @@ fn bundled_core_interfaces_are_available_to_checker() {
     assert!(
         core_interfaces()
             .iter()
+            .any(|(path, _)| *path == "core/config/rules.rssi")
+    );
+    assert!(
+        core_interfaces()
+            .iter()
             .any(|(path, _)| *path == "core/interpreter/interpreter.rssi")
     );
 
@@ -563,6 +568,31 @@ fn reload_config(path: read String, store: mut ConfigStore) -> Result<Unit, Conf
     assert!(rust.contains("return rsscript_runtime::config_load(&path);"));
     assert!(rust.contains("store: &mut rsscript_runtime::ConfigStore"));
     assert!(rust.contains("rsscript_runtime::config_store_replace(store, &next);"));
+}
+
+#[test]
+fn rust_lowering_maps_rules_config_reload_to_runtime_hooks() {
+    let source = r#"
+fn load_rules_config(path: read String) -> Result<fresh Config, ConfigError> {
+    let rules = RuleLoader.load_rules(path: read path)?
+    return Ok(Config.new(name: read "rules", rules: read rules))
+}
+
+fn reload_rules_config(path: read String, global: mut GlobalConfig) -> Result<Unit, ConfigError> {
+    let next = load_rules_config(path: read path)?
+    GlobalConfig.replace(global: mut global, value: read next)
+    return Ok(Unit)
+}
+"#;
+    let rust = lower_source_to_rust("rules-config.rss", source).expect("source should lower");
+
+    assert!(rust.contains("-> Result<rsscript_runtime::Config, rsscript_runtime::ConfigError>"));
+    assert!(rust.contains("let rules = rsscript_runtime::rule_loader_load_rules(&path)?;"));
+    assert!(
+        rust.contains("return Ok(rsscript_runtime::config_new(&\"rules\".to_string(), &rules));")
+    );
+    assert!(rust.contains("global: &mut rsscript_runtime::GlobalConfig"));
+    assert!(rust.contains("rsscript_runtime::global_config_replace(global, &next);"));
 }
 
 #[test]

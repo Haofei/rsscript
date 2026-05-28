@@ -1336,28 +1336,35 @@ fn split_top_level_type_args(args: &str) -> Vec<&str> {
 fn classify_return_expr(hir: &Hir, expr: &Expr) -> HirReturnProof {
     match expr {
         Expr::Ident(name, _) => HirReturnProof::Ident { name: name.clone() },
-        Expr::Call { callee, .. } => match hir.resolve_call(callee) {
-            CallResolution::Resolved {
-                signature,
-                kind:
-                    ResolvedCalleeKind::Constructor {
-                        type_kind: HirTypeKind::Struct,
-                    },
-            } if signature.returns_fresh => HirReturnProof::StructConstructor,
-            CallResolution::Resolved { signature, .. } if signature.returns_fresh => {
-                HirReturnProof::FreshCall
+        Expr::Call { callee, args, .. } => {
+            if matches!(callee_name(callee), "Ok" | "Some")
+                && let Some(arg) = args.first()
+            {
+                return classify_return_expr(hir, &arg.value);
             }
-            CallResolution::Resolved {
-                kind:
-                    ResolvedCalleeKind::Constructor {
-                        type_kind: HirTypeKind::Struct,
-                    },
-                ..
-            } => HirReturnProof::StructConstructor,
-            CallResolution::Resolved { .. }
-            | CallResolution::EnumVariant
-            | CallResolution::Unknown => HirReturnProof::Unknown,
-        },
+            match hir.resolve_call(callee) {
+                CallResolution::Resolved {
+                    signature,
+                    kind:
+                        ResolvedCalleeKind::Constructor {
+                            type_kind: HirTypeKind::Struct,
+                        },
+                } if signature.returns_fresh => HirReturnProof::StructConstructor,
+                CallResolution::Resolved { signature, .. } if signature.returns_fresh => {
+                    HirReturnProof::FreshCall
+                }
+                CallResolution::Resolved {
+                    kind:
+                        ResolvedCalleeKind::Constructor {
+                            type_kind: HirTypeKind::Struct,
+                        },
+                    ..
+                } => HirReturnProof::StructConstructor,
+                CallResolution::Resolved { .. }
+                | CallResolution::EnumVariant
+                | CallResolution::Unknown => HirReturnProof::Unknown,
+            }
+        }
         Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
             classify_return_expr(hir, value)
         }

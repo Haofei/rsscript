@@ -20,6 +20,10 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../core/config/config.rssi"),
     ),
     (
+        "core/config/rules.rssi",
+        include_str!("../core/config/rules.rssi"),
+    ),
+    (
         "core/counter/counter.rssi",
         include_str!("../core/counter/counter.rssi"),
     ),

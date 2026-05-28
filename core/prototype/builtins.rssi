@@ -1,11 +1,3 @@
-pub fn RuleLoader.load_rules(path: read Path) -> Result<fresh List<Rule>, ConfigError>
-
-pub fn GlobalConfig.replace(
-    global: mut GlobalConfig,
-    value: read Config,
-) -> Unit
-    effects(retains(value))
-
 pub fn Cache.lookup(cache: read Cache, key: read String)
 
 pub fn Cache.get(cache: read Cache)

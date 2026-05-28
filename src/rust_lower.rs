@@ -811,6 +811,13 @@ impl<'a> RustLowerer<'a> {
             "Fd" => "i64".to_string(),
             "Bytes" | "Buffer" => "Vec<u8>".to_string(),
             "Path" => "std::path::PathBuf".to_string(),
+            "Rule" if !self.type_kinds.contains_key("Rule") => "rsscript_runtime::Rule".to_string(),
+            "Config" if !self.type_kinds.contains_key("Config") => {
+                "rsscript_runtime::Config".to_string()
+            }
+            "GlobalConfig" if !self.type_kinds.contains_key("GlobalConfig") => {
+                "rsscript_runtime::GlobalConfig".to_string()
+            }
             "Environment" => "rsscript_runtime::Environment".to_string(),
             "FunctionObject" => "rsscript_runtime::FunctionObject".to_string(),
             "Counter" => "rsscript_runtime::Counter".to_string(),
@@ -1217,6 +1224,22 @@ fn lower_callee(callee: &Callee) -> String {
         callee if is_config_store_name_callee(callee) => {
             "rsscript_runtime::config_store_name".to_string()
         }
+        callee if is_rule_loader_load_rules_callee(callee) => {
+            "rsscript_runtime::rule_loader_load_rules".to_string()
+        }
+        callee if is_rules_config_new_callee(callee) => "rsscript_runtime::config_new".to_string(),
+        callee if is_rules_config_rule_count_callee(callee) => {
+            "rsscript_runtime::config_rule_count".to_string()
+        }
+        callee if is_global_config_new_callee(callee) => {
+            "rsscript_runtime::global_config_new".to_string()
+        }
+        callee if is_global_config_replace_callee(callee) => {
+            "rsscript_runtime::global_config_replace".to_string()
+        }
+        callee if is_global_config_rule_count_callee(callee) => {
+            "rsscript_runtime::global_config_rule_count".to_string()
+        }
         callee if is_counter_new_callee(callee) => "rsscript_runtime::counter_new".to_string(),
         callee if is_counter_add_callee(callee) => "rsscript_runtime::counter_add".to_string(),
         callee if is_counter_value_callee(callee) => "rsscript_runtime::counter_value".to_string(),
@@ -1370,6 +1393,30 @@ fn is_config_store_replace_callee(callee: &Callee) -> bool {
 
 fn is_config_store_name_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ConfigStore" && name == "name")
+}
+
+fn is_rule_loader_load_rules_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "RuleLoader" && name == "load_rules")
+}
+
+fn is_rules_config_new_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Config" && name == "new")
+}
+
+fn is_rules_config_rule_count_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Config" && name == "rule_count")
+}
+
+fn is_global_config_new_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "GlobalConfig" && name == "new")
+}
+
+fn is_global_config_replace_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "GlobalConfig" && name == "replace")
+}
+
+fn is_global_config_rule_count_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "GlobalConfig" && name == "rule_count")
 }
 
 fn is_counter_new_callee(callee: &Callee) -> bool {
