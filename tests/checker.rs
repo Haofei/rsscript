@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 
 use rsscript::syntax::ast::Item;
 use rsscript::syntax::parse_source;
-use rsscript::{analyze_source, format_diagnostics_json, review_sources};
+use rsscript::{
+    analyze_source, explain_diagnostic_code, format_diagnostic_explanation,
+    format_diagnostics_json, review_sources,
+};
 use serde_json::Value;
 
 #[test]
@@ -61,6 +64,17 @@ fn diagnostics_json_uses_protocol_shape() {
     );
     assert!(first["causes"].is_array());
     assert!(first["fixes"].is_array());
+}
+
+#[test]
+fn diagnostic_explanations_are_available_by_code() {
+    let explanation = explain_diagnostic_code("RS0401").expect("RS0401 should be registered");
+    let formatted = format_diagnostic_explanation(explanation);
+
+    assert_eq!(explanation.title, "use after manage");
+    assert!(formatted.contains("RS0401"));
+    assert!(formatted.contains("manage"));
+    assert!(explain_diagnostic_code("RS9999").is_none());
 }
 
 #[test]

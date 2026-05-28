@@ -3,8 +3,8 @@ use std::fs;
 use std::process::ExitCode;
 
 use rsscript::{
-    analyze_source, format_diagnostics_human, format_diagnostics_json, format_review_human,
-    review_sources,
+    analyze_source, explain_diagnostic_code, format_diagnostic_explanation,
+    format_diagnostics_human, format_diagnostics_json, format_review_human, review_sources,
 };
 
 fn main() -> ExitCode {
@@ -26,6 +26,15 @@ fn main() -> ExitCode {
 }
 
 fn run_check(args: &[String]) -> ExitCode {
+    if let Some(code) = parse_explain_args(args) {
+        let Some(explanation) = explain_diagnostic_code(code) else {
+            eprintln!("unknown diagnostic code: {code}");
+            return ExitCode::from(2);
+        };
+        print!("{}", format_diagnostic_explanation(explanation));
+        return ExitCode::SUCCESS;
+    }
+
     let (json, path) = parse_path_args(args);
     let Some(path) = path else {
         print_usage();
@@ -125,6 +134,13 @@ fn run_review(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn parse_explain_args(args: &[String]) -> Option<&str> {
+    let [flag, code] = args else {
+        return None;
+    };
+    (flag == "--explain").then_some(code.as_str())
+}
+
 fn parse_path_args(args: &[String]) -> (bool, Option<&str>) {
     let mut json = false;
     let mut path = None;
@@ -143,6 +159,7 @@ fn parse_path_args(args: &[String]) -> (bool, Option<&str>) {
 fn print_usage() {
     eprintln!("usage:");
     eprintln!("  rsscript check [--json] <file.rss>");
+    eprintln!("  rsscript check --explain <code>");
     eprintln!("  rsscript fmt <file.rss>");
     eprintln!("  rsscript review <old.rss> <new.rss>");
 }

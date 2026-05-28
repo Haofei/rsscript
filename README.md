@@ -9,6 +9,7 @@ It currently implements:
 
 - `rss check <file.rss>` with human diagnostics
 - `rss check --json <file.rss>` with serde-backed machine-readable diagnostics
+- `rss check --explain <code>` for diagnostic code explanations
 - `rss fmt <file.rss>` as a parse/check gate that prints the source unchanged when valid
 - `rss review <old.rss> <new.rss>` for a first-pass API/type/effect/freshness diff
 - Lexer, lightweight parser, syntax AST, HIR signature table, and semantic checks for the review-critical v0.4.1 rules
@@ -61,5 +62,6 @@ cargo clippy -- -D warnings
 cargo test
 cargo run --bin rss -- check path/to/file.rss
 cargo run --bin rss -- check --json path/to/file.rss
+cargo run --bin rss -- check --explain RS0401
 cargo run --bin rss -- review old.rss new.rss
 ```
