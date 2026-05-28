@@ -5,11 +5,15 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::analyzer::{analyze_source_with_interfaces, core_interfaces};
+use crate::analyzer::{
+    analyze_source_with_interfaces, analyze_sources_with_interfaces, core_interfaces,
+};
 use crate::diagnostic::{Diagnostic, code};
 use crate::review::{
     ReviewFinding, ReviewMap, ReviewRisk, format_review_human, review_map_sources, review_sources,
 };
+use crate::syntax::ast::{DataEffect, EffectDecl, FunctionDecl, Item, Param, TypeRef};
+use crate::syntax::parse_source;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PackageReview {
@@ -412,6 +416,23 @@ struct PackageDependencySpec {
     features: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PackageFunctionContract {
+    name: String,
+    params: Vec<PackageParamContract>,
+    return_type: Option<String>,
+    returns_fresh: bool,
+    effects: BTreeSet<String>,
+    span: crate::diagnostic::Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PackageParamContract {
+    name: String,
+    effect: Option<&'static str>,
+    type_name: String,
+}
+
 pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
     let package = load_package(package_dir)?;
     let manifest = &package.manifest;
@@ -430,28 +451,21 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
     let mut external_interfaces = core_interfaces().to_vec();
     external_interfaces.extend(dependency_interface_refs);
     let mut combined_interfaces = external_interfaces.clone();
-    combined_interfaces.extend(interface_refs);
+    combined_interfaces.extend(interface_refs.clone());
+    let source_refs = sources
+        .iter()
+        .filter(|source| source.kind == PackageReviewFileKind::Source)
+        .map(|source| (source.path.as_str(), source.contents.as_str()))
+        .collect::<Vec<_>>();
     let mut diagnostics = package_interface_environment_diagnostics(&combined_interfaces);
-    diagnostics.extend(
-        sources
-            .iter()
-            .flat_map(|source| {
-                if source.kind == PackageReviewFileKind::Source {
-                    analyze_source_with_interfaces(
-                        &source.path,
-                        &source.contents,
-                        &combined_interfaces,
-                    )
-                } else {
-                    analyze_source_with_interfaces(
-                        &source.path,
-                        &source.contents,
-                        &external_interfaces,
-                    )
-                }
-            })
-            .collect::<Vec<_>>(),
-    );
+    diagnostics.extend(interface_refs.iter().flat_map(|(path, contents)| {
+        analyze_source_with_interfaces(path, contents, &external_interfaces)
+    }));
+    diagnostics.extend(analyze_sources_with_interfaces(
+        &source_refs,
+        &external_interfaces,
+    ));
+    diagnostics.extend(package_interface_contract_diagnostics(sources));
     dedup_diagnostics(&mut diagnostics);
     let review_map = review_map_sources(
         sources
@@ -1547,6 +1561,175 @@ fn package_interface_environment_diagnostics(interfaces: &[(&str, &str)]) -> Vec
         .into_iter()
         .filter(|diagnostic| diagnostic.code == code::DUPLICATE_DECLARATION)
         .collect()
+}
+
+fn package_interface_contract_diagnostics(sources: &[PackageSource]) -> Vec<Diagnostic> {
+    if !sources
+        .iter()
+        .any(|source| source.kind == PackageReviewFileKind::Source)
+    {
+        return Vec::new();
+    }
+    let source_contracts =
+        collect_package_function_contracts(sources, PackageReviewFileKind::Source);
+    let interface_contracts =
+        collect_package_function_contracts(sources, PackageReviewFileKind::Interface);
+    let mut diagnostics = Vec::new();
+
+    for (name, interface_contract) in interface_contracts {
+        let Some(source_contract) = source_contracts.get(&name) else {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_INTERFACE_MISMATCH,
+                    format!("package interface function `{name}` has no public source implementation."),
+                    interface_contract.span.clone(),
+                    "missing source implementation",
+                )
+                .with_cause("Package `.rssi` files are the public semantic contract; every public interface function must be implemented by package source.")
+                .with_fix(
+                    "implement_interface_function",
+                    format!("Add `pub fn {name}` with the declared signature, or remove it from the interface."),
+                    "manual",
+                ),
+            );
+            continue;
+        };
+
+        if !package_function_contracts_match(&interface_contract, source_contract) {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_INTERFACE_MISMATCH,
+                    format!("package interface function `{name}` does not match its source implementation."),
+                    interface_contract.span.clone(),
+                    "interface/source signature mismatch",
+                )
+                .with_cause(format!(
+                    "interface: {}",
+                    package_function_contract_label(&interface_contract)
+                ))
+                .with_cause(format!(
+                    "source: {}",
+                    package_function_contract_label(source_contract)
+                ))
+                .with_fix(
+                    "align_interface_and_source",
+                    "Update the `.rssi` contract or the source implementation so their public signatures match exactly.",
+                    "manual",
+                ),
+            );
+        }
+    }
+
+    diagnostics
+}
+
+fn package_function_contracts_match(
+    interface: &PackageFunctionContract,
+    source: &PackageFunctionContract,
+) -> bool {
+    interface.name == source.name
+        && interface.params == source.params
+        && interface.return_type == source.return_type
+        && interface.returns_fresh == source.returns_fresh
+        && interface.effects == source.effects
+}
+
+fn collect_package_function_contracts(
+    sources: &[PackageSource],
+    kind: PackageReviewFileKind,
+) -> BTreeMap<String, PackageFunctionContract> {
+    let mut contracts = BTreeMap::new();
+    for source in sources.iter().filter(|source| source.kind == kind) {
+        let program = parse_source(&source.path, &source.contents);
+        for item in program.items {
+            let Item::Function(function) = item else {
+                continue;
+            };
+            if function.is_public {
+                contracts.insert(function.name.clone(), package_function_contract(&function));
+            }
+        }
+    }
+    contracts
+}
+
+fn package_function_contract(function: &FunctionDecl) -> PackageFunctionContract {
+    PackageFunctionContract {
+        name: function.name.clone(),
+        params: function.params.iter().map(package_param_contract).collect(),
+        return_type: function.return_ty.as_ref().map(package_type_name),
+        returns_fresh: function.returns_fresh,
+        effects: function.effects.iter().map(package_effect_name).collect(),
+        span: function.span.clone(),
+    }
+}
+
+fn package_param_contract(param: &Param) -> PackageParamContract {
+    PackageParamContract {
+        name: param.name.clone(),
+        effect: param.effect.map(package_effect_label),
+        type_name: package_type_name(&param.ty),
+    }
+}
+
+fn package_effect_label(effect: DataEffect) -> &'static str {
+    match effect {
+        DataEffect::Read => "read",
+        DataEffect::Mut => "mut",
+        DataEffect::Take => "take",
+    }
+}
+
+fn package_effect_name(effect: &EffectDecl) -> String {
+    match effect {
+        EffectDecl::Name(name) => name.clone(),
+        EffectDecl::Retains(param) => format!("retains({param})"),
+    }
+}
+
+fn package_type_name(ty: &TypeRef) -> String {
+    if ty.args.is_empty() {
+        return ty.name.clone();
+    }
+    let args = ty
+        .args
+        .iter()
+        .map(package_type_name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{}<{args}>", ty.name)
+}
+
+fn package_function_contract_label(contract: &PackageFunctionContract) -> String {
+    let params = contract
+        .params
+        .iter()
+        .map(|param| match param.effect {
+            Some(effect) => format!("{}: {} {}", param.name, effect, param.type_name),
+            None => format!("{}: {}", param.name, param.type_name),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut label = format!("pub fn {}({params})", contract.name);
+    if let Some(return_type) = &contract.return_type {
+        if contract.returns_fresh {
+            label.push_str(&format!(" -> fresh {return_type}"));
+        } else {
+            label.push_str(&format!(" -> {return_type}"));
+        }
+    }
+    if !contract.effects.is_empty() {
+        label.push_str(&format!(
+            " effects({})",
+            contract
+                .effects
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    label
 }
 
 fn dedup_diagnostics(diagnostics: &mut Vec<Diagnostic>) {

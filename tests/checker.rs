@@ -2512,6 +2512,91 @@ rss-dep = {{ path = "{}" }}
 }
 
 #[test]
+fn package_review_reports_missing_interface_implementation() {
+    let temp_dir = unique_temp_dir("rsscript-package-missing-interface-impl");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-missing-impl",
+        "0.1.0",
+        "",
+        r#"pub fn render(body: read String) -> String
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("src/lib.rss"),
+        r#"fn helper(body: read String) -> String {
+    return body
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let check = check_package_dir(&temp_dir).expect("package check should succeed");
+    let codes = review
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect::<Vec<_>>();
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(codes.contains(&"RS1301"), "{codes:?}");
+    assert!(!check.ok);
+}
+
+#[test]
+fn package_review_reports_interface_implementation_signature_mismatch() {
+    let temp_dir = unique_temp_dir("rsscript-package-interface-mismatch");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-interface-mismatch",
+        "0.1.0",
+        "",
+        r#"pub fn render(body: read String) -> fresh String
+    effects(no_panic)
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("src/lib.rss"),
+        r#"pub fn render(body: read String) -> String {
+    return body
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let codes = review
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect::<Vec<_>>();
+    let causes = review
+        .diagnostics
+        .iter()
+        .flat_map(|diagnostic| diagnostic.causes.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(codes.contains(&"RS1301"), "{codes:?}");
+    assert!(
+        causes.iter().any(|cause| cause.contains(
+            "interface: pub fn render(body: read String) -> fresh String effects(no_panic)"
+        )),
+        "{causes:?}"
+    );
+    assert!(
+        causes
+            .iter()
+            .any(|cause| cause.contains("source: pub fn render(body: read String) -> String")),
+        "{causes:?}"
+    );
+}
+
+#[test]
 fn package_review_reports_path_dependency_interface_call_violations() {
     let root_dir = unique_temp_dir("rsscript-package-dep-interface-violation-root");
     let dep_dir = unique_temp_dir("rsscript-package-dep-interface-violation-dep");
