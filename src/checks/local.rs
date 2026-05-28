@@ -38,11 +38,23 @@ pub(crate) struct TakeHandleField {
     pub(crate) span: Span,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FreshReturnIssueKind {
+    NotClean { name: String },
+    UnknownIdent { name: String },
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FreshReturnIssue {
+    pub(crate) kind: FreshReturnIssueKind,
+    pub(crate) span: Span,
+}
+
 pub(crate) struct LocalAnalysis {
     body: Option<HirFunctionBody>,
     events_by_span: HashMap<Span, Vec<HirEffectEvent>>,
     binding_types_by_span: HashMap<Span, String>,
-    return_proofs_by_span: HashMap<Span, HirReturnProof>,
     managed_closure_uses_by_span: HashMap<Span, Vec<(String, Span)>>,
     resource_escapes_by_with_span: HashMap<Span, Vec<ResourceEscape>>,
     take_handle_fields: Vec<TakeHandleField>,
@@ -110,10 +122,6 @@ impl LocalAnalysis {
             .as_ref()
             .and_then(|body| body.block.as_ref())
             .map_or_else(HashMap::new, index_binding_types_from_block);
-        let return_proofs_by_span = body
-            .as_ref()
-            .and_then(|body| body.block.as_ref())
-            .map_or_else(HashMap::new, index_return_proofs_from_block);
         let managed_closure_uses_by_span = body
             .as_ref()
             .and_then(|body| body.block.as_ref())
@@ -137,7 +145,6 @@ impl LocalAnalysis {
             body,
             events_by_span,
             binding_types_by_span,
-            return_proofs_by_span,
             managed_closure_uses_by_span,
             resource_escapes_by_with_span,
             take_handle_fields,
@@ -160,10 +167,6 @@ impl LocalAnalysis {
 
     pub(crate) fn binding_type(&self, span: &Span) -> Option<&str> {
         self.binding_types_by_span.get(span).map(String::as_str)
-    }
-
-    pub(crate) fn return_proof(&self, span: &Span) -> Option<&HirReturnProof> {
-        self.return_proofs_by_span.get(span)
     }
 
     pub(crate) fn managed_closure_ident_uses(&self, span: &Span) -> Option<&[(String, Span)]> {
@@ -233,6 +236,18 @@ impl LocalAnalysis {
             }
         }
         uses
+    }
+
+    pub(crate) fn fresh_return_issues(&self) -> Vec<FreshReturnIssue> {
+        let mut issues = Vec::new();
+        if let Some(block) = self.body.as_ref().and_then(|body| body.block.as_ref()) {
+            collect_fresh_return_issues_from_block(
+                block,
+                &self.flow_entry_states_by_span,
+                &mut issues,
+            );
+        }
+        issues
     }
 
     fn effect_events(&self, span: &Span) -> &[HirEffectEvent] {
@@ -497,78 +512,114 @@ fn push_take_handle_field(fields: &mut Vec<TakeHandleField>, name: String, span:
     }
 }
 
-fn index_return_proofs_from_block(block: &HirBlock) -> HashMap<Span, HirReturnProof> {
-    let mut proofs = HashMap::new();
-    collect_block_return_proofs(block, &mut proofs);
-    proofs
-}
-
-fn collect_block_return_proofs(block: &HirBlock, proofs: &mut HashMap<Span, HirReturnProof>) {
+fn collect_fresh_return_issues_from_block(
+    block: &HirBlock,
+    entry_states: &HashMap<Span, BodyState>,
+    issues: &mut Vec<FreshReturnIssue>,
+) {
     for statement in &block.statements {
-        collect_stmt_return_proofs(statement, proofs);
+        collect_fresh_return_issues_from_stmt(statement, entry_states, issues);
     }
 }
 
-fn collect_stmt_return_proofs(statement: &HirStmt, proofs: &mut HashMap<Span, HirReturnProof>) {
+fn collect_fresh_return_issues_from_stmt(
+    statement: &HirStmt,
+    entry_states: &HashMap<Span, BodyState>,
+    issues: &mut Vec<FreshReturnIssue>,
+) {
     match statement {
         HirStmt::Return { value, proof, span } => {
-            let proof_span = value.as_ref().map_or(span, hir_expr_span);
-            proofs.insert(proof_span.clone(), proof.clone());
-            if let Some(value) = value {
-                collect_expr_return_proofs(value, proofs);
-            }
+            collect_fresh_return_issue(value.as_ref(), proof, span, entry_states, issues);
         }
-        HirStmt::Let {
-            value: Some(value), ..
-        }
-        | HirStmt::Expr(value) => collect_expr_return_proofs(value, proofs),
-        HirStmt::With { resource, body, .. } => {
-            collect_expr_return_proofs(resource, proofs);
-            collect_block_return_proofs(body, proofs);
+        HirStmt::With { body, .. } => {
+            collect_fresh_return_issues_from_block(body, entry_states, issues);
         }
         HirStmt::If {
-            condition,
             then_body,
             else_body,
             ..
         } => {
-            collect_expr_return_proofs(condition, proofs);
-            collect_block_return_proofs(then_body, proofs);
+            collect_fresh_return_issues_from_block(then_body, entry_states, issues);
             if let Some(else_body) = else_body {
-                collect_block_return_proofs(else_body, proofs);
+                collect_fresh_return_issues_from_block(else_body, entry_states, issues);
             }
         }
-        HirStmt::Loop {
-            condition, body, ..
-        } => {
-            if let Some(condition) = condition {
-                collect_expr_return_proofs(condition, proofs);
-            }
-            collect_block_return_proofs(body, proofs);
+        HirStmt::Loop { body, .. } => {
+            collect_fresh_return_issues_from_block(body, entry_states, issues);
         }
-        HirStmt::Let { value: None, .. }
+        HirStmt::Let { .. }
         | HirStmt::Break(_)
         | HirStmt::Continue(_)
+        | HirStmt::Expr(_)
         | HirStmt::Unknown(_) => {}
     }
 }
 
-fn collect_expr_return_proofs(expr: &HirExpr, proofs: &mut HashMap<Span, HirReturnProof>) {
-    match expr {
-        HirExpr::Call { args, .. } => {
-            for arg in args {
-                collect_expr_return_proofs(&arg.value, proofs);
+fn collect_fresh_return_issue(
+    value: Option<&HirExpr>,
+    proof: &HirReturnProof,
+    return_span: &Span,
+    entry_states: &HashMap<Span, BodyState>,
+    issues: &mut Vec<FreshReturnIssue>,
+) {
+    match proof {
+        HirReturnProof::Ident { name } => {
+            let span = fresh_return_value_span(value)
+                .unwrap_or(return_span)
+                .clone();
+            if let Some(state) = entry_states.get(return_span) {
+                if state.is_managed(name) || (state.is_local(name) && !state.is_clean_local(name)) {
+                    push_fresh_return_issue(
+                        issues,
+                        FreshReturnIssueKind::NotClean { name: name.clone() },
+                        span,
+                    );
+                    return;
+                }
+                if state.is_local(name) {
+                    return;
+                }
             }
+            push_fresh_return_issue(
+                issues,
+                FreshReturnIssueKind::UnknownIdent { name: name.clone() },
+                span,
+            );
         }
-        HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => {
-            collect_expr_return_proofs(value, proofs);
+        HirReturnProof::Unknown => {
+            push_fresh_return_issue(
+                issues,
+                FreshReturnIssueKind::Unknown,
+                fresh_return_value_span(value)
+                    .unwrap_or(return_span)
+                    .clone(),
+            );
         }
-        HirExpr::Field { base, .. } => collect_expr_return_proofs(base, proofs),
-        HirExpr::Closure { body, .. } => collect_block_return_proofs(body, proofs),
-        HirExpr::Ident { .. }
-        | HirExpr::Number { .. }
-        | HirExpr::String { .. }
-        | HirExpr::Unknown(_) => {}
+        HirReturnProof::NoValue | HirReturnProof::StructConstructor | HirReturnProof::FreshCall => {
+        }
+    }
+}
+
+fn fresh_return_value_span(value: Option<&HirExpr>) -> Option<&Span> {
+    let mut value = value?;
+    loop {
+        match value {
+            HirExpr::Effect { value: inner, .. } | HirExpr::Manage { value: inner, .. } => {
+                value = inner;
+            }
+            _ => return Some(hir_expr_span(value)),
+        }
+    }
+}
+
+fn push_fresh_return_issue(
+    issues: &mut Vec<FreshReturnIssue>,
+    kind: FreshReturnIssueKind,
+    span: Span,
+) {
+    let issue = FreshReturnIssue { kind, span };
+    if !issues.contains(&issue) {
+        issues.push(issue);
     }
 }
 
@@ -1842,15 +1893,79 @@ mod tests {
                 span: span(22),
             }]
         );
-        assert!(matches!(
-            local_analysis.return_proof(&span(23)),
-            Some(HirReturnProof::FreshCall)
-        ));
         local_analysis.apply_retention_events(&span(20), &mut state);
         local_analysis.apply_move_events(&span(21), &mut state);
 
         assert!(!state.is_clean_local("cached"));
         assert_eq!(state.move_span("image").map(|span| span.line), Some(21));
+    }
+
+    #[test]
+    fn local_analysis_reports_fresh_return_issues_from_hir_flow_state() {
+        let retain_event = HirEffectEvent {
+            function_name: "render".to_string(),
+            kind: HirEffectEventKind::Retain {
+                callee: "ImageCache.store".to_string(),
+                param: "image".to_string(),
+            },
+            binding_name: "image".to_string(),
+            span: span(2),
+            value_span: span(2),
+        };
+        let body = HirFunctionBody {
+            function_name: "render".to_string(),
+            block: Some(HirBlock {
+                statements: vec![
+                    HirStmt::Let {
+                        kind: HirBindingKind::LocalLet,
+                        name: "image".to_string(),
+                        value: Some(HirExpr::Call {
+                            callee: Callee::Name("Image.load".to_string()),
+                            args: Vec::new(),
+                            resolution: CallResolution::Unknown,
+                            events: Vec::new(),
+                            type_name: Some("Image".to_string()),
+                            span: span(1),
+                        }),
+                        type_name: Some("Image".to_string()),
+                        span: span(1),
+                    },
+                    HirStmt::Expr(HirExpr::Call {
+                        callee: Callee::Name("ImageCache.store".to_string()),
+                        args: Vec::new(),
+                        resolution: CallResolution::Unknown,
+                        events: vec![retain_event],
+                        type_name: None,
+                        span: span(2),
+                    }),
+                    HirStmt::Return {
+                        value: Some(HirExpr::Ident {
+                            name: "image".to_string(),
+                            type_name: Some("Image".to_string()),
+                            span: span(3),
+                        }),
+                        proof: HirReturnProof::Ident {
+                            name: "image".to_string(),
+                        },
+                        span: span(3),
+                    },
+                ],
+                span: span(1),
+            }),
+            ..HirFunctionBody::default()
+        };
+
+        let local_analysis = LocalAnalysis::new(Some(&body));
+
+        assert_eq!(
+            local_analysis.fresh_return_issues(),
+            vec![FreshReturnIssue {
+                kind: FreshReturnIssueKind::NotClean {
+                    name: "image".to_string(),
+                },
+                span: span(3),
+            }]
+        );
     }
 
     #[test]

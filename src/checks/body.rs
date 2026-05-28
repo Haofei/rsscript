@@ -1,11 +1,11 @@
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, code};
-use crate::hir::{CallResolution, HirReturnProof, HirTypeKind, ResolvedCalleeKind};
+use crate::hir::{CallResolution, HirTypeKind};
 use crate::syntax::ast::{Block, Callee, DataEffect, Expr, FunctionDecl, Item, LetKind, Stmt};
 
 use super::local::{
-    BodyState, LocalAnalysis, ManagedToLocalUse, MovedUse, ResourceEscapeKind, TakeHandleField,
-    merge_if_state, merge_loop_state,
+    BodyState, FreshReturnIssue, FreshReturnIssueKind, LocalAnalysis, ManagedToLocalUse, MovedUse,
+    ResourceEscapeKind, TakeHandleField, merge_if_state, merge_loop_state,
 };
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
@@ -24,6 +24,7 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
         check_managed_to_local_uses(analyzer, &local_analysis);
         check_moved_uses(analyzer, &local_analysis);
         check_take_handle_fields(analyzer, &local_analysis);
+        check_fresh_returns(analyzer, &local_analysis, &function);
         let mut state = local_analysis.initial_state();
         check_block(
             analyzer,
@@ -82,15 +83,7 @@ fn check_stmt_semantics(
 
             Flow::Fallthrough
         }
-        Stmt::Return(stmt) => {
-            if let Some(value) = &stmt.value {
-                let return_state = local_analysis.flow_entry_state(&stmt.span).unwrap_or(state);
-                if function.returns_fresh {
-                    check_fresh_return(analyzer, local_analysis, function, value, return_state);
-                }
-            }
-            Flow::Return
-        }
+        Stmt::Return(_) => Flow::Return,
         Stmt::With(stmt) => {
             check_resource_escape(analyzer, local_analysis, &stmt.span);
             check_block(analyzer, local_analysis, function, &stmt.body, state)
@@ -240,6 +233,27 @@ fn check_managed_to_local_uses(analyzer: &mut Analyzer<'_>, local_analysis: &Loc
 fn check_take_handle_fields(analyzer: &mut Analyzer<'_>, local_analysis: &LocalAnalysis) {
     for field in local_analysis.take_handle_fields() {
         take_handle_field_diagnostic(analyzer, field);
+    }
+}
+
+fn check_fresh_returns(
+    analyzer: &mut Analyzer<'_>,
+    local_analysis: &LocalAnalysis,
+    function: &FunctionDecl,
+) {
+    if !function.returns_fresh {
+        return;
+    }
+    for issue in local_analysis.fresh_return_issues() {
+        match &issue.kind {
+            FreshReturnIssueKind::NotClean { name } => {
+                fresh_return_diagnostic(analyzer, &function.name, name, issue.span);
+            }
+            FreshReturnIssueKind::UnknownIdent { name } if trusted_fresh_ident(analyzer, name) => {}
+            FreshReturnIssueKind::UnknownIdent { .. } | FreshReturnIssueKind::Unknown => {
+                freshness_unknown_diagnostic(analyzer, &function.name, issue);
+            }
+        }
     }
 }
 
@@ -397,113 +411,9 @@ fn resource_capture_diagnostic(
     );
 }
 
-fn check_fresh_return(
-    analyzer: &mut Analyzer<'_>,
-    local_analysis: &LocalAnalysis,
-    function: &FunctionDecl,
-    value: &Expr,
-    state: &BodyState,
-) {
-    match value {
-        Expr::Ident(name, span) if state.is_managed(name) => {
-            fresh_return_diagnostic(analyzer, function, name, span.clone());
-        }
-        Expr::Ident(name, span) if state.is_local(name) => {
-            if !state.is_clean_local(name) {
-                fresh_return_diagnostic(analyzer, function, name, span.clone());
-            }
-        }
-        Expr::Ident(name, span)
-            if !is_struct_type(analyzer, name)
-                && !analyzer
-                    .hir
-                    .resolve_function(None, name)
-                    .is_some_and(|signature| signature.returns_fresh) =>
-        {
-            analyzer.diagnostics.push(
-                Diagnostic::warning(
-                    code::FRESHNESS_UNKNOWN,
-                    format!(
-                        "freshness of return value in `{}` could not be proven.",
-                        function.name
-                    ),
-                    span.clone(),
-                    "freshness unknown",
-                )
-                .with_cause("This MVP checker only trusts clean locals, struct constructors, and known fresh functions."),
-            );
-        }
-        Expr::Call { callee, span, .. } => {
-            if !hir_return_proves_fresh_call(analyzer, local_analysis, callee, span) {
-                analyzer.diagnostics.push(
-                    Diagnostic::warning(
-                        code::FRESHNESS_UNKNOWN,
-                        format!(
-                            "freshness of return value in `{}` could not be proven.",
-                            function.name
-                        ),
-                        span.clone(),
-                        "freshness unknown",
-                    )
-                    .with_cause("This MVP checker only trusts clean locals, struct constructors, and known fresh functions."),
-                );
-            }
-        }
-        Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
-            check_fresh_return(analyzer, local_analysis, function, value, state);
-        }
-        Expr::Field { span, .. } | Expr::Closure { span, .. } | Expr::Unknown(span) => {
-            analyzer.diagnostics.push(
-                Diagnostic::warning(
-                    code::FRESHNESS_UNKNOWN,
-                    format!(
-                        "freshness of return value in `{}` could not be proven.",
-                        function.name
-                    ),
-                    span.clone(),
-                    "freshness unknown",
-                )
-                .with_cause("This MVP checker only trusts clean locals, struct constructors, and known fresh functions."),
-            );
-        }
-        Expr::Ident(_, _) => {}
-        Expr::Number(_, _) | Expr::String(_, _) => {}
-    }
-}
-
-fn hir_return_proves_fresh_call(
-    analyzer: &Analyzer<'_>,
-    local_analysis: &LocalAnalysis,
-    callee: &Callee,
-    span: &crate::diagnostic::Span,
-) -> bool {
-    if let Some(return_proof) = local_analysis.return_proof(span) {
-        return matches!(
-            return_proof,
-            HirReturnProof::StructConstructor | HirReturnProof::FreshCall
-        );
-    }
-
-    let resolution = analyzer.resolve_call_site(callee, span);
-    let constructor_is_struct = matches!(
-        resolution,
-        CallResolution::Resolved {
-            kind: ResolvedCalleeKind::Constructor {
-                type_kind: HirTypeKind::Struct
-            },
-            ..
-        }
-    );
-    let call_returns_fresh = match resolution {
-        CallResolution::Resolved { signature, .. } => signature.returns_fresh,
-        CallResolution::EnumVariant | CallResolution::Unknown => false,
-    };
-    constructor_is_struct || call_returns_fresh
-}
-
 fn fresh_return_diagnostic(
     analyzer: &mut Analyzer<'_>,
-    function: &FunctionDecl,
+    function_name: &str,
     name: &str,
     span: crate::diagnostic::Span,
 ) {
@@ -512,7 +422,7 @@ fn fresh_return_diagnostic(
             code::FRESH_RETURN_NOT_CLEAN,
             format!(
                 "fresh function `{}` returns managed value `{name}`.",
-                function.name
+                function_name
             ),
             span,
             "aliased value returned",
@@ -526,8 +436,30 @@ fn fresh_return_diagnostic(
     );
 }
 
-fn is_struct_type(analyzer: &Analyzer<'_>, name: &str) -> bool {
-    analyzer.hir.type_kind(name) == Some(crate::hir::HirTypeKind::Struct)
+fn freshness_unknown_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    function_name: &str,
+    issue: FreshReturnIssue,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::warning(
+            code::FRESHNESS_UNKNOWN,
+            format!("freshness of return value in `{function_name}` could not be proven."),
+            issue.span,
+            "freshness unknown",
+        )
+        .with_cause(
+            "This MVP checker only trusts clean locals, struct constructors, and known fresh functions.",
+        ),
+    );
+}
+
+fn trusted_fresh_ident(analyzer: &Analyzer<'_>, name: &str) -> bool {
+    analyzer.hir.type_kind(name) == Some(HirTypeKind::Struct)
+        || analyzer
+            .hir
+            .resolve_function(None, name)
+            .is_some_and(|signature| signature.returns_fresh)
 }
 
 fn infer_expr_type(analyzer: &Analyzer<'_>, expr: &Expr, state: &BodyState) -> Option<String> {
