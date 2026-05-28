@@ -64,9 +64,10 @@ fn check_stmt_semantics(
 ) -> Flow {
     match statement {
         Stmt::Let(stmt) => {
+            let stmt_state = local_analysis.flow_entry_state(&stmt.span).unwrap_or(state);
             if stmt.kind == LetKind::Local
                 && let Some(Expr::Ident(name, span)) = &stmt.value
-                && state.is_managed(name)
+                && stmt_state.is_managed(name)
             {
                 analyzer.diagnostics.push(
                     Diagnostic::error(
@@ -90,11 +91,11 @@ fn check_stmt_semantics(
             if stmt.kind == LetKind::Managed
                 && let Some(Expr::Closure { body, span }) = &stmt.value
             {
-                check_managed_closure_captures(analyzer, local_analysis, span, body, state);
+                check_managed_closure_captures(analyzer, local_analysis, span, body, stmt_state);
             }
 
             if let Some(value) = &stmt.value {
-                check_take_of_handle_field(analyzer, local_analysis, value, state);
+                check_take_of_handle_field(analyzer, local_analysis, value, stmt_state);
             }
             Flow::Fallthrough
         }
@@ -109,11 +110,14 @@ fn check_stmt_semantics(
             Flow::Return
         }
         Stmt::With(stmt) => {
+            let stmt_state = local_analysis.flow_entry_state(&stmt.span).unwrap_or(state);
+            check_take_of_handle_field(analyzer, local_analysis, &stmt.resource, stmt_state);
             check_resource_escape(analyzer, local_analysis, &stmt.binding, &stmt.body);
             check_block(analyzer, local_analysis, function, &stmt.body, state)
         }
         Stmt::If(stmt) => {
-            check_take_of_handle_field(analyzer, local_analysis, &stmt.condition, state);
+            let stmt_state = local_analysis.flow_entry_state(&stmt.span).unwrap_or(state);
+            check_take_of_handle_field(analyzer, local_analysis, &stmt.condition, stmt_state);
             apply_expr_effects(local_analysis, &stmt.condition, state);
 
             let base_state = state.clone();
@@ -141,8 +145,9 @@ fn check_stmt_semantics(
             merge_if_state(state, &base_state, then_state, then_flow, else_branch)
         }
         Stmt::Loop(stmt) => {
+            let stmt_state = local_analysis.flow_entry_state(&stmt.span).unwrap_or(state);
             if let Some(condition) = &stmt.condition {
-                check_take_of_handle_field(analyzer, local_analysis, condition, state);
+                check_take_of_handle_field(analyzer, local_analysis, condition, stmt_state);
                 apply_expr_effects(local_analysis, condition, state);
             }
 
@@ -165,7 +170,10 @@ fn check_stmt_semantics(
             )
         }
         Stmt::Expr(expr) => {
-            check_take_of_handle_field(analyzer, local_analysis, expr, state);
+            let stmt_state = local_analysis
+                .flow_entry_state(stmt_span(statement))
+                .unwrap_or(state);
+            check_take_of_handle_field(analyzer, local_analysis, expr, stmt_state);
             Flow::Fallthrough
         }
         Stmt::Break(_) => Flow::Break,
@@ -388,6 +396,9 @@ fn check_take_of_handle_in_stmt(
     statement: &Stmt,
     state: &BodyState,
 ) {
+    let state = local_analysis
+        .flow_entry_state(stmt_span(statement))
+        .unwrap_or(state);
     match statement {
         Stmt::Let(stmt) => {
             if let Some(value) = &stmt.value {

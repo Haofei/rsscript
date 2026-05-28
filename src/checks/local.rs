@@ -1848,6 +1848,55 @@ mod tests {
     }
 
     #[test]
+    fn local_flow_entry_states_preserve_stable_value_types() {
+        let body = HirFunctionBody {
+            function_name: "run".to_string(),
+            block: Some(HirBlock {
+                statements: vec![
+                    HirStmt::Let {
+                        kind: HirBindingKind::LocalLet,
+                        name: "config".to_string(),
+                        value: None,
+                        type_name: Some("InlineConfig".to_string()),
+                        span: span(1),
+                    },
+                    HirStmt::If {
+                        condition: HirExpr::Ident {
+                            name: "enabled".to_string(),
+                            type_name: Some("Bool".to_string()),
+                            span: span(2),
+                        },
+                        then_body: HirBlock {
+                            statements: vec![HirStmt::Expr(HirExpr::Ident {
+                                name: "config".to_string(),
+                                type_name: Some("InlineConfig".to_string()),
+                                span: span(3),
+                            })],
+                            span: span(3),
+                        },
+                        else_body: None,
+                        span: span(2),
+                    },
+                    HirStmt::Expr(HirExpr::Ident {
+                        name: "config".to_string(),
+                        type_name: Some("InlineConfig".to_string()),
+                        span: span(4),
+                    }),
+                ],
+                span: span(1),
+            }),
+            ..HirFunctionBody::default()
+        };
+        let local_analysis = LocalAnalysis::new(Some(&body));
+
+        let expr_state = local_analysis
+            .flow_entry_state(&span(4))
+            .expect("expression should be reachable");
+
+        assert_eq!(expr_state.value_type("config"), Some("InlineConfig"));
+    }
+
+    #[test]
     fn local_flow_entry_states_carry_loop_break_moves() {
         let manage_event = HirEffectEvent {
             function_name: "run".to_string(),
