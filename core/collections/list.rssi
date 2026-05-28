@@ -1,1 +1,3 @@
+features: local
+
 pub fn List.consume<T>(list: take List<T>) -> Unit

@@ -1,1 +1,3 @@
+features: local
+
 pub fn Buffer.consume(buffer: take Buffer) -> Unit

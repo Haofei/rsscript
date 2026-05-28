@@ -45,7 +45,7 @@ fn fail_fixtures_report_expected_diagnostic_codes() {
 
 #[test]
 fn core_interface_files_have_no_diagnostics() {
-    for path in fixture_paths("core") {
+    for path in recursive_fixture_paths("core") {
         let source = read_fixture(&path);
         let diagnostics = analyze_source(path.to_str().unwrap(), &source);
         assert_eq!(diagnostics, Vec::new(), "{}", path.display());
@@ -239,6 +239,34 @@ pub fn overloaded<A, B, C, D>(
         diagnostics
             .iter()
             .any(|diagnostic| diagnostic.summary.contains("5 effects"))
+    );
+}
+
+#[test]
+fn lint_warns_on_duplicate_effects() {
+    let source = r#"
+fn cache(value: read Image) -> Unit
+    effects(no_panic, no_panic, retains(value), retains(value))
+{
+    return Unit
+}
+"#;
+    let diagnostics = lint_source("lint.rss", source);
+    let duplicate_effects = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "RSL002")
+        .collect::<Vec<_>>();
+
+    assert_eq!(duplicate_effects.len(), 2);
+    assert!(
+        duplicate_effects
+            .iter()
+            .any(|diagnostic| diagnostic.summary.contains("no_panic"))
+    );
+    assert!(
+        duplicate_effects
+            .iter()
+            .any(|diagnostic| diagnostic.summary.contains("retains(value)"))
     );
 }
 
@@ -2043,6 +2071,30 @@ fn fixture_paths(directory: &str) -> Vec<PathBuf> {
         .collect();
     paths.sort();
     paths
+}
+
+fn recursive_fixture_paths(directory: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    collect_fixture_paths(Path::new(directory), &mut paths);
+    paths.sort();
+    paths
+}
+
+fn collect_fixture_paths(directory: &Path, paths: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(directory)
+        .unwrap_or_else(|error| panic!("failed to read {directory:?}: {error}"))
+    {
+        let path = entry.expect("fixture entry should be readable").path();
+        if path.is_dir() {
+            collect_fixture_paths(&path, paths);
+        } else if path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| matches!(extension, "rss" | "rssi"))
+        {
+            paths.push(path);
+        }
+    }
 }
 
 fn read_fixture(path: &Path) -> String {

@@ -1253,6 +1253,7 @@ fn is_copy_type(ty: &TypeRef) -> bool {
                 | "UInt32"
                 | "UInt64"
                 | "Closure"
+                | "Fd"
                 | "Unit"
         )
 }

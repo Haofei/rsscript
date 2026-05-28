@@ -14,6 +14,7 @@ cargo check --manifest-path tests/generated/runnable/Cargo.toml
 
 if [[ "${RSSCRIPT_FULL_TESTS:-0}" == "1" ]]; then
   cargo test --workspace
+  bash scripts/lint_sources.sh
   bash scripts/run_examples.sh
 else
   cargo test --workspace --no-run

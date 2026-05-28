@@ -1,5 +1,7 @@
 use crate::diagnostic::{Diagnostic, Span, code};
-use crate::syntax::ast::{Item, TypeRef};
+use std::collections::HashSet;
+
+use crate::syntax::ast::{EffectDecl, Item, TypeRef};
 use crate::syntax::parse_source;
 
 const MAX_PUBLIC_PARAMS: usize = 6;
@@ -15,6 +17,12 @@ pub fn lint_source(file: &str, source: &str) -> Vec<Diagnostic> {
         let Item::Function(function) = item else {
             continue;
         };
+        lint_duplicate_effects(
+            &mut diagnostics,
+            &function.name,
+            &function.effects,
+            function.span.clone(),
+        );
         if !function.is_public {
             continue;
         }
@@ -96,6 +104,42 @@ pub fn lint_source(file: &str, source: &str) -> Vec<Diagnostic> {
     }
 
     diagnostics
+}
+
+fn lint_duplicate_effects(
+    diagnostics: &mut Vec<Diagnostic>,
+    function_name: &str,
+    effects: &[EffectDecl],
+    span: Span,
+) {
+    let mut seen = HashSet::new();
+    for effect in effects {
+        let label = effect_label(effect);
+        if seen.insert(label.clone()) {
+            continue;
+        }
+        diagnostics.push(
+            Diagnostic::warning(
+                code::LINT_DUPLICATE_EFFECT,
+                format!("Function `{function_name}` repeats effect `{label}`."),
+                span.clone(),
+                "duplicate effect",
+            )
+            .with_cause("Repeating an effect does not change the function contract.")
+            .with_fix(
+                "remove_duplicate_effect",
+                format!("Remove the repeated `{label}` effect."),
+                "machine-applicable",
+            ),
+        );
+    }
+}
+
+fn effect_label(effect: &EffectDecl) -> String {
+    match effect {
+        EffectDecl::Name(name) => name.clone(),
+        EffectDecl::Retains(param) => format!("retains({param})"),
+    }
 }
 
 fn signature_complexity_warning(

@@ -447,6 +447,7 @@ Local verification:
 ```sh
 bash scripts/check.sh
 RSSCRIPT_FULL_TESTS=1 bash scripts/check.sh
+bash scripts/lint_sources.sh
 bash scripts/run_examples.sh
 ```
 

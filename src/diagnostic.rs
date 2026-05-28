@@ -49,6 +49,7 @@ pub mod code {
     pub const RUSTC_DIAGNOSTIC_MAPPED: &str = "RS1101";
     pub const RUSTC_DIAGNOSTIC_UNMAPPABLE: &str = "RS1102";
     pub const LINT_SIGNATURE_COMPLEXITY: &str = "RSL001";
+    pub const LINT_DUPLICATE_EFFECT: &str = "RSL002";
 
     pub const REVIEW_FEATURES_CHANGED: &str = "RSR001";
     pub const REVIEW_FUNCTION_REMOVED: &str = "RSR002";
@@ -457,6 +458,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::LINT_SIGNATURE_COMPLEXITY,
         title: "signature complexity lint",
         explanation: "Public signatures should remain reviewable in one screen. The linter warns when public parameters, generic parameters, effect clauses, or nested type shapes exceed the current review budget.",
+    },
+    DiagnosticExplanation {
+        code: code::LINT_DUPLICATE_EFFECT,
+        title: "duplicate effect lint",
+        explanation: "Effect clauses are review contracts. Repeating the same effect adds noise without changing semantics, so the linter warns and suggests removing the duplicate.",
     },
 ];
 
