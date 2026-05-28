@@ -1,0 +1,11 @@
+// expect: RS0301
+mode: uses-local
+
+struct Image {
+    pixels: Buffer
+}
+
+fn bad_local(path: read Path) -> Unit {
+    let image = Image.load(path: read path)
+    local working = image
+}

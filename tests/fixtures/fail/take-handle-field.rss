@@ -1,0 +1,14 @@
+// expect: RS0901
+mode: uses-local
+
+struct Rule {
+    name: String
+}
+
+struct Config {
+    rules: handle List<Rule>
+}
+
+fn bad_take(config: mut Config) -> Unit {
+    List.consume(list: take config.rules)
+}

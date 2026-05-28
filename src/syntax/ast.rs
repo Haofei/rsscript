@@ -147,6 +147,10 @@ pub enum Expr {
         value: Box<Expr>,
         span: Span,
     },
+    Closure {
+        body: Block,
+        span: Span,
+    },
     Unknown(Span),
 }
 
@@ -173,6 +177,7 @@ impl Expr {
             | Self::Call { span, .. }
             | Self::Effect { span, .. }
             | Self::Manage { span, .. }
+            | Self::Closure { span, .. }
             | Self::Unknown(span) => span,
         }
     }

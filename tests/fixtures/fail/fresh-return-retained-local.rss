@@ -1,0 +1,17 @@
+// expect: RS0501 RS0601
+mode: uses-local
+
+class ImageCache {
+    entries: Map<String, Image>
+}
+
+struct Image {
+    pixels: Buffer
+}
+
+fn bad_fresh(cache: mut ImageCache, path: read Path) -> fresh Image {
+    local image = Image.load(path: read path)
+    ImageCache.store(cache: mut cache, image: read image)
+
+    return image
+}

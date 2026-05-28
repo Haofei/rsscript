@@ -211,15 +211,21 @@ fn parse_fields(tokens: &[Token], start: usize, end: usize) -> Vec<FieldDecl> {
             continue;
         }
 
-        let is_handle = tokens[index].is_ident_text("handle");
-        let name_index = if is_handle { index + 1 } else { index };
+        let name_index = index;
         if let Some(name) = tokens.get(name_index).and_then(ident_name)
             && tokens
                 .get(name_index + 1)
                 .is_some_and(|token| token.symbol(":"))
         {
-            let ty_end = next_line_or_block_end(tokens, name_index + 2, end);
-            if let Some(ty) = parse_type_ref(tokens, name_index + 2, ty_end) {
+            let mut ty_start = name_index + 2;
+            let is_handle = tokens
+                .get(ty_start)
+                .is_some_and(|token| token.is_ident_text("handle"));
+            if is_handle {
+                ty_start += 1;
+            }
+            let ty_end = next_line_or_block_end(tokens, ty_start, end);
+            if let Some(ty) = parse_type_ref(tokens, ty_start, ty_end) {
                 fields.push(FieldDecl {
                     name: name.to_string(),
                     ty,
@@ -401,6 +407,17 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
     let end = trim_outer(tokens, start, end).1;
     if start >= end {
         return None;
+    }
+
+    if tokens[start].symbol("|") && tokens.get(start + 1).is_some_and(|token| token.symbol("|")) {
+        let Some(open) = (start + 2..end).find(|index| tokens[*index].symbol("{")) else {
+            return Some(Expr::Unknown(tokens[start].span.clone()));
+        };
+        let close = find_matching(tokens, open, "{", "}").unwrap_or(open);
+        return Some(Expr::Closure {
+            body: parse_block(tokens, open, close),
+            span: tokens[start].span.clone(),
+        });
     }
 
     if let Some(effect) = parse_data_effect(tokens.get(start)) {

@@ -1,21 +1,27 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
-    FileMode, FunctionDecl, Program, TypeKind, find_matching, ident_name, parse_program,
+    FileMode, FunctionDecl as IndexedFunctionDecl, Program, TypeKind, find_matching, ident_name,
+    parse_program,
 };
 use crate::diagnostic::Diagnostic;
 use crate::hir::{FunctionSig, Hir};
 use crate::lexer::{Token, TokenKind, lex};
+use crate::syntax::ast::{
+    Block as SyntaxBlock, Callee, DataEffect, Expr, FunctionDecl as SyntaxFunctionDecl, Item,
+    LetKind, Stmt,
+};
 use crate::syntax::parse_source;
 
 pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
     let tokens = lex(file, source);
     let program = parse_program(&tokens);
-    let syntax = parse_source(file, source);
-    let hir = Hir::from_syntax(&syntax);
+    let syntax_program = parse_source(file, source);
+    let hir = Hir::from_syntax(&syntax_program);
     let mut analyzer = Analyzer {
         tokens: &tokens,
         program,
+        syntax_program,
         hir,
         diagnostics: Vec::new(),
     };
@@ -26,6 +32,7 @@ pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
 struct Analyzer<'a> {
     tokens: &'a [Token],
     program: Program,
+    syntax_program: crate::syntax::ast::Program,
     hir: Hir,
     diagnostics: Vec<Diagnostic>,
 }
@@ -37,7 +44,7 @@ impl Analyzer<'_> {
         self.check_resource_fields();
         self.check_mode_violations();
         self.check_calls();
-        self.check_functions();
+        self.check_ast_functions();
         self.check_operator_overload_attempts();
     }
 
@@ -337,100 +344,210 @@ impl Analyzer<'_> {
         }
     }
 
-    fn check_functions(&mut self) {
-        let functions: Vec<FunctionDecl> = self.program.functions.values().cloned().collect();
+    fn check_ast_functions(&mut self) {
+        let functions: Vec<SyntaxFunctionDecl> = self
+            .syntax_program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Function(function) => Some(function.clone()),
+                Item::Type(_) => None,
+            })
+            .collect();
+
         for function in functions {
-            self.check_function_body(&function);
-            if function.returns_fresh {
-                self.check_fresh_returns(&function);
+            let mut state = BodyState::default();
+            self.check_ast_block(&function, &function.body, &mut state);
+        }
+    }
+
+    fn check_ast_block(
+        &mut self,
+        function: &SyntaxFunctionDecl,
+        block: &SyntaxBlock,
+        state: &mut BodyState,
+    ) {
+        for statement in &block.statements {
+            self.check_moved_uses_in_stmt(statement, state);
+            self.check_stmt_semantics(function, statement, state);
+            self.apply_stmt_effects(statement, state);
+        }
+    }
+
+    fn check_stmt_semantics(
+        &mut self,
+        function: &SyntaxFunctionDecl,
+        statement: &Stmt,
+        state: &mut BodyState,
+    ) {
+        match statement {
+            Stmt::Let(stmt) => {
+                if stmt.kind == LetKind::Local
+                    && let Some(Expr::Ident(name, span)) = &stmt.value
+                    && state.managed.contains(name)
+                {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "RS0301",
+                            format!(
+                                "managed value cannot be converted to local binding `{}`.",
+                                stmt.name
+                            ),
+                            span.clone(),
+                            "managed value used as local",
+                        )
+                        .with_cause("RSScript has no managed -> local conversion.")
+                        .with_fix(
+                            "create_local",
+                            "Create the value as `local` at its creation point.",
+                            "manual",
+                        ),
+                    );
+                }
+
+                if stmt.kind == LetKind::Managed
+                    && let Some(Expr::Closure { body, .. }) = &stmt.value
+                {
+                    self.check_managed_closure_captures(body, state);
+                }
+
+                if let Some(value) = &stmt.value {
+                    self.check_take_of_handle_field(value);
+                }
+            }
+            Stmt::Return(stmt) => {
+                if let Some(value) = &stmt.value {
+                    if function.returns_fresh {
+                        self.check_fresh_return(function, value, state);
+                    }
+                    self.check_take_of_handle_field(value);
+                }
+            }
+            Stmt::With(stmt) => {
+                self.check_resource_escape_ast(&stmt.binding, &stmt.body);
+                self.check_ast_block(function, &stmt.body, state);
+            }
+            Stmt::Expr(expr) => {
+                self.check_take_of_handle_field(expr);
+            }
+            Stmt::Unknown(_) => {}
+        }
+    }
+
+    fn apply_stmt_effects(&mut self, statement: &Stmt, state: &mut BodyState) {
+        match statement {
+            Stmt::Let(stmt) => {
+                match stmt.kind {
+                    LetKind::Managed => {
+                        state.managed.insert(stmt.name.clone());
+                    }
+                    LetKind::Local => {
+                        state.locals.insert(stmt.name.clone());
+                        state.clean_locals.insert(stmt.name.clone());
+                    }
+                }
+                if let Some(value) = &stmt.value {
+                    self.apply_expr_effects(value, state);
+                }
+            }
+            Stmt::Return(stmt) => {
+                if let Some(value) = &stmt.value {
+                    self.apply_expr_effects(value, state);
+                }
+            }
+            Stmt::With(stmt) => {
+                self.apply_expr_effects(&stmt.resource, state);
+            }
+            Stmt::Expr(expr) => self.apply_expr_effects(expr, state),
+            Stmt::Unknown(_) => {}
+        }
+    }
+
+    fn apply_expr_effects(&mut self, expr: &Expr, state: &mut BodyState) {
+        match expr {
+            Expr::Manage { value, span } => {
+                if let Expr::Ident(name, _) = value.as_ref()
+                    && state.locals.contains(name)
+                {
+                    state.moved.insert(name.clone(), span.clone());
+                    state.clean_locals.remove(name);
+                }
+                self.apply_expr_effects(value, state);
+            }
+            Expr::Effect {
+                effect: DataEffect::Take,
+                value,
+                span,
+            } => {
+                if let Expr::Ident(name, _) = value.as_ref()
+                    && state.locals.contains(name)
+                {
+                    state.moved.insert(name.clone(), span.clone());
+                    state.clean_locals.remove(name);
+                }
+                self.apply_expr_effects(value, state);
+            }
+            Expr::Effect { value, .. } => self.apply_expr_effects(value, state),
+            Expr::Call { callee, args, .. } => {
+                self.apply_retention_effects(callee, args, state);
+                for arg in args {
+                    self.apply_expr_effects(&arg.value, state);
+                }
+            }
+            Expr::Field { base, .. } => self.apply_expr_effects(base, state),
+            Expr::Closure { .. }
+            | Expr::Ident(_, _)
+            | Expr::Number(_, _)
+            | Expr::String(_, _)
+            | Expr::Unknown(_) => {}
+        }
+    }
+
+    fn apply_retention_effects(
+        &self,
+        callee: &Callee,
+        args: &[crate::syntax::ast::NamedArg],
+        state: &mut BodyState,
+    ) {
+        let Some(signature) = self.resolve_callee(callee) else {
+            return;
+        };
+        if signature.retained_params.is_empty() {
+            return;
+        }
+
+        for arg in args {
+            if !signature.retained_params.contains(&arg.name) {
+                continue;
+            }
+            if let Expr::Effect {
+                effect: DataEffect::Read,
+                value,
+                ..
+            } = &arg.value
+                && let Expr::Ident(name, _) = value.as_ref()
+                && state.locals.contains(name)
+            {
+                state.clean_locals.remove(name);
             }
         }
     }
 
-    fn check_function_body(&mut self, function: &FunctionDecl) {
-        let mut locals: HashSet<String> = HashSet::new();
-        let mut managed: HashSet<String> = HashSet::new();
-        let mut moved: HashMap<String, Token> = HashMap::new();
-        let mut i = function.body_start;
-
-        while i < function.body_end {
-            if self.tokens[i].is_ident_text("local") {
-                if let Some(name) = self.tokens.get(i + 1).and_then(ident_name) {
-                    locals.insert(name.to_string());
-                    if self
-                        .tokens
-                        .get(i + 2)
-                        .is_some_and(|token| token.symbol("="))
-                        && self
-                            .tokens
-                            .get(i + 3)
-                            .and_then(ident_name)
-                            .is_some_and(|rhs| managed.contains(rhs))
-                    {
-                        self.diagnostics.push(
-                            Diagnostic::error(
-                                "RS0301",
-                                format!(
-                                    "managed value cannot be converted to local binding `{name}`."
-                                ),
-                                self.tokens[i + 3].span.clone(),
-                                "managed value used as local",
-                            )
-                            .with_cause("RSScript has no managed -> local conversion.")
-                            .with_fix(
-                                "create_local",
-                                "Create the value as `local` at its creation point.",
-                                "manual",
-                            ),
-                        );
-                    }
-                }
-            } else if self.tokens[i].is_ident_text("let") {
-                if let Some(name) = self.tokens.get(i + 1).and_then(ident_name) {
-                    managed.insert(name.to_string());
-                    if self
-                        .tokens
-                        .get(i + 2)
-                        .is_some_and(|token| token.symbol("="))
-                        && self
-                            .tokens
-                            .get(i + 3)
-                            .is_some_and(|token| token.symbol("|"))
-                    {
-                        self.check_managed_closure_capture(function, i, &locals);
-                    }
-                }
-            } else if self.tokens[i].is_ident_text("manage") {
-                if let Some(name) = self.tokens.get(i + 1).and_then(ident_name)
-                    && locals.contains(name)
-                {
-                    moved.insert(name.to_string(), self.tokens[i].clone());
-                }
-            } else if self.tokens[i].is_ident_text("take") {
-                self.check_take_of_handle_field(i);
-            } else if self.tokens[i].is_ident_text("with") {
-                if let Some(next) = self.check_resource_escape(i, function.body_end) {
-                    i = next;
-                    continue;
-                }
-            } else if let Some(name) = ident_name(&self.tokens[i])
-                && let Some(move_token) = moved.get(name)
-                && !previous_token_is(self.tokens, i, "manage")
-                && !self
-                    .tokens
-                    .get(i + 1)
-                    .is_some_and(|token| token.symbol(":"))
-            {
+    fn check_moved_uses_in_stmt(&mut self, statement: &Stmt, state: &BodyState) {
+        let mut uses = Vec::new();
+        collect_stmt_idents(statement, &mut uses);
+        for (name, span) in uses {
+            if let Some(move_span) = state.moved.get(&name) {
                 self.diagnostics.push(
                     Diagnostic::error(
                         "RS0401",
                         format!("`{name}` was moved into the managed runtime by `manage {name}`."),
-                        self.tokens[i].span.clone(),
+                        span,
                         "used after manage",
                     )
                     .with_cause(format!(
                         "The move happened at {}:{}.",
-                        move_token.span.line, move_token.span.column
+                        move_span.line, move_span.column
                     ))
                     .with_fix(
                         "move_use_before_manage",
@@ -439,34 +556,19 @@ impl Analyzer<'_> {
                     ),
                 );
             }
-
-            i += 1;
         }
     }
 
-    fn check_managed_closure_capture(
-        &mut self,
-        function: &FunctionDecl,
-        let_index: usize,
-        locals: &HashSet<String>,
-    ) {
-        let Some(open) =
-            (let_index..function.body_end).find(|index| self.tokens[*index].symbol("{"))
-        else {
-            return;
-        };
-        let Some(close) = find_matching(self.tokens, open, "{", "}") else {
-            return;
-        };
-        for index in open + 1..close {
-            if let Some(name) = ident_name(&self.tokens[index])
-                && locals.contains(name)
-            {
+    fn check_managed_closure_captures(&mut self, body: &SyntaxBlock, state: &BodyState) {
+        let mut uses = Vec::new();
+        collect_block_idents(body, &mut uses);
+        for (name, span) in uses {
+            if state.locals.contains(&name) {
                 self.diagnostics.push(
                     Diagnostic::error(
                         "RS0801",
                         format!("managed closure captures local value `{name}`."),
-                        self.tokens[index].span.clone(),
+                        span,
                         "local captured here",
                     )
                     .with_cause("Closures bound with `let` are managed closures.")
@@ -480,137 +582,237 @@ impl Analyzer<'_> {
         }
     }
 
-    fn check_take_of_handle_field(&mut self, take_index: usize) {
-        if !(self
-            .tokens
-            .get(take_index + 2)
-            .is_some_and(|token| token.symbol("."))
-            && self
-                .tokens
-                .get(take_index + 3)
-                .and_then(ident_name)
-                .is_some())
-        {
-            return;
-        }
-        let field = self.tokens[take_index + 3].text();
-        let is_handle = self.program.types.values().any(|decl| {
-            decl.fields
-                .iter()
-                .any(|decl_field| decl_field.name == field && decl_field.is_handle)
-        });
-        if is_handle {
-            self.diagnostics.push(
-                Diagnostic::error(
-                    "RS0901",
-                    format!("cannot `take` handle field `{field}`."),
-                    self.tokens[take_index].span.clone(),
-                    "take of handle field",
-                )
-                .with_cause("Handle fields are managed references and cannot be consumed as local inline values."),
-            );
-        }
-    }
-
-    fn check_resource_escape(&mut self, with_index: usize, body_limit: usize) -> Option<usize> {
-        let as_index =
-            (with_index..body_limit).find(|index| self.tokens[*index].is_ident_text("as"))?;
-        let resource_name = self
-            .tokens
-            .get(as_index + 1)
-            .and_then(ident_name)?
-            .to_string();
-        let open = (as_index + 1..body_limit).find(|index| self.tokens[*index].symbol("{"))?;
-        let close = find_matching(self.tokens, open, "{", "}")?;
-        for index in open + 1..close {
-            let escaping = self.tokens[index].is_ident_text("return")
-                && self
-                    .tokens
-                    .get(index + 1)
-                    .and_then(ident_name)
-                    .is_some_and(|name| name == resource_name)
-                || self.tokens[index].is_ident_text("manage")
-                    && self
-                        .tokens
-                        .get(index + 1)
-                        .and_then(ident_name)
-                        .is_some_and(|name| name == resource_name);
-            if escaping {
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        "RS0702",
-                        format!("resource `{resource_name}` cannot escape its `with` block."),
-                        self.tokens[index].span.clone(),
-                        "resource escapes",
-                    )
-                    .with_cause("A `with` resource must be dropped when the block exits."),
-                );
-            }
-        }
-        Some(close + 1)
-    }
-
-    fn check_fresh_returns(&mut self, function: &FunctionDecl) {
-        let managed = collect_managed_bindings(self.tokens, function.body_start, function.body_end);
-        let locals = collect_local_bindings(self.tokens, function.body_start, function.body_end);
-
-        let mut i = function.body_start;
-        while i < function.body_end {
-            if !self.tokens[i].is_ident_text("return") {
-                i += 1;
-                continue;
-            }
-            let value_index = i + 1;
-            if value_index >= function.body_end {
-                i += 1;
-                continue;
-            }
-            if let Some(name) = ident_name(&self.tokens[value_index]) {
-                if managed.contains(name) {
+    fn check_take_of_handle_field(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Effect {
+                effect: DataEffect::Take,
+                value,
+                span,
+            } => {
+                if let Expr::Field { name, .. } = value.as_ref()
+                    && self.is_handle_field(name)
+                {
                     self.diagnostics.push(
                         Diagnostic::error(
-                            "RS0601",
-                            format!(
-                                "fresh function `{}` returns managed value `{name}`.",
-                                function.name
-                            ),
-                            self.tokens[value_index].span.clone(),
-                            "aliased value returned",
+                            "RS0901",
+                            format!("cannot `take` handle field `{name}`."),
+                            span.clone(),
+                            "take of handle field",
                         )
-                        .with_cause(
-                            "A `fresh` return must be newly created or a clean local value.",
-                        )
-                        .with_fix(
-                            "return_fresh_value",
-                            "Return a struct constructor, fresh call, or clean local binding.",
-                            "manual",
-                        ),
+                        .with_cause("Handle fields are managed references and cannot be consumed as local inline values."),
                     );
-                } else if !locals.contains(name)
+                }
+                self.check_take_of_handle_field(value);
+            }
+            Expr::Effect { value, .. } => self.check_take_of_handle_field(value),
+            Expr::Manage { value, .. } => self.check_take_of_handle_field(value),
+            Expr::Call { args, .. } => {
+                for arg in args {
+                    self.check_take_of_handle_field(&arg.value);
+                }
+            }
+            Expr::Field { base, .. } => self.check_take_of_handle_field(base),
+            Expr::Closure { body, .. } => {
+                for statement in &body.statements {
+                    self.check_take_of_handle_in_stmt(statement);
+                }
+            }
+            Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        }
+    }
+
+    fn check_take_of_handle_in_stmt(&mut self, statement: &Stmt) {
+        match statement {
+            Stmt::Let(stmt) => {
+                if let Some(value) = &stmt.value {
+                    self.check_take_of_handle_field(value);
+                }
+            }
+            Stmt::Return(stmt) => {
+                if let Some(value) = &stmt.value {
+                    self.check_take_of_handle_field(value);
+                }
+            }
+            Stmt::With(stmt) => {
+                self.check_take_of_handle_field(&stmt.resource);
+                for statement in &stmt.body.statements {
+                    self.check_take_of_handle_in_stmt(statement);
+                }
+            }
+            Stmt::Expr(expr) => self.check_take_of_handle_field(expr),
+            Stmt::Unknown(_) => {}
+        }
+    }
+
+    fn check_resource_escape_ast(&mut self, binding: &str, body: &SyntaxBlock) {
+        for statement in &body.statements {
+            match statement {
+                Stmt::Return(stmt) => {
+                    if let Some(Expr::Ident(name, span)) = &stmt.value
+                        && name == binding
+                    {
+                        self.resource_escape_diagnostic(binding, span.clone());
+                    }
+                    if let Some(value) = &stmt.value {
+                        self.check_resource_manage_escape(binding, value);
+                    }
+                }
+                Stmt::Let(stmt) => {
+                    if let Some(value) = &stmt.value {
+                        self.check_resource_manage_escape(binding, value);
+                    }
+                }
+                Stmt::Expr(expr) => self.check_resource_manage_escape(binding, expr),
+                Stmt::With(stmt) => self.check_resource_escape_ast(binding, &stmt.body),
+                Stmt::Unknown(_) => {}
+            }
+        }
+    }
+
+    fn check_resource_manage_escape(&mut self, binding: &str, expr: &Expr) {
+        match expr {
+            Expr::Manage { value, span } => {
+                if let Expr::Ident(name, _) = value.as_ref()
+                    && name == binding
+                {
+                    self.resource_escape_diagnostic(binding, span.clone());
+                }
+                self.check_resource_manage_escape(binding, value);
+            }
+            Expr::Effect { value, .. } => self.check_resource_manage_escape(binding, value),
+            Expr::Call { args, .. } => {
+                for arg in args {
+                    self.check_resource_manage_escape(binding, &arg.value);
+                }
+            }
+            Expr::Field { base, .. } => self.check_resource_manage_escape(binding, base),
+            Expr::Closure { body, .. } => self.check_resource_escape_ast(binding, body),
+            Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        }
+    }
+
+    fn resource_escape_diagnostic(&mut self, binding: &str, span: crate::diagnostic::Span) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                "RS0702",
+                format!("resource `{binding}` cannot escape its `with` block."),
+                span,
+                "resource escapes",
+            )
+            .with_cause("A `with` resource must be dropped when the block exits."),
+        );
+    }
+
+    fn check_fresh_return(
+        &mut self,
+        function: &SyntaxFunctionDecl,
+        value: &Expr,
+        state: &BodyState,
+    ) {
+        match value {
+            Expr::Ident(name, span) if state.managed.contains(name) => {
+                self.fresh_return_diagnostic(function, name, span.clone());
+            }
+            Expr::Ident(name, span) if state.locals.contains(name) => {
+                if !state.clean_locals.contains(name) {
+                    self.fresh_return_diagnostic(function, name, span.clone());
+                }
+            }
+            Expr::Ident(name, span)
+                if !self
+                    .program
+                    .types
+                    .get(name)
+                    .is_some_and(|decl| decl.kind == TypeKind::Struct)
                     && !self
+                        .hir
+                        .resolve_function(None, name)
+                        .is_some_and(|signature| signature.returns_fresh) =>
+            {
+                self.diagnostics.push(
+                    Diagnostic::warning(
+                        "RS0602",
+                        format!("freshness of return value in `{}` could not be proven.", function.name),
+                        span.clone(),
+                        "freshness unknown",
+                    )
+                    .with_cause("This MVP checker only trusts clean locals, struct constructors, and known fresh functions."),
+                );
+            }
+            Expr::Call { callee, span, .. } => {
+                let constructor_is_struct = match callee {
+                    Callee::Name(name) => self
                         .program
                         .types
                         .get(name)
-                        .is_some_and(|decl| decl.kind == TypeKind::Struct)
-                    && !self
-                        .program
-                        .functions
-                        .get(name)
-                        .is_some_and(|decl| decl.returns_fresh)
-                {
+                        .is_some_and(|decl| decl.kind == TypeKind::Struct),
+                    Callee::Qualified { .. } => false,
+                };
+                let call_returns_fresh = self
+                    .resolve_callee(callee)
+                    .is_some_and(|signature| signature.returns_fresh);
+                if !constructor_is_struct && !call_returns_fresh {
                     self.diagnostics.push(
                         Diagnostic::warning(
                             "RS0602",
                             format!("freshness of return value in `{}` could not be proven.", function.name),
-                            self.tokens[value_index].span.clone(),
+                            span.clone(),
                             "freshness unknown",
                         )
                         .with_cause("This MVP checker only trusts clean locals, struct constructors, and known fresh functions."),
                     );
                 }
             }
-            i += 1;
+            Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
+                self.check_fresh_return(function, value, state);
+            }
+            Expr::Field { span, .. } | Expr::Closure { span, .. } | Expr::Unknown(span) => {
+                self.diagnostics.push(
+                    Diagnostic::warning(
+                        "RS0602",
+                        format!("freshness of return value in `{}` could not be proven.", function.name),
+                        span.clone(),
+                        "freshness unknown",
+                    )
+                    .with_cause("This MVP checker only trusts clean locals, struct constructors, and known fresh functions."),
+                );
+            }
+            Expr::Ident(_, _) => {}
+            Expr::Number(_, _) | Expr::String(_, _) => {}
         }
+    }
+
+    fn fresh_return_diagnostic(
+        &mut self,
+        function: &SyntaxFunctionDecl,
+        name: &str,
+        span: crate::diagnostic::Span,
+    ) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                "RS0601",
+                format!(
+                    "fresh function `{}` returns managed value `{name}`.",
+                    function.name
+                ),
+                span,
+                "aliased value returned",
+            )
+            .with_cause("A `fresh` return must be newly created or a clean local value.")
+            .with_fix(
+                "return_fresh_value",
+                "Return a struct constructor, fresh call, or clean local binding.",
+                "manual",
+            ),
+        );
+    }
+
+    fn is_handle_field(&self, field: &str) -> bool {
+        self.program.types.values().any(|decl| {
+            decl.fields
+                .iter()
+                .any(|decl_field| decl_field.name == field && decl_field.is_handle)
+        })
     }
 
     fn check_operator_overload_attempts(&mut self) {
@@ -697,7 +899,16 @@ impl Analyzer<'_> {
             .resolve_function(call.namespace.as_deref(), &call.name)
     }
 
-    fn enclosing_function(&self, token_index: usize) -> Option<&FunctionDecl> {
+    fn resolve_callee(&self, callee: &Callee) -> Option<&FunctionSig> {
+        match callee {
+            Callee::Name(name) => self.hir.resolve_function(None, name),
+            Callee::Qualified { namespace, name } => {
+                self.hir.resolve_function(Some(namespace), name)
+            }
+        }
+    }
+
+    fn enclosing_function(&self, token_index: usize) -> Option<&IndexedFunctionDecl> {
         self.program
             .functions
             .values()
@@ -717,6 +928,60 @@ struct CallSite {
 struct ArgRange {
     start: usize,
     end: usize,
+}
+
+#[derive(Debug, Default)]
+struct BodyState {
+    locals: HashSet<String>,
+    clean_locals: HashSet<String>,
+    managed: HashSet<String>,
+    moved: HashMap<String, crate::diagnostic::Span>,
+}
+
+fn collect_stmt_idents(statement: &Stmt, uses: &mut Vec<(String, crate::diagnostic::Span)>) {
+    match statement {
+        Stmt::Let(stmt) => {
+            if let Some(value) = &stmt.value {
+                collect_expr_idents(value, uses);
+            }
+        }
+        Stmt::Return(stmt) => {
+            if let Some(value) = &stmt.value {
+                collect_expr_idents(value, uses);
+            }
+        }
+        Stmt::With(stmt) => {
+            collect_expr_idents(&stmt.resource, uses);
+        }
+        Stmt::Expr(expr) => collect_expr_idents(expr, uses),
+        Stmt::Unknown(_) => {}
+    }
+}
+
+fn collect_block_idents(block: &SyntaxBlock, uses: &mut Vec<(String, crate::diagnostic::Span)>) {
+    for statement in &block.statements {
+        collect_stmt_idents(statement, uses);
+        if let Stmt::With(stmt) = statement {
+            collect_block_idents(&stmt.body, uses);
+        }
+    }
+}
+
+fn collect_expr_idents(expr: &Expr, uses: &mut Vec<(String, crate::diagnostic::Span)>) {
+    match expr {
+        Expr::Ident(name, span) => uses.push((name.clone(), span.clone())),
+        Expr::Field { base, .. } => collect_expr_idents(base, uses),
+        Expr::Call { args, .. } => {
+            for arg in args {
+                collect_expr_idents(&arg.value, uses);
+            }
+        }
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
+            collect_expr_idents(value, uses);
+        }
+        Expr::Closure { body, .. } => collect_block_idents(body, uses),
+        Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+    }
 }
 
 fn split_top_level_args(tokens: &[Token], start: usize, end: usize) -> Vec<ArgRange> {
@@ -775,16 +1040,8 @@ fn is_enum_variant_call(name: &str) -> bool {
     matches!(name, "Ok" | "Err" | "Some" | "None" | "Result" | "Option")
 }
 
-fn previous_token_is(tokens: &[Token], index: usize, text: &str) -> bool {
-    index > 0 && tokens[index - 1].is_ident_text(text)
-}
-
 fn collect_local_bindings(tokens: &[Token], start: usize, end: usize) -> HashSet<String> {
     collect_bindings(tokens, start, end, "local")
-}
-
-fn collect_managed_bindings(tokens: &[Token], start: usize, end: usize) -> HashSet<String> {
-    collect_bindings(tokens, start, end, "let")
 }
 
 fn collect_bindings(tokens: &[Token], start: usize, end: usize, keyword: &str) -> HashSet<String> {

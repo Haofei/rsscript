@@ -12,6 +12,7 @@ It currently implements:
 - `rss fmt <file.rss>` as a parse/check gate that prints the source unchanged when valid
 - Lexer, lightweight parser, syntax AST, HIR signature table, and semantic checks for the review-critical v0.4.1 rules
 - Builtin signatures for the current fixture stdlib surface, including `Image`, `File`, `Map`, `ResourcePool`, `Json`, `Csv`, and cache/config helpers
+- AST-driven body checks for local moves, `fresh` returns, resource escape, handle-field `take`, and managed closure captures
 - Fixture-based pass/fail scenario tests under `tests/fixtures`
 
 Implemented diagnostic classes include:
@@ -42,7 +43,7 @@ Non-goals for this stage:
 
 Near-term roadmap:
 
-1. Migrate remaining token-scanning body analysis onto the syntax AST.
+1. Migrate remaining token-scanning call and mode checks onto the syntax AST.
 2. Expand HIR from function signatures into resolved statements, expressions, fields, and type kinds.
 3. Split semantic checks into focused modules for calls, local state, freshness, resources, handles, and forbidden features.
 4. Add CleanLocal dataflow for `fresh`, `manage`, `take`, retaining APIs, and closure capture.

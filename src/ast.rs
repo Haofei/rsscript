@@ -41,7 +41,6 @@ pub struct Param {
 pub struct FunctionDecl {
     pub name: String,
     pub params: Vec<Param>,
-    pub returns_fresh: bool,
     pub return_type: Option<String>,
     pub effects: Vec<String>,
     pub body_start: usize,
@@ -132,15 +131,21 @@ impl Parser<'_> {
                 i = skip_block(self.tokens, i).unwrap_or(body_end);
                 continue;
             }
-            let is_handle = self.tokens[i].is_ident_text("handle");
-            let field_name_index = if is_handle { i + 1 } else { i };
+            let field_name_index = i;
             if let Some(field_name) = ident_name(&self.tokens[field_name_index])
                 && self
                     .tokens
                     .get(field_name_index + 1)
                     .is_some_and(|token| token.symbol(":"))
             {
-                let type_start = field_name_index + 2;
+                let mut type_start = field_name_index + 2;
+                let is_handle = self
+                    .tokens
+                    .get(type_start)
+                    .is_some_and(|token| token.is_ident_text("handle"));
+                if is_handle {
+                    type_start += 1;
+                }
                 if let Some(type_name) = first_type_name(self.tokens, type_start, body_end) {
                     fields.push(FieldDecl {
                         name: field_name.to_string(),
@@ -179,7 +184,6 @@ impl Parser<'_> {
             self.index = close + 1;
         }
 
-        let mut returns_fresh = false;
         let mut return_type = None;
         if self.at_symbol("->") {
             self.index += 1;
@@ -196,7 +200,6 @@ impl Parser<'_> {
                 }
                 self.index += 1;
             }
-            returns_fresh = contains_ident(self.tokens, return_start, self.index, "fresh");
             return_type = last_type_name(self.tokens, return_start, self.index);
         }
 
@@ -222,7 +225,6 @@ impl Parser<'_> {
             FunctionDecl {
                 name,
                 params,
-                returns_fresh,
                 return_type,
                 effects,
                 body_start,
@@ -332,10 +334,6 @@ fn last_type_name(tokens: &[Token], start: usize, end: usize) -> Option<String> 
             TokenKind::Keyword(value) if *value != "fresh" => Some((*value).to_string()),
             _ => None,
         })
-}
-
-fn contains_ident(tokens: &[Token], start: usize, end: usize, text: &str) -> bool {
-    (start..end).any(|index| tokens[index].is_ident_text(text))
 }
 
 fn parse_params(tokens: &[Token], start: usize, end: usize) -> Vec<Param> {
