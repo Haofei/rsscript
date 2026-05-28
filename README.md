@@ -374,7 +374,7 @@ The first milestone is a strong review-first checker that can validate the langu
 Current CLI surface:
 
 ```sh
-rss check [--json] [--interface <file.rssi> ...] <file.rss>
+rss check [--json] [--core] [--interface <file.rssi> ...] <file.rss>
 rss check --explain <code>
 rss fmt <file.rss>
 rss review [--json] --diff <old.rss> <new.rss>

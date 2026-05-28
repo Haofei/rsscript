@@ -4,12 +4,12 @@ use std::path::{Path, PathBuf};
 use rsscript::syntax::ast::Item;
 use rsscript::syntax::parse_source;
 use rsscript::{
-    ReviewMapClassification, ReviewRisk, analyze_source, analyze_source_with_interfaces,
-    explain_diagnostic_code, format_diagnostic_explanation, format_diagnostics_json,
-    format_review_human, format_review_json, format_review_map_human, format_review_map_json,
-    lower_source_to_rust, lower_source_to_rust_package, lower_source_to_rust_with_map,
-    remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines, review_map_sources,
-    review_sources,
+    ReviewMapClassification, ReviewRisk, analyze_source, analyze_source_with_core,
+    analyze_source_with_interfaces, core_interfaces, explain_diagnostic_code,
+    format_diagnostic_explanation, format_diagnostics_json, format_review_human,
+    format_review_json, format_review_map_human, format_review_map_json, lower_source_to_rust,
+    lower_source_to_rust_package, lower_source_to_rust_with_map, remap_rustc_diagnostic_json,
+    remap_rustc_diagnostic_json_lines, review_map_sources, review_sources,
 };
 use serde_json::Value;
 
@@ -49,6 +49,42 @@ fn core_interface_files_have_no_diagnostics() {
         let diagnostics = analyze_source(path.to_str().unwrap(), &source);
         assert_eq!(diagnostics, Vec::new(), "{}", path.display());
     }
+}
+
+#[test]
+fn bundled_core_interfaces_are_available_to_checker() {
+    assert!(
+        core_interfaces()
+            .iter()
+            .any(|(path, _)| *path == "core/test/assert.rssi")
+    );
+
+    let source = r#"
+fn check_label(actual: read String, expected: read String) -> Unit {
+    Assert.equal(left: read actual, right: read expected)
+}
+"#;
+
+    assert_eq!(
+        analyze_source_with_core("assert-use.rss", source),
+        Vec::new()
+    );
+}
+
+#[test]
+fn bundled_core_interfaces_report_call_contract_errors() {
+    let source = r#"
+fn check_label(actual: read String, expected: read String) -> Unit {
+    Assert.equal(value: read actual, right: read expected)
+}
+"#;
+    let codes = analyze_source_with_core("assert-use.rss", source)
+        .into_iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+
+    assert!(codes.contains(&"RS0203".to_string()));
+    assert!(codes.contains(&"RS0204".to_string()));
 }
 
 #[test]

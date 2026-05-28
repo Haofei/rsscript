@@ -9,11 +9,43 @@ use crate::syntax::ast::{
 };
 use crate::syntax::parse_source;
 
+pub const CORE_INTERFACES: &[(&str, &str)] = &[
+    (
+        "core/collections/map.rssi",
+        include_str!("../core/collections/map.rssi"),
+    ),
+    ("core/fs/file.rssi", include_str!("../core/fs/file.rssi")),
+    (
+        "core/image/image.rssi",
+        include_str!("../core/image/image.rssi"),
+    ),
+    (
+        "core/json/json.rssi",
+        include_str!("../core/json/json.rssi"),
+    ),
+    (
+        "core/resource/resource_pool.rssi",
+        include_str!("../core/resource/resource_pool.rssi"),
+    ),
+    (
+        "core/test/assert.rssi",
+        include_str!("../core/test/assert.rssi"),
+    ),
+];
+
 pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
     let tokens = lex(file, source);
     let syntax_program = parse_source(file, source);
     let hir = Hir::from_syntax(&syntax_program);
     analyze_program(tokens, syntax_program, hir)
+}
+
+pub fn core_interfaces() -> &'static [(&'static str, &'static str)] {
+    CORE_INTERFACES
+}
+
+pub fn analyze_source_with_core(file: &str, source: &str) -> Vec<Diagnostic> {
+    analyze_source_with_interfaces(file, source, CORE_INTERFACES)
 }
 
 pub fn analyze_source_with_interfaces(

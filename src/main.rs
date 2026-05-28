@@ -5,11 +5,12 @@ use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rsscript::{
-    Diagnostic, analyze_source, analyze_source_with_interfaces, check_generated_rust_package,
-    explain_diagnostic_code, format_diagnostic_explanation, format_diagnostics_human,
-    format_diagnostics_json, format_review_human, format_review_json, format_review_map_human,
-    format_review_map_json, lower_source_to_rust, lower_source_to_rust_package,
-    parse_source_map_json, remap_rustc_diagnostic_json_lines, review_map_sources, review_sources,
+    Diagnostic, analyze_source, analyze_source_with_core, analyze_source_with_interfaces,
+    check_generated_rust_package, core_interfaces, explain_diagnostic_code,
+    format_diagnostic_explanation, format_diagnostics_human, format_diagnostics_json,
+    format_review_human, format_review_json, format_review_map_human, format_review_map_json,
+    lower_source_to_rust, lower_source_to_rust_package, parse_source_map_json,
+    remap_rustc_diagnostic_json_lines, review_map_sources, review_sources,
     write_generated_rust_package,
 };
 
@@ -69,7 +70,13 @@ fn run_check(args: &[String]) -> ExitCode {
         .iter()
         .map(|interface| (interface.path.as_str(), interface.contents.as_str()))
         .collect::<Vec<_>>();
-    let diagnostics = if interface_refs.is_empty() {
+    let diagnostics = if options.use_core && interface_refs.is_empty() {
+        analyze_source_with_core(path, &source)
+    } else if options.use_core {
+        let mut combined = core_interfaces().to_vec();
+        combined.extend(interface_refs);
+        analyze_source_with_interfaces(path, &source, &combined)
+    } else if interface_refs.is_empty() {
         analyze_source(path, &source)
     } else {
         analyze_source_with_interfaces(path, &source, &interface_refs)
@@ -393,12 +400,14 @@ struct LowerOptions<'a> {
 
 struct CheckOptions<'a> {
     json: bool,
+    use_core: bool,
     path: Option<&'a str>,
     interfaces: Vec<&'a str>,
 }
 
 fn parse_check_args(args: &[String]) -> CheckOptions<'_> {
     let mut json = false;
+    let mut use_core = false;
     let mut path = None;
     let mut interfaces = Vec::new();
     let mut index = 0;
@@ -406,6 +415,8 @@ fn parse_check_args(args: &[String]) -> CheckOptions<'_> {
     while let Some(arg) = args.get(index) {
         if arg == "--json" {
             json = true;
+        } else if arg == "--core" {
+            use_core = true;
         } else if arg == "--interface" {
             index += 1;
             if let Some(interface) = args.get(index) {
@@ -419,6 +430,7 @@ fn parse_check_args(args: &[String]) -> CheckOptions<'_> {
 
     CheckOptions {
         json,
+        use_core,
         path,
         interfaces,
     }
@@ -667,7 +679,7 @@ fn read_review_map_file(path: &Path) -> Result<ReviewMapSource, String> {
 
 fn print_usage() {
     eprintln!("usage:");
-    eprintln!("  rsscript check [--json] [--interface <file.rssi> ...] <file.rss>");
+    eprintln!("  rsscript check [--json] [--core] [--interface <file.rssi> ...] <file.rss>");
     eprintln!("  rsscript check --explain <code>");
     eprintln!("  rsscript fmt <file.rss>");
     eprintln!("  rsscript lower --rust <file.rss>");
