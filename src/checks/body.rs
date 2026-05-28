@@ -285,6 +285,7 @@ fn check_expr_semantics_with_context(
 ) {
     match expr {
         HirExpr::Call { callee, args, .. } => {
+            check_constructor_field_initializers(analyzer, callee, args, expr, state);
             check_call_place_conflicts(analyzer, args, state);
             let weak_upgrade = is_weak_upgrade_callee(callee);
             for arg in args {
@@ -608,6 +609,122 @@ fn check_stmt_expr_semantics(analyzer: &mut Analyzer<'_>, statement: &HirStmt, s
         | HirStmt::Continue(_)
         | HirStmt::Unknown(_) => {}
     }
+}
+
+fn check_constructor_field_initializers(
+    analyzer: &mut Analyzer<'_>,
+    callee: &Callee,
+    args: &[HirCallArg],
+    expr: &HirExpr,
+    state: &BodyState,
+) {
+    let HirExpr::Call { resolution, .. } = expr else {
+        return;
+    };
+    let CallResolution::Resolved {
+        signature,
+        kind:
+            ResolvedCalleeKind::Constructor {
+                type_kind: HirTypeKind::Struct,
+            },
+    } = resolution
+    else {
+        return;
+    };
+    let Some(type_info) = analyzer.hir.type_info(&signature.name) else {
+        return;
+    };
+    let fields = type_info.fields.clone();
+    let constructor_name = body_callee_display(callee);
+
+    for arg in args {
+        let Some(name) = arg.name.as_deref() else {
+            continue;
+        };
+        let Some(field) = fields.get(name) else {
+            continue;
+        };
+        let actual_effect = expr_data_effect(&arg.value);
+        if field.is_handle && actual_effect != Some("read") {
+            constructor_field_effect_diagnostic(
+                analyzer,
+                &constructor_name,
+                name,
+                "read",
+                &arg.value,
+                "Handle fields store managed handles and must be initialized from an explicit `read` value.",
+            );
+        } else if !field.is_handle
+            && constructor_arg_uses_local_inline_place(&arg.value, state)
+            && actual_effect != Some("take")
+        {
+            constructor_field_effect_diagnostic(
+                analyzer,
+                &constructor_name,
+                name,
+                "take",
+                &arg.value,
+                "Inline fields take ownership of non-Copy local values stored inside the constructed struct.",
+            );
+        }
+    }
+}
+
+fn constructor_arg_uses_local_inline_place(expr: &HirExpr, state: &BodyState) -> bool {
+    let Some(path) = constructor_arg_place_path(expr) else {
+        return false;
+    };
+    state.is_local(&path.base) && !path.crosses_handle
+}
+
+fn constructor_arg_place_path(expr: &HirExpr) -> Option<PlacePath> {
+    match expr {
+        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => {
+            constructor_arg_place_path(value)
+        }
+        HirExpr::Ident { .. } | HirExpr::Field { .. } | HirExpr::Index { .. } => place_path(expr),
+        HirExpr::Manage { .. }
+        | HirExpr::Spawn { .. }
+        | HirExpr::Call { .. }
+        | HirExpr::Binary { .. }
+        | HirExpr::Closure { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => None,
+    }
+}
+
+fn expr_data_effect(expr: &HirExpr) -> Option<&'static str> {
+    match expr {
+        HirExpr::Effect { effect, .. } => Some(effect.as_str()),
+        _ => None,
+    }
+}
+
+fn constructor_field_effect_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    constructor_name: &str,
+    field_name: &str,
+    expected: &str,
+    value: &HirExpr,
+    cause: &str,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::MISSING_DATA_EFFECT,
+            format!(
+                "field `{field_name}` for `{constructor_name}` must be initialized with `{expected}`."
+            ),
+            hir_expr_span(value).clone(),
+            "missing constructor field effect",
+        )
+        .with_cause(cause)
+        .with_fix(
+            "add_constructor_field_effect",
+            format!("Write `{field_name}: {expected} ...` in the constructor."),
+            "machine-applicable",
+        ),
+    );
 }
 
 fn check_spawn_captures(analyzer: &mut Analyzer<'_>, value: &HirExpr, state: &BodyState) {

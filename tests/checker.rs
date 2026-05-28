@@ -478,6 +478,43 @@ fn bad_take(path: read Path) -> Unit {
 }
 
 #[test]
+fn checker_requires_constructor_field_effects_for_handle_and_local_inline_fields() {
+    let source = r#"
+features: local
+
+struct Buffer
+struct Rules
+
+struct Config {
+    rules: handle Rules
+    workspace: Buffer
+}
+
+fn Buffer.new() -> fresh Buffer
+fn Rules.new() -> fresh Rules
+
+fn bad_config() -> fresh Config {
+    let rules = Rules.new()
+    local workspace = Buffer.new()
+
+    return Config(
+        rules: rules,
+        workspace: workspace,
+    )
+}
+"#;
+    let diagnostics = analyze_source("constructor-field-effects.rss", source);
+    let constructor_effect_count = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == "RS0202" && diagnostic.label == "missing constructor field effect"
+        })
+        .count();
+
+    assert_eq!(constructor_effect_count, 2, "{diagnostics:?}");
+}
+
+#[test]
 fn resource_pool_read_parameter_must_be_local_capability() {
     let source = r#"
 features: local
