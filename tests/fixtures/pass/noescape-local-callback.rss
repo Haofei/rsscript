@@ -1,0 +1,20 @@
+features: local
+
+fn apply(callback: noescape Fn()) -> Unit {
+    callback()
+    return Unit
+}
+
+fn use_local(path: read Path) -> Result<fresh Image, ImageError> {
+    local image = Image.load(path: read path)?
+    apply(callback: || {
+        Image.inspect(image: read image)
+    })
+    return Ok(image)
+}
+
+fn main() -> Result<Unit, ImageError> {
+    let path = Path.from_string(value: read "rsscript-image-input.bin")
+    use_local(path: read path)?
+    return Ok(Unit)
+}

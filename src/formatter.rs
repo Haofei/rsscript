@@ -382,18 +382,27 @@ fn format_effect(effect: &EffectDecl) -> String {
 }
 
 fn type_ref_text(ty: &TypeRef) -> String {
-    if ty.args.is_empty() {
-        return ty.name.clone();
+    let text = if ty.args.is_empty() {
+        ty.name.clone()
+    } else {
+        format!(
+            "{}<{}>",
+            ty.name,
+            ty.args
+                .iter()
+                .map(type_ref_text)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    if ty.is_noescape {
+        if ty.name == "Fn" && ty.args.is_empty() {
+            return "noescape Fn()".to_string();
+        }
+        format!("noescape {text}")
+    } else {
+        text
     }
-    format!(
-        "{}<{}>",
-        ty.name,
-        ty.args
-            .iter()
-            .map(type_ref_text)
-            .collect::<Vec<_>>()
-            .join(", ")
-    )
 }
 
 fn feature_name(feature: FileFeature) -> &'static str {
@@ -514,6 +523,22 @@ native   fn Host.emit(message:read String)->Unit
 
 native fn Host.emit(message: read String) -> Unit
     effects(native)
+"#
+        );
+    }
+
+    #[test]
+    fn preserves_noescape_function_parameter_types() {
+        let source = r#"fn apply(callback:noescape Fn())->Unit {
+return Unit
+}
+"#;
+
+        assert_eq!(
+            format_source("noescape.rss", source),
+            r#"fn apply(callback: noescape Fn()) -> Unit {
+    return Unit
+}
 "#
         );
     }

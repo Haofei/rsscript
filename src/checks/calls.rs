@@ -12,14 +12,22 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
             let Some(body) = analyzer.hir.function_body(&function.name).cloned() else {
                 continue;
             };
+            let noescape_bindings = body
+                .bindings
+                .iter()
+                .filter_map(|binding| {
+                    (binding.type_name.as_deref() == Some("noescape Fn()"))
+                        .then_some(binding.name.clone())
+                })
+                .collect::<HashSet<_>>();
             if let Some(block) = &body.block {
-                check_block(analyzer, block);
+                check_block(analyzer, block, &noescape_bindings);
             }
         }
     }
 }
 
-fn check_block(analyzer: &mut Analyzer<'_>, block: &HirBlock) {
+fn check_block(analyzer: &mut Analyzer<'_>, block: &HirBlock, noescape_bindings: &HashSet<String>) {
     for statement in &block.statements {
         match statement {
             HirStmt::Let {
@@ -28,10 +36,10 @@ fn check_block(analyzer: &mut Analyzer<'_>, block: &HirBlock) {
             | HirStmt::Return {
                 value: Some(value), ..
             }
-            | HirStmt::Expr(value) => check_expr(analyzer, value),
+            | HirStmt::Expr(value) => check_expr(analyzer, value, noescape_bindings),
             HirStmt::With { resource, body, .. } => {
-                check_expr(analyzer, resource);
-                check_block(analyzer, body);
+                check_expr(analyzer, resource, noescape_bindings);
+                check_block(analyzer, body, noescape_bindings);
             }
             HirStmt::If {
                 condition,
@@ -39,19 +47,19 @@ fn check_block(analyzer: &mut Analyzer<'_>, block: &HirBlock) {
                 else_body,
                 ..
             } => {
-                check_expr(analyzer, condition);
-                check_block(analyzer, then_body);
+                check_expr(analyzer, condition, noescape_bindings);
+                check_block(analyzer, then_body, noescape_bindings);
                 if let Some(else_body) = else_body {
-                    check_block(analyzer, else_body);
+                    check_block(analyzer, else_body, noescape_bindings);
                 }
             }
             HirStmt::Loop {
                 condition, body, ..
             } => {
                 if let Some(condition) = condition {
-                    check_expr(analyzer, condition);
+                    check_expr(analyzer, condition, noescape_bindings);
                 }
-                check_block(analyzer, body);
+                check_block(analyzer, body, noescape_bindings);
             }
             HirStmt::Let { value: None, .. }
             | HirStmt::Return { value: None, .. }
@@ -62,7 +70,7 @@ fn check_block(analyzer: &mut Analyzer<'_>, block: &HirBlock) {
     }
 }
 
-fn check_expr(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
+fn check_expr(analyzer: &mut Analyzer<'_>, expr: &HirExpr, noescape_bindings: &HashSet<String>) {
     match expr {
         HirExpr::Call {
             callee,
@@ -71,26 +79,26 @@ fn check_expr(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
             resolution,
             ..
         } => {
-            check_call_args(analyzer, callee, args, span, resolution);
+            check_call_args(analyzer, callee, args, span, resolution, noescape_bindings);
             for arg in args {
-                check_expr(analyzer, &arg.value);
+                check_expr(analyzer, &arg.value, noescape_bindings);
             }
         }
         HirExpr::Effect { value, .. }
         | HirExpr::Manage { value, .. }
         | HirExpr::Try { value, .. } => {
-            check_expr(analyzer, value);
+            check_expr(analyzer, value, noescape_bindings);
         }
         HirExpr::Binary { left, right, .. } => {
-            check_expr(analyzer, left);
-            check_expr(analyzer, right);
+            check_expr(analyzer, left, noescape_bindings);
+            check_expr(analyzer, right, noescape_bindings);
         }
-        HirExpr::Field { base, .. } => check_expr(analyzer, base),
+        HirExpr::Field { base, .. } => check_expr(analyzer, base, noescape_bindings),
         HirExpr::Index { base, index, .. } => {
-            check_expr(analyzer, base);
-            check_expr(analyzer, index);
+            check_expr(analyzer, base, noescape_bindings);
+            check_expr(analyzer, index, noescape_bindings);
         }
-        HirExpr::Closure { body, .. } => check_block(analyzer, body),
+        HirExpr::Closure { body, .. } => check_block(analyzer, body, noescape_bindings),
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -104,8 +112,12 @@ fn check_call_args(
     args: &[HirCallArg],
     call_span: &Span,
     resolution: &CallResolution,
+    noescape_bindings: &HashSet<String>,
 ) {
     let call_name = callee_name(callee);
+    if is_noescape_callback_call(callee, args, resolution, noescape_bindings) {
+        return;
+    }
     if matches!(resolution, CallResolution::EnumVariant) {
         return;
     }
@@ -261,6 +273,17 @@ fn check_call_args(
             );
         }
     }
+}
+
+fn is_noescape_callback_call(
+    callee: &Callee,
+    args: &[HirCallArg],
+    resolution: &CallResolution,
+    noescape_bindings: &HashSet<String>,
+) -> bool {
+    matches!(resolution, CallResolution::Unknown)
+        && args.is_empty()
+        && matches!(callee, Callee::Name(name) if noescape_bindings.contains(name))
 }
 
 fn join_param_names(params: &[crate::hir::ParamSig]) -> String {

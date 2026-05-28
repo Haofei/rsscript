@@ -427,6 +427,7 @@ fn parse_params(tokens: &[Token], start: usize, end: usize) -> Vec<Param> {
                     ty: TypeRef {
                         name: String::new(),
                         args: Vec::new(),
+                        is_noescape: false,
                         span: tokens[start].span.clone(),
                     },
                     span: tokens[start].span.clone(),
@@ -440,6 +441,7 @@ fn parse_params(tokens: &[Token], start: usize, end: usize) -> Vec<Param> {
             let ty = parse_type_ref(tokens, ty_start, end).unwrap_or_else(|| TypeRef {
                 name: String::new(),
                 args: Vec::new(),
+                is_noescape: false,
                 span: tokens[start].span.clone(),
             });
             Some(Param {
@@ -1104,9 +1106,16 @@ fn parse_call_args(tokens: &[Token], start: usize, end: usize) -> Vec<CallArg> {
 }
 
 fn parse_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<TypeRef> {
+    let is_noescape = tokens
+        .get(start)
+        .and_then(ident_name)
+        .is_some_and(|name| name == "noescape");
     let name_index = (start..end).find(|index| {
         ident_name(&tokens[*index]).is_some_and(|name| {
-            !matches!(name, "read" | "mut" | "take" | "fresh" | "handle" | "weak")
+            !matches!(
+                name,
+                "read" | "mut" | "take" | "fresh" | "handle" | "weak" | "noescape"
+            )
         })
     })?;
     let name = ident_name(&tokens[name_index])?.to_string();
@@ -1124,22 +1133,31 @@ fn parse_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<TypeRef>
     Some(TypeRef {
         name,
         args,
+        is_noescape,
         span: tokens[name_index].span.clone(),
     })
 }
 
 fn type_ref_name(ty: &TypeRef) -> String {
-    if ty.args.is_empty() {
-        return ty.name.clone();
+    let name = if ty.args.is_empty() {
+        ty.name.clone()
+    } else {
+        let args = ty
+            .args
+            .iter()
+            .map(type_ref_name)
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{}<{args}>", ty.name)
+    };
+    if ty.is_noescape {
+        if ty.name == "Fn" && ty.args.is_empty() {
+            return "noescape Fn()".to_string();
+        }
+        format!("noescape {name}")
+    } else {
+        name
     }
-
-    let args = ty
-        .args
-        .iter()
-        .map(type_ref_name)
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("{}<{args}>", ty.name)
 }
 
 fn parse_data_effect(token: Option<&Token>) -> Option<DataEffect> {

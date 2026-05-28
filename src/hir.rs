@@ -1477,17 +1477,25 @@ fn split_function_name(name: &str) -> (Option<String>, String) {
 }
 
 fn type_ref_name(ty: &TypeRef) -> String {
-    if ty.args.is_empty() {
-        return ty.name.clone();
+    let name = if ty.args.is_empty() {
+        ty.name.clone()
+    } else {
+        let args = ty
+            .args
+            .iter()
+            .map(type_ref_name)
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{}<{args}>", ty.name)
+    };
+    if ty.is_noescape {
+        if ty.name == "Fn" && ty.args.is_empty() {
+            return "noescape Fn()".to_string();
+        }
+        format!("noescape {name}")
+    } else {
+        name
     }
-
-    let args = ty
-        .args
-        .iter()
-        .map(type_ref_name)
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("{}<{args}>", ty.name)
 }
 
 fn type_root_name(type_name: &str) -> &str {

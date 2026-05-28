@@ -302,6 +302,8 @@ CI sets `RSSCRIPT_FULL_TESTS=1` so the same scripts run the full workspace test 
 
 The runtime hooks wired through so far: `Log.write`, `Assert.equal`, `OS.close`, `List.consume`, `Buffer.consume`, `Path.from_string`, plus the core `File`, `Json`, `Csv`, `Cache`, `Image`, `ImageCache`, HTTP handler, DB resource-pool, config reload, rules config reload, interpreter object links, and `Counter` APIs. `ImageCache` is the first retained managed-container hook; the interpreter hooks model `Environment` and `FunctionObject` as managed handles with the closure link stored weakly. Simple operations like `String.concat` keep `.rssi` signatures for checking but lower directly to Rust std expressions. Built-in literals, arithmetic and comparison operators, `Option<T>` constructors, and surface types (`Bytes`, `Buffer`, `Path`, `List<T>`, `Map<K,V>`, `Set<T>`) lower to the matching Rust forms. User-defined operator overloading stays forbidden.
 
+The supported closure surface includes `noescape Fn()` parameters for temporary callbacks that may use local values without becoming managed closures.
+
 ---
 
 ## Roadmap

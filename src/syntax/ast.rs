@@ -126,6 +126,7 @@ pub struct FieldDecl {
 pub struct TypeRef {
     pub name: String,
     pub args: Vec<TypeRef>,
+    pub is_noescape: bool,
     pub span: Span,
 }
 

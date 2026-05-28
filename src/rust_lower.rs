@@ -1023,6 +1023,7 @@ impl<'a> RustLowerer<'a> {
             } if self.type_kinds.contains_key(name) => Some(TypeRef {
                 name: name.clone(),
                 args: Vec::new(),
+                is_noescape: false,
                 span: span.clone(),
             }),
             Expr::Manage { value, .. } | Expr::Try { value, .. } => self.infer_expr_type(value),
@@ -1031,6 +1032,12 @@ impl<'a> RustLowerer<'a> {
     }
 
     fn lower_type_ref(&self, ty: &TypeRef, position: ManagedPosition) -> String {
+        if ty.is_noescape && ty.name == "Fn" {
+            return match position {
+                ManagedPosition::Param => "impl FnOnce()".to_string(),
+                _ => "Box<dyn FnOnce()>".to_string(),
+            };
+        }
         let lowered = match ty.name.as_str() {
             "Unit" => "()".to_string(),
             "Bool" => "bool".to_string(),

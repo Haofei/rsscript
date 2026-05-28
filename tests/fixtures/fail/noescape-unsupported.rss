@@ -1,6 +1,0 @@
-// expect: RS0015
-features: local
-
-fn apply(callback: noescape Fn()) -> Unit {
-    return Unit
-}

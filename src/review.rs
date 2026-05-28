@@ -1476,12 +1476,20 @@ fn boundary_contract(boundary: &BoundarySig) -> String {
 }
 
 fn type_name(ty: &TypeRef) -> String {
-    if ty.args.is_empty() {
-        return ty.name.clone();
+    let name = if ty.args.is_empty() {
+        ty.name.clone()
+    } else {
+        let args = ty.args.iter().map(type_name).collect::<Vec<_>>().join(", ");
+        format!("{}<{args}>", ty.name)
+    };
+    if ty.is_noescape {
+        if ty.name == "Fn" && ty.args.is_empty() {
+            return "noescape Fn()".to_string();
+        }
+        format!("noescape {name}")
+    } else {
+        name
     }
-
-    let args = ty.args.iter().map(type_name).collect::<Vec<_>>().join(", ");
-    format!("{}<{args}>", ty.name)
 }
 
 fn effect_name(effect: &EffectDecl) -> String {

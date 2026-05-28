@@ -2831,27 +2831,49 @@ fn main() -> Unit {
 }
 
 #[test]
-fn checker_reports_noescape_as_unsupported_until_lowering_exists() {
+fn checker_accepts_noescape_callback_that_temporarily_uses_local() {
     let source = r#"
 features: local
 
 fn apply(callback: noescape Fn()) -> Unit {
+    callback()
     return Unit
+}
+
+fn use_local(path: read Path) -> Result<fresh Image, ImageError> {
+    local image = Image.load(path: read path)?
+    apply(callback: || {
+        Image.inspect(image: read image)
+    })
+    return Ok(image)
+}
+
+fn main() -> Result<Unit, ImageError> {
+    let path = Path.from_string(value: read "rsscript-image-input.bin")
+    use_local(path: read path)?
+    return Ok(Unit)
 }
 "#;
     let diagnostics = analyze_source("noescape.rss", source);
+    assert_eq!(diagnostics, Vec::new());
 
-    assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "RS0015"
-                && diagnostic.label == "unsupported noescape closure")
-    );
-    assert!(
-        diagnostics
-            .iter()
-            .all(|diagnostic| diagnostic.code != "RS0008")
-    );
+    let program = parse_source("noescape.rss", source);
+    let function = program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(function) => Some(function),
+            _ => None,
+        })
+        .find(|function| function.name == "apply")
+        .expect("apply should parse");
+    assert!(function.params[0].ty.is_noescape);
+    assert_eq!(function.params[0].ty.name, "Fn");
+
+    let lowered = lower_source_to_rust("noescape.rss", source)
+        .expect("noescape callback source should lower");
+    assert!(lowered.contains("callback: impl FnOnce()"));
+    assert!(lowered.contains("callback();"));
 }
 
 #[test]
