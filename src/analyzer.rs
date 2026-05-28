@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::checks;
 use crate::diagnostic::{Diagnostic, code};
-use crate::hir::{DuplicateSymbolKind, Hir, HirTypeKind};
+use crate::hir::{CallResolution, DuplicateSymbolKind, Hir, HirTypeKind, ResolvedCalleeKind};
 use crate::interfaces::CORE_INTERFACES;
 use crate::lexer::{Token, lex};
 use crate::syntax::ast::{
@@ -73,6 +73,7 @@ impl Analyzer<'_> {
         self.check_duplicate_declarations();
         self.check_signature_explicitness();
         self.check_generic_constraints();
+        self.check_pure_bodies();
         self.check_noalloc_allocations();
         self.check_try_operator_result_returns();
         self.check_resource_fields();
@@ -747,6 +748,95 @@ impl Analyzer<'_> {
         }
     }
 
+    fn check_pure_bodies(&mut self) {
+        let items = self.syntax_program.items.clone();
+        for item in &items {
+            let Item::Function(function) = item else {
+                continue;
+            };
+            if !function_has_effect(function, "pure") {
+                continue;
+            }
+            self.check_pure_block(&function.name, &function.body);
+        }
+    }
+
+    fn check_pure_block(&mut self, function_name: &str, block: &Block) {
+        for statement in &block.statements {
+            self.check_pure_stmt(function_name, statement);
+        }
+    }
+
+    fn check_pure_stmt(&mut self, function_name: &str, statement: &Stmt) {
+        match statement {
+            Stmt::Let(stmt) => {
+                if let Some(value) = &stmt.value {
+                    self.check_pure_expr(function_name, value);
+                }
+            }
+            Stmt::Return(stmt) => {
+                if let Some(value) = &stmt.value {
+                    self.check_pure_expr(function_name, value);
+                }
+            }
+            Stmt::Expr(value) => self.check_pure_expr(function_name, value),
+            Stmt::With(stmt) => {
+                self.check_pure_expr(function_name, &stmt.resource);
+                self.check_pure_block(function_name, &stmt.body);
+            }
+            Stmt::If(stmt) => {
+                self.check_pure_expr(function_name, &stmt.condition);
+                self.check_pure_block(function_name, &stmt.then_body);
+                if let Some(else_body) = &stmt.else_body {
+                    self.check_pure_block(function_name, else_body);
+                }
+            }
+            Stmt::Loop(stmt) => {
+                if let Some(condition) = &stmt.condition {
+                    self.check_pure_expr(function_name, condition);
+                }
+                self.check_pure_block(function_name, &stmt.body);
+            }
+            Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
+        }
+    }
+
+    fn check_pure_expr(&mut self, function_name: &str, expr: &Expr) {
+        match expr {
+            Expr::Call {
+                callee, args, span, ..
+            } => {
+                match self.hir.resolve_call(callee) {
+                    CallResolution::Resolved { signature, kind } => {
+                        if !matches!(kind, ResolvedCalleeKind::Constructor { .. })
+                            && !signature.effects.iter().any(|effect| effect == "pure")
+                        {
+                            self.non_pure_call_diagnostic(function_name, callee, span);
+                        }
+                    }
+                    CallResolution::EnumVariant | CallResolution::Unknown => {}
+                }
+                for arg in args {
+                    self.check_pure_expr(function_name, &arg.value);
+                }
+            }
+            Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
+                self.check_pure_expr(function_name, value);
+            }
+            Expr::Binary { left, right, .. } => {
+                self.check_pure_expr(function_name, left);
+                self.check_pure_expr(function_name, right);
+            }
+            Expr::Field { base, .. } => self.check_pure_expr(function_name, base),
+            Expr::Index { base, index, .. } => {
+                self.check_pure_expr(function_name, base);
+                self.check_pure_expr(function_name, index);
+            }
+            Expr::Closure { body, .. } => self.check_pure_block(function_name, body),
+            Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        }
+    }
+
     fn check_duplicate_declarations(&mut self) {
         for duplicate in self.hir.duplicate_symbols() {
             self.diagnostics.push(
@@ -1126,6 +1216,33 @@ impl Analyzer<'_> {
             ),
         );
     }
+
+    fn non_pure_call_diagnostic(
+        &mut self,
+        function_name: &str,
+        callee: &Callee,
+        span: &crate::diagnostic::Span,
+    ) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::INVALID_PURE_EFFECT,
+                format!(
+                    "`{function_name}` is declared pure but calls non-pure function `{}`.",
+                    callee_display(callee)
+                ),
+                span.clone(),
+                "non-pure call in pure function",
+            )
+            .with_cause(
+                "A `pure` function may only call constructors, enum variants, or functions also declared `effects(pure)`.",
+            )
+            .with_fix(
+                "remove_pure_or_call_pure",
+                "Remove `pure`, or call only APIs whose signatures are declared `effects(pure)`.",
+                "manual",
+            ),
+        );
+    }
 }
 
 fn resource_pool_namespace_arg(namespace: &str) -> Option<&str> {
@@ -1193,6 +1310,13 @@ fn function_has_effect(function: &crate::syntax::ast::FunctionDecl, effect_name:
         .effects
         .iter()
         .any(|effect| matches!(effect, EffectDecl::Name(name) if name == effect_name))
+}
+
+fn callee_display(callee: &Callee) -> String {
+    match callee {
+        Callee::Name(name) => name.clone(),
+        Callee::Qualified { namespace, name } => format!("{namespace}.{name}"),
+    }
 }
 
 fn removed_runtime_effect_replacement(effect_name: &str) -> Option<&'static str> {

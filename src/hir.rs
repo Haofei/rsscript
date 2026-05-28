@@ -40,6 +40,7 @@ pub struct FunctionSig {
     pub params: Vec<ParamSig>,
     pub return_type: Option<String>,
     pub returns_fresh: bool,
+    pub effects: Vec<String>,
     pub retained_params: HashSet<String>,
     pub is_builtin: bool,
 }
@@ -1412,6 +1413,14 @@ fn function_sig_from_decl(function: &FunctionDecl, is_builtin: bool) -> Function
         params: function.params.iter().map(param_sig_from_decl).collect(),
         return_type: function.return_ty.as_ref().map(type_ref_name),
         returns_fresh: function.returns_fresh,
+        effects: function
+            .effects
+            .iter()
+            .filter_map(|effect| match effect {
+                EffectDecl::Name(name) => Some(name.clone()),
+                EffectDecl::Retains(_) => None,
+            })
+            .collect(),
         retained_params: function
             .effects
             .iter()
@@ -1561,6 +1570,7 @@ fn constructor_sig_from_type(type_info: &TypeInfo, is_builtin: bool) -> Function
             .collect(),
         return_type: Some(type_info.name.clone()),
         returns_fresh: true,
+        effects: Vec::new(),
         retained_params: HashSet::new(),
         is_builtin,
     }
