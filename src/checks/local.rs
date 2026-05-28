@@ -509,6 +509,9 @@ fn fresh_field_access_base(expr: &HirExpr) -> Option<&str> {
     match expr {
         HirExpr::Field { base, access, .. } if !access.is_handle => fresh_field_access_base(base),
         HirExpr::Ident { name, .. } => Some(name),
+        HirExpr::Call { callee, args, .. } if fresh_wrapper_callee(callee) => args
+            .first()
+            .and_then(|arg| fresh_field_access_base(&arg.value)),
         HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => {
             fresh_field_access_base(value)
         }
@@ -522,6 +525,13 @@ fn fresh_field_access_base(expr: &HirExpr) -> Option<&str> {
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => None,
     }
+}
+
+fn fresh_wrapper_callee(callee: &Callee) -> bool {
+    matches!(
+        callee,
+        Callee::Name(name) if matches!(name.as_str(), "Ok" | "Some")
+    )
 }
 
 fn fresh_return_value_span(value: Option<&HirExpr>) -> Option<&Span> {

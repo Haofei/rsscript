@@ -1,0 +1,17 @@
+features: local
+
+struct Image {
+    pixels: Buffer
+}
+
+struct DecodeResult {
+    image: Image
+    metadata: Metadata
+}
+
+fn decode(path: read Path) -> fresh DecodeResult
+
+fn load_image(path: read Path) -> Result<fresh Image, ImageError> {
+    local decoded = decode(path: read path)
+    return Ok(read decoded.image)
+}

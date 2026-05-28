@@ -317,6 +317,34 @@ fn load_image(path: read Path) -> fresh Image {
 }
 
 #[test]
+fn fresh_return_allows_wrapped_inline_field_of_clean_local() {
+    let source = r#"
+features: local
+
+struct Image {
+    pixels: Buffer
+}
+
+struct DecodeResult {
+    image: Image
+    metadata: Metadata
+}
+
+fn decode(path: read Path) -> fresh DecodeResult
+
+fn load_image(path: read Path) -> Result<fresh Image, ImageError> {
+    local decoded = decode(path: read path)
+    return Ok(read decoded.image)
+}
+"#;
+
+    assert_eq!(
+        analyze_source("fresh-inline-field-wrapper.rss", source),
+        Vec::new()
+    );
+}
+
+#[test]
 fn fresh_return_rejects_handle_field_of_clean_local() {
     let source = r#"
 features: local
