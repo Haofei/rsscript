@@ -14,6 +14,8 @@ cleanup_example_artifacts() {
     rsscript-csv-example.csv \
     rsscript-file-copy-input.txt \
     rsscript-file-copy-output.txt \
+    rsscript-file-copy-buffer-input.txt \
+    rsscript-file-copy-buffer-output.txt \
     rsscript-image-input.bin \
     rsscript-image-output.bin \
     rsscript-rules-first.txt \

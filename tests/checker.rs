@@ -713,6 +713,32 @@ fn copy_file(input: read Path, output: read Path) -> Result<Unit, IOError> {
 }
 
 #[test]
+fn rust_lowering_maps_file_read_into_and_buffer_reuse_to_runtime_hooks() {
+    let source = r#"
+features: local
+
+fn copy_file(input: read Path, output: read Path) -> Result<Unit, FileError> {
+    local buffer = Buffer.new(size: 8192)
+    with File.open_read(path: read input) as reader {
+        with File.open_write(path: read output) as writer {
+            while File.read_into(file: mut reader, buffer: mut buffer)? {
+                File.write(file: mut writer, data: read buffer)?
+                Buffer.clear(buffer: mut buffer)
+            }
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    let rust = lower_source_to_rust("file-buffer.rss", source).expect("source should lower");
+
+    assert!(rust.contains("let mut buffer = rsscript_runtime::buffer_new(8192);"));
+    assert!(rust.contains("while rsscript_runtime::file_read_into(&mut reader, &mut buffer)? {"));
+    assert!(rust.contains("rsscript_runtime::file_write(&mut writer, &buffer)?;"));
+    assert!(rust.contains("rsscript_runtime::buffer_clear(&mut buffer);"));
+}
+
+#[test]
 fn rust_lowering_maps_json_core_calls_to_runtime_hooks() {
     let source = r#"
 fn read_name(text: read String) -> Result<String, JsonError> {

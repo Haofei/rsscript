@@ -8,4 +8,6 @@ pub fn File.open_write(path: read Path) -> File
 
 pub fn File.read_all(file: mut File) -> Result<fresh Bytes, FileError>
 
+pub fn File.read_into(file: mut File, buffer: mut Buffer) -> Result<Bool, FileError>
+
 pub fn File.write(file: mut File, data: read Bytes) -> Result<Unit, FileError>

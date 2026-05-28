@@ -1,0 +1,29 @@
+features: local
+
+fn copy_file(input: read String, output: read String) -> Result<Unit, FileError> {
+    local buffer = Buffer.new(size: 8192)
+
+    with File.open_read(path: read input) as reader {
+        with File.open_write(path: read output) as writer {
+            while File.read_into(file: mut reader, buffer: mut buffer)? {
+                File.write(file: mut writer, data: read buffer)?
+                Buffer.clear(buffer: mut buffer)
+            }
+        }
+    }
+
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, FileError> {
+    let input = "rsscript-file-copy-buffer-input.txt"
+    let output = "rsscript-file-copy-buffer-output.txt"
+
+    with File.open_write(path: read input) as file {
+        File.write(file: mut file, data: read "file copy buffer ran")?
+    }
+
+    copy_file(input: read input, output: read output)?
+    Log.write(message: read "file copy buffer ran")
+    return Ok(Unit)
+}

@@ -61,10 +61,14 @@ Hot paths can opt in to local exclusive values, and the checker protects those v
 ```rust
 features: local
 
-local scratch = Buffer.new(size: 4096)
+fn fill_scratch(path: read Path) -> Result<Unit, FileError> {
+    local scratch = Buffer.new(size: 4096)
 
-with File.open(path: read path) as file {
-    File.read_into(file: mut file, buffer: mut scratch)?
+    with File.open(path: read path) as file {
+        File.read_into(file: mut file, buffer: mut scratch)?
+    }
+
+    return Ok(Unit)
 }
 ```
 
@@ -125,7 +129,9 @@ There's a useful asymmetry built in here. At a call site you just follow the fun
 ## A small example
 
 ```rust
-fn copy_file(input: read Path, output: read Path) -> Result<Unit, IOError> {
+features: local
+
+fn copy_file(input: read Path, output: read Path) -> Result<Unit, FileError> {
     local buffer = Buffer.new(size: 8192)
 
     with File.open_read(path: read input) as reader {

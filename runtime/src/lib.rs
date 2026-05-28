@@ -393,6 +393,12 @@ pub fn file_read_all(file: &mut File) -> std::io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+pub fn file_read_into(file: &mut File, buffer: &mut Vec<u8>) -> std::io::Result<bool> {
+    buffer.clear();
+    let bytes_read = file.inner.read_to_end(buffer)?;
+    Ok(bytes_read > 0)
+}
+
 pub fn file_write<B: RuntimeBytes + ?Sized>(file: &mut File, data: &B) -> std::io::Result<()> {
     file.inner.write_all(data.as_bytes_slice())
 }
@@ -403,6 +409,14 @@ pub fn os_close(fd: i64) {
 
 pub fn list_consume<T>(list: Vec<T>) {
     drop(list);
+}
+
+pub fn buffer_new(size: i64) -> Vec<u8> {
+    Vec::with_capacity(size.max(0) as usize)
+}
+
+pub fn buffer_clear(buffer: &mut Vec<u8>) {
+    buffer.clear();
 }
 
 pub fn buffer_consume(buffer: Vec<u8>) {
@@ -1253,6 +1267,30 @@ mod tests {
         let bytes = super::file_read_all(&mut file).expect("read should succeed");
 
         assert_eq!(bytes, b"hello file");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn file_runtime_hooks_read_into_reusable_buffer() {
+        let path = std::env::temp_dir().join(format!(
+            "rsscript-runtime-file-buffer-{}.txt",
+            std::process::id()
+        ));
+
+        {
+            let mut file = super::file_open_write(&path).expect("file should open for write");
+            super::file_write(&mut file, &"hello buffer").expect("write should succeed");
+        }
+
+        let mut file = super::file_open_read(&path).expect("file should open for read");
+        let mut buffer = super::buffer_new(64);
+        assert!(super::file_read_into(&mut file, &mut buffer).expect("read should succeed"));
+        assert_eq!(buffer, b"hello buffer");
+        assert!(!super::file_read_into(&mut file, &mut buffer).expect("EOF should succeed"));
+        assert!(buffer.is_empty());
+        super::buffer_clear(&mut buffer);
+        assert!(buffer.is_empty());
+
         let _ = std::fs::remove_file(path);
     }
 

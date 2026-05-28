@@ -1481,6 +1481,8 @@ fn lower_callee(callee: &Callee) -> String {
         callee if is_assert_equal_callee(callee) => "rsscript_runtime::assert_equal".to_string(),
         callee if is_os_close_callee(callee) => "rsscript_runtime::os_close".to_string(),
         callee if is_list_consume_callee(callee) => "rsscript_runtime::list_consume".to_string(),
+        callee if is_buffer_new_callee(callee) => "rsscript_runtime::buffer_new".to_string(),
+        callee if is_buffer_clear_callee(callee) => "rsscript_runtime::buffer_clear".to_string(),
         callee if is_buffer_consume_callee(callee) => {
             "rsscript_runtime::buffer_consume".to_string()
         }
@@ -1496,6 +1498,9 @@ fn lower_callee(callee: &Callee) -> String {
             "rsscript_runtime::file_open_write".to_string()
         }
         callee if is_file_read_all_callee(callee) => "rsscript_runtime::file_read_all".to_string(),
+        callee if is_file_read_into_callee(callee) => {
+            "rsscript_runtime::file_read_into".to_string()
+        }
         callee if is_file_write_callee(callee) => "rsscript_runtime::file_write".to_string(),
         callee if is_request_new_callee(callee) => "rsscript_runtime::request_new".to_string(),
         callee if is_request_path_callee(callee) => "rsscript_runtime::request_path".to_string(),
@@ -1622,6 +1627,14 @@ fn is_buffer_consume_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Buffer" && name == "consume")
 }
 
+fn is_buffer_new_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Buffer" && name == "new")
+}
+
+fn is_buffer_clear_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Buffer" && name == "clear")
+}
+
 fn is_cache_new_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Cache" && name == "new")
 }
@@ -1656,6 +1669,10 @@ fn is_file_open_write_callee(callee: &Callee) -> bool {
 
 fn is_file_read_all_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && name == "read_all")
+}
+
+fn is_file_read_into_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && name == "read_into")
 }
 
 fn is_file_write_callee(callee: &Callee) -> bool {
