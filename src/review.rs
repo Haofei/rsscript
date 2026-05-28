@@ -47,6 +47,7 @@ pub enum ReviewRisk {
     Effect,
     Boundary,
     Unsafe,
+    Guarantee,
 }
 
 impl ReviewRisk {
@@ -58,6 +59,7 @@ impl ReviewRisk {
             Self::Effect => "effect",
             Self::Boundary => "boundary",
             Self::Unsafe => "unsafe",
+            Self::Guarantee => "guarantee",
         }
     }
 }
@@ -238,6 +240,10 @@ fn review_fixes(code: &str) -> Vec<ReviewFix> {
             "review_unsafe_native_boundary",
             "Review the new unsafe or native boundary and require explicit justification.",
         ),
+        code::REVIEW_GUARANTEE_REMOVED => (
+            "review_removed_guarantee",
+            "Review callers that relied on the removed runtime guarantee.",
+        ),
         _ => ("review_change", "Review this source-level contract change."),
     };
     vec![ReviewFix {
@@ -414,6 +420,26 @@ fn compare_function(old: &FunctionSig, new: &FunctionSig, findings: &mut Vec<Rev
             Some(effects_contract(&new_unsafe_native)),
         ));
     }
+    let old_guarantees = guarantee_effects(&old.effects);
+    let new_guarantees = guarantee_effects(&new.effects);
+    let removed_guarantees: BTreeSet<_> = old_guarantees
+        .difference(&new_guarantees)
+        .cloned()
+        .collect();
+    if !removed_guarantees.is_empty() {
+        findings.push(review_finding(
+            code::REVIEW_GUARANTEE_REMOVED,
+            ReviewRisk::Guarantee,
+            format!(
+                "function `{}` removed guarantee(s): {}.",
+                old.name,
+                effects_contract(&removed_guarantees)
+            ),
+            paired_spans(&old.span, &new.span, "old guarantees", "new guarantees"),
+            Some(effects_contract(&old_guarantees)),
+            Some(effects_contract(&new_guarantees)),
+        ));
+    }
     if old.boundary != new.boundary {
         findings.push(review_finding(
             code::REVIEW_BOUNDARY_CHANGED,
@@ -548,6 +574,19 @@ fn unsafe_native_effects(effects: &BTreeSet<String>) -> BTreeSet<String> {
     effects
         .iter()
         .filter(|effect| matches!(effect.as_str(), "unsafe" | "native"))
+        .cloned()
+        .collect()
+}
+
+fn guarantee_effects(effects: &BTreeSet<String>) -> BTreeSet<String> {
+    effects
+        .iter()
+        .filter(|effect| {
+            matches!(
+                effect.as_str(),
+                "no_panic" | "noalloc" | "no_block" | "pure"
+            )
+        })
         .cloned()
         .collect()
 }

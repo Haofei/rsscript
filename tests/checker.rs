@@ -270,6 +270,52 @@ fn checksum(data: read Bytes) -> UInt64
 }
 
 #[test]
+fn review_reports_removed_guarantees() {
+    let old_source = r#"
+mode: managed
+
+fn checksum(data: read Bytes) -> UInt64
+    effects(noalloc, no_panic, pure)
+{
+    Bytes.checksum(data: read data)
+}
+"#;
+    let new_source = r#"
+mode: managed
+
+fn checksum(data: read Bytes) -> UInt64
+    effects(no_panic)
+{
+    Bytes.checksum(data: read data)
+}
+"#;
+
+    let findings = review_sources("old.rss", old_source, "new.rss", new_source);
+    let guarantee = findings
+        .iter()
+        .find(|finding| finding.code == "RSR013")
+        .expect("expected removed guarantee finding");
+
+    assert_eq!(guarantee.risk, ReviewRisk::Guarantee);
+    assert_eq!(guarantee.before.as_deref(), Some("no_panic, noalloc, pure"));
+    assert_eq!(guarantee.after.as_deref(), Some("no_panic"));
+    assert!(
+        guarantee
+            .summary
+            .contains("removed guarantee(s): noalloc, pure")
+    );
+    assert!(format_review_human(&findings).contains("RSR013[guarantee]:"));
+
+    let json = format_review_json(&findings);
+    let value: Value = serde_json::from_str(&json).expect("review JSON should parse");
+    assert!(value.as_array().is_some_and(|items| {
+        items
+            .iter()
+            .any(|item| item["code"] == "RSR013" && item["risk"] == "guarantee")
+    }));
+}
+
+#[test]
 fn review_reports_type_layout_changes() {
     let old_source = r#"
 mode: managed
