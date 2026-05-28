@@ -9,19 +9,14 @@ pub fn copy_file(input: read Path, output: read Path) -> Result<Unit, IOError> {
 }
 
 fn main() -> Result<Unit, IOError> {
-    let input = "rsscript-file-copy-input.txt"
-    let output = "rsscript-file-copy-output.txt"
+    let input = Path.from_string(value: read "rsscript-file-copy-input.txt")
+    let output = Path.from_string(value: read "rsscript-file-copy-output.txt")
 
     with File.open_write(path: read input) as file {
         File.write(file: mut file, data: read "file copy ran")?
     }
 
-    with File.open_read(path: read input) as reader {
-        with File.open_write(path: read output) as writer {
-            let bytes = File.read_all(file: mut reader)?
-            File.write(file: mut writer, data: read bytes)?
-        }
-    }
+    copy_file(input: read input, output: read output)?
 
     Log.write(message: read "file copy ran")
     return Ok(Unit)

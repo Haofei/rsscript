@@ -347,6 +347,10 @@ impl<T: RuntimePath + ?Sized> RuntimePath for &T {
     }
 }
 
+pub fn path_from_string(value: &str) -> PathBuf {
+    PathBuf::from(value)
+}
+
 pub trait RuntimeBytes {
     fn as_bytes_slice(&self) -> &[u8];
 }
@@ -1212,6 +1216,13 @@ mod tests {
         let value = super::manage_at(String::from("cached"), span.clone());
 
         assert_eq!(value.origin_span(), Some(&span));
+    }
+
+    #[test]
+    fn path_runtime_hook_builds_pathbuf_from_string() {
+        let path = super::path_from_string("rsscript-path.txt");
+
+        assert_eq!(path, std::path::PathBuf::from("rsscript-path.txt"));
     }
 
     #[test]

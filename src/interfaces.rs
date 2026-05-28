@@ -53,6 +53,10 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
     ("core/log/log.rssi", include_str!("../core/log/log.rssi")),
     ("core/os/os.rssi", include_str!("../core/os/os.rssi")),
     (
+        "core/path/path.rssi",
+        include_str!("../core/path/path.rssi"),
+    ),
+    (
         "core/resource/resource_pool.rssi",
         include_str!("../core/resource/resource_pool.rssi"),
     ),

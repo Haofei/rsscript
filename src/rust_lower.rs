@@ -1502,6 +1502,9 @@ fn lower_callee(callee: &Callee) -> String {
             "rsscript_runtime::file_read_into".to_string()
         }
         callee if is_file_write_callee(callee) => "rsscript_runtime::file_write".to_string(),
+        callee if is_path_from_string_callee(callee) => {
+            "rsscript_runtime::path_from_string".to_string()
+        }
         callee if is_request_new_callee(callee) => "rsscript_runtime::request_new".to_string(),
         callee if is_request_path_callee(callee) => "rsscript_runtime::request_path".to_string(),
         callee if is_response_ok_callee(callee) => "rsscript_runtime::response_ok".to_string(),
@@ -1677,6 +1680,10 @@ fn is_file_read_into_callee(callee: &Callee) -> bool {
 
 fn is_file_write_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && name == "write")
+}
+
+fn is_path_from_string_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Path" && name == "from_string")
 }
 
 fn is_request_new_callee(callee: &Callee) -> bool {

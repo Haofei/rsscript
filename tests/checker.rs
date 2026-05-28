@@ -713,6 +713,25 @@ fn copy_file(input: read Path, output: read Path) -> Result<Unit, IOError> {
 }
 
 #[test]
+fn rust_lowering_maps_path_construction_to_runtime_hook() {
+    let source = r#"
+fn main() -> Result<Unit, FileError> {
+    let path = Path.from_string(value: read "rsscript-path.txt")
+    with File.open_write(path: read path) as file {
+        File.write(file: mut file, data: read "path hook ran")?
+    }
+    return Ok(Unit)
+}
+"#;
+    let rust = lower_source_to_rust("path.rss", source).expect("source should lower");
+
+    assert!(rust.contains(
+        "let path = rsscript_runtime::path_from_string(&\"rsscript-path.txt\".to_string());"
+    ));
+    assert!(rust.contains("let mut file = rsscript_runtime::file_open_write(&path)?;"));
+}
+
+#[test]
 fn rust_lowering_maps_file_read_into_and_buffer_reuse_to_runtime_hooks() {
     let source = r#"
 features: local
