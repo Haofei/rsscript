@@ -1,4 +1,4 @@
-use std::cell::{RefCell, RefMut};
+use std::cell::{BorrowError, BorrowMutError, Ref, RefCell, RefMut};
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
@@ -11,18 +11,38 @@ pub trait Resource {}
 
 #[derive(Clone)]
 pub struct Gc<T> {
-    inner: Rc<T>,
+    inner: Rc<RefCell<T>>,
 }
 
 impl<T> Gc<T> {
     pub fn new(value: T) -> Self {
         Self {
-            inner: Rc::new(value),
+            inner: Rc::new(RefCell::new(value)),
         }
     }
 
-    pub fn get(&self) -> &T {
-        &self.inner
+    pub fn try_read(&self) -> Result<GcRead<'_, T>, RuntimeError> {
+        self.inner
+            .try_borrow()
+            .map(GcRead)
+            .map_err(RuntimeError::from)
+    }
+
+    pub fn try_write(&self) -> Result<GcWrite<'_, T>, RuntimeError> {
+        self.inner
+            .try_borrow_mut()
+            .map(GcWrite)
+            .map_err(RuntimeError::from)
+    }
+
+    pub fn read(&self) -> GcRead<'_, T> {
+        self.try_read()
+            .expect("RSScript runtime read conflict should be reported through diagnostics")
+    }
+
+    pub fn write(&self) -> GcWrite<'_, T> {
+        self.try_write()
+            .expect("RSScript runtime write conflict should be reported through diagnostics")
     }
 
     pub fn ptr_eq(left: &Self, right: &Self) -> bool {
@@ -30,22 +50,108 @@ impl<T> Gc<T> {
     }
 }
 
-impl<T> Deref for Gc<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        self.get()
-    }
-}
-
 impl<T: fmt::Debug> fmt::Debug for Gc<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_tuple("Gc").field(&self.inner).finish()
+        formatter.debug_tuple("Gc").field(&self.read()).finish()
     }
 }
 
 pub fn manage<T>(value: T) -> Gc<T> {
     Gc::new(value)
+}
+
+pub struct GcRead<'a, T>(Ref<'a, T>);
+
+impl<T> Deref for GcRead<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for GcRead<'_, T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&**self, formatter)
+    }
+}
+
+pub struct GcWrite<'a, T>(RefMut<'a, T>);
+
+impl<T> Deref for GcWrite<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> DerefMut for GcWrite<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for GcWrite<'_, T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&**self, formatter)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeErrorKind {
+    ManagedReadConflict,
+    ManagedWriteConflict,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeError {
+    pub kind: RuntimeErrorKind,
+    pub message: String,
+    pub span: Option<SourceSpan>,
+}
+
+impl RuntimeError {
+    pub fn with_span(mut self, span: SourceSpan) -> Self {
+        self.span = Some(span);
+        self
+    }
+}
+
+impl fmt::Display for RuntimeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.message)
+    }
+}
+
+impl std::error::Error for RuntimeError {}
+
+impl From<BorrowError> for RuntimeError {
+    fn from(_: BorrowError) -> Self {
+        Self {
+            kind: RuntimeErrorKind::ManagedReadConflict,
+            message: "managed value is already mutably borrowed".to_string(),
+            span: None,
+        }
+    }
+}
+
+impl From<BorrowMutError> for RuntimeError {
+    fn from(_: BorrowMutError) -> Self {
+        Self {
+            kind: RuntimeErrorKind::ManagedWriteConflict,
+            message: "managed value is already borrowed".to_string(),
+            span: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceSpan {
+    pub file: &'static str,
+    pub line: usize,
+    pub column: usize,
+    pub length: usize,
 }
 
 #[derive(Debug)]
@@ -109,7 +215,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{Resource, ResourcePool, manage};
+    use super::{Resource, ResourcePool, RuntimeErrorKind, manage};
 
     #[derive(Debug)]
     struct FileHandle(i32);
@@ -120,7 +226,29 @@ mod tests {
     fn manage_wraps_value_in_gc_handle() {
         let value = manage(String::from("cached"));
 
-        assert_eq!(value.get(), "cached");
+        assert_eq!(&*value.read(), "cached");
+    }
+
+    #[test]
+    fn managed_aliases_observe_mutation() {
+        let left = manage(String::from("cached"));
+        let right = left.clone();
+
+        right.write().push_str("-updated");
+
+        assert_eq!(&*left.read(), "cached-updated");
+        assert!(super::Gc::ptr_eq(&left, &right));
+    }
+
+    #[test]
+    fn managed_conflicts_report_runtime_errors() {
+        let value = manage(String::from("cached"));
+        let _write = value.try_write().expect("initial write should succeed");
+        let error = value
+            .try_read()
+            .expect_err("read should conflict with write");
+
+        assert_eq!(error.kind, RuntimeErrorKind::ManagedReadConflict);
     }
 
     #[test]

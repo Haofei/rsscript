@@ -361,6 +361,7 @@ review-oriented rules
 review map metadata
 Rust source lowering
 runtime crate type surface
+runtime-mediated managed handles
 source map JSON for generated Rust packages
 rustc diagnostic remapping through source maps
 core `.rssi` interface signatures
