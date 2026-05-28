@@ -1,0 +1,13 @@
+// expect: RS0301
+features: local
+
+struct Widget
+
+fn make_widget() -> fresh Widget
+
+fn bad() -> Unit {
+    let shared = make_widget()
+    local maybe_shared = Some(shared)
+    local read_maybe_shared = read Some(shared)
+    return Unit
+}

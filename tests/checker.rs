@@ -2442,6 +2442,33 @@ fn bad() -> Unit {
 }
 
 #[test]
+fn checker_rejects_wrapped_managed_bound_as_local() {
+    let source = r#"
+features: local
+
+struct Widget
+
+fn make_widget() -> fresh Widget
+
+fn bad() -> Unit {
+    let shared = make_widget()
+    local maybe_shared = Some(shared)
+    local read_maybe_shared = read Some(shared)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("managed-wrapper-to-local.rss", source);
+    let managed_to_local_count = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == "RS0301" && diagnostic.label == "managed value used as local"
+        })
+        .count();
+
+    assert_eq!(managed_to_local_count, 2, "{diagnostics:?}");
+}
+
+#[test]
 fn checker_rejects_handle_field_bound_as_local() {
     let source = r#"
 features: local

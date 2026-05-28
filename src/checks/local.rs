@@ -2116,6 +2116,9 @@ fn local_binding_source_ident(value: &HirExpr) -> Option<(String, Span)> {
             value,
             ..
         } => local_binding_source_ident(value),
+        HirExpr::Call { callee, args, .. } if local_binding_wrapper_callee(callee) => args
+            .iter()
+            .find_map(|arg| local_binding_source_ident(&arg.value)),
         HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Binary { .. }
