@@ -17,6 +17,7 @@ It currently implements:
 - HIR type and field tables for class/struct/resource declarations and handle fields
 - HIR constructor signatures derived from declared type fields
 - HIR call-site facts with resolved builtin, user function, constructor, enum variant, and unknown callees
+- HIR body binding facts for parameters, managed lets, local lets, and best-effort initial value types
 - AST-driven mode and call checks for local-only features, named arguments, data effects, and retaining APIs
 - AST-driven body checks for local moves, early-exit-aware `fresh` returns, resource escape, resolved handle-field `take`, and managed closure captures
 - Focused check modules for mode, calls, body semantics, and forbidden operator behavior

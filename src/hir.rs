@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::diagnostic::Span;
 use crate::syntax::ast::{
-    Block, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl, Item, Param,
+    Block, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl, Item, LetKind, Param,
     Program as SyntaxProgram, Stmt, TypeDecl, TypeKind,
 };
 
@@ -103,6 +103,22 @@ pub struct HirCallSite {
     pub resolution: CallResolution,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HirBindingKind {
+    Param,
+    ManagedLet,
+    LocalLet,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirBinding {
+    pub function_name: String,
+    pub name: String,
+    pub kind: HirBindingKind,
+    pub span: Span,
+    pub type_name: Option<String>,
+}
+
 #[derive(Debug, Default)]
 pub struct Hir {
     signatures: HashMap<String, FunctionSig>,
@@ -111,6 +127,9 @@ pub struct Hir {
     duplicate_symbols: Vec<DuplicateSymbol>,
     call_sites: Vec<HirCallSite>,
     call_resolutions_by_span: HashMap<Span, CallResolution>,
+    bindings: Vec<HirBinding>,
+    bindings_by_span: HashMap<Span, HirBinding>,
+    bindings_by_function: HashMap<String, Vec<HirBinding>>,
 }
 
 impl Hir {
@@ -151,7 +170,7 @@ impl Hir {
                 }
             }
         }
-        hir.collect_call_sites(program);
+        hir.collect_body_facts(program);
         hir
     }
 
@@ -189,6 +208,16 @@ impl Hir {
 
     pub fn call_resolution(&self, span: &Span) -> Option<&CallResolution> {
         self.call_resolutions_by_span.get(span)
+    }
+
+    pub fn binding(&self, span: &Span) -> Option<&HirBinding> {
+        self.bindings_by_span.get(span)
+    }
+
+    pub fn function_bindings(&self, function_name: &str) -> &[HirBinding] {
+        self.bindings_by_function
+            .get(function_name)
+            .map_or(&[], Vec::as_slice)
     }
 
     pub fn resolve_call(&self, callee: &Callee) -> CallResolution {
@@ -244,97 +273,190 @@ impl Hir {
         }
     }
 
-    fn collect_call_sites(&mut self, program: &SyntaxProgram) {
-        let mut sites = Vec::new();
+    fn collect_body_facts(&mut self, program: &SyntaxProgram) {
+        let mut facts = BodyFacts::default();
         for item in &program.items {
             let Item::Function(function) = item else {
                 continue;
             };
-            collect_call_sites_in_block(self, &function.name, &function.body, &mut sites);
+            collect_function_body_facts(self, function, &mut facts);
         }
 
-        self.call_resolutions_by_span = sites
+        self.call_resolutions_by_span = facts
+            .call_sites
             .iter()
             .map(|site| (site.span.clone(), site.resolution.clone()))
             .collect();
-        self.call_sites = sites;
+        self.bindings_by_span = facts
+            .bindings
+            .iter()
+            .map(|binding| (binding.span.clone(), binding.clone()))
+            .collect();
+        self.bindings_by_function = facts.bindings.iter().fold(
+            HashMap::<String, Vec<HirBinding>>::new(),
+            |mut by_function, binding| {
+                by_function
+                    .entry(binding.function_name.clone())
+                    .or_default()
+                    .push(binding.clone());
+                by_function
+            },
+        );
+        self.call_sites = facts.call_sites;
+        self.bindings = facts.bindings;
     }
 }
 
-fn collect_call_sites_in_block(
+#[derive(Default)]
+struct BodyFacts {
+    call_sites: Vec<HirCallSite>,
+    bindings: Vec<HirBinding>,
+}
+
+fn collect_function_body_facts(hir: &Hir, function: &FunctionDecl, facts: &mut BodyFacts) {
+    let mut value_types = HashMap::new();
+    for param in &function.params {
+        value_types.insert(param.name.clone(), param.ty.name.clone());
+        facts.bindings.push(HirBinding {
+            function_name: function.name.clone(),
+            name: param.name.clone(),
+            kind: HirBindingKind::Param,
+            span: param.span.clone(),
+            type_name: Some(param.ty.name.clone()),
+        });
+    }
+    collect_body_facts_in_block(hir, &function.name, &function.body, &mut value_types, facts);
+}
+
+fn collect_body_facts_in_block(
     hir: &Hir,
     function_name: &str,
     block: &Block,
-    sites: &mut Vec<HirCallSite>,
+    value_types: &mut HashMap<String, String>,
+    facts: &mut BodyFacts,
 ) {
     for statement in &block.statements {
-        collect_call_sites_in_stmt(hir, function_name, statement, sites);
+        collect_body_facts_in_stmt(hir, function_name, statement, value_types, facts);
     }
 }
 
-fn collect_call_sites_in_stmt(
+fn collect_body_facts_in_stmt(
     hir: &Hir,
     function_name: &str,
     statement: &Stmt,
-    sites: &mut Vec<HirCallSite>,
+    value_types: &mut HashMap<String, String>,
+    facts: &mut BodyFacts,
 ) {
     match statement {
         Stmt::Let(stmt) => {
+            let type_name = stmt
+                .value
+                .as_ref()
+                .and_then(|value| infer_hir_expr_type(hir, value, value_types));
+            facts.bindings.push(HirBinding {
+                function_name: function_name.to_string(),
+                name: stmt.name.clone(),
+                kind: hir_binding_kind(stmt.kind),
+                span: stmt.span.clone(),
+                type_name: type_name.clone(),
+            });
+            if let Some(type_name) = type_name {
+                value_types.insert(stmt.name.clone(), type_name);
+            }
             if let Some(value) = &stmt.value {
-                collect_call_sites_in_expr(hir, function_name, value, sites);
+                collect_body_facts_in_expr(hir, function_name, value, value_types, facts);
             }
         }
         Stmt::Return(stmt) => {
             if let Some(value) = &stmt.value {
-                collect_call_sites_in_expr(hir, function_name, value, sites);
+                collect_body_facts_in_expr(hir, function_name, value, value_types, facts);
             }
         }
         Stmt::With(stmt) => {
-            collect_call_sites_in_expr(hir, function_name, &stmt.resource, sites);
-            collect_call_sites_in_block(hir, function_name, &stmt.body, sites);
+            collect_body_facts_in_expr(hir, function_name, &stmt.resource, value_types, facts);
+            collect_body_facts_in_block(hir, function_name, &stmt.body, value_types, facts);
         }
         Stmt::If(stmt) => {
-            collect_call_sites_in_expr(hir, function_name, &stmt.condition, sites);
-            collect_call_sites_in_block(hir, function_name, &stmt.then_body, sites);
+            collect_body_facts_in_expr(hir, function_name, &stmt.condition, value_types, facts);
+            collect_body_facts_in_block(hir, function_name, &stmt.then_body, value_types, facts);
             if let Some(else_body) = &stmt.else_body {
-                collect_call_sites_in_block(hir, function_name, else_body, sites);
+                collect_body_facts_in_block(hir, function_name, else_body, value_types, facts);
             }
         }
         Stmt::Loop(stmt) => {
             if let Some(condition) = &stmt.condition {
-                collect_call_sites_in_expr(hir, function_name, condition, sites);
+                collect_body_facts_in_expr(hir, function_name, condition, value_types, facts);
             }
-            collect_call_sites_in_block(hir, function_name, &stmt.body, sites);
+            collect_body_facts_in_block(hir, function_name, &stmt.body, value_types, facts);
         }
-        Stmt::Expr(expr) => collect_call_sites_in_expr(hir, function_name, expr, sites),
+        Stmt::Expr(expr) => {
+            collect_body_facts_in_expr(hir, function_name, expr, value_types, facts);
+        }
         Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
     }
 }
 
-fn collect_call_sites_in_expr(
+fn collect_body_facts_in_expr(
     hir: &Hir,
     function_name: &str,
     expr: &Expr,
-    sites: &mut Vec<HirCallSite>,
+    value_types: &mut HashMap<String, String>,
+    facts: &mut BodyFacts,
 ) {
     match expr {
         Expr::Call { callee, args, span } => {
-            sites.push(HirCallSite {
+            facts.call_sites.push(HirCallSite {
                 function_name: function_name.to_string(),
                 callee: callee.clone(),
                 span: span.clone(),
                 resolution: hir.resolve_call(callee),
             });
             for arg in args {
-                collect_call_sites_in_expr(hir, function_name, &arg.value, sites);
+                collect_body_facts_in_expr(hir, function_name, &arg.value, value_types, facts);
             }
         }
         Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
-            collect_call_sites_in_expr(hir, function_name, value, sites);
+            collect_body_facts_in_expr(hir, function_name, value, value_types, facts);
         }
-        Expr::Field { base, .. } => collect_call_sites_in_expr(hir, function_name, base, sites),
-        Expr::Closure { body, .. } => collect_call_sites_in_block(hir, function_name, body, sites),
+        Expr::Field { base, .. } => {
+            collect_body_facts_in_expr(hir, function_name, base, value_types, facts);
+        }
+        Expr::Closure { body, .. } => {
+            collect_body_facts_in_block(hir, function_name, body, value_types, facts);
+        }
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+    }
+}
+
+fn hir_binding_kind(kind: LetKind) -> HirBindingKind {
+    match kind {
+        LetKind::Managed => HirBindingKind::ManagedLet,
+        LetKind::Local => HirBindingKind::LocalLet,
+    }
+}
+
+fn infer_hir_expr_type(
+    hir: &Hir,
+    expr: &Expr,
+    value_types: &HashMap<String, String>,
+) -> Option<String> {
+    match expr {
+        Expr::Ident(name, _) => value_types.get(name).cloned(),
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
+            infer_hir_expr_type(hir, value, value_types)
+        }
+        Expr::Call { callee, .. } => match hir.resolve_call(callee) {
+            CallResolution::Resolved { signature, .. } => signature.return_type,
+            CallResolution::EnumVariant | CallResolution::Unknown => None,
+        },
+        Expr::Field { base, name, .. } => {
+            let base_type = infer_hir_expr_type(hir, base, value_types)?;
+            hir.type_info(&base_type)?
+                .fields
+                .get(name)
+                .map(|field| field.type_name.clone())
+        }
+        Expr::Closure { .. } | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => None,
     }
 }
 
@@ -1008,9 +1130,10 @@ struct Response {
 }
 
 fn render(body: read String) -> Result<fresh Response, HttpError> {
+    let response = Response(status: 200, body: read body)
     Log.write(message: read body)
     Missing.call(value: read body)
-    return Response(status: 200, body: read body)
+    return response
 }
 "#;
 
@@ -1022,19 +1145,60 @@ fn render(body: read String) -> Result<fresh Response, HttpError> {
         assert!(matches!(
             sites[0].resolution,
             CallResolution::Resolved {
-                kind: ResolvedCalleeKind::BuiltinFunction,
-                ..
-            }
-        ));
-        assert!(matches!(sites[1].resolution, CallResolution::Unknown));
-        assert!(matches!(
-            sites[2].resolution,
-            CallResolution::Resolved {
                 kind: ResolvedCalleeKind::Constructor {
                     type_kind: HirTypeKind::Struct
                 },
                 ..
             }
+        ));
+        assert!(matches!(
+            sites[1].resolution,
+            CallResolution::Resolved {
+                kind: ResolvedCalleeKind::BuiltinFunction,
+                ..
+            }
+        ));
+        assert!(matches!(sites[2].resolution, CallResolution::Unknown));
+
+        let bindings = hir.function_bindings("render");
+        assert_eq!(bindings.len(), 2);
+        assert_eq!(bindings[0].kind, HirBindingKind::Param);
+        assert_eq!(bindings[0].name, "body");
+        assert_eq!(bindings[0].type_name.as_deref(), Some("String"));
+        assert_eq!(bindings[1].kind, HirBindingKind::ManagedLet);
+        assert_eq!(bindings[1].name, "response");
+        assert_eq!(bindings[1].type_name.as_deref(), Some("Response"));
+        assert!(matches!(
+            hir.binding(&bindings[1].span)
+                .expect("binding lookup by span works")
+                .kind,
+            HirBindingKind::ManagedLet
+        ));
+    }
+
+    #[test]
+    fn records_local_binding_facts() {
+        let source = r#"
+mode: uses-local
+
+fn load(path: read Path) -> Unit {
+    local image = Image.load(path: read path)
+}
+"#;
+
+        let program = parse_source("test.rss", source);
+        let hir = Hir::from_syntax(&program);
+        let bindings = hir.function_bindings("load");
+
+        assert_eq!(bindings.len(), 2);
+        assert_eq!(bindings[1].kind, HirBindingKind::LocalLet);
+        assert_eq!(bindings[1].name, "image");
+        assert_eq!(bindings[1].type_name.as_deref(), Some("Image"));
+        assert!(matches!(
+            hir.binding(&bindings[1].span)
+                .expect("local binding lookup by span works")
+                .kind,
+            HirBindingKind::LocalLet
         ));
     }
 }

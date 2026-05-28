@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, code};
-use crate::hir::{CallResolution, HirTypeKind, ResolvedCalleeKind};
+use crate::hir::{CallResolution, HirBindingKind, HirTypeKind, ResolvedCalleeKind};
 use crate::syntax::ast::{
     Block, CallArg, Callee, DataEffect, Expr, FunctionDecl, Item, LetKind, Stmt,
 };
@@ -20,11 +20,7 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
 
     for function in functions {
         let mut state = BodyState::default();
-        for param in &function.params {
-            state
-                .value_types
-                .insert(param.name.clone(), param.ty.name.clone());
-        }
+        seed_function_bindings(analyzer, &function, &mut state);
         check_block(analyzer, &function, &function.body, &mut state);
     }
 }
@@ -36,6 +32,19 @@ struct BodyState {
     managed: HashSet<String>,
     moved: HashMap<String, crate::diagnostic::Span>,
     value_types: HashMap<String, String>,
+}
+
+fn seed_function_bindings(analyzer: &Analyzer<'_>, function: &FunctionDecl, state: &mut BodyState) {
+    for binding in analyzer.hir.function_bindings(&function.name) {
+        if binding.kind != HirBindingKind::Param {
+            continue;
+        }
+        if let Some(type_name) = &binding.type_name {
+            state
+                .value_types
+                .insert(binding.name.clone(), type_name.clone());
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -175,7 +184,9 @@ fn apply_stmt_effects(analyzer: &mut Analyzer<'_>, statement: &Stmt, state: &mut
                 }
             }
             if let Some(value) = &stmt.value {
-                if let Some(type_name) = infer_expr_type(analyzer, value, state) {
+                if let Some(type_name) = hir_binding_type(analyzer, &stmt.span)
+                    .or_else(|| infer_expr_type(analyzer, value, state))
+                {
                     state.value_types.insert(stmt.name.clone(), type_name);
                 }
                 apply_expr_effects(analyzer, value, state);
@@ -195,6 +206,13 @@ fn apply_stmt_effects(analyzer: &mut Analyzer<'_>, statement: &Stmt, state: &mut
         Stmt::Break(_) | Stmt::Continue(_) => {}
         Stmt::Unknown(_) => {}
     }
+}
+
+fn hir_binding_type(analyzer: &Analyzer<'_>, span: &crate::diagnostic::Span) -> Option<String> {
+    analyzer
+        .hir
+        .binding(span)
+        .and_then(|binding| binding.type_name.clone())
 }
 
 fn merge_if_state(
