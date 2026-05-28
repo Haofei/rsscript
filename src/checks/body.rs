@@ -336,22 +336,28 @@ fn check_resource_escape(analyzer: &mut Analyzer<'_>, binding: &str, body: &Bloc
                     resource_escape_diagnostic(analyzer, binding, span.clone());
                 }
                 if let Some(value) = &stmt.value {
-                    check_resource_manage_escape(analyzer, binding, value);
+                    check_resource_escape_expr(analyzer, binding, value);
                 }
             }
             Stmt::Let(stmt) => {
+                if stmt.kind == LetKind::Managed
+                    && let Some(Expr::Closure { body, span }) = &stmt.value
+                    && block_mentions_ident(body, binding)
+                {
+                    resource_capture_diagnostic(analyzer, binding, span.clone());
+                }
                 if let Some(value) = &stmt.value {
-                    check_resource_manage_escape(analyzer, binding, value);
+                    check_resource_escape_expr(analyzer, binding, value);
                 }
             }
-            Stmt::Expr(expr) => check_resource_manage_escape(analyzer, binding, expr),
+            Stmt::Expr(expr) => check_resource_escape_expr(analyzer, binding, expr),
             Stmt::With(stmt) => check_resource_escape(analyzer, binding, &stmt.body),
             Stmt::Unknown(_) => {}
         }
     }
 }
 
-fn check_resource_manage_escape(analyzer: &mut Analyzer<'_>, binding: &str, expr: &Expr) {
+fn check_resource_escape_expr(analyzer: &mut Analyzer<'_>, binding: &str, expr: &Expr) {
     match expr {
         Expr::Manage { value, span } => {
             if let Expr::Ident(name, _) = value.as_ref()
@@ -359,18 +365,64 @@ fn check_resource_manage_escape(analyzer: &mut Analyzer<'_>, binding: &str, expr
             {
                 resource_escape_diagnostic(analyzer, binding, span.clone());
             }
-            check_resource_manage_escape(analyzer, binding, value);
+            check_resource_escape_expr(analyzer, binding, value);
         }
-        Expr::Effect { value, .. } => check_resource_manage_escape(analyzer, binding, value),
-        Expr::Call { args, .. } => {
+        Expr::Effect { value, .. } => check_resource_escape_expr(analyzer, binding, value),
+        Expr::Call { callee, args, .. } => {
+            check_resource_retained_by_call(analyzer, binding, callee, args);
             for arg in args {
-                check_resource_manage_escape(analyzer, binding, &arg.value);
+                check_resource_escape_expr(analyzer, binding, &arg.value);
             }
         }
-        Expr::Field { base, .. } => check_resource_manage_escape(analyzer, binding, base),
+        Expr::Field { base, .. } => check_resource_escape_expr(analyzer, binding, base),
         Expr::Closure { body, .. } => check_resource_escape(analyzer, binding, body),
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
     }
+}
+
+fn check_resource_retained_by_call(
+    analyzer: &mut Analyzer<'_>,
+    binding: &str,
+    callee: &Callee,
+    args: &[CallArg],
+) {
+    let Some(signature) = analyzer.resolve_callee(callee) else {
+        return;
+    };
+    if signature.retained_params.is_empty() {
+        return;
+    }
+    let retained_params = signature.retained_params.clone();
+
+    for arg in args {
+        let Some(name) = &arg.name else {
+            continue;
+        };
+        if retained_params.contains(name) && expr_is_binding_value(&arg.value, binding) {
+            resource_escape_diagnostic(analyzer, binding, arg.value.span().clone());
+        }
+    }
+}
+
+fn expr_is_binding_value(expr: &Expr, binding: &str) -> bool {
+    match expr {
+        Expr::Ident(name, _) => name == binding,
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
+            expr_is_binding_value(value, binding)
+        }
+        Expr::Field { base, .. } => expr_is_binding_value(base, binding),
+        Expr::Call { .. }
+        | Expr::Closure { .. }
+        | Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::Unknown(_) => false,
+    }
+}
+
+fn block_mentions_ident(block: &Block, binding: &str) -> bool {
+    let mut uses = Vec::new();
+    collect_block_idents(block, &mut uses);
+    uses.iter().any(|(name, _)| name == binding)
 }
 
 fn resource_escape_diagnostic(
@@ -386,6 +438,22 @@ fn resource_escape_diagnostic(
             "resource escapes",
         )
         .with_cause("A `with` resource must be dropped when the block exits."),
+    );
+}
+
+fn resource_capture_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    binding: &str,
+    span: crate::diagnostic::Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            "RS0702",
+            format!("resource `{binding}` cannot be captured by a managed closure."),
+            span,
+            "resource captured",
+        )
+        .with_cause("Managed closures may outlive the `with` block that owns the resource."),
     );
 }
 

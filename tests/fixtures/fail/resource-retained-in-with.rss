@@ -1,0 +1,25 @@
+// expect: RS0702
+mode: uses-local
+
+resource File {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+class Registry {
+    entries: List<File>
+}
+
+fn register(registry: mut Registry, file: read File) -> Unit
+    effects(retains(file))
+{
+}
+
+fn bad_retain(registry: mut Registry, path: read Path) -> Unit {
+    with File.open(path: read path) as file {
+        register(registry: mut registry, file: read file)
+    }
+}

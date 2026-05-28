@@ -1,0 +1,18 @@
+// expect: RS0702
+mode: uses-local
+
+resource File {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+fn bad_capture(path: read Path) -> Unit {
+    with File.open(path: read path) as file {
+        let callback = || {
+            File.read_all(file: mut file)
+        }
+    }
+}
