@@ -92,6 +92,7 @@ fn check_expr(analyzer: &mut Analyzer<'_>, expr: &HirExpr, noescape_bindings: &H
         }
         HirExpr::Effect { value, .. }
         | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
         | HirExpr::Try { value, .. } => {
             check_expr(analyzer, value, noescape_bindings);
         }
@@ -332,6 +333,7 @@ fn hir_expr_span(expr: &HirExpr) -> &Span {
         | HirExpr::Call { span, .. }
         | HirExpr::Effect { span, .. }
         | HirExpr::Manage { span, .. }
+        | HirExpr::Spawn { span, .. }
         | HirExpr::Try { span, .. }
         | HirExpr::Closure { span, .. }
         | HirExpr::Unknown(span) => span,

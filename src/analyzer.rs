@@ -353,6 +353,14 @@ impl Analyzer<'_> {
             Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
                 self.check_unsupported_syntax_expr(value);
             }
+            Expr::Spawn { value, span } => {
+                self.unsupported_syntax(
+                    span.clone(),
+                    "unsupported spawn expression",
+                    "`spawn` is currently review metadata only; executable async task lowering is not part of the v0.5 runtime yet.",
+                );
+                self.check_unsupported_syntax_expr(value);
+            }
             Expr::Closure { body, .. } => self.check_unsupported_syntax_block(body),
             Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) => {}
             Expr::Unknown(span) => self.unsupported_syntax(
@@ -470,7 +478,10 @@ impl Analyzer<'_> {
                     self.check_match_exhaustiveness_expr(&arg.value);
                 }
             }
-            Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
+            Expr::Effect { value, .. }
+            | Expr::Manage { value, .. }
+            | Expr::Spawn { value, .. }
+            | Expr::Try { value, .. } => {
                 self.check_match_exhaustiveness_expr(value);
             }
             Expr::Closure { body, .. } => self.check_match_exhaustiveness_block(body),
@@ -1004,7 +1015,7 @@ impl Analyzer<'_> {
                 }
                 self.check_runtime_guarantee_expr(guarantee, function_name, value);
             }
-            Expr::Effect { value, .. } | Expr::Try { value, .. } => {
+            Expr::Effect { value, .. } | Expr::Spawn { value, .. } | Expr::Try { value, .. } => {
                 self.check_runtime_guarantee_expr(guarantee, function_name, value);
             }
             Expr::Binary { left, right, .. } => {
@@ -1252,7 +1263,10 @@ impl Analyzer<'_> {
                 self.check_resource_pool_calls_in_expr(left);
                 self.check_resource_pool_calls_in_expr(right);
             }
-            Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
+            Expr::Effect { value, .. }
+            | Expr::Manage { value, .. }
+            | Expr::Spawn { value, .. }
+            | Expr::Try { value, .. } => {
                 self.check_resource_pool_calls_in_expr(value);
             }
             Expr::Field { base, .. } => self.check_resource_pool_calls_in_expr(base),
@@ -1332,7 +1346,10 @@ impl Analyzer<'_> {
                 self.check_resource_generic_calls_in_expr(left);
                 self.check_resource_generic_calls_in_expr(right);
             }
-            Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
+            Expr::Effect { value, .. }
+            | Expr::Manage { value, .. }
+            | Expr::Spawn { value, .. }
+            | Expr::Try { value, .. } => {
                 self.check_resource_generic_calls_in_expr(value);
             }
             Expr::Field { base, .. } => self.check_resource_generic_calls_in_expr(base),

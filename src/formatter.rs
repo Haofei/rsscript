@@ -286,6 +286,16 @@ impl Formatter {
                     self.expr(value, 6);
                 }
             }
+            Expr::Spawn { value, .. } => {
+                self.out.push_str("spawn ");
+                if matches!(**value, Expr::Binary { .. }) {
+                    self.out.push('(');
+                    self.expr(value, 0);
+                    self.out.push(')');
+                } else {
+                    self.expr(value, 6);
+                }
+            }
             Expr::Try { value, .. } => {
                 self.expr(value, 7);
                 self.out.push('?');

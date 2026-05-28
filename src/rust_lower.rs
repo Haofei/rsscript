@@ -846,6 +846,14 @@ impl<'a> RustLowerer<'a> {
                 });
                 self.record_expr_source_map(value, generated);
             }
+            Expr::Spawn { value, span } => {
+                self.source_map.push(RustSourceMapEntry {
+                    kind: "spawn".to_string(),
+                    source: span.clone(),
+                    generated: generated.clone(),
+                });
+                self.record_expr_source_map(value, generated);
+            }
             Expr::Try { value, span } => {
                 self.source_map.push(RustSourceMapEntry {
                     kind: "try".to_string(),
@@ -1017,6 +1025,7 @@ impl<'a> RustLowerer<'a> {
                     lower_source_span(span)
                 )
             }
+            Expr::Spawn { span, .. } => unreachable_lowering("spawn expression", span),
             Expr::Try { value, .. } => format!("{}?", self.lower_expr(value)),
             Expr::Closure { body, .. } => {
                 if let [Stmt::Expr(value)] = body.statements.as_slice() {
@@ -1326,7 +1335,7 @@ fn collect_mutated_bindings_from_expr(expr: &Expr, names: &mut BTreeSet<String>)
             }
             collect_mutated_bindings_from_expr(value, names);
         }
-        Expr::Manage { value, .. } | Expr::Try { value, .. } => {
+        Expr::Manage { value, .. } | Expr::Spawn { value, .. } | Expr::Try { value, .. } => {
             collect_mutated_bindings_from_expr(value, names);
         }
         Expr::Closure { body, .. } => collect_mutated_bindings_from_block(body, names),

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rsscript::syntax::ast::{EffectDecl, Item};
+use rsscript::syntax::ast::{EffectDecl, Expr, Item};
 use rsscript::syntax::parse_source;
 use rsscript::{
     NativeRustDependency, ReviewMapClassification, ReviewMapFileRisk, ReviewRisk, analyze_source,
@@ -3250,6 +3250,47 @@ async fn ping(url: read Url) -> Result<Unit, NetworkError>
 }
 
 #[test]
+fn review_map_marks_spawn_retention_boundary() {
+    let source = r#"
+features: async
+
+async fn fetch_user(client: read HttpClient, id: read UserId) -> Result<fresh User, HttpError>
+
+fn schedule(client: read HttpClient, id: read UserId) -> Unit {
+    let task = spawn fetch_user(client: read client, id: read id)
+    return Unit
+}
+"#;
+
+    let map = review_map_sources(vec![("spawn-map.rss", source)]);
+    let region = map.files[0]
+        .regions
+        .iter()
+        .find(|region| region.function == "schedule")
+        .expect("expected schedule region");
+
+    assert_eq!(
+        region.classification,
+        ReviewMapClassification::ReviewRequired
+    );
+    assert!(
+        region
+            .reasons
+            .iter()
+            .any(|reason| reason == "spawn task boundary"),
+        "{region:?}"
+    );
+    assert!(
+        region
+            .reasons
+            .iter()
+            .any(|reason| reason == "spawn retains-until-task-complete `client`, `id`"),
+        "{region:?}"
+    );
+    assert_eq!(map.summary.unknown.functions, 0);
+}
+
+#[test]
 fn review_map_marks_noescape_callback_calls_review_required_not_unknown() {
     let source = r#"
 features: local
@@ -3374,6 +3415,40 @@ async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError>
 }
 
 #[test]
+fn parser_preserves_spawn_expression() {
+    let source = r#"
+features: async
+
+async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError>
+
+fn schedule(url: read Url) -> Unit {
+    let task = spawn fetch(url: read url)
+    return Unit
+}
+"#;
+    let program = parse_source("spawn.rss", source);
+    let schedule = program
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Function(function) if function.name == "schedule" => Some(function),
+            _ => None,
+        })
+        .expect("expected schedule function");
+    let stmt = schedule
+        .body
+        .statements
+        .first()
+        .expect("expected task binding");
+
+    assert!(matches!(
+        stmt,
+        rsscript::syntax::ast::Stmt::Let(let_stmt)
+            if matches!(let_stmt.value.as_ref(), Some(Expr::Spawn { .. }))
+    ));
+}
+
+#[test]
 fn checker_reports_async_bodies_as_unsupported_until_async_lowering_exists() {
     let source = r#"
 features: async
@@ -3389,6 +3464,74 @@ async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError> {
             .iter()
             .any(|diagnostic| diagnostic.code == "RS0015"
                 && diagnostic.label == "unsupported async function body")
+    );
+}
+
+#[test]
+fn checker_reports_spawn_as_unsupported_until_async_lowering_exists() {
+    let source = r#"
+features: async
+
+async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError>
+
+fn schedule(url: read Url) -> Unit {
+    let task = spawn fetch(url: read url)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("spawn-body.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0015"
+                && diagnostic.label == "unsupported spawn expression")
+    );
+}
+
+#[test]
+fn checker_gates_spawn_on_async_feature() {
+    let source = r#"
+async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError>
+
+fn schedule(url: read Url) -> Unit {
+    let task = spawn fetch(url: read url)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("spawn-feature.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0101" && diagnostic.summary.contains("spawn")),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_rejects_spawn_capturing_local_value() {
+    let source = r#"
+features: async, local
+
+struct Image
+
+fn work(image: read Image) -> Unit
+
+fn schedule(path: read Path) -> Unit {
+    local image = Image()
+    let task = spawn work(image: read image)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("spawn-local.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0501"
+                && diagnostic.label == "local captured by spawn"),
+        "{diagnostics:?}"
     );
 }
 

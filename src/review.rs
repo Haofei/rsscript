@@ -465,6 +465,18 @@ fn review_map_region_draft(
     if facts.has_manage {
         reasons.push("manage boundary".to_string());
     }
+    if facts.has_spawn {
+        reasons.push("spawn task boundary".to_string());
+    }
+    if !facts.spawn_captures.is_empty() {
+        let captures = facts
+            .spawn_captures
+            .iter()
+            .map(|capture| format!("`{capture}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        reasons.push(format!("spawn retains-until-task-complete {captures}"));
+    }
     if facts.has_with {
         reasons.push("resource with block".to_string());
     }
@@ -533,6 +545,7 @@ struct ReviewMapRegionDraft {
 struct ReviewMapFacts {
     has_local: bool,
     has_manage: bool,
+    has_spawn: bool,
     has_with: bool,
     has_mut: bool,
     has_take: bool,
@@ -543,6 +556,7 @@ struct ReviewMapFacts {
     user_calls: BTreeSet<String>,
     unresolved_calls: BTreeSet<String>,
     callback_calls: BTreeSet<String>,
+    spawn_captures: BTreeSet<String>,
 }
 
 fn propagate_review_map_call_classifications(drafts: &mut [ReviewMapRegionDraft]) {
@@ -729,6 +743,11 @@ fn collect_review_map_facts_expr(
             facts.has_manage = true;
             collect_review_map_facts_expr(value, hir, callback_params, facts);
         }
+        Expr::Spawn { value, .. } => {
+            facts.has_spawn = true;
+            collect_spawn_capture_names(value, &mut facts.spawn_captures);
+            collect_review_map_facts_expr(value, hir, callback_params, facts);
+        }
         Expr::Try { value, .. } => {
             facts.has_error_boundary = true;
             collect_review_map_facts_expr(value, hir, callback_params, facts);
@@ -758,6 +777,114 @@ fn review_map_callback_call<'a>(
     match callee {
         Callee::Name(name) => callback_params.get(name).map(String::as_str),
         Callee::Qualified { .. } => None,
+    }
+}
+
+fn collect_spawn_capture_names(expr: &Expr, captures: &mut BTreeSet<String>) {
+    match expr {
+        Expr::Ident(name, _) => {
+            captures.insert(name.clone());
+        }
+        Expr::Effect { value, .. } | Expr::Try { value, .. } => {
+            collect_spawn_capture_names(value, captures);
+        }
+        Expr::Manage { .. } => {}
+        Expr::Call { args, .. } => {
+            for arg in args {
+                collect_spawn_capture_names(&arg.value, captures);
+            }
+        }
+        Expr::Field { base, name, .. } => {
+            if let Some(base_name) = spawn_capture_path(base) {
+                captures.insert(format!("{base_name}.{name}"));
+            } else {
+                collect_spawn_capture_names(base, captures);
+            }
+        }
+        Expr::Index { base, index, .. } => {
+            collect_spawn_capture_names(base, captures);
+            collect_spawn_capture_names(index, captures);
+        }
+        Expr::Binary { left, right, .. } => {
+            collect_spawn_capture_names(left, captures);
+            collect_spawn_capture_names(right, captures);
+        }
+        Expr::Spawn { value, .. } => collect_spawn_capture_names(value, captures),
+        Expr::Closure { body, .. } => {
+            for statement in &body.statements {
+                collect_spawn_capture_names_from_stmt(statement, captures);
+            }
+        }
+        Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+    }
+}
+
+fn collect_spawn_capture_names_from_stmt(stmt: &Stmt, captures: &mut BTreeSet<String>) {
+    match stmt {
+        Stmt::Let(stmt) => {
+            if let Some(value) = &stmt.value {
+                collect_spawn_capture_names(value, captures);
+            }
+        }
+        Stmt::Return(stmt) => {
+            if let Some(value) = &stmt.value {
+                collect_spawn_capture_names(value, captures);
+            }
+        }
+        Stmt::Expr(value) => collect_spawn_capture_names(value, captures),
+        Stmt::With(stmt) => {
+            collect_spawn_capture_names(&stmt.resource, captures);
+            for statement in &stmt.body.statements {
+                collect_spawn_capture_names_from_stmt(statement, captures);
+            }
+        }
+        Stmt::If(stmt) => {
+            collect_spawn_capture_names(&stmt.condition, captures);
+            for statement in &stmt.then_body.statements {
+                collect_spawn_capture_names_from_stmt(statement, captures);
+            }
+            if let Some(else_body) = &stmt.else_body {
+                for statement in &else_body.statements {
+                    collect_spawn_capture_names_from_stmt(statement, captures);
+                }
+            }
+        }
+        Stmt::Loop(stmt) => {
+            if let Some(condition) = &stmt.condition {
+                collect_spawn_capture_names(condition, captures);
+            }
+            for statement in &stmt.body.statements {
+                collect_spawn_capture_names_from_stmt(statement, captures);
+            }
+        }
+        Stmt::Match(stmt) => {
+            collect_spawn_capture_names(&stmt.value, captures);
+            for arm in &stmt.arms {
+                for statement in &arm.body.statements {
+                    collect_spawn_capture_names_from_stmt(statement, captures);
+                }
+            }
+        }
+        Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
+    }
+}
+
+fn spawn_capture_path(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Ident(name, _) => Some(name.clone()),
+        Expr::Field { base, name, .. } => {
+            spawn_capture_path(base).map(|base| format!("{base}.{name}"))
+        }
+        Expr::Effect { value, .. } | Expr::Try { value, .. } => spawn_capture_path(value),
+        Expr::Manage { .. }
+        | Expr::Spawn { .. }
+        | Expr::Index { .. }
+        | Expr::Call { .. }
+        | Expr::Binary { .. }
+        | Expr::Closure { .. }
+        | Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::Unknown(_) => None,
     }
 }
 
@@ -855,6 +982,7 @@ fn collect_review_map_hir_facts_expr(
         }
         HirExpr::Effect { value, .. }
         | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
         | HirExpr::Try { value, .. } => {
             collect_review_map_hir_facts_expr(value, local_bindings, facts);
         }
@@ -896,6 +1024,7 @@ fn hir_place_path_root(expr: &HirExpr) -> Option<&str> {
         HirExpr::Field { base, .. } | HirExpr::Index { base, .. } => hir_place_path_root(base),
         HirExpr::Effect { value, .. }
         | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
         | HirExpr::Try { value, .. } => hir_place_path_root(value),
         HirExpr::Binary { .. }
         | HirExpr::Call { .. }
@@ -911,9 +1040,9 @@ fn hir_place_path_crosses_handle_field(expr: &HirExpr) -> bool {
         HirExpr::Field { base, access, .. } => {
             access.is_handle || hir_place_path_crosses_handle_field(base)
         }
-        HirExpr::Index { base, .. } | HirExpr::Manage { value: base, .. } => {
-            hir_place_path_crosses_handle_field(base)
-        }
+        HirExpr::Index { base, .. }
+        | HirExpr::Manage { value: base, .. }
+        | HirExpr::Spawn { value: base, .. } => hir_place_path_crosses_handle_field(base),
         HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => {
             hir_place_path_crosses_handle_field(value)
         }
@@ -1649,7 +1778,7 @@ fn collect_boundary_expr(expr: &Expr, path: &str, boundary: &mut BoundarySig) {
             );
             collect_boundary_expr(value, &format!("{path}.take"), boundary);
         }
-        Expr::Effect { value, .. } | Expr::Try { value, .. } => {
+        Expr::Effect { value, .. } | Expr::Spawn { value, .. } | Expr::Try { value, .. } => {
             collect_boundary_expr(value, path, boundary);
         }
         Expr::Manage { value, .. } => {
@@ -1702,9 +1831,10 @@ fn push_boundary_event(
 fn boundary_expr_subject(expr: &Expr) -> Option<String> {
     match expr {
         Expr::Ident(name, _) => Some(name.clone()),
-        Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
-            boundary_expr_subject(value)
-        }
+        Expr::Effect { value, .. }
+        | Expr::Manage { value, .. }
+        | Expr::Spawn { value, .. }
+        | Expr::Try { value, .. } => boundary_expr_subject(value),
         Expr::Field { name, .. } => Some(format!(".{name}")),
         Expr::Index { .. } => None,
         Expr::Call { .. }

@@ -294,6 +294,11 @@ pub enum HirExpr {
         type_name: Option<String>,
         span: Span,
     },
+    Spawn {
+        value: Box<HirExpr>,
+        type_name: Option<String>,
+        span: Span,
+    },
     Try {
         value: Box<HirExpr>,
         type_name: Option<String>,
@@ -931,6 +936,11 @@ fn lower_hir_expr(
             type_name: infer_hir_expr_type(hir, expr, value_types),
             span: span.clone(),
         },
+        Expr::Spawn { value, span } => HirExpr::Spawn {
+            value: Box::new(lower_hir_expr(hir, function_name, value, value_types)),
+            type_name: infer_hir_expr_type(hir, expr, value_types),
+            span: span.clone(),
+        },
         Expr::Try { value, span } => HirExpr::Try {
             value: Box::new(lower_hir_expr(hir, function_name, value, value_types)),
             type_name: infer_hir_expr_type(hir, expr, value_types),
@@ -950,7 +960,7 @@ fn lower_hir_expr(
 fn effect_events_for_expr(function_name: &str, expr: &Expr) -> Vec<HirEffectEvent> {
     let event = match expr {
         Expr::Manage { value, span } => {
-            let Some((binding_name, value_span)) = direct_ident(value) else {
+            let Some((binding_name, value_span)) = direct_move_binding(value) else {
                 return Vec::new();
             };
             HirEffectEvent {
@@ -1195,6 +1205,14 @@ fn collect_body_facts_in_expr(
             }
             collect_body_facts_in_expr(hir, function_name, value, value_types, facts);
         }
+        Expr::Spawn { value, span } => {
+            facts.feature_uses.push(HirFeatureUse {
+                function_name: Some(function_name.to_string()),
+                kind: HirFeatureUseKind::Async,
+                span: span.clone(),
+            });
+            collect_body_facts_in_expr(hir, function_name, value, value_types, facts);
+        }
         Expr::Effect {
             effect: DataEffect::Take,
             value,
@@ -1337,6 +1355,9 @@ fn infer_hir_expr_type(
         Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
             infer_hir_expr_type(hir, value, value_types)
         }
+        Expr::Spawn { value, .. } => {
+            infer_hir_expr_type(hir, value, value_types).map(|ty| format!("Task<{ty}>"))
+        }
         Expr::Try { value, .. } => {
             infer_hir_expr_type(hir, value, value_types).and_then(|ty| result_ok_type(&ty))
         }
@@ -1387,7 +1408,10 @@ fn resource_pool_borrow_type(
 
 fn resource_pool_arg_type(expr: &Expr, value_types: &HashMap<String, String>) -> Option<String> {
     let type_name = match expr {
-        Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
+        Expr::Effect { value, .. }
+        | Expr::Manage { value, .. }
+        | Expr::Spawn { value, .. }
+        | Expr::Try { value, .. } => {
             return resource_pool_arg_type(value, value_types);
         }
         Expr::Ident(name, _) => value_types.get(name)?,
@@ -1523,9 +1547,10 @@ fn classify_return_expr(hir: &Hir, expr: &Expr) -> HirReturnProof {
                 | CallResolution::Unknown => HirReturnProof::Unknown,
             }
         }
-        Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
-            classify_return_expr(hir, value)
-        }
+        Expr::Effect { value, .. }
+        | Expr::Manage { value, .. }
+        | Expr::Spawn { value, .. }
+        | Expr::Try { value, .. } => classify_return_expr(hir, value),
         Expr::Field { .. }
         | Expr::Index { .. }
         | Expr::Binary { .. }
@@ -2207,7 +2232,8 @@ fn update(cache: mut ImageCache, config: mut Config, path: read Path) -> Unit {
         else {
             panic!("call argument should be a take expression");
         };
-        assert!(events.is_empty());
+        assert!(matches!(events[0].kind, HirEffectEventKind::Take));
+        assert_eq!(events[0].binding_name, "config.rules");
         let HirExpr::Field { access, .. } = value.as_ref() else {
             panic!("take value should be a field access");
         };

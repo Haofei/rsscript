@@ -272,6 +272,10 @@ fn check_expr_semantics(analyzer: &mut Analyzer<'_>, expr: &HirExpr, state: &Bod
                 check_expr_semantics(analyzer, &arg.value, state);
             }
         }
+        HirExpr::Spawn { value, .. } => {
+            check_spawn_captures(analyzer, value, state);
+            check_expr_semantics(analyzer, value, state);
+        }
         HirExpr::Effect {
             effect,
             value,
@@ -371,6 +375,119 @@ fn check_stmt_expr_semantics(analyzer: &mut Analyzer<'_>, statement: &HirStmt, s
     }
 }
 
+fn check_spawn_captures(analyzer: &mut Analyzer<'_>, value: &HirExpr, state: &BodyState) {
+    let mut captures = Vec::new();
+    collect_spawn_capture_idents(value, &mut captures);
+    for (name, span) in captures {
+        if state.is_local(&name) {
+            analyzer.diagnostics.push(
+                Diagnostic::error(
+                    code::LOCAL_VALUE_RETAINED,
+                    format!("spawn cannot capture local value `{name}`."),
+                    span,
+                    "local captured by spawn",
+                )
+                .with_cause("`spawn` may retain captured values until task completion.")
+                .with_fix(
+                    "manage_before_spawn",
+                    format!("Convert `{name}` through `manage` before spawning the task."),
+                    "manual",
+                ),
+            );
+        } else if state.is_resource(&name) {
+            resource_escape_diagnostic(analyzer, &name, span);
+        }
+    }
+}
+
+fn collect_spawn_capture_idents(expr: &HirExpr, captures: &mut Vec<(String, Span)>) {
+    match expr {
+        HirExpr::Ident { name, span, .. } => captures.push((name.clone(), span.clone())),
+        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => {
+            collect_spawn_capture_idents(value, captures);
+        }
+        HirExpr::Manage { .. } => {}
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                collect_spawn_capture_idents(&arg.value, captures);
+            }
+        }
+        HirExpr::Field { base, .. } => collect_spawn_capture_idents(base, captures),
+        HirExpr::Index { base, index, .. } => {
+            collect_spawn_capture_idents(base, captures);
+            collect_spawn_capture_idents(index, captures);
+        }
+        HirExpr::Binary { left, right, .. } => {
+            collect_spawn_capture_idents(left, captures);
+            collect_spawn_capture_idents(right, captures);
+        }
+        HirExpr::Spawn { value, .. } => collect_spawn_capture_idents(value, captures),
+        HirExpr::Closure { body, .. } => {
+            for statement in &body.statements {
+                collect_spawn_capture_idents_from_stmt(statement, captures);
+            }
+        }
+        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn collect_spawn_capture_idents_from_stmt(statement: &HirStmt, captures: &mut Vec<(String, Span)>) {
+    match statement {
+        HirStmt::Let {
+            value: Some(value), ..
+        }
+        | HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => collect_spawn_capture_idents(value, captures),
+        HirStmt::With { resource, body, .. } => {
+            collect_spawn_capture_idents(resource, captures);
+            for statement in &body.statements {
+                collect_spawn_capture_idents_from_stmt(statement, captures);
+            }
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            collect_spawn_capture_idents(condition, captures);
+            for statement in &then_body.statements {
+                collect_spawn_capture_idents_from_stmt(statement, captures);
+            }
+            if let Some(else_body) = else_body {
+                for statement in &else_body.statements {
+                    collect_spawn_capture_idents_from_stmt(statement, captures);
+                }
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                collect_spawn_capture_idents(condition, captures);
+            }
+            for statement in &body.statements {
+                collect_spawn_capture_idents_from_stmt(statement, captures);
+            }
+        }
+        HirStmt::Match { value, arms, .. } => {
+            collect_spawn_capture_idents(value, captures);
+            for arm in arms {
+                for statement in &arm.body.statements {
+                    collect_spawn_capture_idents_from_stmt(statement, captures);
+                }
+            }
+        }
+        HirStmt::Let { value: None, .. }
+        | HirStmt::Return { value: None, .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
 fn check_call_place_conflicts(analyzer: &mut Analyzer<'_>, args: &[HirCallArg], state: &BodyState) {
     let accesses = args
         .iter()
@@ -413,7 +530,9 @@ fn expr_moves_path(expr: &HirExpr) -> bool {
             ..
         }
         | HirExpr::Manage { .. } => true,
-        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => expr_moves_path(value),
+        HirExpr::Effect { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Try { value, .. } => expr_moves_path(value),
         HirExpr::Field { base, .. } => expr_moves_path(base),
         HirExpr::Index { base, index, .. } => expr_moves_path(base) || expr_moves_path(index),
         HirExpr::Binary { left, right, .. } => expr_moves_path(left) || expr_moves_path(right),
@@ -458,6 +577,7 @@ fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
         | HirExpr::Call { type_name, .. }
         | HirExpr::Effect { type_name, .. }
         | HirExpr::Manage { type_name, .. }
+        | HirExpr::Spawn { type_name, .. }
         | HirExpr::Try { type_name, .. } => type_name.as_deref(),
         HirExpr::Field { access, .. } => access.type_name.as_deref(),
         HirExpr::Binary { .. } | HirExpr::Index { .. } => None,
@@ -495,7 +615,7 @@ fn place_path(expr: &HirExpr) -> Option<PlacePath> {
             path.has_index = true;
             Some(path)
         }
-        HirExpr::Manage { value, .. } => place_path(value),
+        HirExpr::Manage { value, .. } | HirExpr::Spawn { value, .. } => place_path(value),
         _ => None,
     }
 }
@@ -773,6 +893,7 @@ fn apply_expr_effects(expr: &HirExpr, state: &mut BodyState) {
             state.apply_move_events(events);
             apply_expr_effects(value, state);
         }
+        HirExpr::Spawn { value, .. } => apply_expr_effects(value, state),
         HirExpr::Try { value, .. } => apply_expr_effects(value, state),
         HirExpr::Binary { left, right, .. } => {
             apply_expr_effects(left, state);
@@ -1050,6 +1171,7 @@ fn check_resource_pool_lease_expr(
         }
         HirExpr::Effect { value, .. }
         | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
         | HirExpr::Try { value, .. } => {
             check_resource_pool_lease_expr(analyzer, value, within_with_resource);
         }

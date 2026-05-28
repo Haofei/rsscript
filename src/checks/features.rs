@@ -41,7 +41,7 @@ fn feature_violation_summary(kind: HirFeatureUseKind) -> &'static str {
         HirFeatureUseKind::ResourcePool => "`ResourcePool<T>` requires `features: local`.",
         HirFeatureUseKind::Native => "`native` boundaries require `features: native`.",
         HirFeatureUseKind::Unsafe => "`unsafe` effects require `features: unsafe`.",
-        HirFeatureUseKind::Async => "`async fn` requires `features: async`.",
+        HirFeatureUseKind::Async => "`async fn`, `await`, and `spawn` require `features: async`.",
     }
 }
 
