@@ -586,9 +586,10 @@ Managed values are not Rust-owned values exposed to RSScript users.
 ## 7.2 Boundary-stable managed representation
 
 The managed layer is the default boundary-stable representation. Managed values
-may cross interface calls, async suspension points, and spawned task boundaries.
-Local values and resources may not cross those boundaries unless explicitly
-converted through `manage` or an approved resource container.
+may cross interface calls and, in the future executable async subset, same-isolate
+async suspension points and spawned task boundaries. Local values and resources
+may not cross those boundaries unless explicitly converted through `manage` or
+an approved resource container.
 
 This keeps app-layer interface and async semantics simple without hiding
 review-relevant retention, mutation, resource lifetime, or native boundaries.
@@ -687,20 +688,25 @@ unsupported  rejected before Rust lowering or reserved for later versions
 | `read x` call-site effect | Callee may inspect `x`. It is not a snapshot guarantee. For managed handles this is a shared runtime read view; ordinary contention waits/serializes rather than becoming a semantic error. For plain lowered values it is a Rust shared borrow. | static argument/effect checking; dynamic runtime diagnostics only for poison/internal/reentrant failures where `Managed<T>` read guards are used |
 | `mut x` call-site effect | Callee may mutate `x`. For managed handles, mutation goes through the runtime handle and acquires an exclusive runtime write view; ordinary contention waits/serializes rather than becoming a semantic error. | static argument/effect checking; dynamic runtime diagnostics only for poison/internal/reentrant failures where `Managed<T>` write guards are used |
 | `take x` call-site effect | Callee consumes a local/owned value. It is not valid for managed handles or handle fields. | static checking for parameter effect, managed value take, handle-field take, and local move/use |
+| same-call place conflicts | Within one call, `read/read` of the same place is allowed; `read/mut`, `mut/mut`, `take` with anything else, and `manage` with any other original-local use are rejected for the same or overlapping place. | static for syntactic/local-inline place conflicts; dynamic runtime diagnostics for non-obvious managed alias conflicts |
 | managed sharing | Managed values may be shared, stored, and cyclic. The reference runtime is reference-counted and lock-mediated. Strong cycles are representable and must use `weak` review markers at back edges when collection matters. | dynamic `Arc<RwLock<T>>`-like handle semantics for `Managed<T>`; weak handles implemented; cycle collection unsupported |
 | managed alias observes mutation | Aliases of the same managed handle observe mutation through the runtime handle. Alternative runtimes may optimize internally only if this RSScript-observable reference semantics is preserved. | dynamic for `Managed<T>` aliases; not a compile-time proof |
 | managed -> local | A managed value cannot be silently recovered as a local exclusive value, including through `read`/`mut` wrappers, enum wrappers, handle-field access, or enum wrappers around handle-field access. | static |
-| managed boundary crossing | Managed values and Copy values may cross interface calls, async suspension points, and spawned task boundaries. Local values and resources may not cross those boundaries unless explicitly converted through `manage` or an approved resource container. | static for local/resource boundary checks where implemented; dynamic for managed handle behavior |
+| managed boundary crossing | Managed values and Copy values may cross interface calls and future same-isolate async/task boundaries. Local values and resources may not cross those boundaries unless explicitly converted through `manage` or an approved resource container. | static for local/resource boundary checks where implemented; dynamic for managed handle behavior |
+| expression modes | Expressions are classified as `CopyValue`, `ManagedHandle`, `FreshShell`, `LocalValue`, `ResourceValue`, or `WeakHandle`. These are checker states, not user-written type kinds. | static/HIR checker state |
+| fresh shell materialization | `let` materializes fresh shells as managed values; `local` materializes them as local values; fresh returns preserve the fresh contract; `read fresh_expr` creates a managed temporary; `mut`/`take fresh_expr` require an explicit local binding first. | static for supported fresh/call/binding contexts |
 | `manage x` | Moves a local value into a managed runtime handle; the local binding is no longer usable. | static move/use checking plus generated runtime handle creation |
 | `effects(retains(x))` | Function may store a managed reference derived from `x` after return. Retaining a clean local value without `manage` is forbidden, including through enum wrappers such as `Some(local)` or `Ok(local)` and nested data-effect wrappers inside them. | static for declared retained parameters and known builtin/core signatures |
-| resource lifetime / `with` | Resource values must stay scoped to `with` and must not escape by direct return, enum wrapper return such as `Ok(resource)`/`Some(resource)`, managed storage, retention, or managed closure capture, including closure capture hidden inside enum wrappers. | static for implemented escape shapes; `ResourcePool<T>` is the privileged long-lived resource container |
+| runtime read/write guards | Runtime guards used to implement managed `read`/`mut` are not source-level borrows. They cannot be retained, stored, returned, or cross `await`. | dynamic implementation invariant plus static async/resource hardening where implemented |
+| resource lifetime / `with` | Resource values are transient linear values before `with` or an approved resource container. They must not escape by direct return, enum wrapper return such as `Ok(resource)`/`Some(resource)`, ordinary binding, managed storage, retention, or managed closure capture. | static for implemented escape shapes; `ResourcePool<T>` is the privileged long-lived resource container |
 | `fresh T` | Returned top-level struct shell is newly created and unaliased; the guarantee is shallow and does not make handle fields unique. Clean local values and clean inline fields may be returned directly or through `Ok`/`Some` wrappers. | static freshness analysis for supported constructors, fresh calls, branches/loops, handle-field restriction, and retained/managed-local pollution |
 | local partial access | Disjoint local fields may be accessed independently until a handle field or indexed container boundary is reached. | static for supported path shapes |
+| weak field access | Weak fields are non-owning handles and cannot be passed directly as `read T` or `mut T`; they must be explicitly upgraded to `Option<T>`. | static where weak field access is resolved; runtime weak upgrade semantics |
 | managed closure capture of local | Managed closures may not capture clean local values that could outlive the local region, including retained closures hidden inside enum wrappers. | static for supported closure shapes; `noescape Fn()` is the supported temporary-callback escape hatch |
 | `features: local` | Enables local ownership features (`local`, `manage`, `take`, `ResourcePool`, local closures). | static file-level gate |
 | `features: native` | Marks a native/Rust boundary. Bodyless native declarations are allowed through binding metadata; executable native bodies are not part of v0.5. | static gate plus package/native binding checks; executable body unsupported |
 | `features: unsafe` | Marks an explicit hazard boundary. It is separate from native and does not become a normal next layer. | review boundary and static feature gate for unsafe effects/native metadata; safe RSScript/runtime crates forbid Rust `unsafe` internally |
-| `async fn` | Async signatures are visible to review and interface diffing. Executable async bodies are not part of the v0.5 runtime. | static feature gate; executable body unsupported |
+| `async fn` | Async signatures are visible to review and interface diffing. Executable async bodies, `await`, and `spawn` are not part of the v0.5 executable runtime. | static feature gate; executable body unsupported; `spawn` may be parsed for review metadata and rejected before lowering |
 | `effects(no_panic)` | Function promises not to intentionally panic through known RSScript calls. This is not a whole-program proof over arbitrary native/runtime internals. | static over resolved constructors/enum variants/functions with matching guarantees; native/runtime trust boundary is review-required |
 | `effects(no_block)` | Function promises not to call known blocking APIs. This is not a scheduler or OS-level proof. | static over resolved constructors/enum variants/functions with matching guarantees; native/runtime trust boundary is review-required |
 | `effects(noalloc)` | Function promises no obvious heap allocation through supported RSScript constructs and calls. It is not a global allocator trace. | static for constructors, `manage`, and resolved calls with matching guarantee |
@@ -974,14 +980,93 @@ cannot be captured by managed closures
 Primary usage:
 
 ```rust
-with File.open(path: read path) as file {
+with File.open(path: read path)? as file {
     File.write(file: mut file, data: read data)
 }
 ```
 
 ---
 
+## 9.4 Expression modes and materialization
+
+RSScript expressions have checker modes. These modes are not user-written type
+kinds; they are semantic states used to define materialization, call effects,
+freshness, resource lifetime, and lowering.
+
+Expression modes:
+
+```text
+CopyValue
+ManagedHandle
+FreshShell
+LocalValue
+ResourceValue
+WeakHandle
+```
+
+Materialization contexts:
+
+```text
+let binding context
+local binding context
+return context
+call argument context
+with context
+container insertion context
+approved resource container context
+```
+
+A `fresh T` expression denotes an unmaterialized fresh struct shell. The
+ownership representation of that shell is selected only by an explicit language
+materialization context:
+
+```text
+let x = fresh_expr
+    materializes the shell as a managed value
+
+local x = fresh_expr
+    materializes the shell as a local value
+
+return fresh_expr from a function returning fresh T
+    preserves the fresh return mode
+
+Ok(fresh_expr) / Some(fresh_expr)
+    preserves freshness only when the enclosing return type is
+    Result<fresh T, E> / Option<fresh T>
+
+read fresh_expr
+    materializes a managed expression temporary
+
+mut fresh_expr / take fresh_expr
+    rejected unless the value is explicitly bound as local first
+```
+
+These are fixed language contexts, not user-defined conversions. RSScript does
+not provide implicit `From`/`Into`, auto-deref, overload, or managed-to-local
+conversion.
+
+Example:
+
+```rust
+Image.save(
+    image: read Image.load(path: read input)?,
+    path: read output,
+)
+```
+
+The fresh image result is materialized as a managed temporary for the `read`
+argument. If the callee needs `mut` or `take`, the value must be named as
+`local` first:
+
+```rust
+local image = Image.load(path: read input)?
+Image.resize(image: mut image, width: 800, height: 600)
+```
+
+---
+
 # 10. Field Model: Inline vs Handle
+
 
 Every field is either:
 
@@ -1070,6 +1155,26 @@ weak fields are for managed class identity objects
 In the MVP, `weak` fields may only target `class` types. This keeps weak references tied to the managed identity-object model and avoids implying weak ownership for inline value structs.
 
 Generated Rust lowers a weak field to the runtime weak-handle surface, not to a direct Rust reference.
+
+A weak field cannot be used directly as `read T` or `mut T`. It must be
+explicitly upgraded to a managed handle option:
+
+```rust
+let maybe_owner = Weak.upgrade(value: read session.owner)
+
+match maybe_owner {
+    Some(owner) => User.log(user: read owner)
+    None => Log.write(message: read "owner gone")
+}
+```
+
+Invalid:
+
+```rust
+User.log(user: read session.owner)
+```
+
+The explicit upgrade keeps possible target disappearance review-visible.
 
 ---
 
@@ -1183,7 +1288,7 @@ cannot be captured by managed closures
 `with` introduces a scoped resource binding.
 
 ```rust
-with File.open(path: read path) as file {
+with File.open(path: read path)? as file {
     File.write(file: mut file, data: read data)?
 }
 ```
@@ -1301,6 +1406,13 @@ hash(data: read bytes)
 
 A `read` parameter may not be retained unless `retains(param)` is present.
 
+`read` is a source-level data permission, not a first-class borrow. For managed
+values, the implementation may acquire a runtime read guard while actually
+inspecting fields. Such guards are implementation details.
+
+Runtime read/write guards cannot escape a function call, cannot be stored,
+cannot be retained, and cannot cross `await`.
+
 ---
 
 ## 13.2 `mut`
@@ -1360,7 +1472,41 @@ fn resize(image: mut Image, width: Int, height: Int) -> Unit
 
 ---
 
+## 13.5 Same-call place conflicts
+
+Within a single call expression, argument places must be pairwise compatible.
+
+If two arguments refer to the same syntactic place or overlapping local-inline
+place:
+
+```text
+read + read is allowed
+read + mut is rejected
+mut + mut is rejected
+take with anything else is rejected
+manage with any other use of the original local binding is rejected
+```
+
+Examples:
+
+```rust
+Foo.run(a: read x, b: read x)              // allowed
+Foo.run(a: mut x, b: read x)               // error
+Foo.run(a: mut x, b: mut x)                // error
+Foo.run(a: take x, b: read x)              // error
+Foo.run(a: read (manage x), b: read x)     // error
+```
+
+This static syntactic-place rule catches obvious conflicts. If two different
+managed variables alias the same runtime handle and a same-isolate reentrant
+read/write conflict is only visible dynamically, the managed runtime must report
+an RSScript runtime diagnostic rather than deadlocking or surfacing a raw Rust
+lock/borrow error.
+
+---
+
 # 14. Field-Level Effects and Partial Local Access
+
 
 Field-level access is intentionally conservative.
 
@@ -1594,6 +1740,28 @@ fn hash(data: read Bytes) -> UInt64
 | `native` | function crosses native FFI |
 | `retains(x)` | function may retain parameter `x` after returning |
 
+The syntax is deliberately unified, but the effects have distinct semantic
+classes:
+
+```text
+Retention effects:
+  retains(x)
+
+Boundary effects:
+  native
+  unsafe
+
+Guarantee effects:
+  pure
+  no_panic
+  noalloc
+  no_block
+```
+
+Guarantee effects are checked only over RSScript-known constructs and trusted
+signature metadata. They are not whole-program proofs over arbitrary native or
+runtime internals.
+
 ---
 
 ## 15.3 `retains(x)`
@@ -1604,6 +1772,9 @@ fn hash(data: read Bytes) -> UInt64
 fn cache_put(cache: mut Cache, key: read String, value: read Image) -> Unit
     effects(retains(value))
 ```
+
+`retains(x)` retains a managed handle or value derived from `x`; it must not
+retain an active runtime read guard or write guard.
 
 A local value cannot be passed directly to a retaining parameter. This includes
 local-inline fields reached without crossing a `handle` or `weak` field.
@@ -1648,11 +1819,20 @@ fn load(path: read Path) -> Result<Image, ImageError>
 
 ---
 
-## 15.5 Async execution model, future executable subset
+## 15.5 Async signatures in v0.5
 
 In the current v0.5 implementation target, `async fn` is a review-visible
-signature boundary and executable async bodies are unsupported. The first
-executable async subset must stay narrow and review-first.
+signature boundary. Executable async function bodies, `await`, and `spawn` are
+unsupported before lowering in v0.5.
+
+Any text below describing `await` or `spawn` is a future executable async
+candidate, not part of the v0.5 executable language.
+
+---
+
+## 15.6 Future executable async candidate
+
+The first executable async subset must stay narrow and review-first.
 
 RSScript async must not expose Rust's `Future`, `Pin`, `Poll`, `Waker`, executor
 internals, or lifetime-across-await machinery to RSScript users.
@@ -1787,6 +1967,11 @@ async function calling unresolved or non-no_block sync function
 
 Unknown async callees, incomplete native async metadata, and unmappable backend
 async diagnostics must be classified as unknown, not safe.
+
+The future executable async subset assumes same-isolate cooperative tasks.
+`spawn` does not imply cross-thread execution. Managed values may cross
+same-isolate task boundaries only. Cross-isolate or cross-thread transfer is
+unsupported until an explicit `Send`/`Share` capability exists.
 
 ---
 
@@ -1948,6 +2133,19 @@ Resources are not fresh values.
 let image = Image.load(path: read path)?
 local image = Image.load(path: read path)?
 ```
+
+The returned `fresh Image` is a `FreshShell` until the binding context
+materializes it:
+
+```text
+let image = ...
+    managed materialization
+
+local image = ...
+    local materialization
+```
+
+This is the same fixed materialization rule defined in section 9.4.
 
 ---
 
@@ -2151,10 +2349,51 @@ Handle fields are not deep-cloned.
 Resources require deterministic cleanup.
 
 ```rust
-with File.open(path: read path) as file {
+with File.open(path: read path)? as file {
     File.write(file: mut file, data: read data)?
 }
 ```
+
+A resource-producing expression may return `R` or `Result<R, E>` only if the
+resource value is immediately consumed by a resource context.
+
+Resource values are transient linear values before they enter a `with` binding
+or an approved resource container.
+
+Legal resource consumption contexts:
+
+```text
+with File.open(...)? as file { ... }
+ResourcePool<T>.new(...)
+approved resource container insertion
+immediate resource lease APIs
+```
+
+Invalid:
+
+```rust
+let file = File.open(path: read path)?
+return Ok(file)
+let files = List<File>.new()
+```
+
+Canonical syntax for `Result<R, E>` resource producers uses explicit `?`:
+
+```rust
+with File.open(path: read path)? as file {
+    File.write(file: mut file, data: read data)?
+}
+```
+
+The compatibility form:
+
+```rust
+with File.open(path: read path) as file { ... }
+```
+
+may be accepted by v0.5 tooling for older examples, but it should warn when the
+producer returns `Result<R, E>`. v0.6 should require explicit `?` for
+Result-returning resource producers.
 
 ---
 
@@ -2291,6 +2530,28 @@ fn first<T: Managed>(items: read List<T>) -> Option<T>
 ```
 
 Resource types are not `Managed`.
+
+`T: Managed` is a capability bound, not a declaration kind. More precisely, it
+means "managed-capable":
+
+```text
+values of T may appear in managed bindings
+values of T may appear in managed containers
+values of T may be retained through declared retains effects
+values of T may be represented by managed handles when needed
+```
+
+Rules:
+
+```text
+class types are always Managed
+struct types are Managed-capable unless they contain resource fields or are otherwise restricted
+resource types are never Managed
+Copy types satisfy Managed only as values inside managed containers; Copy values do not require read/mut/take effects
+```
+
+The source spelling remains `T: Managed` for brevity; the semantic meaning is
+the managed-capable bound.
 
 ---
 
@@ -3101,6 +3362,24 @@ internal compiler diagnostic with generated Rust reference
 
 not raw Rust output as the primary diagnostic.
 
+Unmapped diagnostics must be classified by origin:
+
+```text
+mapped_user_diagnostic
+mapped_backend_diagnostic
+unmapped_backend_environment_error
+unmapped_native_binding_error
+compiler_bug
+```
+
+If a diagnostic originates from a user-originating lowered construct and cannot
+be mapped, classify it as `compiler_bug`.
+
+If a diagnostic originates from Cargo, the linker, a native dependency, runtime
+crate version mismatch, platform configuration, or another environment issue,
+classify it as `unmapped_backend_environment_error` or
+`unmapped_native_binding_error` as appropriate.
+
 ---
 
 ## 32.3 Diagnostic translation quality
@@ -3203,9 +3482,21 @@ A review map classifies code regions as:
 entry_point
 must_review
 review_if_changed
+low_semantic_risk
+unknown
+```
+
+`safe_to_skip` is deprecated as a primary name because it can overstate what the
+tool proves. New human-facing output should use `low_semantic_risk`. Existing
+JSON schema v1 may retain `safe_to_skip` as a compatibility alias; schema v2
+should use `low_semantic_risk` and may include `legacy_classification:
+safe_to_skip` during migration.
+
+Legacy aliases:
+
+```text
 safe_to_skim
 safe_to_skip
-unknown
 ```
 
 ---
@@ -3268,9 +3559,10 @@ This file-level risk does not require every helper function in the file to be cl
 
 ---
 
-## 33.6 Safe to skip
+## 33.6 Low semantic risk
 
-A function may be classified safe-to-skip only if all of the following hold:
+A function may be classified `low_semantic_risk` only if all of the following
+hold:
 
 ```text
 private
@@ -3291,9 +3583,11 @@ Call propagation must use the resolved fully qualified RSScript function name.
 For example, a call to `Cache.remember` must inherit the review classification
 of `Cache.remember`, not an unrelated short name `remember`.
 
-Safe-to-skip does not mean logically correct.
+Low semantic risk does not mean logically correct.
 
 It means no language-visible side-effect, resource, retention, native, or local/managed boundary risk.
+
+`unknown` is never `low_semantic_risk`.
 
 ---
 
@@ -3301,7 +3595,7 @@ It means no language-visible side-effect, resource, retention, native, or local/
 
 If the tool cannot classify a region, it must mark it unknown.
 
-Unknown must not be classified as safe-to-skip.
+Unknown must not be classified as low semantic risk or safe-to-skip.
 
 An unresolved direct call makes the containing region unknown even when the
 function is public or otherwise review-required; the public/API reason should be
@@ -3328,6 +3622,10 @@ ResourcePool borrowing, counter mutation, and HTTP-style orchestration.
 ---
 
 ## 33.8 Review map JSON
+
+The example below uses JSON schema v1, which retains `safe_to_skip` field names
+for compatibility. New human-facing output should label this category
+`low_semantic_risk`.
 
 Example:
 
