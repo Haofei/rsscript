@@ -583,7 +583,19 @@ Managed values are not Rust-owned values exposed to RSScript users.
 
 ---
 
-## 7.2 Managed aliasing is runtime-mediated
+## 7.2 Boundary-stable managed representation
+
+The managed layer is the default boundary-stable representation. Managed values
+may cross interface calls, async suspension points, and spawned task boundaries.
+Local values and resources may not cross those boundaries unless explicitly
+converted through `manage` or an approved resource container.
+
+This keeps app-layer interface and async semantics simple without hiding
+review-relevant retention, mutation, resource lifetime, or native boundaries.
+
+---
+
+## 7.3 Managed aliasing is runtime-mediated
 
 In v0.5, managed value aliasing and mutation are mediated by the RSScript runtime, not by Rust's source-level borrow checker.
 
@@ -611,7 +623,7 @@ Therefore, generated Rust will usually represent managed values through runtime 
 
 ---
 
-## 7.3 What rustc checks and does not check
+## 7.4 What rustc checks and does not check
 
 rustc may check generated Rust implementation correctness.
 
@@ -633,7 +645,7 @@ Managed dynamic mutation is a runtime model.
 
 ---
 
-## 7.4 Semantic guarantee table
+## 7.5 Semantic guarantee table
 
 The table below is normative for the v0.5 implementation target. It prevents
 the source language from promising more than the compiler/runtime can currently
@@ -656,6 +668,7 @@ unsupported  rejected before Rust lowering or reserved for later versions
 | managed sharing | Managed values may be shared, stored, and cyclic. Strong cycles are representable and must use `weak` review markers at back edges when collection matters. | dynamic `Arc<RwLock<T>>` handle semantics for `Managed<T>`; weak handles implemented; cycle collection unsupported |
 | managed alias observes mutation | Aliases of the same managed handle observe mutation through the runtime handle. Ordering is the ordering of the generated Rust execution plus the runtime lock implementation; no stronger memory model is promised. | dynamic for `Managed<T>` aliases; not a compile-time proof |
 | managed -> local | A managed value cannot be silently recovered as a local exclusive value, including through `read`/`mut` wrappers or handle-field access. | static |
+| managed boundary crossing | Managed values and Copy values may cross interface calls, async suspension points, and spawned task boundaries. Local values and resources may not cross those boundaries unless explicitly converted through `manage` or an approved resource container. | static for local/resource boundary checks where implemented; dynamic for managed handle behavior |
 | `manage x` | Moves a local value into a managed runtime handle; the local binding is no longer usable. | static move/use checking plus generated runtime handle creation |
 | `effects(retains(x))` | Function may store a managed reference derived from `x` after return. Retaining a clean local value without `manage` is forbidden. | static for declared retained parameters and known builtin/core signatures |
 | resource lifetime / `with` | Resource values must stay scoped to `with` and must not escape by direct return, enum wrapper return such as `Ok(resource)`/`Some(resource)`, managed storage, retention, or closure capture. | static for implemented escape shapes; `ResourcePool<T>` is the privileged long-lived resource container |
@@ -682,7 +695,7 @@ diagnostics before v0.5 can be called semantically hard.
 
 ---
 
-## 7.5 Runtime conflicts
+## 7.6 Runtime conflicts
 
 RSScript managed mutation semantics are dynamically shared.
 
@@ -696,7 +709,7 @@ Any runtime conflict must be reported as an RSScript runtime diagnostic with RSS
 
 ---
 
-## 7.6 No Rust lifetime leakage
+## 7.7 No Rust lifetime leakage
 
 Generated Rust must not leak lifetime parameters, `RefCell`, `Rc`, `Arc`, `Mutex`, or other backend representation details into RSScript diagnostics unless explicitly marked as an internal compiler/runtime error.
 
@@ -1687,9 +1700,26 @@ and should be elevated review risk because the task may outlive the caller.
 Async bodies must not directly call sync functions unless those functions are
 known constructors, enum variants, or declared `effects(no_block)`.
 
-Local values must not be live across `await`. Resources must not cross `await`.
-In particular, `await` inside an ordinary `with` resource scope is not allowed
-in this subset. Future versions may introduce `async with`, but v0.5 does not.
+The cross-`await` rule is deliberately simple:
+
+```text
+managed values may cross await
+Copy values may cross await
+local values may not cross await
+resources may not cross await
+```
+
+This avoids exposing Future state-machine borrowing, pinned self-references, and
+Rust lifetime diagnostics to RSScript users. If local data must cross an await
+boundary, it must first become managed:
+
+```rust
+let body = manage buffer
+let response = await HttpClient.send_body(client: read client, body: read body)?
+```
+
+`await` inside an ordinary `with` resource scope is not allowed in this subset.
+Future versions may introduce `async with`, but v0.5 does not.
 
 Managed values may be used before and after `await`, and async callees may take
 `mut` managed parameters. The caller must not hold a managed read/write runtime
@@ -2339,6 +2369,27 @@ means:
 interface X<Self: Managed>
 ```
 
+Because `Self` defaults to the managed-capable layer, interface receivers stay
+review-visible without Rust receiver machinery:
+
+```text
+self: read Self  = read through the managed boundary
+self: mut Self   = mutate through the managed/runtime boundary
+retains(value)   = may store a managed handle or managed value
+```
+
+RSScript users do not need to choose between:
+
+```text
+&T
+&mut T
+Box<dyn Trait>
+Arc<dyn Trait + Send + Sync>
+impl Trait
+lifetime of self
+object safety rules
+```
+
 Allowed `Self` bounds are:
 
 ```text
@@ -2421,7 +2472,12 @@ let services = List<Logger>.new()        // not v0.5
 ```
 
 If dynamic dispatch is added later, it must be a separate review-visible feature
-such as `features: dyn_interface`, with explicit syntax.
+such as `features: dyn_interface`, with explicit syntax and a managed dynamic
+handle boundary:
+
+```rust
+let logger = dyn Logger.from(value: read console)
+```
 
 `.rssi` public contracts may eventually declare interfaces and impl mappings.
 Semantic diff and review map must treat interface changes as review-relevant,
