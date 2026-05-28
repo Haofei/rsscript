@@ -1,5 +1,5 @@
 use crate::analyzer::Analyzer;
-use crate::diagnostic::{Diagnostic, code};
+use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::{
     HirBindingKind, HirBlock, HirCallArg, HirExpr, HirStmt, HirTypeKind, ParamEffect,
 };
@@ -235,6 +235,9 @@ fn check_expr_semantics(analyzer: &mut Analyzer<'_>, expr: &HirExpr, state: &Bod
         HirExpr::Effect { value, .. }
         | HirExpr::Manage { value, .. }
         | HirExpr::Try { value, .. } => {
+            if let HirExpr::Try { span, .. } = expr {
+                check_try_value_is_result(analyzer, value, span);
+            }
             check_expr_semantics(analyzer, value, state);
         }
         HirExpr::Binary { left, right, .. } => {
@@ -360,6 +363,52 @@ fn expr_moves_path(expr: &HirExpr) -> bool {
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => false,
     }
+}
+
+fn check_try_value_is_result(analyzer: &mut Analyzer<'_>, value: &HirExpr, span: &Span) {
+    let Some(type_name) = hir_expr_type_name(value) else {
+        return;
+    };
+    if is_result_type(type_name) {
+        return;
+    }
+
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::INVALID_TRY_OPERATOR,
+            "`?` can only be applied to a Result value.",
+            span.clone(),
+            "invalid try operator",
+        )
+        .with_cause(format!(
+            "The expression before `?` has type `{type_name}`, not `Result<T, E>`."
+        ))
+        .with_fix(
+            "remove_try_or_return_result",
+            "Remove `?`, or call an API that returns `Result<T, E>`.",
+            "manual",
+        ),
+    );
+}
+
+fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
+    match expr {
+        HirExpr::Ident { type_name, .. }
+        | HirExpr::Call { type_name, .. }
+        | HirExpr::Effect { type_name, .. }
+        | HirExpr::Manage { type_name, .. }
+        | HirExpr::Try { type_name, .. } => type_name.as_deref(),
+        HirExpr::Field { access, .. } => access.type_name.as_deref(),
+        HirExpr::Binary { .. } | HirExpr::Index { .. } => None,
+        HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Closure { .. }
+        | HirExpr::Unknown(_) => None,
+    }
+}
+
+fn is_result_type(type_name: &str) -> bool {
+    type_name == "Result" || type_name.starts_with("Result<")
 }
 
 fn place_path(expr: &HirExpr) -> Option<PlacePath> {
