@@ -1,18 +1,18 @@
 # RSScript
 
-**A reviewable systems scripting language for code AI writes and humans still have to trust.**
+**A constrained, review-first source format for AI-generated systems code with Rust-backed execution.**
 
 ```text
-Reviewable source.
-Rust-backed execution.
-Native escape hatches when they are worth reviewing.
+AI codegen target.
+Semantic review protocol.
+Rust lowering backend.
 ```
 
 This came out of reviewing 100k+ lines of AI-generated Rust over six months. The same shapes kept hurting: `Arc<Mutex<HashMap<...>>>` stacked four deep, signatures with eight trait bounds where one would do, `Pin<Box<dyn Future<...>>>` blocking the view of what a function actually does, retention buried three call levels down, four hundred lines of correct-but-dense code in a single PR where the important ten percent was hard to find. The Rust compiler accepted it. Review still took too much human attention.
 
-There's also a long-standing wishlist for this kind of language: managed-by-default app code, explicit performance escapes, and a direct path back to native systems work. The request shows up in `/r/rust` threads and language-design posts regularly. AI review pain is what finally made the cost/benefit click for me.
+There's also a long-standing wishlist for managed-by-default app code, explicit performance escapes, and a direct path back to native systems work. The request shows up in `/r/rust` threads and language-design posts regularly. AI review pain is what finally made the cost/benefit click for me.
 
-RSScript is a new language front end that lowers to Rust. It keeps rustc, Cargo, and the crate ecosystem; it compresses the surface so a reviewer's first read costs less, and pushes mutation, retention, resources, and native boundaries into the signature where review can see them. Advanced Rust remains available through `features: native` as an explicit review boundary.
+RSScript is an AI codegen target and semantic review protocol that lowers to Rust. It keeps rustc, Cargo, and the crate ecosystem; it compresses the source surface so a reviewer's first read costs less, and pushes mutation, retention, resources, and native boundaries into the signature where review can see them. Advanced Rust remains available through `features: native` as an explicit review boundary.
 
 Rust is excellent at library boundaries: generic abstractions, precise ownership, trait-driven APIs, async runtimes, and zero-cost escape hatches. Application code usually wants a different register: concrete data, direct control flow, visible mutation, visible retention, and few abstraction choices. RSScript makes that application register the default surface for AI-generated code, while keeping Rust as the place for library implementation and native wrapper work.
 
@@ -20,7 +20,7 @@ That distinction matters more with AI in the loop. When a model writes Rust appl
 
 ---
 
-## Why a Smaller Review Surface
+## Why a Review Protocol
 
 The obvious alternative is proc-macros, a Clippy ruleset, and a review tool over Rust directly. The problem is that **Rust's signatures themselves are part of the review cost**. `Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'a>>` carries four bits a reviewer needs and a dozen bits that exist to satisfy the type system. A smaller source language changes the surface itself, instead of asking tools to recover intent afterward. And AI, trained on every clever Rust crate on GitHub, is gradient-descending into that surface every time it generates code.
 
@@ -29,7 +29,7 @@ A smaller front end fixes two things at once:
 - **The signature** a human reads becomes shorter and load-bearing in different ways.
 - **The AI's option space** shrinks. RSScript gives the generator fewer complex shapes to reach for. Constraint is the product.
 
-RSScript is not a Rust syntax profile, macro layer, or Clippy ruleset. It has its own source syntax, effects, package contracts, diagnostics, and review metadata. Rust is the backend target and ecosystem substrate, not the user-facing language model.
+The product core is the review protocol: `.rssi` semantic contracts, structured diagnostics, source-mapped backend errors, review maps, and semantic diffs. The source language exists to make those review artifacts reliable and cheap to compute. Rust is the backend target and ecosystem substrate.
 
 Before AI, writing code was expensive and reviewing was manageable. That ratio has flipped: generating is cheap, reviewing is the bottleneck. RSScript is designed for the new ratio: AI writes, the compiler checks semantic boundaries, humans focus on the *risk*. What mutates, what gets retained, who owns a resource, where you cross into native or unsafe, what changed in a public API — all of it lives in the signature and in machine-readable diagnostics.
 
@@ -223,9 +223,9 @@ RSScript source
   → executable or library
 ```
 
-RSScript owns the front end: syntax, semantic checks, effects, managed/local/resource rules, diagnostics, review metadata, source mapping, core signatures. Rust owns everything below: codegen, optimization, platform support, linking, the crate ecosystem.
+RSScript owns the review-facing front end: syntax, semantic checks, effects, managed/local/resource rules, diagnostics, review metadata, source mapping, core signatures. Rust owns everything below: codegen, optimization, platform support, linking, the crate ecosystem.
 
-This makes RSScript a new language front end with a deliberately borrowed backend, not a new backend project. The value is in the front end; the back end is Rust's strongest territory, and RSScript leans into that strength.
+This makes RSScript a review-first source format with a deliberately borrowed backend. The value is in the semantic protocol; the back end is Rust's strongest territory, and RSScript leans into that strength.
 
 ---
 

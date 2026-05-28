@@ -9,23 +9,24 @@ Compatibility note: v0.5 preserves the v0.4.x language core and reorganizes the 
 
 # 0. Executive Summary
 
-RSScript (**Reviewable System Script**) is a **managed systems language for AI-era software**.
+RSScript (**Reviewable System Script**) is a **constrained, review-first source
+format for AI-generated systems code with Rust-grade execution**.
 
 Its design target is:
 
 ```text
-Easy by default.
-Fast when local.
-Reviewable by design.
+AI codegen target.
+Semantic review protocol.
+Rust lowering backend.
 ```
 
 RSScript is:
 
 ```text
-a managed-first language
-with explicit local capability
-semantic review tooling
-and Rust-backed execution.
+a source format for generated application-level systems code
+with explicit semantic boundaries
+machine-readable review artifacts
+and Rust-backed execution
 ```
 
 v0.5 keeps the v0.4.x semantic core:
@@ -52,7 +53,7 @@ Generated Rust is treated as typed implementation IR.
 
 This is the intended implementation architecture until there is evidence that Rust source lowering blocks RSScript semantics.
 
-RSScript's value is in its **frontend semantics**:
+RSScript's value is in its **semantic review protocol**:
 
 ```text
 review-first syntax
@@ -62,7 +63,9 @@ resource lifetime
 freshness
 retention
 semantic review maps
+semantic diffs
 structured diagnostics
+source-mapped backend diagnostics
 ```
 
 These are independent of machine-code generation. Rust source lowering lets RSScript invest in the frontend and review model instead of duplicating rustc.
@@ -92,6 +95,7 @@ RSScript is designed for this workflow:
 AI writes code.
 Humans review semantic changes.
 Tools explain risk.
+rustc executes the lowered implementation.
 ```
 
 The language makes review-critical behavior explicit:
@@ -106,7 +110,12 @@ freshness guarantees
 native/unsafe boundaries
 ```
 
-RSScript accepts more explicit code in exchange for less ambiguity and better tooling.
+RSScript accepts more explicit code in exchange for less ambiguity and stronger
+review artifacts.
+
+The language surface is a means to that end. v0.5 should be judged by whether
+it reliably produces reviewable contracts, diagnostics, maps, diffs, and
+source-mapped Rust execution for AI-generated systems code.
 
 ---
 
@@ -270,11 +279,15 @@ machine-readable JSON form
 
 ## 2.7 Rust is a backend, not the language model
 
-RSScript may lower to Rust source, but Rust syntax, lifetime parameters, trait-bound complexity, and borrow-checker diagnostics are not user-facing RSScript semantics.
+RSScript lowers to Rust source while keeping Rust syntax, lifetime parameters,
+trait-bound complexity, and borrow-checker diagnostics behind the RSScript
+review protocol.
 
 Valid RSScript code should not require the user to understand generated Rust.
 
-RSScript is therefore a new language front end, not a Rust syntax profile, macro layer, or lint configuration. The compiler owns RSScript syntax, semantic checks, source-mapped diagnostics, package contracts, and review metadata. Rust owns backend compilation after lowering.
+The compiler owns RSScript syntax, semantic checks, source-mapped diagnostics,
+package contracts, and review metadata. Rust owns backend compilation after
+lowering.
 
 ---
 
