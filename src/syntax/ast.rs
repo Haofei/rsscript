@@ -147,6 +147,12 @@ pub enum Expr {
     Ident(String, Span),
     Number(String, Span),
     String(String, Span),
+    Binary {
+        op: BinaryOp,
+        left: Box<Expr>,
+        right: Box<Expr>,
+        span: Span,
+    },
     Field {
         base: Box<Expr>,
         name: String,
@@ -173,6 +179,12 @@ pub enum Expr {
     Unknown(Span),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinaryOp {
+    LogicalAnd,
+    LogicalOr,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Callee {
     Name(String),
@@ -192,6 +204,7 @@ impl Expr {
             Self::Ident(_, span)
             | Self::Number(_, span)
             | Self::String(_, span)
+            | Self::Binary { span, .. }
             | Self::Field { span, .. }
             | Self::Call { span, .. }
             | Self::Effect { span, .. }

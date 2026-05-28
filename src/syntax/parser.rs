@@ -1,8 +1,8 @@
 use crate::lexer::{Token, TokenKind, lex};
 use crate::syntax::ast::{
-    Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileMode, FunctionDecl,
-    IfStmt, Item, LetKind, LetStmt, LoopStmt, Param, Program, ReturnStmt, Stmt, TypeDecl, TypeKind,
-    TypeRef, WithStmt,
+    BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileMode,
+    FunctionDecl, IfStmt, Item, LetKind, LetStmt, LoopStmt, Param, Program, ReturnStmt, Stmt,
+    TypeDecl, TypeKind, TypeRef, WithStmt,
 };
 
 pub fn parse_source(file: &str, source: &str) -> Program {
@@ -526,6 +526,10 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
         });
     }
 
+    if let Some(binary) = parse_binary_expr(tokens, start, end) {
+        return Some(binary);
+    }
+
     if let Some(effect) = parse_data_effect(tokens.get(start)) {
         let value_start = start + 1;
         let value = if tokens
@@ -581,6 +585,59 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
         TokenKind::String(value) => Some(Expr::String(value.clone(), tokens[start].span.clone())),
         _ => Some(Expr::Unknown(tokens[start].span.clone())),
     }
+}
+
+fn parse_binary_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
+    find_top_level_binary_operator(tokens, start, end, "|", "|")
+        .or_else(|| find_top_level_binary_operator(tokens, start, end, "&", "&"))
+        .and_then(|(operator, op)| {
+            let left = parse_expr(tokens, start, operator)?;
+            let right = parse_expr(tokens, operator + 2, end)?;
+            Some(Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+                span: tokens[operator].span.clone(),
+            })
+        })
+}
+
+fn find_top_level_binary_operator(
+    tokens: &[Token],
+    start: usize,
+    end: usize,
+    first: &str,
+    second: &str,
+) -> Option<(usize, BinaryOp)> {
+    let mut depth = 0usize;
+    for index in (start..end.saturating_sub(1)).rev() {
+        let token = &tokens[index];
+        if token.symbol(")") || token.symbol("}") || token.symbol("]") || token.symbol(">") {
+            depth += 1;
+            continue;
+        }
+        if token.symbol("(") || token.symbol("{") || token.symbol("[") || token.symbol("<") {
+            depth = depth.saturating_sub(1);
+            continue;
+        }
+        if depth == 0
+            && token.symbol(first)
+            && tokens
+                .get(index + 1)
+                .is_some_and(|token| token.symbol(second))
+        {
+            if first == "|" && tokens.get(index + 2).is_some_and(|token| token.symbol("{")) {
+                continue;
+            }
+            let op = if first == "|" {
+                BinaryOp::LogicalOr
+            } else {
+                BinaryOp::LogicalAnd
+            };
+            return Some((index, op));
+        }
+    }
+    None
 }
 
 fn parse_call_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {

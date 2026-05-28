@@ -655,6 +655,10 @@ fn collect_boundary_expr(expr: &Expr, path: &str, boundary: &mut BoundarySig) {
                 collect_boundary_expr(value, &arg_path, boundary);
             }
         }
+        Expr::Binary { left, right, .. } => {
+            collect_boundary_expr(left, &format!("{path}.left"), boundary);
+            collect_boundary_expr(right, &format!("{path}.right"), boundary);
+        }
         Expr::Field { base, .. } => collect_boundary_expr(base, path, boundary),
         Expr::Closure { body, .. } => {
             collect_boundary_block(body, &format!("{path}.closure"), boundary)
@@ -682,6 +686,7 @@ fn boundary_expr_subject(expr: &Expr) -> Option<String> {
         Expr::Effect { value, .. } | Expr::Manage { value, .. } => boundary_expr_subject(value),
         Expr::Field { name, .. } => Some(format!(".{name}")),
         Expr::Call { .. }
+        | Expr::Binary { .. }
         | Expr::Closure { .. }
         | Expr::Number(_, _)
         | Expr::String(_, _)

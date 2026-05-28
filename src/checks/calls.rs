@@ -79,6 +79,10 @@ fn check_expr(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
         HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => {
             check_expr(analyzer, value);
         }
+        HirExpr::Binary { left, right, .. } => {
+            check_expr(analyzer, left);
+            check_expr(analyzer, right);
+        }
         HirExpr::Field { base, .. } => check_expr(analyzer, base),
         HirExpr::Closure { body, .. } => check_block(analyzer, body),
         HirExpr::Ident { .. }
@@ -287,6 +291,7 @@ fn hir_expr_span(expr: &HirExpr) -> &Span {
         HirExpr::Ident { span, .. }
         | HirExpr::Number { span, .. }
         | HirExpr::String { span, .. }
+        | HirExpr::Binary { span, .. }
         | HirExpr::Field { span, .. }
         | HirExpr::Call { span, .. }
         | HirExpr::Effect { span, .. }

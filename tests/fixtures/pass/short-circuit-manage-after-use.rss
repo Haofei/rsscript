@@ -1,0 +1,10 @@
+mode: uses-local
+
+struct Image {
+    pixels: Buffer
+}
+
+fn ok_short_circuit(path: read Path) -> Unit {
+    local image = Image.load(path: read path)
+    let ok = image && manage image
+}

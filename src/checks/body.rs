@@ -198,6 +198,10 @@ fn apply_expr_effects(expr: &HirExpr, state: &mut BodyState) {
             state.apply_move_events(events);
             apply_expr_effects(value, state);
         }
+        HirExpr::Binary { left, right, .. } => {
+            apply_expr_effects(left, state);
+            apply_expr_effects(right, state);
+        }
         HirExpr::Field { base, .. } => apply_expr_effects(base, state),
         HirExpr::Closure { .. }
         | HirExpr::Ident { .. }
@@ -443,6 +447,10 @@ fn check_resource_pool_lease_expr(
         }
         HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => {
             check_resource_pool_lease_expr(analyzer, value, within_with_resource);
+        }
+        HirExpr::Binary { left, right, .. } => {
+            check_resource_pool_lease_expr(analyzer, left, within_with_resource);
+            check_resource_pool_lease_expr(analyzer, right, within_with_resource);
         }
         HirExpr::Field { base, .. } => {
             check_resource_pool_lease_expr(analyzer, base, within_with_resource);

@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::diagnostic::Span;
 use crate::syntax::ast::{
-    Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl, Item, LetKind,
-    Param, Program as SyntaxProgram, Stmt, TypeDecl, TypeKind, TypeRef,
+    BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl, Item,
+    LetKind, Param, Program as SyntaxProgram, Stmt, TypeDecl, TypeKind, TypeRef,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -232,6 +232,12 @@ pub enum HirExpr {
     },
     String {
         value: String,
+        span: Span,
+    },
+    Binary {
+        op: BinaryOp,
+        left: Box<HirExpr>,
+        right: Box<HirExpr>,
         span: Span,
     },
     Field {
@@ -712,6 +718,17 @@ fn lower_hir_expr(
             value: value.clone(),
             span: span.clone(),
         },
+        Expr::Binary {
+            op,
+            left,
+            right,
+            span,
+        } => HirExpr::Binary {
+            op: *op,
+            left: Box::new(lower_hir_expr(hir, function_name, left, value_types)),
+            right: Box::new(lower_hir_expr(hir, function_name, right, value_types)),
+            span: span.clone(),
+        },
         Expr::Field { base, name, span } => {
             let base_type = infer_hir_expr_type(hir, base, value_types);
             let field = base_type
@@ -950,6 +967,10 @@ fn collect_body_facts_in_expr(
     facts: &mut BodyFacts,
 ) {
     match expr {
+        Expr::Binary { left, right, .. } => {
+            collect_body_facts_in_expr(hir, function_name, left, value_types, facts);
+            collect_body_facts_in_expr(hir, function_name, right, value_types, facts);
+        }
         Expr::Call { callee, args, span } => {
             let resolution = hir.resolve_call(callee);
             if is_resource_pool_callee(callee) {
@@ -1108,6 +1129,7 @@ fn infer_hir_expr_type(
 ) -> Option<String> {
     match expr {
         Expr::Ident(name, _) => value_types.get(name).cloned(),
+        Expr::Binary { .. } => None,
         Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
             infer_hir_expr_type(hir, value, value_types)
         }
@@ -1165,6 +1187,7 @@ fn resource_pool_arg_type(expr: &Expr, value_types: &HashMap<String, String>) ->
             return resource_pool_namespace_arg(callee).map(|resource| resource.to_string());
         }
         Expr::Field { .. }
+        | Expr::Binary { .. }
         | Expr::Closure { .. }
         | Expr::Number(_, _)
         | Expr::String(_, _)
@@ -1221,6 +1244,7 @@ fn classify_return_expr(hir: &Hir, expr: &Expr) -> HirReturnProof {
         },
         Expr::Effect { value, .. } | Expr::Manage { value, .. } => classify_return_expr(hir, value),
         Expr::Field { .. }
+        | Expr::Binary { .. }
         | Expr::Closure { .. }
         | Expr::Number(_, _)
         | Expr::String(_, _)
