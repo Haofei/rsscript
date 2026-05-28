@@ -363,6 +363,8 @@ pub struct PackageReviewSummary {
     pub dependencies: usize,
     pub dev_dependencies: usize,
     pub package_features: usize,
+    pub public_types: usize,
+    pub public_functions: usize,
     pub public_apis: usize,
     pub mutating_apis: usize,
     pub retaining_apis: usize,
@@ -370,6 +372,7 @@ pub struct PackageReviewSummary {
     pub fresh_returning_apis: usize,
     pub native_apis: usize,
     pub unsafe_apis: usize,
+    pub unknown_apis: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -647,6 +650,8 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         dependencies: manifest.dependencies.len(),
         dev_dependencies: manifest.dev_dependencies.len(),
         package_features: manifest.features.len(),
+        public_types: api_summary.public_types,
+        public_functions: api_summary.public_functions,
         public_apis: api_summary.public_apis,
         mutating_apis: api_summary.mutating_apis,
         retaining_apis: api_summary.retaining_apis,
@@ -654,6 +659,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         fresh_returning_apis: api_summary.fresh_returning_apis,
         native_apis: api_summary.native_apis,
         unsafe_apis: api_summary.unsafe_apis,
+        unknown_apis: api_summary.unknown_apis,
     };
     let files = sources
         .iter()
@@ -1358,11 +1364,13 @@ pub fn format_package_review_human(review: &PackageReview) -> String {
         package_risk_label(review.risk)
     ));
     output.push_str(&format!(
-        "summary: {} interface files; {} source files; {} dependencies; {} package features; {} public APIs; {} mutating APIs; {} retaining APIs; {} resource APIs; {} fresh-returning APIs; {} native APIs; {} unsafe APIs; {} diagnostics ({} errors)\n",
+        "summary: {} interface files; {} source files; {} dependencies; {} package features; {} public types; {} public functions; {} public APIs; {} mutating APIs; {} retaining APIs; {} resource APIs; {} fresh-returning APIs; {} native APIs; {} unsafe APIs; {} unknown APIs; {} diagnostics ({} errors)\n",
         review.summary.interface_files,
         review.summary.source_files,
         review.summary.dependencies,
         review.summary.package_features,
+        review.summary.public_types,
+        review.summary.public_functions,
         review.summary.public_apis,
         review.summary.mutating_apis,
         review.summary.retaining_apis,
@@ -1370,6 +1378,7 @@ pub fn format_package_review_human(review: &PackageReview) -> String {
         review.summary.fresh_returning_apis,
         review.summary.native_apis,
         review.summary.unsafe_apis,
+        review.summary.unknown_apis,
         review.summary.diagnostics,
         review.summary.errors
     ));
@@ -1400,9 +1409,11 @@ pub fn format_package_metadata_human(metadata: &PackageMetadataReport) -> String
     ));
     output.push_str(&format!("metadata path: {}\n", metadata.metadata_path));
     output.push_str(&format!(
-        "summary: {} interface files; {} source files; {} public APIs; {} mutating APIs; {} retaining APIs; {} resource APIs; {} fresh-returning APIs; {} native APIs; {} unsafe APIs; {} diagnostics ({} errors)\n",
+        "summary: {} interface files; {} source files; {} public types; {} public functions; {} public APIs; {} mutating APIs; {} retaining APIs; {} resource APIs; {} fresh-returning APIs; {} native APIs; {} unsafe APIs; {} unknown APIs; {} diagnostics ({} errors)\n",
         metadata.metadata.summary.interface_files,
         metadata.metadata.summary.source_files,
+        metadata.metadata.summary.public_types,
+        metadata.metadata.summary.public_functions,
         metadata.metadata.summary.public_apis,
         metadata.metadata.summary.mutating_apis,
         metadata.metadata.summary.retaining_apis,
@@ -1410,6 +1421,7 @@ pub fn format_package_metadata_human(metadata: &PackageMetadataReport) -> String
         metadata.metadata.summary.fresh_returning_apis,
         metadata.metadata.summary.native_apis,
         metadata.metadata.summary.unsafe_apis,
+        metadata.metadata.summary.unknown_apis,
         metadata.metadata.summary.diagnostics,
         metadata.metadata.summary.errors
     ));
@@ -1469,11 +1481,13 @@ pub fn format_package_check_human(check: &PackageCheck) -> String {
         package_risk_label(check.risk)
     ));
     output.push_str(&format!(
-        "summary: {} interface files; {} source files; {} dependencies; {} package features; {} public APIs; {} mutating APIs; {} retaining APIs; {} resource APIs; {} fresh-returning APIs; {} native APIs; {} unsafe APIs; {} diagnostics ({} errors)\n",
+        "summary: {} interface files; {} source files; {} dependencies; {} package features; {} public types; {} public functions; {} public APIs; {} mutating APIs; {} retaining APIs; {} resource APIs; {} fresh-returning APIs; {} native APIs; {} unsafe APIs; {} unknown APIs; {} diagnostics ({} errors)\n",
         check.summary.interface_files,
         check.summary.source_files,
         check.summary.dependencies,
         check.summary.package_features,
+        check.summary.public_types,
+        check.summary.public_functions,
         check.summary.public_apis,
         check.summary.mutating_apis,
         check.summary.retaining_apis,
@@ -1481,6 +1495,7 @@ pub fn format_package_check_human(check: &PackageCheck) -> String {
         check.summary.fresh_returning_apis,
         check.summary.native_apis,
         check.summary.unsafe_apis,
+        check.summary.unknown_apis,
         check.summary.diagnostics,
         check.summary.errors
     ));
@@ -2245,6 +2260,8 @@ fn collect_package_function_contracts(
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct PackageApiSummary {
+    public_types: usize,
+    public_functions: usize,
     public_apis: usize,
     mutating_apis: usize,
     retaining_apis: usize,
@@ -2252,6 +2269,7 @@ struct PackageApiSummary {
     fresh_returning_apis: usize,
     native_apis: usize,
     unsafe_apis: usize,
+    unknown_apis: usize,
 }
 
 fn package_api_effect_summary(sources: &[PackageSource]) -> PackageApiSummary {
@@ -2282,7 +2300,9 @@ fn package_api_effect_summary(sources: &[PackageSource]) -> PackageApiSummary {
         .collect::<BTreeSet<_>>();
 
     PackageApiSummary {
-        public_apis: contracts.len(),
+        public_types: type_contracts.len(),
+        public_functions: contracts.len(),
+        public_apis: type_contracts.len() + contracts.len(),
         mutating_apis: contracts
             .values()
             .filter(|contract| {
@@ -2327,6 +2347,7 @@ fn package_api_effect_summary(sources: &[PackageSource]) -> PackageApiSummary {
                     .any(|effect| effect.as_str() == "unsafe")
             })
             .count(),
+        unknown_apis: 0,
     }
 }
 
@@ -3600,7 +3621,7 @@ fn package_review_hash(review: &PackageReview) -> String {
         input.push('\n');
     }
     input.push_str(&format!(
-        "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}\n",
+        "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}\n",
         review.summary.interface_files,
         review.summary.source_files,
         review.summary.diagnostics,
@@ -3608,13 +3629,16 @@ fn package_review_hash(review: &PackageReview) -> String {
         review.summary.dependencies,
         review.summary.dev_dependencies,
         review.summary.package_features,
+        review.summary.public_types,
+        review.summary.public_functions,
         review.summary.public_apis,
         review.summary.mutating_apis,
         review.summary.retaining_apis,
         review.summary.resource_apis,
         review.summary.fresh_returning_apis,
         review.summary.native_apis,
-        review.summary.unsafe_apis
+        review.summary.unsafe_apis,
+        review.summary.unknown_apis
     ));
     if let Some(native) = &review.native_rust {
         input.push_str(&native.path);

@@ -3701,11 +3701,14 @@ pub fn Cache.store(conn: mut DbConnection, image: read Image) -> Unit
         .expect("package review JSON should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 
-    assert_eq!(json["summary"]["public_apis"], 2);
+    assert_eq!(json["summary"]["public_types"], 2);
+    assert_eq!(json["summary"]["public_functions"], 2);
+    assert_eq!(json["summary"]["public_apis"], 4);
     assert_eq!(json["summary"]["mutating_apis"], 1);
     assert_eq!(json["summary"]["retaining_apis"], 1);
     assert_eq!(json["summary"]["resource_apis"], 1);
     assert_eq!(json["summary"]["fresh_returning_apis"], 1);
+    assert_eq!(json["summary"]["unknown_apis"], 0);
 }
 
 #[test]
