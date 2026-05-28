@@ -3228,7 +3228,8 @@ The reference implementation must track unknown rate as a product metric before
 expanding runtime scope. A known-good review corpus should keep unknown
 functions and unknown lines near zero; unresolved callback, interface, package,
 or native-boundary cases should become targeted classifier work rather than
-being hidden as safe-to-skip.
+being hidden as safe-to-skip. Review map JSON reports both `unknown_ratio`
+based on lines and `unknown_function_ratio` based on function count.
 
 The current prototype gates `tests/fixtures/pass` as a review-map confidence
 corpus: the corpus must classify all known-good fixture functions without
@@ -3254,6 +3255,8 @@ Example:
     "unknown_lines": 0,
     "suggested_review_lines": 54,
     "review_ratio": 0.131,
+    "unknown_ratio": 0.0,
+    "unknown_function_ratio": 0.0,
     "must_review": { "functions": 1, "lines": 41 },
     "safe_to_skip": { "functions": 1, "lines": 358 },
     "unknown": { "functions": 0, "lines": 0 }

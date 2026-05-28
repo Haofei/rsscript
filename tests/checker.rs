@@ -3176,6 +3176,8 @@ fn delegated(value: read Int) -> Int {
     assert!(value["summary"]["safe_to_skip_lines"].is_number());
     assert!(value["summary"]["suggested_review_lines"].is_number());
     assert!(value["summary"]["review_ratio"].is_number());
+    assert!(value["summary"]["unknown_ratio"].is_number());
+    assert!(value["summary"]["unknown_function_ratio"].is_number());
     assert!(
         value["files"][0]["regions"]
             .as_array()
@@ -3298,6 +3300,10 @@ fn review_map_pass_fixture_unknown_rate_stays_low() {
     assert!(map.summary.total_functions >= 60);
     assert_eq!(map.summary.unknown.functions, 0, "{map:?}");
     assert_eq!(map.summary.unknown.lines, 0, "{map:?}");
+    let json: Value =
+        serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
+    assert_eq!(json["summary"]["unknown_ratio"], 0.0);
+    assert_eq!(json["summary"]["unknown_function_ratio"], 0.0);
 }
 
 #[test]
@@ -3312,6 +3318,10 @@ fn review_map_complex_supported_script_has_no_unknown_regions() {
     assert_eq!(map.summary.unknown.lines, 0, "{map:?}");
     assert_eq!(map.summary.review_required.functions, 6);
     assert_eq!(map.summary.foldable.functions, 0);
+    let json: Value =
+        serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
+    assert_eq!(json["summary"]["unknown_ratio"], 0.0);
+    assert_eq!(json["summary"]["unknown_function_ratio"], 0.0);
 }
 
 #[test]

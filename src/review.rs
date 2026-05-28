@@ -57,6 +57,8 @@ pub struct ReviewMapSummary {
     pub unknown_lines: usize,
     pub suggested_review_lines: usize,
     pub review_ratio: ReviewRatio,
+    pub unknown_ratio: ReviewRatio,
+    pub unknown_function_ratio: ReviewRatio,
     #[serde(rename = "must_review")]
     pub review_required: ReviewMapCategorySummary,
     #[serde(rename = "safe_to_skip")]
@@ -345,6 +347,9 @@ fn review_map_summary(files: &[ReviewMapFile]) -> ReviewMapSummary {
     summary.suggested_review_lines = summary.review_required.lines + summary.unknown.lines;
     summary.review_ratio =
         ReviewRatio::from_parts(summary.suggested_review_lines, summary.total_lines);
+    summary.unknown_ratio = ReviewRatio::from_parts(summary.unknown.lines, summary.total_lines);
+    summary.unknown_function_ratio =
+        ReviewRatio::from_parts(summary.unknown.functions, summary.total_functions);
     summary
 }
 
