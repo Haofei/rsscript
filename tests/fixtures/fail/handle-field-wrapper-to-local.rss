@@ -1,0 +1,16 @@
+// expect: RS0301
+features: local
+
+struct Rules
+struct Holder {
+    rules: handle Rules
+}
+
+fn make_holder() -> fresh Holder
+
+fn bad() -> Unit {
+    local holder = make_holder()
+    local maybe_rules = Some(holder.rules)
+    local read_maybe_rules = read Some(holder.rules)
+    return Unit
+}

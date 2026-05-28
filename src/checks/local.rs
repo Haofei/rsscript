@@ -2118,6 +2118,9 @@ fn local_binding_handle_field_source(value: &HirExpr) -> Option<(String, Span)> 
             value,
             ..
         } => local_binding_handle_field_source(value),
+        HirExpr::Call { callee, args, .. } if local_binding_wrapper_callee(callee) => args
+            .iter()
+            .find_map(|arg| local_binding_handle_field_source(&arg.value)),
         HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Binary { .. }
@@ -2130,6 +2133,13 @@ fn local_binding_handle_field_source(value: &HirExpr) -> Option<(String, Span)> 
         | HirExpr::Closure { .. }
         | HirExpr::Unknown(_) => None,
     }
+}
+
+fn local_binding_wrapper_callee(callee: &Callee) -> bool {
+    matches!(
+        callee,
+        Callee::Name(name) if matches!(name.as_str(), "Ok" | "Err" | "Some")
+    )
 }
 
 fn local_flow_step_resource_binding(statement: &HirStmt) -> Option<LocalFlowResourceBinding> {

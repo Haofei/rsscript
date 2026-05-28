@@ -2402,6 +2402,36 @@ fn bad() -> Unit {
 }
 
 #[test]
+fn checker_rejects_wrapped_handle_field_bound_as_local() {
+    let source = r#"
+features: local
+
+struct Rules
+struct Holder {
+    rules: handle Rules
+}
+
+fn make_holder() -> fresh Holder
+
+fn bad() -> Unit {
+    local holder = make_holder()
+    local maybe_rules = Some(holder.rules)
+    local read_maybe_rules = read Some(holder.rules)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("handle-field-wrapper-to-local.rss", source);
+    let managed_to_local_count = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == "RS0301" && diagnostic.label == "managed value used as local"
+        })
+        .count();
+
+    assert_eq!(managed_to_local_count, 2, "{diagnostics:?}");
+}
+
+#[test]
 fn checker_rejects_retaining_local_inline_field() {
     let source = r#"
 features: local
