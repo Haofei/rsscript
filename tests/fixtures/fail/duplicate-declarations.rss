@@ -1,0 +1,14 @@
+// expect: RS0005
+mode: managed
+
+struct Image {
+    pixels: Buffer
+}
+
+fn Image(path: read Path) -> Image {
+    return Image(pixels: read path)
+}
+
+fn Image(path: read Path) -> Image {
+    return Image(pixels: read path)
+}

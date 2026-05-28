@@ -1,6 +1,6 @@
 use crate::checks;
 use crate::diagnostic::{Diagnostic, code};
-use crate::hir::{FunctionSig, Hir, HirTypeKind};
+use crate::hir::{DuplicateSymbolKind, FunctionSig, Hir, HirTypeKind};
 use crate::lexer::{Token, lex};
 use crate::syntax::ast::{Callee, EffectDecl, Item};
 use crate::syntax::parse_source;
@@ -29,6 +29,7 @@ pub(crate) struct Analyzer<'a> {
 impl Analyzer<'_> {
     fn run(&mut self) {
         self.check_file_mode_present();
+        self.check_duplicate_declarations();
         self.check_signature_explicitness();
         self.check_resource_fields();
         checks::mode::check(self);
@@ -116,6 +117,32 @@ impl Analyzer<'_> {
         }
     }
 
+    fn check_duplicate_declarations(&mut self) {
+        for duplicate in self.hir.duplicate_symbols() {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::DUPLICATE_DECLARATION,
+                    format!(
+                        "{} `{}` is declared more than once.",
+                        duplicate_symbol_label(duplicate.kind),
+                        duplicate.name
+                    ),
+                    duplicate.duplicate_span.clone(),
+                    "duplicate declaration",
+                )
+                .with_cause(format!(
+                    "The first declaration is at {}:{}.",
+                    duplicate.first_span.line, duplicate.first_span.column
+                ))
+                .with_fix(
+                    "rename_declaration",
+                    "Rename or remove one declaration so the symbol table is unambiguous.",
+                    "manual",
+                ),
+            );
+        }
+    }
+
     fn check_resource_fields(&mut self) {
         for item in &self.syntax_program.items {
             let Item::Type(decl) = item else {
@@ -154,5 +181,13 @@ impl Analyzer<'_> {
 fn effect_name(effect: &EffectDecl) -> &str {
     match effect {
         EffectDecl::Name(name) | EffectDecl::Retains(name) => name,
+    }
+}
+
+fn duplicate_symbol_label(kind: DuplicateSymbolKind) -> &'static str {
+    match kind {
+        DuplicateSymbolKind::Function => "function",
+        DuplicateSymbolKind::Type => "type",
+        DuplicateSymbolKind::Constructor => "callable",
     }
 }

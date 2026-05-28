@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::diagnostic::Span;
 use crate::syntax::ast::{
     DataEffect, EffectDecl, FieldDecl, FunctionDecl, Item, Param, Program as SyntaxProgram,
     TypeDecl, TypeKind,
@@ -61,21 +62,64 @@ pub struct TypeInfo {
     pub fields: HashMap<String, FieldInfo>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DuplicateSymbolKind {
+    Function,
+    Type,
+    Constructor,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DuplicateSymbol {
+    pub kind: DuplicateSymbolKind,
+    pub name: String,
+    pub first_span: Span,
+    pub duplicate_span: Span,
+}
+
 #[derive(Debug, Default)]
 pub struct Hir {
     signatures: HashMap<String, FunctionSig>,
     types: HashMap<String, TypeInfo>,
     fields_by_name: HashMap<String, Vec<FieldInfo>>,
+    duplicate_symbols: Vec<DuplicateSymbol>,
 }
 
 impl Hir {
     pub fn from_syntax(program: &SyntaxProgram) -> Self {
         let mut hir = Self::default();
         hir.insert_builtins();
+        let mut type_symbols = HashMap::new();
+        let mut callable_symbols = HashMap::new();
         for item in &program.items {
             match item {
-                Item::Function(function) => hir.insert_function(function_sig_from_decl(function)),
-                Item::Type(type_decl) => hir.insert_type(type_info_from_decl(type_decl)),
+                Item::Function(function) => {
+                    record_duplicate_symbol(
+                        &mut hir.duplicate_symbols,
+                        &mut callable_symbols,
+                        DuplicateSymbolKind::Function,
+                        &function.name,
+                        &function.span,
+                    );
+                    hir.insert_function(function_sig_from_decl(function));
+                }
+                Item::Type(type_decl) => {
+                    record_duplicate_symbol(
+                        &mut hir.duplicate_symbols,
+                        &mut type_symbols,
+                        DuplicateSymbolKind::Type,
+                        &type_decl.name,
+                        &type_decl.span,
+                    );
+                    record_duplicate_symbol(
+                        &mut hir.duplicate_symbols,
+                        &mut callable_symbols,
+                        DuplicateSymbolKind::Constructor,
+                        &type_decl.name,
+                        &type_decl.span,
+                    );
+                    hir.insert_type(type_info_from_decl(type_decl));
+                }
             }
         }
         hir
@@ -107,6 +151,10 @@ impl Hir {
 
     pub fn is_handle_field_name(&self, field_name: &str) -> bool {
         self.fields_named(field_name).any(|field| field.is_handle)
+    }
+
+    pub fn duplicate_symbols(&self) -> &[DuplicateSymbol] {
+        &self.duplicate_symbols
     }
 
     fn insert_function(&mut self, signature: FunctionSig) {
@@ -152,6 +200,39 @@ fn function_sig_from_decl(function: &FunctionDecl) -> FunctionSig {
             })
             .collect(),
         is_builtin: false,
+    }
+}
+
+fn record_duplicate_symbol(
+    duplicates: &mut Vec<DuplicateSymbol>,
+    symbols: &mut HashMap<String, (DuplicateSymbolKind, Span)>,
+    kind: DuplicateSymbolKind,
+    name: &str,
+    span: &Span,
+) {
+    if let Some((first_kind, first_span)) = symbols.get(name) {
+        duplicates.push(DuplicateSymbol {
+            kind: duplicate_symbol_kind(*first_kind, kind),
+            name: name.to_string(),
+            first_span: first_span.clone(),
+            duplicate_span: span.clone(),
+        });
+        return;
+    }
+
+    symbols.insert(name.to_string(), (kind, span.clone()));
+}
+
+fn duplicate_symbol_kind(
+    first: DuplicateSymbolKind,
+    duplicate: DuplicateSymbolKind,
+) -> DuplicateSymbolKind {
+    match (first, duplicate) {
+        (DuplicateSymbolKind::Function, DuplicateSymbolKind::Function) => {
+            DuplicateSymbolKind::Function
+        }
+        (DuplicateSymbolKind::Type, DuplicateSymbolKind::Type) => DuplicateSymbolKind::Type,
+        _ => DuplicateSymbolKind::Constructor,
     }
 }
 
@@ -678,5 +759,31 @@ fn cache_put(cache: mut Cache, value: read Image) -> Unit
             .resolve_function(Some("Image"), "load")
             .expect("builtin signature exists");
         assert_eq!(load.return_type.as_deref(), Some("Image"));
+    }
+
+    #[test]
+    fn records_duplicate_callable_symbols() {
+        let source = r#"
+mode: managed
+
+struct Image {
+    pixels: Buffer
+}
+
+fn Image(path: read Path) -> Image {
+}
+"#;
+
+        let program = parse_source("test.rss", source);
+        let hir = Hir::from_syntax(&program);
+        let duplicate = hir
+            .duplicate_symbols()
+            .first()
+            .expect("constructor/function duplicate is recorded");
+
+        assert_eq!(duplicate.kind, DuplicateSymbolKind::Constructor);
+        assert_eq!(duplicate.name, "Image");
+        assert_eq!(duplicate.first_span.line, 4);
+        assert_eq!(duplicate.duplicate_span.line, 8);
     }
 }

@@ -5,6 +5,7 @@ pub mod code {
     pub const MISSING_RETURN_TYPE: &str = "RS0002";
     pub const MISSING_PARAMETER_TYPE: &str = "RS0003";
     pub const UNKNOWN_EFFECT: &str = "RS0004";
+    pub const DUPLICATE_DECLARATION: &str = "RS0005";
     pub const FILE_MODE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
@@ -207,6 +208,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::UNKNOWN_EFFECT,
         title: "unknown effect",
         explanation: "The effect list contains an effect name outside the currently recognized MVP surface.",
+    },
+    DiagnosticExplanation {
+        code: code::DUPLICATE_DECLARATION,
+        title: "duplicate declaration",
+        explanation: "Top-level type, constructor, and function names must be unique so symbol resolution cannot silently overwrite an earlier declaration.",
     },
     DiagnosticExplanation {
         code: code::FILE_MODE_VIOLATION,
