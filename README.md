@@ -12,7 +12,7 @@ This came out of reviewing 100k+ lines of AI-generated Rust over six months. The
 
 There's also a long-standing wishlist for this kind of language: managed-by-default app code, explicit performance escapes, and a direct path back to native systems work. The request shows up in `/r/rust` threads and language-design posts regularly. AI review pain is what finally made the cost/benefit click for me.
 
-RSScript is a smaller front end that lowers to Rust. It keeps rustc, Cargo, and the crate ecosystem; it compresses the surface so a reviewer's first read costs less, and pushes mutation, retention, resources, and native boundaries into the signature where review can see them. Advanced Rust remains available through `features: native` as an explicit review boundary.
+RSScript is a new language front end that lowers to Rust. It keeps rustc, Cargo, and the crate ecosystem; it compresses the surface so a reviewer's first read costs less, and pushes mutation, retention, resources, and native boundaries into the signature where review can see them. Advanced Rust remains available through `features: native` as an explicit review boundary.
 
 ---
 
@@ -24,6 +24,8 @@ A smaller front end fixes two things at once:
 
 - **The signature** a human reads becomes shorter and load-bearing in different ways.
 - **The AI's option space** shrinks. RSScript gives the generator fewer complex shapes to reach for. Constraint is the product.
+
+RSScript is not a Rust syntax profile, macro layer, or Clippy ruleset. It has its own source syntax, effects, package contracts, diagnostics, and review metadata. Rust is the backend target and ecosystem substrate, not the user-facing language model.
 
 Before AI, writing code was expensive and reviewing was manageable. That ratio has flipped: generating is cheap, reviewing is the bottleneck. RSScript is designed for the new ratio: AI writes, the compiler checks semantic boundaries, humans focus on the *risk*. What mutates, what gets retained, who owns a resource, where you cross into native or unsafe, what changed in a public API — all of it lives in the signature and in machine-readable diagnostics.
 
@@ -217,7 +219,7 @@ RSScript source
 
 RSScript owns the front end: syntax, semantic checks, effects, managed/local/resource rules, diagnostics, review metadata, source mapping, core signatures. Rust owns everything below: codegen, optimization, platform support, linking, the crate ecosystem.
 
-This is an architectural choice. The value is in the front end; the back end is Rust's strongest territory, and RSScript leans into that strength.
+This makes RSScript a new language front end with a deliberately borrowed backend, not a new backend project. The value is in the front end; the back end is Rust's strongest territory, and RSScript leans into that strength.
 
 ---
 

@@ -253,6 +253,8 @@ RSScript may lower to Rust source, but Rust syntax, lifetime parameters, trait-b
 
 Valid RSScript code should not require the user to understand generated Rust.
 
+RSScript is therefore a new language front end, not a Rust syntax profile, macro layer, or lint configuration. The compiler owns RSScript syntax, semantic checks, source-mapped diagnostics, package contracts, and review metadata. Rust owns backend compilation after lowering.
+
 ---
 
 # 3. Version Delta: v0.4.5 -> v0.5
