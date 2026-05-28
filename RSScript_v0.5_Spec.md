@@ -1728,6 +1728,7 @@ guard across `await`.
 Review tools should mark these as must-review:
 
 ```text
+async function signature
 public async entry point
 await native async call
 spawn task

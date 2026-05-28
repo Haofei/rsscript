@@ -438,6 +438,9 @@ fn review_map_region_draft(
     if function.returns_fresh {
         reasons.push("fresh guarantee boundary".to_string());
     }
+    if function.is_async {
+        reasons.push("async function boundary".to_string());
+    }
     for effect in &function.effects {
         match effect {
             EffectDecl::Retains(param) => reasons.push(format!("retains `{param}`")),

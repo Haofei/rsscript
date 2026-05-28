@@ -3218,6 +3218,36 @@ fn delegated(value: read Int) -> Int {
 }
 
 #[test]
+fn review_map_marks_async_signatures_review_required() {
+    let source = r#"
+features: async
+
+async fn ping(url: read Url) -> Result<Unit, NetworkError>
+"#;
+
+    let map = review_map_sources(vec![("async-map.rss", source)]);
+    let region = map.files[0]
+        .regions
+        .iter()
+        .find(|region| region.function == "ping")
+        .expect("expected ping region");
+
+    assert_eq!(
+        region.classification,
+        ReviewMapClassification::ReviewRequired
+    );
+    assert!(
+        region
+            .reasons
+            .iter()
+            .any(|reason| reason == "async function boundary"),
+        "{region:?}"
+    );
+    assert_eq!(map.summary.foldable.functions, 0);
+    assert_eq!(map.summary.review_required.functions, 1);
+}
+
+#[test]
 fn parser_accepts_bodyless_rssi_interface() {
     let source = r#"
 struct JsonValue
