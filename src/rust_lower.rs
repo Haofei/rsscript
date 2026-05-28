@@ -785,6 +785,9 @@ impl<'a> RustLowerer<'a> {
             "FileError" | "IOError" => "std::io::Error".to_string(),
             "JsonValue" => "rsscript_runtime::JsonValue".to_string(),
             "JsonError" => "rsscript_runtime::JsonError".to_string(),
+            "RowBuffer" => "rsscript_runtime::RowBuffer".to_string(),
+            "Row" => "rsscript_runtime::Row".to_string(),
+            "CsvError" => "rsscript_runtime::CsvError".to_string(),
             "Result" if ty.args.len() == 2 => format!(
                 "Result<{}, {}>",
                 self.lower_type_ref(&ty.args[0], ManagedPosition::Nested),
@@ -1066,6 +1069,14 @@ fn lower_callee(callee: &Callee) -> String {
         callee if is_json_field_string_callee(callee) => {
             "rsscript_runtime::json_field_string".to_string()
         }
+        callee if is_row_buffer_new_callee(callee) => {
+            "rsscript_runtime::row_buffer_new".to_string()
+        }
+        callee if is_csv_read_into_callee(callee) => "rsscript_runtime::csv_read_into".to_string(),
+        callee if is_csv_parse_row_callee(callee) => "rsscript_runtime::csv_parse_row".to_string(),
+        callee if is_row_field_string_callee(callee) => {
+            "rsscript_runtime::row_field_string".to_string()
+        }
         Callee::Name(name) => rust_ident(name),
         Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" => {
             format!("rsscript_runtime::ResourcePool::{}", rust_ident(name))
@@ -1118,6 +1129,22 @@ fn is_json_field_callee(callee: &Callee) -> bool {
 
 fn is_json_field_string_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "field_string")
+}
+
+fn is_row_buffer_new_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "RowBuffer" && name == "new")
+}
+
+fn is_csv_read_into_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Csv" && name == "read_into")
+}
+
+fn is_csv_parse_row_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Csv" && name == "parse_row")
+}
+
+fn is_row_field_string_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Row" && name == "field_string")
 }
 
 fn is_file_open_expr(expr: &Expr) -> bool {

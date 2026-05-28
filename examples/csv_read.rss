@@ -1,0 +1,20 @@
+features: local
+
+fn main() -> Result<Unit, CsvError> {
+    let path = "rsscript-csv-example.csv"
+
+    with File.open_write(path: read path) as file {
+        File.write(file: mut file, data: read "name,amount\nRSScript,42\n")?
+    }
+
+    local buffer = RowBuffer.new(size: 4096)
+    with File.open_read(path: read path) as file {
+        Csv.read_into(file: mut file, buffer: mut buffer)?
+        let row = Csv.parse_row(buffer: read buffer)?
+        let name = Row.field_string(row: read row, index: 0)?
+        Assert.equal(left: read name, right: read "RSScript")
+        Log.write(message: read name)
+    }
+
+    return Ok(Unit)
+}

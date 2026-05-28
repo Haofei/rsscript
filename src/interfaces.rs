@@ -3,6 +3,7 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         "core/collections/map.rssi",
         include_str!("../core/collections/map.rssi"),
     ),
+    ("core/csv/csv.rssi", include_str!("../core/csv/csv.rssi")),
     ("core/fs/file.rssi", include_str!("../core/fs/file.rssi")),
     (
         "core/image/image.rssi",

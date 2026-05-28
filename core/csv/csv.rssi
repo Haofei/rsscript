@@ -1,0 +1,17 @@
+struct RowBuffer
+
+struct Row
+
+pub fn RowBuffer.new(size: Int) -> fresh RowBuffer
+
+pub fn Csv.read_into(
+    file: mut File,
+    buffer: mut RowBuffer,
+) -> Result<Unit, CsvError>
+
+pub fn Csv.parse_row(buffer: read RowBuffer) -> Result<fresh Row, CsvError>
+
+pub fn Row.field_string(
+    row: read Row,
+    index: Int,
+) -> Result<String, CsvError>

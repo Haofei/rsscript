@@ -4,6 +4,7 @@ use std::io::{Read, Write};
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::str::Utf8Error;
 
 pub trait Managed {}
 
@@ -45,6 +46,49 @@ impl std::error::Error for JsonError {}
 
 impl From<serde_json::Error> for JsonError {
     fn from(error: serde_json::Error) -> Self {
+        Self::new(error.to_string())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RowBuffer {
+    bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Row {
+    fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CsvError {
+    message: String,
+}
+
+impl CsvError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for CsvError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.message)
+    }
+}
+
+impl std::error::Error for CsvError {}
+
+impl From<std::io::Error> for CsvError {
+    fn from(error: std::io::Error) -> Self {
+        Self::new(error.to_string())
+    }
+}
+
+impl From<Utf8Error> for CsvError {
+    fn from(error: Utf8Error) -> Self {
         Self::new(error.to_string())
     }
 }
@@ -150,6 +194,45 @@ pub fn json_field_string(value: &JsonValue, name: &str) -> Result<String, JsonEr
         )));
     };
     Ok(text.to_string())
+}
+
+pub fn row_buffer_new(size: i64) -> RowBuffer {
+    RowBuffer {
+        bytes: Vec::with_capacity(size.max(0) as usize),
+    }
+}
+
+pub fn csv_read_into(file: &mut File, buffer: &mut RowBuffer) -> Result<(), CsvError> {
+    buffer.bytes.clear();
+    file.inner.read_to_end(&mut buffer.bytes)?;
+    Ok(())
+}
+
+pub fn csv_parse_row(buffer: &RowBuffer) -> Result<Row, CsvError> {
+    let text = std::str::from_utf8(&buffer.bytes)?;
+    let Some(line) = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .nth(1)
+        .or_else(|| text.lines().map(str::trim).find(|line| !line.is_empty()))
+    else {
+        return Err(CsvError::new("CSV buffer is empty"));
+    };
+    Ok(Row {
+        fields: line
+            .split(',')
+            .map(|field| field.trim().to_string())
+            .collect(),
+    })
+}
+
+pub fn row_field_string(row: &Row, index: i64) -> Result<String, CsvError> {
+    let index = usize::try_from(index).map_err(|_| CsvError::new("negative CSV field index"))?;
+    row.fields
+        .get(index)
+        .cloned()
+        .ok_or_else(|| CsvError::new(format!("CSV field index `{index}` is out of bounds")))
 }
 
 #[derive(Clone)]
@@ -535,5 +618,26 @@ mod tests {
             super::json_field_string(&profile, "name").expect("name field should be a string");
 
         assert_eq!(name, "RSScript");
+    }
+
+    #[test]
+    fn csv_runtime_hooks_read_and_parse_row() {
+        let path =
+            std::env::temp_dir().join(format!("rsscript-runtime-csv-{}.csv", std::process::id()));
+
+        {
+            let mut file = super::file_open_write(&path).expect("file should open for write");
+            super::file_write(&mut file, &"name,amount\nRSScript,42\n")
+                .expect("write should succeed");
+        }
+
+        let mut file = super::file_open_read(&path).expect("file should open for read");
+        let mut buffer = super::row_buffer_new(4096);
+        super::csv_read_into(&mut file, &mut buffer).expect("CSV read should succeed");
+        let row = super::csv_parse_row(&buffer).expect("CSV row should parse");
+        let name = super::row_field_string(&row, 0).expect("field should exist");
+
+        assert_eq!(name, "RSScript");
+        let _ = std::fs::remove_file(path);
     }
 }

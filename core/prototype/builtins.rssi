@@ -6,15 +6,6 @@ pub fn ImageCache.store(
 ) -> Unit
     effects(retains(image))
 
-pub fn RowBuffer.new(size: Int) -> fresh RowBuffer
-
-pub fn Csv.read_into(
-    file: mut File,
-    buffer: mut RowBuffer,
-) -> Result<Unit, CsvError>
-
-pub fn Csv.parse_row(buffer: read RowBuffer) -> Result<fresh Row, CsvError>
-
 pub fn List.consume(list: take List) -> Unit
 
 pub fn Buffer.consume(buffer: take Buffer) -> Unit

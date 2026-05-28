@@ -357,6 +357,29 @@ fn read_name(text: read String) -> Result<String, JsonError> {
 }
 
 #[test]
+fn rust_lowering_maps_csv_core_calls_to_runtime_hooks() {
+    let source = r#"
+features: local
+
+fn read_name(path: read Path) -> Result<String, CsvError> {
+    local buffer = RowBuffer.new(size: 4096)
+    with File.open_read(path: read path) as file {
+        Csv.read_into(file: mut file, buffer: mut buffer)?
+        let row = Csv.parse_row(buffer: read buffer)?
+        return Row.field_string(row: read row, index: 0)
+    }
+}
+"#;
+    let rust = lower_source_to_rust("csv.rss", source).expect("source should lower");
+
+    assert!(rust.contains("-> Result<String, rsscript_runtime::CsvError>"));
+    assert!(rust.contains("let mut buffer = rsscript_runtime::row_buffer_new(4096);"));
+    assert!(rust.contains("rsscript_runtime::csv_read_into(&mut file, &mut buffer)?;"));
+    assert!(rust.contains("let row = rsscript_runtime::csv_parse_row(&buffer)?;"));
+    assert!(rust.contains("return rsscript_runtime::row_field_string(&row, 0);"));
+}
+
+#[test]
 fn rust_lowering_decodes_string_escape_sequences() {
     let source = r#"
 fn json_text() -> String {
