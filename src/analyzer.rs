@@ -2,7 +2,7 @@ use crate::checks;
 use crate::diagnostic::{Diagnostic, code};
 use crate::hir::{DuplicateSymbolKind, Hir, HirTypeKind};
 use crate::lexer::{Token, lex};
-use crate::syntax::ast::{EffectDecl, Item};
+use crate::syntax::ast::{Callee, EffectDecl, Expr, Item, Stmt, TypeRef};
 use crate::syntax::parse_source;
 
 pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
@@ -32,6 +32,7 @@ impl Analyzer<'_> {
         self.check_duplicate_declarations();
         self.check_signature_explicitness();
         self.check_resource_fields();
+        self.check_resource_pool_type_arguments();
         checks::mode::check(self);
         checks::calls::check(self);
         checks::body::check(self);
@@ -167,6 +168,157 @@ impl Analyzer<'_> {
             }
         }
     }
+
+    fn check_resource_pool_type_arguments(&mut self) {
+        let items = self.syntax_program.items.clone();
+        for item in &items {
+            match item {
+                Item::Type(decl) => {
+                    for field in &decl.fields {
+                        self.check_resource_pool_type_ref(&field.ty);
+                    }
+                }
+                Item::Function(function) => {
+                    for param in &function.params {
+                        self.check_resource_pool_type_ref(&param.ty);
+                    }
+                    if let Some(return_ty) = &function.return_ty {
+                        self.check_resource_pool_type_ref(return_ty);
+                    }
+                    self.check_resource_pool_calls_in_block(&function.body);
+                }
+            }
+        }
+    }
+
+    fn check_resource_pool_type_ref(&mut self, ty: &TypeRef) {
+        if ty.name == "ResourcePool" {
+            match ty.args.first() {
+                Some(arg) => self.check_resource_pool_arg(&arg.name, &arg.span),
+                None => self.invalid_resource_pool_type_diagnostic(
+                    "ResourcePool must declare a resource type argument.",
+                    ty.span.clone(),
+                ),
+            }
+        }
+        for arg in &ty.args {
+            self.check_resource_pool_type_ref(arg);
+        }
+    }
+
+    fn check_resource_pool_calls_in_block(&mut self, block: &crate::syntax::ast::Block) {
+        for statement in &block.statements {
+            self.check_resource_pool_calls_in_stmt(statement);
+        }
+    }
+
+    fn check_resource_pool_calls_in_stmt(&mut self, statement: &Stmt) {
+        match statement {
+            Stmt::Let(stmt) => {
+                if let Some(value) = &stmt.value {
+                    self.check_resource_pool_calls_in_expr(value);
+                }
+            }
+            Stmt::Return(stmt) => {
+                if let Some(value) = &stmt.value {
+                    self.check_resource_pool_calls_in_expr(value);
+                }
+            }
+            Stmt::Expr(value) => self.check_resource_pool_calls_in_expr(value),
+            Stmt::With(stmt) => {
+                self.check_resource_pool_calls_in_expr(&stmt.resource);
+                self.check_resource_pool_calls_in_block(&stmt.body);
+            }
+            Stmt::If(stmt) => {
+                self.check_resource_pool_calls_in_expr(&stmt.condition);
+                self.check_resource_pool_calls_in_block(&stmt.then_body);
+                if let Some(else_body) = &stmt.else_body {
+                    self.check_resource_pool_calls_in_block(else_body);
+                }
+            }
+            Stmt::Loop(stmt) => {
+                if let Some(condition) = &stmt.condition {
+                    self.check_resource_pool_calls_in_expr(condition);
+                }
+                self.check_resource_pool_calls_in_block(&stmt.body);
+            }
+            Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
+        }
+    }
+
+    fn check_resource_pool_calls_in_expr(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Call { callee, args, span } => {
+                if let Callee::Qualified { namespace, name } = callee
+                    && namespace == "ResourcePool"
+                    && name == "new"
+                {
+                    self.invalid_resource_pool_type_diagnostic(
+                        "ResourcePool.new must be called as ResourcePool<T>.new with resource T.",
+                        span.clone(),
+                    );
+                } else if let Callee::Qualified { namespace, .. } = callee
+                    && let Some(arg) = resource_pool_namespace_arg(namespace)
+                {
+                    self.check_resource_pool_arg(arg, span);
+                }
+                for arg in args {
+                    self.check_resource_pool_calls_in_expr(&arg.value);
+                }
+            }
+            Expr::Binary { left, right, .. } => {
+                self.check_resource_pool_calls_in_expr(left);
+                self.check_resource_pool_calls_in_expr(right);
+            }
+            Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
+                self.check_resource_pool_calls_in_expr(value);
+            }
+            Expr::Field { base, .. } => self.check_resource_pool_calls_in_expr(base),
+            Expr::Closure { body, .. } => self.check_resource_pool_calls_in_block(body),
+            Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        }
+    }
+
+    fn check_resource_pool_arg(&mut self, type_name: &str, span: &crate::diagnostic::Span) {
+        match self.hir.type_kind(type_name) {
+            Some(HirTypeKind::Resource) | None => {}
+            Some(HirTypeKind::Class) | Some(HirTypeKind::Struct) => {
+                self.invalid_resource_pool_type_diagnostic(
+                    format!(
+                        "ResourcePool can only hold resources, but `{type_name}` is not a resource."
+                    ),
+                    span.clone(),
+                );
+            }
+        }
+    }
+
+    fn invalid_resource_pool_type_diagnostic(
+        &mut self,
+        summary: impl Into<String>,
+        span: crate::diagnostic::Span,
+    ) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::INVALID_RESOURCE_POOL_TYPE,
+                summary,
+                span,
+                "invalid ResourcePool type",
+            )
+            .with_cause("`ResourcePool<T>` is the privileged container for long-lived resource values, so `T` must be a resource.")
+            .with_fix(
+                "use_resource_type",
+                "Use a resource type argument or a non-resource container for ordinary values.",
+                "manual",
+            ),
+        );
+    }
+}
+
+fn resource_pool_namespace_arg(namespace: &str) -> Option<&str> {
+    namespace
+        .strip_prefix("ResourcePool<")
+        .and_then(|rest| rest.strip_suffix('>'))
 }
 
 fn effect_name(effect: &EffectDecl) -> &str {

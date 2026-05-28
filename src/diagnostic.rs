@@ -21,6 +21,7 @@ pub mod code {
     pub const INVALID_FRESH_RETURN_TYPE: &str = "RS0603";
     pub const RESOURCE_FIELD: &str = "RS0701";
     pub const RESOURCE_ESCAPE: &str = "RS0702";
+    pub const INVALID_RESOURCE_POOL_TYPE: &str = "RS0703";
     pub const LOCAL_CAPTURED_BY_MANAGED_CLOSURE: &str = "RS0801";
     pub const TAKE_HANDLE_FIELD: &str = "RS0901";
     pub const OPERATOR_OVERLOAD_ATTEMPT: &str = "RS1001";
@@ -289,6 +290,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::RESOURCE_ESCAPE,
         title: "resource escape",
         explanation: "A resource introduced by `with` must not escape the block through return, manage, retention, or managed closure capture.",
+    },
+    DiagnosticExplanation {
+        code: code::INVALID_RESOURCE_POOL_TYPE,
+        title: "invalid ResourcePool type",
+        explanation: "`ResourcePool<T>` is only valid when `T` is a resource type.",
     },
     DiagnosticExplanation {
         code: code::LOCAL_CAPTURED_BY_MANAGED_CLOSURE,

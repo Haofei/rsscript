@@ -610,13 +610,14 @@ fn find_top_level_binary_operator(
     second: &str,
 ) -> Option<(usize, BinaryOp)> {
     let mut depth = 0usize;
-    for index in (start..end.saturating_sub(1)).rev() {
+    let mut found = None;
+    for index in start..end.saturating_sub(1) {
         let token = &tokens[index];
-        if token.symbol(")") || token.symbol("}") || token.symbol("]") || token.symbol(">") {
+        if token.symbol("(") || token.symbol("{") || token.symbol("[") || token.symbol("<") {
             depth += 1;
             continue;
         }
-        if token.symbol("(") || token.symbol("{") || token.symbol("[") || token.symbol("<") {
+        if token.symbol(")") || token.symbol("}") || token.symbol("]") || token.symbol(">") {
             depth = depth.saturating_sub(1);
             continue;
         }
@@ -634,10 +635,10 @@ fn find_top_level_binary_operator(
             } else {
                 BinaryOp::LogicalAnd
             };
-            return Some((index, op));
+            found = Some((index, op));
         }
     }
-    None
+    found
 }
 
 fn parse_call_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
@@ -895,6 +896,44 @@ fn find_matching(
 
 fn is_trivia_boundary(token: &Token) -> bool {
     token.symbol(",") || token.symbol(";")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_generic_qualified_resource_pool_call() {
+        let program = parse_source(
+            "test.rss",
+            r#"
+mode: uses-local
+
+fn run() -> Unit {
+    local pool = ResourcePool<Image>.new(
+        create: || Image.load(path: read path),
+        max_size: 4,
+    )
+}
+"#,
+        );
+        let Item::Function(function) = &program.items[0] else {
+            panic!("expected function");
+        };
+        let Stmt::Let(stmt) = &function.body.statements[0] else {
+            panic!("expected let");
+        };
+        let Some(Expr::Call { callee, .. }) = &stmt.value else {
+            panic!("expected call, got {:?}", stmt.value);
+        };
+        assert_eq!(
+            callee,
+            &Callee::Qualified {
+                namespace: "ResourcePool<Image>".to_string(),
+                name: "new".to_string(),
+            }
+        );
+    }
 }
 
 fn ident_name(token: &Token) -> Option<&str> {

@@ -1,0 +1,10 @@
+// expect: RS0703
+mode: uses-local
+
+struct Image {
+    pixels: Buffer
+}
+
+fn bad_pool(pool: mut ResourcePool<Image>) -> Unit {
+    return Unit
+}

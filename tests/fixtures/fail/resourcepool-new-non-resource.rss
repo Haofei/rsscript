@@ -1,0 +1,13 @@
+// expect: RS0703
+mode: uses-local
+
+struct Image {
+    pixels: Buffer
+}
+
+fn bad_pool(path: read Path) -> Unit {
+    local pool = ResourcePool<Image>.new(
+        create: || Image.load(path: read path),
+        max_size: 4,
+    )
+}
