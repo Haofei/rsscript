@@ -1,0 +1,22 @@
+// expect: RS0401
+mode: uses-local
+
+class LruCache {
+    entries: Map<String, Image>
+}
+
+struct Image {
+    pixels: Buffer
+}
+
+fn lru_put(cache: mut LruCache, key: read String, value: read Image) -> Unit
+    effects(retains(value))
+{
+    Map.insert(map: mut cache.entries, key: read key, value: read value)
+}
+
+fn store_thumbnail(cache: mut LruCache, key: read String, path: read Path) -> Unit {
+    local image = Image.load(path: read path)
+    lru_put(cache: mut cache, key: read key, value: read (manage image))
+    Image.inspect(image: read image)
+}

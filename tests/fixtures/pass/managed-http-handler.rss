@@ -1,0 +1,17 @@
+mode: managed
+
+class AppState {
+    cache: Cache
+}
+
+struct Response {
+    status: Int
+    body: String
+}
+
+fn handle_request(state: mut AppState, request: read Request) -> Result<fresh Response, HttpError> {
+    let path = Request.path(request: read request)
+    let body = Cache.lookup(cache: read state.cache, key: read path)
+
+    return Response(status: 200, body: read body)
+}

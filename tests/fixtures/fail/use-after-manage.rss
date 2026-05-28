@@ -1,0 +1,13 @@
+// expect: RS0401
+mode: uses-local
+
+struct Image {
+    pixels: Buffer
+}
+
+fn publish(path: read Path) -> Unit {
+    local image = Image.load(path: read path)
+    let shared = manage image
+    Image.save(image: read image, path: read path)
+    Image.save(image: read shared, path: read path)
+}

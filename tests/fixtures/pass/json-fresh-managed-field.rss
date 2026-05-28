@@ -1,0 +1,26 @@
+mode: managed
+
+class Schema {
+    name: String
+}
+
+struct JsonValue {
+    raw: String
+}
+
+struct UserConfig {
+    schema: handle Schema
+    json: JsonValue
+    name: String
+}
+
+fn parse_user_config(text: read String, schema: read Schema) -> Result<fresh UserConfig, JsonError> {
+    let json = Json.parse(text: read text)?
+    let name = Json.field_string(value: read json, name: read "name")?
+
+    return UserConfig(
+        schema: read schema,
+        json: read json,
+        name: read name,
+    )
+}

@@ -1,0 +1,20 @@
+// expect: RS0701 RS0702
+mode: managed
+
+resource File {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+struct Logger {
+    file: File
+}
+
+fn leak(path: read Path) -> Unit {
+    with File.open(path: read path) as file {
+        return file
+    }
+}

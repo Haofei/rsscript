@@ -1,0 +1,18 @@
+mode: uses-local
+
+struct Image {
+    pixels: Buffer
+}
+
+fn process_upload(input: read Path, cache: mut ImageCache) -> Result<Unit, ImageError> {
+    local image = Image.load(path: read input)?
+
+    Image.resize(image: mut image, width: 1280, height: 720)
+    Image.normalize(image: mut image)
+    Image.sharpen(image: mut image)
+
+    let shared = manage image
+    ImageCache.store(cache: mut cache, image: read shared)
+
+    return Ok(Unit)
+}

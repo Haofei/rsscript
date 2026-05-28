@@ -1,0 +1,22 @@
+mode: uses-local
+
+resource DbConnection {
+    fd: Int
+
+    drop {
+        Db.close(fd: fd)
+    }
+}
+
+fn run_query(url: read Url, sql: read String) -> Result<Unit, DbError> {
+    local pool = ResourcePool<DbConnection>.new(
+        create: || DbConnection.open(url: read url),
+        max_size: 8,
+    )
+
+    with ResourcePool.borrow(pool: mut pool) as conn {
+        DbConnection.query(conn: mut conn, sql: read sql)?
+    }
+
+    return Ok(Unit)
+}

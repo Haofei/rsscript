@@ -1,0 +1,20 @@
+mode: managed
+
+resource File {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+fn copy_file(input: read Path, output: read Path) -> Result<Unit, IOError> {
+    with File.open_read(path: read input) as reader {
+        with File.open_write(path: read output) as writer {
+            let bytes = File.read_all(file: mut reader)?
+            File.write(file: mut writer, data: read bytes)?
+        }
+    }
+
+    return Ok(Unit)
+}

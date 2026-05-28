@@ -1,3 +1,5 @@
+use serde::Serialize;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Severity {
     Error,
@@ -25,7 +27,7 @@ pub struct Span {
     pub length: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Fix {
     pub kind: String,
     pub title: String,
@@ -130,54 +132,45 @@ pub fn format_diagnostics_human(diagnostics: &[Diagnostic]) -> String {
 }
 
 pub fn format_diagnostics_json(diagnostics: &[Diagnostic]) -> String {
-    let mut output = String::from("[");
-    for (index, diagnostic) in diagnostics.iter().enumerate() {
-        if index > 0 {
-            output.push(',');
-        }
-        output.push_str(&format!(
-            "{{\"code\":\"{}\",\"severity\":\"{}\",\"summary\":\"{}\",\"spans\":[{{\"file\":\"{}\",\"line\":{},\"column\":{},\"length\":{},\"label\":\"{}\"}}],\"causes\":[{}],\"fixes\":[{}]}}",
-            escape_json(&diagnostic.code),
-            diagnostic.severity.as_str(),
-            escape_json(&diagnostic.summary),
-            escape_json(&diagnostic.span.file),
-            diagnostic.span.line,
-            diagnostic.span.column,
-            diagnostic.span.length,
-            escape_json(&diagnostic.label),
-            diagnostic
-                .causes
-                .iter()
-                .map(|cause| format!("\"{}\"", escape_json(cause)))
-                .collect::<Vec<_>>()
-                .join(","),
-            diagnostic
-                .fixes
-                .iter()
-                .map(|fix| format!(
-                    "{{\"kind\":\"{}\",\"title\":\"{}\",\"applicability\":\"{}\"}}",
-                    escape_json(&fix.kind),
-                    escape_json(&fix.title),
-                    escape_json(&fix.applicability)
-                ))
-                .collect::<Vec<_>>()
-                .join(",")
-        ));
-    }
-    output.push(']');
-    output
+    let diagnostics: Vec<JsonDiagnostic<'_>> =
+        diagnostics.iter().map(JsonDiagnostic::from).collect();
+    serde_json::to_string(&diagnostics).expect("diagnostic JSON serialization should not fail")
 }
 
-fn escape_json(value: &str) -> String {
-    value
-        .chars()
-        .flat_map(|ch| match ch {
-            '"' => "\\\"".chars().collect::<Vec<_>>(),
-            '\\' => "\\\\".chars().collect::<Vec<_>>(),
-            '\n' => "\\n".chars().collect::<Vec<_>>(),
-            '\r' => "\\r".chars().collect::<Vec<_>>(),
-            '\t' => "\\t".chars().collect::<Vec<_>>(),
-            _ => vec![ch],
-        })
-        .collect()
+#[derive(Serialize)]
+struct JsonDiagnostic<'a> {
+    code: &'a str,
+    severity: &'a str,
+    summary: &'a str,
+    spans: Vec<JsonSpan<'a>>,
+    causes: &'a [String],
+    fixes: &'a [Fix],
+}
+
+#[derive(Serialize)]
+struct JsonSpan<'a> {
+    file: &'a str,
+    line: usize,
+    column: usize,
+    length: usize,
+    label: &'a str,
+}
+
+impl<'a> From<&'a Diagnostic> for JsonDiagnostic<'a> {
+    fn from(diagnostic: &'a Diagnostic) -> Self {
+        Self {
+            code: &diagnostic.code,
+            severity: diagnostic.severity.as_str(),
+            summary: &diagnostic.summary,
+            spans: vec![JsonSpan {
+                file: &diagnostic.span.file,
+                line: diagnostic.span.line,
+                column: diagnostic.span.column,
+                length: diagnostic.span.length,
+                label: &diagnostic.label,
+            }],
+            causes: &diagnostic.causes,
+            fixes: &diagnostic.fixes,
+        }
+    }
 }

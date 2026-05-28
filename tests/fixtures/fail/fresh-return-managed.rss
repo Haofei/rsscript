@@ -1,0 +1,11 @@
+// expect: RS0601
+mode: managed
+
+struct Image {
+    pixels: Buffer
+}
+
+fn cached(cache: read Cache) -> fresh Image {
+    let image = Cache.get(cache: read cache)
+    return image
+}

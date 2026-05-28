@@ -1,0 +1,18 @@
+mode: uses-local
+
+struct RowBuffer {
+    bytes: Buffer
+}
+
+fn sum_csv(path: read Path) -> Result<Int, CsvError> {
+    local buffer = RowBuffer.new(size: 4096)
+    let total = 0
+
+    with File.open_read(path: read path) as file {
+        Csv.read_into(file: mut file, buffer: mut buffer)?
+        let row = Csv.parse_row(buffer: read buffer)?
+        Int.add(left: total, right: row.amount)
+    }
+
+    return Ok(total)
+}

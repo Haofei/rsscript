@@ -1,0 +1,12 @@
+// expect: RS0101 RS0201 RS0202
+mode: managed
+
+struct Image {
+    pixels: Buffer
+}
+
+fn resize(image: mut Image, width: Int, height: Int) -> Unit {
+    local image = Image.load(path: read "in.png")
+    Image.resize(image: image, width: 800, height: 600)
+    Image.save(read image, path: read "out.png")
+}

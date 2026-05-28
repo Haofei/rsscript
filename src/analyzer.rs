@@ -709,20 +709,12 @@ fn split_top_level_args(tokens: &[Token], start: usize, end: usize) -> Vec<ArgRa
     let mut args = Vec::new();
     let mut depth = 0usize;
     let mut arg_start = start;
-    for index in start..end {
-        if tokens[index].symbol("(")
-            || tokens[index].symbol("<")
-            || tokens[index].symbol("[")
-            || tokens[index].symbol("{")
-        {
+    for (index, token) in tokens.iter().enumerate().take(end).skip(start) {
+        if token.symbol("(") || token.symbol("<") || token.symbol("[") || token.symbol("{") {
             depth += 1;
-        } else if tokens[index].symbol(")")
-            || tokens[index].symbol(">")
-            || tokens[index].symbol("]")
-            || tokens[index].symbol("}")
-        {
+        } else if token.symbol(")") || token.symbol(">") || token.symbol("]") || token.symbol("}") {
             depth = depth.saturating_sub(1);
-        } else if depth == 0 && tokens[index].symbol(",") {
+        } else if depth == 0 && token.symbol(",") {
             args.push(ArgRange {
                 start: arg_start,
                 end: index,

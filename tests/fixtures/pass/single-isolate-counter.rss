@@ -1,0 +1,15 @@
+mode: managed
+
+class Counter {
+    value: Int
+}
+
+fn increment(counter: mut Counter) -> Unit {
+    Counter.add(counter: mut counter, amount: 1)
+
+    return Unit
+}
+
+fn read_counter(counter: read Counter) -> Int {
+    return Counter.value(counter: read counter)
+}

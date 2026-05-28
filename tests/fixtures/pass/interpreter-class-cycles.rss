@@ -1,0 +1,20 @@
+mode: managed
+
+class Environment {
+    parent: Environment
+    values: Map<String, Object>
+}
+
+class FunctionObject {
+    closure: Environment
+}
+
+class Object {
+    prototype: Object
+}
+
+fn make_function(env: read Environment) -> FunctionObject {
+    let function = FunctionObject.new(closure: read env)
+
+    return function
+}
