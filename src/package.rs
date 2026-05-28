@@ -14,7 +14,8 @@ use crate::analyzer::{
 use crate::diagnostic::{Diagnostic, code};
 use crate::formatter::format_program;
 use crate::review::{
-    ReviewFinding, ReviewMap, ReviewRisk, format_review_human, review_map_sources, review_sources,
+    ReviewFinding, ReviewMap, ReviewMapClassification, ReviewRisk, format_review_human,
+    review_map_sources, review_sources,
 };
 use crate::rust_lower::NativeRustDependency;
 use crate::syntax::ast::{
@@ -632,7 +633,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
     reasons.dedup();
 
     let risk = package_risk(manifest, native_rust.as_ref(), &review_map, &diagnostics);
-    let api_summary = package_api_effect_summary(sources);
+    let api_summary = package_api_effect_summary(sources, &review_map);
     let summary = PackageReviewSummary {
         interface_files: sources
             .iter()
@@ -2272,7 +2273,10 @@ struct PackageApiSummary {
     unknown_apis: usize,
 }
 
-fn package_api_effect_summary(sources: &[PackageSource]) -> PackageApiSummary {
+fn package_api_effect_summary(
+    sources: &[PackageSource],
+    review_map: &ReviewMap,
+) -> PackageApiSummary {
     let interface_contracts =
         collect_package_function_contracts(sources, PackageReviewFileKind::Interface);
     let interface_type_contracts =
@@ -2347,8 +2351,25 @@ fn package_api_effect_summary(sources: &[PackageSource]) -> PackageApiSummary {
                     .any(|effect| effect.as_str() == "unsafe")
             })
             .count(),
-        unknown_apis: 0,
+        unknown_apis: package_unknown_api_count(contracts, review_map),
     }
+}
+
+fn package_unknown_api_count(
+    contracts: &BTreeMap<String, PackageFunctionContract>,
+    review_map: &ReviewMap,
+) -> usize {
+    contracts
+        .keys()
+        .filter(|function| {
+            review_map.files.iter().any(|file| {
+                file.regions.iter().any(|region| {
+                    &region.function == *function
+                        && region.classification == ReviewMapClassification::Unknown
+                })
+            })
+        })
+        .count()
 }
 
 fn package_contract_has_resource_boundary(

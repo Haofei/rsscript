@@ -3712,6 +3712,42 @@ pub fn Cache.store(conn: mut DbConnection, image: read Image) -> Unit
 }
 
 #[test]
+fn package_review_json_counts_public_apis_with_unknown_review_regions() {
+    let temp_dir = unique_temp_dir("rsscript-package-review-unknown-api");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        "",
+        r#"pub fn Api.run() -> Unit
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("src/main.rss"),
+        r#"pub fn Api.run() -> Unit {
+    helper()
+    return Unit
+}
+
+fn helper() -> Unit {
+    Missing.call()
+    return Unit
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(json["summary"]["public_functions"], 1);
+    assert_eq!(json["summary"]["unknown_apis"], 1);
+    assert_eq!(json["review_map"]["summary"]["unknown"]["functions"], 2);
+}
+
+#[test]
 fn package_metadata_dry_run_reports_review_metadata_without_writing() {
     let temp_dir = unique_temp_dir("rsscript-package-metadata-dry-run");
     write_named_package_fixture(
