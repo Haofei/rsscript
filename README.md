@@ -1,29 +1,35 @@
 # RSScript
 
-**Reviewable System Script — a small language that lowers to Rust, built for code AI writes but humans still have to trust.**
+**A simpler Rust for code AI writes and humans still have to trust.**
 
 ```text
-Easy by default.
-Fast when local.
-Reviewable by design.
-Compiled through Rust.
+20% of the mental load.
+80% of what Rust does.
+Drop to native Rust for the other 20%.
 ```
 
-I like Rust, and that is where this project starts. AI-generated Rust can be hard to review at speed: lifetimes, ownership shapes, trait-heavy APIs, mutation boundaries, retention — all technically correct, all expensive to audit when a single PR drops hundreds of new lines on you.
+This came out of reviewing 100k+ lines of AI-generated Rust over six months. The same shapes kept hurting: `Arc<Mutex<HashMap<...>>>` stacked four deep, signatures with eight trait bounds where one would do, `Pin<Box<dyn Future<...>>>` blocking the view of what a function actually does, retention buried three call levels down, four hundred lines of correct-but-dense code in a single PR where ninety percent of it isn't worth careful reading. The Rust compiler was happy. My eyes weren't.
 
-RSScript is an experiment in putting a smaller, review-first semantic layer in front of Rust. It keeps rustc, Cargo, and the crate ecosystem; it just makes mutation, retention, resources, native boundaries, and managed/local transitions explicit *before* the Rust gets generated.
-
-One question drives the design:
-
-> If AI can write hundreds of lines of code in seconds, how can humans review that code safely?
+RSScript is a smaller front end that lowers to Rust. It keeps rustc, Cargo, and the crate ecosystem; it just compresses the surface so a reviewer's first read costs less, and pushes mutation, retention, resources, and native boundaries into the signature where review can see them. The hairy 20% of Rust — high-rank lifetimes, GATs, exotic trait coherence, hand-tuned pinning — isn't reproduced. When you genuinely need it, `features: native` lets you inline Rust with an explicit review boundary.
 
 ---
 
-## Why bother
+## Why a smaller language, not just lints on Rust
 
-Before AI, writing code was expensive and reviewing was manageable. That ratio has flipped — generating code is now cheap, reviewing generated code is the bottleneck.
+The obvious alternative is proc-macros, a Clippy ruleset, and a review tool over Rust directly. The problem is that **Rust's signatures themselves are part of the review cost**, not just the absence of annotations. `Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'a>>` carries four bits a reviewer needs and a dozen bits that exist to satisfy the type system. No lint can fix that — the noise is *in the language surface*. And AI, trained on every clever Rust crate on GitHub, is gradient-descending into that surface every time it generates code.
 
-Existing languages were designed for humans writing code by hand. RSScript is designed for a workflow where AI writes, the compiler checks semantic boundaries, and humans review the *risk profile first*. So the things that actually matter to a reviewer — what mutates, what gets retained, who owns a resource, where you cross into native or unsafe, what changed in a public API — are pushed into source and machine-readable diagnostics instead of being inferred from context.
+A smaller front end fixes two things at once:
+
+- **The signature** a human reads becomes shorter and load-bearing in different ways.
+- **The AI's option space** shrinks. AI can't generate `Pin<Box<dyn Future ...>>` patterns in a language that doesn't have them. Constraint is the product.
+
+Before AI, writing code was expensive and reviewing was manageable. That ratio has flipped — generating is cheap, reviewing is the bottleneck. RSScript is designed for the new ratio: AI writes, the compiler checks semantic boundaries, humans review the *risk*, not every line. What mutates, what gets retained, who owns a resource, where you cross into native or unsafe, what changed in a public API — all of it lives in the signature and in machine-readable diagnostics, instead of being inferred from context.
+
+---
+
+## Scope
+
+RSScript targets **application-level systems**: backend services, agent runtimes, data processing tools, internal infrastructure, glue code that needs to be fast and correct but doesn't need to encode every static fact in the type system. It isn't aimed at kernels, drivers, embedded firmware, or compiler internals where Rust's full expressivity earns its keep. For those, keep using Rust.
 
 ---
 
