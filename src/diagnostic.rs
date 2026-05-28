@@ -19,6 +19,7 @@ pub mod code {
     pub const UNKNOWN_FILE_FEATURE: &str = "RS0016";
     pub const DUPLICATE_FILE_FEATURE: &str = "RS0017";
     pub const INVALID_NO_BLOCK_CALL: &str = "RS0018";
+    pub const INVALID_NO_PANIC_CALL: &str = "RS0019";
     pub const FEATURE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
@@ -310,6 +311,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::INVALID_NO_BLOCK_CALL,
         title: "invalid no_block call",
         explanation: "`effects(no_block)` is a guarantee that the function does not block the current isolate. Calls inside it must target constructors, enum variants, or functions also declared `effects(no_block)`.",
+    },
+    DiagnosticExplanation {
+        code: code::INVALID_NO_PANIC_CALL,
+        title: "invalid no_panic call",
+        explanation: "`effects(no_panic)` is a guarantee that the function does not intentionally panic. Calls inside it must target constructors, enum variants, or functions also declared `effects(no_panic)`.",
     },
     DiagnosticExplanation {
         code: code::FEATURE_VIOLATION,

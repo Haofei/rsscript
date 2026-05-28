@@ -1,0 +1,11 @@
+fn checked_id(value: Int) -> Int
+    effects(no_panic)
+{
+    return value
+}
+
+fn checked_twice(value: Int) -> Int
+    effects(no_panic)
+{
+    return checked_id(value: value)
+}

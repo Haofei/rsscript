@@ -1,0 +1,11 @@
+// expect: RS0019
+
+fn may_panic(value: Int) -> Int {
+    return value
+}
+
+fn promised_no_panic(value: Int) -> Int
+    effects(no_panic)
+{
+    return may_panic(value: value)
+}

@@ -75,6 +75,7 @@ impl Analyzer<'_> {
         self.check_generic_constraints();
         self.check_pure_bodies();
         self.check_no_block_bodies();
+        self.check_no_panic_bodies();
         self.check_noalloc_allocations();
         self.check_try_operator_result_returns();
         self.check_resource_fields();
@@ -927,6 +928,95 @@ impl Analyzer<'_> {
         }
     }
 
+    fn check_no_panic_bodies(&mut self) {
+        let items = self.syntax_program.items.clone();
+        for item in &items {
+            let Item::Function(function) = item else {
+                continue;
+            };
+            if !function_has_effect(function, "no_panic") {
+                continue;
+            }
+            self.check_no_panic_block(&function.name, &function.body);
+        }
+    }
+
+    fn check_no_panic_block(&mut self, function_name: &str, block: &Block) {
+        for statement in &block.statements {
+            self.check_no_panic_stmt(function_name, statement);
+        }
+    }
+
+    fn check_no_panic_stmt(&mut self, function_name: &str, statement: &Stmt) {
+        match statement {
+            Stmt::Let(stmt) => {
+                if let Some(value) = &stmt.value {
+                    self.check_no_panic_expr(function_name, value);
+                }
+            }
+            Stmt::Return(stmt) => {
+                if let Some(value) = &stmt.value {
+                    self.check_no_panic_expr(function_name, value);
+                }
+            }
+            Stmt::Expr(value) => self.check_no_panic_expr(function_name, value),
+            Stmt::With(stmt) => {
+                self.check_no_panic_expr(function_name, &stmt.resource);
+                self.check_no_panic_block(function_name, &stmt.body);
+            }
+            Stmt::If(stmt) => {
+                self.check_no_panic_expr(function_name, &stmt.condition);
+                self.check_no_panic_block(function_name, &stmt.then_body);
+                if let Some(else_body) = &stmt.else_body {
+                    self.check_no_panic_block(function_name, else_body);
+                }
+            }
+            Stmt::Loop(stmt) => {
+                if let Some(condition) = &stmt.condition {
+                    self.check_no_panic_expr(function_name, condition);
+                }
+                self.check_no_panic_block(function_name, &stmt.body);
+            }
+            Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
+        }
+    }
+
+    fn check_no_panic_expr(&mut self, function_name: &str, expr: &Expr) {
+        match expr {
+            Expr::Call {
+                callee, args, span, ..
+            } => {
+                match self.hir.resolve_call(callee) {
+                    CallResolution::Resolved { signature, kind } => {
+                        if !matches!(kind, ResolvedCalleeKind::Constructor { .. })
+                            && !signature.effects.iter().any(|effect| effect == "no_panic")
+                        {
+                            self.panic_call_diagnostic(function_name, callee, span);
+                        }
+                    }
+                    CallResolution::EnumVariant | CallResolution::Unknown => {}
+                }
+                for arg in args {
+                    self.check_no_panic_expr(function_name, &arg.value);
+                }
+            }
+            Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
+                self.check_no_panic_expr(function_name, value);
+            }
+            Expr::Binary { left, right, .. } => {
+                self.check_no_panic_expr(function_name, left);
+                self.check_no_panic_expr(function_name, right);
+            }
+            Expr::Field { base, .. } => self.check_no_panic_expr(function_name, base),
+            Expr::Index { base, index, .. } => {
+                self.check_no_panic_expr(function_name, base);
+                self.check_no_panic_expr(function_name, index);
+            }
+            Expr::Closure { body, .. } => self.check_no_panic_block(function_name, body),
+            Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        }
+    }
+
     fn check_duplicate_declarations(&mut self) {
         for duplicate in self.hir.duplicate_symbols() {
             self.diagnostics.push(
@@ -1356,6 +1446,33 @@ impl Analyzer<'_> {
             .with_fix(
                 "remove_no_block_or_call_no_block",
                 "Remove `no_block`, or call only APIs whose signatures are declared `effects(no_block)`.",
+                "manual",
+            ),
+        );
+    }
+
+    fn panic_call_diagnostic(
+        &mut self,
+        function_name: &str,
+        callee: &Callee,
+        span: &crate::diagnostic::Span,
+    ) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::INVALID_NO_PANIC_CALL,
+                format!(
+                    "`{function_name}` is declared no_panic but calls possibly panicking function `{}`.",
+                    callee_display(callee)
+                ),
+                span.clone(),
+                "possibly panicking call in no_panic function",
+            )
+            .with_cause(
+                "A `no_panic` function may only call constructors, enum variants, or functions also declared `effects(no_panic)`.",
+            )
+            .with_fix(
+                "remove_no_panic_or_call_no_panic",
+                "Remove `no_panic`, or call only APIs whose signatures are declared `effects(no_panic)`.",
                 "manual",
             ),
         );
