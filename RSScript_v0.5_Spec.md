@@ -676,16 +676,24 @@ Features describe semantic capability, not style.
 
 ---
 
-## 8.4 Reserved Features
+## 8.4 Review Boundary Features
 
-Only `local` is implemented for the MVP.
+The MVP recognizes these feature names as review-relevant capability gates:
+
+```text
+local
+native
+unsafe
+async
+```
+
+`local` enables local ownership features.
+
+`native`, `unsafe`, and `async` are boundary declarations. A file must declare the matching feature before it can contain `native` boundaries, `unsafe` effects, or `async fn` declarations.
 
 The following feature names are reserved for future review-relevant capabilities:
 
 ```text
-native
-unsafe
-async
 device
 ffi
 reflection

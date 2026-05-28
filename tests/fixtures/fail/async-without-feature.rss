@@ -1,0 +1,4 @@
+// expect: RS0101
+async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError> {
+    return Network.fetch(url: read url)
+}

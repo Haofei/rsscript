@@ -1,0 +1,4 @@
+// expect: RS0101
+native fn Host.emit(message: read String) -> Unit {
+    return Unit
+}

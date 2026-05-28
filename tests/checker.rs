@@ -217,6 +217,8 @@ fn diagnostic_explanations_are_available_by_code() {
 #[test]
 fn lint_warns_on_public_signature_complexity() {
     let source = r#"
+features: native
+
 pub fn overloaded<A, B, C, D>(
     first: read Result<Option<List<Map<String, Image>>>, Error>,
     second: read String,
@@ -1017,6 +1019,8 @@ fn copy(path: read Path) -> Result<Unit, FileError> {
 #[test]
 fn rust_lowering_maps_native_call_boundaries() {
     let source = r#"
+features: native
+
 native fn host_emit(message: read String) -> Unit
 
 pub fn run() -> Unit {
@@ -1032,8 +1036,8 @@ pub fn run() -> Unit {
         .collect::<Vec<_>>();
 
     assert_eq!(native_calls.len(), 2);
-    assert!(native_calls.iter().any(|entry| entry.source.line == 5));
-    assert!(native_calls.iter().any(|entry| entry.source.line == 6));
+    assert!(native_calls.iter().any(|entry| entry.source.line == 7));
+    assert!(native_calls.iter().any(|entry| entry.source.line == 8));
 }
 
 #[test]
@@ -2288,6 +2292,8 @@ pub fn field_string(
 #[test]
 fn parser_preserves_async_function_kind() {
     let source = r#"
+features: async
+
 async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError>
 "#;
     let program = parse_source("net.rssi", source);
@@ -2301,6 +2307,8 @@ async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError>
 #[test]
 fn parser_accepts_native_function_declaration() {
     let source = r#"
+features: native
+
 native fn Host.emit(message: read String) -> Unit
 "#;
     let program = parse_source("host.rssi", source);
@@ -2701,7 +2709,9 @@ unsafe = "forbid"
     .expect("manifest should be written");
     fs::write(
         temp_dir.join("interface/json.rssi"),
-        r#"struct JsonValue
+        r#"features: native
+
+struct JsonValue
 struct JsonError
 
 native fn Json.parse(text: read String) -> Result<fresh JsonValue, JsonError>
@@ -3178,7 +3188,9 @@ path = "native/rust"
 crate = "rss_json_native"
 build_scripts = "review"
 "#,
-        r#"struct JsonValue
+        r#"features: native
+
+struct JsonValue
 struct JsonError
 
 pub fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
@@ -3840,7 +3852,9 @@ build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
 "#,
-        r#"native fn Native.parse(text: read String) -> String
+        r#"features: native
+
+native fn Native.parse(text: read String) -> String
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -3889,7 +3903,9 @@ build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
 "#,
-        r#"native fn Native.parse(text: read String) -> String
+        r#"features: native
+
+native fn Native.parse(text: read String) -> String
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -3948,7 +3964,9 @@ build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
 "#,
-        r#"native fn Native.parse(text: read String) -> String
+        r#"features: native
+
+native fn Native.parse(text: read String) -> String
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -4006,7 +4024,9 @@ proc_macros = "forbid"
 unsafe = "forbid"
 links = ["ssl"]
 "#,
-        r#"native fn Native.parse(text: read String) -> String
+        r#"features: native
+
+native fn Native.parse(text: read String) -> String
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -4060,7 +4080,9 @@ build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
 "#,
-        r#"native fn Native.parse(text: read String) -> String
+        r#"features: native
+
+native fn Native.parse(text: read String) -> String
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -4120,7 +4142,9 @@ build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
 "#,
-        r#"native fn Native.parse(text: read String) -> String
+        r#"features: native
+
+native fn Native.parse(text: read String) -> String
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -4181,7 +4205,9 @@ build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
 "#,
-        r#"native fn Native.parse(text: read String) -> String
+        r#"features: native
+
+native fn Native.parse(text: read String) -> String
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");

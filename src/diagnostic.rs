@@ -332,7 +332,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::FEATURE_VIOLATION,
         title: "feature violation",
-        explanation: "Managed-only files cannot use advanced local capabilities such as `local`, `manage`, `take`, or `ResourcePool<T>` unless they declare `features: local`.",
+        explanation: "Files must declare review-relevant capabilities before using them. `local`, `manage`, `take`, `ResourcePool<T>`, `native`, `unsafe`, and `async` boundaries require matching `features:` entries.",
     },
     DiagnosticExplanation {
         code: code::UNNAMED_ARGUMENT,

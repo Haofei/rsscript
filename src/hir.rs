@@ -115,6 +115,9 @@ pub enum HirFeatureUseKind {
     Manage,
     Take,
     ResourcePool,
+    Native,
+    Unsafe,
+    Async,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -589,6 +592,30 @@ struct BodyFacts {
 }
 
 fn collect_function_body_facts(hir: &Hir, function: &FunctionDecl, facts: &mut BodyFacts) {
+    if function.is_async {
+        facts.feature_uses.push(HirFeatureUse {
+            function_name: Some(function.name.clone()),
+            kind: HirFeatureUseKind::Async,
+            span: function.span.clone(),
+        });
+    }
+    for effect in &function.effects {
+        if let EffectDecl::Name(name) = effect {
+            let kind = match name.as_str() {
+                "native" => Some(HirFeatureUseKind::Native),
+                "unsafe" => Some(HirFeatureUseKind::Unsafe),
+                _ => None,
+            };
+            if let Some(kind) = kind {
+                facts.feature_uses.push(HirFeatureUse {
+                    function_name: Some(function.name.clone()),
+                    kind,
+                    span: function.span.clone(),
+                });
+            }
+        }
+    }
+
     let mut value_types = HashMap::new();
     for param in &function.params {
         if param.effect == Some(DataEffect::Take) {

@@ -1,18 +1,34 @@
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, code};
 use crate::hir::HirFeatureUseKind;
+use crate::syntax::ast::FileFeature;
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
-    if analyzer.syntax_program.local_capability_enabled() {
-        return;
-    }
-
     for feature_use in analyzer.hir.feature_uses().to_vec() {
-        feature_violation(
-            analyzer,
-            feature_violation_summary(feature_use.kind),
-            feature_use.span,
-        );
+        if !analyzer
+            .syntax_program
+            .has_feature(required_feature(feature_use.kind))
+        {
+            feature_violation(
+                analyzer,
+                feature_violation_summary(feature_use.kind),
+                feature_use.span,
+                required_feature(feature_use.kind),
+            );
+        }
+    }
+}
+
+fn required_feature(kind: HirFeatureUseKind) -> FileFeature {
+    match kind {
+        HirFeatureUseKind::LocalLet
+        | HirFeatureUseKind::LocalClosure
+        | HirFeatureUseKind::Manage
+        | HirFeatureUseKind::Take
+        | HirFeatureUseKind::ResourcePool => FileFeature::Local,
+        HirFeatureUseKind::Native => FileFeature::Native,
+        HirFeatureUseKind::Unsafe => FileFeature::Unsafe,
+        HirFeatureUseKind::Async => FileFeature::Async,
     }
 }
 
@@ -23,15 +39,38 @@ fn feature_violation_summary(kind: HirFeatureUseKind) -> &'static str {
         HirFeatureUseKind::Manage => "`manage` requires `features: local`.",
         HirFeatureUseKind::Take => "`take` requires `features: local`.",
         HirFeatureUseKind::ResourcePool => "`ResourcePool<T>` requires `features: local`.",
+        HirFeatureUseKind::Native => "`native` boundaries require `features: native`.",
+        HirFeatureUseKind::Unsafe => "`unsafe` effects require `features: unsafe`.",
+        HirFeatureUseKind::Async => "`async fn` requires `features: async`.",
     }
 }
 
-fn feature_violation(analyzer: &mut Analyzer<'_>, summary: &str, span: crate::diagnostic::Span) {
+fn feature_violation(
+    analyzer: &mut Analyzer<'_>,
+    summary: &str,
+    span: crate::diagnostic::Span,
+    feature: FileFeature,
+) {
     analyzer.diagnostics.push(
         Diagnostic::error(code::FEATURE_VIOLATION, summary, span, "feature violation").with_fix(
-            "enable_local_feature",
-            "Add `features: local` to the file header.",
+            "enable_file_feature",
+            format!(
+                "Add `features: {}` to the file header.",
+                file_feature_name(feature)
+            ),
             "manual",
         ),
     );
+}
+
+fn file_feature_name(feature: FileFeature) -> &'static str {
+    match feature {
+        FileFeature::Local => "local",
+        FileFeature::Native => "native",
+        FileFeature::Unsafe => "unsafe",
+        FileFeature::Async => "async",
+        FileFeature::Device => "device",
+        FileFeature::Ffi => "ffi",
+        FileFeature::Reflection => "reflection",
+    }
 }
