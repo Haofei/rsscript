@@ -3739,11 +3739,128 @@ unsafe = "forbid"
     assert_eq!(json["native_rust"]["cargo_toml_present"], true);
     assert_eq!(json["native_rust"]["cargo_metadata_ok"], true);
     assert_eq!(json["native_rust"]["cargo_package_name"], "rss_json_native");
+    assert_eq!(json["native_rust"]["unsafe_detected"], false);
+    assert_eq!(
+        json["native_rust"]["linked_libraries"],
+        serde_json::json!([])
+    );
     assert!(
         json["native_rust"]["target_kinds"]
             .as_array()
             .is_some_and(|kinds| kinds.iter().any(|kind| kind == "lib"))
     );
+}
+
+#[test]
+fn package_check_reports_native_unsafe_usage() {
+    let temp_dir = unique_temp_dir("rsscript-package-check-native-unsafe");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_json_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+        r#"native fn Native.parse(text: read String) -> String
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
+    fs::write(
+        temp_dir.join("native/rust/Cargo.toml"),
+        "[package]\nname = \"rss_json_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("native Cargo.toml should be written");
+    fs::write(
+        temp_dir.join("native/rust/src/lib.rs"),
+        r#"pub fn parse() {
+    let _ = "unsafe in a string";
+    // unsafe in a comment should not count
+    unsafe {}
+}
+"#,
+    )
+    .expect("native source should be written");
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&temp_dir).expect("package check should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!check.ok);
+    assert_eq!(json["native_rust"]["unsafe_detected"], true);
+    assert!(
+        json["native_rust"]["reasons"]
+            .as_array()
+            .is_some_and(|reasons| reasons
+                .iter()
+                .any(|reason| reason == "native Rust unsafe usage detected"))
+    );
+}
+
+#[test]
+fn package_check_reports_native_linked_libraries() {
+    let temp_dir = unique_temp_dir("rsscript-package-check-native-links");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_json_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+links = ["ssl"]
+"#,
+        r#"native fn Native.parse(text: read String) -> String
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
+    fs::write(
+        temp_dir.join("native/rust/Cargo.toml"),
+        "[package]\nname = \"rss_json_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("native Cargo.toml should be written");
+    fs::write(
+        temp_dir.join("native/rust/src/lib.rs"),
+        "pub fn parse() {}\n",
+    )
+    .expect("native source should be written");
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&temp_dir).expect("package check should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(check.ok);
+    assert_eq!(check.risk, rsscript::PackageRisk::High);
+    assert_eq!(
+        json["native_rust"]["linked_libraries"],
+        serde_json::json!(["ssl"])
+    );
+    assert!(json["reasons"].as_array().is_some_and(|reasons| {
+        reasons
+            .iter()
+            .any(|reason| reason == "native Rust links external libraries")
+    }));
 }
 
 #[test]

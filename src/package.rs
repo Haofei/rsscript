@@ -213,6 +213,8 @@ pub struct PackageNativeRustCheck {
     pub cargo_metadata_ok: bool,
     pub cargo_package_name: Option<String>,
     pub target_kinds: Vec<String>,
+    pub unsafe_detected: bool,
+    pub linked_libraries: Vec<String>,
     pub file_count: usize,
     pub ok: bool,
     pub risk: PackageRisk,
@@ -1287,7 +1289,7 @@ pub fn format_package_check_human(check: &PackageCheck) -> String {
     ));
     if let Some(native) = &check.native_rust {
         output.push_str(&format!(
-            "native rust: {} cargo_toml={} cargo_metadata={} package={} targets={} files={}\n",
+            "native rust: {} cargo_toml={} cargo_metadata={} package={} targets={} unsafe={} links={} files={}\n",
             native.path,
             native.cargo_toml_present,
             native.cargo_metadata_ok,
@@ -1296,6 +1298,12 @@ pub fn format_package_check_human(check: &PackageCheck) -> String {
                 "<none>".to_string()
             } else {
                 native.target_kinds.join(",")
+            },
+            native.unsafe_detected,
+            if native.linked_libraries.is_empty() {
+                "<none>".to_string()
+            } else {
+                native.linked_libraries.join(",")
             },
             native.file_count
         ));
@@ -2130,6 +2138,7 @@ fn check_package_native_rust(
     if native_root.exists() {
         collect_regular_files(&native_root, &mut files)?;
     }
+    let unsafe_detected = native_rust_unsafe_detected(&files)?;
     let mut reasons = Vec::new();
     if !native_root.exists() {
         reasons.push("native Rust path missing".to_string());
@@ -2147,6 +2156,9 @@ fn check_package_native_rust(
     }
     if files.is_empty() {
         reasons.push("native Rust source files missing".to_string());
+    }
+    if unsafe_detected && native.unsafe_policy.as_deref() == Some("forbid") {
+        reasons.push("native Rust unsafe usage detected".to_string());
     }
     let metadata = if cargo_toml_present {
         scan_native_cargo_metadata(&cargo_toml, native, &mut reasons)?
@@ -2166,6 +2178,8 @@ fn check_package_native_rust(
         cargo_metadata_ok: metadata.ok,
         cargo_package_name: metadata.package_name,
         target_kinds: metadata.target_kinds,
+        unsafe_detected,
+        linked_libraries: native.links.clone(),
         file_count: files.len(),
         ok,
         risk,
@@ -2276,6 +2290,89 @@ fn native_cargo_metadata_temp_dir(cargo_toml: &Path) -> PathBuf {
         "rsscript-native-metadata-{name}-{}-{now}",
         std::process::id()
     ))
+}
+
+fn native_rust_unsafe_detected(files: &[PathBuf]) -> Result<bool, String> {
+    for file in files {
+        if file.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            continue;
+        }
+        let source = fs::read_to_string(file)
+            .map_err(|error| format!("failed to read {}: {error}", file.display()))?;
+        if source_contains_rust_unsafe_keyword(&source) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn source_contains_rust_unsafe_keyword(source: &str) -> bool {
+    let bytes = source.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                index += 2;
+                while index < bytes.len() && bytes[index] != b'\n' {
+                    index += 1;
+                }
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                index += 2;
+                while index + 1 < bytes.len() && !(bytes[index] == b'*' && bytes[index + 1] == b'/')
+                {
+                    index += 1;
+                }
+                index = (index + 2).min(bytes.len());
+            }
+            b'"' => {
+                index += 1;
+                while index < bytes.len() {
+                    if bytes[index] == b'\\' {
+                        index = (index + 2).min(bytes.len());
+                    } else if bytes[index] == b'"' {
+                        index += 1;
+                        break;
+                    } else {
+                        index += 1;
+                    }
+                }
+            }
+            b'\'' => {
+                index += 1;
+                while index < bytes.len() {
+                    if bytes[index] == b'\\' {
+                        index = (index + 2).min(bytes.len());
+                    } else if bytes[index] == b'\'' {
+                        index += 1;
+                        break;
+                    } else {
+                        index += 1;
+                    }
+                }
+            }
+            byte if is_rust_ident_start(byte) => {
+                let start = index;
+                index += 1;
+                while index < bytes.len() && is_rust_ident_continue(bytes[index]) {
+                    index += 1;
+                }
+                if &source[start..index] == "unsafe" {
+                    return true;
+                }
+            }
+            _ => index += 1,
+        }
+    }
+    false
+}
+
+fn is_rust_ident_start(byte: u8) -> bool {
+    byte == b'_' || byte.is_ascii_alphabetic()
+}
+
+fn is_rust_ident_continue(byte: u8) -> bool {
+    is_rust_ident_start(byte) || byte.is_ascii_digit()
 }
 
 fn package_tree_node(
