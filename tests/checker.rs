@@ -12,7 +12,7 @@ use rsscript::{
     format_review_human, format_review_json, format_review_map_human, format_review_map_json,
     lint_source, lower_source_to_rust, lower_source_to_rust_package, lower_source_to_rust_with_map,
     parse_runtime_diagnostics, remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines,
-    review_map_sources, review_sources,
+    review_map_sources, review_package_dir, review_sources,
 };
 use serde_json::Value;
 
@@ -2252,6 +2252,125 @@ fn process() -> Unit {
                 .iter()
                 .any(|reason| reason == "native boundary capability enabled"))
     );
+}
+
+#[test]
+fn package_review_reads_manifest_and_reports_semantic_risk() {
+    let temp_dir = unique_temp_dir("rsscript-package-review");
+    fs::create_dir_all(temp_dir.join("interface")).expect("interface dir should be created");
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("rsspkg.toml"),
+        r#"[package]
+name = "rss-json"
+version = "0.1.0"
+edition = "2026"
+
+[interfaces]
+paths = ["interface"]
+
+[sources]
+paths = ["src"]
+
+[dependencies]
+rss-core = "0.5"
+
+[features]
+streaming = []
+
+[review]
+risk = "low"
+allow_native = true
+
+[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_json_native"
+build_scripts = "review"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+    )
+    .expect("manifest should be written");
+    fs::write(
+        temp_dir.join("interface/json.rssi"),
+        r#"struct JsonValue
+struct JsonError
+
+native fn Json.parse(text: read String) -> Result<fresh JsonValue, JsonError>
+"#,
+    )
+    .expect("interface should be written");
+    fs::write(
+        temp_dir.join("src/lib.rss"),
+        r#"fn helper(text: read String) -> String {
+    return text
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(json["package"]["name"], "rss-json");
+    assert_eq!(json["risk"], "high");
+    assert_eq!(json["summary"]["interface_files"], 1);
+    assert_eq!(json["summary"]["source_files"], 1);
+    assert!(json["reasons"].as_array().is_some_and(|reasons| {
+        reasons
+            .iter()
+            .any(|reason| reason == "native Rust build scripts require review")
+    }));
+    assert!(json["reasons"].as_array().is_some_and(|reasons| {
+        reasons
+            .iter()
+            .any(|reason| reason == "native Rust wrapper enabled")
+    }));
+}
+
+#[test]
+fn rss_package_review_json_reports_package_metadata() {
+    let temp_dir = unique_temp_dir("rsscript-package-review-cli");
+    fs::create_dir_all(temp_dir.join("interface")).expect("interface dir should be created");
+    fs::write(
+        temp_dir.join("rsspkg.toml"),
+        r#"[package]
+name = "rss-math"
+version = "0.1.0"
+edition = "2026"
+
+[interfaces]
+paths = ["interface"]
+"#,
+    )
+    .expect("manifest should be written");
+    fs::write(
+        temp_dir.join("interface/math.rssi"),
+        r#"pub fn add(left: Int, right: Int) -> Int
+"#,
+    )
+    .expect("interface should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("package")
+        .arg("review")
+        .arg("--json")
+        .arg(&temp_dir)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss package review should execute");
+    let _ = fs::remove_dir_all(&temp_dir);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: Value = serde_json::from_str(&stdout).expect("stdout should be package review JSON");
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert_eq!(json["package"]["name"], "rss-math");
+    assert_eq!(json["summary"]["interface_files"], 1);
 }
 
 fn fixture_paths(directory: &str) -> Vec<PathBuf> {

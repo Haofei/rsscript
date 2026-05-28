@@ -5,6 +5,7 @@ mod hir;
 mod interfaces;
 mod lexer;
 mod lint;
+mod package;
 mod review;
 mod rust_lower;
 pub mod syntax;
@@ -17,6 +18,11 @@ pub use diagnostic::{
     format_diagnostic_explanation, format_diagnostics_human, format_diagnostics_json,
 };
 pub use lint::lint_source;
+pub use package::{
+    PackageIdentity, PackageNativeRustReview, PackageReview, PackageReviewFile,
+    PackageReviewFileKind, PackageReviewSummary, PackageRisk, format_package_review_human,
+    format_package_review_json, review_package_dir,
+};
 pub use review::{
     ReviewFinding, ReviewFix, ReviewMap, ReviewMapCategorySummary, ReviewMapClassification,
     ReviewMapFile, ReviewMapFileRisk, ReviewMapRegion, ReviewMapSummary, ReviewRisk,

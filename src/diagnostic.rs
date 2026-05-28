@@ -71,7 +71,8 @@ pub mod code {
     pub const REVIEW_FUNCTION_KIND_CHANGED: &str = "RSR014";
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Severity {
     Error,
     Warning,
@@ -105,7 +106,7 @@ pub struct Fix {
     pub applicability: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Diagnostic {
     pub code: String,
     pub severity: Severity,

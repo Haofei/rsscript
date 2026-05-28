@@ -7,11 +7,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rsscript::{
     Diagnostic, analyze_source, analyze_source_with_interfaces, check_generated_rust_package,
     core_interfaces, explain_diagnostic_code, format_diagnostic_explanation,
-    format_diagnostics_human, format_diagnostics_json, format_review_human, format_review_json,
-    format_review_map_human, format_review_map_json, lint_source, lower_source_to_rust,
-    lower_source_to_rust_package, parse_runtime_diagnostics, parse_source_map_json,
-    remap_rustc_diagnostic_json_lines, review_map_sources, review_sources,
-    write_generated_rust_package,
+    format_diagnostics_human, format_diagnostics_json, format_package_review_human,
+    format_package_review_json, format_review_human, format_review_json, format_review_map_human,
+    format_review_map_json, lint_source, lower_source_to_rust, lower_source_to_rust_package,
+    parse_runtime_diagnostics, parse_source_map_json, remap_rustc_diagnostic_json_lines,
+    review_map_sources, review_package_dir, review_sources, write_generated_rust_package,
 };
 
 fn main() -> ExitCode {
@@ -26,11 +26,22 @@ fn main() -> ExitCode {
         "lint" => run_lint(&args[2..]),
         "fmt" => run_fmt(&args[2..]),
         "review" => run_review(&args[2..]),
+        "package" | "pkg" => run_package(&args[2..]),
         "lower" => run_lower(&args[2..]),
         "run" => run_generated_rust(&args[2..]),
         "remap-rustc" => run_remap_rustc(&args[2..]),
         "verify-rust" => run_verify_rust(&args[2..]),
         _ => {
+            print_usage();
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn run_package(args: &[String]) -> ExitCode {
+    match parse_package_args(args) {
+        PackageCommand::Review { json, path } => run_package_review(json, path),
+        PackageCommand::Invalid => {
             print_usage();
             ExitCode::from(2)
         }
@@ -766,6 +777,32 @@ enum ReviewCommand<'a> {
     Invalid,
 }
 
+enum PackageCommand<'a> {
+    Review { json: bool, path: &'a str },
+    Invalid,
+}
+
+fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
+    let mut json = false;
+    let mut command = None;
+    let mut paths = Vec::new();
+
+    for arg in args {
+        if arg == "--json" {
+            json = true;
+        } else if arg == "review" {
+            command = Some(arg.as_str());
+        } else {
+            paths.push(arg.as_str());
+        }
+    }
+
+    match (command, paths.as_slice()) {
+        (Some("review"), [path]) => PackageCommand::Review { json, path },
+        _ => PackageCommand::Invalid,
+    }
+}
+
 fn parse_review_args(args: &[String]) -> ReviewCommand<'_> {
     let mut json = false;
     let mut command = None;
@@ -868,6 +905,35 @@ fn run_review_map(json: bool, path: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn run_package_review(json: bool, path: &str) -> ExitCode {
+    let review = match review_package_dir(Path::new(path)) {
+        Ok(review) => review,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+
+    if json {
+        println!("{}", format_package_review_json(&review));
+    } else {
+        print!("{}", format_package_review_human(&review));
+        if !review.diagnostics.is_empty() {
+            print!("{}", format_diagnostics_human(&review.diagnostics));
+        }
+    }
+
+    if review
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity.is_error())
+    {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
 struct ReviewMapSource {
     path: String,
     contents: String,
@@ -944,4 +1010,5 @@ fn print_usage() {
     eprintln!("  rsscript verify-rust [--json] <file.rss> --out-dir <directory>");
     eprintln!("  rsscript review [--json] --diff <old.rss> <new.rss>");
     eprintln!("  rsscript review [--json] --map <file-or-directory>");
+    eprintln!("  rsscript package review [--json] <package-directory>");
 }

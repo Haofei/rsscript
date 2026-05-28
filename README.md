@@ -387,6 +387,7 @@ rustc diagnostic remapping through source maps
 zero-argument `fn main() -> Unit` and `fn main() -> Result<Unit, E>` package harnesses for runnable Rust output
 core `.rssi` interface signatures
 HIR builtin signatures parsed from `.rssi` interface sources instead of a hand-written Rust table
+initial `rsspkg.toml` package review metadata
 CI gates for formatting, linting, tests, and generated Rust fixtures
 golden tests for Rust lowering and source-map shape
 ```
@@ -404,6 +405,7 @@ rss lint [--json] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>
 rss fmt <file.rss>
 rss review [--json] --diff <old.rss> <new.rss>
 rss review [--json] --map <file-or-directory>
+rss package review [--json] <package-directory>
 rss lower --rust <file.rss>
 rss lower --rust <file.rss> --out-dir <directory>
 rss run [--json] <file.rss>
@@ -418,6 +420,8 @@ rss verify-rust [--json] <file.rss> --out-dir <directory>
 `rss lint` runs the same frontend checks and emits warning diagnostics for reviewability issues. The first lint is `RSL001`, which flags public signatures that exceed the current review budget for parameter count, generic parameter count, effect count, or nested type depth.
 
 `rss review --map` checks inputs before emitting a map. Files with frontend errors produce diagnostics instead of potentially misleading review classifications.
+
+`rss package review` reads `rsspkg.toml`, loads declared interface/source roots, and emits conservative package review metadata. It treats `.rssi` files as the public semantic contract, reports package features separately from file-level `features:`, and raises risk for native Rust wrappers, build scripts, proc macros, unsafe policy, external links, frontend diagnostics, and unknown review-map regions.
 
 If a lowered package contains `fn main() -> Unit` or `fn main() -> Result<Unit, E>`, `rss lower --rust --out-dir` also emits a Rust `src/main.rs` harness. `rss run <file.rss>` uses the same lowering path, writes a temporary Rust package, and delegates execution to `cargo run`. Use `rss run <file.rss> --out-dir <directory>` to keep the generated Rust package for inspection. Frontend and RSScript runtime diagnostics from `rss run` support `--json`; successful program output remains the program's own stdout.
 
