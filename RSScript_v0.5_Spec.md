@@ -620,7 +620,54 @@ Managed dynamic mutation is a runtime model.
 
 ---
 
-## 7.4 Runtime conflicts
+## 7.4 Semantic guarantee table
+
+The table below is normative for the v0.5 implementation target. It prevents
+the source language from promising more than the compiler/runtime can currently
+prove.
+
+Status meanings:
+
+```text
+static       checked by the RSScript frontend before Rust lowering
+dynamic      checked by RSScript runtime hooks/handles at execution time
+review-only  surfaced for human review, but not fully proven by the compiler
+unsupported  rejected before Rust lowering or reserved for later versions
+```
+
+| Surface | v0.5 meaning | Current enforcement |
+| --- | --- | --- |
+| `read x` call-site effect | Callee may inspect `x`. It is not a snapshot guarantee. For managed handles this is a runtime read view; for plain lowered values it is a Rust shared borrow. | static argument/effect checking; dynamic managed read conflict reporting where `Managed<T>` read guards are used |
+| `mut x` call-site effect | Callee may mutate `x`. For managed handles, mutation must go through the runtime handle and require dynamic exclusive write access. | static argument/effect checking; dynamic managed write conflict reporting where `Managed<T>` write guards are used |
+| `take x` call-site effect | Callee consumes a local/owned value. It is not valid for managed handles or handle fields. | static checking for parameter effect, managed value take, handle-field take, and local move/use |
+| managed sharing | Managed values may be shared, stored, and cyclic. Strong cycles are representable and must use `weak` review markers at back edges when collection matters. | dynamic `Arc<RwLock<T>>` handle semantics for `Managed<T>`; weak handles implemented; cycle collection unsupported |
+| managed alias observes mutation | Aliases of the same managed handle observe mutation through the runtime handle. Ordering is the ordering of the generated Rust execution plus the runtime lock implementation; no stronger memory model is promised. | dynamic for `Managed<T>` aliases; not a compile-time proof |
+| managed -> local | A managed value cannot be silently recovered as a local exclusive value. | static |
+| `manage x` | Moves a local value into a managed runtime handle; the local binding is no longer usable. | static move/use checking plus generated runtime handle creation |
+| `effects(retains(x))` | Function may store a managed reference derived from `x` after return. Retaining a clean local value without `manage` is forbidden. | static for declared retained parameters and known builtin/core signatures |
+| resource lifetime / `with` | Resource values must stay scoped to `with` and must not escape by return, managed storage, retention, or closure capture. | static for implemented escape shapes; `ResourcePool<T>` is the privileged long-lived resource container |
+| `fresh T` | Returned top-level struct shell is newly created and unaliased; the guarantee is shallow and does not make handle fields unique. | static freshness analysis for supported constructors, fresh calls, branches/loops, handle-field restriction, and retained/managed-local pollution |
+| local partial access | Disjoint local fields may be accessed independently until a handle field or indexed container boundary is reached. | static for supported path shapes |
+| managed closure capture of local | Managed closures may not capture clean local values that could outlive the local region. | static for supported closure shapes; `noescape Fn()` is the supported temporary-callback escape hatch |
+| `features: local` | Enables local ownership features (`local`, `manage`, `take`, `ResourcePool`, local closures). | static file-level gate |
+| `features: native` | Marks a native/Rust boundary. Bodyless native declarations are allowed through binding metadata; executable native bodies are not part of v0.5. | static gate plus package/native binding checks; executable body unsupported |
+| `features: unsafe` | Marks an explicit hazard boundary. It is separate from native and does not become a normal next layer. | review boundary and static feature gate for unsafe effects/native metadata; safe RSScript/runtime crates forbid Rust `unsafe` internally |
+| `async fn` | Async signatures are visible to review and interface diffing. Executable async bodies are not part of the v0.5 runtime. | static feature gate; executable body unsupported |
+| `effects(no_panic)` | Function promises not to intentionally panic through known RSScript calls. This is not a whole-program proof over arbitrary native/runtime internals. | static over resolved constructors/enum variants/functions with matching guarantees; native/runtime trust boundary is review-required |
+| `effects(no_block)` | Function promises not to call known blocking APIs. This is not a scheduler or OS-level proof. | static over resolved constructors/enum variants/functions with matching guarantees; native/runtime trust boundary is review-required |
+| `effects(noalloc)` | Function promises no obvious heap allocation through supported RSScript constructs and calls. It is not a global allocator trace. | static for constructors, `manage`, and resolved calls with matching guarantee |
+| `effects(pure)` | Function promises no observable external side effects and no reachable managed mutation through known RSScript calls. | static for mut params, retention effects, and resolved calls with matching guarantee; native/runtime trust boundary is review-required |
+| Rust lowering + source map | Generated Rust is typed implementation IR. Backend diagnostics should map back to RSScript spans when possible. | static lowering gate, source map emission, rustc JSON remap; unmappable diagnostics are reported explicitly |
+| review map/diff | Review tools classify semantic risk; `unknown` must not be treated as safe. | implemented as review metadata/diff/map; still conservative and not a proof of behavioral equivalence |
+| unsupported syntax | Unsupported source must not become generated Rust `todo!()` or silently skipped semantics. | static diagnostics for known unsupported constructs; parser completeness is still a hardening area |
+
+Open hardening requirement: parser errors and unknown top-level constructs must
+become stable diagnostics rather than silent recovery before v0.5 can be called
+semantically hard.
+
+---
+
+## 7.5 Runtime conflicts
 
 RSScript managed mutation semantics are dynamically shared.
 
@@ -634,7 +681,7 @@ Any runtime conflict must be reported as an RSScript runtime diagnostic with RSS
 
 ---
 
-## 7.5 No Rust lifetime leakage
+## 7.6 No Rust lifetime leakage
 
 Generated Rust must not leak lifetime parameters, `RefCell`, `Rc`, `Arc`, `Mutex`, or other backend representation details into RSScript diagnostics unless explicitly marked as an internal compiler/runtime error.
 
