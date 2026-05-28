@@ -400,10 +400,12 @@ fn diagnostics_json_uses_protocol_shape() {
 fn diagnostic_explanations_are_available_by_code() {
     let explanation = explain_diagnostic_code("RS0401").expect("RS0401 should be registered");
     let formatted = format_diagnostic_explanation(explanation);
+    let fresh_unknown = explain_diagnostic_code("RS0602").expect("RS0602 should be registered");
 
     assert_eq!(explanation.title, "use after manage");
     assert!(formatted.contains("RS0401"));
     assert!(formatted.contains("manage"));
+    assert!(fresh_unknown.explanation.contains("clean inline fields"));
     assert!(explain_diagnostic_code("RS9999").is_none());
 }
 

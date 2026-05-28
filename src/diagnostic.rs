@@ -417,12 +417,12 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::FRESH_RETURN_NOT_CLEAN,
         title: "fresh return is not clean",
-        explanation: "A `fresh` function may only return a newly created value, a known fresh call, or a clean local value that has not escaped through manage, take, retain, or capture.",
+        explanation: "A `fresh` function may only return a newly created value, a known fresh call, a clean local value, or a clean inline field of a local value. Clean locals must not have escaped through manage, take, retain, or capture.",
     },
     DiagnosticExplanation {
         code: code::FRESHNESS_UNKNOWN,
         title: "freshness unknown",
-        explanation: "The MVP checker could not prove the returned value is fresh. Current proof support trusts clean locals, struct constructors, and known fresh calls.",
+        explanation: "The MVP checker could not prove the returned value is fresh. Current proof support trusts clean locals, clean inline fields of locals, struct constructors, and known fresh calls.",
     },
     DiagnosticExplanation {
         code: code::INVALID_FRESH_RETURN_TYPE,
