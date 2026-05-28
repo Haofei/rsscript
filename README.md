@@ -395,7 +395,7 @@ The first milestone is a strong review-first checker that can validate the langu
 Current CLI surface:
 
 ```sh
-rss check [--json] [--core] [--interface <file.rssi> ...] <file.rss>
+rss check [--json] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>
 rss check --explain <code>
 rss fmt <file.rss>
 rss review [--json] --diff <old.rss> <new.rss>
@@ -408,6 +408,8 @@ rss remap-rustc [--json] <rsscript-source-map.json> <rustc-json-lines>
 rss verify-rust [--json] <file.rss>
 rss verify-rust [--json] <file.rss> --out-dir <directory>
 ```
+
+`rss check` loads bundled core `.rssi` signatures by default. Use `--no-core` only when testing a file against user-supplied interfaces in isolation.
 
 If a lowered package contains `fn main() -> Unit`, `rss lower --rust --out-dir` also emits a Rust `src/main.rs` harness. `rss run <file.rss>` uses the same lowering path, writes a temporary Rust package, and delegates execution to `cargo run`. Use `rss run <file.rss> --out-dir <directory>` to keep the generated Rust package for inspection.
 

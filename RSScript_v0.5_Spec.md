@@ -2699,7 +2699,7 @@ signature complexity budget
 
 ## 34.3 Check
 
-`rss check` runs:
+`rss check` loads bundled core `.rssi` signatures by default, then runs:
 
 ```text
 parser
