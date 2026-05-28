@@ -9,9 +9,9 @@ use std::str::Utf8Error;
 
 pub const RUNTIME_DIAGNOSTIC_PREFIX: &str = "RSSCRIPT_RUNTIME_DIAGNOSTIC:";
 
-pub trait Managed {}
+pub trait ManagedValue {}
 
-impl<T: 'static> Managed for T {}
+impl<T: 'static> ManagedValue for T {}
 
 pub trait Resource {}
 
@@ -70,13 +70,13 @@ pub struct Counter {
 
 #[derive(Clone)]
 pub struct Environment {
-    parent: Option<Gc<Environment>>,
-    function: Option<Gc<FunctionObject>>,
+    parent: Option<Managed<Environment>>,
+    function: Option<Managed<FunctionObject>>,
 }
 
 #[derive(Clone)]
 pub struct FunctionObject {
-    closure: Gc<Environment>,
+    closure: Managed<Environment>,
 }
 
 impl fmt::Debug for Environment {
@@ -178,7 +178,7 @@ pub struct Image {
 #[derive(Debug, Clone)]
 pub struct ImageCache {
     capacity: usize,
-    entries: VecDeque<Gc<Image>>,
+    entries: VecDeque<Managed<Image>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -218,7 +218,7 @@ impl RuntimeImageRef for Image {
     }
 }
 
-impl RuntimeImageRef for Gc<Image> {
+impl RuntimeImageRef for Managed<Image> {
     fn with_image<R>(&self, f: impl FnOnce(&Image) -> R) -> R {
         let image = self.read();
         f(&image)
@@ -530,32 +530,35 @@ pub fn environment_root() -> Environment {
     }
 }
 
-pub fn environment_child(parent: &Gc<Environment>) -> Environment {
+pub fn environment_child(parent: &Managed<Environment>) -> Environment {
     Environment {
         parent: Some(parent.clone()),
         function: None,
     }
 }
 
-pub fn environment_bind_function(env: &mut Gc<Environment>, function: &Gc<FunctionObject>) {
+pub fn environment_bind_function(
+    env: &mut Managed<Environment>,
+    function: &Managed<FunctionObject>,
+) {
     env.write().function = Some(function.clone());
 }
 
-pub fn environment_has_parent(env: &Gc<Environment>) -> bool {
+pub fn environment_has_parent(env: &Managed<Environment>) -> bool {
     env.read().parent.is_some()
 }
 
-pub fn environment_has_function(env: &Gc<Environment>) -> bool {
+pub fn environment_has_function(env: &Managed<Environment>) -> bool {
     env.read().function.is_some()
 }
 
-pub fn function_object_new(closure: &Gc<Environment>) -> FunctionObject {
+pub fn function_object_new(closure: &Managed<Environment>) -> FunctionObject {
     FunctionObject {
         closure: closure.clone(),
     }
 }
 
-pub fn function_object_has_closure(function: &Gc<FunctionObject>) -> bool {
+pub fn function_object_has_closure(function: &Managed<FunctionObject>) -> bool {
     let _closure = function.read().closure.clone();
     true
 }
@@ -645,7 +648,7 @@ pub fn image_cache_new(capacity: i64) -> ImageCache {
     }
 }
 
-pub fn image_cache_store(cache: &mut ImageCache, image: &Gc<Image>) {
+pub fn image_cache_store(cache: &mut ImageCache, image: &Managed<Image>) {
     if cache.capacity == 0 {
         return;
     }
@@ -724,12 +727,16 @@ pub fn row_field_string(row: &Row, index: i64) -> Result<String, CsvError> {
 }
 
 #[derive(Clone)]
-pub struct Gc<T> {
+pub struct Managed<T> {
     inner: Rc<RefCell<T>>,
     origin_span: Option<SourceSpan>,
 }
 
-impl<T> Gc<T> {
+// Compatibility alias for generated packages produced before the v0.5 runtime
+// surface settled on `Managed<T>`.
+pub type Gc<T> = Managed<T>;
+
+impl<T> Managed<T> {
     pub fn new(value: T) -> Self {
         Self {
             inner: Rc::new(RefCell::new(value)),
@@ -744,36 +751,36 @@ impl<T> Gc<T> {
         }
     }
 
-    pub fn try_read(&self) -> Result<GcRead<'_, T>, RuntimeError> {
+    pub fn try_read(&self) -> Result<ManagedRead<'_, T>, RuntimeError> {
         self.inner
             .try_borrow()
-            .map(GcRead)
+            .map(ManagedRead)
             .map_err(RuntimeError::from)
     }
 
-    pub fn try_write(&self) -> Result<GcWrite<'_, T>, RuntimeError> {
+    pub fn try_write(&self) -> Result<ManagedWrite<'_, T>, RuntimeError> {
         self.inner
             .try_borrow_mut()
-            .map(GcWrite)
+            .map(ManagedWrite)
             .map_err(RuntimeError::from)
     }
 
-    pub fn try_read_at(&self, span: SourceSpan) -> Result<GcRead<'_, T>, RuntimeError> {
+    pub fn try_read_at(&self, span: SourceSpan) -> Result<ManagedRead<'_, T>, RuntimeError> {
         self.try_read().map_err(|error| error.with_span(span))
     }
 
-    pub fn try_write_at(&self, span: SourceSpan) -> Result<GcWrite<'_, T>, RuntimeError> {
+    pub fn try_write_at(&self, span: SourceSpan) -> Result<ManagedWrite<'_, T>, RuntimeError> {
         self.try_write().map_err(|error| error.with_span(span))
     }
 
-    pub fn read(&self) -> GcRead<'_, T> {
+    pub fn read(&self) -> ManagedRead<'_, T> {
         match self.try_read() {
             Ok(value) => value,
             Err(error) => panic_runtime_error(error),
         }
     }
 
-    pub fn write(&self) -> GcWrite<'_, T> {
+    pub fn write(&self) -> ManagedWrite<'_, T> {
         match self.try_write() {
             Ok(value) => value,
             Err(error) => panic_runtime_error(error),
@@ -789,18 +796,21 @@ impl<T> Gc<T> {
     }
 }
 
-impl<T: fmt::Debug> fmt::Debug for Gc<T> {
+impl<T: fmt::Debug> fmt::Debug for Managed<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_tuple("Gc").field(&self.read()).finish()
+        formatter
+            .debug_tuple("Managed")
+            .field(&self.read())
+            .finish()
     }
 }
 
-pub fn manage<T>(value: T) -> Gc<T> {
-    Gc::new(value)
+pub fn manage<T>(value: T) -> Managed<T> {
+    Managed::new(value)
 }
 
-pub fn manage_at<T>(value: T, span: SourceSpan) -> Gc<T> {
-    Gc::new_at(value, span)
+pub fn manage_at<T>(value: T, span: SourceSpan) -> Managed<T> {
+    Managed::new_at(value, span)
 }
 
 pub fn unwrap_runtime<T>(result: Result<T, RuntimeError>) -> T {
@@ -818,9 +828,11 @@ pub fn assert_equal(left: &str, right: &str) {
     assert_eq!(left, right);
 }
 
-pub struct GcRead<'a, T>(Ref<'a, T>);
+pub struct ManagedRead<'a, T>(Ref<'a, T>);
 
-impl<T> Deref for GcRead<'_, T> {
+pub type GcRead<'a, T> = ManagedRead<'a, T>;
+
+impl<T> Deref for ManagedRead<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -828,15 +840,17 @@ impl<T> Deref for GcRead<'_, T> {
     }
 }
 
-impl<T: fmt::Debug> fmt::Debug for GcRead<'_, T> {
+impl<T: fmt::Debug> fmt::Debug for ManagedRead<'_, T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&**self, formatter)
     }
 }
 
-pub struct GcWrite<'a, T>(RefMut<'a, T>);
+pub struct ManagedWrite<'a, T>(RefMut<'a, T>);
 
-impl<T> Deref for GcWrite<'_, T> {
+pub type GcWrite<'a, T> = ManagedWrite<'a, T>;
+
+impl<T> Deref for ManagedWrite<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -844,13 +858,13 @@ impl<T> Deref for GcWrite<'_, T> {
     }
 }
 
-impl<T> DerefMut for GcWrite<'_, T> {
+impl<T> DerefMut for ManagedWrite<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl<T: fmt::Debug> fmt::Debug for GcWrite<'_, T> {
+impl<T: fmt::Debug> fmt::Debug for ManagedWrite<'_, T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&**self, formatter)
     }
@@ -1059,7 +1073,7 @@ mod tests {
     impl Resource for FileHandle {}
 
     #[test]
-    fn manage_wraps_value_in_gc_handle() {
+    fn manage_wraps_value_in_managed_handle() {
         let value = manage(String::from("cached"));
 
         assert_eq!(&*value.read(), "cached");
@@ -1073,7 +1087,7 @@ mod tests {
         right.write().push_str("-updated");
 
         assert_eq!(&*left.read(), "cached-updated");
-        assert!(super::Gc::ptr_eq(&left, &right));
+        assert!(super::Managed::ptr_eq(&left, &right));
     }
 
     #[test]

@@ -7,7 +7,10 @@ pub struct Session {
     pub id: i64,
 }
 
-pub fn make_session(id: i64) -> rsscript_runtime::Gc<Session> {
+pub fn make_session(id: i64) -> rsscript_runtime::Managed<Session> {
     let session = Session { id: id };
-    return rsscript_runtime::manage_at(session, rsscript_runtime::SourceSpan::new("session.rss", 10, 12, 6));
+    return rsscript_runtime::manage_at(
+        session,
+        rsscript_runtime::SourceSpan::new("session.rss", 10, 12, 6),
+    );
 }

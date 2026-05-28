@@ -505,15 +505,15 @@ impl<'a> RustLowerer<'a> {
     }
 
     fn lower_field_decl(&mut self, field: &FieldDecl, out: &mut String) {
-        let rust_ty = self.lower_type_ref(&field.ty, ManagedPosition::Field);
+        let rust_ty = self.lower_type_ref(&field.ty, ManagedPosition::Bare);
         self.source_map.push(RustSourceMapEntry {
             kind: "field".to_string(),
             source: field.span.clone(),
             generated: generated_span_at_end(out, "src/lib.rs", "field"),
         });
-        if field.is_handle {
+        if field.is_handle || matches!(self.type_kinds.get(&field.ty.name), Some(TypeKind::Class)) {
             out.push_str(&format!(
-                "    pub {}: rsscript_runtime::Gc<{}>,\n",
+                "    pub {}: rsscript_runtime::Managed<{}>,\n",
                 rust_ident(&field.name),
                 rust_ty
             ));
@@ -1034,20 +1034,17 @@ impl<'a> RustLowerer<'a> {
             }
         };
 
-        if self.should_wrap_in_gc(ty, position) {
-            format!("rsscript_runtime::Gc<{lowered}>")
+        if self.should_wrap_in_managed_handle(ty, position) {
+            format!("rsscript_runtime::Managed<{lowered}>")
         } else {
             lowered
         }
     }
 
-    fn should_wrap_in_gc(&self, ty: &TypeRef, position: ManagedPosition) -> bool {
+    fn should_wrap_in_managed_handle(&self, ty: &TypeRef, position: ManagedPosition) -> bool {
         if !matches!(
             position,
-            ManagedPosition::Field
-                | ManagedPosition::Param
-                | ManagedPosition::Return
-                | ManagedPosition::Nested
+            ManagedPosition::Param | ManagedPosition::Return | ManagedPosition::Nested
         ) {
             return false;
         }
@@ -1316,7 +1313,7 @@ fn source_marker_value(value: &str) -> String {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ManagedPosition {
-    Field,
+    Bare,
     Param,
     Return,
     FreshReturn,
@@ -1337,7 +1334,7 @@ fn lower_generic_params(params: &[GenericParam]) -> String {
         .map(|param| {
             let name = rust_ident(&param.name);
             match param.bound {
-                Some(GenericBound::Managed) => format!("{name}: rsscript_runtime::Managed"),
+                Some(GenericBound::Managed) => format!("{name}: rsscript_runtime::ManagedValue"),
                 Some(GenericBound::Struct) => name,
                 Some(GenericBound::Resource) => format!("{name}: rsscript_runtime::Resource"),
                 None => name,

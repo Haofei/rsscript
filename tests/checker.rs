@@ -1407,7 +1407,7 @@ fn pooled(pool: mut ResourcePool<TestConnection>) -> Unit {
 }
 
 #[test]
-fn rust_lowering_wraps_managed_class_returns_in_gc() {
+fn rust_lowering_wraps_managed_class_returns_in_managed_handle() {
     let source = r#"
 features: local
 
@@ -1423,9 +1423,28 @@ pub fn make_session(id: Int) -> Session {
     let rust = lower_source_to_rust("session.rss", source).expect("source should lower");
 
     assert!(rust.contains("pub struct Session"));
-    assert!(rust.contains("pub fn make_session(id: i64) -> rsscript_runtime::Gc<Session>"));
+    assert!(rust.contains("pub fn make_session(id: i64) -> rsscript_runtime::Managed<Session>"));
     assert!(rust.contains("let session = Session { id: id };"));
     assert!(rust.contains("return rsscript_runtime::manage_at(session, rsscript_runtime::SourceSpan::new(\"session.rss\", 10, 12, 6));"));
+}
+
+#[test]
+fn rust_lowering_wraps_handle_fields_once() {
+    let source = r#"
+class User {
+    id: Int
+}
+
+struct Session {
+    owner: User
+    explicit_owner: handle User
+}
+"#;
+    let rust = lower_source_to_rust("session.rss", source).expect("source should lower");
+
+    assert!(rust.contains("pub owner: rsscript_runtime::Managed<User>"));
+    assert!(rust.contains("pub explicit_owner: rsscript_runtime::Managed<User>"));
+    assert!(!rust.contains("rsscript_runtime::Managed<rsscript_runtime::Managed<User>>"));
 }
 
 #[test]
