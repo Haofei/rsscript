@@ -287,6 +287,7 @@ pub fn check_generated_rust_package(package_dir: &Path) -> Result<RustBackendChe
 struct RustLowerer<'a> {
     program: &'a Program,
     type_kinds: BTreeMap<String, TypeKind>,
+    param_effects: BTreeMap<String, DataEffect>,
     source_map: Vec<RustSourceMapEntry>,
 }
 
@@ -304,6 +305,7 @@ impl<'a> RustLowerer<'a> {
         Self {
             program,
             type_kinds,
+            param_effects: BTreeMap::new(),
             source_map: Vec::new(),
         }
     }
@@ -399,6 +401,12 @@ impl<'a> RustLowerer<'a> {
     }
 
     fn lower_function(&mut self, function: &FunctionDecl, out: &mut String) {
+        let previous_param_effects = std::mem::take(&mut self.param_effects);
+        self.param_effects = function
+            .params
+            .iter()
+            .filter_map(|param| param.effect.map(|effect| (param.name.clone(), effect)))
+            .collect();
         self.record_source_marker(out, 0, "function", &function.span);
         let async_prefix = if function.is_async { "async " } else { "" };
         let is_public = function.is_public || is_runnable_main(function);
@@ -437,6 +445,7 @@ impl<'a> RustLowerer<'a> {
             self.lower_block(&function.body, out, 1);
         }
         out.push_str("}\n");
+        self.param_effects = previous_param_effects;
     }
 
     fn lower_param(&self, param: &Param) -> String {
@@ -740,7 +749,15 @@ impl<'a> RustLowerer<'a> {
             }
             Expr::Effect { effect, value, .. } => match effect {
                 DataEffect::Read => format!("&{}", self.lower_expr(value)),
-                DataEffect::Mut => format!("&mut {}", self.lower_expr(value)),
+                DataEffect::Mut => {
+                    if let Expr::Ident(name, _) = &**value
+                        && self.param_effects.get(name) == Some(&DataEffect::Mut)
+                    {
+                        rust_ident(name)
+                    } else {
+                        format!("&mut {}", self.lower_expr(value))
+                    }
+                }
                 DataEffect::Take => self.lower_expr(value),
             },
             Expr::Manage { value, span } => {
@@ -794,6 +811,9 @@ impl<'a> RustLowerer<'a> {
             "Request" => "rsscript_runtime::Request".to_string(),
             "Response" => "rsscript_runtime::Response".to_string(),
             "HttpError" => "rsscript_runtime::HttpError".to_string(),
+            "ConfigValue" => "rsscript_runtime::ConfigValue".to_string(),
+            "ConfigStore" => "rsscript_runtime::ConfigStore".to_string(),
+            "ConfigError" => "rsscript_runtime::ConfigError".to_string(),
             "DbConnection" => "rsscript_runtime::DbConnection".to_string(),
             "DbError" => "rsscript_runtime::DbError".to_string(),
             "Image" => "rsscript_runtime::Image".to_string(),
@@ -1086,6 +1106,17 @@ fn lower_callee(callee: &Callee) -> String {
             "rsscript_runtime::response_status".to_string()
         }
         callee if is_response_body_callee(callee) => "rsscript_runtime::response_body".to_string(),
+        callee if is_config_load_callee(callee) => "rsscript_runtime::config_load".to_string(),
+        callee if is_config_name_callee(callee) => "rsscript_runtime::config_name".to_string(),
+        callee if is_config_store_new_callee(callee) => {
+            "rsscript_runtime::config_store_new".to_string()
+        }
+        callee if is_config_store_replace_callee(callee) => {
+            "rsscript_runtime::config_store_replace".to_string()
+        }
+        callee if is_config_store_name_callee(callee) => {
+            "rsscript_runtime::config_store_name".to_string()
+        }
         callee if is_db_connection_open_callee(callee) => {
             "rsscript_runtime::db_connection_open".to_string()
         }
@@ -1174,6 +1205,26 @@ fn is_response_status_callee(callee: &Callee) -> bool {
 
 fn is_response_body_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Response" && name == "body")
+}
+
+fn is_config_load_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Config" && name == "load")
+}
+
+fn is_config_name_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Config" && name == "name")
+}
+
+fn is_config_store_new_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ConfigStore" && name == "new")
+}
+
+fn is_config_store_replace_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ConfigStore" && name == "replace")
+}
+
+fn is_config_store_name_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ConfigStore" && name == "name")
 }
 
 fn is_db_connection_open_callee(callee: &Callee) -> bool {

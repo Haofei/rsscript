@@ -1,0 +1,32 @@
+features: local
+
+fn load_config(path: read String) -> Result<fresh ConfigValue, ConfigError> {
+    return Config.load(path: read path)
+}
+
+fn reload_config(path: read String, store: mut ConfigStore) -> Result<Unit, ConfigError> {
+    let next = load_config(path: read path)?
+    ConfigStore.replace(store: mut store, value: read next)
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, ConfigError> {
+    let first = "rsscript-config-first.txt"
+    let second = "rsscript-config-second.txt"
+
+    with File.open_write(path: read first) as file {
+        File.write(file: mut file, data: read "initial\n")?
+    }
+    with File.open_write(path: read second) as file {
+        File.write(file: mut file, data: read "reloaded\n")?
+    }
+
+    let initial = load_config(path: read first)?
+    local store = ConfigStore.new(value: read initial)
+    reload_config(path: read second, store: mut store)?
+
+    let name = ConfigStore.name(store: read store)
+    Assert.equal(left: read name, right: read "reloaded")
+    Log.write(message: read name)
+    return Ok(Unit)
+}

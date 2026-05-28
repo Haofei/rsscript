@@ -458,6 +458,31 @@ fn run_query(url: read Url, sql: read String) -> Result<Unit, DbError> {
 }
 
 #[test]
+fn rust_lowering_maps_config_reload_to_runtime_hooks() {
+    let source = r#"
+features: local
+
+fn load_config(path: read String) -> Result<fresh ConfigValue, ConfigError> {
+    return Config.load(path: read path)
+}
+
+fn reload_config(path: read String, store: mut ConfigStore) -> Result<Unit, ConfigError> {
+    let next = load_config(path: read path)?
+    ConfigStore.replace(store: mut store, value: read next)
+    return Ok(Unit)
+}
+"#;
+    let rust = lower_source_to_rust("config.rss", source).expect("source should lower");
+
+    assert!(
+        rust.contains("-> Result<rsscript_runtime::ConfigValue, rsscript_runtime::ConfigError>")
+    );
+    assert!(rust.contains("return rsscript_runtime::config_load(&path);"));
+    assert!(rust.contains("store: &mut rsscript_runtime::ConfigStore"));
+    assert!(rust.contains("rsscript_runtime::config_store_replace(store, &next);"));
+}
+
+#[test]
 fn rust_lowering_decodes_string_escape_sequences() {
     let source = r#"
 fn json_text() -> String {
@@ -776,7 +801,7 @@ fn pooled(pool: mut ResourcePool<TestConnection>) -> Unit {
     let rust = lower_source_to_rust("pool.rss", source).expect("source should lower");
 
     assert!(rust.contains(
-        "let mut conn = rsscript_runtime::unwrap_runtime(rsscript_runtime::ResourcePool::borrow_at(&mut pool, rsscript_runtime::SourceSpan::new(\"pool.rss\""
+        "let mut conn = rsscript_runtime::unwrap_runtime(rsscript_runtime::ResourcePool::borrow_at(pool, rsscript_runtime::SourceSpan::new(\"pool.rss\""
     ));
 }
 

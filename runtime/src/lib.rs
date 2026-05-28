@@ -30,6 +30,43 @@ pub struct Response {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigValue {
+    name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigStore {
+    current: ConfigValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigError {
+    message: String,
+}
+
+impl ConfigError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for ConfigError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.message)
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+impl From<std::io::Error> for ConfigError {
+    fn from(error: std::io::Error) -> Self {
+        Self::new(error.to_string())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DbConnection {
     url: String,
     queries: Vec<String>,
@@ -282,6 +319,35 @@ pub fn response_status(response: &Response) -> i64 {
 
 pub fn response_body(response: &Response) -> String {
     response.body.clone()
+}
+
+pub fn config_load<P: RuntimePath + ?Sized>(path: &P) -> Result<ConfigValue, ConfigError> {
+    let text = std::fs::read_to_string(path.as_path())?;
+    let name = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("default")
+        .to_string();
+    Ok(ConfigValue { name })
+}
+
+pub fn config_name(value: &ConfigValue) -> String {
+    value.name.clone()
+}
+
+pub fn config_store_new(value: &ConfigValue) -> ConfigStore {
+    ConfigStore {
+        current: value.clone(),
+    }
+}
+
+pub fn config_store_replace(store: &mut ConfigStore, value: &ConfigValue) {
+    store.current = value.clone();
+}
+
+pub fn config_store_name(store: &ConfigStore) -> String {
+    store.current.name.clone()
 }
 
 pub fn db_connection_open(url: &str) -> DbConnection {
@@ -882,5 +948,29 @@ mod tests {
         }
 
         assert_eq!(pool.values.borrow().len(), 2);
+    }
+
+    #[test]
+    fn config_runtime_hooks_load_and_replace_store() {
+        let first = std::env::temp_dir().join(format!(
+            "rsscript-runtime-config-first-{}.txt",
+            std::process::id()
+        ));
+        let second = std::env::temp_dir().join(format!(
+            "rsscript-runtime-config-second-{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(&first, "initial\n").expect("first config should write");
+        std::fs::write(&second, "reloaded\n").expect("second config should write");
+
+        let initial = super::config_load(&first).expect("initial config should load");
+        let mut store = super::config_store_new(&initial);
+        let reloaded = super::config_load(&second).expect("reloaded config should load");
+        super::config_store_replace(&mut store, &reloaded);
+
+        assert_eq!(super::config_store_name(&store), "reloaded");
+
+        let _ = std::fs::remove_file(first);
+        let _ = std::fs::remove_file(second);
     }
 }

@@ -1,0 +1,17 @@
+struct ConfigValue
+
+struct ConfigStore
+
+pub fn Config.load(path: read Path) -> Result<fresh ConfigValue, ConfigError>
+
+pub fn Config.name(value: read ConfigValue) -> String
+
+pub fn ConfigStore.new(value: read ConfigValue) -> fresh ConfigStore
+
+pub fn ConfigStore.replace(
+    store: mut ConfigStore,
+    value: read ConfigValue,
+) -> Unit
+    effects(retains(value))
+
+pub fn ConfigStore.name(store: read ConfigStore) -> String
