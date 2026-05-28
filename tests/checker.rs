@@ -97,6 +97,11 @@ fn bundled_core_interfaces_are_available_to_checker() {
             .iter()
             .any(|(path, _)| *path == "core/counter/counter.rssi")
     );
+    assert!(
+        core_interfaces()
+            .iter()
+            .any(|(path, _)| *path == "core/interpreter/interpreter.rssi")
+    );
 
     let source = r#"
 fn check_label(actual: read String, expected: read String) -> Unit {
@@ -541,6 +546,37 @@ fn main() -> Unit {
 }
 
 #[test]
+fn rust_lowering_maps_interpreter_cycle_core_calls_to_runtime_hooks() {
+    let source = r#"
+features: local
+
+fn main() -> Unit {
+    local root_value = Environment.root()
+    let root = manage root_value
+    local child_value = Environment.child(parent: read root)
+    let child = manage child_value
+    local function_value = FunctionObject.new(closure: read child)
+    let function = manage function_value
+    Environment.bind_function(env: mut child, function: read function)
+    if Environment.has_function(env: read child) && FunctionObject.has_closure(function: read function) {
+        Log.write(message: read "linked")
+    }
+    return Unit
+}
+"#;
+    let rust = lower_source_to_rust("interpreter-cycle.rss", source).expect("source should lower");
+
+    assert!(rust.contains("let root_value = rsscript_runtime::environment_root();"));
+    assert!(rust.contains("let root = rsscript_runtime::manage_at(root_value,"));
+    assert!(rust.contains("let child_value = rsscript_runtime::environment_child(&root);"));
+    assert!(rust.contains("let mut child = rsscript_runtime::manage_at(child_value,"));
+    assert!(rust.contains("let function_value = rsscript_runtime::function_object_new(&child);"));
+    assert!(rust.contains("let function = rsscript_runtime::manage_at(function_value,"));
+    assert!(rust.contains("rsscript_runtime::environment_bind_function(&mut child, &function);"));
+    assert!(rust.contains("rsscript_runtime::function_object_has_closure(&function)"));
+}
+
+#[test]
 fn rust_lowering_decodes_string_escape_sequences() {
     let source = r#"
 fn json_text() -> String {
@@ -881,7 +917,7 @@ pub fn make_session(id: Int) -> Session {
 
     assert!(rust.contains("pub struct Session"));
     assert!(rust.contains("pub fn make_session(id: i64) -> rsscript_runtime::Gc<Session>"));
-    assert!(rust.contains("let mut session = Session { id: id };"));
+    assert!(rust.contains("let session = Session { id: id };"));
     assert!(rust.contains("return rsscript_runtime::manage_at(session, rsscript_runtime::SourceSpan::new(\"session.rss\", 10, 12, 6));"));
 }
 

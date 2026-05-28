@@ -7,8 +7,8 @@ use crate::analyzer::analyze_source_with_core;
 use crate::diagnostic::{Diagnostic, Severity, Span, code};
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature,
-    FunctionDecl, GenericBound, GenericParam, Item, LetKind, Param, Program, Stmt, TypeDecl,
-    TypeKind, TypeRef,
+    FunctionDecl, GenericBound, GenericParam, Item, Param, Program, Stmt, TypeDecl, TypeKind,
+    TypeRef,
 };
 use crate::syntax::parse_source;
 
@@ -484,12 +484,11 @@ impl<'a> RustLowerer<'a> {
         self.record_statement_source_map(statement, &marker.generated);
         match statement {
             Stmt::Let(stmt) => {
-                let mutable =
-                    if stmt.kind == LetKind::Local || self.mutated_bindings.contains(&stmt.name) {
-                        "mut "
-                    } else {
-                        ""
-                    };
+                let mutable = if self.mutated_bindings.contains(&stmt.name) {
+                    "mut "
+                } else {
+                    ""
+                };
                 if let Some(value) = &stmt.value {
                     out.push_str(&format!(
                         "{pad}let {mutable}{} = {};\n",
@@ -812,6 +811,8 @@ impl<'a> RustLowerer<'a> {
             "Fd" => "i64".to_string(),
             "Bytes" | "Buffer" => "Vec<u8>".to_string(),
             "Path" => "std::path::PathBuf".to_string(),
+            "Environment" => "rsscript_runtime::Environment".to_string(),
+            "FunctionObject" => "rsscript_runtime::FunctionObject".to_string(),
             "Counter" => "rsscript_runtime::Counter".to_string(),
             "File" => "rsscript_runtime::File".to_string(),
             "FileError" | "IOError" => "std::io::Error".to_string(),
@@ -1214,6 +1215,27 @@ fn lower_callee(callee: &Callee) -> String {
         callee if is_counter_new_callee(callee) => "rsscript_runtime::counter_new".to_string(),
         callee if is_counter_add_callee(callee) => "rsscript_runtime::counter_add".to_string(),
         callee if is_counter_value_callee(callee) => "rsscript_runtime::counter_value".to_string(),
+        callee if is_environment_root_callee(callee) => {
+            "rsscript_runtime::environment_root".to_string()
+        }
+        callee if is_environment_child_callee(callee) => {
+            "rsscript_runtime::environment_child".to_string()
+        }
+        callee if is_environment_bind_function_callee(callee) => {
+            "rsscript_runtime::environment_bind_function".to_string()
+        }
+        callee if is_environment_has_parent_callee(callee) => {
+            "rsscript_runtime::environment_has_parent".to_string()
+        }
+        callee if is_environment_has_function_callee(callee) => {
+            "rsscript_runtime::environment_has_function".to_string()
+        }
+        callee if is_function_object_new_callee(callee) => {
+            "rsscript_runtime::function_object_new".to_string()
+        }
+        callee if is_function_object_has_closure_callee(callee) => {
+            "rsscript_runtime::function_object_has_closure".to_string()
+        }
         callee if is_db_connection_open_callee(callee) => {
             "rsscript_runtime::db_connection_open".to_string()
         }
@@ -1343,6 +1365,34 @@ fn is_counter_add_callee(callee: &Callee) -> bool {
 
 fn is_counter_value_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Counter" && name == "value")
+}
+
+fn is_environment_root_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Environment" && name == "root")
+}
+
+fn is_environment_child_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Environment" && name == "child")
+}
+
+fn is_environment_bind_function_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Environment" && name == "bind_function")
+}
+
+fn is_environment_has_parent_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Environment" && name == "has_parent")
+}
+
+fn is_environment_has_function_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Environment" && name == "has_function")
+}
+
+fn is_function_object_new_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "FunctionObject" && name == "new")
+}
+
+fn is_function_object_has_closure_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "FunctionObject" && name == "has_closure")
 }
 
 fn is_db_connection_open_callee(callee: &Callee) -> bool {

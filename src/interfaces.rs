@@ -23,6 +23,10 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../core/http/http.rssi"),
     ),
     (
+        "core/interpreter/interpreter.rssi",
+        include_str!("../core/interpreter/interpreter.rssi"),
+    ),
+    (
         "core/image/image.rssi",
         include_str!("../core/image/image.rssi"),
     ),

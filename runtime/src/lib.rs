@@ -45,6 +45,36 @@ pub struct Counter {
     value: i64,
 }
 
+#[derive(Clone)]
+pub struct Environment {
+    parent: Option<Gc<Environment>>,
+    function: Option<Gc<FunctionObject>>,
+}
+
+#[derive(Clone)]
+pub struct FunctionObject {
+    closure: Gc<Environment>,
+}
+
+impl fmt::Debug for Environment {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Environment")
+            .field("has_parent", &self.parent.is_some())
+            .field("has_function", &self.function.is_some())
+            .finish()
+    }
+}
+
+impl fmt::Debug for FunctionObject {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("FunctionObject")
+            .field("has_closure", &true)
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigError {
     message: String,
@@ -389,6 +419,43 @@ pub fn counter_add(counter: &mut Counter, amount: i64) {
 
 pub fn counter_value(counter: &Counter) -> i64 {
     counter.value
+}
+
+pub fn environment_root() -> Environment {
+    Environment {
+        parent: None,
+        function: None,
+    }
+}
+
+pub fn environment_child(parent: &Gc<Environment>) -> Environment {
+    Environment {
+        parent: Some(parent.clone()),
+        function: None,
+    }
+}
+
+pub fn environment_bind_function(env: &mut Gc<Environment>, function: &Gc<FunctionObject>) {
+    env.write().function = Some(function.clone());
+}
+
+pub fn environment_has_parent(env: &Gc<Environment>) -> bool {
+    env.read().parent.is_some()
+}
+
+pub fn environment_has_function(env: &Gc<Environment>) -> bool {
+    env.read().function.is_some()
+}
+
+pub fn function_object_new(closure: &Gc<Environment>) -> FunctionObject {
+    FunctionObject {
+        closure: closure.clone(),
+    }
+}
+
+pub fn function_object_has_closure(function: &Gc<FunctionObject>) -> bool {
+    let _closure = function.read().closure.clone();
+    true
 }
 
 pub fn db_connection_open(url: &str) -> DbConnection {
@@ -980,6 +1047,20 @@ mod tests {
         super::counter_add(&mut counter, 2);
 
         assert_eq!(super::counter_value(&counter), 3);
+    }
+
+    #[test]
+    fn interpreter_runtime_hooks_link_environment_function_cycle() {
+        let root = super::manage(super::environment_root());
+        let child = super::manage(super::environment_child(&root));
+        let function = super::manage(super::function_object_new(&child));
+        let mut child_handle = child.clone();
+
+        super::environment_bind_function(&mut child_handle, &function);
+
+        assert!(super::environment_has_parent(&child));
+        assert!(super::environment_has_function(&child));
+        assert!(super::function_object_has_closure(&function));
     }
 
     #[test]

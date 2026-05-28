@@ -15,5 +15,3 @@ pub fn GlobalConfig.replace(
 pub fn Cache.lookup(cache: read Cache, key: read String)
 
 pub fn Cache.get(cache: read Cache)
-
-pub fn FunctionObject.new(closure: read Environment) -> fresh FunctionObject
