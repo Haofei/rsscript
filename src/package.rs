@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -208,6 +210,9 @@ pub struct PackageCheckLock {
 pub struct PackageNativeRustCheck {
     pub path: String,
     pub cargo_toml_present: bool,
+    pub cargo_metadata_ok: bool,
+    pub cargo_package_name: Option<String>,
+    pub target_kinds: Vec<String>,
     pub file_count: usize,
     pub ok: bool,
     pub risk: PackageRisk,
@@ -403,6 +408,22 @@ struct ManifestNativeRust {
     unsafe_policy: Option<String>,
     #[serde(default)]
     links: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CargoMetadata {
+    packages: Vec<CargoMetadataPackage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CargoMetadataPackage {
+    name: String,
+    targets: Vec<CargoMetadataTarget>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CargoMetadataTarget {
+    kind: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1266,8 +1287,17 @@ pub fn format_package_check_human(check: &PackageCheck) -> String {
     ));
     if let Some(native) = &check.native_rust {
         output.push_str(&format!(
-            "native rust: {} cargo_toml={} files={}\n",
-            native.path, native.cargo_toml_present, native.file_count
+            "native rust: {} cargo_toml={} cargo_metadata={} package={} targets={} files={}\n",
+            native.path,
+            native.cargo_toml_present,
+            native.cargo_metadata_ok,
+            native.cargo_package_name.as_deref().unwrap_or("<unknown>"),
+            if native.target_kinds.is_empty() {
+                "<none>".to_string()
+            } else {
+                native.target_kinds.join(",")
+            },
+            native.file_count
         ));
     }
     if !check.reasons.is_empty() {
@@ -2094,7 +2124,8 @@ fn check_package_native_rust(
         return Ok(None);
     };
     let native_root = package_dir.join(&native.path);
-    let cargo_toml_present = native_root.join("Cargo.toml").exists();
+    let cargo_toml = native_root.join("Cargo.toml");
+    let cargo_toml_present = cargo_toml.exists();
     let mut files = Vec::new();
     if native_root.exists() {
         collect_regular_files(&native_root, &mut files)?;
@@ -2117,6 +2148,11 @@ fn check_package_native_rust(
     if files.is_empty() {
         reasons.push("native Rust source files missing".to_string());
     }
+    let metadata = if cargo_toml_present {
+        scan_native_cargo_metadata(&cargo_toml, native, &mut reasons)?
+    } else {
+        NativeCargoMetadataScan::default()
+    };
     let ok = reasons.is_empty();
     let risk = if ok {
         PackageRisk::Elevated
@@ -2127,11 +2163,119 @@ fn check_package_native_rust(
     Ok(Some(PackageNativeRustCheck {
         path: native.path.clone(),
         cargo_toml_present,
+        cargo_metadata_ok: metadata.ok,
+        cargo_package_name: metadata.package_name,
+        target_kinds: metadata.target_kinds,
         file_count: files.len(),
         ok,
         risk,
         reasons,
     }))
+}
+
+#[derive(Debug, Default)]
+struct NativeCargoMetadataScan {
+    ok: bool,
+    package_name: Option<String>,
+    target_kinds: Vec<String>,
+}
+
+fn scan_native_cargo_metadata(
+    cargo_toml: &Path,
+    native: &PackageNativeRustReview,
+    reasons: &mut Vec<String>,
+) -> Result<NativeCargoMetadataScan, String> {
+    let native_root = cargo_toml
+        .parent()
+        .ok_or_else(|| format!("native Cargo.toml has no parent: {}", cargo_toml.display()))?;
+    let scan_root = native_cargo_metadata_temp_dir(cargo_toml);
+    if scan_root.exists() {
+        let _ = fs::remove_dir_all(&scan_root);
+    }
+    copy_package_directory(native_root, &scan_root)?;
+    let scan_cargo_toml = scan_root.join("Cargo.toml");
+    let output = Command::new("cargo")
+        .arg("metadata")
+        .arg("--format-version")
+        .arg("1")
+        .arg("--no-deps")
+        .arg("--manifest-path")
+        .arg(&scan_cargo_toml)
+        .output()
+        .map_err(|error| {
+            format!(
+                "failed to run cargo metadata for {}: {error}",
+                cargo_toml.display()
+            )
+        })?;
+    let _ = fs::remove_dir_all(&scan_root);
+    if !output.status.success() {
+        reasons.push("native Rust cargo metadata failed".to_string());
+        return Ok(NativeCargoMetadataScan::default());
+    }
+
+    let metadata: CargoMetadata = serde_json::from_slice(&output.stdout).map_err(|error| {
+        format!(
+            "failed to parse cargo metadata for {}: {error}",
+            cargo_toml.display()
+        )
+    })?;
+    let Some(package) = metadata.packages.first() else {
+        reasons.push("native Rust cargo metadata reported no packages".to_string());
+        return Ok(NativeCargoMetadataScan::default());
+    };
+
+    if let Some(expected) = native.crate_name.as_deref().map(str::trim)
+        && !expected.is_empty()
+        && expected != package.name
+    {
+        reasons.push(format!(
+            "native Rust crate name `{expected}` does not match Cargo package `{}`",
+            package.name
+        ));
+    }
+
+    let mut target_kinds = package
+        .targets
+        .iter()
+        .flat_map(|target| target.kind.iter().cloned())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    target_kinds.sort();
+
+    if target_kinds.iter().any(|kind| kind == "custom-build")
+        && native.build_scripts.as_deref() == Some("forbid")
+    {
+        reasons.push("native Rust build script target present".to_string());
+    }
+    if target_kinds.iter().any(|kind| kind == "proc-macro")
+        && native.proc_macros.as_deref() == Some("forbid")
+    {
+        reasons.push("native Rust proc macro target present".to_string());
+    }
+
+    Ok(NativeCargoMetadataScan {
+        ok: true,
+        package_name: Some(package.name.clone()),
+        target_kinds,
+    })
+}
+
+fn native_cargo_metadata_temp_dir(cargo_toml: &Path) -> PathBuf {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let name = cargo_toml
+        .parent()
+        .and_then(|path| path.file_name())
+        .and_then(|name| name.to_str())
+        .unwrap_or("native");
+    env::temp_dir().join(format!(
+        "rsscript-native-metadata-{name}-{}-{now}",
+        std::process::id()
+    ))
 }
 
 fn package_tree_node(
