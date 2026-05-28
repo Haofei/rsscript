@@ -112,6 +112,27 @@ RSScript accepts more explicit code in exchange for less ambiguity and better to
 
 # 2. Design Principles
 
+## 2.0 Application Register by Default
+
+RSScript separates the language surface used for ordinary application code from
+the Rust surface used for library and native implementation work.
+
+Application code should prefer:
+
+```text
+concrete data shapes
+named calls
+visible mutation
+visible retention
+managed-by-default values
+explicit local hot paths
+```
+
+Library implementation work remains available through the Rust backend,
+package contracts, and native wrapper boundaries. This keeps the ordinary
+review surface smaller without giving up Rust as the systems implementation
+substrate.
+
 ## 2.1 Ease by default
 
 Ordinary code should be managed and approachable.
