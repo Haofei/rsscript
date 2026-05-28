@@ -222,7 +222,7 @@ The first milestone is a checker strong enough to validate the language model ag
 Current CLI:
 
 ```sh
-rss check    [--json] [--core|--no-core] [--interface <f.rssi> ...] <file.rss>
+rss check    [--json] [--core|--no-core] [--interface <f.rssi> ...] <file-or-package-directory>
 rss check    --explain <code>
 rss lint     [--json] [--core|--no-core] [--interface <f.rssi> ...] <file.rss>
 rss fmt      <file.rss>
@@ -245,7 +245,7 @@ rss verify-rust  [--json] <file.rss> [--out-dir <directory>]
 
 A few details worth knowing:
 
-- `rss check` loads bundled core `.rssi` signatures by default; `--no-core` is for testing against isolated user interfaces.
+- `rss check` loads bundled core `.rssi` signatures by default for single files; when pointed at a directory with `rsspkg.toml`, it runs package check.
 - `rss lint` reuses the frontend checks and emits warnings. The first lint is `RSL001` — public signatures over the review budget for parameter count, generics, effects, or nested-type depth.
 - `rss review --map` validates inputs first, so files with frontend errors get diagnostics instead of misleading classifications.
 - `rss package check` validates a local package, loads local path dependency `.rssi` contracts, rejects unresolved or conflicting local dependency graphs, runs package review, compares the current semantic lock against `rsspkg.lock`, and scans enabled native Rust wrapper metadata.

@@ -3178,6 +3178,43 @@ fn rss_package_check_json_reports_consistent_package() {
 }
 
 #[test]
+fn rss_check_json_accepts_package_directory() {
+    let temp_dir = unique_temp_dir("rsscript-check-package-cli");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-check-package",
+        "0.1.0",
+        "",
+        r#"pub fn add(left: Int, right: Int) -> Int
+"#,
+    );
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("check")
+        .arg("--json")
+        .arg(&temp_dir)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss check package directory should execute");
+    let _ = fs::remove_dir_all(&temp_dir);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: Value = serde_json::from_str(&stdout).expect("stdout should be package check JSON");
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["package"]["name"], "rss-check-package");
+}
+
+#[test]
 fn rss_package_check_fails_when_lock_missing() {
     let temp_dir = unique_temp_dir("rsscript-package-check-missing-lock");
     write_package_fixture(

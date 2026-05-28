@@ -155,6 +155,10 @@ fn run_check(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     };
 
+    if is_package_directory(path) {
+        return run_package_check(options.json, path);
+    }
+
     let source = match fs::read_to_string(path) {
         Ok(source) => source,
         Err(error) => {
@@ -1313,10 +1317,15 @@ fn read_review_map_file(path: &Path) -> Result<ReviewMapSource, String> {
     })
 }
 
+fn is_package_directory(path: &str) -> bool {
+    let path = Path::new(path);
+    path.is_dir() && path.join("rsspkg.toml").exists()
+}
+
 fn print_usage() {
     eprintln!("usage:");
     eprintln!(
-        "  rsscript check [--json] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>"
+        "  rsscript check [--json] [--core|--no-core] [--interface <file.rssi> ...] <file-or-package-directory>"
     );
     eprintln!(
         "  rsscript lint [--json] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>"
