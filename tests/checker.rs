@@ -2317,12 +2317,26 @@ fn checksum(data: read Bytes) -> UInt64
     let unsafe_finding = findings
         .iter()
         .find(|finding| finding.code == "RSR012")
-        .expect("expected unsafe/native review finding");
+        .expect("expected unsafe review finding");
+    let native_finding = findings
+        .iter()
+        .find(|finding| finding.code == "RSR015")
+        .expect("expected native review finding");
 
     assert_eq!(unsafe_finding.risk, ReviewRisk::Unsafe);
     assert_eq!(unsafe_finding.before.as_deref(), Some("<none>"));
-    assert_eq!(unsafe_finding.after.as_deref(), Some("native, unsafe"));
-    assert!(format_review_human(&findings).contains("RSR012[unsafe]: function `checksum` added"));
+    assert_eq!(unsafe_finding.after.as_deref(), Some("unsafe"));
+    assert_eq!(native_finding.risk, ReviewRisk::Boundary);
+    assert_eq!(native_finding.before.as_deref(), Some("<none>"));
+    assert_eq!(native_finding.after.as_deref(), Some("native"));
+    assert!(
+        format_review_human(&findings)
+            .contains("RSR012[unsafe]: function `checksum` added unsafe boundary.")
+    );
+    assert!(
+        format_review_human(&findings)
+            .contains("RSR015[boundary]: function `checksum` added native boundary.")
+    );
 
     let json = format_review_json(&findings);
     let value: Value = serde_json::from_str(&json).expect("review JSON should parse");
@@ -2330,6 +2344,11 @@ fn checksum(data: read Bytes) -> UInt64
         items
             .iter()
             .any(|item| item["code"] == "RSR012" && item["risk"] == "unsafe")
+    }));
+    assert!(value.as_array().is_some_and(|items| {
+        items
+            .iter()
+            .any(|item| item["code"] == "RSR015" && item["risk"] == "boundary")
     }));
 }
 
@@ -2346,14 +2365,15 @@ native fn host_emit(message: read String) -> Unit
 "#;
 
     let findings = review_sources("old.rss", old_source, "new.rss", new_source);
-    let unsafe_finding = findings
+    let native_finding = findings
         .iter()
-        .find(|finding| finding.code == "RSR012")
+        .find(|finding| finding.code == "RSR015")
         .expect("expected native boundary review finding");
 
-    assert_eq!(unsafe_finding.risk, ReviewRisk::Unsafe);
-    assert_eq!(unsafe_finding.before.as_deref(), Some("<none>"));
-    assert_eq!(unsafe_finding.after.as_deref(), Some("native"));
+    assert_eq!(native_finding.risk, ReviewRisk::Boundary);
+    assert_eq!(native_finding.before.as_deref(), Some("<none>"));
+    assert_eq!(native_finding.after.as_deref(), Some("native"));
+    assert!(!findings.iter().any(|finding| finding.code == "RSR012"));
 }
 
 #[test]

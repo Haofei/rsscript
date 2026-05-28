@@ -72,9 +72,10 @@ pub mod code {
     pub const REVIEW_TYPE_KIND_CHANGED: &str = "RSR009";
     pub const REVIEW_TYPE_FIELDS_CHANGED: &str = "RSR010";
     pub const REVIEW_BOUNDARY_CHANGED: &str = "RSR011";
-    pub const REVIEW_UNSAFE_NATIVE_ADDED: &str = "RSR012";
+    pub const REVIEW_UNSAFE_ADDED: &str = "RSR012";
     pub const REVIEW_GUARANTEE_REMOVED: &str = "RSR013";
     pub const REVIEW_FUNCTION_KIND_CHANGED: &str = "RSR014";
+    pub const REVIEW_NATIVE_ADDED: &str = "RSR015";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

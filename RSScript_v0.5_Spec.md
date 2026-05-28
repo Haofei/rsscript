@@ -217,7 +217,8 @@ data effects: read / mut / take
 return freshness: fresh or managed
 retention effects: effects(retains(...))
 guarantees: no_panic / noalloc / pure / no_block
-unsafe/native boundaries
+native boundaries
+unsafe boundaries
 ```
 
 Public APIs must not rely on inference.
@@ -2598,7 +2599,8 @@ parameter effect changes
 return freshness changes
 retention changes
 guarantee changes
-new unsafe/native usage
+new native usage
+new unsafe usage
 new local/manage boundary
 resource lifetime changes
 callers requiring re-review
@@ -2691,7 +2693,8 @@ effects(retains(...))
 with resource
 ResourcePool
 file features such as local/native/unsafe/async/device/ffi/reflection
-native / unsafe
+native boundary
+unsafe boundary
 unknown external call
 writes to managed state
 writes through handle fields
