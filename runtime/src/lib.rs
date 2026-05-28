@@ -19,6 +19,41 @@ pub struct File {
 impl Resource for File {}
 
 #[derive(Debug, Clone)]
+pub struct Image {
+    bytes: Vec<u8>,
+    width: Option<i64>,
+    height: Option<i64>,
+    operations: Vec<&'static str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageError {
+    message: String,
+}
+
+impl ImageError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for ImageError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.message)
+    }
+}
+
+impl std::error::Error for ImageError {}
+
+impl From<std::io::Error> for ImageError {
+    fn from(error: std::io::Error) -> Self {
+        Self::new(error.to_string())
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct JsonValue {
     inner: serde_json::Value,
 }
@@ -169,6 +204,55 @@ pub fn file_read_all(file: &mut File) -> std::io::Result<Vec<u8>> {
 
 pub fn file_write<B: RuntimeBytes + ?Sized>(file: &mut File, data: &B) -> std::io::Result<()> {
     file.inner.write_all(data.as_bytes_slice())
+}
+
+pub fn image_load<P: RuntimePath + ?Sized>(path: &P) -> Result<Image, ImageError> {
+    let bytes = std::fs::read(path.as_path())?;
+    Ok(Image {
+        bytes,
+        width: None,
+        height: None,
+        operations: vec!["load"],
+    })
+}
+
+pub fn image_resize(image: &mut Image, width: i64, height: i64) {
+    image.width = Some(width);
+    image.height = Some(height);
+    image.operations.push("resize");
+}
+
+pub fn image_normalize(image: &mut Image) {
+    image.operations.push("normalize");
+}
+
+pub fn image_sharpen(image: &mut Image) {
+    image.operations.push("sharpen");
+}
+
+pub fn image_save<P: RuntimePath + ?Sized>(image: &Image, path: &P) -> Result<(), ImageError> {
+    let mut bytes = image.bytes.clone();
+    bytes.extend_from_slice(b"\n# rsscript-image-ops:");
+    bytes.extend_from_slice(image.operations.join(",").as_bytes());
+    if let (Some(width), Some(height)) = (image.width, image.height) {
+        bytes.extend_from_slice(format!(";size={width}x{height}").as_bytes());
+    }
+    std::fs::write(path.as_path(), bytes)?;
+    Ok(())
+}
+
+pub fn image_inspect(image: &Image) {
+    let size = image
+        .width
+        .zip(image.height)
+        .map(|(width, height)| format!("{width}x{height}"))
+        .unwrap_or_else(|| "unknown".to_string());
+    println!(
+        "image bytes={} size={} ops={}",
+        image.bytes.len(),
+        size,
+        image.operations.join(",")
+    );
 }
 
 pub fn json_parse(text: &str) -> Result<JsonValue, JsonError> {
@@ -639,5 +723,30 @@ mod tests {
 
         assert_eq!(name, "RSScript");
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn image_runtime_hooks_load_transform_and_save() {
+        let input = std::env::temp_dir().join(format!(
+            "rsscript-runtime-image-input-{}.bin",
+            std::process::id()
+        ));
+        let output = std::env::temp_dir().join(format!(
+            "rsscript-runtime-image-output-{}.bin",
+            std::process::id()
+        ));
+        std::fs::write(&input, b"image-bytes").expect("input image should be writable");
+
+        let mut image = super::image_load(&input).expect("image should load");
+        super::image_resize(&mut image, 320, 240);
+        super::image_normalize(&mut image);
+        super::image_sharpen(&mut image);
+        super::image_save(&image, &output).expect("image should save");
+
+        let saved = std::fs::read_to_string(&output).expect("saved image should be readable");
+        assert!(saved.contains("rsscript-image-ops:load,resize,normalize,sharpen;size=320x240"));
+
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(output);
     }
 }

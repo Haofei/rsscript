@@ -1,0 +1,20 @@
+features: local
+
+fn main() -> Result<Unit, ImageError> {
+    let input = "rsscript-image-input.bin"
+    let output = "rsscript-image-output.bin"
+
+    with File.open_write(path: read input) as file {
+        File.write(file: mut file, data: read "raw image bytes")?
+    }
+
+    local image = Image.load(path: read input)?
+    Image.resize(image: mut image, width: 320, height: 240)
+    Image.normalize(image: mut image)
+    Image.sharpen(image: mut image)
+    Image.inspect(image: read image)
+    Image.save(image: read image, path: read output)?
+
+    Log.write(message: read "image pipeline ran")
+    return Ok(Unit)
+}

@@ -783,6 +783,8 @@ impl<'a> RustLowerer<'a> {
             "Path" => "std::path::PathBuf".to_string(),
             "File" => "rsscript_runtime::File".to_string(),
             "FileError" | "IOError" => "std::io::Error".to_string(),
+            "Image" => "rsscript_runtime::Image".to_string(),
+            "ImageError" => "rsscript_runtime::ImageError".to_string(),
             "JsonValue" => "rsscript_runtime::JsonValue".to_string(),
             "JsonError" => "rsscript_runtime::JsonError".to_string(),
             "RowBuffer" => "rsscript_runtime::RowBuffer".to_string(),
@@ -1064,6 +1066,14 @@ fn lower_callee(callee: &Callee) -> String {
         }
         callee if is_file_read_all_callee(callee) => "rsscript_runtime::file_read_all".to_string(),
         callee if is_file_write_callee(callee) => "rsscript_runtime::file_write".to_string(),
+        callee if is_image_load_callee(callee) => "rsscript_runtime::image_load".to_string(),
+        callee if is_image_resize_callee(callee) => "rsscript_runtime::image_resize".to_string(),
+        callee if is_image_normalize_callee(callee) => {
+            "rsscript_runtime::image_normalize".to_string()
+        }
+        callee if is_image_sharpen_callee(callee) => "rsscript_runtime::image_sharpen".to_string(),
+        callee if is_image_save_callee(callee) => "rsscript_runtime::image_save".to_string(),
+        callee if is_image_inspect_callee(callee) => "rsscript_runtime::image_inspect".to_string(),
         callee if is_json_parse_callee(callee) => "rsscript_runtime::json_parse".to_string(),
         callee if is_json_field_callee(callee) => "rsscript_runtime::json_field".to_string(),
         callee if is_json_field_string_callee(callee) => {
@@ -1117,6 +1127,30 @@ fn is_file_read_all_callee(callee: &Callee) -> bool {
 
 fn is_file_write_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && name == "write")
+}
+
+fn is_image_load_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Image" && name == "load")
+}
+
+fn is_image_resize_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Image" && name == "resize")
+}
+
+fn is_image_normalize_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Image" && name == "normalize")
+}
+
+fn is_image_sharpen_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Image" && name == "sharpen")
+}
+
+fn is_image_save_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Image" && name == "save")
+}
+
+fn is_image_inspect_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Image" && name == "inspect")
 }
 
 fn is_json_parse_callee(callee: &Callee) -> bool {

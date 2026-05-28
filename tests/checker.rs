@@ -380,6 +380,32 @@ fn read_name(path: read Path) -> Result<String, CsvError> {
 }
 
 #[test]
+fn rust_lowering_maps_image_core_calls_to_runtime_hooks() {
+    let source = r#"
+features: local
+
+fn process(input: read Path, output: read Path) -> Result<Unit, ImageError> {
+    local image = Image.load(path: read input)?
+    Image.resize(image: mut image, width: 320, height: 240)
+    Image.normalize(image: mut image)
+    Image.sharpen(image: mut image)
+    Image.inspect(image: read image)
+    Image.save(image: read image, path: read output)?
+    return Ok(Unit)
+}
+"#;
+    let rust = lower_source_to_rust("image.rss", source).expect("source should lower");
+
+    assert!(rust.contains("-> Result<(), rsscript_runtime::ImageError>"));
+    assert!(rust.contains("let mut image = rsscript_runtime::image_load(&input)?;"));
+    assert!(rust.contains("rsscript_runtime::image_resize(&mut image, 320, 240);"));
+    assert!(rust.contains("rsscript_runtime::image_normalize(&mut image);"));
+    assert!(rust.contains("rsscript_runtime::image_sharpen(&mut image);"));
+    assert!(rust.contains("rsscript_runtime::image_inspect(&image);"));
+    assert!(rust.contains("rsscript_runtime::image_save(&image, &output)?;"));
+}
+
+#[test]
 fn rust_lowering_decodes_string_escape_sequences() {
     let source = r#"
 fn json_text() -> String {
