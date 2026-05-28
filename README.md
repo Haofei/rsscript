@@ -364,6 +364,7 @@ runtime crate type surface
 source map JSON for generated Rust packages
 rustc diagnostic remapping through source maps
 core `.rssi` interface signatures
+CI gates for formatting, linting, tests, and generated Rust fixtures
 ```
 
 The first milestone is not a production runtime.

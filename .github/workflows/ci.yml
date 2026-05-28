@@ -23,7 +23,17 @@ jobs:
         run: cargo fmt --check
 
       - name: Lint
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --workspace -- -D warnings
+
+      - name: Check generated Rust fixtures
+        run: |
+          cargo check --manifest-path tests/generated/simple/Cargo.toml
+          cargo check --manifest-path tests/generated/managed/Cargo.toml
+          cargo check --manifest-path tests/generated/resource_pool/Cargo.toml
+          cargo check --manifest-path tests/generated/effects/Cargo.toml
 
       - name: Test
-        run: cargo test
+        run: cargo test --workspace
+
+      - name: Check patch whitespace
+        run: git diff --check
