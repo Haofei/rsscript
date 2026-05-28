@@ -143,21 +143,6 @@ impl LocalAnalysis {
         state.apply_retention_events(self.effect_events(span));
     }
 
-    pub(crate) fn retained_value_spans(&self, span: &Span, binding: &str) -> Vec<Span> {
-        self.effect_events(span)
-            .iter()
-            .filter_map(|event| {
-                if matches!(event.kind, HirEffectEventKind::Retain { .. })
-                    && event.binding_name == binding
-                {
-                    Some(event.value_span.clone())
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
     pub(crate) fn binding_type(&self, span: &Span) -> Option<&str> {
         self.binding_types_by_span.get(span).map(String::as_str)
     }
@@ -1854,10 +1839,6 @@ mod tests {
 
         assert_eq!(state.value_type("pool"), Some("ResourcePool<File>"));
         assert_eq!(local_analysis.binding_type(&span(2)), Some("Image"));
-        assert_eq!(
-            local_analysis.retained_value_spans(&span(20), "cached"),
-            vec![span(20)]
-        );
         assert!(
             local_analysis
                 .field_access(&span(22))

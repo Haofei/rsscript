@@ -65,7 +65,7 @@ Non-goals for this stage:
 Near-term roadmap:
 
 1. Continue moving body checkers from syntax AST plus lookup tables onto the resolved HIR statement/expression tree.
-2. Remove remaining recursive AST fallbacks from body diagnostics once HIR coverage is complete.
+2. Remove remaining identifier-collection fallbacks from body diagnostics once HIR coverage is complete.
 3. Expand `rss review` local/manage boundary diffs from summaries into path-aware risk explanations.
 
 Run:
