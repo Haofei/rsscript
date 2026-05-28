@@ -215,12 +215,21 @@ fn publish(path: read Path) -> Unit {
 }
 "#;
 
-    let codes: Vec<String> = review_sources("old.rss", old_source, "new.rss", new_source)
-        .into_iter()
-        .map(|finding| finding.code)
+    let findings = review_sources("old.rss", old_source, "new.rss", new_source);
+    let codes: Vec<String> = findings
+        .iter()
+        .map(|finding| finding.code.clone())
         .collect();
 
     assert!(codes.contains(&"RSR011".to_string()));
+    let boundary = findings
+        .iter()
+        .find(|finding| finding.code == "RSR011")
+        .expect("expected boundary review finding");
+    assert!(boundary.summary.contains("added local binding `image`"));
+    assert!(boundary.summary.contains("added manage `image`"));
+    assert!(boundary.summary.contains("body[1]"));
+    assert!(boundary.summary.contains("body[2].value"));
 }
 
 fn fixture_paths(directory: &str) -> Vec<PathBuf> {

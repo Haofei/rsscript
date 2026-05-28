@@ -110,9 +110,21 @@ struct ParamSig {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct BoundarySig {
-    local_bindings: BTreeSet<String>,
-    manage_count: usize,
-    take_count: usize,
+    events: BTreeSet<BoundaryEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct BoundaryEvent {
+    kind: BoundaryEventKind,
+    subject: Option<String>,
+    path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum BoundaryEventKind {
+    LocalBinding,
+    Manage,
+    Take,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,7 +220,11 @@ fn compare_function(old: &FunctionSig, new: &FunctionSig, findings: &mut Vec<Rev
     if old.boundary != new.boundary {
         findings.push(ReviewFinding {
             code: code::REVIEW_BOUNDARY_CHANGED.to_string(),
-            summary: format!("function `{}` local/manage boundary changed.", old.name),
+            summary: format!(
+                "function `{}` local/manage boundary changed: {}.",
+                old.name,
+                boundary_change_summary(&old.boundary, &new.boundary)
+            ),
         });
     }
 }
@@ -275,75 +291,164 @@ fn effect_name(effect: &EffectDecl) -> String {
 
 fn boundary_sig(block: &Block) -> BoundarySig {
     let mut boundary = BoundarySig::default();
-    collect_boundary_block(block, &mut boundary);
+    collect_boundary_block(block, "body", &mut boundary);
     boundary
 }
 
-fn collect_boundary_block(block: &Block, boundary: &mut BoundarySig) {
-    for statement in &block.statements {
-        collect_boundary_stmt(statement, boundary);
+fn collect_boundary_block(block: &Block, path: &str, boundary: &mut BoundarySig) {
+    for (index, statement) in block.statements.iter().enumerate() {
+        collect_boundary_stmt(statement, &format!("{path}[{}]", index + 1), boundary);
     }
 }
 
-fn collect_boundary_stmt(statement: &Stmt, boundary: &mut BoundarySig) {
+fn collect_boundary_stmt(statement: &Stmt, path: &str, boundary: &mut BoundarySig) {
     match statement {
         Stmt::Let(stmt) => {
             if stmt.kind == LetKind::Local {
-                boundary.local_bindings.insert(stmt.name.clone());
+                push_boundary_event(
+                    boundary,
+                    BoundaryEventKind::LocalBinding,
+                    Some(stmt.name.clone()),
+                    path,
+                );
             }
             if let Some(value) = &stmt.value {
-                collect_boundary_expr(value, boundary);
+                collect_boundary_expr(value, &format!("{path}.value"), boundary);
             }
         }
         Stmt::Return(stmt) => {
             if let Some(value) = &stmt.value {
-                collect_boundary_expr(value, boundary);
+                collect_boundary_expr(value, &format!("{path}.return"), boundary);
             }
         }
         Stmt::With(stmt) => {
-            collect_boundary_expr(&stmt.resource, boundary);
-            collect_boundary_block(&stmt.body, boundary);
+            collect_boundary_expr(&stmt.resource, &format!("{path}.resource"), boundary);
+            collect_boundary_block(&stmt.body, &format!("{path}.body"), boundary);
         }
         Stmt::If(stmt) => {
-            collect_boundary_expr(&stmt.condition, boundary);
-            collect_boundary_block(&stmt.then_body, boundary);
+            collect_boundary_expr(&stmt.condition, &format!("{path}.condition"), boundary);
+            collect_boundary_block(&stmt.then_body, &format!("{path}.then"), boundary);
             if let Some(else_body) = &stmt.else_body {
-                collect_boundary_block(else_body, boundary);
+                collect_boundary_block(else_body, &format!("{path}.else"), boundary);
             }
         }
         Stmt::Loop(stmt) => {
             if let Some(condition) = &stmt.condition {
-                collect_boundary_expr(condition, boundary);
+                collect_boundary_expr(condition, &format!("{path}.condition"), boundary);
             }
-            collect_boundary_block(&stmt.body, boundary);
+            collect_boundary_block(&stmt.body, &format!("{path}.loop"), boundary);
         }
-        Stmt::Expr(expr) => collect_boundary_expr(expr, boundary),
+        Stmt::Expr(expr) => collect_boundary_expr(expr, path, boundary),
         Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
     }
 }
 
-fn collect_boundary_expr(expr: &Expr, boundary: &mut BoundarySig) {
+fn collect_boundary_expr(expr: &Expr, path: &str, boundary: &mut BoundarySig) {
     match expr {
         Expr::Effect {
             effect: DataEffect::Take,
             value,
             ..
         } => {
-            boundary.take_count += 1;
-            collect_boundary_expr(value, boundary);
+            push_boundary_event(
+                boundary,
+                BoundaryEventKind::Take,
+                boundary_expr_subject(value),
+                path,
+            );
+            collect_boundary_expr(value, &format!("{path}.take"), boundary);
         }
-        Expr::Effect { value, .. } => collect_boundary_expr(value, boundary),
+        Expr::Effect { value, .. } => collect_boundary_expr(value, path, boundary),
         Expr::Manage { value, .. } => {
-            boundary.manage_count += 1;
-            collect_boundary_expr(value, boundary);
+            push_boundary_event(
+                boundary,
+                BoundaryEventKind::Manage,
+                boundary_expr_subject(value),
+                path,
+            );
+            collect_boundary_expr(value, &format!("{path}.manage"), boundary);
         }
         Expr::Call { args, .. } => {
-            for CallArg { value, .. } in args {
-                collect_boundary_expr(value, boundary);
+            for (index, CallArg { name, value, .. }) in args.iter().enumerate() {
+                let arg_path = name.as_ref().map_or_else(
+                    || format!("{path}.arg{}", index + 1),
+                    |name| format!("{path}.arg({name})"),
+                );
+                collect_boundary_expr(value, &arg_path, boundary);
             }
         }
-        Expr::Field { base, .. } => collect_boundary_expr(base, boundary),
-        Expr::Closure { body, .. } => collect_boundary_block(body, boundary),
+        Expr::Field { base, .. } => collect_boundary_expr(base, path, boundary),
+        Expr::Closure { body, .. } => {
+            collect_boundary_block(body, &format!("{path}.closure"), boundary)
+        }
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+    }
+}
+
+fn push_boundary_event(
+    boundary: &mut BoundarySig,
+    kind: BoundaryEventKind,
+    subject: Option<String>,
+    path: &str,
+) {
+    boundary.events.insert(BoundaryEvent {
+        kind,
+        subject,
+        path: path.to_string(),
+    });
+}
+
+fn boundary_expr_subject(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Ident(name, _) => Some(name.clone()),
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } => boundary_expr_subject(value),
+        Expr::Field { name, .. } => Some(format!(".{name}")),
+        Expr::Call { .. }
+        | Expr::Closure { .. }
+        | Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::Unknown(_) => None,
+    }
+}
+
+fn boundary_change_summary(old: &BoundarySig, new: &BoundarySig) -> String {
+    let added = new
+        .events
+        .difference(&old.events)
+        .map(|event| format!("added {}", boundary_event_label(event)))
+        .collect::<Vec<_>>();
+    let removed = old
+        .events
+        .difference(&new.events)
+        .map(|event| format!("removed {}", boundary_event_label(event)))
+        .collect::<Vec<_>>();
+
+    let mut parts = added;
+    parts.extend(removed);
+    if parts.is_empty() {
+        "boundary event paths changed".to_string()
+    } else {
+        parts.join("; ")
+    }
+}
+
+fn boundary_event_label(event: &BoundaryEvent) -> String {
+    let subject = event
+        .subject
+        .as_ref()
+        .map_or(String::new(), |subject| format!(" `{subject}`"));
+    format!(
+        "{}{} at {}",
+        boundary_event_kind_label(event.kind),
+        subject,
+        event.path
+    )
+}
+
+fn boundary_event_kind_label(kind: BoundaryEventKind) -> &'static str {
+    match kind {
+        BoundaryEventKind::LocalBinding => "local binding",
+        BoundaryEventKind::Manage => "manage",
+        BoundaryEventKind::Take => "take",
     }
 }
