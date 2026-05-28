@@ -1,0 +1,8 @@
+// expect: RS0015
+
+fn bad(value: read Option<Int>) -> Int {
+    match value {
+        Some(result) return result
+        None => return 0
+    }
+}

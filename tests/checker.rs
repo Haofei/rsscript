@@ -2700,6 +2700,23 @@ fn unknown_effect_call(value: read String) -> Unit
 }
 
 #[test]
+fn checker_reports_malformed_match_arms_as_unsupported() {
+    let source = r#"
+fn bad(value: read Option<Int>) -> Int {
+    match value {
+        Some(result) return result
+        None => return 0
+    }
+}
+"#;
+    let diagnostics = analyze_source("malformed-match-arm.rss", source);
+
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS0015" && diagnostic.label == "malformed match arm"
+    }));
+}
+
+#[test]
 fn checker_reports_malformed_bindings_and_arguments_as_unsupported() {
     let source = r#"
 fn main() -> Unit {

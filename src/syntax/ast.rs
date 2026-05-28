@@ -248,6 +248,7 @@ pub struct LoopStmt {
 pub struct MatchStmt {
     pub value: Expr,
     pub arms: Vec<MatchArm>,
+    pub malformed_arm_spans: Vec<Span>,
     pub span: Span,
 }
 

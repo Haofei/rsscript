@@ -921,18 +921,26 @@ fn parse_match_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usiz
     let value = parse_expr(tokens, start + 1, open)
         .unwrap_or_else(|| Expr::Unknown(tokens[start].span.clone()));
 
+    let parsed_arms = parse_match_arms(tokens, open + 1, close);
     (
         Stmt::Match(MatchStmt {
             value,
-            arms: parse_match_arms(tokens, open + 1, close),
+            arms: parsed_arms.arms,
+            malformed_arm_spans: parsed_arms.malformed_spans,
             span: tokens[start].span.clone(),
         }),
         close + 1,
     )
 }
 
-fn parse_match_arms(tokens: &[Token], start: usize, end: usize) -> Vec<MatchArm> {
+struct ParsedMatchArms {
+    arms: Vec<MatchArm>,
+    malformed_spans: Vec<crate::diagnostic::Span>,
+}
+
+fn parse_match_arms(tokens: &[Token], start: usize, end: usize) -> ParsedMatchArms {
     let mut arms = Vec::new();
+    let mut malformed_spans = Vec::new();
     let mut index = start;
     while index < end {
         while index < end && is_trivia_boundary(&tokens[index]) {
@@ -941,21 +949,33 @@ fn parse_match_arms(tokens: &[Token], start: usize, end: usize) -> Vec<MatchArm>
         if index >= end {
             break;
         }
-        let Some(arrow) = find_top_level_symbol(tokens, index, end, "=>") else {
-            break;
+        let line_end = next_line_or_block_end(tokens, index, end);
+        let Some(arrow) = find_top_level_symbol(tokens, index, line_end, "=>") else {
+            malformed_spans.push(tokens[index].span.clone());
+            index = line_end.max(index + 1);
+            continue;
         };
-        let pattern = parse_match_pattern(tokens, index, arrow)
-            .unwrap_or_else(|| MatchPattern::Wildcard(tokens[index].span.clone()));
+        let pattern = if let Some(pattern) = parse_match_pattern(tokens, index, arrow) {
+            pattern
+        } else {
+            malformed_spans.push(tokens[index].span.clone());
+            MatchPattern::Wildcard(tokens[index].span.clone())
+        };
         let body_start = arrow + 1;
         let (body, next) = if tokens
             .get(body_start)
             .is_some_and(|token| token.symbol("{"))
         {
             let Some(body_close) = find_matching(tokens, body_start, "{", "}") else {
+                malformed_spans.push(tokens[body_start].span.clone());
                 break;
             };
             (parse_block(tokens, body_start, body_close), body_close + 1)
         } else {
+            if body_start >= end {
+                malformed_spans.push(tokens[arrow].span.clone());
+                break;
+            }
             let body_end = next_line_or_block_end(tokens, body_start, end);
             let (statement, next) = parse_stmt(tokens, body_start, body_end);
             (
@@ -973,7 +993,10 @@ fn parse_match_arms(tokens: &[Token], start: usize, end: usize) -> Vec<MatchArm>
         });
         index = next;
     }
-    arms
+    ParsedMatchArms {
+        arms,
+        malformed_spans,
+    }
 }
 
 fn parse_match_pattern(tokens: &[Token], start: usize, end: usize) -> Option<MatchPattern> {

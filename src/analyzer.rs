@@ -376,6 +376,13 @@ impl Analyzer<'_> {
             }
             Stmt::Match(stmt) => {
                 self.check_unsupported_syntax_expr(&stmt.value);
+                for span in &stmt.malformed_arm_spans {
+                    self.unsupported_syntax(
+                        span.clone(),
+                        "malformed match arm",
+                        "Match arms must use `pattern => statement` or `pattern => { ... }`.",
+                    );
+                }
                 for arm in &stmt.arms {
                     self.check_unsupported_syntax_block(&arm.body);
                 }
