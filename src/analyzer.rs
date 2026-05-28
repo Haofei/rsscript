@@ -247,6 +247,13 @@ impl Analyzer<'_> {
     fn check_unsupported_syntax_item(&mut self, item: &Item) {
         match item {
             Item::Function(function) => {
+                for span in &function.malformed_generic_param_spans {
+                    self.unsupported_syntax(
+                        span.clone(),
+                        "malformed generic parameter declaration",
+                        "Generic parameters must use `T`, `T: Managed`, `T: Struct`, or `T: Resource`.",
+                    );
+                }
                 if function.is_async && !function.body.statements.is_empty() {
                     self.unsupported_syntax(
                         function.span.clone(),
@@ -277,6 +284,13 @@ impl Analyzer<'_> {
                 self.check_unsupported_syntax_block(&function.body);
             }
             Item::Type(type_decl) => {
+                for span in &type_decl.malformed_generic_param_spans {
+                    self.unsupported_syntax(
+                        span.clone(),
+                        "malformed generic parameter declaration",
+                        "Generic parameters must use `T`, `T: Managed`, `T: Struct`, or `T: Resource`.",
+                    );
+                }
                 for span in &type_decl.malformed_field_spans {
                     self.unsupported_syntax(
                         span.clone(),

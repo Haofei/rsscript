@@ -140,7 +140,9 @@ impl Parser<'_> {
         };
         self.index += 1;
         let name = self.take_function_name()?;
-        let type_params = self.parse_generic_params();
+        let parsed_type_params = self.parse_generic_params();
+        let type_params = parsed_type_params.params;
+        let malformed_generic_param_spans = parsed_type_params.malformed_spans;
         let (fields, malformed_field_spans, drop_body) = if self.at_symbol("{") {
             let open = self.index;
             let close = find_matching(self.tokens, open, "{", "}")?;
@@ -167,6 +169,7 @@ impl Parser<'_> {
             kind,
             name,
             type_params,
+            malformed_generic_param_spans,
             fields,
             malformed_field_spans,
             drop_body,
@@ -196,7 +199,9 @@ impl Parser<'_> {
         }
         self.index += 1;
         let name = self.take_function_name()?;
-        let type_params = self.parse_generic_params();
+        let parsed_type_params = self.parse_generic_params();
+        let type_params = parsed_type_params.params;
+        let malformed_generic_param_spans = parsed_type_params.malformed_spans;
 
         let mut params = Vec::new();
         let mut malformed_param_spans = Vec::new();
@@ -261,6 +266,7 @@ impl Parser<'_> {
             is_async,
             is_native,
             type_params,
+            malformed_generic_param_spans,
             params,
             malformed_param_spans,
             return_ty,
@@ -310,13 +316,19 @@ impl Parser<'_> {
         Some(name)
     }
 
-    fn parse_generic_params(&mut self) -> Vec<GenericParam> {
+    fn parse_generic_params(&mut self) -> ParsedGenericParams {
         if !self.at_symbol("<") {
-            return Vec::new();
+            return ParsedGenericParams {
+                params: Vec::new(),
+                malformed_spans: Vec::new(),
+            };
         }
         let open = self.index;
         let Some(close) = find_matching(self.tokens, open, "<", ">") else {
-            return Vec::new();
+            return ParsedGenericParams {
+                params: Vec::new(),
+                malformed_spans: vec![self.tokens[open].span.clone()],
+            };
         };
         let params = parse_generic_params(self.tokens, open + 1, close);
         self.index = close + 1;
@@ -338,6 +350,11 @@ struct ParsedFields {
 
 struct ParsedParams {
     params: Vec<Param>,
+    malformed_spans: Vec<crate::diagnostic::Span>,
+}
+
+struct ParsedGenericParams {
+    params: Vec<GenericParam>,
     malformed_spans: Vec<crate::diagnostic::Span>,
 }
 
@@ -582,22 +599,46 @@ fn parse_effects(tokens: &[Token], start: usize, end: usize) -> Vec<EffectDecl> 
     effects
 }
 
-fn parse_generic_params(tokens: &[Token], start: usize, end: usize) -> Vec<GenericParam> {
-    split_top_level(tokens, start, end, ",")
-        .into_iter()
-        .filter_map(|(start, end)| {
-            let name = tokens.get(start).and_then(ident_name)?;
-            let bound = (start + 1..end)
-                .find(|index| tokens[*index].symbol(":"))
-                .and_then(|colon| tokens.get(colon + 1))
-                .and_then(parse_generic_bound);
-            Some(GenericParam {
-                name: name.to_string(),
-                bound,
-                span: tokens[start].span.clone(),
-            })
-        })
-        .collect()
+fn parse_generic_params(tokens: &[Token], start: usize, end: usize) -> ParsedGenericParams {
+    let mut params = Vec::new();
+    let mut malformed_spans = Vec::new();
+    for range in split_param_ranges(tokens, start, end) {
+        if let Some(span) = range.empty_span {
+            malformed_spans.push(span);
+            continue;
+        }
+        let start = range.start;
+        let end = range.end;
+        let Some(name) = tokens.get(start).and_then(ident_name) else {
+            if let Some(token) = tokens.get(start) {
+                malformed_spans.push(token.span.clone());
+            }
+            continue;
+        };
+
+        let bound = if start + 1 == end {
+            None
+        } else if tokens.get(start + 1).is_some_and(|token| token.symbol(":")) && start + 3 == end {
+            let Some(bound) = tokens.get(start + 2).and_then(parse_generic_bound) else {
+                malformed_spans.push(tokens[start].span.clone());
+                continue;
+            };
+            Some(bound)
+        } else {
+            malformed_spans.push(tokens[start].span.clone());
+            continue;
+        };
+
+        params.push(GenericParam {
+            name: name.to_string(),
+            bound,
+            span: tokens[start].span.clone(),
+        });
+    }
+    ParsedGenericParams {
+        params,
+        malformed_spans,
+    }
 }
 
 fn parse_generic_bound(token: &Token) -> Option<GenericBound> {
