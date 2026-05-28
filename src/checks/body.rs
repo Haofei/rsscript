@@ -1,8 +1,6 @@
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, code};
-use crate::hir::{
-    CallResolution, HirEffectEventKind, HirReturnProof, HirTypeKind, ResolvedCalleeKind,
-};
+use crate::hir::{CallResolution, HirReturnProof, HirTypeKind, ResolvedCalleeKind};
 use crate::syntax::ast::{Block, Callee, DataEffect, Expr, FunctionDecl, Item, LetKind, Stmt};
 
 use super::local::{BodyState, LocalAnalysis, merge_if_state, merge_loop_state};
@@ -110,7 +108,7 @@ fn check_stmt_semantics(
             Flow::Return
         }
         Stmt::With(stmt) => {
-            check_resource_escape(analyzer, &stmt.binding, &stmt.body);
+            check_resource_escape(analyzer, local_analysis, &stmt.binding, &stmt.body);
             check_block(analyzer, local_analysis, function, &stmt.body, state)
         }
         Stmt::If(stmt) => {
@@ -383,7 +381,12 @@ fn check_take_of_handle_in_stmt(analyzer: &mut Analyzer<'_>, statement: &Stmt, s
     }
 }
 
-fn check_resource_escape(analyzer: &mut Analyzer<'_>, binding: &str, body: &Block) {
+fn check_resource_escape(
+    analyzer: &mut Analyzer<'_>,
+    local_analysis: &LocalAnalysis,
+    binding: &str,
+    body: &Block,
+) {
     for statement in &body.statements {
         match statement {
             Stmt::Return(stmt) => {
@@ -393,7 +396,7 @@ fn check_resource_escape(analyzer: &mut Analyzer<'_>, binding: &str, body: &Bloc
                     resource_escape_diagnostic(analyzer, binding, span.clone());
                 }
                 if let Some(value) = &stmt.value {
-                    check_resource_escape_expr(analyzer, binding, value);
+                    check_resource_escape_expr(analyzer, local_analysis, binding, value);
                 }
             }
             Stmt::Let(stmt) => {
@@ -404,23 +407,25 @@ fn check_resource_escape(analyzer: &mut Analyzer<'_>, binding: &str, body: &Bloc
                     resource_capture_diagnostic(analyzer, binding, span.clone());
                 }
                 if let Some(value) = &stmt.value {
-                    check_resource_escape_expr(analyzer, binding, value);
+                    check_resource_escape_expr(analyzer, local_analysis, binding, value);
                 }
             }
-            Stmt::Expr(expr) => check_resource_escape_expr(analyzer, binding, expr),
-            Stmt::With(stmt) => check_resource_escape(analyzer, binding, &stmt.body),
+            Stmt::Expr(expr) => check_resource_escape_expr(analyzer, local_analysis, binding, expr),
+            Stmt::With(stmt) => {
+                check_resource_escape(analyzer, local_analysis, binding, &stmt.body)
+            }
             Stmt::If(stmt) => {
-                check_resource_escape_expr(analyzer, binding, &stmt.condition);
-                check_resource_escape(analyzer, binding, &stmt.then_body);
+                check_resource_escape_expr(analyzer, local_analysis, binding, &stmt.condition);
+                check_resource_escape(analyzer, local_analysis, binding, &stmt.then_body);
                 if let Some(else_body) = &stmt.else_body {
-                    check_resource_escape(analyzer, binding, else_body);
+                    check_resource_escape(analyzer, local_analysis, binding, else_body);
                 }
             }
             Stmt::Loop(stmt) => {
                 if let Some(condition) = &stmt.condition {
-                    check_resource_escape_expr(analyzer, binding, condition);
+                    check_resource_escape_expr(analyzer, local_analysis, binding, condition);
                 }
-                check_resource_escape(analyzer, binding, &stmt.body);
+                check_resource_escape(analyzer, local_analysis, binding, &stmt.body);
             }
             Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Unknown(_) => {}
@@ -428,7 +433,12 @@ fn check_resource_escape(analyzer: &mut Analyzer<'_>, binding: &str, body: &Bloc
     }
 }
 
-fn check_resource_escape_expr(analyzer: &mut Analyzer<'_>, binding: &str, expr: &Expr) {
+fn check_resource_escape_expr(
+    analyzer: &mut Analyzer<'_>,
+    local_analysis: &LocalAnalysis,
+    binding: &str,
+    expr: &Expr,
+) {
     match expr {
         Expr::Manage { value, span } => {
             if let Expr::Ident(name, _) = value.as_ref()
@@ -436,41 +446,34 @@ fn check_resource_escape_expr(analyzer: &mut Analyzer<'_>, binding: &str, expr: 
             {
                 resource_escape_diagnostic(analyzer, binding, span.clone());
             }
-            check_resource_escape_expr(analyzer, binding, value);
+            check_resource_escape_expr(analyzer, local_analysis, binding, value);
         }
-        Expr::Effect { value, .. } => check_resource_escape_expr(analyzer, binding, value),
+        Expr::Effect { value, .. } => {
+            check_resource_escape_expr(analyzer, local_analysis, binding, value);
+        }
         Expr::Call { args, span, .. } => {
-            check_resource_retained_by_call(analyzer, binding, span);
+            check_resource_retained_by_call(analyzer, local_analysis, binding, span);
             for arg in args {
-                check_resource_escape_expr(analyzer, binding, &arg.value);
+                check_resource_escape_expr(analyzer, local_analysis, binding, &arg.value);
             }
         }
-        Expr::Field { base, .. } => check_resource_escape_expr(analyzer, binding, base),
-        Expr::Closure { body, .. } => check_resource_escape(analyzer, binding, body),
+        Expr::Field { base, .. } => {
+            check_resource_escape_expr(analyzer, local_analysis, binding, base);
+        }
+        Expr::Closure { body, .. } => {
+            check_resource_escape(analyzer, local_analysis, binding, body)
+        }
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
     }
 }
 
 fn check_resource_retained_by_call(
     analyzer: &mut Analyzer<'_>,
+    local_analysis: &LocalAnalysis,
     binding: &str,
     span: &crate::diagnostic::Span,
 ) {
-    let escaping_spans: Vec<crate::diagnostic::Span> = analyzer
-        .hir
-        .effect_events(span)
-        .iter()
-        .filter_map(|event| {
-            if matches!(event.kind, HirEffectEventKind::Retain { .. })
-                && event.binding_name == binding
-            {
-                Some(event.value_span.clone())
-            } else {
-                None
-            }
-        })
-        .collect();
-    for escaping_span in escaping_spans {
+    for escaping_span in local_analysis.retained_value_spans(span, binding) {
         resource_escape_diagnostic(analyzer, binding, escaping_span);
     }
 }

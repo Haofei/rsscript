@@ -283,7 +283,6 @@ pub struct Hir {
     field_accesses: Vec<HirFieldAccess>,
     field_accesses_by_span: HashMap<Span, HirFieldAccess>,
     effect_events: Vec<HirEffectEvent>,
-    effect_events_by_span: HashMap<Span, Vec<HirEffectEvent>>,
     returns: Vec<HirReturn>,
     returns_by_span: HashMap<Span, HirReturn>,
     function_bodies: HashMap<String, HirFunctionBody>,
@@ -375,12 +374,6 @@ impl Hir {
         self.field_accesses_by_span.get(span)
     }
 
-    pub fn effect_events(&self, span: &Span) -> &[HirEffectEvent] {
-        self.effect_events_by_span
-            .get(span)
-            .map_or(&[], Vec::as_slice)
-    }
-
     pub fn return_fact(&self, span: &Span) -> Option<&HirReturn> {
         self.returns_by_span.get(span)
     }
@@ -457,16 +450,6 @@ impl Hir {
             .iter()
             .map(|field| (field.span.clone(), field.clone()))
             .collect();
-        self.effect_events_by_span = facts.effect_events.iter().fold(
-            HashMap::<Span, Vec<HirEffectEvent>>::new(),
-            |mut by_span, event| {
-                by_span
-                    .entry(event.span.clone())
-                    .or_default()
-                    .push(event.clone());
-                by_span
-            },
-        );
         self.returns_by_span = facts
             .returns
             .iter()
@@ -1946,7 +1929,13 @@ fn publish(cache: mut ImageCache, path: read Path) -> Unit {
             HirEffectEventKind::Take
         ));
         assert_eq!(hir.effect_events[2].binding_name, "image");
-        assert_eq!(hir.effect_events(&hir.effect_events[0].span).len(), 1);
+        assert_eq!(
+            hir.function_body("publish")
+                .expect("publish body exists")
+                .effect_events
+                .len(),
+            3
+        );
     }
 
     #[test]
