@@ -2296,6 +2296,17 @@ Package features declared in `rsspkg.toml` are package selection features. They 
 
 If a package feature enables native code, unsafe code, build scripts, proc macros, linked libraries, or another advanced boundary, package review metadata must report that risk explicitly.
 
+The current prototype implements a local package review subset:
+
+```text
+rss package review
+rss package lock
+rss package review update
+rss package diff
+```
+
+`rss package review update` compares two `rsspkg.lock` files and classifies package version, source, checksum, public interface hash, review metadata hash, native wrapper hash, and feature-selection changes.
+
 ---
 
 # 30. Native Core and FFI Boundary

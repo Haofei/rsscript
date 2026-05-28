@@ -8,12 +8,12 @@ use rsscript::syntax::parse_source;
 use rsscript::{
     ReviewMapClassification, ReviewMapFileRisk, ReviewRisk, analyze_source,
     analyze_source_with_core, analyze_source_with_interfaces, core_interfaces, diff_package_dirs,
-    explain_diagnostic_code, format_diagnostic_explanation, format_diagnostics_json,
-    format_package_lock_toml, format_review_human, format_review_json, format_review_map_human,
-    format_review_map_json, lint_source, lock_package_dir, lower_source_to_rust,
-    lower_source_to_rust_package, lower_source_to_rust_with_map, parse_runtime_diagnostics,
-    remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines, review_map_sources,
-    review_package_dir, review_sources,
+    diff_package_locks, explain_diagnostic_code, format_diagnostic_explanation,
+    format_diagnostics_json, format_package_lock_toml, format_review_human, format_review_json,
+    format_review_map_human, format_review_map_json, lint_source, lock_package_dir,
+    lower_source_to_rust, lower_source_to_rust_package, lower_source_to_rust_with_map,
+    parse_runtime_diagnostics, remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines,
+    review_map_sources, review_package_dir, review_sources,
 };
 use serde_json::Value;
 
@@ -2532,6 +2532,7 @@ unsafe = "forbid"
             .is_some_and(|hash| hash.starts_with("sha256:"))
     );
     assert!(toml.contains("[[package]]"));
+    assert!(toml.contains("rss_version = \""));
     assert!(toml.contains("interface_hash = \"sha256:"));
 }
 
@@ -2572,6 +2573,137 @@ fn rss_package_lock_json_reports_hashes() {
         json["package"][0]["review_hash"]
             .as_str()
             .is_some_and(|hash| hash.starts_with("sha256:"))
+    );
+}
+
+#[test]
+fn package_review_update_reports_lockfile_contract_changes() {
+    let old_dir = unique_temp_dir("rsscript-package-update-old");
+    let new_dir = unique_temp_dir("rsscript-package-update-new");
+    let lock_dir = unique_temp_dir("rsscript-package-update-locks");
+    write_package_fixture(
+        &old_dir,
+        "0.1.0",
+        "",
+        r#"pub fn add(left: Int, right: Int) -> Int
+"#,
+    );
+    write_package_fixture(
+        &new_dir,
+        "0.2.0",
+        r#"[features]
+fast = []
+"#,
+        r#"pub fn add(left: Int, right: Int) -> Result<Int, MathError>
+"#,
+    );
+    fs::create_dir_all(&lock_dir).expect("lock dir should be created");
+    let old_lock_path = lock_dir.join("old.rsspkg.lock");
+    let new_lock_path = lock_dir.join("new.rsspkg.lock");
+    fs::write(
+        &old_lock_path,
+        format_package_lock_toml(&lock_package_dir(&old_dir).expect("old lock should be built")),
+    )
+    .expect("old lock should be written");
+    fs::write(
+        &new_lock_path,
+        format_package_lock_toml(&lock_package_dir(&new_dir).expect("new lock should be built")),
+    )
+    .expect("new lock should be written");
+
+    let diff =
+        diff_package_locks(&old_lock_path, &new_lock_path).expect("lock diff should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_lock_diff_json(&diff))
+        .expect("lock diff JSON should parse");
+    let _ = fs::remove_dir_all(&old_dir);
+    let _ = fs::remove_dir_all(&new_dir);
+    let _ = fs::remove_dir_all(&lock_dir);
+
+    assert_eq!(json["risk"], "high");
+    assert!(json["reasons"].as_array().is_some_and(|reasons| {
+        reasons
+            .iter()
+            .any(|reason| reason == ".rssi interface hash changed")
+    }));
+    assert!(json["reasons"].as_array().is_some_and(|reasons| {
+        reasons
+            .iter()
+            .any(|reason| reason == "package feature selection changed")
+    }));
+    assert!(json["package_changes"].as_array().is_some_and(|changes| {
+        changes.iter().any(|change| {
+            change["name"] == "rss-json"
+                && change["changes"].as_array().is_some_and(|fields| {
+                    fields
+                        .iter()
+                        .any(|field| field["field"] == "interface_hash" && field["risk"] == "high")
+                })
+        })
+    }));
+}
+
+#[test]
+fn rss_package_review_update_json_reports_lock_changes() {
+    let old_dir = unique_temp_dir("rsscript-package-update-cli-old");
+    let new_dir = unique_temp_dir("rsscript-package-update-cli-new");
+    let lock_dir = unique_temp_dir("rsscript-package-update-cli-locks");
+    write_package_fixture(
+        &old_dir,
+        "0.1.0",
+        "",
+        r#"pub fn add(left: Int, right: Int) -> Int
+"#,
+    );
+    write_package_fixture(
+        &new_dir,
+        "0.1.1",
+        "",
+        r#"pub fn add(left: Int, right: Int) -> Result<Int, MathError>
+"#,
+    );
+    fs::create_dir_all(&lock_dir).expect("lock dir should be created");
+    let old_lock_path = lock_dir.join("old.rsspkg.lock");
+    let new_lock_path = lock_dir.join("new.rsspkg.lock");
+    fs::write(
+        &old_lock_path,
+        format_package_lock_toml(&lock_package_dir(&old_dir).expect("old lock should be built")),
+    )
+    .expect("old lock should be written");
+    fs::write(
+        &new_lock_path,
+        format_package_lock_toml(&lock_package_dir(&new_dir).expect("new lock should be built")),
+    )
+    .expect("new lock should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("package")
+        .arg("review")
+        .arg("update")
+        .arg("--json")
+        .arg("--from")
+        .arg(&old_lock_path)
+        .arg("--to")
+        .arg(&new_lock_path)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss package review update should execute");
+    let _ = fs::remove_dir_all(&old_dir);
+    let _ = fs::remove_dir_all(&new_dir);
+    let _ = fs::remove_dir_all(&lock_dir);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: Value =
+        serde_json::from_str(&stdout).expect("stdout should be package review update JSON");
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert_eq!(json["risk"], "high");
+    assert!(
+        json["package_changes"][0]["changes"]
+            .as_array()
+            .is_some_and(|changes| changes
+                .iter()
+                .any(|change| change["field"] == "interface_hash"))
     );
 }
 

@@ -6,9 +6,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rsscript::{
     Diagnostic, analyze_source, analyze_source_with_interfaces, check_generated_rust_package,
-    core_interfaces, diff_package_dirs, explain_diagnostic_code, format_diagnostic_explanation,
-    format_diagnostics_human, format_diagnostics_json, format_package_diff_human,
-    format_package_diff_json, format_package_lock_json, format_package_lock_toml,
+    core_interfaces, diff_package_dirs, diff_package_locks, explain_diagnostic_code,
+    format_diagnostic_explanation, format_diagnostics_human, format_diagnostics_json,
+    format_package_diff_human, format_package_diff_json, format_package_lock_diff_human,
+    format_package_lock_diff_json, format_package_lock_json, format_package_lock_toml,
     format_package_review_human, format_package_review_json, format_review_human,
     format_review_json, format_review_map_human, format_review_map_json, lint_source,
     lock_package_dir, lower_source_to_rust, lower_source_to_rust_package,
@@ -43,6 +44,11 @@ fn main() -> ExitCode {
 fn run_package(args: &[String]) -> ExitCode {
     match parse_package_args(args) {
         PackageCommand::Review { json, path } => run_package_review(json, path),
+        PackageCommand::ReviewUpdate {
+            json,
+            old_lock_path,
+            new_lock_path,
+        } => run_package_review_update(json, old_lock_path, new_lock_path),
         PackageCommand::Lock { json, path } => run_package_lock(json, path),
         PackageCommand::Diff {
             json,
@@ -790,6 +796,11 @@ enum PackageCommand<'a> {
         json: bool,
         path: &'a str,
     },
+    ReviewUpdate {
+        json: bool,
+        old_lock_path: &'a str,
+        new_lock_path: &'a str,
+    },
     Lock {
         json: bool,
         path: &'a str,
@@ -804,23 +815,46 @@ enum PackageCommand<'a> {
 
 fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
     let mut json = false;
-    let mut command = None;
+    let mut words = Vec::new();
+    let mut from_path = None;
+    let mut to_path = None;
     let mut paths = Vec::new();
+    let mut index = 0;
 
-    for arg in args {
+    while let Some(arg) = args.get(index) {
         if arg == "--json" {
             json = true;
-        } else if arg == "review" || arg == "lock" || arg == "diff" {
-            command = Some(arg.as_str());
+        } else if arg == "--from" {
+            let Some(path) = args.get(index + 1) else {
+                return PackageCommand::Invalid;
+            };
+            from_path = Some(path.as_str());
+            index += 1;
+        } else if arg == "--to" {
+            let Some(path) = args.get(index + 1) else {
+                return PackageCommand::Invalid;
+            };
+            to_path = Some(path.as_str());
+            index += 1;
+        } else if matches!(arg.as_str(), "review" | "update" | "lock" | "diff") {
+            words.push(arg.as_str());
         } else {
             paths.push(arg.as_str());
         }
+        index += 1;
     }
 
-    match (command, paths.as_slice()) {
-        (Some("review"), [path]) => PackageCommand::Review { json, path },
-        (Some("lock"), [path]) => PackageCommand::Lock { json, path },
-        (Some("diff"), [old_path, new_path]) => PackageCommand::Diff {
+    match (words.as_slice(), paths.as_slice(), from_path, to_path) {
+        (["review"], [path], None, None) => PackageCommand::Review { json, path },
+        (["review", "update"], [], Some(old_lock_path), Some(new_lock_path)) => {
+            PackageCommand::ReviewUpdate {
+                json,
+                old_lock_path,
+                new_lock_path,
+            }
+        }
+        (["lock"], [path], None, None) => PackageCommand::Lock { json, path },
+        (["diff"], [old_path, new_path], None, None) => PackageCommand::Diff {
             json,
             old_path,
             new_path,
@@ -977,6 +1011,23 @@ fn run_package_lock(json: bool, path: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn run_package_review_update(json: bool, old_lock_path: &str, new_lock_path: &str) -> ExitCode {
+    let diff = match diff_package_locks(Path::new(old_lock_path), Path::new(new_lock_path)) {
+        Ok(diff) => diff,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+
+    if json {
+        println!("{}", format_package_lock_diff_json(&diff));
+    } else {
+        print!("{}", format_package_lock_diff_human(&diff));
+    }
+    ExitCode::SUCCESS
+}
+
 fn run_package_diff(json: bool, old_path: &str, new_path: &str) -> ExitCode {
     let diff = match diff_package_dirs(Path::new(old_path), Path::new(new_path)) {
         Ok(diff) => diff,
@@ -1071,6 +1122,9 @@ fn print_usage() {
     eprintln!("  rsscript review [--json] --diff <old.rss> <new.rss>");
     eprintln!("  rsscript review [--json] --map <file-or-directory>");
     eprintln!("  rsscript package review [--json] <package-directory>");
+    eprintln!(
+        "  rsscript package review update [--json] --from <old-rsspkg.lock> --to <new-rsspkg.lock>"
+    );
     eprintln!("  rsscript package lock [--json] <package-directory>");
     eprintln!("  rsscript package diff [--json] <old-package-directory> <new-package-directory>");
 }

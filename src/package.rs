@@ -36,7 +36,7 @@ pub struct PackageDiff {
     pub new_review: PackageReviewSummary,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackageLock {
     pub version: u32,
     #[serde(rename = "package")]
@@ -44,7 +44,7 @@ pub struct PackageLock {
     pub metadata: PackageLockMetadata,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackageLockPackage {
     pub name: String,
     pub version: String,
@@ -56,10 +56,39 @@ pub struct PackageLockPackage {
     pub features: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackageLockMetadata {
+    #[serde(rename = "rss_version")]
     pub rsscript_version: String,
     pub created_by: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageLockDiff {
+    pub old_lock_path: String,
+    pub new_lock_path: String,
+    pub risk: PackageRisk,
+    pub reasons: Vec<String>,
+    pub old_packages: usize,
+    pub new_packages: usize,
+    pub package_changes: Vec<PackageLockPackageChange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageLockPackageChange {
+    pub name: String,
+    pub before_version: Option<String>,
+    pub after_version: Option<String>,
+    pub risk: PackageRisk,
+    pub changes: Vec<PackageLockFieldChange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageLockFieldChange {
+    pub field: String,
+    pub before: Option<String>,
+    pub after: Option<String>,
+    pub risk: PackageRisk,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -421,6 +450,31 @@ pub fn lock_package_dir(package_dir: &Path) -> Result<PackageLock, String> {
     })
 }
 
+pub fn diff_package_locks(old_path: &Path, new_path: &Path) -> Result<PackageLockDiff, String> {
+    let old_lock = read_package_lock(old_path)?;
+    let new_lock = read_package_lock(new_path)?;
+    let package_changes = compare_locked_packages(&old_lock.packages, &new_lock.packages);
+    let risk = package_changes
+        .iter()
+        .fold(PackageRisk::Low, |risk, change| risk.max(change.risk));
+    let mut reasons = package_lock_diff_reasons(&package_changes);
+    if old_lock.version != new_lock.version {
+        reasons.push("lockfile format version changed".to_string());
+    }
+    reasons.sort();
+    reasons.dedup();
+
+    Ok(PackageLockDiff {
+        old_lock_path: old_path.display().to_string(),
+        new_lock_path: new_path.display().to_string(),
+        risk,
+        reasons,
+        old_packages: old_lock.packages.len(),
+        new_packages: new_lock.packages.len(),
+        package_changes,
+    })
+}
+
 pub fn format_package_review_json(review: &PackageReview) -> String {
     serde_json::to_string(review).expect("package review JSON serialization should not fail")
 }
@@ -435,6 +489,10 @@ pub fn format_package_lock_json(lock: &PackageLock) -> String {
 
 pub fn format_package_lock_toml(lock: &PackageLock) -> String {
     toml::to_string_pretty(lock).expect("package lock TOML serialization should not fail")
+}
+
+pub fn format_package_lock_diff_json(diff: &PackageLockDiff) -> String {
+    serde_json::to_string(diff).expect("package lock diff JSON serialization should not fail")
 }
 
 pub fn format_package_review_human(review: &PackageReview) -> String {
@@ -505,6 +563,41 @@ pub fn format_package_diff_human(diff: &PackageDiff) -> String {
         ));
         if !change.findings.is_empty() {
             output.push_str(&format_review_human(&change.findings));
+        }
+    }
+    output
+}
+
+pub fn format_package_lock_diff_human(diff: &PackageLockDiff) -> String {
+    let mut output = String::new();
+    output.push_str(&format!(
+        "package lock update {} -> {} risk {}\n",
+        diff.old_lock_path,
+        diff.new_lock_path,
+        package_risk_label(diff.risk)
+    ));
+    if !diff.reasons.is_empty() {
+        output.push_str("reasons:\n");
+        for reason in &diff.reasons {
+            output.push_str(&format!("  - {reason}\n"));
+        }
+    }
+    for package in &diff.package_changes {
+        output.push_str(&format!(
+            "package {}: {} -> {} ({})\n",
+            package.name,
+            package.before_version.as_deref().unwrap_or("<none>"),
+            package.after_version.as_deref().unwrap_or("<none>"),
+            package_risk_label(package.risk)
+        ));
+        for change in &package.changes {
+            output.push_str(&format!(
+                "  {}: {} -> {} ({})\n",
+                change.field,
+                change.before.as_deref().unwrap_or("<none>"),
+                change.after.as_deref().unwrap_or("<none>"),
+                package_risk_label(change.risk)
+            ));
         }
     }
     output
@@ -629,6 +722,12 @@ fn collect_regular_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), St
         }
     }
     Ok(())
+}
+
+fn read_package_lock(path: &Path) -> Result<PackageLock, String> {
+    let source = fs::read_to_string(path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    toml::from_str(&source).map_err(|error| format!("failed to parse {}: {error}", path.display()))
 }
 
 fn is_rsscript_source_path(path: &Path) -> bool {
@@ -1039,6 +1138,150 @@ fn compare_interface_sources(
     changes
 }
 
+fn compare_locked_packages(
+    old_packages: &[PackageLockPackage],
+    new_packages: &[PackageLockPackage],
+) -> Vec<PackageLockPackageChange> {
+    let old_packages = locked_packages_by_name(old_packages);
+    let new_packages = locked_packages_by_name(new_packages);
+    let names = old_packages
+        .keys()
+        .chain(new_packages.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut changes = Vec::new();
+    for name in names {
+        match (old_packages.get(&name), new_packages.get(&name)) {
+            (None, Some(new)) => changes.push(PackageLockPackageChange {
+                name,
+                before_version: None,
+                after_version: Some(new.version.clone()),
+                risk: PackageRisk::Elevated,
+                changes: vec![PackageLockFieldChange {
+                    field: "package".to_string(),
+                    before: None,
+                    after: Some("added".to_string()),
+                    risk: PackageRisk::Elevated,
+                }],
+            }),
+            (Some(old), None) => changes.push(PackageLockPackageChange {
+                name,
+                before_version: Some(old.version.clone()),
+                after_version: None,
+                risk: PackageRisk::High,
+                changes: vec![PackageLockFieldChange {
+                    field: "package".to_string(),
+                    before: Some("present".to_string()),
+                    after: None,
+                    risk: PackageRisk::High,
+                }],
+            }),
+            (Some(old), Some(new)) => {
+                let field_changes = compare_locked_package_fields(old, new);
+                if !field_changes.is_empty() {
+                    let risk = field_changes
+                        .iter()
+                        .fold(PackageRisk::Low, |risk, change| risk.max(change.risk));
+                    changes.push(PackageLockPackageChange {
+                        name,
+                        before_version: Some(old.version.clone()),
+                        after_version: Some(new.version.clone()),
+                        risk,
+                        changes: field_changes,
+                    });
+                }
+            }
+            (None, None) => {}
+        }
+    }
+    changes
+}
+
+fn locked_packages_by_name(
+    packages: &[PackageLockPackage],
+) -> BTreeMap<String, &PackageLockPackage> {
+    packages
+        .iter()
+        .map(|package| (package.name.clone(), package))
+        .collect()
+}
+
+fn compare_locked_package_fields(
+    old: &PackageLockPackage,
+    new: &PackageLockPackage,
+) -> Vec<PackageLockFieldChange> {
+    let mut changes = Vec::new();
+    push_lock_field_change(
+        &mut changes,
+        "version",
+        Some(old.version.as_str()),
+        Some(new.version.as_str()),
+        PackageRisk::Elevated,
+    );
+    push_lock_field_change(
+        &mut changes,
+        "source",
+        Some(old.source.as_str()),
+        Some(new.source.as_str()),
+        PackageRisk::Elevated,
+    );
+    push_lock_field_change(
+        &mut changes,
+        "checksum",
+        Some(old.checksum.as_str()),
+        Some(new.checksum.as_str()),
+        PackageRisk::Elevated,
+    );
+    push_lock_field_change(
+        &mut changes,
+        "interface_hash",
+        Some(old.interface_hash.as_str()),
+        Some(new.interface_hash.as_str()),
+        PackageRisk::High,
+    );
+    push_lock_field_change(
+        &mut changes,
+        "review_hash",
+        Some(old.review_hash.as_str()),
+        Some(new.review_hash.as_str()),
+        PackageRisk::Elevated,
+    );
+    push_lock_field_change(
+        &mut changes,
+        "native_hash",
+        old.native_hash.as_deref(),
+        new.native_hash.as_deref(),
+        PackageRisk::High,
+    );
+    let old_features = feature_values_label(&old.features);
+    let new_features = feature_values_label(&new.features);
+    push_lock_field_change(
+        &mut changes,
+        "features",
+        Some(old_features.as_str()),
+        Some(new_features.as_str()),
+        PackageRisk::Elevated,
+    );
+    changes
+}
+
+fn push_lock_field_change(
+    changes: &mut Vec<PackageLockFieldChange>,
+    field: &str,
+    before: Option<&str>,
+    after: Option<&str>,
+    risk: PackageRisk,
+) {
+    if before != after {
+        changes.push(PackageLockFieldChange {
+            field: field.to_string(),
+            before: before.map(str::to_string),
+            after: after.map(str::to_string),
+            risk,
+        });
+    }
+}
+
 fn interface_sources_by_relative_path(
     sources: &[PackageSource],
 ) -> BTreeMap<String, &PackageSource> {
@@ -1082,6 +1325,53 @@ fn package_diff_reasons(
         reasons.push("high-risk interface change detected".to_string());
     }
     reasons
+}
+
+fn package_lock_diff_reasons(changes: &[PackageLockPackageChange]) -> Vec<String> {
+    let mut reasons = Vec::new();
+    if changes
+        .iter()
+        .flat_map(|change| &change.changes)
+        .any(|change| change.field == "package" && change.after.as_deref() == Some("added"))
+    {
+        reasons.push("RSScript package added to lockfile".to_string());
+    }
+    if changes
+        .iter()
+        .flat_map(|change| &change.changes)
+        .any(|change| change.field == "package" && change.after.is_none())
+    {
+        reasons.push("RSScript package removed from lockfile".to_string());
+    }
+    if lock_field_changed(changes, "version") {
+        reasons.push("RSScript package version changed".to_string());
+    }
+    if lock_field_changed(changes, "interface_hash") {
+        reasons.push(".rssi interface hash changed".to_string());
+    }
+    if lock_field_changed(changes, "review_hash") {
+        reasons.push("review metadata hash changed".to_string());
+    }
+    if lock_field_changed(changes, "native_hash") {
+        reasons.push("native wrapper source hash changed".to_string());
+    }
+    if lock_field_changed(changes, "checksum") {
+        reasons.push("package checksum changed".to_string());
+    }
+    if lock_field_changed(changes, "features") {
+        reasons.push("package feature selection changed".to_string());
+    }
+    if lock_field_changed(changes, "source") {
+        reasons.push("package source changed".to_string());
+    }
+    reasons
+}
+
+fn lock_field_changed(changes: &[PackageLockPackageChange], field: &str) -> bool {
+    changes
+        .iter()
+        .flat_map(|change| &change.changes)
+        .any(|change| change.field == field)
 }
 
 fn package_diff_risk(

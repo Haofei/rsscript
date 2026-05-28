@@ -213,6 +213,7 @@ rss fmt      <file.rss>
 rss review   [--json] --diff <old.rss> <new.rss>
 rss review   [--json] --map  <file-or-directory>
 rss package  review [--json] <package-directory>
+rss package  review update [--json] --from <old-rsspkg.lock> --to <new-rsspkg.lock>
 rss package  lock   [--json] <package-directory>
 rss package  diff   [--json] <old-package-directory> <new-package-directory>
 rss lower    --rust  <file.rss> [--out-dir <directory>]
@@ -227,6 +228,7 @@ A few details worth knowing:
 - `rss lint` reuses the frontend checks and emits warnings. The first lint is `RSL001` — public signatures over the review budget for parameter count, generics, effects, or nested-type depth.
 - `rss review --map` validates inputs first, so files with frontend errors get diagnostics instead of misleading classifications.
 - `rss package review` reads `rsspkg.toml`, treats `.rssi` files as the public semantic contract, and raises risk for native Rust wrappers, build scripts, proc macros, unsafe policy, external links, frontend diagnostics, and unknown review-map regions.
+- `rss package review update` compares two `rsspkg.lock` files and reports package version, source, checksum, `.rssi` interface, review metadata, native wrapper, and feature-selection changes.
 - `rss package lock` emits root package lock metadata with SHA-256 hashes for the public `.rssi` contract, review metadata, package contents, and native Rust wrapper contents when enabled.
 - `rss package diff` compares two local package directories and reports package version changes, RSScript dependency changes, package feature changes, native Rust wrapper metadata changes, and public `.rssi` semantic contract changes.
 - `rss run` lowers to a temporary Rust package and delegates to `cargo run`; `--out-dir` keeps the generated package around for inspection. Diagnostics support `--json`; program stdout stays the program's own.
