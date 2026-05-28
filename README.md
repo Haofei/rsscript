@@ -14,6 +14,7 @@ It currently implements:
 - Builtin signatures for the current fixture stdlib surface, including `Image`, `File`, `Map`, `ResourcePool`, `Json`, `Csv`, and cache/config helpers
 - AST-driven mode and call checks for local-only features, named arguments, data effects, and retaining APIs
 - AST-driven body checks for local moves, `fresh` returns, resource escape, handle-field `take`, and managed closure captures
+- Focused check modules for mode, calls, and forbidden operator behavior
 - Fixture-based pass/fail scenario tests under `tests/fixtures`
 
 Implemented diagnostic classes include:
@@ -45,7 +46,7 @@ Non-goals for this stage:
 Near-term roadmap:
 
 1. Expand HIR from function signatures into resolved statements, expressions, fields, and type kinds.
-2. Split semantic checks into focused modules for calls, local state, freshness, resources, handles, and forbidden features.
+2. Split remaining body semantic checks into focused modules for local state, freshness, resources, and handles.
 3. Add branch-aware CleanLocal dataflow for `fresh`, `manage`, `take`, retaining APIs, and closure capture.
 4. Add `rss review old.rss new.rss` for API/effect/freshness diffing.
 

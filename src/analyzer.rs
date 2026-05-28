@@ -1,12 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{Program, TypeKind, parse_program};
+use crate::checks;
 use crate::diagnostic::Diagnostic;
 use crate::hir::{FunctionSig, Hir};
-use crate::lexer::{Token, TokenKind, lex};
+use crate::lexer::{Token, lex};
 use crate::syntax::ast::{
-    Block as SyntaxBlock, CallArg, Callee, DataEffect, Expr, FileMode as SyntaxFileMode,
-    FunctionDecl as SyntaxFunctionDecl, Item, LetKind, Stmt,
+    Block as SyntaxBlock, CallArg, Callee, DataEffect, Expr, FunctionDecl as SyntaxFunctionDecl,
+    Item, LetKind, Stmt,
 };
 use crate::syntax::parse_source;
 
@@ -26,12 +27,12 @@ pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
     analyzer.diagnostics
 }
 
-struct Analyzer<'a> {
-    tokens: &'a [Token],
-    program: Program,
-    syntax_program: crate::syntax::ast::Program,
-    hir: Hir,
-    diagnostics: Vec<Diagnostic>,
+pub(crate) struct Analyzer<'a> {
+    pub(crate) tokens: &'a [Token],
+    pub(crate) program: Program,
+    pub(crate) syntax_program: crate::syntax::ast::Program,
+    pub(crate) hir: Hir,
+    pub(crate) diagnostics: Vec<Diagnostic>,
 }
 
 impl Analyzer<'_> {
@@ -39,10 +40,10 @@ impl Analyzer<'_> {
         self.check_file_mode_present();
         self.check_signature_explicitness();
         self.check_resource_fields();
-        self.check_ast_mode_violations();
-        self.check_ast_calls();
+        checks::mode::check(self);
+        checks::calls::check(self);
         self.check_ast_functions();
-        self.check_operator_overload_attempts();
+        checks::forbidden::check(self);
     }
 
     fn check_file_mode_present(&mut self) {
@@ -166,279 +167,6 @@ impl Analyzer<'_> {
                         .with_fix("use_with", "Use `with` or `ResourcePool<T: Resource>` instead.", "manual"),
                     );
                 }
-            }
-        }
-    }
-
-    fn check_ast_mode_violations(&mut self) {
-        let Some(mode) = self.syntax_program.mode else {
-            return;
-        };
-        if mode != SyntaxFileMode::Managed {
-            return;
-        }
-
-        let items = self.syntax_program.items.clone();
-        for item in &items {
-            match item {
-                Item::Function(function) => {
-                    self.check_mode_violations_in_block(&function.body);
-                    for param in &function.params {
-                        if param.effect == Some(DataEffect::Take) {
-                            self.mode_violation(
-                                "`take` requires `mode: uses-local`.",
-                                param.span.clone(),
-                            );
-                        }
-                        self.check_mode_violations_in_type_ref(&param.ty);
-                    }
-                    if let Some(return_ty) = &function.return_ty {
-                        self.check_mode_violations_in_type_ref(return_ty);
-                    }
-                }
-                Item::Type(decl) => {
-                    for field in &decl.fields {
-                        self.check_mode_violations_in_type_ref(&field.ty);
-                    }
-                }
-            }
-        }
-    }
-
-    fn check_mode_violations_in_block(&mut self, block: &SyntaxBlock) {
-        for statement in &block.statements {
-            match statement {
-                Stmt::Let(stmt) => {
-                    if stmt.kind == LetKind::Local {
-                        self.mode_violation(
-                            "`local` requires `mode: uses-local`.",
-                            stmt.span.clone(),
-                        );
-                    }
-                    if let Some(value) = &stmt.value {
-                        self.check_mode_violations_in_expr(value);
-                    }
-                }
-                Stmt::Return(stmt) => {
-                    if let Some(value) = &stmt.value {
-                        self.check_mode_violations_in_expr(value);
-                    }
-                }
-                Stmt::With(stmt) => {
-                    self.check_mode_violations_in_expr(&stmt.resource);
-                    self.check_mode_violations_in_block(&stmt.body);
-                }
-                Stmt::Expr(expr) => self.check_mode_violations_in_expr(expr),
-                Stmt::Unknown(_) => {}
-            }
-        }
-    }
-
-    fn check_mode_violations_in_expr(&mut self, expr: &Expr) {
-        match expr {
-            Expr::Manage { value, span } => {
-                self.mode_violation("`manage` requires `mode: uses-local`.", span.clone());
-                self.check_mode_violations_in_expr(value);
-            }
-            Expr::Effect {
-                effect: DataEffect::Take,
-                value,
-                span,
-            } => {
-                self.mode_violation("`take` requires `mode: uses-local`.", span.clone());
-                self.check_mode_violations_in_expr(value);
-            }
-            Expr::Effect { value, .. } => self.check_mode_violations_in_expr(value),
-            Expr::Call { callee, args, .. } => {
-                if matches!(callee, Callee::Qualified { namespace, .. } if namespace == "ResourcePool")
-                    || matches!(callee, Callee::Name(name) if name == "ResourcePool")
-                {
-                    self.mode_violation(
-                        "`ResourcePool<T>` requires `mode: uses-local`.",
-                        expr.span().clone(),
-                    );
-                }
-                for arg in args {
-                    self.check_mode_violations_in_expr(&arg.value);
-                }
-            }
-            Expr::Field { base, .. } => self.check_mode_violations_in_expr(base),
-            Expr::Closure { body, .. } => self.check_mode_violations_in_block(body),
-            Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
-        }
-    }
-
-    fn check_mode_violations_in_type_ref(&mut self, ty: &crate::syntax::ast::TypeRef) {
-        if ty.name == "ResourcePool" {
-            self.mode_violation(
-                "`ResourcePool<T>` requires `mode: uses-local`.",
-                ty.span.clone(),
-            );
-        }
-        for arg in &ty.args {
-            self.check_mode_violations_in_type_ref(arg);
-        }
-    }
-
-    fn mode_violation(&mut self, summary: &str, span: crate::diagnostic::Span) {
-        self.diagnostics.push(
-            Diagnostic::error("RS0101", summary, span, "mode violation").with_fix(
-                "change_mode",
-                "Change the file declaration to `mode: uses-local`.",
-                "manual",
-            ),
-        );
-    }
-
-    fn check_ast_calls(&mut self) {
-        let items = self.syntax_program.items.clone();
-        for item in &items {
-            if let Item::Function(function) = item {
-                let locals = collect_local_bindings_from_block(&function.body);
-                self.check_calls_in_block(&function.body, &locals);
-            }
-        }
-    }
-
-    fn check_calls_in_block(&mut self, block: &SyntaxBlock, locals: &HashSet<String>) {
-        for statement in &block.statements {
-            match statement {
-                Stmt::Let(stmt) => {
-                    if let Some(value) = &stmt.value {
-                        self.check_calls_in_expr(value, locals);
-                    }
-                }
-                Stmt::Return(stmt) => {
-                    if let Some(value) = &stmt.value {
-                        self.check_calls_in_expr(value, locals);
-                    }
-                }
-                Stmt::With(stmt) => {
-                    self.check_calls_in_expr(&stmt.resource, locals);
-                    self.check_calls_in_block(&stmt.body, locals);
-                }
-                Stmt::Expr(expr) => self.check_calls_in_expr(expr, locals),
-                Stmt::Unknown(_) => {}
-            }
-        }
-    }
-
-    fn check_calls_in_expr(&mut self, expr: &Expr, locals: &HashSet<String>) {
-        match expr {
-            Expr::Call { callee, args, .. } => {
-                self.check_call_args(callee, args, locals);
-                for arg in args {
-                    self.check_calls_in_expr(&arg.value, locals);
-                }
-            }
-            Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
-                self.check_calls_in_expr(value, locals);
-            }
-            Expr::Field { base, .. } => self.check_calls_in_expr(base, locals),
-            Expr::Closure { body, .. } => self.check_calls_in_block(body, locals),
-            Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
-        }
-    }
-
-    fn check_call_args(&mut self, callee: &Callee, args: &[CallArg], locals: &HashSet<String>) {
-        let call_name = callee_name(callee);
-        if is_enum_variant_call(&call_name) {
-            return;
-        }
-
-        for arg in args {
-            if arg.name.is_none() {
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        "RS0201",
-                        format!("call to `{call_name}` uses an unnamed argument."),
-                        arg.span.clone(),
-                        "argument must be named",
-                    )
-                    .with_cause(
-                        "RSScript v0.4.1 requires all non-receiver call arguments to be named.",
-                    )
-                    .with_fix(
-                        "add_argument_name",
-                        "Write the argument as `name: value`.",
-                        "manual",
-                    ),
-                );
-            }
-        }
-
-        let Some(signature) = self.resolve_callee(callee) else {
-            return;
-        };
-        let param_effects: HashMap<String, &'static str> = signature
-            .params
-            .iter()
-            .filter_map(|param| {
-                param
-                    .effect
-                    .map(|effect| (param.name.clone(), effect.as_str()))
-            })
-            .collect();
-        let retained_params = signature.retained_params.clone();
-
-        for arg in args {
-            let Some(name) = &arg.name else {
-                continue;
-            };
-            let Some(expected) = param_effects.get(name) else {
-                continue;
-            };
-            if expr_data_effect(&arg.value) != Some(*expected) {
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        "RS0202",
-                        format!("argument `{name}` for `{call_name}` is missing `{expected}`."),
-                        arg.value.span().clone(),
-                        "missing data effect",
-                    )
-                    .with_cause("Non-Copy parameters require an explicit `read`, `mut`, or `take` call-site effect.")
-                    .with_fix(
-                        "add_data_effect",
-                        format!("Write `{name}: {expected} ...` at the call site."),
-                        "machine-applicable",
-                    ),
-                );
-            }
-        }
-
-        for arg in args {
-            let Some(name) = &arg.name else {
-                continue;
-            };
-            if !retained_params.contains(name) {
-                continue;
-            }
-            if let Expr::Effect {
-                effect: DataEffect::Read,
-                value,
-                ..
-            } = &arg.value
-                && let Expr::Ident(var, span) = value.as_ref()
-                && locals.contains(var)
-            {
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        "RS0501",
-                        format!("retaining API `{call_name}` cannot retain local value `{var}`."),
-                        span.clone(),
-                        "local value retained",
-                    )
-                    .with_cause(format!(
-                        "`{call_name}` declares `effects(retains({name}))`."
-                    ))
-                    .with_fix(
-                        "manage_local",
-                        format!(
-                            "Pass `{name}: read (manage {var})` if the value should become managed."
-                        ),
-                        "manual",
-                    ),
-                );
             }
         }
     }
@@ -912,46 +640,7 @@ impl Analyzer<'_> {
         })
     }
 
-    fn check_operator_overload_attempts(&mut self) {
-        for i in 1..self.tokens.len().saturating_sub(1) {
-            if !(self.tokens[i].symbol("+")
-                || self.tokens[i].symbol("-")
-                || self.tokens[i].symbol("*")
-                || self.tokens[i].symbol("/"))
-            {
-                continue;
-            }
-            let left_number = matches!(self.tokens[i - 1].kind, TokenKind::Number(_));
-            let right_number = matches!(self.tokens[i + 1].kind, TokenKind::Number(_));
-            let likely_type_name = self.tokens[i - 1]
-                .text()
-                .chars()
-                .next()
-                .is_some_and(char::is_uppercase)
-                || self.tokens[i + 1]
-                    .text()
-                    .chars()
-                    .next()
-                    .is_some_and(char::is_uppercase);
-            if !left_number && !right_number && likely_type_name {
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        "RS1001",
-                        "operators cannot be overloaded for user-defined types.",
-                        self.tokens[i].span.clone(),
-                        "operator on non-builtin-looking value",
-                    )
-                    .with_fix(
-                        "use_named_function",
-                        "Use a named function such as `Type.add(left: read a, right: read b)`.",
-                        "manual",
-                    ),
-                );
-            }
-        }
-    }
-
-    fn resolve_callee(&self, callee: &Callee) -> Option<&FunctionSig> {
+    pub(crate) fn resolve_callee(&self, callee: &Callee) -> Option<&FunctionSig> {
         match callee {
             Callee::Name(name) => self.hir.resolve_function(None, name),
             Callee::Qualified { namespace, name } => {
@@ -1012,80 +701,5 @@ fn collect_expr_idents(expr: &Expr, uses: &mut Vec<(String, crate::diagnostic::S
         }
         Expr::Closure { body, .. } => collect_block_idents(body, uses),
         Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
-    }
-}
-
-fn is_enum_variant_call(name: &str) -> bool {
-    matches!(name, "Ok" | "Err" | "Some" | "None" | "Result" | "Option")
-}
-
-fn callee_name(callee: &Callee) -> String {
-    match callee {
-        Callee::Name(name) => name.clone(),
-        Callee::Qualified { name, .. } => name.clone(),
-    }
-}
-
-fn expr_data_effect(expr: &Expr) -> Option<&'static str> {
-    match expr {
-        Expr::Effect { effect, .. } => Some(match effect {
-            DataEffect::Read => "read",
-            DataEffect::Mut => "mut",
-            DataEffect::Take => "take",
-        }),
-        _ => None,
-    }
-}
-
-fn collect_local_bindings_from_block(block: &SyntaxBlock) -> HashSet<String> {
-    let mut locals = HashSet::new();
-    collect_local_bindings_from_statements(&block.statements, &mut locals);
-    locals
-}
-
-fn collect_local_bindings_from_statements(statements: &[Stmt], locals: &mut HashSet<String>) {
-    for statement in statements {
-        match statement {
-            Stmt::Let(stmt) if stmt.kind == LetKind::Local => {
-                locals.insert(stmt.name.clone());
-                if let Some(value) = &stmt.value {
-                    collect_local_bindings_from_expr(value, locals);
-                }
-            }
-            Stmt::Let(stmt) => {
-                if let Some(value) = &stmt.value {
-                    collect_local_bindings_from_expr(value, locals);
-                }
-            }
-            Stmt::Return(stmt) => {
-                if let Some(value) = &stmt.value {
-                    collect_local_bindings_from_expr(value, locals);
-                }
-            }
-            Stmt::With(stmt) => {
-                collect_local_bindings_from_expr(&stmt.resource, locals);
-                collect_local_bindings_from_statements(&stmt.body.statements, locals);
-            }
-            Stmt::Expr(expr) => collect_local_bindings_from_expr(expr, locals),
-            Stmt::Unknown(_) => {}
-        }
-    }
-}
-
-fn collect_local_bindings_from_expr(expr: &Expr, locals: &mut HashSet<String>) {
-    match expr {
-        Expr::Call { args, .. } => {
-            for arg in args {
-                collect_local_bindings_from_expr(&arg.value, locals);
-            }
-        }
-        Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
-            collect_local_bindings_from_expr(value, locals);
-        }
-        Expr::Field { base, .. } => collect_local_bindings_from_expr(base, locals),
-        Expr::Closure { body, .. } => {
-            collect_local_bindings_from_statements(&body.statements, locals);
-        }
-        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
     }
 }
