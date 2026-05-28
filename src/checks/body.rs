@@ -722,10 +722,14 @@ fn collect_spawn_capture_idents_from_stmt(statement: &HirStmt, captures: &mut Ve
     }
 }
 
-fn check_call_place_conflicts(analyzer: &mut Analyzer<'_>, args: &[HirCallArg], state: &BodyState) {
+fn check_call_place_conflicts(
+    analyzer: &mut Analyzer<'_>,
+    args: &[HirCallArg],
+    _state: &BodyState,
+) {
     let accesses = args
         .iter()
-        .filter_map(|arg| call_place_access(arg, state))
+        .filter_map(call_place_access)
         .collect::<Vec<_>>();
 
     for left_index in 0..accesses.len() {
@@ -735,7 +739,7 @@ fn check_call_place_conflicts(analyzer: &mut Analyzer<'_>, args: &[HirCallArg], 
     }
 }
 
-fn call_place_access(arg: &HirCallArg, state: &BodyState) -> Option<CallPlaceAccess> {
+fn call_place_access(arg: &HirCallArg) -> Option<CallPlaceAccess> {
     let HirExpr::Effect {
         effect,
         value,
@@ -746,9 +750,6 @@ fn call_place_access(arg: &HirCallArg, state: &BodyState) -> Option<CallPlaceAcc
         return None;
     };
     let path = place_path(value)?;
-    if !state.is_local(&path.base) {
-        return None;
-    }
     Some(CallPlaceAccess {
         effect: *effect,
         moves_path: expr_moves_path(&arg.value),

@@ -2826,6 +2826,31 @@ fn bad_arg(path: read Path) -> Unit {
 }
 
 #[test]
+fn checker_rejects_same_call_managed_place_conflict() {
+    let source = r#"
+class Cache {
+    count: Int
+}
+
+fn Cache.new() -> Cache
+fn touch(first: mut Cache, second: read Cache) -> Unit
+
+fn bad() -> Unit {
+    let cache = Cache.new()
+    touch(first: mut cache, second: read cache)
+}
+"#;
+    let diagnostics = analyze_source("same-call-managed-place.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0303" && diagnostic.label == "field path conflict"
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn checker_allows_result_resource_only_as_return_producer_contract() {
     let source = r#"
 resource File {

@@ -611,10 +611,14 @@ Rust ownership semantics do not directly model that surface language.
 
 The v0.5 runtime target is intentionally simple: managed handles may be
 implemented as reference-counted, lock-mediated Rust values such as
-`Arc<RwLock<T>>`. This allows managed handles to be shared across Rust threads
-when the lowered Rust types satisfy Rust's ordinary thread-safety rules.
-RSScript v0.5 does not require a custom global tracing heap, moving collector,
-or actor runtime to make that work.
+`Arc<RwLock<T>>`. This is an implementation strategy, not a source-level
+cross-thread or cross-isolate capability. RSScript v0.5 does not require a
+custom global tracing heap, moving collector, or actor runtime to make managed
+aliasing observable and reviewable.
+
+RSScript v0.5 exposes a single-isolate model. Managed handles do not cross
+isolates, and future cross-thread transfer requires explicit `Send`/`Share`-like
+capabilities.
 
 This reference runtime model is normative at the RSScript-observable level:
 
@@ -688,7 +692,7 @@ unsupported  rejected before Rust lowering or reserved for later versions
 | `read x` call-site effect | Callee may inspect `x`. It is not a snapshot guarantee. For managed handles this is a shared runtime read view; ordinary contention waits/serializes rather than becoming a semantic error. For plain lowered values it is a Rust shared borrow. | static argument/effect checking; dynamic runtime diagnostics only for poison/internal/reentrant failures where `Managed<T>` read guards are used |
 | `mut x` call-site effect | Callee may mutate `x`. For managed handles, mutation goes through the runtime handle and acquires an exclusive runtime write view; ordinary contention waits/serializes rather than becoming a semantic error. | static argument/effect checking; dynamic runtime diagnostics only for poison/internal/reentrant failures where `Managed<T>` write guards are used |
 | `take x` call-site effect | Callee consumes a local/owned value. It is not valid for managed handles or handle fields. | static checking for parameter effect, managed value take, handle-field take, and local move/use |
-| same-call place conflicts | Within one call, `read/read` of the same place is allowed; `read/mut`, `mut/mut`, `take` with anything else, and `manage` with any other original-local use are rejected for the same or overlapping place. | static for syntactic/local-inline place conflicts; dynamic runtime diagnostics for non-obvious managed alias conflicts |
+| same-call place conflicts | Within one call, `read/read` of the same conflict root is allowed; `read/mut`, `mut/mut`, `take` with anything else, and `manage` with any other original-local use are rejected for the same or overlapping conflict root. Handle fields, weak fields, and indexes truncate conflict roots. | static for syntactic/local-inline/handle-prefix place conflicts; dynamic runtime diagnostics for non-obvious managed alias conflicts |
 | managed sharing | Managed values may be shared, stored, and cyclic. The reference runtime is reference-counted and lock-mediated. Strong cycles are representable and must use `weak` review markers at back edges when collection matters. | dynamic `Arc<RwLock<T>>`-like handle semantics for `Managed<T>`; weak handles implemented; cycle collection unsupported |
 | managed alias observes mutation | Aliases of the same managed handle observe mutation through the runtime handle. Alternative runtimes may optimize internally only if this RSScript-observable reference semantics is preserved. | dynamic for `Managed<T>` aliases; not a compile-time proof |
 | managed -> local | A managed value cannot be silently recovered as a local exclusive value, including through `read`/`mut` wrappers, enum wrappers, handle-field access, or enum wrappers around handle-field access. | static |
@@ -1049,7 +1053,7 @@ Example:
 
 ```rust
 Image.save(
-    image: read Image.load(path: read input)?,
+    image: read (Image.load(path: read input)?),
     path: read output,
 )
 ```
@@ -1497,6 +1501,31 @@ Foo.run(a: take x, b: read x)              // error
 Foo.run(a: read (manage x), b: read x)     // error
 ```
 
+For same-call conflict checking, every argument place has a conflict root:
+
+```text
+local-inline field path
+    conflict root is the full inline path
+
+path crossing a handle field, weak field, or index operation
+    conflict root is truncated at the first handle/weak/index boundary
+```
+
+Two places with the same conflict root are overlapping for same-call purposes.
+
+Example:
+
+```rust
+Foo.run(
+    a: mut state.cache.entries,
+    b: mut state.cache.stats,
+)
+```
+
+If `cache` is a `handle` field, both arguments have conflict root
+`state.cache`, so the call is rejected. The checker does not wait for the
+runtime to discover this obvious same-call managed-handle conflict.
+
 This static syntactic-place rule catches obvious conflicts. If two different
 managed variables alias the same runtime handle and a same-isolate reentrant
 read/write conflict is only visible dynamically, the managed runtime must report
@@ -1790,6 +1819,15 @@ For `read (manage image)`, `manage image` is evaluated first and produces a
 managed temporary; `read` then applies to that temporary, not to the original
 local binding.
 
+Canonical RSScript uses parentheses when a data-effect wrapper applies to a
+postfix expression:
+
+```rust
+image: read (Image.load(path: read input)?)
+```
+
+This avoids ambiguity around `?`, field access, and indexing in review.
+
 ---
 
 ## 15.4 Failure and async
@@ -2000,14 +2038,31 @@ Private functions follow canonical syntax.
 
 ## 16.1 Return modes
 
-For non-Copy returns:
+For non-Copy, non-resource returns:
 
 ```text
 T                       = managed T
 fresh T                 = fresh struct shell
 Result<T, E>            = managed T on success
 Result<fresh T, E>      = fresh struct shell on success
+Option<T>               = managed T on Some
+Option<fresh T>         = fresh struct shell on Some
 ```
+
+For resource returns:
+
+```text
+R where R: Resource
+    = transient ResourceValue R
+
+Result<R, E> where R: Resource
+    = Result containing a transient ResourceValue on success
+```
+
+A resource return mode is valid only for resource-producing functions. The
+resource value must be consumed immediately by a resource context such as
+`with`, an approved resource container, or an immediate lease API. It is not a
+managed success value.
 
 Example:
 
@@ -2062,6 +2117,15 @@ Constructors use named fields:
 ```rust
 let point = Point(x: 1.0, y: 2.0)
 ```
+
+Struct constructors and enum variants are call-like initialization expressions.
+They participate in named-argument checking, data-effect checking, same-call
+place conflict checking, local move/use checking, resource escape checking, and
+freshness analysis.
+
+For inline struct fields, initialization from a non-Copy local value requires
+`take`. For handle fields, initialization from a managed value requires `read`.
+For weak fields, initialization requires a weak-handle producing expression.
 
 Dot syntax is namespace access, not method dispatch magic.
 
@@ -2365,8 +2429,19 @@ Legal resource consumption contexts:
 ```text
 with File.open(...)? as file { ... }
 ResourcePool<T>.new(...)
+ResourcePool<T>.try_new(...)?
 approved resource container insertion
 immediate resource lease APIs
+```
+
+`ResourcePool<T>.new` is for infallible resource factories. If the factory
+returns `Result<T, E>`, the canonical API is result-aware and explicit:
+
+```rust
+local pool = ResourcePool<T>.try_new(
+    create: || T.open(...),
+    max_size: 16,
+)?
 ```
 
 Invalid:
@@ -2547,7 +2622,7 @@ Rules:
 class types are always Managed
 struct types are Managed-capable unless they contain resource fields or are otherwise restricted
 resource types are never Managed
-Copy types satisfy Managed only as values inside managed containers; Copy values do not require read/mut/take effects
+Copy types satisfy Managed for generic instantiation and managed-container storage, but Copy values are passed by value and do not require read/mut/take effects
 ```
 
 The source spelling remains `T: Managed` for brevity; the semantic meaning is
@@ -2859,8 +2934,12 @@ Managed closures may capture:
 ```text
 Copy values
 managed values
-handle or weak field paths, because those fields are managed handles
+handle field paths as managed handles
+weak field paths as WeakHandle values
 ```
+
+A captured weak field must still be explicitly upgraded before the target value
+is used.
 
 They may not capture:
 
@@ -3313,15 +3392,23 @@ use after manage
 managed -> local attempt
 missing named argument
 missing read/mut/take effect
+same-call place conflict
+handle-field same-call conflict
 retaining local value
 fresh function returning aliased value
+mut/take of unbound fresh expression
 resource escaping with
+resource-producing expression used outside resource context
+Result-returning resource producer missing explicit ?
+invalid resource type in ordinary Result/Option/container context
 local captured by managed closure
 take of handle field
+weak field used without explicit upgrade
 implicit conversion attempt
 operator overload attempt
 feature violation
 unsupported syntax
+async body / await / spawn used in v0.5 executable lowering
 unmappable rustc diagnostic
 native boundary violation
 ```
@@ -3767,7 +3854,7 @@ multi-isolate runtime
 
 ```rust
 fn write_text(path: read Path, text: read String) -> Result<Unit, IOError> {
-    with File.open_write(path: read path) as file {
+    with File.open_write(path: read path)? as file {
         File.write(file: mut file, data: read text)?
     }
 
