@@ -24,7 +24,6 @@ pub(crate) struct LocalAnalysis {
     binding_types_by_span: HashMap<Span, String>,
     field_accesses_by_span: HashMap<Span, HirFieldAccess>,
     return_proofs_by_span: HashMap<Span, HirReturnProof>,
-    closure_uses_by_span: HashMap<Span, Vec<(String, Span)>>,
     managed_closure_uses_by_span: HashMap<Span, Vec<(String, Span)>>,
     resource_escapes_by_with_span: HashMap<Span, Vec<ResourceEscape>>,
     flow_steps: Vec<LocalFlowStep>,
@@ -98,10 +97,6 @@ impl LocalAnalysis {
             .as_ref()
             .and_then(|body| body.block.as_ref())
             .map_or_else(HashMap::new, index_return_proofs_from_block);
-        let closure_uses_by_span = body
-            .as_ref()
-            .and_then(|body| body.block.as_ref())
-            .map_or_else(HashMap::new, index_closure_uses_from_block);
         let managed_closure_uses_by_span = body
             .as_ref()
             .and_then(|body| body.block.as_ref())
@@ -123,7 +118,6 @@ impl LocalAnalysis {
             binding_types_by_span,
             field_accesses_by_span,
             return_proofs_by_span,
-            closure_uses_by_span,
             managed_closure_uses_by_span,
             resource_escapes_by_with_span,
             flow_steps,
@@ -153,10 +147,6 @@ impl LocalAnalysis {
 
     pub(crate) fn return_proof(&self, span: &Span) -> Option<&HirReturnProof> {
         self.return_proofs_by_span.get(span)
-    }
-
-    pub(crate) fn closure_ident_uses(&self, span: &Span) -> Option<&[(String, Span)]> {
-        self.closure_uses_by_span.get(span).map(Vec::as_slice)
     }
 
     pub(crate) fn managed_closure_ident_uses(&self, span: &Span) -> Option<&[(String, Span)]> {
@@ -528,12 +518,6 @@ fn hir_expr_span(expr: &HirExpr) -> &Span {
     }
 }
 
-fn index_closure_uses_from_block(block: &HirBlock) -> HashMap<Span, Vec<(String, Span)>> {
-    let mut closures = HashMap::new();
-    collect_block_closure_uses(block, &mut closures);
-    closures
-}
-
 fn index_managed_closure_uses_from_block(block: &HirBlock) -> HashMap<Span, Vec<(String, Span)>> {
     let mut closures = HashMap::new();
     collect_block_managed_closure_uses(block, &mut closures);
@@ -825,80 +809,6 @@ fn collect_expr_managed_closure_uses(
         }
         HirExpr::Field { base, .. } => collect_expr_managed_closure_uses(base, closures),
         HirExpr::Closure { body, .. } => collect_block_managed_closure_uses(body, closures),
-        HirExpr::Ident { .. }
-        | HirExpr::Number { .. }
-        | HirExpr::String { .. }
-        | HirExpr::Unknown(_) => {}
-    }
-}
-
-fn collect_block_closure_uses(block: &HirBlock, closures: &mut HashMap<Span, Vec<(String, Span)>>) {
-    for statement in &block.statements {
-        collect_stmt_closure_uses(statement, closures);
-    }
-}
-
-fn collect_stmt_closure_uses(
-    statement: &HirStmt,
-    closures: &mut HashMap<Span, Vec<(String, Span)>>,
-) {
-    match statement {
-        HirStmt::Let {
-            value: Some(value), ..
-        }
-        | HirStmt::Return {
-            value: Some(value), ..
-        }
-        | HirStmt::Expr(value) => collect_expr_closure_uses(value, closures),
-        HirStmt::With { resource, body, .. } => {
-            collect_expr_closure_uses(resource, closures);
-            collect_block_closure_uses(body, closures);
-        }
-        HirStmt::If {
-            condition,
-            then_body,
-            else_body,
-            ..
-        } => {
-            collect_expr_closure_uses(condition, closures);
-            collect_block_closure_uses(then_body, closures);
-            if let Some(else_body) = else_body {
-                collect_block_closure_uses(else_body, closures);
-            }
-        }
-        HirStmt::Loop {
-            condition, body, ..
-        } => {
-            if let Some(condition) = condition {
-                collect_expr_closure_uses(condition, closures);
-            }
-            collect_block_closure_uses(body, closures);
-        }
-        HirStmt::Let { value: None, .. }
-        | HirStmt::Return { value: None, .. }
-        | HirStmt::Break(_)
-        | HirStmt::Continue(_)
-        | HirStmt::Unknown(_) => {}
-    }
-}
-
-fn collect_expr_closure_uses(expr: &HirExpr, closures: &mut HashMap<Span, Vec<(String, Span)>>) {
-    match expr {
-        HirExpr::Closure { body, span } => {
-            let mut uses = Vec::new();
-            collect_hir_block_idents(body, &mut uses);
-            closures.insert(span.clone(), uses);
-            collect_block_closure_uses(body, closures);
-        }
-        HirExpr::Call { args, .. } => {
-            for arg in args {
-                collect_expr_closure_uses(&arg.value, closures);
-            }
-        }
-        HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => {
-            collect_expr_closure_uses(value, closures);
-        }
-        HirExpr::Field { base, .. } => collect_expr_closure_uses(base, closures),
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -1848,10 +1758,6 @@ mod tests {
             local_analysis.return_proof(&span(23)),
             Some(HirReturnProof::FreshCall)
         ));
-        assert_eq!(
-            local_analysis.closure_ident_uses(&span(24)),
-            Some(&[("cached".to_string(), span(25))][..])
-        );
         assert_eq!(
             local_analysis.statement_ident_uses(&span(24)),
             Some(&[("cached".to_string(), span(25))][..])

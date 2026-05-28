@@ -270,17 +270,9 @@ fn check_moved_uses_in_stmt(
     let state = local_analysis
         .flow_entry_state(stmt_span(statement))
         .unwrap_or(state);
-    let fallback_uses;
-    let uses = if let Some(uses) = local_analysis.statement_ident_uses(stmt_span(statement)) {
-        uses
-    } else {
-        fallback_uses = {
-            let mut uses = Vec::new();
-            collect_stmt_idents(statement, &mut uses);
-            uses
-        };
-        fallback_uses.as_slice()
-    };
+    let uses = local_analysis
+        .statement_ident_uses(stmt_span(statement))
+        .unwrap_or(&[]);
     for (name, span) in uses {
         if let Some(move_span) = state.move_span(name) {
             analyzer.diagnostics.push(
@@ -308,36 +300,12 @@ fn check_managed_closure_captures(
     analyzer: &mut Analyzer<'_>,
     local_analysis: &LocalAnalysis,
     statement_span: &crate::diagnostic::Span,
-    value: Option<&Expr>,
+    _value: Option<&Expr>,
     state: &BodyState,
 ) {
-    let fallback_uses;
-    let closure_uses = value.and_then(|value| match value {
-        Expr::Closure { span, .. } => local_analysis.closure_ident_uses(span),
-        Expr::Effect { .. }
-        | Expr::Manage { .. }
-        | Expr::Call { .. }
-        | Expr::Field { .. }
-        | Expr::Ident(_, _)
-        | Expr::Number(_, _)
-        | Expr::String(_, _)
-        | Expr::Unknown(_) => None,
-    });
-    let uses = if let Some(uses) = local_analysis
+    let uses = local_analysis
         .managed_closure_ident_uses(statement_span)
-        .or(closure_uses)
-    {
-        uses
-    } else {
-        fallback_uses = {
-            let mut uses = Vec::new();
-            if let Some(Expr::Closure { body, .. }) = value {
-                collect_block_idents(body, &mut uses);
-            }
-            uses
-        };
-        fallback_uses.as_slice()
-    };
+        .unwrap_or(&[]);
     for (name, span) in uses {
         if state.is_local(name) {
             analyzer.diagnostics.push(
@@ -719,71 +687,5 @@ fn stmt_span(statement: &Stmt) -> &crate::diagnostic::Span {
         Stmt::Loop(stmt) => &stmt.span,
         Stmt::Break(span) | Stmt::Continue(span) | Stmt::Unknown(span) => span,
         Stmt::Expr(expr) => expr.span(),
-    }
-}
-
-fn collect_stmt_idents(statement: &Stmt, uses: &mut Vec<(String, crate::diagnostic::Span)>) {
-    match statement {
-        Stmt::Let(stmt) => {
-            if let Some(value) = &stmt.value {
-                collect_expr_idents(value, uses);
-            }
-        }
-        Stmt::Return(stmt) => {
-            if let Some(value) = &stmt.value {
-                collect_expr_idents(value, uses);
-            }
-        }
-        Stmt::With(stmt) => {
-            collect_expr_idents(&stmt.resource, uses);
-        }
-        Stmt::If(stmt) => collect_expr_idents(&stmt.condition, uses),
-        Stmt::Loop(stmt) => {
-            if let Some(condition) = &stmt.condition {
-                collect_expr_idents(condition, uses);
-            }
-        }
-        Stmt::Expr(expr) => collect_expr_idents(expr, uses),
-        Stmt::Break(_) | Stmt::Continue(_) => {}
-        Stmt::Unknown(_) => {}
-    }
-}
-
-fn collect_block_idents(block: &Block, uses: &mut Vec<(String, crate::diagnostic::Span)>) {
-    for statement in &block.statements {
-        collect_stmt_idents(statement, uses);
-        match statement {
-            Stmt::With(stmt) => collect_block_idents(&stmt.body, uses),
-            Stmt::If(stmt) => {
-                collect_block_idents(&stmt.then_body, uses);
-                if let Some(else_body) = &stmt.else_body {
-                    collect_block_idents(else_body, uses);
-                }
-            }
-            Stmt::Loop(stmt) => collect_block_idents(&stmt.body, uses),
-            Stmt::Let(_)
-            | Stmt::Return(_)
-            | Stmt::Expr(_)
-            | Stmt::Break(_)
-            | Stmt::Continue(_)
-            | Stmt::Unknown(_) => {}
-        }
-    }
-}
-
-fn collect_expr_idents(expr: &Expr, uses: &mut Vec<(String, crate::diagnostic::Span)>) {
-    match expr {
-        Expr::Ident(name, span) => uses.push((name.clone(), span.clone())),
-        Expr::Field { base, .. } => collect_expr_idents(base, uses),
-        Expr::Call { args, .. } => {
-            for arg in args {
-                collect_expr_idents(&arg.value, uses);
-            }
-        }
-        Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
-            collect_expr_idents(value, uses);
-        }
-        Expr::Closure { body, .. } => collect_block_idents(body, uses),
-        Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
     }
 }
