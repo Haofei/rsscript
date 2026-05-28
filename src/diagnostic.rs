@@ -18,6 +18,7 @@ pub mod code {
     pub const UNSUPPORTED_SYNTAX: &str = "RS0015";
     pub const UNKNOWN_FILE_FEATURE: &str = "RS0016";
     pub const DUPLICATE_FILE_FEATURE: &str = "RS0017";
+    pub const INVALID_NO_BLOCK_CALL: &str = "RS0018";
     pub const FEATURE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
@@ -304,6 +305,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::DUPLICATE_FILE_FEATURE,
         title: "duplicate file feature",
         explanation: "Each review-relevant capability may appear at most once in a `features:` header. Duplicate entries are rejected instead of silently folded away.",
+    },
+    DiagnosticExplanation {
+        code: code::INVALID_NO_BLOCK_CALL,
+        title: "invalid no_block call",
+        explanation: "`effects(no_block)` is a guarantee that the function does not block the current isolate. Calls inside it must target constructors, enum variants, or functions also declared `effects(no_block)`.",
     },
     DiagnosticExplanation {
         code: code::FEATURE_VIOLATION,
