@@ -45,7 +45,7 @@ fn check_block(
     state: &mut BodyState,
 ) -> Flow {
     for statement in &block.statements {
-        check_moved_uses_in_stmt(analyzer, statement, state);
+        check_moved_uses_in_stmt(analyzer, local_analysis, statement, state);
         let flow = check_stmt_semantics(analyzer, local_analysis, function, statement, state);
         apply_stmt_effects(analyzer, local_analysis, statement, state);
         if flow != Flow::Fallthrough {
@@ -246,16 +246,30 @@ fn apply_expr_effects(local_analysis: &LocalAnalysis, expr: &Expr, state: &mut B
     }
 }
 
-fn check_moved_uses_in_stmt(analyzer: &mut Analyzer<'_>, statement: &Stmt, state: &BodyState) {
-    let mut uses = Vec::new();
-    collect_stmt_idents(statement, &mut uses);
+fn check_moved_uses_in_stmt(
+    analyzer: &mut Analyzer<'_>,
+    local_analysis: &LocalAnalysis,
+    statement: &Stmt,
+    state: &BodyState,
+) {
+    let fallback_uses;
+    let uses = if let Some(uses) = local_analysis.statement_ident_uses(stmt_span(statement)) {
+        uses
+    } else {
+        fallback_uses = {
+            let mut uses = Vec::new();
+            collect_stmt_idents(statement, &mut uses);
+            uses
+        };
+        fallback_uses.as_slice()
+    };
     for (name, span) in uses {
-        if let Some(move_span) = state.move_span(&name) {
+        if let Some(move_span) = state.move_span(name) {
             analyzer.diagnostics.push(
                 Diagnostic::error(
                     code::USE_AFTER_MANAGE,
                     format!("`{name}` was moved into the managed runtime by `manage {name}`."),
-                    span,
+                    span.clone(),
                     "used after manage",
                 )
                 .with_cause(format!(
@@ -728,6 +742,18 @@ fn is_handle_field(
     }
 
     !matches!(base, Expr::Ident(_, _)) && analyzer.hir.is_handle_field_name(field_name)
+}
+
+fn stmt_span(statement: &Stmt) -> &crate::diagnostic::Span {
+    match statement {
+        Stmt::Let(stmt) => &stmt.span,
+        Stmt::Return(stmt) => &stmt.span,
+        Stmt::With(stmt) => &stmt.span,
+        Stmt::If(stmt) => &stmt.span,
+        Stmt::Loop(stmt) => &stmt.span,
+        Stmt::Break(span) | Stmt::Continue(span) | Stmt::Unknown(span) => span,
+        Stmt::Expr(expr) => expr.span(),
+    }
 }
 
 fn collect_stmt_idents(statement: &Stmt, uses: &mut Vec<(String, crate::diagnostic::Span)>) {

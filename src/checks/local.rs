@@ -24,6 +24,7 @@ pub(crate) struct LocalAnalysis {
     field_accesses_by_span: HashMap<Span, HirFieldAccess>,
     return_proofs_by_span: HashMap<Span, HirReturnProof>,
     closure_uses_by_span: HashMap<Span, Vec<(String, Span)>>,
+    statement_uses_by_span: HashMap<Span, Vec<(String, Span)>>,
 }
 
 impl LocalAnalysis {
@@ -49,6 +50,10 @@ impl LocalAnalysis {
             .as_ref()
             .and_then(|body| body.block.as_ref())
             .map_or_else(HashMap::new, index_closure_uses_from_block);
+        let statement_uses_by_span = body
+            .as_ref()
+            .and_then(|body| body.block.as_ref())
+            .map_or_else(HashMap::new, index_statement_uses_from_block);
 
         Self {
             body,
@@ -57,6 +62,7 @@ impl LocalAnalysis {
             field_accesses_by_span,
             return_proofs_by_span,
             closure_uses_by_span,
+            statement_uses_by_span,
         }
     }
 
@@ -105,6 +111,10 @@ impl LocalAnalysis {
 
     pub(crate) fn closure_ident_uses(&self, span: &Span) -> Option<&[(String, Span)]> {
         self.closure_uses_by_span.get(span).map(Vec::as_slice)
+    }
+
+    pub(crate) fn statement_ident_uses(&self, span: &Span) -> Option<&[(String, Span)]> {
+        self.statement_uses_by_span.get(span).map(Vec::as_slice)
     }
 
     fn effect_events(&self, span: &Span) -> &[HirEffectEvent] {
@@ -575,6 +585,57 @@ fn collect_hir_expr_idents(expr: &HirExpr, uses: &mut Vec<(String, Span)>) {
     }
 }
 
+fn index_statement_uses_from_block(block: &HirBlock) -> HashMap<Span, Vec<(String, Span)>> {
+    let mut uses_by_span = HashMap::new();
+    collect_block_statement_uses(block, &mut uses_by_span);
+    uses_by_span
+}
+
+fn collect_block_statement_uses(
+    block: &HirBlock,
+    uses_by_span: &mut HashMap<Span, Vec<(String, Span)>>,
+) {
+    for statement in &block.statements {
+        let mut uses = Vec::new();
+        collect_hir_stmt_idents(statement, &mut uses);
+        uses_by_span.insert(hir_stmt_span(statement).clone(), uses);
+        match statement {
+            HirStmt::With { body, .. } => collect_block_statement_uses(body, uses_by_span),
+            HirStmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_block_statement_uses(then_body, uses_by_span);
+                if let Some(else_body) = else_body {
+                    collect_block_statement_uses(else_body, uses_by_span);
+                }
+            }
+            HirStmt::Loop { body, .. } => collect_block_statement_uses(body, uses_by_span),
+            HirStmt::Let { .. }
+            | HirStmt::Return { .. }
+            | HirStmt::Expr(_)
+            | HirStmt::Break(_)
+            | HirStmt::Continue(_)
+            | HirStmt::Unknown(_) => {}
+        }
+    }
+}
+
+fn hir_stmt_span(statement: &HirStmt) -> &Span {
+    match statement {
+        HirStmt::Let { span, .. }
+        | HirStmt::Return { span, .. }
+        | HirStmt::With { span, .. }
+        | HirStmt::If { span, .. }
+        | HirStmt::Loop { span, .. }
+        | HirStmt::Break(span)
+        | HirStmt::Continue(span)
+        | HirStmt::Unknown(span) => span,
+        HirStmt::Expr(expr) => hir_expr_span(expr),
+    }
+}
+
 impl BodyState {
     pub(crate) fn seed_params(&mut self, bindings: &[HirBinding]) {
         for binding in bindings {
@@ -943,6 +1004,10 @@ mod tests {
         ));
         assert_eq!(
             local_analysis.closure_ident_uses(&span(24)),
+            Some(&[("cached".to_string(), span(25))][..])
+        );
+        assert_eq!(
+            local_analysis.statement_ident_uses(&span(24)),
             Some(&[("cached".to_string(), span(25))][..])
         );
 
