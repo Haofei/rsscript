@@ -176,6 +176,24 @@ fn check_label(actual: read String, expected: read String) -> Unit {
 }
 
 #[test]
+fn bundled_interpreter_function_object_new_does_not_retain_closure() {
+    let source = r#"
+features: local
+
+fn build() -> Unit {
+    local env = Environment.root()
+    let function = FunctionObject.new(closure: read env)
+    return Unit
+}
+"#;
+
+    assert_eq!(
+        analyze_source_with_core("interpreter-weak.rss", source),
+        Vec::new()
+    );
+}
+
+#[test]
 fn diagnostics_json_uses_protocol_shape() {
     let path = Path::new("tests/fixtures/fail/use-after-manage.rss");
     let source = read_fixture(path);

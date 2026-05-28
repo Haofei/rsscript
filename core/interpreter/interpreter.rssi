@@ -18,6 +18,5 @@ pub fn Environment.has_parent(env: read Environment) -> Bool
 pub fn Environment.has_function(env: read Environment) -> Bool
 
 pub fn FunctionObject.new(closure: read Environment) -> fresh FunctionObject
-    effects(retains(closure))
 
 pub fn FunctionObject.has_closure(function: read FunctionObject) -> Bool
