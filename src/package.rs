@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::analyzer::{analyze_source_with_core, analyze_source_with_interfaces, core_interfaces};
 use crate::diagnostic::Diagnostic;
@@ -33,6 +34,32 @@ pub struct PackageDiff {
     pub interface_changes: Vec<PackageInterfaceChange>,
     pub old_review: PackageReviewSummary,
     pub new_review: PackageReviewSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageLock {
+    pub version: u32,
+    #[serde(rename = "package")]
+    pub packages: Vec<PackageLockPackage>,
+    pub metadata: PackageLockMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageLockPackage {
+    pub name: String,
+    pub version: String,
+    pub source: String,
+    pub checksum: String,
+    pub interface_hash: String,
+    pub review_hash: String,
+    pub native_hash: Option<String>,
+    pub features: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageLockMetadata {
+    pub rsscript_version: String,
+    pub created_by: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -359,12 +386,55 @@ pub fn diff_package_dirs(old_dir: &Path, new_dir: &Path) -> Result<PackageDiff, 
     })
 }
 
+pub fn lock_package_dir(package_dir: &Path) -> Result<PackageLock, String> {
+    let package = load_package(package_dir)?;
+    let review = review_package_dir(package_dir)?;
+    let native = package
+        .manifest
+        .native
+        .as_ref()
+        .and_then(|native| native.rust.as_ref());
+    let native_hash = package_native_hash(package_dir, native)?;
+    let features = package
+        .manifest
+        .features
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+
+    Ok(PackageLock {
+        version: 1,
+        packages: vec![PackageLockPackage {
+            name: package.manifest.package.name.clone(),
+            version: package.manifest.package.version.clone(),
+            source: format!("path+{}", package_dir.display()),
+            checksum: package_checksum(&package, native_hash.as_deref()),
+            interface_hash: hash_sources(&package.sources, PackageReviewFileKind::Interface),
+            review_hash: package_review_hash(&review),
+            native_hash,
+            features,
+        }],
+        metadata: PackageLockMetadata {
+            rsscript_version: env!("CARGO_PKG_VERSION").to_string(),
+            created_by: "rsscript package lock".to_string(),
+        },
+    })
+}
+
 pub fn format_package_review_json(review: &PackageReview) -> String {
     serde_json::to_string(review).expect("package review JSON serialization should not fail")
 }
 
 pub fn format_package_diff_json(diff: &PackageDiff) -> String {
     serde_json::to_string(diff).expect("package diff JSON serialization should not fail")
+}
+
+pub fn format_package_lock_json(lock: &PackageLock) -> String {
+    serde_json::to_string(lock).expect("package lock JSON serialization should not fail")
+}
+
+pub fn format_package_lock_toml(lock: &PackageLock) -> String {
+    toml::to_string_pretty(lock).expect("package lock TOML serialization should not fail")
 }
 
 pub fn format_package_review_human(review: &PackageReview) -> String {
@@ -442,6 +512,7 @@ pub fn format_package_diff_human(diff: &PackageDiff) -> String {
 
 struct LoadedPackage {
     manifest_path: PathBuf,
+    manifest_source: String,
     manifest: Manifest,
     sources: Vec<PackageSource>,
 }
@@ -469,6 +540,7 @@ fn load_package(package_dir: &Path) -> Result<LoadedPackage, String> {
     sources.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(LoadedPackage {
         manifest_path,
+        manifest_source,
         manifest,
         sources,
     })
@@ -539,10 +611,164 @@ fn collect_rsscript_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), S
     Ok(())
 }
 
+fn collect_regular_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    if path.is_file() {
+        files.push(path.to_path_buf());
+        return Ok(());
+    }
+    let entries = fs::read_dir(path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| format!("failed to read entry in {}: {error}", path.display()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_regular_files(&path, files)?;
+        } else if path.is_file() {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
 fn is_rsscript_source_path(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| matches!(extension, "rss" | "rssi"))
+}
+
+fn package_checksum(package: &LoadedPackage, native_hash: Option<&str>) -> String {
+    let mut input = String::new();
+    input.push_str("manifest\n");
+    input.push_str(&package.manifest_source);
+    input.push_str("\nsources\n");
+    append_sources_hash_input(&mut input, &package.sources);
+    if let Some(native_hash) = native_hash {
+        input.push_str("\nnative\n");
+        input.push_str(native_hash);
+    }
+    sha256_label(input.as_bytes())
+}
+
+fn hash_sources(sources: &[PackageSource], kind: PackageReviewFileKind) -> String {
+    let filtered = sources
+        .iter()
+        .filter(|source| source.kind == kind)
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut input = String::new();
+    append_sources_hash_input(&mut input, &filtered);
+    sha256_label(input.as_bytes())
+}
+
+fn append_sources_hash_input(input: &mut String, sources: &[PackageSource]) {
+    let mut sources = sources.iter().collect::<Vec<_>>();
+    sources.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    for source in sources {
+        input.push_str(&source.relative_path);
+        input.push('\n');
+        input.push_str(&source.contents);
+        input.push('\n');
+    }
+}
+
+fn package_review_hash(review: &PackageReview) -> String {
+    let mut input = String::new();
+    input.push_str(&review.package.name);
+    input.push('\n');
+    input.push_str(&review.package.version);
+    input.push('\n');
+    input.push_str(&review.package.edition);
+    input.push('\n');
+    input.push_str(package_risk_label(review.risk));
+    input.push('\n');
+    for reason in &review.reasons {
+        input.push_str(reason);
+        input.push('\n');
+    }
+    input.push_str(&format!(
+        "{}:{}:{}:{}:{}:{}:{}\n",
+        review.summary.interface_files,
+        review.summary.source_files,
+        review.summary.diagnostics,
+        review.summary.errors,
+        review.summary.dependencies,
+        review.summary.dev_dependencies,
+        review.summary.package_features
+    ));
+    if let Some(native) = &review.native_rust {
+        input.push_str(&native.path);
+        input.push('\n');
+        input.push_str(native.crate_name.as_deref().unwrap_or(""));
+        input.push('\n');
+        input.push_str(native.build_scripts.as_deref().unwrap_or(""));
+        input.push('\n');
+        input.push_str(native.proc_macros.as_deref().unwrap_or(""));
+        input.push('\n');
+        input.push_str(native.unsafe_policy.as_deref().unwrap_or(""));
+        input.push('\n');
+        for link in &native.links {
+            input.push_str(link);
+            input.push('\n');
+        }
+    }
+    for diagnostic in &review.diagnostics {
+        input.push_str(&diagnostic.code);
+        input.push('\n');
+        input.push_str(&diagnostic.summary);
+        input.push('\n');
+    }
+    sha256_label(input.as_bytes())
+}
+
+fn package_native_hash(
+    package_dir: &Path,
+    native: Option<&ManifestNativeRust>,
+) -> Result<Option<String>, String> {
+    let Some(native) = native.filter(|native| native.enabled) else {
+        return Ok(None);
+    };
+    let native_root = package_dir.join(native.path.as_deref().unwrap_or("native/rust"));
+    let mut input = String::new();
+    input.push_str(native.path.as_deref().unwrap_or("native/rust"));
+    input.push('\n');
+    input.push_str(native.crate_name.as_deref().unwrap_or(""));
+    input.push('\n');
+    input.push_str(native.build_scripts.as_deref().unwrap_or(""));
+    input.push('\n');
+    input.push_str(native.proc_macros.as_deref().unwrap_or(""));
+    input.push('\n');
+    input.push_str(native.unsafe_policy.as_deref().unwrap_or(""));
+    input.push('\n');
+    for link in &native.links {
+        input.push_str(link);
+        input.push('\n');
+    }
+
+    if native_root.exists() {
+        let mut files = Vec::new();
+        collect_regular_files(&native_root, &mut files)?;
+        files.sort();
+        for file in files {
+            input.push_str(&relative_path(package_dir, &file));
+            input.push('\n');
+            let contents = fs::read(&file)
+                .map_err(|error| format!("failed to read {}: {error}", file.display()))?;
+            input.push_str(&sha256_label(&contents));
+            input.push('\n');
+        }
+    }
+
+    Ok(Some(sha256_label(input.as_bytes())))
+}
+
+fn sha256_label(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut output = String::from("sha256:");
+    for byte in digest {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
 }
 
 fn collect_manifest_review_reasons(manifest: &Manifest, reasons: &mut Vec<String>) {

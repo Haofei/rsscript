@@ -9,7 +9,7 @@ Reviewable by design.
 Compiled through Rust.
 ```
 
-I like Rust. But AI-generated Rust is hard to review at speed: lifetimes, ownership shapes, trait-heavy APIs, mutation boundaries, retention — all technically correct, all expensive to audit when a single PR drops hundreds of new lines on you.
+I like Rust, and that is where this project starts. AI-generated Rust can be hard to review at speed: lifetimes, ownership shapes, trait-heavy APIs, mutation boundaries, retention — all technically correct, all expensive to audit when a single PR drops hundreds of new lines on you.
 
 RSScript is an experiment in putting a smaller, review-first semantic layer in front of Rust. It keeps rustc, Cargo, and the crate ecosystem; it just makes mutation, retention, resources, native boundaries, and managed/local transitions explicit *before* the Rust gets generated.
 
@@ -23,7 +23,7 @@ One question drives the design:
 
 Before AI, writing code was expensive and reviewing was manageable. That ratio has flipped — generating code is now cheap, reviewing generated code is the bottleneck.
 
-Existing languages were designed for humans writing code by hand. RSScript is designed for a workflow where AI writes, the compiler checks semantic boundaries, and humans review the *risk*, not every line. So the things that actually matter to a reviewer — what mutates, what gets retained, who owns a resource, where you cross into native or unsafe, what changed in a public API — are pushed into source and machine-readable diagnostics instead of being inferred from context.
+Existing languages were designed for humans writing code by hand. RSScript is designed for a workflow where AI writes, the compiler checks semantic boundaries, and humans review the *risk profile first*. So the things that actually matter to a reviewer — what mutates, what gets retained, who owns a resource, where you cross into native or unsafe, what changed in a public API — are pushed into source and machine-readable diagnostics instead of being inferred from context.
 
 ---
 
@@ -38,11 +38,11 @@ let user = User.load(id: read user_id)
 let response = Response.ok(body: read user)
 ```
 
-Managed values are easy to share, store, and drop into long-lived graphs. This is the default for business logic, agent memory, configuration, caches, ASTs, request/response objects — anything that isn't a hot path.
+Managed values are easy to share, store, and drop into long-lived graphs. This is the default for business logic, agent memory, configuration, caches, ASTs, request/response objects — the broad layer outside hot paths.
 
 ### Local when it matters
 
-Hot paths can opt in to local exclusive values, which can't be silently retained by managed objects or captured by managed closures:
+Hot paths can opt in to local exclusive values, and the checker protects those values from silent retention by managed objects or managed closures:
 
 ```rust
 features: local
@@ -64,7 +64,7 @@ Files are managed-only unless they declare otherwise:
 features: local
 ```
 
-Only `local` is implemented today. Names like `native`, `unsafe`, `async`, `device`, `ffi`, and `reflection` are reserved for capabilities that genuinely change review risk. Ordinary libraries (JSON, File, Image, HTTP, Map, Regex) are *not* features. Repeated or unknown names are diagnostics — capability boundaries shouldn't be silently normalized away.
+Only `local` is implemented today. Names like `native`, `unsafe`, `async`, `device`, `ffi`, and `reflection` are reserved for capabilities that genuinely change review risk. Ordinary libraries (JSON, File, Image, HTTP, Map, Regex) stay as libraries. Repeated or unknown names are diagnostics so capability boundaries stay explicit.
 
 ---
 
@@ -139,13 +139,13 @@ User-facing APIs stay simple:
 let json = Json.parse(text: read body)?
 ```
 
-Internals can use local scratch and `*_into` forms for low-allocation paths, but that complexity doesn't leak out.
+Internals can use local scratch and `*_into` forms for low-allocation paths, while the public surface stays managed and reviewable.
 
 ---
 
 ## Semantic review
 
-Review is meant to be semantic, not just textual diff.
+Review is meant to be semantic and stronger than textual diff.
 
 ```sh
 rss review --diff base/ changed/
@@ -175,7 +175,7 @@ FOLDABLE
   private pure helpers, no retention, no resources
 ```
 
-RSScript doesn't eliminate human review. It moves human review up a level.
+RSScript moves human review up a level.
 
 ---
 
@@ -199,7 +199,7 @@ This is an architectural choice. The value is in the front end; the back end is 
 
 ## Status
 
-Experimental. The current implementation is a Rust-based front-end prototype: lexer, parser, semantic checker with the review-oriented rules, structured diagnostics, review-map metadata, package review/diff metadata, Rust source lowering with source maps, rustc diagnostic remapping, a small runtime crate, and core `.rssi` interface signatures (parsed as ordinary files, not a hand-written builtin table). CI gates formatting, lint, tests, and generated-Rust fixtures; golden tests cover lowering and source-map shape.
+Experimental. The current implementation is a Rust-based front-end prototype: lexer, parser, semantic checker with the review-oriented rules, structured diagnostics, review-map metadata, package review/diff/lock metadata, Rust source lowering with source maps, rustc diagnostic remapping, a small runtime crate, and core `.rssi` interface signatures parsed through the ordinary interface path. CI gates formatting, lint, tests, and generated-Rust fixtures; golden tests cover lowering and source-map shape.
 
 The first milestone is a checker strong enough to validate the language model against real examples.
 
@@ -213,6 +213,7 @@ rss fmt      <file.rss>
 rss review   [--json] --diff <old.rss> <new.rss>
 rss review   [--json] --map  <file-or-directory>
 rss package  review [--json] <package-directory>
+rss package  lock   [--json] <package-directory>
 rss package  diff   [--json] <old-package-directory> <new-package-directory>
 rss lower    --rust  <file.rss> [--out-dir <directory>]
 rss run      [--json] <file.rss> [--out-dir <directory>]
@@ -226,6 +227,7 @@ A few details worth knowing:
 - `rss lint` reuses the frontend checks and emits warnings. The first lint is `RSL001` — public signatures over the review budget for parameter count, generics, effects, or nested-type depth.
 - `rss review --map` validates inputs first, so files with frontend errors get diagnostics instead of misleading classifications.
 - `rss package review` reads `rsspkg.toml`, treats `.rssi` files as the public semantic contract, and raises risk for native Rust wrappers, build scripts, proc macros, unsafe policy, external links, frontend diagnostics, and unknown review-map regions.
+- `rss package lock` emits root package lock metadata with SHA-256 hashes for the public `.rssi` contract, review metadata, package contents, and native Rust wrapper contents when enabled.
 - `rss package diff` compares two local package directories and reports package version changes, RSScript dependency changes, package feature changes, native Rust wrapper metadata changes, and public `.rssi` semantic contract changes.
 - `rss run` lowers to a temporary Rust package and delegates to `cargo run`; `--out-dir` keeps the generated package around for inspection. Diagnostics support `--json`; program stdout stays the program's own.
 - `rss verify-rust --out-dir` keeps the generated package and source map, so unmappable rustc diagnostics can be inspected against the actual generated Rust.

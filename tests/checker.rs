@@ -9,10 +9,11 @@ use rsscript::{
     ReviewMapClassification, ReviewMapFileRisk, ReviewRisk, analyze_source,
     analyze_source_with_core, analyze_source_with_interfaces, core_interfaces, diff_package_dirs,
     explain_diagnostic_code, format_diagnostic_explanation, format_diagnostics_json,
-    format_review_human, format_review_json, format_review_map_human, format_review_map_json,
-    lint_source, lower_source_to_rust, lower_source_to_rust_package, lower_source_to_rust_with_map,
-    parse_runtime_diagnostics, remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines,
-    review_map_sources, review_package_dir, review_sources,
+    format_package_lock_toml, format_review_human, format_review_json, format_review_map_human,
+    format_review_map_json, lint_source, lock_package_dir, lower_source_to_rust,
+    lower_source_to_rust_package, lower_source_to_rust_with_map, parse_runtime_diagnostics,
+    remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines, review_map_sources,
+    review_package_dir, review_sources,
 };
 use serde_json::Value;
 
@@ -2484,6 +2485,94 @@ rss-core = "0.6"
             .iter()
             .any(|change| change["kind"] == "dependency" && change["name"] == "rss-core")
     }));
+}
+
+#[test]
+fn package_lock_records_contract_review_and_native_hashes() {
+    let temp_dir = unique_temp_dir("rsscript-package-lock");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[features]
+streaming = []
+
+[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_json_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+        r#"pub fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
+    fs::write(
+        temp_dir.join("native/rust/src/lib.rs"),
+        "pub fn parse(_: &str) {}\n",
+    )
+    .expect("native source should be written");
+
+    let lock = lock_package_dir(&temp_dir).expect("package lock should succeed");
+    let toml = format_package_lock_toml(&lock);
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(lock.version, 1);
+    assert_eq!(lock.packages.len(), 1);
+    assert_eq!(lock.packages[0].name, "rss-json");
+    assert_eq!(lock.packages[0].features, vec!["streaming".to_string()]);
+    assert!(lock.packages[0].checksum.starts_with("sha256:"));
+    assert!(lock.packages[0].interface_hash.starts_with("sha256:"));
+    assert!(lock.packages[0].review_hash.starts_with("sha256:"));
+    assert!(
+        lock.packages[0]
+            .native_hash
+            .as_ref()
+            .is_some_and(|hash| hash.starts_with("sha256:"))
+    );
+    assert!(toml.contains("[[package]]"));
+    assert!(toml.contains("interface_hash = \"sha256:"));
+}
+
+#[test]
+fn rss_package_lock_json_reports_hashes() {
+    let temp_dir = unique_temp_dir("rsscript-package-lock-cli");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        "",
+        r#"pub fn add(left: Int, right: Int) -> Int
+"#,
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("package")
+        .arg("lock")
+        .arg("--json")
+        .arg(&temp_dir)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss package lock should execute");
+    let _ = fs::remove_dir_all(&temp_dir);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: Value = serde_json::from_str(&stdout).expect("stdout should be package lock JSON");
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert_eq!(json["version"], 1);
+    assert_eq!(json["package"][0]["name"], "rss-json");
+    assert!(
+        json["package"][0]["interface_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.starts_with("sha256:"))
+    );
+    assert!(
+        json["package"][0]["review_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.starts_with("sha256:"))
+    );
 }
 
 fn fixture_paths(directory: &str) -> Vec<PathBuf> {

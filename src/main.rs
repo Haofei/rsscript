@@ -8,11 +8,12 @@ use rsscript::{
     Diagnostic, analyze_source, analyze_source_with_interfaces, check_generated_rust_package,
     core_interfaces, diff_package_dirs, explain_diagnostic_code, format_diagnostic_explanation,
     format_diagnostics_human, format_diagnostics_json, format_package_diff_human,
-    format_package_diff_json, format_package_review_human, format_package_review_json,
-    format_review_human, format_review_json, format_review_map_human, format_review_map_json,
-    lint_source, lower_source_to_rust, lower_source_to_rust_package, parse_runtime_diagnostics,
-    parse_source_map_json, remap_rustc_diagnostic_json_lines, review_map_sources,
-    review_package_dir, review_sources, write_generated_rust_package,
+    format_package_diff_json, format_package_lock_json, format_package_lock_toml,
+    format_package_review_human, format_package_review_json, format_review_human,
+    format_review_json, format_review_map_human, format_review_map_json, lint_source,
+    lock_package_dir, lower_source_to_rust, lower_source_to_rust_package,
+    parse_runtime_diagnostics, parse_source_map_json, remap_rustc_diagnostic_json_lines,
+    review_map_sources, review_package_dir, review_sources, write_generated_rust_package,
 };
 
 fn main() -> ExitCode {
@@ -42,6 +43,7 @@ fn main() -> ExitCode {
 fn run_package(args: &[String]) -> ExitCode {
     match parse_package_args(args) {
         PackageCommand::Review { json, path } => run_package_review(json, path),
+        PackageCommand::Lock { json, path } => run_package_lock(json, path),
         PackageCommand::Diff {
             json,
             old_path,
@@ -788,6 +790,10 @@ enum PackageCommand<'a> {
         json: bool,
         path: &'a str,
     },
+    Lock {
+        json: bool,
+        path: &'a str,
+    },
     Diff {
         json: bool,
         old_path: &'a str,
@@ -804,7 +810,7 @@ fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
     for arg in args {
         if arg == "--json" {
             json = true;
-        } else if arg == "review" || arg == "diff" {
+        } else if arg == "review" || arg == "lock" || arg == "diff" {
             command = Some(arg.as_str());
         } else {
             paths.push(arg.as_str());
@@ -813,6 +819,7 @@ fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
 
     match (command, paths.as_slice()) {
         (Some("review"), [path]) => PackageCommand::Review { json, path },
+        (Some("lock"), [path]) => PackageCommand::Lock { json, path },
         (Some("diff"), [old_path, new_path]) => PackageCommand::Diff {
             json,
             old_path,
@@ -953,6 +960,23 @@ fn run_package_review(json: bool, path: &str) -> ExitCode {
     }
 }
 
+fn run_package_lock(json: bool, path: &str) -> ExitCode {
+    let lock = match lock_package_dir(Path::new(path)) {
+        Ok(lock) => lock,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+
+    if json {
+        println!("{}", format_package_lock_json(&lock));
+    } else {
+        print!("{}", format_package_lock_toml(&lock));
+    }
+    ExitCode::SUCCESS
+}
+
 fn run_package_diff(json: bool, old_path: &str, new_path: &str) -> ExitCode {
     let diff = match diff_package_dirs(Path::new(old_path), Path::new(new_path)) {
         Ok(diff) => diff,
@@ -1047,5 +1071,6 @@ fn print_usage() {
     eprintln!("  rsscript review [--json] --diff <old.rss> <new.rss>");
     eprintln!("  rsscript review [--json] --map <file-or-directory>");
     eprintln!("  rsscript package review [--json] <package-directory>");
+    eprintln!("  rsscript package lock [--json] <package-directory>");
     eprintln!("  rsscript package diff [--json] <old-package-directory> <new-package-directory>");
 }

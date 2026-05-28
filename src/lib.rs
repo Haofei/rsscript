@@ -19,11 +19,12 @@ pub use diagnostic::{
 };
 pub use lint::lint_source;
 pub use package::{
-    PackageDiff, PackageIdentity, PackageInterfaceChange, PackageInterfaceChangeKind,
-    PackageManifestChange, PackageNativeRustReview, PackageReview, PackageReviewFile,
-    PackageReviewFileKind, PackageReviewSummary, PackageRisk, diff_package_dirs,
-    format_package_diff_human, format_package_diff_json, format_package_review_human,
-    format_package_review_json, review_package_dir,
+    PackageDiff, PackageIdentity, PackageInterfaceChange, PackageInterfaceChangeKind, PackageLock,
+    PackageLockMetadata, PackageLockPackage, PackageManifestChange, PackageNativeRustReview,
+    PackageReview, PackageReviewFile, PackageReviewFileKind, PackageReviewSummary, PackageRisk,
+    diff_package_dirs, format_package_diff_human, format_package_diff_json,
+    format_package_lock_json, format_package_lock_toml, format_package_review_human,
+    format_package_review_json, lock_package_dir, review_package_dir,
 };
 pub use review::{
     ReviewFinding, ReviewFix, ReviewMap, ReviewMapCategorySummary, ReviewMapClassification,
