@@ -266,6 +266,23 @@ pub fn unit_result() -> Result<Unit, BuildError> {
 }
 
 #[test]
+fn rust_lowering_maps_option_type_and_constructors_to_rust() {
+    let source = r#"
+pub fn maybe_value(flag: Bool) -> Option<Int> {
+    if flag {
+        return Some(42)
+    }
+    return None
+}
+"#;
+    let rust = lower_source_to_rust("option.rss", source).expect("source should lower");
+
+    assert!(rust.contains("pub fn maybe_value(flag: bool) -> Option<i64>"));
+    assert!(rust.contains("return Some(42);"));
+    assert!(rust.contains("return None;"));
+}
+
+#[test]
 fn rust_lowering_maps_log_write_to_runtime_output_hook() {
     let source = r#"
 fn main() -> Unit {

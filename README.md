@@ -418,7 +418,7 @@ If a lowered package contains `fn main() -> Unit` or `fn main() -> Result<Unit, 
 
 `rss verify-rust <file.rss> --out-dir <directory>` keeps the generated package used for backend checking, including `rsscript-source-map.json`, so unmappable rustc diagnostics can be inspected against the generated Rust.
 
-The first observable runtime boundaries are `Log.write(message: read String)` and `Assert.equal(left: read String, right: read String)`, which lower to explicit runtime hooks. Simple core operations such as `String.concat(left: read String, right: read String)` keep RSScript `.rssi` signatures for checking and review, but lower directly to Rust standard-library expressions. Built-in boolean literals, numeric operators, and comparison operators lower to the corresponding Rust literals and operators; user-defined operator overloading remains forbidden.
+The first observable runtime boundaries are `Log.write(message: read String)` and `Assert.equal(left: read String, right: read String)`, which lower to explicit runtime hooks. Simple core operations such as `String.concat(left: read String, right: read String)` keep RSScript `.rssi` signatures for checking and review, but lower directly to Rust standard-library expressions. Built-in boolean literals, numeric operators, comparison operators, and `Option<T>` constructors lower to the corresponding Rust literals, operators, and enum constructors; user-defined operator overloading remains forbidden.
 
 Smallest runnable example:
 

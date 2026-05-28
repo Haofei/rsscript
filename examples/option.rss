@@ -1,0 +1,12 @@
+pub fn maybe_value(flag: Bool) -> Option<Int> {
+    if flag {
+        return Some(42)
+    }
+    return None
+}
+
+fn main() -> Unit {
+    let _ = maybe_value(flag: true)
+    Log.write(message: read "option ran")
+    return Unit
+}
