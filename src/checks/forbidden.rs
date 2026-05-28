@@ -4,6 +4,56 @@ use crate::lexer::TokenKind;
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
     check_operator_overload_attempts(analyzer);
+    check_implicit_conversion_attempts(analyzer);
+}
+
+fn check_implicit_conversion_attempts(analyzer: &mut Analyzer<'_>) {
+    for index in 0..analyzer.tokens.len() {
+        if !analyzer.tokens[index].is_ident_text("as") || as_belongs_to_with(analyzer, index) {
+            continue;
+        }
+        analyzer.diagnostics.push(
+            Diagnostic::error(
+                code::IMPLICIT_CONVERSION_ATTEMPT,
+                "cast-style conversions are not part of RSScript.",
+                analyzer.tokens[index].span.clone(),
+                "implicit conversion attempt",
+            )
+            .with_cause("RSScript requires conversions to be explicit named APIs so review tools can see them.")
+            .with_fix(
+                "use_named_conversion",
+                "Use a named conversion such as `Target.from(value: read source)`.",
+                "manual",
+            ),
+        );
+    }
+}
+
+fn as_belongs_to_with(analyzer: &Analyzer<'_>, as_index: usize) -> bool {
+    for token in analyzer.tokens[..as_index].iter().rev() {
+        if token.is_ident_text("with") {
+            return true;
+        }
+        if token.symbol("{")
+            || token.symbol("}")
+            || token.is_ident_text("let")
+            || token.is_ident_text("local")
+            || token.is_ident_text("return")
+            || token.is_ident_text("fn")
+            || token.is_ident_text("class")
+            || token.is_ident_text("struct")
+            || token.is_ident_text("resource")
+            || token.is_ident_text("if")
+            || token.is_ident_text("else")
+            || token.is_ident_text("loop")
+            || token.is_ident_text("while")
+            || token.is_ident_text("break")
+            || token.is_ident_text("continue")
+        {
+            return false;
+        }
+    }
+    false
 }
 
 fn check_operator_overload_attempts(analyzer: &mut Analyzer<'_>) {

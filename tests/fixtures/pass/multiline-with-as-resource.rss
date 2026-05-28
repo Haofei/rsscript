@@ -1,0 +1,13 @@
+mode: managed
+
+resource File {
+    fd: Int
+}
+
+fn read_file(path: read Path) -> Result<fresh Bytes, IOError> {
+    with File.open_read(
+        path: read path
+    ) as file {
+        return File.read_all(file: mut file)
+    }
+}

@@ -31,6 +31,7 @@ pub mod code {
     pub const LOCAL_CAPTURED_BY_MANAGED_CLOSURE: &str = "RS0801";
     pub const TAKE_HANDLE_FIELD: &str = "RS0901";
     pub const OPERATOR_OVERLOAD_ATTEMPT: &str = "RS1001";
+    pub const IMPLICIT_CONVERSION_ATTEMPT: &str = "RS1002";
 
     pub const REVIEW_MODE_CHANGED: &str = "RSR001";
     pub const REVIEW_FUNCTION_REMOVED: &str = "RSR002";
@@ -346,6 +347,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::OPERATOR_OVERLOAD_ATTEMPT,
         title: "operator overload attempt",
         explanation: "The MVP language surface rejects likely user-defined operator overloads to keep review semantics explicit.",
+    },
+    DiagnosticExplanation {
+        code: code::IMPLICIT_CONVERSION_ATTEMPT,
+        title: "implicit conversion attempt",
+        explanation: "RSScript rejects cast-style conversion syntax. Conversions must be visible named APIs such as `Type.from(value: read x)`.",
     },
 ];
 
