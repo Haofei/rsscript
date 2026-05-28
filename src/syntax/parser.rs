@@ -592,21 +592,19 @@ fn parse_let_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize)
     } else {
         LetKind::Managed
     };
-    let name = tokens
-        .get(start + 1)
-        .and_then(ident_name)
-        .unwrap_or("")
-        .to_string();
+    let parsed_name = tokens.get(start + 1).and_then(ident_name);
+    let name = parsed_name.unwrap_or("").to_string();
     let end = statement_end(tokens, start, limit);
-    let value = (start + 2..end)
-        .find(|index| tokens[*index].symbol("="))
-        .and_then(|equals| parse_expr(tokens, equals + 1, end));
+    let equals = (start + 2..end).find(|index| tokens[*index].symbol("="));
+    let value = equals.and_then(|equals| parse_expr(tokens, equals + 1, end));
+    let malformed = parsed_name.is_none() || (equals.is_some() && value.is_none());
 
     (
         Stmt::Let(LetStmt {
             kind,
             name,
             value,
+            malformed,
             span: tokens[start].span.clone(),
         }),
         end,
@@ -1193,23 +1191,25 @@ fn parse_index_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> 
 fn parse_call_args(tokens: &[Token], start: usize, end: usize) -> Vec<CallArg> {
     split_top_level(tokens, start, end, ",")
         .into_iter()
-        .filter_map(|(start, end)| {
+        .map(|(start, end)| {
             if let Some(name) = tokens.get(start).and_then(ident_name)
                 && tokens.get(start + 1).is_some_and(|token| token.symbol(":"))
             {
-                let value = parse_expr(tokens, start + 2, end)?;
-                Some(CallArg {
+                let value = parse_expr(tokens, start + 2, end)
+                    .unwrap_or_else(|| Expr::Unknown(tokens[start].span.clone()));
+                CallArg {
                     name: Some(name.to_string()),
                     value,
                     span: tokens[start].span.clone(),
-                })
+                }
             } else {
-                let value = parse_expr(tokens, start, end)?;
-                Some(CallArg {
+                let value = parse_expr(tokens, start, end)
+                    .unwrap_or_else(|| Expr::Unknown(tokens[start].span.clone()));
+                CallArg {
                     name: None,
                     value,
                     span: tokens[start].span.clone(),
-                })
+                }
             }
         })
         .collect()

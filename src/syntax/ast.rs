@@ -205,6 +205,7 @@ pub struct LetStmt {
     pub kind: LetKind,
     pub name: String,
     pub value: Option<Expr>,
+    pub malformed: bool,
     pub span: Span,
 }
 

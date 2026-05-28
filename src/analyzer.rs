@@ -285,6 +285,13 @@ impl Analyzer<'_> {
     fn check_unsupported_syntax_stmt(&mut self, statement: &Stmt) {
         match statement {
             Stmt::Let(stmt) => {
+                if stmt.malformed {
+                    self.unsupported_syntax(
+                        stmt.span.clone(),
+                        "malformed statement",
+                        "`let` and `local` bindings need a binding name, and an `=` must be followed by an expression.",
+                    );
+                }
                 if let Some(value) = &stmt.value {
                     self.check_unsupported_syntax_expr(value);
                 }

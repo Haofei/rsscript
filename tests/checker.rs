@@ -2246,6 +2246,30 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_reports_malformed_bindings_and_arguments_as_unsupported() {
+    let source = r#"
+fn main() -> Unit {
+    let missing =
+    print(value:)
+}
+"#;
+    let diagnostics = analyze_source("malformed-body.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0015"
+                && diagnostic.label == "malformed statement")
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0015"
+                && diagnostic.label == "unsupported expression")
+    );
+}
+
+#[test]
 fn review_json_uses_protocol_shape() {
     let old_source = r#"
 

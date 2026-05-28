@@ -1,0 +1,5 @@
+// expect: RS0015
+fn main() -> Unit {
+    let missing =
+    return Unit
+}
