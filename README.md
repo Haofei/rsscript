@@ -382,7 +382,7 @@ source-span hooks for manage and ResourcePool borrow lowering
 central runtime unwrap boundary for generated resource operations
 source map JSON for generated Rust packages
 rustc diagnostic remapping through source maps
-zero-argument `fn main() -> Unit` package harnesses for runnable Rust output
+zero-argument `fn main() -> Unit` and `fn main() -> Result<Unit, E>` package harnesses for runnable Rust output
 core `.rssi` interface signatures
 HIR builtin signatures parsed from `.rssi` interface sources instead of a hand-written Rust table
 CI gates for formatting, linting, tests, and generated Rust fixtures
@@ -414,7 +414,7 @@ rss verify-rust [--json] <file.rss> --out-dir <directory>
 
 The checker prototype also keeps a small `core/prototype` interface bundle for real-scenario fixtures such as CSV, DB, cache, and config examples. Those signatures are still `.rssi` sources, not a second Rust-side builtin table.
 
-If a lowered package contains `fn main() -> Unit`, `rss lower --rust --out-dir` also emits a Rust `src/main.rs` harness. `rss run <file.rss>` uses the same lowering path, writes a temporary Rust package, and delegates execution to `cargo run`. Use `rss run <file.rss> --out-dir <directory>` to keep the generated Rust package for inspection.
+If a lowered package contains `fn main() -> Unit` or `fn main() -> Result<Unit, E>`, `rss lower --rust --out-dir` also emits a Rust `src/main.rs` harness. `rss run <file.rss>` uses the same lowering path, writes a temporary Rust package, and delegates execution to `cargo run`. Use `rss run <file.rss> --out-dir <directory>` to keep the generated Rust package for inspection.
 
 `rss verify-rust <file.rss> --out-dir <directory>` keeps the generated package used for backend checking, including `rsscript-source-map.json`, so unmappable rustc diagnostics can be inspected against the generated Rust.
 
@@ -431,6 +431,12 @@ fn main() -> Unit {
     Log.write(message: read "hello RSScript")
     return Unit
 }
+```
+
+Result-returning entry points also run:
+
+```sh
+cargo run -- run examples/hello_result.rss
 ```
 
 Local verification:

@@ -587,6 +587,37 @@ fn main() -> Unit {
 }
 
 #[test]
+fn rust_lowering_can_emit_result_main_harness() {
+    let source = r#"
+struct MainError
+
+fn main() -> Result<Unit, MainError> {
+    return Ok(Unit)
+}
+"#;
+    let package = lower_source_to_rust_package(
+        "main.rss",
+        source,
+        "Result Runnable Example.rss",
+        "/workspace/rsscript/runtime",
+    )
+    .expect("source should lower into package");
+    let main_rs = package
+        .main_rs
+        .as_ref()
+        .expect("zero-argument Result<Unit, E> main should emit a Rust binary harness");
+
+    assert!(
+        package
+            .lib_rs
+            .contains("pub fn main() -> Result<(), MainError>")
+    );
+    assert!(main_rs.contains(
+        "result_runnable_example_rss::main().expect(\"RSScript main returned an error\");"
+    ));
+}
+
+#[test]
 fn rust_lowering_is_gated_by_diagnostics() {
     let source = r#"
 features: local

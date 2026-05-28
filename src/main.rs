@@ -335,7 +335,9 @@ fn run_generated_rust(args: &[String]) -> ExitCode {
         }
     };
     if package.main_rs.is_none() {
-        eprintln!("rss run requires a zero-argument `fn main() -> Unit`.");
+        eprintln!(
+            "rss run requires a zero-argument `fn main() -> Unit` or `fn main() -> Result<Unit, E>`."
+        );
         return ExitCode::from(1);
     }
 

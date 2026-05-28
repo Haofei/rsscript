@@ -1,0 +1,6 @@
+struct MainError
+
+fn main() -> Result<Unit, MainError> {
+    Log.write(message: read "hello RSScript result")
+    return Ok(Unit)
+}
