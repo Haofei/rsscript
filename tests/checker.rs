@@ -203,6 +203,19 @@ pub fn make_point(x: Int, y: Int) -> fresh Point {
 }
 
 #[test]
+fn rust_lowering_matches_golden_fixture() {
+    let source = read_fixture(Path::new("tests/golden/lowering/simple.rss"));
+    let expected_rust = read_fixture(Path::new("tests/golden/lowering/simple.rs"));
+    let expected_source_map =
+        read_fixture(Path::new("tests/golden/lowering/simple.source-map.txt"));
+    let lowered =
+        lower_source_to_rust_with_map("simple.rss", &source).expect("source should lower");
+
+    assert_eq!(lowered.rust_source, expected_rust);
+    assert_eq!(source_map_summary(&lowered.source_map), expected_source_map);
+}
+
+#[test]
 fn rust_lowering_emits_machine_readable_source_map() {
     let source = r#"
 mode: uses-local
@@ -1177,4 +1190,22 @@ fn expected_codes(source: &str) -> Vec<String> {
         panic!("fail fixture must start with `// expect:`");
     };
     codes.split_whitespace().map(str::to_string).collect()
+}
+
+fn source_map_summary(entries: &[rsscript::RustSourceMapEntry]) -> String {
+    entries
+        .iter()
+        .map(|entry| {
+            format!(
+                "{} {}:{}:{} -> {}:{}:{}\n",
+                entry.kind,
+                entry.source.file,
+                entry.source.line,
+                entry.source.column,
+                entry.generated.file,
+                entry.generated.line,
+                entry.generated.column
+            )
+        })
+        .collect()
 }

@@ -365,6 +365,7 @@ source map JSON for generated Rust packages
 rustc diagnostic remapping through source maps
 core `.rssi` interface signatures
 CI gates for formatting, linting, tests, and generated Rust fixtures
+golden tests for Rust lowering and source-map shape
 ```
 
 The first milestone is not a production runtime.
