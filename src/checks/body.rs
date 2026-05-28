@@ -252,6 +252,9 @@ fn check_moved_uses_in_stmt(
     statement: &Stmt,
     state: &BodyState,
 ) {
+    let state = local_analysis
+        .flow_entry_state(stmt_span(statement))
+        .unwrap_or(state);
     let fallback_uses;
     let uses = if let Some(uses) = local_analysis.statement_ident_uses(stmt_span(statement)) {
         uses

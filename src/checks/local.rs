@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::diagnostic::Span;
 use crate::hir::{
@@ -8,7 +8,7 @@ use crate::hir::{
 
 use super::body::Flow;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct BodyState {
     pub(crate) locals: HashSet<String>,
     pub(crate) clean_locals: HashSet<String>,
@@ -25,6 +25,7 @@ pub(crate) struct LocalAnalysis {
     return_proofs_by_span: HashMap<Span, HirReturnProof>,
     closure_uses_by_span: HashMap<Span, Vec<(String, Span)>>,
     flow_steps: Vec<LocalFlowStep>,
+    flow_entry_states_by_span: HashMap<Span, BodyState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,7 +44,16 @@ struct LocalFlowStep {
     span: Span,
     kind: LocalFlowStepKind,
     uses: Vec<(String, Span)>,
+    binding: Option<LocalFlowBinding>,
+    events: Vec<HirEffectEvent>,
     successors: Vec<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocalFlowBinding {
+    name: String,
+    kind: HirBindingKind,
+    type_name: Option<String>,
 }
 
 impl LocalAnalysis {
@@ -73,6 +83,8 @@ impl LocalAnalysis {
             .as_ref()
             .and_then(|body| body.block.as_ref())
             .map_or_else(Vec::new, collect_local_flow_steps);
+        let flow_entry_states_by_span =
+            collect_flow_entry_states(&flow_steps, initial_state_from_body(body.as_ref()));
 
         Self {
             body,
@@ -82,15 +94,12 @@ impl LocalAnalysis {
             return_proofs_by_span,
             closure_uses_by_span,
             flow_steps,
+            flow_entry_states_by_span,
         }
     }
 
     pub(crate) fn initial_state(&self) -> BodyState {
-        let mut state = BodyState::default();
-        if let Some(body) = &self.body {
-            state.seed_params(&body.bindings);
-        }
-        state
+        initial_state_from_body(self.body.as_ref())
     }
 
     pub(crate) fn apply_move_events(&self, span: &Span, state: &mut BodyState) {
@@ -149,9 +158,21 @@ impl LocalAnalysis {
             .map(|step| step.uses.as_slice())
     }
 
+    pub(crate) fn flow_entry_state(&self, span: &Span) -> Option<&BodyState> {
+        self.flow_entry_states_by_span.get(span)
+    }
+
     fn effect_events(&self, span: &Span) -> &[HirEffectEvent] {
         self.events_by_span.get(span).map_or(&[], Vec::as_slice)
     }
+}
+
+fn initial_state_from_body(body: Option<&HirFunctionBody>) -> BodyState {
+    let mut state = BodyState::default();
+    if let Some(body) = body {
+        state.seed_params(&body.bindings);
+    }
+    state
 }
 
 impl LocalFlowStepKind {
@@ -609,6 +630,66 @@ fn collect_hir_stmt_idents(statement: &HirStmt, uses: &mut Vec<(String, Span)>) 
     }
 }
 
+fn collect_hir_stmt_effect_events(statement: &HirStmt, events: &mut Vec<HirEffectEvent>) {
+    match statement {
+        HirStmt::Let {
+            value: Some(value), ..
+        }
+        | HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => collect_hir_expr_effect_events(value, events),
+        HirStmt::With { resource, .. } => collect_hir_expr_effect_events(resource, events),
+        HirStmt::If { condition, .. } => collect_hir_expr_effect_events(condition, events),
+        HirStmt::Loop {
+            condition: Some(condition),
+            ..
+        } => collect_hir_expr_effect_events(condition, events),
+        HirStmt::Let { value: None, .. }
+        | HirStmt::Return { value: None, .. }
+        | HirStmt::Loop {
+            condition: None, ..
+        }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn collect_hir_expr_effect_events(expr: &HirExpr, events: &mut Vec<HirEffectEvent>) {
+    match expr {
+        HirExpr::Call {
+            args,
+            events: expr_events,
+            ..
+        } => {
+            events.extend(expr_events.iter().cloned());
+            for arg in args {
+                collect_hir_expr_effect_events(&arg.value, events);
+            }
+        }
+        HirExpr::Effect {
+            value,
+            events: expr_events,
+            ..
+        }
+        | HirExpr::Manage {
+            value,
+            events: expr_events,
+            ..
+        } => {
+            events.extend(expr_events.iter().cloned());
+            collect_hir_expr_effect_events(value, events);
+        }
+        HirExpr::Field { base, .. } => collect_hir_expr_effect_events(base, events),
+        HirExpr::Closure { .. }
+        | HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
 fn collect_hir_expr_idents(expr: &HirExpr, uses: &mut Vec<(String, Span)>) {
     match expr {
         HirExpr::Ident { name, span, .. } => uses.push((name.clone(), span.clone())),
@@ -803,12 +884,16 @@ fn collect_scoped_body_flow(
 fn push_local_flow_step(steps: &mut Vec<LocalFlowStep>, statement: &HirStmt) -> usize {
     let mut uses = Vec::new();
     collect_hir_stmt_idents(statement, &mut uses);
+    let mut events = Vec::new();
+    collect_hir_stmt_effect_events(statement, &mut events);
     let id = steps.len();
     steps.push(LocalFlowStep {
         id,
         span: hir_stmt_span(statement).clone(),
         kind: local_flow_step_kind(statement),
         uses,
+        binding: local_flow_step_binding(statement),
+        events,
         successors: Vec::new(),
     });
     id
@@ -817,6 +902,115 @@ fn push_local_flow_step(steps: &mut Vec<LocalFlowStep>, statement: &HirStmt) -> 
 fn add_successor(steps: &mut [LocalFlowStep], from: usize, to: usize) {
     if !steps[from].successors.contains(&to) {
         steps[from].successors.push(to);
+    }
+}
+
+fn collect_flow_entry_states(
+    steps: &[LocalFlowStep],
+    initial_state: BodyState,
+) -> HashMap<Span, BodyState> {
+    if steps.is_empty() {
+        return HashMap::new();
+    }
+
+    let mut entry_states = vec![None; steps.len()];
+    entry_states[0] = Some(initial_state);
+    let mut worklist = VecDeque::from([0]);
+
+    while let Some(step_id) = worklist.pop_front() {
+        let Some(entry_state) = entry_states[step_id].clone() else {
+            continue;
+        };
+        let exit_state = transfer_flow_step(&steps[step_id], entry_state);
+        for successor in &steps[step_id].successors {
+            let changed = merge_flow_entry_state(&mut entry_states[*successor], &exit_state);
+            if changed {
+                worklist.push_back(*successor);
+            }
+        }
+    }
+
+    steps
+        .iter()
+        .zip(entry_states)
+        .filter_map(|(step, state)| state.map(|state| (step.span.clone(), state)))
+        .collect()
+}
+
+fn transfer_flow_step(step: &LocalFlowStep, mut state: BodyState) -> BodyState {
+    if let Some(binding) = &step.binding {
+        match binding.kind {
+            HirBindingKind::ManagedLet => state.bind_managed(binding.name.clone()),
+            HirBindingKind::LocalLet => state.bind_local(binding.name.clone()),
+            HirBindingKind::Param => {}
+        }
+        if let Some(type_name) = &binding.type_name {
+            state.record_type(binding.name.clone(), type_name.clone());
+        }
+    }
+
+    state.apply_retention_events(&step.events);
+    state.apply_move_events(&step.events);
+    state
+}
+
+fn merge_flow_entry_state(target: &mut Option<BodyState>, incoming: &BodyState) -> bool {
+    let Some(existing) = target else {
+        *target = Some(incoming.clone());
+        return true;
+    };
+
+    let merged = merge_flow_states(existing, incoming);
+    if merged == *existing {
+        false
+    } else {
+        *existing = merged;
+        true
+    }
+}
+
+fn merge_flow_states(left: &BodyState, right: &BodyState) -> BodyState {
+    let locals = left
+        .locals
+        .intersection(&right.locals)
+        .cloned()
+        .collect::<HashSet<_>>();
+    let managed = left
+        .managed
+        .intersection(&right.managed)
+        .cloned()
+        .collect::<HashSet<_>>();
+    let value_types = left
+        .value_types
+        .iter()
+        .filter_map(|(name, left_type)| {
+            right
+                .value_types
+                .get(name)
+                .filter(|right_type| *right_type == left_type)
+                .map(|_| (name.clone(), left_type.clone()))
+        })
+        .collect::<HashMap<_, _>>();
+
+    let mut moved = left.moved.clone();
+    for (name, span) in &right.moved {
+        moved.entry(name.clone()).or_insert_with(|| span.clone());
+    }
+    moved.retain(|name, _| locals.contains(name));
+
+    let clean_locals = left
+        .clean_locals
+        .intersection(&right.clean_locals)
+        .filter(|name| locals.contains(*name))
+        .cloned()
+        .collect();
+
+    BodyState {
+        locals,
+        clean_locals,
+        managed,
+        moved,
+        value_types,
     }
 }
 
@@ -830,6 +1024,29 @@ fn local_flow_step_kind(statement: &HirStmt) -> LocalFlowStepKind {
         HirStmt::Let { .. } | HirStmt::With { .. } | HirStmt::Expr(_) | HirStmt::Unknown(_) => {
             LocalFlowStepKind::Statement
         }
+    }
+}
+
+fn local_flow_step_binding(statement: &HirStmt) -> Option<LocalFlowBinding> {
+    match statement {
+        HirStmt::Let {
+            kind,
+            name,
+            type_name,
+            ..
+        } => Some(LocalFlowBinding {
+            name: name.clone(),
+            kind: *kind,
+            type_name: type_name.clone(),
+        }),
+        HirStmt::Return { .. }
+        | HirStmt::With { .. }
+        | HirStmt::If { .. }
+        | HirStmt::Loop { .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Expr(_)
+        | HirStmt::Unknown(_) => None,
     }
 }
 
@@ -1394,5 +1611,143 @@ mod tests {
         assert_eq!(steps[1].successors, vec![3]);
         assert!(steps[2].successors.is_empty());
         assert!(steps[3].successors.is_empty());
+    }
+
+    #[test]
+    fn local_flow_entry_states_merge_clean_local_retention() {
+        let retain_event = HirEffectEvent {
+            function_name: "run".to_string(),
+            kind: HirEffectEventKind::Retain {
+                callee: "Cache.store".to_string(),
+                param: "value".to_string(),
+            },
+            binding_name: "image".to_string(),
+            span: span(3),
+            value_span: span(3),
+        };
+        let body = HirFunctionBody {
+            function_name: "run".to_string(),
+            block: Some(HirBlock {
+                statements: vec![
+                    HirStmt::Let {
+                        kind: HirBindingKind::LocalLet,
+                        name: "image".to_string(),
+                        value: None,
+                        type_name: Some("Image".to_string()),
+                        span: span(1),
+                    },
+                    HirStmt::If {
+                        condition: HirExpr::Ident {
+                            name: "should_store".to_string(),
+                            type_name: Some("Bool".to_string()),
+                            span: span(2),
+                        },
+                        then_body: HirBlock {
+                            statements: vec![HirStmt::Expr(HirExpr::Call {
+                                callee: Callee::Name("Cache.store".to_string()),
+                                args: Vec::new(),
+                                resolution: CallResolution::Unknown,
+                                events: vec![retain_event],
+                                type_name: None,
+                                span: span(3),
+                            })],
+                            span: span(3),
+                        },
+                        else_body: None,
+                        span: span(2),
+                    },
+                    HirStmt::Return {
+                        value: Some(HirExpr::Ident {
+                            name: "image".to_string(),
+                            type_name: Some("Image".to_string()),
+                            span: span(4),
+                        }),
+                        proof: HirReturnProof::Ident {
+                            name: "image".to_string(),
+                        },
+                        span: span(4),
+                    },
+                ],
+                span: span(1),
+            }),
+            ..HirFunctionBody::default()
+        };
+        let local_analysis = LocalAnalysis::new(Some(&body));
+
+        let return_state = local_analysis
+            .flow_entry_state(&span(4))
+            .expect("return should be reachable");
+
+        assert!(return_state.is_local("image"));
+        assert!(!return_state.is_clean_local("image"));
+    }
+
+    #[test]
+    fn local_flow_entry_states_carry_loop_break_moves() {
+        let manage_event = HirEffectEvent {
+            function_name: "run".to_string(),
+            kind: HirEffectEventKind::Manage,
+            binding_name: "image".to_string(),
+            span: span(3),
+            value_span: span(3),
+        };
+        let body = HirFunctionBody {
+            function_name: "run".to_string(),
+            block: Some(HirBlock {
+                statements: vec![
+                    HirStmt::Let {
+                        kind: HirBindingKind::LocalLet,
+                        name: "image".to_string(),
+                        value: None,
+                        type_name: Some("Image".to_string()),
+                        span: span(1),
+                    },
+                    HirStmt::Loop {
+                        condition: None,
+                        body: HirBlock {
+                            statements: vec![
+                                HirStmt::Expr(HirExpr::Manage {
+                                    value: Box::new(HirExpr::Ident {
+                                        name: "image".to_string(),
+                                        type_name: Some("Image".to_string()),
+                                        span: span(3),
+                                    }),
+                                    events: vec![manage_event],
+                                    type_name: Some("Image".to_string()),
+                                    span: span(3),
+                                }),
+                                HirStmt::Break(span(4)),
+                            ],
+                            span: span(3),
+                        },
+                        span: span(2),
+                    },
+                    HirStmt::Return {
+                        value: Some(HirExpr::Ident {
+                            name: "image".to_string(),
+                            type_name: Some("Image".to_string()),
+                            span: span(5),
+                        }),
+                        proof: HirReturnProof::Ident {
+                            name: "image".to_string(),
+                        },
+                        span: span(5),
+                    },
+                ],
+                span: span(1),
+            }),
+            ..HirFunctionBody::default()
+        };
+        let local_analysis = LocalAnalysis::new(Some(&body));
+
+        let return_state = local_analysis
+            .flow_entry_state(&span(5))
+            .expect("return should be reachable");
+
+        assert_eq!(
+            return_state.move_span("image").map(|span| span.line),
+            Some(3)
+        );
+        assert!(!return_state.is_clean_local("image"));
     }
 }
