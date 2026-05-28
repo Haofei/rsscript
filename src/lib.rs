@@ -1,6 +1,7 @@
 mod analyzer;
 mod checks;
 mod diagnostic;
+mod formatter;
 mod hir;
 mod interfaces;
 mod lexer;
@@ -18,6 +19,7 @@ pub use diagnostic::{
     Diagnostic, DiagnosticExplanation, Severity, explain_diagnostic_code,
     format_diagnostic_explanation, format_diagnostics_human, format_diagnostics_json,
 };
+pub use formatter::{format_program, format_source};
 pub use lint::lint_source;
 pub use package::{
     PackageArchiveFile, PackageCheck, PackageCheckLock, PackageDependencyKind, PackageDiff,

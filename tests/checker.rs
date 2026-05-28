@@ -1195,6 +1195,48 @@ fn rss_run_json_maps_runtime_conflict_to_diagnostics_json() {
 }
 
 #[test]
+fn rss_fmt_outputs_canonical_source() {
+    let temp_dir = unique_temp_dir("rsscript-fmt-cli");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    let source_path = temp_dir.join("messy.rss");
+    fs::write(
+        &source_path,
+        r#"features:   local
+fn   main( )->Unit{
+local value=String.concat(left:read "hello",right:read " fmt")
+Log.write(message:read value)
+return Unit
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("fmt")
+        .arg(&source_path)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss fmt should execute");
+    let _ = fs::remove_dir_all(&temp_dir);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert_eq!(
+        stdout,
+        r#"features: local
+
+fn main() -> Unit {
+    local value = String.concat(left: read "hello", right: read " fmt")
+    Log.write(message: read value)
+    return Unit
+}
+"#
+    );
+}
+
+#[test]
 fn rss_run_accepts_package_directory() {
     let temp_dir = unique_temp_dir("rsscript-run-package-cli");
     write_named_package_fixture(&temp_dir, "rss-run-package", "0.1.0", "", "");

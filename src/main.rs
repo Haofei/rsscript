@@ -15,7 +15,7 @@ use rsscript::{
     format_package_publish_json, format_package_review_human, format_package_review_json,
     format_package_tree_human, format_package_tree_json, format_package_vendor_human,
     format_package_vendor_json, format_review_human, format_review_json, format_review_map_human,
-    format_review_map_json, lint_source, lock_package_dir, lower_source_to_rust,
+    format_review_map_json, format_source, lint_source, lock_package_dir, lower_source_to_rust,
     lower_source_to_rust_package, lower_sources_to_rust_package_with_options,
     package_lowering_input, package_metadata, package_tree, parse_runtime_diagnostics,
     parse_source_map_json, publish_package_dry_run_with_registry,
@@ -231,7 +231,7 @@ fn run_fmt(args: &[String]) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    print!("{source}");
+    print!("{}", format_source(path, &source));
     ExitCode::SUCCESS
 }
 
