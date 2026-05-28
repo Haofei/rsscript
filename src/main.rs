@@ -387,7 +387,7 @@ fn run_generated_rust(args: &[String]) -> ExitCode {
     ) {
         Ok(package) => package,
         Err(diagnostics) => {
-            print_diagnostics(false, &diagnostics);
+            print_diagnostics(options.json, &diagnostics);
             return ExitCode::from(1);
         }
     };
@@ -441,7 +441,7 @@ fn run_generated_rust(args: &[String]) -> ExitCode {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let diagnostics = parse_runtime_diagnostics(&stderr);
     if !diagnostics.is_empty() {
-        print_diagnostics(false, &diagnostics);
+        print_diagnostics(options.json, &diagnostics);
         return ExitCode::from(1);
     }
     if !stderr.trim().is_empty() {
@@ -563,6 +563,7 @@ struct LowerOptions<'a> {
 }
 
 struct RunOptions<'a> {
+    json: bool,
     path: Option<&'a str>,
     out_dir: Option<&'a str>,
 }
@@ -639,12 +640,15 @@ fn parse_lower_args(args: &[String]) -> LowerOptions<'_> {
 }
 
 fn parse_run_args(args: &[String]) -> RunOptions<'_> {
+    let mut json = false;
     let mut path = None;
     let mut out_dir = None;
     let mut index = 0;
 
     while let Some(arg) = args.get(index) {
-        if arg == "--out-dir" {
+        if arg == "--json" {
+            json = true;
+        } else if arg == "--out-dir" {
             index += 1;
             out_dir = args.get(index).map(String::as_str);
         } else if path.is_none() {
@@ -653,7 +657,11 @@ fn parse_run_args(args: &[String]) -> RunOptions<'_> {
         index += 1;
     }
 
-    RunOptions { path, out_dir }
+    RunOptions {
+        json,
+        path,
+        out_dir,
+    }
 }
 
 fn parse_verify_args(args: &[String]) -> VerifyOptions<'_> {
@@ -929,8 +937,8 @@ fn print_usage() {
     eprintln!("  rsscript fmt <file.rss>");
     eprintln!("  rsscript lower --rust <file.rss>");
     eprintln!("  rsscript lower --rust <file.rss> --out-dir <directory>");
-    eprintln!("  rsscript run <file.rss>");
-    eprintln!("  rsscript run <file.rss> --out-dir <directory>");
+    eprintln!("  rsscript run [--json] <file.rss>");
+    eprintln!("  rsscript run [--json] <file.rss> --out-dir <directory>");
     eprintln!("  rsscript remap-rustc [--json] <rsscript-source-map.json> <rustc-json-lines>");
     eprintln!("  rsscript verify-rust [--json] <file.rss>");
     eprintln!("  rsscript verify-rust [--json] <file.rss> --out-dir <directory>");

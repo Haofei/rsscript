@@ -406,8 +406,8 @@ rss review [--json] --diff <old.rss> <new.rss>
 rss review [--json] --map <file-or-directory>
 rss lower --rust <file.rss>
 rss lower --rust <file.rss> --out-dir <directory>
-rss run <file.rss>
-rss run <file.rss> --out-dir <directory>
+rss run [--json] <file.rss>
+rss run [--json] <file.rss> --out-dir <directory>
 rss remap-rustc [--json] <rsscript-source-map.json> <rustc-json-lines>
 rss verify-rust [--json] <file.rss>
 rss verify-rust [--json] <file.rss> --out-dir <directory>
@@ -419,7 +419,7 @@ rss verify-rust [--json] <file.rss> --out-dir <directory>
 
 `rss review --map` checks inputs before emitting a map. Files with frontend errors produce diagnostics instead of potentially misleading review classifications.
 
-If a lowered package contains `fn main() -> Unit` or `fn main() -> Result<Unit, E>`, `rss lower --rust --out-dir` also emits a Rust `src/main.rs` harness. `rss run <file.rss>` uses the same lowering path, writes a temporary Rust package, and delegates execution to `cargo run`. Use `rss run <file.rss> --out-dir <directory>` to keep the generated Rust package for inspection.
+If a lowered package contains `fn main() -> Unit` or `fn main() -> Result<Unit, E>`, `rss lower --rust --out-dir` also emits a Rust `src/main.rs` harness. `rss run <file.rss>` uses the same lowering path, writes a temporary Rust package, and delegates execution to `cargo run`. Use `rss run <file.rss> --out-dir <directory>` to keep the generated Rust package for inspection. Frontend and RSScript runtime diagnostics from `rss run` support `--json`; successful program output remains the program's own stdout.
 
 `rss verify-rust <file.rss> --out-dir <directory>` keeps the generated package used for backend checking, including `rsscript-source-map.json`, so unmappable rustc diagnostics can be inspected against the generated Rust.
 
