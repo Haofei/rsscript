@@ -10,6 +10,7 @@ pub enum FileMode {
 pub struct Program {
     pub mode: Option<FileMode>,
     pub mode_spans: Vec<Span>,
+    pub profile_spans: Vec<Span>,
     pub items: Vec<Item>,
 }
 

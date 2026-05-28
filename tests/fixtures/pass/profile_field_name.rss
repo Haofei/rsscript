@@ -1,0 +1,9 @@
+mode: managed
+
+struct Settings {
+    profile: String
+}
+
+fn load_settings() -> Settings {
+    return Settings(profile: "review")
+}

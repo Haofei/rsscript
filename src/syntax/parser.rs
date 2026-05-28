@@ -23,12 +23,16 @@ impl Parser<'_> {
     fn parse_program(&mut self) -> Program {
         let mut mode = None;
         let mut mode_spans = Vec::new();
+        let mut profile_spans = Vec::new();
         let mut items = Vec::new();
 
         while !self.is_eof() {
             if self.at_ident("mode") && self.peek_symbol(1, ":") {
                 mode_spans.push(self.tokens[self.index].span.clone());
                 mode = self.parse_mode();
+            } else if self.at_ident("profile") && self.peek_symbol(1, ":") {
+                profile_spans.push(self.tokens[self.index].span.clone());
+                self.index += 1;
             } else if self.at_ident("class") || self.at_ident("struct") || self.at_ident("resource")
             {
                 if let Some(item) = self.parse_type_decl() {
@@ -46,6 +50,7 @@ impl Parser<'_> {
         Program {
             mode,
             mode_spans,
+            profile_spans,
             items,
         }
     }

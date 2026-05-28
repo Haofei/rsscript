@@ -32,6 +32,7 @@ impl Analyzer<'_> {
     fn run(&mut self) {
         self.check_file_mode_present();
         self.check_single_file_mode();
+        self.check_removed_profile_declarations();
         self.check_duplicate_declarations();
         self.check_signature_explicitness();
         self.check_resource_fields();
@@ -75,6 +76,25 @@ impl Analyzer<'_> {
                 .with_fix(
                     "remove_duplicate_mode",
                     "Remove the extra `mode:` declaration.",
+                    "manual",
+                ),
+            );
+        }
+    }
+
+    fn check_removed_profile_declarations(&mut self) {
+        for span in &self.syntax_program.profile_spans {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::REMOVED_PROFILE_DECLARATION,
+                    "`profile:` declarations were removed in RSScript v0.4.1.",
+                    span.clone(),
+                    "removed profile declaration",
+                )
+                .with_cause("v0.4.1 has one canonical surface style and only `mode:` as the top-level semantic file declaration.")
+                .with_fix(
+                    "remove_profile",
+                    "Remove `profile:` and keep exactly one `mode: managed` or `mode: uses-local` declaration.",
                     "manual",
                 ),
             );

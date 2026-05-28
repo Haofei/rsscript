@@ -10,6 +10,7 @@ pub mod code {
     pub const UNKNOWN_RETAINED_PARAMETER: &str = "RS0007";
     pub const MISSING_PARAMETER_EFFECT: &str = "RS0008";
     pub const INVALID_PURE_EFFECT: &str = "RS0009";
+    pub const REMOVED_PROFILE_DECLARATION: &str = "RS0010";
     pub const FILE_MODE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
@@ -242,6 +243,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::INVALID_PURE_EFFECT,
         title: "invalid pure effect",
         explanation: "`effects(pure)` is a guarantee that the function does not mutate reachable managed state and does not retain parameters.",
+    },
+    DiagnosticExplanation {
+        code: code::REMOVED_PROFILE_DECLARATION,
+        title: "removed profile declaration",
+        explanation: "RSScript v0.4.1 removed `profile:` declarations. The only top-level semantic file declaration is `mode:`.",
     },
     DiagnosticExplanation {
         code: code::FILE_MODE_VIOLATION,
