@@ -13,11 +13,12 @@ use rsscript::{
     format_package_lock_diff_json, format_package_lock_json, format_package_lock_toml,
     format_package_publish_human, format_package_publish_json, format_package_review_human,
     format_package_review_json, format_package_tree_human, format_package_tree_json,
-    format_review_human, format_review_json, format_review_map_human, format_review_map_json,
-    lint_source, lock_package_dir, lower_source_to_rust, lower_source_to_rust_package,
-    package_tree, parse_runtime_diagnostics, parse_source_map_json, publish_package_dry_run,
+    format_package_vendor_human, format_package_vendor_json, format_review_human,
+    format_review_json, format_review_map_human, format_review_map_json, lint_source,
+    lock_package_dir, lower_source_to_rust, lower_source_to_rust_package, package_tree,
+    parse_runtime_diagnostics, parse_source_map_json, publish_package_dry_run,
     remap_rustc_diagnostic_json_lines, review_map_sources, review_package_dir, review_sources,
-    write_generated_rust_package,
+    vendor_package_dir, write_generated_rust_package,
 };
 
 fn main() -> ExitCode {
@@ -60,6 +61,11 @@ fn run_package(args: &[String]) -> ExitCode {
             dry_run,
             path,
         } => run_package_publish(json, dry_run, path),
+        PackageCommand::Vendor {
+            json,
+            dry_run,
+            path,
+        } => run_package_vendor(json, dry_run, path),
         PackageCommand::Diff {
             json,
             old_path,
@@ -828,6 +834,11 @@ enum PackageCommand<'a> {
         dry_run: bool,
         path: &'a str,
     },
+    Vendor {
+        json: bool,
+        dry_run: bool,
+        path: &'a str,
+    },
     Diff {
         json: bool,
         old_path: &'a str,
@@ -864,7 +875,7 @@ fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
             index += 1;
         } else if matches!(
             arg.as_str(),
-            "check" | "review" | "update" | "lock" | "tree" | "publish" | "diff"
+            "check" | "review" | "update" | "lock" | "tree" | "publish" | "vendor" | "diff"
         ) {
             words.push(arg.as_str());
         } else {
@@ -893,6 +904,16 @@ fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
             path: ".",
         },
         (["publish"], [path], None, None) => PackageCommand::Publish {
+            json,
+            dry_run,
+            path,
+        },
+        (["vendor"], [], None, None) => PackageCommand::Vendor {
+            json,
+            dry_run,
+            path: ".",
+        },
+        (["vendor"], [path], None, None) => PackageCommand::Vendor {
             json,
             dry_run,
             path,
@@ -1139,6 +1160,28 @@ fn run_package_publish(json: bool, dry_run: bool, path: &str) -> ExitCode {
     }
 }
 
+fn run_package_vendor(json: bool, dry_run: bool, path: &str) -> ExitCode {
+    let vendor = match vendor_package_dir(Path::new(path), dry_run) {
+        Ok(vendor) => vendor,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+
+    if json {
+        println!("{}", format_package_vendor_json(&vendor));
+    } else {
+        print!("{}", format_package_vendor_human(&vendor));
+    }
+
+    if vendor.ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
 fn run_package_diff(json: bool, old_path: &str, new_path: &str) -> ExitCode {
     let diff = match diff_package_dirs(Path::new(old_path), Path::new(new_path)) {
         Ok(diff) => diff,
@@ -1240,5 +1283,6 @@ fn print_usage() {
     eprintln!("  rsscript package lock [--json] <package-directory>");
     eprintln!("  rsscript package tree [--json] [package-directory]");
     eprintln!("  rsscript package publish --dry-run [--json] [package-directory]");
+    eprintln!("  rsscript package vendor [--dry-run] [--json] [package-directory]");
     eprintln!("  rsscript package diff [--json] <old-package-directory> <new-package-directory>");
 }

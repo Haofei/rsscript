@@ -76,6 +76,37 @@ pub struct PackagePublishCheck {
     pub detail: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageVendorReport {
+    pub package: PackageIdentity,
+    pub package_dir: String,
+    pub vendor_dir: String,
+    pub dry_run: bool,
+    pub ok: bool,
+    pub risk: PackageRisk,
+    pub entries: Vec<PackageVendorEntry>,
+    pub unresolved: Vec<PackageVendorUnresolved>,
+    pub reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageVendorEntry {
+    pub name: String,
+    pub version: String,
+    pub source_path: String,
+    pub vendor_path: String,
+    pub checksum: String,
+    pub native: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageVendorUnresolved {
+    pub name: String,
+    pub requirement: Option<String>,
+    pub source: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct PackageTreeSummary {
     pub packages: usize,
@@ -686,6 +717,76 @@ pub fn publish_package_dry_run(package_dir: &Path) -> Result<PackagePublishDryRu
     })
 }
 
+pub fn vendor_package_dir(
+    package_dir: &Path,
+    dry_run: bool,
+) -> Result<PackageVendorReport, String> {
+    let package = load_package(package_dir)?;
+    let vendor_dir = package_dir.join("vendor");
+    let mut visiting = BTreeSet::new();
+    let mut entries = Vec::new();
+    let mut unresolved = Vec::new();
+    collect_vendor_dependencies(
+        package_dir,
+        &package.manifest.dependencies,
+        &vendor_dir,
+        &mut visiting,
+        &mut entries,
+        &mut unresolved,
+    )?;
+
+    entries.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then(left.version.cmp(&right.version))
+    });
+    entries.dedup_by(|left, right| left.name == right.name && left.version == right.version);
+    unresolved.sort_by(|left, right| left.name.cmp(&right.name));
+
+    if !dry_run {
+        fs::create_dir_all(&vendor_dir)
+            .map_err(|error| format!("failed to create {}: {error}", vendor_dir.display()))?;
+        for entry in &entries {
+            let source_path = Path::new(&entry.source_path);
+            let vendor_path = Path::new(&entry.vendor_path);
+            if vendor_path.exists() {
+                fs::remove_dir_all(vendor_path).map_err(|error| {
+                    format!("failed to remove {}: {error}", vendor_path.display())
+                })?;
+            }
+            copy_package_directory(source_path, vendor_path)?;
+        }
+        let metadata_path = vendor_dir.join("rss-vendor.json");
+        let metadata = serde_json::to_string_pretty(&entries)
+            .expect("vendor metadata JSON serialization should not fail");
+        fs::write(&metadata_path, metadata)
+            .map_err(|error| format!("failed to write {}: {error}", metadata_path.display()))?;
+    }
+
+    let ok = unresolved.is_empty();
+    let risk = if ok {
+        PackageRisk::Low
+    } else {
+        PackageRisk::Unknown
+    };
+    let reasons = unresolved
+        .iter()
+        .map(|dependency| format!("{} unresolved: {}", dependency.name, dependency.reason))
+        .collect::<Vec<_>>();
+
+    Ok(PackageVendorReport {
+        package: package_identity(&package.manifest),
+        package_dir: package_dir.display().to_string(),
+        vendor_dir: vendor_dir.display().to_string(),
+        dry_run,
+        ok,
+        risk,
+        entries,
+        unresolved,
+        reasons,
+    })
+}
+
 pub fn lock_package_dir(package_dir: &Path) -> Result<PackageLock, String> {
     let package = load_package(package_dir)?;
     let review = review_package_dir(package_dir)?;
@@ -764,6 +865,10 @@ pub fn format_package_tree_json(tree: &PackageTree) -> String {
 
 pub fn format_package_publish_json(publish: &PackagePublishDryRun) -> String {
     serde_json::to_string(publish).expect("package publish JSON serialization should not fail")
+}
+
+pub fn format_package_vendor_json(vendor: &PackageVendorReport) -> String {
+    serde_json::to_string(vendor).expect("package vendor JSON serialization should not fail")
 }
 
 pub fn format_package_lock_json(lock: &PackageLock) -> String {
@@ -939,6 +1044,31 @@ pub fn format_package_publish_human(publish: &PackagePublishDryRun) -> String {
     output
 }
 
+pub fn format_package_vendor_human(vendor: &PackageVendorReport) -> String {
+    let mut output = String::new();
+    output.push_str(&format!(
+        "package vendor {} {} {} risk {}\n",
+        vendor.package.name,
+        vendor.package.version,
+        if vendor.dry_run { "dry-run" } else { "wrote" },
+        package_risk_label(vendor.risk)
+    ));
+    output.push_str(&format!("vendor dir: {}\n", vendor.vendor_dir));
+    for entry in &vendor.entries {
+        output.push_str(&format!(
+            "vendored {} {} -> {} {}\n",
+            entry.name, entry.version, entry.vendor_path, entry.checksum
+        ));
+    }
+    for dependency in &vendor.unresolved {
+        output.push_str(&format!(
+            "unresolved {} {} ({})\n",
+            dependency.name, dependency.source, dependency.reason
+        ));
+    }
+    output
+}
+
 pub fn format_package_lock_diff_human(diff: &PackageLockDiff) -> String {
     let mut output = String::new();
     output.push_str(&format!(
@@ -1093,6 +1223,45 @@ fn collect_regular_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), St
         }
     }
     Ok(())
+}
+
+fn copy_package_directory(source: &Path, destination: &Path) -> Result<(), String> {
+    if source.is_file() {
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
+        }
+        fs::copy(source, destination).map_err(|error| {
+            format!(
+                "failed to copy {} to {}: {error}",
+                source.display(),
+                destination.display()
+            )
+        })?;
+        return Ok(());
+    }
+    fs::create_dir_all(destination)
+        .map_err(|error| format!("failed to create {}: {error}", destination.display()))?;
+    let entries = fs::read_dir(source)
+        .map_err(|error| format!("failed to read {}: {error}", source.display()))?;
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| format!("failed to read entry in {}: {error}", source.display()))?;
+        let path = entry.path();
+        let name = entry.file_name();
+        if should_skip_vendor_copy_entry(&name.to_string_lossy()) {
+            continue;
+        }
+        let target = destination.join(name);
+        if path.is_dir() || path.is_file() {
+            copy_package_directory(&path, &target)?;
+        }
+    }
+    Ok(())
+}
+
+fn should_skip_vendor_copy_entry(name: &str) -> bool {
+    matches!(name, ".git" | "target" | "vendor")
 }
 
 fn read_package_lock(path: &Path) -> Result<PackageLock, String> {
@@ -1270,6 +1439,75 @@ fn package_tree_dependencies(
     Ok(nodes)
 }
 
+fn collect_vendor_dependencies(
+    package_dir: &Path,
+    dependencies: &BTreeMap<String, toml::Value>,
+    vendor_dir: &Path,
+    visiting: &mut BTreeSet<String>,
+    entries: &mut Vec<PackageVendorEntry>,
+    unresolved: &mut Vec<PackageVendorUnresolved>,
+) -> Result<(), String> {
+    for (name, value) in dependencies {
+        let spec = package_dependency_spec(name, value);
+        let Some(path) = &spec.path else {
+            unresolved.push(PackageVendorUnresolved {
+                name: spec.name,
+                requirement: spec.requirement,
+                source: if let Some(git) = spec.git {
+                    format!("git+{git}")
+                } else {
+                    "registry".to_string()
+                },
+                reason: "dependency resolver not implemented for this source".to_string(),
+            });
+            continue;
+        };
+
+        let dependency_dir = package_dir.join(path);
+        if !dependency_dir.join("rsspkg.toml").exists() {
+            unresolved.push(PackageVendorUnresolved {
+                name: spec.name,
+                requirement: spec.requirement,
+                source: format!("path+{}", dependency_dir.display()),
+                reason: "path dependency manifest missing".to_string(),
+            });
+            continue;
+        }
+
+        let dependency_package = load_package(&dependency_dir)?;
+        let identity = package_identity(&dependency_package.manifest);
+        let canonical = canonical_path_label(&dependency_dir);
+        let vendor_path = vendor_dir.join(vendor_package_dir_name(&identity));
+        let native = dependency_package
+            .manifest
+            .native
+            .as_ref()
+            .and_then(|native| native.rust.as_ref());
+        let native_hash = package_native_hash(&dependency_dir, native)?;
+        entries.push(PackageVendorEntry {
+            name: identity.name.clone(),
+            version: identity.version.clone(),
+            source_path: dependency_dir.display().to_string(),
+            vendor_path: vendor_path.display().to_string(),
+            checksum: package_checksum(&dependency_package, native_hash.as_deref()),
+            native: native.is_some_and(|native| native.enabled),
+        });
+
+        if visiting.insert(canonical.clone()) {
+            collect_vendor_dependencies(
+                &dependency_dir,
+                &dependency_package.manifest.dependencies,
+                vendor_dir,
+                visiting,
+                entries,
+                unresolved,
+            )?;
+            visiting.remove(&canonical);
+        }
+    }
+    Ok(())
+}
+
 fn package_dependency_spec(name: &str, value: &toml::Value) -> PackageDependencySpec {
     if let Some(requirement) = value.as_str() {
         return PackageDependencySpec {
@@ -1363,6 +1601,27 @@ fn is_semver_like(version: &str) -> bool {
         && parts.iter().all(|part| {
             !part.is_empty() && part.chars().all(|character| character.is_ascii_digit())
         })
+}
+
+fn vendor_package_dir_name(identity: &PackageIdentity) -> String {
+    format!(
+        "{}-{}",
+        sanitize_vendor_path_component(&identity.name),
+        sanitize_vendor_path_component(&identity.version)
+    )
+}
+
+fn sanitize_vendor_path_component(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 fn canonical_path_label(path: &Path) -> String {

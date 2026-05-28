@@ -19,7 +19,7 @@ Fast when local.
 Reviewable by design.
 ```
 
-RSScript is not "Rust with GC" and not "Python with types". It is:
+RSScript is:
 
 ```text
 a managed-first language
@@ -45,12 +45,12 @@ retains   = function may retain a parameter after return
 v0.5 makes one major architecture decision:
 
 ```text
-RSScript does not define its own VM or native backend in the MVP.
 RSScript lowers to Rust source.
 rustc is the backend.
+Generated Rust is treated as typed implementation IR.
 ```
 
-This is not merely an MVP shortcut. It is the intended implementation architecture until there is evidence that Rust source lowering blocks RSScript semantics.
+This is the intended implementation architecture until there is evidence that Rust source lowering blocks RSScript semantics.
 
 RSScript's value is in its **frontend semantics**:
 
@@ -65,7 +65,7 @@ semantic review maps
 structured diagnostics
 ```
 
-These are independent of machine-code generation. Reimplementing a lower-quality rustc would not improve RSScript's core value.
+These are independent of machine-code generation. Rust source lowering lets RSScript invest in the frontend and review model instead of duplicating rustc.
 
 ---
 
@@ -2305,6 +2305,7 @@ rss package lock
 rss package review update
 rss package tree
 rss package publish --dry-run
+rss package vendor
 rss package diff
 ```
 
@@ -2315,6 +2316,8 @@ rss package diff
 `rss package tree` prints the package dependency graph with review risk. The prototype expands local path dependencies recursively and classifies unresolved registry or git dependencies as `unknown`.
 
 `rss package publish --dry-run` performs local pre-publish validation without uploading: package consistency, dependency graph review, semantic version shape, package review metadata, native metadata, and reproducible archive hashing.
+
+`rss package vendor` copies local path dependencies into `vendor/<name>-<version>/` and writes `vendor/rss-vendor.json` for offline/reproducible review. Registry and git dependencies remain unresolved until the resolver exists.
 
 ---
 

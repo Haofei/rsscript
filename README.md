@@ -1,35 +1,37 @@
 # RSScript
 
-**A simpler Rust for code AI writes and humans still have to trust.**
+**A reviewable systems scripting language for code AI writes and humans still have to trust.**
 
 ```text
-20% of the mental load.
-80% of what Rust does.
-Drop to native Rust for the other 20%.
+Reviewable source.
+Rust-backed execution.
+Native escape hatches when they are worth reviewing.
 ```
 
-This came out of reviewing 100k+ lines of AI-generated Rust over six months. The same shapes kept hurting: `Arc<Mutex<HashMap<...>>>` stacked four deep, signatures with eight trait bounds where one would do, `Pin<Box<dyn Future<...>>>` blocking the view of what a function actually does, retention buried three call levels down, four hundred lines of correct-but-dense code in a single PR where ninety percent of it isn't worth careful reading. The Rust compiler was happy. My eyes weren't.
+This came out of reviewing 100k+ lines of AI-generated Rust over six months. The same shapes kept hurting: `Arc<Mutex<HashMap<...>>>` stacked four deep, signatures with eight trait bounds where one would do, `Pin<Box<dyn Future<...>>>` blocking the view of what a function actually does, retention buried three call levels down, four hundred lines of correct-but-dense code in a single PR where the important ten percent was hard to find. The Rust compiler accepted it. Review still took too much human attention.
 
-RSScript is a smaller front end that lowers to Rust. It keeps rustc, Cargo, and the crate ecosystem; it just compresses the surface so a reviewer's first read costs less, and pushes mutation, retention, resources, and native boundaries into the signature where review can see them. The hairy 20% of Rust — high-rank lifetimes, GATs, exotic trait coherence, hand-tuned pinning — isn't reproduced. When you genuinely need it, `features: native` lets you inline Rust with an explicit review boundary.
+There's also a long-standing wishlist for this kind of language: managed-by-default app code, explicit performance escapes, and a direct path back to native systems work. The request shows up in `/r/rust` threads and language-design posts regularly. AI review pain is what finally made the cost/benefit click for me.
+
+RSScript is a smaller front end that lowers to Rust. It keeps rustc, Cargo, and the crate ecosystem; it compresses the surface so a reviewer's first read costs less, and pushes mutation, retention, resources, and native boundaries into the signature where review can see them. Advanced Rust remains available through `features: native` as an explicit review boundary.
 
 ---
 
-## Why a smaller language, not just lints on Rust
+## Why a Smaller Review Surface
 
-The obvious alternative is proc-macros, a Clippy ruleset, and a review tool over Rust directly. The problem is that **Rust's signatures themselves are part of the review cost**, not just the absence of annotations. `Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'a>>` carries four bits a reviewer needs and a dozen bits that exist to satisfy the type system. No lint can fix that — the noise is *in the language surface*. And AI, trained on every clever Rust crate on GitHub, is gradient-descending into that surface every time it generates code.
+The obvious alternative is proc-macros, a Clippy ruleset, and a review tool over Rust directly. The problem is that **Rust's signatures themselves are part of the review cost**. `Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'a>>` carries four bits a reviewer needs and a dozen bits that exist to satisfy the type system. A smaller source language changes the surface itself, instead of asking tools to recover intent afterward. And AI, trained on every clever Rust crate on GitHub, is gradient-descending into that surface every time it generates code.
 
 A smaller front end fixes two things at once:
 
 - **The signature** a human reads becomes shorter and load-bearing in different ways.
-- **The AI's option space** shrinks. AI can't generate `Pin<Box<dyn Future ...>>` patterns in a language that doesn't have them. Constraint is the product.
+- **The AI's option space** shrinks. RSScript gives the generator fewer complex shapes to reach for. Constraint is the product.
 
-Before AI, writing code was expensive and reviewing was manageable. That ratio has flipped — generating is cheap, reviewing is the bottleneck. RSScript is designed for the new ratio: AI writes, the compiler checks semantic boundaries, humans review the *risk*, not every line. What mutates, what gets retained, who owns a resource, where you cross into native or unsafe, what changed in a public API — all of it lives in the signature and in machine-readable diagnostics, instead of being inferred from context.
+Before AI, writing code was expensive and reviewing was manageable. That ratio has flipped: generating is cheap, reviewing is the bottleneck. RSScript is designed for the new ratio: AI writes, the compiler checks semantic boundaries, humans focus on the *risk*. What mutates, what gets retained, who owns a resource, where you cross into native or unsafe, what changed in a public API — all of it lives in the signature and in machine-readable diagnostics.
 
 ---
 
 ## Scope
 
-RSScript targets **application-level systems**: backend services, agent runtimes, data processing tools, internal infrastructure, glue code that needs to be fast and correct but doesn't need to encode every static fact in the type system. It isn't aimed at kernels, drivers, embedded firmware, or compiler internals where Rust's full expressivity earns its keep. For those, keep using Rust.
+RSScript targets **application-level systems**: backend services, agent runtimes, data processing tools, internal infrastructure, glue code that needs to be fast and correct while keeping review cost low. Rust remains the right tool for kernels, drivers, embedded firmware, compiler internals, and code that benefits from its full expressivity.
 
 ---
 
@@ -232,6 +234,7 @@ rss package  review update [--json] --from <old-rsspkg.lock> --to <new-rsspkg.lo
 rss package  lock   [--json] <package-directory>
 rss package  tree   [--json] [package-directory]
 rss package  publish --dry-run [--json] [package-directory]
+rss package  vendor [--dry-run] [--json] [package-directory]
 rss package  diff   [--json] <old-package-directory> <new-package-directory>
 rss lower    --rust  <file.rss> [--out-dir <directory>]
 rss run      [--json] <file.rss> [--out-dir <directory>]
@@ -250,6 +253,7 @@ A few details worth knowing:
 - `rss package lock` emits root package lock metadata with SHA-256 hashes for the public `.rssi` contract, review metadata, package contents, and native Rust wrapper contents when enabled.
 - `rss package tree` shows the dependency graph with review risk. Local path dependencies are expanded recursively; unresolved registry or git dependencies are classified as unknown.
 - `rss package publish --dry-run` runs pre-publish checks without uploading anything: package consistency, dependency graph review, semver shape, review metadata, native metadata, and reproducible archive hashing.
+- `rss package vendor` copies local path dependencies into `vendor/<name>-<version>/` and writes `vendor/rss-vendor.json`; unresolved registry or git dependencies stay unknown.
 - `rss package diff` compares two local package directories and reports package version changes, RSScript dependency changes, package feature changes, native Rust wrapper metadata changes, and public `.rssi` semantic contract changes.
 - `rss run` lowers to a temporary Rust package and delegates to `cargo run`; `--out-dir` keeps the generated package around for inspection. Diagnostics support `--json`; program stdout stays the program's own.
 - `rss verify-rust --out-dir` keeps the generated package and source map, so unmappable rustc diagnostics can be inspected against the actual generated Rust.

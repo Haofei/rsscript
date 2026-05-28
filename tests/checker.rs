@@ -14,6 +14,7 @@ use rsscript::{
     lower_source_to_rust, lower_source_to_rust_package, lower_source_to_rust_with_map,
     package_tree, parse_runtime_diagnostics, publish_package_dry_run, remap_rustc_diagnostic_json,
     remap_rustc_diagnostic_json_lines, review_map_sources, review_package_dir, review_sources,
+    vendor_package_dir,
 };
 use serde_json::Value;
 
@@ -3062,6 +3063,102 @@ rss-remote = "0.5.0"
             .iter()
             .any(|check| check["name"] == "dependency graph review" && check["ok"] == false)
     }));
+}
+
+#[test]
+fn package_vendor_dry_run_reports_path_and_unresolved_dependencies() {
+    let root_dir = unique_temp_dir("rsscript-package-vendor-root");
+    let dep_dir = unique_temp_dir("rsscript-package-vendor-dep");
+    write_named_package_fixture(
+        &dep_dir,
+        "rss-dep",
+        "0.2.0",
+        "",
+        r#"pub fn parse(text: read String) -> String
+"#,
+    );
+    write_package_fixture(
+        &root_dir,
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-dep = {{ path = "{}" }}
+rss-remote = "0.5.0"
+"#,
+            dep_dir.display()
+        ),
+        r#"pub fn main() -> Unit
+"#,
+    );
+
+    let vendor =
+        vendor_package_dir(&root_dir, true).expect("vendor dry-run should produce a report");
+    let json: Value = serde_json::from_str(&rsscript::format_package_vendor_json(&vendor))
+        .expect("vendor JSON should parse");
+    let vendor_dir_exists = root_dir.join("vendor").exists();
+    let _ = fs::remove_dir_all(&root_dir);
+    let _ = fs::remove_dir_all(&dep_dir);
+
+    assert!(!vendor.ok);
+    assert!(!vendor_dir_exists);
+    assert_eq!(json["dry_run"], true);
+    assert_eq!(json["entries"][0]["name"], "rss-dep");
+    assert_eq!(json["unresolved"][0]["name"], "rss-remote");
+    assert_eq!(json["risk"], "unknown");
+}
+
+#[test]
+fn rss_package_vendor_json_writes_vendor_directory_and_metadata() {
+    let root_dir = unique_temp_dir("rsscript-package-vendor-cli-root");
+    let dep_dir = unique_temp_dir("rsscript-package-vendor-cli-dep");
+    write_named_package_fixture(
+        &dep_dir,
+        "rss-dep",
+        "0.2.0",
+        "",
+        r#"pub fn parse(text: read String) -> String
+"#,
+    );
+    write_package_fixture(
+        &root_dir,
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-dep = {{ path = "{}" }}
+"#,
+            dep_dir.display()
+        ),
+        r#"pub fn main() -> Unit
+"#,
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("package")
+        .arg("vendor")
+        .arg("--json")
+        .arg(&root_dir)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss package vendor should execute");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: Value = serde_json::from_str(&stdout).expect("stdout should be vendor JSON");
+    let vendored_manifest = root_dir
+        .join("vendor")
+        .join("rss-dep-0.2.0")
+        .join("rsspkg.toml");
+    let vendor_metadata = root_dir.join("vendor").join("rss-vendor.json");
+    let vendored_manifest_exists = vendored_manifest.exists();
+    let vendor_metadata_exists = vendor_metadata.exists();
+    let _ = fs::remove_dir_all(&root_dir);
+    let _ = fs::remove_dir_all(&dep_dir);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["entries"][0]["name"], "rss-dep");
+    assert!(vendored_manifest_exists);
+    assert!(vendor_metadata_exists);
 }
 
 fn fixture_paths(directory: &str) -> Vec<PathBuf> {
