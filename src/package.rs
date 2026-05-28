@@ -31,6 +31,7 @@ pub struct PackageLoweringInput {
     pub source_path: String,
     pub source_relative_path: String,
     pub source: String,
+    pub sources: Vec<(String, String)>,
     pub interfaces: Vec<(String, String)>,
 }
 
@@ -573,18 +574,21 @@ pub fn package_lowering_input(package_dir: &Path) -> Result<PackageLoweringInput
     let package = load_package(package_dir)?;
     let dependency_interfaces =
         collect_dependency_interface_sources(package_dir, &package.manifest)?;
-    let package_interfaces = package
-        .sources
-        .iter()
-        .filter(|source| source.kind == PackageReviewFileKind::Interface);
-    let mut interfaces = dependency_interfaces
+    let interfaces = dependency_interfaces
         .iter()
         .map(|source| (source.path.clone(), source.contents.clone()))
         .collect::<Vec<_>>();
-    interfaces
-        .extend(package_interfaces.map(|source| (source.path.clone(), source.contents.clone())));
 
-    let source = select_package_runnable_source(&package.sources)?;
+    let source_files = package
+        .sources
+        .iter()
+        .filter(|source| source.kind == PackageReviewFileKind::Source)
+        .collect::<Vec<_>>();
+    let source = select_package_runnable_source(&source_files)?;
+    let sources = source_files
+        .iter()
+        .map(|source| (source.path.clone(), source.contents.clone()))
+        .collect::<Vec<_>>();
     Ok(PackageLoweringInput {
         package: PackageIdentity {
             name: package.manifest.package.name.clone(),
@@ -595,6 +599,7 @@ pub fn package_lowering_input(package_dir: &Path) -> Result<PackageLoweringInput
         source_path: source.path.clone(),
         source_relative_path: source.relative_path.clone(),
         source: source.contents.clone(),
+        sources,
         interfaces,
     })
 }
@@ -1364,11 +1369,9 @@ fn read_package_sources(
     Ok(sources)
 }
 
-fn select_package_runnable_source(sources: &[PackageSource]) -> Result<&PackageSource, String> {
-    let source_files = sources
-        .iter()
-        .filter(|source| source.kind == PackageReviewFileKind::Source)
-        .collect::<Vec<_>>();
+fn select_package_runnable_source<'a>(
+    source_files: &[&'a PackageSource],
+) -> Result<&'a PackageSource, String> {
     if source_files.is_empty() {
         return Err("rss run requires one package source file under `src`.".to_string());
     }
@@ -1382,14 +1385,11 @@ fn select_package_runnable_source(sources: &[PackageSource]) -> Result<&PackageS
         return Ok(source_files[0]);
     }
     if main_sources.len() == 1 {
-        return Err(
-            "rss run package lowering does not yet support multiple source files; keep one runnable `src/main.rss` for now."
-                .to_string(),
-        );
+        return Ok(main_sources[0]);
     }
 
     Err(
-        "rss run package lowering requires exactly one `.rss` source file until multi-file lowering is implemented."
+        "rss run package lowering requires `src/main.rss` when a package has multiple `.rss` source files."
             .to_string(),
     )
 }

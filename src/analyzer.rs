@@ -5,6 +5,7 @@ use crate::diagnostic::{Diagnostic, code};
 use crate::hir::{CallResolution, DuplicateSymbolKind, Hir, HirTypeKind, ResolvedCalleeKind};
 use crate::interfaces::CORE_INTERFACES;
 use crate::lexer::{Token, lex};
+use crate::syntax::ast::merge_programs;
 use crate::syntax::ast::{
     Block, Callee, DataEffect, EffectDecl, Expr, GenericBound, GenericParam, Item, Stmt, TypeKind,
     TypeRef,
@@ -33,6 +34,27 @@ pub fn analyze_source_with_interfaces(
 ) -> Vec<Diagnostic> {
     let tokens = lex(file, source);
     let syntax_program = parse_source(file, source);
+    let interface_programs = interfaces
+        .iter()
+        .map(|(file, source)| parse_source(file, source))
+        .collect::<Vec<_>>();
+    let hir = Hir::from_syntax_with_interfaces(&syntax_program, &interface_programs);
+    analyze_program(tokens, syntax_program, hir)
+}
+
+pub fn analyze_sources_with_interfaces(
+    sources: &[(&str, &str)],
+    interfaces: &[(&str, &str)],
+) -> Vec<Diagnostic> {
+    let tokens = sources
+        .iter()
+        .flat_map(|(file, source)| lex(file, source))
+        .collect::<Vec<_>>();
+    let syntax_program = merge_programs(
+        sources
+            .iter()
+            .map(|(file, source)| parse_source(file, source)),
+    );
     let interface_programs = interfaces
         .iter()
         .map(|(file, source)| parse_source(file, source))

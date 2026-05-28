@@ -3,13 +3,13 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use crate::analyzer::{analyze_source_with_core, analyze_source_with_interfaces};
+use crate::analyzer::{analyze_source_with_core, analyze_sources_with_interfaces};
 use crate::diagnostic::{Diagnostic, Severity, Span, code};
 use crate::interfaces::builtin_interfaces;
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature,
     FunctionDecl, GenericBound, GenericParam, Item, Param, Program, Stmt, TypeDecl, TypeKind,
-    TypeRef,
+    TypeRef, merge_programs,
 };
 use crate::syntax::parse_source;
 
@@ -100,13 +100,31 @@ pub fn lower_source_to_rust_package_with_interfaces(
     runtime_path: &str,
     interfaces: &[(String, String)],
 ) -> Result<GeneratedRustPackage, Vec<Diagnostic>> {
+    lower_sources_to_rust_package_with_interfaces(
+        &[(file.to_string(), source.to_string())],
+        package_name,
+        runtime_path,
+        interfaces,
+    )
+}
+
+pub fn lower_sources_to_rust_package_with_interfaces(
+    sources: &[(String, String)],
+    package_name: &str,
+    runtime_path: &str,
+    interfaces: &[(String, String)],
+) -> Result<GeneratedRustPackage, Vec<Diagnostic>> {
     let mut interface_refs = builtin_interfaces().collect::<Vec<_>>();
     interface_refs.extend(
         interfaces
             .iter()
             .map(|(path, contents)| (path.as_str(), contents.as_str())),
     );
-    let diagnostics = analyze_source_with_interfaces(file, source, &interface_refs);
+    let source_refs = sources
+        .iter()
+        .map(|(path, contents)| (path.as_str(), contents.as_str()))
+        .collect::<Vec<_>>();
+    let diagnostics = analyze_sources_with_interfaces(&source_refs, &interface_refs);
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity.is_error())
@@ -114,7 +132,11 @@ pub fn lower_source_to_rust_package_with_interfaces(
         return Err(diagnostics);
     }
 
-    let program = parse_source(file, source);
+    let program = merge_programs(
+        sources
+            .iter()
+            .map(|(path, source)| parse_source(path, source)),
+    );
     let lowered = lower_program_to_rust_with_map(&program);
     let package_name = cargo_package_name(package_name);
     let cargo_toml = format!(

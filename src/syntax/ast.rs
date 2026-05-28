@@ -43,6 +43,39 @@ impl Program {
     }
 }
 
+pub fn merge_programs(programs: impl IntoIterator<Item = Program>) -> Program {
+    let mut features = Vec::new();
+    let mut unknown_features = Vec::new();
+    let mut duplicate_features = Vec::new();
+    let mut feature_spans = Vec::new();
+    let mut profile_spans = Vec::new();
+    let mut items = Vec::new();
+
+    for program in programs {
+        for feature in program.features {
+            if !features.contains(&feature) {
+                features.push(feature);
+            }
+        }
+        unknown_features.extend(program.unknown_features);
+        duplicate_features.extend(program.duplicate_features);
+        if program.feature_spans.len() > 1 {
+            feature_spans.extend(program.feature_spans);
+        }
+        profile_spans.extend(program.profile_spans);
+        items.extend(program.items);
+    }
+
+    Program {
+        features,
+        unknown_features,
+        duplicate_features,
+        feature_spans,
+        profile_spans,
+        items,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
     Type(TypeDecl),

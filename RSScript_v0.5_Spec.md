@@ -293,7 +293,7 @@ RSScript source
   -> executable / library
 ```
 
-`rss run <file.rss>` is a convenience command over this pipeline. It lowers the file to a Rust package and invokes Cargo on that package. `rss run <package-directory>` follows the same pipeline for a package manifest and package interface environment. By default the package is temporary; `rss run <file.rss> --out-dir <directory>` keeps the generated Rust package for inspection. It is not an interpreter and must not bypass frontend diagnostics, source mapping, or the runtime crate target ABI.
+`rss run <file.rss>` is a convenience command over this pipeline. It lowers the file to a Rust package and invokes Cargo on that package. `rss run <package-directory>` follows the same pipeline for a package manifest, package source set, and package interface environment; packages with multiple source files use `src/main.rss` as the runnable entry source. By default the package is temporary; `rss run <file.rss> --out-dir <directory>` keeps the generated Rust package for inspection. It is not an interpreter and must not bypass frontend diagnostics, source mapping, or the runtime crate target ABI.
 
 `rss verify-rust <file.rss>` performs the same lowering and checks the generated package with rustc. `rss verify-rust <package-directory>` verifies package lowering the same way. `rss verify-rust <file.rss> --out-dir <directory>` must keep that package, including `rsscript-source-map.json`, so backend diagnostics can be inspected against generated Rust.
 

@@ -11,7 +11,8 @@ mod rust_lower;
 pub mod syntax;
 
 pub use analyzer::{
-    analyze_source, analyze_source_with_core, analyze_source_with_interfaces, core_interfaces,
+    analyze_source, analyze_source_with_core, analyze_source_with_interfaces,
+    analyze_sources_with_interfaces, core_interfaces,
 };
 pub use diagnostic::{
     Diagnostic, DiagnosticExplanation, Severity, explain_diagnostic_code,
@@ -47,6 +48,7 @@ pub use rust_lower::{
     RustSourceMapEntry, check_generated_rust_package, lower_program_to_rust,
     lower_program_to_rust_with_map, lower_source_to_rust, lower_source_to_rust_package,
     lower_source_to_rust_package_with_interfaces, lower_source_to_rust_with_map,
-    parse_runtime_diagnostics, parse_source_map_json, remap_rustc_diagnostic_json,
-    remap_rustc_diagnostic_json_lines, write_generated_rust_package,
+    lower_sources_to_rust_package_with_interfaces, parse_runtime_diagnostics,
+    parse_source_map_json, remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines,
+    write_generated_rust_package,
 };

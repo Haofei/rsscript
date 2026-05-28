@@ -16,7 +16,7 @@ use rsscript::{
     format_package_tree_human, format_package_tree_json, format_package_vendor_human,
     format_package_vendor_json, format_review_human, format_review_json, format_review_map_human,
     format_review_map_json, lint_source, lock_package_dir, lower_source_to_rust,
-    lower_source_to_rust_package, lower_source_to_rust_package_with_interfaces,
+    lower_source_to_rust_package, lower_sources_to_rust_package_with_interfaces,
     package_lowering_input, package_metadata, package_tree, parse_runtime_diagnostics,
     parse_source_map_json, publish_package_dry_run, remap_rustc_diagnostic_json_lines,
     review_map_sources, review_package_dir, review_sources, vendor_package_dir,
@@ -331,9 +331,8 @@ fn lower_cli_input_to_rust_package(
             eprintln!("{error}");
             ExitCode::from(2)
         })?;
-        return lower_source_to_rust_package_with_interfaces(
-            &input.source_path,
-            &input.source,
+        return lower_sources_to_rust_package_with_interfaces(
+            &input.sources,
             &input.package.name,
             &runtime_path,
             &input.interfaces,

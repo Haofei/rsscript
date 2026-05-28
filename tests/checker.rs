@@ -1221,6 +1221,50 @@ fn rss_run_accepts_package_directory() {
 }
 
 #[test]
+fn rss_run_accepts_multi_file_package_directory() {
+    let temp_dir = unique_temp_dir("rsscript-run-multi-package-cli");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-run-multi-package",
+        "0.1.0",
+        "",
+        "pub fn package_message() -> fresh String\n",
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("src/helper.rss"),
+        r#"pub fn package_message() -> fresh String {
+    return String.concat(left: read "hello", right: read " multi package")
+}
+"#,
+    )
+    .expect("helper source should be written");
+    fs::write(
+        temp_dir.join("src/main.rss"),
+        r#"fn main() -> Unit {
+    let message = package_message()
+    Log.write(message: read message)
+}
+"#,
+    )
+    .expect("main source should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg(&temp_dir)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss run package directory should execute");
+    let _ = fs::remove_dir_all(&temp_dir);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert!(stdout.contains("hello multi package"), "{stdout}");
+}
+
+#[test]
 fn rss_verify_rust_json_accepts_package_directory() {
     let temp_dir = unique_temp_dir("rsscript-verify-package-cli");
     write_named_package_fixture(&temp_dir, "rss-verify-package", "0.1.0", "", "");
