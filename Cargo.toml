@@ -1,0 +1,14 @@
+[package]
+name = "rsscript"
+version = "0.1.0"
+edition = "2024"
+description = "RSScript v0.4.1 front-end checker"
+license = "MIT"
+
+[[bin]]
+name = "rss"
+path = "src/main.rs"
+
+[dependencies]
+
+[dev-dependencies]
