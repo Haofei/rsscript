@@ -1285,8 +1285,15 @@ fn retained_inline_binding(
             let (binding_name, _) = retained_inline_binding(base, hir, value_types)?;
             Some((binding_name, span.clone()))
         }
+        Expr::Call { callee, args, .. } if retained_wrapper_callee(callee) => args
+            .iter()
+            .find_map(|arg| retained_inline_binding(&arg.value, hir, value_types)),
         _ => None,
     }
+}
+
+fn retained_wrapper_callee(callee: &Callee) -> bool {
+    matches!(callee_name(callee), "Ok" | "Err" | "Some")
 }
 
 fn direct_ident(expr: &Expr) -> Option<(String, Span)> {

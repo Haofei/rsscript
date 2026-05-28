@@ -2402,6 +2402,42 @@ fn bad_store(cache: mut Cache, path: read Path) -> Unit {
 }
 
 #[test]
+fn checker_rejects_retaining_local_through_enum_wrapper() {
+    let source = r#"
+features: local
+
+struct Image
+struct Holder {
+    image: Image
+}
+struct Cache
+
+fn Cache.store_option(cache: mut Cache, value: read Option<Image>) -> Unit
+    effects(retains(value))
+
+fn Cache.store_result(cache: mut Cache, value: read Result<Image, StoreError>) -> Unit
+    effects(retains(value))
+
+fn make_holder() -> fresh Holder
+
+fn bad_store(cache: mut Cache) -> Unit {
+    local holder = make_holder()
+    Cache.store_option(cache: mut cache, value: read Some(holder.image))
+    Cache.store_result(cache: mut cache, value: read Ok(holder.image))
+}
+"#;
+    let diagnostics = analyze_source("retaining-local-wrapper.rss", source);
+    let retained_count = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == "RS0501" && diagnostic.label == "local value retained"
+        })
+        .count();
+
+    assert_eq!(retained_count, 2, "{diagnostics:?}");
+}
+
+#[test]
 fn checker_accepts_managed_closure_capturing_handle_field() {
     let source = r#"
 features: local

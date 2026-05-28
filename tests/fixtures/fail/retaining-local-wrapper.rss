@@ -1,0 +1,22 @@
+// expect: RS0501
+features: local
+
+struct Image
+struct Holder {
+    image: Image
+}
+struct Cache
+
+fn Cache.store_option(cache: mut Cache, value: read Option<Image>) -> Unit
+    effects(retains(value))
+
+fn Cache.store_result(cache: mut Cache, value: read Result<Image, StoreError>) -> Unit
+    effects(retains(value))
+
+fn make_holder() -> fresh Holder
+
+fn bad_store(cache: mut Cache) -> Unit {
+    local holder = make_holder()
+    Cache.store_option(cache: mut cache, value: read Some(holder.image))
+    Cache.store_result(cache: mut cache, value: read Ok(holder.image))
+}
