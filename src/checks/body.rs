@@ -192,7 +192,9 @@ fn apply_stmt_effects(
                 }
             }
             if let Some(value) = &stmt.value {
-                if let Some(type_name) = hir_binding_type(analyzer, &stmt.span)
+                if let Some(type_name) = local_analysis
+                    .binding_type(&stmt.span)
+                    .map(str::to_string)
                     .or_else(|| infer_expr_type(analyzer, value, state))
                 {
                     state.record_type(stmt.name.clone(), type_name);
@@ -214,13 +216,6 @@ fn apply_stmt_effects(
         Stmt::Break(_) | Stmt::Continue(_) => {}
         Stmt::Unknown(_) => {}
     }
-}
-
-fn hir_binding_type(analyzer: &Analyzer<'_>, span: &crate::diagnostic::Span) -> Option<String> {
-    analyzer
-        .hir
-        .binding(span)
-        .and_then(|binding| binding.type_name.clone())
 }
 
 fn apply_expr_effects(local_analysis: &LocalAnalysis, expr: &Expr, state: &mut BodyState) {

@@ -1,7 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::diagnostic::Span;
-use crate::hir::{HirBinding, HirBindingKind, HirEffectEvent, HirEffectEventKind, HirFunctionBody};
+use crate::hir::{
+    HirBinding, HirBindingKind, HirBlock, HirEffectEvent, HirEffectEventKind, HirExpr,
+    HirFunctionBody, HirStmt,
+};
 
 use super::body::Flow;
 
@@ -16,12 +19,26 @@ pub(crate) struct BodyState {
 
 pub(crate) struct LocalAnalysis {
     body: Option<HirFunctionBody>,
+    events_by_span: HashMap<Span, Vec<HirEffectEvent>>,
+    binding_types_by_span: HashMap<Span, String>,
 }
 
 impl LocalAnalysis {
     pub(crate) fn new(body: Option<&HirFunctionBody>) -> Self {
+        let body = body.cloned();
+        let events_by_span = body
+            .as_ref()
+            .and_then(|body| body.block.as_ref())
+            .map_or_else(HashMap::new, index_events_from_block);
+        let binding_types_by_span = body
+            .as_ref()
+            .and_then(|body| body.block.as_ref())
+            .map_or_else(HashMap::new, index_binding_types_from_block);
+
         Self {
-            body: body.cloned(),
+            body,
+            events_by_span,
+            binding_types_by_span,
         }
     }
 
@@ -41,21 +58,161 @@ impl LocalAnalysis {
         state.apply_retention_events(self.effect_events(span));
     }
 
+    pub(crate) fn binding_type(&self, span: &Span) -> Option<&str> {
+        self.binding_types_by_span.get(span).map(String::as_str)
+    }
+
     fn effect_events(&self, span: &Span) -> &[HirEffectEvent] {
-        self.body
-            .as_ref()
-            .and_then(|body| events_at_span(&body.effect_events, span))
-            .unwrap_or(&[])
+        self.events_by_span.get(span).map_or(&[], Vec::as_slice)
     }
 }
 
-fn events_at_span<'a>(events: &'a [HirEffectEvent], span: &Span) -> Option<&'a [HirEffectEvent]> {
-    let start = events.iter().position(|event| event.span == *span)?;
-    let end = events[start..]
-        .iter()
-        .position(|event| event.span != *span)
-        .map_or(events.len(), |offset| start + offset);
-    Some(&events[start..end])
+fn index_events_from_block(block: &HirBlock) -> HashMap<Span, Vec<HirEffectEvent>> {
+    let mut events = HashMap::new();
+    collect_block_events(block, &mut events);
+    events
+}
+
+fn collect_block_events(block: &HirBlock, events: &mut HashMap<Span, Vec<HirEffectEvent>>) {
+    for statement in &block.statements {
+        collect_stmt_events(statement, events);
+    }
+}
+
+fn collect_stmt_events(statement: &HirStmt, events: &mut HashMap<Span, Vec<HirEffectEvent>>) {
+    match statement {
+        HirStmt::Let {
+            value: Some(value), ..
+        }
+        | HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => collect_expr_events(value, events),
+        HirStmt::With { resource, body, .. } => {
+            collect_expr_events(resource, events);
+            collect_block_events(body, events);
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            collect_expr_events(condition, events);
+            collect_block_events(then_body, events);
+            if let Some(else_body) = else_body {
+                collect_block_events(else_body, events);
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                collect_expr_events(condition, events);
+            }
+            collect_block_events(body, events);
+        }
+        HirStmt::Let { value: None, .. }
+        | HirStmt::Return { value: None, .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn collect_expr_events(expr: &HirExpr, events: &mut HashMap<Span, Vec<HirEffectEvent>>) {
+    match expr {
+        HirExpr::Call {
+            args,
+            events: expr_events,
+            span,
+            ..
+        } => {
+            record_expr_events(events, span, expr_events);
+            for arg in args {
+                collect_expr_events(&arg.value, events);
+            }
+        }
+        HirExpr::Effect {
+            value,
+            events: expr_events,
+            span,
+            ..
+        }
+        | HirExpr::Manage {
+            value,
+            events: expr_events,
+            span,
+            ..
+        } => {
+            record_expr_events(events, span, expr_events);
+            collect_expr_events(value, events);
+        }
+        HirExpr::Field { base, .. } => collect_expr_events(base, events),
+        HirExpr::Closure { body, .. } => collect_block_events(body, events),
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn record_expr_events(
+    events: &mut HashMap<Span, Vec<HirEffectEvent>>,
+    span: &Span,
+    expr_events: &[HirEffectEvent],
+) {
+    if expr_events.is_empty() {
+        return;
+    }
+    events
+        .entry(span.clone())
+        .or_default()
+        .extend(expr_events.iter().cloned());
+}
+
+fn index_binding_types_from_block(block: &HirBlock) -> HashMap<Span, String> {
+    let mut types = HashMap::new();
+    collect_block_binding_types(block, &mut types);
+    types
+}
+
+fn collect_block_binding_types(block: &HirBlock, types: &mut HashMap<Span, String>) {
+    for statement in &block.statements {
+        collect_stmt_binding_types(statement, types);
+    }
+}
+
+fn collect_stmt_binding_types(statement: &HirStmt, types: &mut HashMap<Span, String>) {
+    match statement {
+        HirStmt::Let {
+            type_name: Some(type_name),
+            span,
+            ..
+        } => {
+            types.insert(span.clone(), type_name.clone());
+        }
+        HirStmt::With { body, .. } => collect_block_binding_types(body, types),
+        HirStmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            collect_block_binding_types(then_body, types);
+            if let Some(else_body) = else_body {
+                collect_block_binding_types(else_body, types);
+            }
+        }
+        HirStmt::Loop { body, .. } => collect_block_binding_types(body, types),
+        HirStmt::Let {
+            type_name: None, ..
+        }
+        | HirStmt::Return { .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Expr(_)
+        | HirStmt::Unknown(_) => {}
+    }
 }
 
 impl BodyState {
@@ -263,6 +420,8 @@ fn merge_fallthrough_states(base: &BodyState, left: &BodyState, right: &BodyStat
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hir::{CallResolution, HirBlock, HirExpr, HirStmt};
+    use crate::syntax::ast::Callee;
 
     fn span(line: usize) -> Span {
         Span {
@@ -304,6 +463,23 @@ mod tests {
 
     #[test]
     fn local_analysis_seeds_params_and_applies_events_by_span() {
+        let retain_event = HirEffectEvent {
+            function_name: "run".to_string(),
+            kind: HirEffectEventKind::Retain {
+                callee: "Cache.store".to_string(),
+                param: "value".to_string(),
+            },
+            binding_name: "cached".to_string(),
+            span: span(20),
+            value_span: span(20),
+        };
+        let manage_event = HirEffectEvent {
+            function_name: "run".to_string(),
+            kind: HirEffectEventKind::Manage,
+            binding_name: "image".to_string(),
+            span: span(21),
+            value_span: span(21),
+        };
         let body = HirFunctionBody {
             function_name: "run".to_string(),
             bindings: vec![HirBinding {
@@ -313,25 +489,36 @@ mod tests {
                 span: span(1),
                 type_name: Some("ResourcePool<File>".to_string()),
             }],
-            effect_events: vec![
-                HirEffectEvent {
-                    function_name: "run".to_string(),
-                    kind: HirEffectEventKind::Retain {
-                        callee: "Cache.store".to_string(),
-                        param: "value".to_string(),
+            block: Some(HirBlock {
+                statements: vec![
+                    HirStmt::Let {
+                        kind: HirBindingKind::LocalLet,
+                        name: "cached".to_string(),
+                        value: None,
+                        type_name: Some("Image".to_string()),
+                        span: span(2),
                     },
-                    binding_name: "cached".to_string(),
-                    span: span(20),
-                    value_span: span(20),
-                },
-                HirEffectEvent {
-                    function_name: "run".to_string(),
-                    kind: HirEffectEventKind::Manage,
-                    binding_name: "image".to_string(),
-                    span: span(21),
-                    value_span: span(21),
-                },
-            ],
+                    HirStmt::Expr(HirExpr::Call {
+                        callee: Callee::Name("store".to_string()),
+                        args: Vec::new(),
+                        resolution: CallResolution::Unknown,
+                        events: vec![retain_event],
+                        type_name: None,
+                        span: span(20),
+                    }),
+                    HirStmt::Expr(HirExpr::Manage {
+                        value: Box::new(HirExpr::Ident {
+                            name: "image".to_string(),
+                            type_name: Some("Image".to_string()),
+                            span: span(21),
+                        }),
+                        events: vec![manage_event],
+                        type_name: Some("Image".to_string()),
+                        span: span(21),
+                    }),
+                ],
+                span: span(1),
+            }),
             ..HirFunctionBody::default()
         };
         let local_analysis = LocalAnalysis::new(Some(&body));
@@ -340,6 +527,7 @@ mod tests {
         state.bind_local("image");
 
         assert_eq!(state.value_type("pool"), Some("ResourcePool<File>"));
+        assert_eq!(local_analysis.binding_type(&span(2)), Some("Image"));
 
         local_analysis.apply_retention_events(&span(20), &mut state);
         local_analysis.apply_move_events(&span(21), &mut state);

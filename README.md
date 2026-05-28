@@ -25,6 +25,7 @@ It currently implements:
 - Per-function HIR body views that group bindings, calls, fields, effects, and returns
 - AST-driven mode and call checks for local-only features, named arguments, data effects, and retaining APIs
 - AST-driven body checks for local moves, early-exit-aware `fresh` returns, resource escape, resolved handle-field `take`, and managed closure captures
+- Local ownership effect application now indexes binding types and move/retain events from resolved HIR body trees
 - Focused check modules for mode, calls, body semantics, and forbidden operator behavior
 - Fixture-based pass/fail scenario tests under `tests/fixtures`
 
@@ -61,7 +62,7 @@ Non-goals for this stage:
 
 Near-term roadmap:
 
-1. Start moving body checkers from syntax AST plus lookup tables onto the resolved HIR statement/expression tree.
+1. Continue moving body checkers from syntax AST plus lookup tables onto the resolved HIR statement/expression tree.
 2. Extend CleanLocal dataflow from structured statements into a dedicated CFG representation.
 3. Expand `rss review` local/manage boundary diffs from summaries into path-aware risk explanations.
 

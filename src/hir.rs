@@ -280,7 +280,6 @@ pub struct Hir {
     call_sites: Vec<HirCallSite>,
     call_resolutions_by_span: HashMap<Span, CallResolution>,
     bindings: Vec<HirBinding>,
-    bindings_by_span: HashMap<Span, HirBinding>,
     field_accesses: Vec<HirFieldAccess>,
     field_accesses_by_span: HashMap<Span, HirFieldAccess>,
     effect_events: Vec<HirEffectEvent>,
@@ -368,10 +367,6 @@ impl Hir {
         self.call_resolutions_by_span.get(span)
     }
 
-    pub fn binding(&self, span: &Span) -> Option<&HirBinding> {
-        self.bindings_by_span.get(span)
-    }
-
     pub fn function_body(&self, function_name: &str) -> Option<&HirFunctionBody> {
         self.function_bodies.get(function_name)
     }
@@ -456,11 +451,6 @@ impl Hir {
             .call_sites
             .iter()
             .map(|site| (site.span.clone(), site.resolution.clone()))
-            .collect();
-        self.bindings_by_span = facts
-            .bindings
-            .iter()
-            .map(|binding| (binding.span.clone(), binding.clone()))
             .collect();
         self.field_accesses_by_span = facts
             .field_accesses
@@ -1820,12 +1810,6 @@ fn render(body: read String) -> Result<fresh Response, HttpError> {
         assert_eq!(bindings[1].kind, HirBindingKind::ManagedLet);
         assert_eq!(bindings[1].name, "response");
         assert_eq!(bindings[1].type_name.as_deref(), Some("Response"));
-        assert!(matches!(
-            hir.binding(&bindings[1].span)
-                .expect("binding lookup by span works")
-                .kind,
-            HirBindingKind::ManagedLet
-        ));
 
         let returns = &hir.returns;
         assert_eq!(returns.len(), 1);
@@ -1847,6 +1831,18 @@ fn render(body: read String) -> Result<fresh Response, HttpError> {
         assert_eq!(body.call_sites.len(), 3);
         assert_eq!(body.effect_events.len(), 0);
         assert_eq!(body.returns.len(), 1);
+        assert!(matches!(
+            body.block
+                .as_ref()
+                .expect("resolved body block exists")
+                .statements
+                .first(),
+            Some(HirStmt::Let {
+                kind: HirBindingKind::ManagedLet,
+                type_name: Some(type_name),
+                ..
+            }) if type_name == "Response"
+        ));
     }
 
     #[test]
@@ -1871,10 +1867,14 @@ fn load(path: read Path) -> Unit {
         assert_eq!(bindings[1].name, "image");
         assert_eq!(bindings[1].type_name.as_deref(), Some("Image"));
         assert!(matches!(
-            hir.binding(&bindings[1].span)
-                .expect("local binding lookup by span works")
-                .kind,
-            HirBindingKind::LocalLet
+            hir.function_body("load")
+                .and_then(|body| body.block.as_ref())
+                .and_then(|block| block.statements.first()),
+            Some(HirStmt::Let {
+                kind: HirBindingKind::LocalLet,
+                type_name: Some(type_name),
+                ..
+            }) if type_name == "Image"
         ));
     }
 
