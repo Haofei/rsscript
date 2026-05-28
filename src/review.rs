@@ -46,6 +46,7 @@ pub enum ReviewRisk {
     TypeLayout,
     Effect,
     Boundary,
+    Unsafe,
 }
 
 impl ReviewRisk {
@@ -56,6 +57,7 @@ impl ReviewRisk {
             Self::TypeLayout => "type-layout",
             Self::Effect => "effect",
             Self::Boundary => "boundary",
+            Self::Unsafe => "unsafe",
         }
     }
 }
@@ -232,6 +234,10 @@ fn review_fixes(code: &str) -> Vec<ReviewFix> {
             "review_local_manage_boundary",
             "Review the changed local ownership and manage boundary.",
         ),
+        code::REVIEW_UNSAFE_NATIVE_ADDED => (
+            "review_unsafe_native_boundary",
+            "Review the new unsafe or native boundary and require explicit justification.",
+        ),
         _ => ("review_change", "Review this source-level contract change."),
     };
     vec![ReviewFix {
@@ -383,6 +389,31 @@ fn compare_function(old: &FunctionSig, new: &FunctionSig, findings: &mut Vec<Rev
             Some(effects_contract(&new.effects)),
         ));
     }
+    let old_unsafe_native = unsafe_native_effects(&old.effects);
+    let new_unsafe_native = unsafe_native_effects(&new.effects);
+    let added_unsafe_native: BTreeSet<_> = new_unsafe_native
+        .difference(&old_unsafe_native)
+        .cloned()
+        .collect();
+    if !added_unsafe_native.is_empty() {
+        findings.push(review_finding(
+            code::REVIEW_UNSAFE_NATIVE_ADDED,
+            ReviewRisk::Unsafe,
+            format!(
+                "function `{}` added unsafe/native boundary: {}.",
+                old.name,
+                effects_contract(&added_unsafe_native)
+            ),
+            paired_spans(
+                &old.span,
+                &new.span,
+                "old function",
+                "new unsafe/native boundary",
+            ),
+            Some(effects_contract(&old_unsafe_native)),
+            Some(effects_contract(&new_unsafe_native)),
+        ));
+    }
     if old.boundary != new.boundary {
         findings.push(review_finding(
             code::REVIEW_BOUNDARY_CHANGED,
@@ -511,6 +542,14 @@ fn effects_contract(effects: &BTreeSet<String>) -> String {
         return "<none>".to_string();
     }
     effects.iter().cloned().collect::<Vec<_>>().join(", ")
+}
+
+fn unsafe_native_effects(effects: &BTreeSet<String>) -> BTreeSet<String> {
+    effects
+        .iter()
+        .filter(|effect| matches!(effect.as_str(), "unsafe" | "native"))
+        .cloned()
+        .collect()
 }
 
 fn type_contract(ty: &TypeSig) -> String {

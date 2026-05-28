@@ -229,6 +229,47 @@ fn inspect(image: read Image) -> Unit {
 }
 
 #[test]
+fn review_reports_new_unsafe_native_usage() {
+    let old_source = r#"
+mode: managed
+
+fn checksum(data: read Bytes) -> UInt64
+    effects(no_panic)
+{
+    Bytes.checksum(data: read data)
+}
+"#;
+    let new_source = r#"
+mode: managed
+
+fn checksum(data: read Bytes) -> UInt64
+    effects(no_panic, unsafe, native)
+{
+    Native.checksum(data: read data)
+}
+"#;
+
+    let findings = review_sources("old.rss", old_source, "new.rss", new_source);
+    let unsafe_finding = findings
+        .iter()
+        .find(|finding| finding.code == "RSR012")
+        .expect("expected unsafe/native review finding");
+
+    assert_eq!(unsafe_finding.risk, ReviewRisk::Unsafe);
+    assert_eq!(unsafe_finding.before.as_deref(), Some("<none>"));
+    assert_eq!(unsafe_finding.after.as_deref(), Some("native, unsafe"));
+    assert!(format_review_human(&findings).contains("RSR012[unsafe]: function `checksum` added"));
+
+    let json = format_review_json(&findings);
+    let value: Value = serde_json::from_str(&json).expect("review JSON should parse");
+    assert!(value.as_array().is_some_and(|items| {
+        items
+            .iter()
+            .any(|item| item["code"] == "RSR012" && item["risk"] == "unsafe")
+    }));
+}
+
+#[test]
 fn review_reports_type_layout_changes() {
     let old_source = r#"
 mode: managed
