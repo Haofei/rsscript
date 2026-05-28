@@ -1,0 +1,10 @@
+// expect: RS0603
+mode: managed
+
+class User {
+    name: String
+}
+
+fn load_user() -> Result<fresh User, UserError> {
+    return User(name: "Ada")
+}

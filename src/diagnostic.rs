@@ -18,6 +18,7 @@ pub mod code {
     pub const LOCAL_VALUE_RETAINED: &str = "RS0501";
     pub const FRESH_RETURN_NOT_CLEAN: &str = "RS0601";
     pub const FRESHNESS_UNKNOWN: &str = "RS0602";
+    pub const INVALID_FRESH_RETURN_TYPE: &str = "RS0603";
     pub const RESOURCE_FIELD: &str = "RS0701";
     pub const RESOURCE_ESCAPE: &str = "RS0702";
     pub const LOCAL_CAPTURED_BY_MANAGED_CLOSURE: &str = "RS0801";
@@ -273,6 +274,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::FRESHNESS_UNKNOWN,
         title: "freshness unknown",
         explanation: "The MVP checker could not prove the returned value is fresh. Current proof support trusts clean locals, struct constructors, and known fresh calls.",
+    },
+    DiagnosticExplanation {
+        code: code::INVALID_FRESH_RETURN_TYPE,
+        title: "invalid fresh return type",
+        explanation: "`fresh` may only be used with struct types. Classes and resources are not fresh values.",
     },
     DiagnosticExplanation {
         code: code::RESOURCE_FIELD,

@@ -1,7 +1,7 @@
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, code};
 use crate::hir::{HirBindingKind, HirBlock, HirExpr, HirStmt, HirTypeKind};
-use crate::syntax::ast::{Callee, FunctionDecl, Item};
+use crate::syntax::ast::{Callee, FunctionDecl, Item, TypeRef};
 
 use super::local::{
     BodyState, FreshReturnIssue, FreshReturnIssueKind, LocalAnalysis, ManagedToLocalUse, MovedUse,
@@ -249,6 +249,7 @@ fn check_fresh_returns(
     if !function.returns_fresh {
         return;
     }
+    check_fresh_return_type(analyzer, function);
     for issue in local_analysis.fresh_return_issues() {
         match &issue.kind {
             FreshReturnIssueKind::NotClean { name } => {
@@ -260,6 +261,28 @@ fn check_fresh_returns(
             }
         }
     }
+}
+
+fn check_fresh_return_type(analyzer: &mut Analyzer<'_>, function: &FunctionDecl) {
+    let Some(return_ty) = &function.return_ty else {
+        return;
+    };
+    let target = fresh_return_target_type(return_ty);
+    match analyzer.hir.type_kind(&target.name) {
+        Some(HirTypeKind::Struct) | None => {}
+        Some(HirTypeKind::Class) | Some(HirTypeKind::Resource) => {
+            invalid_fresh_return_type_diagnostic(analyzer, function, target);
+        }
+    }
+}
+
+fn fresh_return_target_type(return_ty: &TypeRef) -> &TypeRef {
+    if matches!(return_ty.name.as_str(), "Result" | "Option")
+        && let Some(first_arg) = return_ty.args.first()
+    {
+        return first_arg;
+    }
+    return_ty
 }
 
 fn managed_to_local_diagnostic(analyzer: &mut Analyzer<'_>, managed_to_local: ManagedToLocalUse) {
@@ -627,6 +650,30 @@ fn freshness_unknown_diagnostic(
         )
         .with_cause(
             "This MVP checker only trusts clean locals, struct constructors, and known fresh functions.",
+        ),
+    );
+}
+
+fn invalid_fresh_return_type_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    function: &FunctionDecl,
+    target: &TypeRef,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::INVALID_FRESH_RETURN_TYPE,
+            format!(
+                "function `{}` declares `fresh {}` but `{}` is not a struct.",
+                function.name, target.name, target.name
+            ),
+            target.span.clone(),
+            "invalid fresh type",
+        )
+        .with_cause("RSScript `fresh` is a shallow guarantee for newly created struct shells.")
+        .with_fix(
+            "use_struct_fresh_type",
+            "Return a struct type as fresh, or remove `fresh` from this return contract.",
+            "manual",
         ),
     );
 }

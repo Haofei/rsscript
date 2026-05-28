@@ -1,0 +1,10 @@
+// expect: RS0603
+mode: managed
+
+class User {
+    name: String
+}
+
+fn current_user() -> fresh User {
+    return User(name: "Ada")
+}
