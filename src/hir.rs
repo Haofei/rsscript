@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::diagnostic::Span;
 use crate::syntax::ast::{
     Block, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl, Item, LetKind, Param,
-    Program as SyntaxProgram, Stmt, TypeDecl, TypeKind,
+    Program as SyntaxProgram, Stmt, TypeDecl, TypeKind, TypeRef,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +101,21 @@ pub struct HirCallSite {
     pub callee: Callee,
     pub span: Span,
     pub resolution: CallResolution,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HirModeUseKind {
+    LocalLet,
+    Manage,
+    Take,
+    ResourcePool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirModeUse {
+    pub function_name: Option<String>,
+    pub kind: HirModeUseKind,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -282,6 +297,7 @@ pub struct Hir {
     field_accesses: Vec<HirFieldAccess>,
     effect_events: Vec<HirEffectEvent>,
     returns: Vec<HirReturn>,
+    mode_uses: Vec<HirModeUse>,
     function_bodies: HashMap<String, HirFunctionBody>,
 }
 
@@ -365,6 +381,10 @@ impl Hir {
         self.function_bodies.get(function_name)
     }
 
+    pub fn mode_uses(&self) -> &[HirModeUse] {
+        &self.mode_uses
+    }
+
     pub fn resolve_call(&self, callee: &Callee) -> CallResolution {
         let call_name = callee_name(callee);
         if is_enum_variant_call(call_name) {
@@ -421,10 +441,10 @@ impl Hir {
     fn collect_body_facts(&mut self, program: &SyntaxProgram) {
         let mut facts = BodyFacts::default();
         for item in &program.items {
-            let Item::Function(function) = item else {
-                continue;
-            };
-            collect_function_body_facts(self, function, &mut facts);
+            match item {
+                Item::Function(function) => collect_function_body_facts(self, function, &mut facts),
+                Item::Type(type_decl) => collect_type_mode_uses(type_decl, &mut facts),
+            }
         }
 
         self.function_bodies = build_function_bodies(&facts);
@@ -433,6 +453,7 @@ impl Hir {
         self.field_accesses = facts.field_accesses;
         self.effect_events = facts.effect_events;
         self.returns = facts.returns;
+        self.mode_uses = facts.mode_uses;
     }
 }
 
@@ -489,11 +510,25 @@ struct BodyFacts {
     field_accesses: Vec<HirFieldAccess>,
     effect_events: Vec<HirEffectEvent>,
     returns: Vec<HirReturn>,
+    mode_uses: Vec<HirModeUse>,
 }
 
 fn collect_function_body_facts(hir: &Hir, function: &FunctionDecl, facts: &mut BodyFacts) {
     let mut value_types = HashMap::new();
     for param in &function.params {
+        if param.effect == Some(DataEffect::Take) {
+            facts.mode_uses.push(HirModeUse {
+                function_name: Some(function.name.clone()),
+                kind: HirModeUseKind::Take,
+                span: param.span.clone(),
+            });
+        }
+        collect_mode_uses_in_type_ref(
+            Some(&function.name),
+            &param.ty,
+            HirModeUseKind::ResourcePool,
+            facts,
+        );
         value_types.insert(param.name.clone(), param.ty.name.clone());
         facts.bindings.push(HirBinding {
             function_name: function.name.clone(),
@@ -502,6 +537,14 @@ fn collect_function_body_facts(hir: &Hir, function: &FunctionDecl, facts: &mut B
             span: param.span.clone(),
             type_name: Some(param.ty.name.clone()),
         });
+    }
+    if let Some(return_ty) = &function.return_ty {
+        collect_mode_uses_in_type_ref(
+            Some(&function.name),
+            return_ty,
+            HirModeUseKind::ResourcePool,
+            facts,
+        );
     }
     let mut lowering_value_types = value_types.clone();
     facts.blocks.insert(
@@ -514,6 +557,30 @@ fn collect_function_body_facts(hir: &Hir, function: &FunctionDecl, facts: &mut B
         ),
     );
     collect_body_facts_in_block(hir, &function.name, &function.body, &mut value_types, facts);
+}
+
+fn collect_type_mode_uses(type_decl: &TypeDecl, facts: &mut BodyFacts) {
+    for field in &type_decl.fields {
+        collect_mode_uses_in_type_ref(None, &field.ty, HirModeUseKind::ResourcePool, facts);
+    }
+}
+
+fn collect_mode_uses_in_type_ref(
+    function_name: Option<&str>,
+    ty: &TypeRef,
+    kind: HirModeUseKind,
+    facts: &mut BodyFacts,
+) {
+    if ty.name == "ResourcePool" {
+        facts.mode_uses.push(HirModeUse {
+            function_name: function_name.map(str::to_string),
+            kind,
+            span: ty.span.clone(),
+        });
+    }
+    for arg in &ty.args {
+        collect_mode_uses_in_type_ref(function_name, arg, kind, facts);
+    }
 }
 
 fn lower_hir_block(
@@ -793,6 +860,13 @@ fn collect_body_facts_in_stmt(
 ) {
     match statement {
         Stmt::Let(stmt) => {
+            if stmt.kind == LetKind::Local {
+                facts.mode_uses.push(HirModeUse {
+                    function_name: Some(function_name.to_string()),
+                    kind: HirModeUseKind::LocalLet,
+                    span: stmt.span.clone(),
+                });
+            }
             let type_name = stmt
                 .value
                 .as_ref()
@@ -861,6 +935,13 @@ fn collect_body_facts_in_expr(
     match expr {
         Expr::Call { callee, args, span } => {
             let resolution = hir.resolve_call(callee);
+            if is_resource_pool_callee(callee) {
+                facts.mode_uses.push(HirModeUse {
+                    function_name: Some(function_name.to_string()),
+                    kind: HirModeUseKind::ResourcePool,
+                    span: span.clone(),
+                });
+            }
             facts.call_sites.push(HirCallSite {
                 function_name: function_name.to_string(),
                 callee: callee.clone(),
@@ -873,6 +954,11 @@ fn collect_body_facts_in_expr(
             }
         }
         Expr::Manage { value, span } => {
+            facts.mode_uses.push(HirModeUse {
+                function_name: Some(function_name.to_string()),
+                kind: HirModeUseKind::Manage,
+                span: span.clone(),
+            });
             if let Some((binding_name, value_span)) = direct_ident(value) {
                 facts.effect_events.push(HirEffectEvent {
                     function_name: function_name.to_string(),
@@ -889,6 +975,11 @@ fn collect_body_facts_in_expr(
             value,
             span,
         } => {
+            facts.mode_uses.push(HirModeUse {
+                function_name: Some(function_name.to_string()),
+                kind: HirModeUseKind::Take,
+                span: span.clone(),
+            });
             if let Some((binding_name, value_span)) = direct_ident(value) {
                 facts.effect_events.push(HirEffectEvent {
                     function_name: function_name.to_string(),
@@ -961,6 +1052,11 @@ fn collect_retain_events(
             });
         }
     }
+}
+
+fn is_resource_pool_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Name(name) if name == "ResourcePool")
+        || matches!(callee, Callee::Qualified { namespace, .. } if namespace == "ResourcePool")
 }
 
 fn direct_read_ident(expr: &Expr) -> Option<(String, Span)> {
