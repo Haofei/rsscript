@@ -130,6 +130,7 @@ fn check_stmt_semantics(
             if let Some(value) = value {
                 check_expr_semantics(analyzer, value, stmt_state);
                 check_resource_pool_lease_expr(analyzer, value, false);
+                check_resource_producer_expr(analyzer, value, false);
             }
 
             Flow::Fallthrough
@@ -138,6 +139,7 @@ fn check_stmt_semantics(
             if let Some(value) = value {
                 check_expr_semantics(analyzer, value, state);
                 check_resource_pool_lease_expr(analyzer, value, false);
+                check_resource_producer_expr(analyzer, value, false);
             }
             Flow::Return
         }
@@ -150,6 +152,7 @@ fn check_stmt_semantics(
         } => {
             check_expr_semantics(analyzer, resource, state);
             check_resource_pool_lease_expr(analyzer, resource, true);
+            check_resource_producer_expr(analyzer, resource, true);
             check_resource_escape(analyzer, local_analysis, span);
             let mut scoped_state = state.clone();
             scoped_state.bind_resource(binding.clone());
@@ -163,6 +166,7 @@ fn check_stmt_semantics(
         } => {
             check_expr_semantics(analyzer, condition, state);
             check_resource_pool_lease_expr(analyzer, condition, false);
+            check_resource_producer_expr(analyzer, condition, false);
             apply_expr_effects(condition, state);
 
             let base_state = state.clone();
@@ -183,6 +187,7 @@ fn check_stmt_semantics(
             if let Some(condition) = condition {
                 check_expr_semantics(analyzer, condition, state);
                 check_resource_pool_lease_expr(analyzer, condition, false);
+                check_resource_producer_expr(analyzer, condition, false);
                 apply_expr_effects(condition, state);
             }
 
@@ -201,6 +206,7 @@ fn check_stmt_semantics(
         HirStmt::Match { value, arms, .. } => {
             check_expr_semantics(analyzer, value, state);
             check_resource_pool_lease_expr(analyzer, value, false);
+            check_resource_producer_expr(analyzer, value, false);
             apply_expr_effects(value, state);
 
             let base_state = state.clone();
@@ -219,6 +225,7 @@ fn check_stmt_semantics(
         HirStmt::Expr(expr) => {
             check_expr_semantics(analyzer, expr, state);
             check_resource_pool_lease_expr(analyzer, expr, false);
+            check_resource_producer_expr(analyzer, expr, false);
             Flow::Fallthrough
         }
         HirStmt::Break(_) => Flow::Break,
@@ -812,6 +819,24 @@ fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
         | HirExpr::String { .. }
         | HirExpr::Closure { .. }
         | HirExpr::Unknown(_) => None,
+    }
+}
+
+fn hir_expr_span(expr: &HirExpr) -> &Span {
+    match expr {
+        HirExpr::Ident { span, .. }
+        | HirExpr::Number { span, .. }
+        | HirExpr::String { span, .. }
+        | HirExpr::Binary { span, .. }
+        | HirExpr::Field { span, .. }
+        | HirExpr::Index { span, .. }
+        | HirExpr::Call { span, .. }
+        | HirExpr::Effect { span, .. }
+        | HirExpr::Manage { span, .. }
+        | HirExpr::Spawn { span, .. }
+        | HirExpr::Try { span, .. }
+        | HirExpr::Closure { span, .. }
+        | HirExpr::Unknown(span) => span,
     }
 }
 
@@ -1425,6 +1450,220 @@ fn check_resource_pool_lease_expr(
     }
 }
 
+fn check_resource_producer_expr(
+    analyzer: &mut Analyzer<'_>,
+    expr: &HirExpr,
+    allowed_resource_context: bool,
+) {
+    if expr_is_resource_producer(analyzer, expr) {
+        if allowed_resource_context {
+            check_resource_producer_children(analyzer, expr);
+        } else {
+            resource_producer_escape_diagnostic(
+                analyzer,
+                hir_expr_span(expr).clone(),
+                hir_expr_type_name(expr).unwrap_or("resource"),
+            );
+        }
+        return;
+    }
+
+    match expr {
+        HirExpr::Call { callee, args, .. } => {
+            for arg in args {
+                if is_resource_pool_new(callee) && arg.name.as_deref() == Some("create") {
+                    check_resource_pool_factory_expr(analyzer, &arg.value);
+                } else {
+                    check_resource_producer_expr(analyzer, &arg.value, false);
+                }
+            }
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Try { value, .. } => {
+            check_resource_producer_expr(analyzer, value, allowed_resource_context);
+        }
+        HirExpr::Binary { left, right, .. } => {
+            check_resource_producer_expr(analyzer, left, false);
+            check_resource_producer_expr(analyzer, right, false);
+        }
+        HirExpr::Field { base, .. } => check_resource_producer_expr(analyzer, base, false),
+        HirExpr::Index { base, index, .. } => {
+            check_resource_producer_expr(analyzer, base, false);
+            check_resource_producer_expr(analyzer, index, false);
+        }
+        HirExpr::Closure { body, .. } => {
+            for statement in &body.statements {
+                check_resource_producer_stmt(analyzer, statement);
+            }
+        }
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn check_resource_producer_children(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
+    match expr {
+        HirExpr::Call { callee, args, .. } => {
+            for arg in args {
+                if is_resource_pool_new(callee) && arg.name.as_deref() == Some("create") {
+                    check_resource_pool_factory_expr(analyzer, &arg.value);
+                } else {
+                    check_resource_producer_expr(analyzer, &arg.value, false);
+                }
+            }
+        }
+        HirExpr::Try { value, .. } | HirExpr::Effect { value, .. } => {
+            check_resource_producer_expr(analyzer, value, true);
+        }
+        _ => {}
+    }
+}
+
+fn check_resource_producer_stmt(analyzer: &mut Analyzer<'_>, statement: &HirStmt) {
+    match statement {
+        HirStmt::Let {
+            value: Some(value), ..
+        }
+        | HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => check_resource_producer_expr(analyzer, value, false),
+        HirStmt::With { resource, body, .. } => {
+            check_resource_producer_expr(analyzer, resource, true);
+            for statement in &body.statements {
+                check_resource_producer_stmt(analyzer, statement);
+            }
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            check_resource_producer_expr(analyzer, condition, false);
+            for statement in &then_body.statements {
+                check_resource_producer_stmt(analyzer, statement);
+            }
+            if let Some(else_body) = else_body {
+                for statement in &else_body.statements {
+                    check_resource_producer_stmt(analyzer, statement);
+                }
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                check_resource_producer_expr(analyzer, condition, false);
+            }
+            for statement in &body.statements {
+                check_resource_producer_stmt(analyzer, statement);
+            }
+        }
+        HirStmt::Match { value, arms, .. } => {
+            check_resource_producer_expr(analyzer, value, false);
+            for arm in arms {
+                for statement in &arm.body.statements {
+                    check_resource_producer_stmt(analyzer, statement);
+                }
+            }
+        }
+        HirStmt::Let { value: None, .. }
+        | HirStmt::Return { value: None, .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn check_resource_pool_factory_expr(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
+    match expr {
+        HirExpr::Closure { body, .. } => {
+            for statement in &body.statements {
+                check_resource_pool_factory_stmt(analyzer, statement);
+            }
+        }
+        _ => check_resource_producer_expr(analyzer, expr, true),
+    }
+}
+
+fn check_resource_pool_factory_stmt(analyzer: &mut Analyzer<'_>, statement: &HirStmt) {
+    match statement {
+        HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => check_resource_producer_expr(analyzer, value, true),
+        HirStmt::Let {
+            value: Some(value), ..
+        } => check_resource_producer_expr(analyzer, value, false),
+        HirStmt::With { resource, body, .. } => {
+            check_resource_producer_expr(analyzer, resource, true);
+            for statement in &body.statements {
+                check_resource_pool_factory_stmt(analyzer, statement);
+            }
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            check_resource_producer_expr(analyzer, condition, false);
+            for statement in &then_body.statements {
+                check_resource_pool_factory_stmt(analyzer, statement);
+            }
+            if let Some(else_body) = else_body {
+                for statement in &else_body.statements {
+                    check_resource_pool_factory_stmt(analyzer, statement);
+                }
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                check_resource_producer_expr(analyzer, condition, false);
+            }
+            for statement in &body.statements {
+                check_resource_pool_factory_stmt(analyzer, statement);
+            }
+        }
+        HirStmt::Match { value, arms, .. } => {
+            check_resource_producer_expr(analyzer, value, false);
+            for arm in arms {
+                for statement in &arm.body.statements {
+                    check_resource_pool_factory_stmt(analyzer, statement);
+                }
+            }
+        }
+        HirStmt::Let { value: None, .. }
+        | HirStmt::Return { value: None, .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn expr_is_resource_producer(analyzer: &Analyzer<'_>, expr: &HirExpr) -> bool {
+    match expr {
+        HirExpr::Call { .. } => expr_type_is_resource(analyzer, expr),
+        HirExpr::Try { value, .. } | HirExpr::Effect { value, .. } => {
+            expr_type_is_resource(analyzer, expr) && expr_is_resource_producer(analyzer, value)
+        }
+        _ => false,
+    }
+}
+
+fn expr_type_is_resource(analyzer: &Analyzer<'_>, expr: &HirExpr) -> bool {
+    hir_expr_type_name(expr).is_some_and(|type_name| {
+        analyzer.hir.type_kind(type_root_name(type_name)) == Some(HirTypeKind::Resource)
+    })
+}
+
 fn check_resource_pool_lease_stmt(analyzer: &mut Analyzer<'_>, statement: &HirStmt) {
     match statement {
         HirStmt::Let {
@@ -1486,6 +1725,10 @@ fn is_resource_pool_borrow(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && name == "borrow")
 }
 
+fn is_resource_pool_new(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && name == "new")
+}
+
 fn type_root_name(type_name: &str) -> &str {
     type_name
         .split_once('<')
@@ -1519,6 +1762,27 @@ fn resource_escape_diagnostic(
             "resource escapes",
         )
         .with_cause("A `with` resource must be dropped when the block exits."),
+    );
+}
+
+fn resource_producer_escape_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    span: crate::diagnostic::Span,
+    type_name: &str,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::RESOURCE_ESCAPE,
+            format!("resource-producing expression of type `{type_name}` must be consumed by `with`."),
+            span,
+            "resource producer escapes",
+        )
+        .with_cause("Resource-producing calls create transient linear values that cannot be stored, returned, retained, managed, or passed as ordinary values.")
+        .with_fix(
+            "use_with",
+            "Use `with producer(...)? as resource { ... }`, or an approved resource container API.",
+            "manual",
+        ),
     );
 }
 

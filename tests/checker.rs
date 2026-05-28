@@ -2779,6 +2779,51 @@ fn bad_binding(path: read Path) -> Unit {
 }
 
 #[test]
+fn checker_requires_resource_producers_to_enter_with_context() {
+    let source = r#"
+features: local
+
+resource File {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+fn File.open(path: read Path) -> File
+fn File.stat(file: read File) -> Unit
+
+fn ok_with(path: read Path) -> Unit {
+    with File.open(path: read path) as file {
+        File.stat(file: read file)
+    }
+}
+
+fn bad_let(path: read Path) -> Unit {
+    let file = File.open(path: read path)
+}
+
+fn bad_return(path: read Path) -> File {
+    return File.open(path: read path)
+}
+
+fn bad_arg(path: read Path) -> Unit {
+    File.stat(file: read File.open(path: read path))
+}
+"#;
+    let diagnostics = analyze_source("resource-producer-context.rss", source);
+    let producer_escape_count = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == "RS0702" && diagnostic.label == "resource producer escapes"
+        })
+        .count();
+
+    assert_eq!(producer_escape_count, 3, "{diagnostics:?}");
+}
+
+#[test]
 fn checker_tracks_use_after_take_for_local_inline_field() {
     let bad = r#"
 features: local
