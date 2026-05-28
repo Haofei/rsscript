@@ -4237,19 +4237,58 @@ fn package_publish_dry_run_reports_ready_package() {
         ),
     )
     .expect("lock should be written");
+    fs::create_dir_all(temp_dir.join("target/debug")).expect("target dir should be created");
+    fs::write(temp_dir.join("target/debug/junk"), "do not publish")
+        .expect("target file should be written");
+    fs::create_dir_all(temp_dir.join("review")).expect("review dir should be created");
+    fs::write(temp_dir.join("review/package-review.json"), "{}\n")
+        .expect("generated review metadata should be written");
 
     let publish = publish_package_dry_run(&temp_dir).expect("publish dry-run should succeed");
+    let publish_again =
+        publish_package_dry_run(&temp_dir).expect("publish dry-run should be deterministic");
     let json: Value = serde_json::from_str(&rsscript::format_package_publish_json(&publish))
         .expect("publish JSON should parse");
     let _ = fs::remove_dir_all(&temp_dir);
+    let archive_paths = publish
+        .archive_files
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect::<Vec<_>>();
 
     assert!(publish.ready);
+    assert_eq!(publish.archive_hash, publish_again.archive_hash);
     assert_eq!(json["package"]["name"], "rss-ready");
+    assert_eq!(json["archive_format"], "rss.package.archive.v1");
     assert!(
         json["archive_hash"]
             .as_str()
             .is_some_and(|hash| hash.starts_with("sha256:"))
     );
+    assert!(archive_paths.contains(&"rsspkg.toml"), "{archive_paths:?}");
+    assert!(
+        archive_paths.contains(&"interface/lib.rssi"),
+        "{archive_paths:?}"
+    );
+    assert!(archive_paths.contains(&"rsspkg.lock"), "{archive_paths:?}");
+    assert!(
+        !archive_paths.iter().any(|path| path.starts_with("target/")),
+        "{archive_paths:?}"
+    );
+    assert!(
+        !archive_paths
+            .iter()
+            .any(|path| *path == "review/package-review.json"),
+        "{archive_paths:?}"
+    );
+    assert!(json["archive_files"].as_array().is_some_and(|files| {
+        files.iter().any(|file| {
+            file["path"] == "rsspkg.toml"
+                && file["sha256"]
+                    .as_str()
+                    .is_some_and(|hash| hash.starts_with("sha256:"))
+        })
+    }));
     assert!(json["checks"].as_array().is_some_and(|checks| {
         checks
             .iter()

@@ -119,10 +119,19 @@ pub struct PackagePublishDryRun {
     pub ready: bool,
     pub risk: PackageRisk,
     pub reasons: Vec<String>,
+    pub archive_format: String,
     pub archive_hash: String,
+    pub archive_files: Vec<PackageArchiveFile>,
     pub review: PackageReviewSummary,
     pub dependency_summary: PackageTreeSummary,
     pub checks: Vec<PackagePublishCheck>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageArchiveFile {
+    pub path: String,
+    pub size: u64,
+    pub sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -845,7 +854,8 @@ pub fn publish_package_dry_run(package_dir: &Path) -> Result<PackagePublishDryRu
     let review = review_package_dir(package_dir)?;
     let check = check_package_dir(package_dir)?;
     let tree = package_tree(package_dir)?;
-    let archive_hash = package_archive_hash(package_dir)?;
+    let archive_files = package_archive_files(package_dir)?;
+    let archive_hash = package_archive_hash(&archive_files);
 
     let version_ok = is_semver_like(&package.manifest.package.version);
     let dependency_graph_ok = tree.summary.unknown_risk_packages == 0;
@@ -932,7 +942,7 @@ pub fn publish_package_dry_run(package_dir: &Path) -> Result<PackagePublishDryRu
             "package archive reproducible",
             true,
             PackageRisk::Low,
-            archive_hash.clone(),
+            format!("{} files; {archive_hash}", archive_files.len()),
         ),
     ];
 
@@ -955,7 +965,9 @@ pub fn publish_package_dry_run(package_dir: &Path) -> Result<PackagePublishDryRu
         ready,
         risk,
         reasons,
+        archive_format: "rss.package.archive.v1".to_string(),
         archive_hash,
+        archive_files,
         review: review.summary,
         dependency_summary: tree.summary,
         checks,
@@ -1345,7 +1357,12 @@ pub fn format_package_publish_human(publish: &PackagePublishDryRun) -> String {
         if publish.ready { "ready" } else { "blocked" },
         package_risk_label(publish.risk)
     ));
-    output.push_str(&format!("archive: {}\n", publish.archive_hash));
+    output.push_str(&format!(
+        "archive: {} {} files {}\n",
+        publish.archive_format,
+        publish.archive_files.len(),
+        publish.archive_hash
+    ));
     for check in &publish.checks {
         output.push_str(&format!(
             "{}: {} ({}) {}\n",
@@ -2889,15 +2906,75 @@ fn package_checksum(package: &LoadedPackage, native_hash: Option<&str>) -> Strin
     sha256_label(input.as_bytes())
 }
 
-fn package_archive_hash(package_dir: &Path) -> Result<String, String> {
-    let package = load_package(package_dir)?;
-    let native = package
-        .manifest
-        .native
-        .as_ref()
-        .and_then(|native| native.rust.as_ref());
-    let native_hash = package_native_hash(package_dir, native)?;
-    Ok(package_checksum(&package, native_hash.as_deref()))
+fn package_archive_files(package_dir: &Path) -> Result<Vec<PackageArchiveFile>, String> {
+    let mut paths = Vec::new();
+    collect_package_archive_paths(package_dir, package_dir, &mut paths)?;
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| package_archive_file(package_dir, &path))
+        .collect()
+}
+
+fn collect_package_archive_paths(
+    root: &Path,
+    path: &Path,
+    files: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    if path.is_file() {
+        files.push(path.to_path_buf());
+        return Ok(());
+    }
+    let entries = fs::read_dir(path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| format!("failed to read entry in {}: {error}", path.display()))?;
+        let path = entry.path();
+        let name = entry.file_name();
+        if should_skip_archive_entry(root, &path, &name.to_string_lossy()) {
+            continue;
+        }
+        if path.is_dir() || path.is_file() {
+            collect_package_archive_paths(root, &path, files)?;
+        }
+    }
+    Ok(())
+}
+
+fn should_skip_archive_entry(root: &Path, path: &Path, name: &str) -> bool {
+    if matches!(name, ".git" | "target" | "vendor" | ".DS_Store") {
+        return true;
+    }
+    let relative = relative_path(root, path);
+    matches!(
+        relative.as_str(),
+        "review/package-review.json" | "vendor/rss-vendor.json"
+    )
+}
+
+fn package_archive_file(root: &Path, path: &Path) -> Result<PackageArchiveFile, String> {
+    let contents =
+        fs::read(path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    Ok(PackageArchiveFile {
+        path: relative_path(root, path),
+        size: contents.len() as u64,
+        sha256: sha256_label(&contents),
+    })
+}
+
+fn package_archive_hash(files: &[PackageArchiveFile]) -> String {
+    let mut input = String::new();
+    input.push_str("rss.package.archive.v1\n");
+    for file in files {
+        input.push_str(&file.path);
+        input.push('\n');
+        input.push_str(&file.size.to_string());
+        input.push('\n');
+        input.push_str(&file.sha256);
+        input.push('\n');
+    }
+    sha256_label(input.as_bytes())
 }
 
 fn hash_sources(sources: &[PackageSource], kind: PackageReviewFileKind) -> String {

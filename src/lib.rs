@@ -20,9 +20,9 @@ pub use diagnostic::{
 };
 pub use lint::lint_source;
 pub use package::{
-    PackageCheck, PackageCheckLock, PackageDependencyKind, PackageDiff, PackageGraphCheck,
-    PackageIdentity, PackageInterfaceChange, PackageInterfaceChangeKind, PackageLock,
-    PackageLockDiff, PackageLockFieldChange, PackageLockMetadata, PackageLockPackage,
+    PackageArchiveFile, PackageCheck, PackageCheckLock, PackageDependencyKind, PackageDiff,
+    PackageGraphCheck, PackageIdentity, PackageInterfaceChange, PackageInterfaceChangeKind,
+    PackageLock, PackageLockDiff, PackageLockFieldChange, PackageLockMetadata, PackageLockPackage,
     PackageLockPackageChange, PackageLoweringInput, PackageManifestChange, PackageMetadataReport,
     PackageNativeRustCheck, PackageNativeRustReview, PackagePublishCheck, PackagePublishDryRun,
     PackageReview, PackageReviewFile, PackageReviewFileKind, PackageReviewMetadata,
