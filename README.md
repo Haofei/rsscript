@@ -82,7 +82,7 @@ Files are managed-only unless they declare otherwise:
 features: local
 ```
 
-`local`, `native`, `unsafe`, and `async` are recognized as review capability gates today. `local` enables local ownership features; `native`, `unsafe`, and `async` must be declared before a file can expose those boundaries. Names like `device`, `ffi`, and `reflection` are reserved for capabilities that genuinely change review risk. Ordinary libraries (JSON, File, Image, HTTP, Map, Regex) stay as libraries. Repeated or unknown names are diagnostics so capability boundaries stay explicit.
+`local`, `native`, `unsafe`, and `async` are recognized as review capability gates today. `local` enables local ownership features; `native`, `unsafe`, and `async` must be declared before a file can expose those boundaries. Executable async bodies are still outside the v0.5 runtime and are reported before Rust lowering; async signatures remain useful in interfaces and review diffs. Names like `device`, `ffi`, and `reflection` are reserved for capabilities that genuinely change review risk. Ordinary libraries (JSON, File, Image, HTTP, Map, Regex) stay as libraries. Repeated or unknown names are diagnostics so capability boundaries stay explicit.
 
 ---
 

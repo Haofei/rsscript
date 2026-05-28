@@ -2526,6 +2526,25 @@ async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError>
 }
 
 #[test]
+fn checker_reports_async_bodies_as_unsupported_until_async_lowering_exists() {
+    let source = r#"
+features: async
+
+async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError> {
+    return Network.fetch(url: read url)
+}
+"#;
+    let diagnostics = analyze_source("async-body.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0015"
+                && diagnostic.label == "unsupported async function body")
+    );
+}
+
+#[test]
 fn parser_accepts_native_function_declaration() {
     let source = r#"
 features: native

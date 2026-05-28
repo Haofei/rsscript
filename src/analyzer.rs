@@ -218,6 +218,13 @@ impl Analyzer<'_> {
     fn check_unsupported_syntax_item(&mut self, item: &Item) {
         match item {
             Item::Function(function) => {
+                if function.is_async && !function.body.statements.is_empty() {
+                    self.unsupported_syntax(
+                        function.span.clone(),
+                        "unsupported async function body",
+                        "`async fn` is currently supported only in interface and review metadata; executable async lowering is not part of the v0.5 runtime yet.",
+                    );
+                }
                 for param in &function.params {
                     self.check_unsupported_syntax_type_ref(&param.ty);
                 }
