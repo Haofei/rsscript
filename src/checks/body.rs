@@ -19,6 +19,11 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
 
     for function in functions {
         let mut state = BodyState::default();
+        for param in &function.params {
+            state
+                .value_types
+                .insert(param.name.clone(), param.ty.name.clone());
+        }
         check_block(analyzer, &function, &function.body, &mut state);
     }
 }
@@ -29,6 +34,7 @@ struct BodyState {
     clean_locals: HashSet<String>,
     managed: HashSet<String>,
     moved: HashMap<String, crate::diagnostic::Span>,
+    value_types: HashMap<String, String>,
 }
 
 fn check_block(
@@ -82,7 +88,7 @@ fn check_stmt_semantics(
             }
 
             if let Some(value) = &stmt.value {
-                check_take_of_handle_field(analyzer, value);
+                check_take_of_handle_field(analyzer, value, state);
             }
         }
         Stmt::Return(stmt) => {
@@ -90,7 +96,7 @@ fn check_stmt_semantics(
                 if function.returns_fresh {
                     check_fresh_return(analyzer, function, value, state);
                 }
-                check_take_of_handle_field(analyzer, value);
+                check_take_of_handle_field(analyzer, value, state);
             }
         }
         Stmt::With(stmt) => {
@@ -98,7 +104,7 @@ fn check_stmt_semantics(
             check_block(analyzer, function, &stmt.body, state);
         }
         Stmt::Expr(expr) => {
-            check_take_of_handle_field(analyzer, expr);
+            check_take_of_handle_field(analyzer, expr, state);
         }
         Stmt::Unknown(_) => {}
     }
@@ -117,6 +123,9 @@ fn apply_stmt_effects(analyzer: &mut Analyzer<'_>, statement: &Stmt, state: &mut
                 }
             }
             if let Some(value) = &stmt.value {
+                if let Some(type_name) = infer_expr_type(analyzer, value, state) {
+                    state.value_types.insert(stmt.name.clone(), type_name);
+                }
                 apply_expr_effects(analyzer, value, state);
             }
         }
@@ -255,15 +264,15 @@ fn check_managed_closure_captures(analyzer: &mut Analyzer<'_>, body: &Block, sta
     }
 }
 
-fn check_take_of_handle_field(analyzer: &mut Analyzer<'_>, expr: &Expr) {
+fn check_take_of_handle_field(analyzer: &mut Analyzer<'_>, expr: &Expr, state: &BodyState) {
     match expr {
         Expr::Effect {
             effect: DataEffect::Take,
             value,
             span,
         } => {
-            if let Expr::Field { name, .. } = value.as_ref()
-                && is_handle_field(analyzer, name)
+            if let Expr::Field { base, name, .. } = value.as_ref()
+                && is_handle_field(analyzer, state, base, name)
             {
                 analyzer.diagnostics.push(
                     Diagnostic::error(
@@ -275,44 +284,44 @@ fn check_take_of_handle_field(analyzer: &mut Analyzer<'_>, expr: &Expr) {
                     .with_cause("Handle fields are managed references and cannot be consumed as local inline values."),
                 );
             }
-            check_take_of_handle_field(analyzer, value);
+            check_take_of_handle_field(analyzer, value, state);
         }
-        Expr::Effect { value, .. } => check_take_of_handle_field(analyzer, value),
-        Expr::Manage { value, .. } => check_take_of_handle_field(analyzer, value),
+        Expr::Effect { value, .. } => check_take_of_handle_field(analyzer, value, state),
+        Expr::Manage { value, .. } => check_take_of_handle_field(analyzer, value, state),
         Expr::Call { args, .. } => {
             for arg in args {
-                check_take_of_handle_field(analyzer, &arg.value);
+                check_take_of_handle_field(analyzer, &arg.value, state);
             }
         }
-        Expr::Field { base, .. } => check_take_of_handle_field(analyzer, base),
+        Expr::Field { base, .. } => check_take_of_handle_field(analyzer, base, state),
         Expr::Closure { body, .. } => {
             for statement in &body.statements {
-                check_take_of_handle_in_stmt(analyzer, statement);
+                check_take_of_handle_in_stmt(analyzer, statement, state);
             }
         }
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
     }
 }
 
-fn check_take_of_handle_in_stmt(analyzer: &mut Analyzer<'_>, statement: &Stmt) {
+fn check_take_of_handle_in_stmt(analyzer: &mut Analyzer<'_>, statement: &Stmt, state: &BodyState) {
     match statement {
         Stmt::Let(stmt) => {
             if let Some(value) = &stmt.value {
-                check_take_of_handle_field(analyzer, value);
+                check_take_of_handle_field(analyzer, value, state);
             }
         }
         Stmt::Return(stmt) => {
             if let Some(value) = &stmt.value {
-                check_take_of_handle_field(analyzer, value);
+                check_take_of_handle_field(analyzer, value, state);
             }
         }
         Stmt::With(stmt) => {
-            check_take_of_handle_field(analyzer, &stmt.resource);
+            check_take_of_handle_field(analyzer, &stmt.resource, state);
             for statement in &stmt.body.statements {
-                check_take_of_handle_in_stmt(analyzer, statement);
+                check_take_of_handle_in_stmt(analyzer, statement, state);
             }
         }
-        Stmt::Expr(expr) => check_take_of_handle_field(analyzer, expr),
+        Stmt::Expr(expr) => check_take_of_handle_field(analyzer, expr, state),
         Stmt::Unknown(_) => {}
     }
 }
@@ -493,8 +502,53 @@ fn fresh_return_diagnostic(
     );
 }
 
-fn is_handle_field(analyzer: &Analyzer<'_>, field: &str) -> bool {
-    analyzer.hir.is_handle_field_name(field)
+fn infer_expr_type(analyzer: &Analyzer<'_>, expr: &Expr, state: &BodyState) -> Option<String> {
+    match expr {
+        Expr::Ident(name, _) => state.value_types.get(name).cloned(),
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
+            infer_expr_type(analyzer, value, state)
+        }
+        Expr::Call { callee, .. } => infer_call_type(analyzer, callee),
+        Expr::Field { base, name, .. } => {
+            let base_type = infer_expr_type(analyzer, base, state)?;
+            let field = analyzer.hir.type_info(&base_type)?.fields.get(name)?;
+            Some(field.type_name.clone())
+        }
+        Expr::Closure { .. } | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => None,
+    }
+}
+
+fn infer_call_type(analyzer: &Analyzer<'_>, callee: &Callee) -> Option<String> {
+    if let Some(signature) = analyzer.resolve_callee(callee)
+        && let Some(return_type) = &signature.return_type
+    {
+        return Some(return_type.clone());
+    }
+
+    match callee {
+        Callee::Name(name) if analyzer.hir.type_info(name).is_some() => Some(name.clone()),
+        Callee::Qualified { namespace, name } if name == "new" => {
+            analyzer.hir.type_info(namespace).map(|_| namespace.clone())
+        }
+        Callee::Name(_) | Callee::Qualified { .. } => None,
+    }
+}
+
+fn is_handle_field(
+    analyzer: &Analyzer<'_>,
+    state: &BodyState,
+    base: &Expr,
+    field_name: &str,
+) -> bool {
+    if let Some(base_type) = infer_expr_type(analyzer, base, state) {
+        return analyzer
+            .hir
+            .type_info(&base_type)
+            .and_then(|type_info| type_info.fields.get(field_name))
+            .is_some_and(|field| field.is_handle);
+    }
+
+    !matches!(base, Expr::Ident(_, _)) && analyzer.hir.is_handle_field_name(field_name)
 }
 
 fn collect_stmt_idents(statement: &Stmt, uses: &mut Vec<(String, crate::diagnostic::Span)>) {

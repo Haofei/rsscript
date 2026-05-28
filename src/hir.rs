@@ -34,6 +34,7 @@ pub struct FunctionSig {
     pub namespace: Option<String>,
     pub name: String,
     pub params: Vec<ParamSig>,
+    pub return_type: Option<String>,
     pub returns_fresh: bool,
     pub retained_params: HashSet<String>,
     pub is_builtin: bool,
@@ -138,6 +139,7 @@ fn function_sig_from_decl(function: &FunctionDecl) -> FunctionSig {
         namespace: None,
         name: function.name.clone(),
         params: function.params.iter().map(param_sig_from_decl).collect(),
+        return_type: function.return_ty.as_ref().map(|ty| ty.name.clone()),
         returns_fresh: function.returns_fresh,
         retained_params: function
             .effects
@@ -205,6 +207,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
             "Image",
             "load",
             &[param("path", ParamEffect::Read, "Path")],
+            Some("Image"),
             true,
             &[],
         ),
@@ -216,6 +219,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
                 copy_param("width", "Int"),
                 copy_param("height", "Int"),
             ],
+            Some("Unit"),
             false,
             &[],
         ),
@@ -223,6 +227,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
             "Image",
             "normalize",
             &[param("image", ParamEffect::Mut, "Image")],
+            Some("Unit"),
             false,
             &[],
         ),
@@ -230,6 +235,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
             "Image",
             "sharpen",
             &[param("image", ParamEffect::Mut, "Image")],
+            Some("Unit"),
             false,
             &[],
         ),
@@ -240,6 +246,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
                 param("image", ParamEffect::Read, "Image"),
                 param("path", ParamEffect::Read, "Path"),
             ],
+            Some("Unit"),
             false,
             &[],
         ),
@@ -247,6 +254,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
             "Image",
             "inspect",
             &[param("image", ParamEffect::Read, "Image")],
+            Some("Unit"),
             false,
             &[],
         ),
@@ -257,6 +265,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
                 param("cache", ParamEffect::Mut, "ImageCache"),
                 param("image", ParamEffect::Read, "Image"),
             ],
+            Some("Unit"),
             false,
             &["image"],
         ),
@@ -264,6 +273,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
             "File",
             "open",
             &[param("path", ParamEffect::Read, "Path")],
+            Some("File"),
             false,
             &[],
         ),
@@ -271,6 +281,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
             "File",
             "open_read",
             &[param("path", ParamEffect::Read, "Path")],
+            Some("File"),
             false,
             &[],
         ),
@@ -278,6 +289,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
             "File",
             "open_write",
             &[param("path", ParamEffect::Read, "Path")],
+            Some("File"),
             false,
             &[],
         ),
@@ -285,6 +297,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
             "File",
             "read_all",
             &[param("file", ParamEffect::Mut, "File")],
+            Some("Bytes"),
             true,
             &[],
         ),
@@ -295,6 +308,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
                 param("file", ParamEffect::Mut, "File"),
                 param("data", ParamEffect::Read, "Bytes"),
             ],
+            Some("Unit"),
             false,
             &[],
         ),
@@ -306,6 +320,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
                 param("key", ParamEffect::Read, "K"),
                 param("value", ParamEffect::Read, "V"),
             ],
+            Some("Unit"),
             false,
             &["value"],
         ),
@@ -313,6 +328,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
             "ResourcePool",
             "borrow",
             &[param("pool", ParamEffect::Mut, "ResourcePool")],
+            None,
             false,
             &[],
         ),
@@ -320,6 +336,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
             "Json",
             "parse",
             &[param("text", ParamEffect::Read, "String")],
+            Some("JsonValue"),
             true,
             &[],
         ),
@@ -330,6 +347,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
                 param("value", ParamEffect::Read, "JsonValue"),
                 param("name", ParamEffect::Read, "String"),
             ],
+            Some("String"),
             true,
             &[],
         ),
@@ -340,6 +358,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
                 param("file", ParamEffect::Mut, "File"),
                 param("buffer", ParamEffect::Mut, "RowBuffer"),
             ],
+            Some("Unit"),
             false,
             &[],
         ),
@@ -347,6 +366,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
             "Csv",
             "parse_row",
             &[param("buffer", ParamEffect::Read, "RowBuffer")],
+            Some("Row"),
             true,
             &[],
         ),
@@ -357,6 +377,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
                 param("conn", ParamEffect::Mut, "DbConnection"),
                 param("sql", ParamEffect::Read, "String"),
             ],
+            None,
             false,
             &[],
         ),
@@ -364,6 +385,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
             "RuleLoader",
             "load_rules",
             &[param("path", ParamEffect::Read, "Path")],
+            Some("List"),
             true,
             &[],
         ),
@@ -374,6 +396,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
                 param("global", ParamEffect::Mut, "GlobalConfig"),
                 param("value", ParamEffect::Read, "Config"),
             ],
+            Some("Unit"),
             false,
             &["value"],
         ),
@@ -384,6 +407,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
                 param("cache", ParamEffect::Read, "Cache"),
                 param("key", ParamEffect::Read, "String"),
             ],
+            None,
             false,
             &[],
         ),
@@ -391,6 +415,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
             "Cache",
             "get",
             &[param("cache", ParamEffect::Read, "Cache")],
+            None,
             false,
             &[],
         ),
@@ -398,6 +423,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
             "Request",
             "path",
             &[param("request", ParamEffect::Read, "Request")],
+            Some("String"),
             false,
             &[],
         ),
@@ -408,6 +434,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
                 param("counter", ParamEffect::Mut, "Counter"),
                 copy_param("amount", "Int"),
             ],
+            Some("Unit"),
             false,
             &[],
         ),
@@ -415,6 +442,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
             "Counter",
             "value",
             &[param("counter", ParamEffect::Read, "Counter")],
+            Some("Int"),
             false,
             &[],
         ),
@@ -425,6 +453,7 @@ fn builtin(
     namespace: &str,
     name: &str,
     params: &[ParamSig],
+    return_type: Option<&str>,
     returns_fresh: bool,
     retained_params: &[&str],
 ) -> FunctionSig {
@@ -432,6 +461,7 @@ fn builtin(
         namespace: Some(namespace.to_string()),
         name: name.to_string(),
         params: params.to_vec(),
+        return_type: return_type.map(str::to_string),
         returns_fresh,
         retained_params: retained_params
             .iter()
@@ -495,6 +525,9 @@ struct Session {
         let user_field = hir.fields_named("user").next().expect("user field exists");
         assert_eq!(user_field.type_name, "User");
         assert!(user_field.is_handle);
+        let session = hir.type_info("Session").expect("session type exists");
+        assert!(session.fields["user"].is_handle);
+        assert!(!session.fields["file_name"].is_handle);
         assert!(hir.is_handle_field_name("user"));
         assert!(!hir.is_handle_field_name("file_name"));
     }
@@ -521,5 +554,11 @@ fn cache_put(cache: mut Cache, value: read Image) -> Unit
         assert!(signature.retained_params.contains("value"));
         assert_eq!(signature.params[0].effect, Some(ParamEffect::Mut));
         assert_eq!(signature.params[1].effect, Some(ParamEffect::Read));
+        assert_eq!(signature.return_type.as_deref(), Some("Unit"));
+
+        let load = hir
+            .resolve_function(Some("Image"), "load")
+            .expect("builtin signature exists");
+        assert_eq!(load.return_type.as_deref(), Some("Image"));
     }
 }

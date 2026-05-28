@@ -1,0 +1,17 @@
+mode: uses-local
+
+struct Rule {
+    name: String
+}
+
+struct Config {
+    rules: handle List<Rule>
+}
+
+struct InlineConfig {
+    rules: List<Rule>
+}
+
+fn ok_take(config: mut InlineConfig) -> Unit {
+    List.consume(list: take config.rules)
+}
