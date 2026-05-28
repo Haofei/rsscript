@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::diagnostic::Span;
 use crate::syntax::ast::{
-    Block, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl, Item, LetKind, Param,
-    Program as SyntaxProgram, Stmt, TypeDecl, TypeKind, TypeRef,
+    Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl, Item, LetKind,
+    Param, Program as SyntaxProgram, Stmt, TypeDecl, TypeKind, TypeRef,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -349,11 +349,17 @@ impl Hir {
         {
             return Some(signature);
         }
+        if let Some(namespace) = namespace {
+            let namespace = type_root_name(namespace);
+            if let Some(signature) = self.signatures.get(&qualified_key(namespace, name)) {
+                return Some(signature);
+            }
+        }
         self.signatures.get(name)
     }
 
     pub fn type_info(&self, name: &str) -> Option<&TypeInfo> {
-        self.types.get(name)
+        self.types.get(type_root_name(name))
     }
 
     pub fn type_kind(&self, name: &str) -> Option<HirTypeKind> {
@@ -529,13 +535,14 @@ fn collect_function_body_facts(hir: &Hir, function: &FunctionDecl, facts: &mut B
             HirModeUseKind::ResourcePool,
             facts,
         );
-        value_types.insert(param.name.clone(), param.ty.name.clone());
+        let param_type = type_ref_name(&param.ty);
+        value_types.insert(param.name.clone(), param_type.clone());
         facts.bindings.push(HirBinding {
             function_name: function.name.clone(),
             name: param.name.clone(),
             kind: HirBindingKind::Param,
             span: param.span.clone(),
-            type_name: Some(param.ty.name.clone()),
+            type_name: Some(param_type),
         });
     }
     if let Some(return_ty) = &function.return_ty {
@@ -642,12 +649,19 @@ fn lower_hir_stmt(
                 span: stmt.span.clone(),
             }
         }
-        Stmt::With(stmt) => HirStmt::With {
-            resource: lower_hir_expr(hir, function_name, &stmt.resource, value_types),
-            binding: stmt.binding.clone(),
-            body: lower_hir_block(hir, function_name, &stmt.body, value_types),
-            span: stmt.span.clone(),
-        },
+        Stmt::With(stmt) => {
+            let resource_type = infer_hir_expr_type(hir, &stmt.resource, value_types);
+            let mut body_types = value_types.clone();
+            if let Some(resource_type) = &resource_type {
+                body_types.insert(stmt.binding.clone(), resource_type.clone());
+            }
+            HirStmt::With {
+                resource: lower_hir_expr(hir, function_name, &stmt.resource, value_types),
+                binding: stmt.binding.clone(),
+                body: lower_hir_block(hir, function_name, &stmt.body, &mut body_types),
+                span: stmt.span.clone(),
+            }
+        }
         Stmt::If(stmt) => HirStmt::If {
             condition: lower_hir_expr(hir, function_name, &stmt.condition, value_types),
             then_body: {
@@ -721,6 +735,7 @@ fn lower_hir_expr(
         Expr::Call { callee, args, span } => {
             let resolution = hir.resolve_call(callee);
             let events = retain_events_for_call(function_name, callee, args, span, &resolution);
+            let type_name = infer_hir_expr_type(hir, expr, value_types);
             HirExpr::Call {
                 callee: callee.clone(),
                 args: args
@@ -731,10 +746,7 @@ fn lower_hir_expr(
                         span: arg.span.clone(),
                     })
                     .collect(),
-                type_name: match &resolution {
-                    CallResolution::Resolved { signature, .. } => signature.return_type.clone(),
-                    CallResolution::EnumVariant | CallResolution::Unknown => None,
-                },
+                type_name,
                 resolution,
                 events,
                 span: span.clone(),
@@ -903,7 +915,12 @@ fn collect_body_facts_in_stmt(
         }
         Stmt::With(stmt) => {
             collect_body_facts_in_expr(hir, function_name, &stmt.resource, value_types, facts);
-            collect_body_facts_in_block(hir, function_name, &stmt.body, value_types, facts);
+            let resource_type = infer_hir_expr_type(hir, &stmt.resource, value_types);
+            let mut body_types = value_types.clone();
+            if let Some(resource_type) = resource_type {
+                body_types.insert(stmt.binding.clone(), resource_type);
+            }
+            collect_body_facts_in_block(hir, function_name, &stmt.body, &mut body_types, facts);
         }
         Stmt::If(stmt) => {
             collect_body_facts_in_expr(hir, function_name, &stmt.condition, value_types, facts);
@@ -1056,7 +1073,7 @@ fn collect_retain_events(
 
 fn is_resource_pool_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Name(name) if name == "ResourcePool")
-        || matches!(callee, Callee::Qualified { namespace, .. } if namespace == "ResourcePool")
+        || matches!(callee, Callee::Qualified { namespace, .. } if type_root_name(namespace) == "ResourcePool")
 }
 
 fn direct_read_ident(expr: &Expr) -> Option<(String, Span)> {
@@ -1094,8 +1111,11 @@ fn infer_hir_expr_type(
         Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
             infer_hir_expr_type(hir, value, value_types)
         }
-        Expr::Call { callee, .. } => match hir.resolve_call(callee) {
-            CallResolution::Resolved { signature, .. } => signature.return_type,
+        Expr::Call { callee, args, .. } => match hir.resolve_call(callee) {
+            CallResolution::Resolved { signature, .. } => {
+                infer_builtin_generic_return_type(callee, args, value_types)
+                    .or(signature.return_type)
+            }
             CallResolution::EnumVariant | CallResolution::Unknown => None,
         },
         Expr::Field { base, name, .. } => {
@@ -1107,6 +1127,71 @@ fn infer_hir_expr_type(
         }
         Expr::Closure { .. } | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => None,
     }
+}
+
+fn infer_builtin_generic_return_type(
+    callee: &Callee,
+    args: &[CallArg],
+    value_types: &HashMap<String, String>,
+) -> Option<String> {
+    if is_resource_pool_new(callee) {
+        return resource_pool_namespace_arg(callee)
+            .map(|resource| format!("ResourcePool<{resource}>"));
+    }
+    if is_resource_pool_borrow(callee) {
+        return resource_pool_borrow_type(callee, args, value_types);
+    }
+    None
+}
+
+fn resource_pool_borrow_type(
+    callee: &Callee,
+    args: &[CallArg],
+    value_types: &HashMap<String, String>,
+) -> Option<String> {
+    args.iter()
+        .find(|arg| arg.name.as_deref() == Some("pool"))
+        .and_then(|arg| resource_pool_arg_type(&arg.value, value_types))
+        .or_else(|| resource_pool_namespace_arg(callee).map(str::to_string))
+}
+
+fn resource_pool_arg_type(expr: &Expr, value_types: &HashMap<String, String>) -> Option<String> {
+    let type_name = match expr {
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
+            return resource_pool_arg_type(value, value_types);
+        }
+        Expr::Ident(name, _) => value_types.get(name)?,
+        Expr::Call { callee, .. } => {
+            return resource_pool_namespace_arg(callee).map(|resource| resource.to_string());
+        }
+        Expr::Field { .. }
+        | Expr::Closure { .. }
+        | Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::Unknown(_) => return None,
+    };
+    resource_pool_type_arg(type_name).map(str::to_string)
+}
+
+fn is_resource_pool_new(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && name == "new")
+}
+
+fn is_resource_pool_borrow(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && name == "borrow")
+}
+
+fn resource_pool_namespace_arg(callee: &Callee) -> Option<&str> {
+    match callee {
+        Callee::Qualified { namespace, .. } => resource_pool_type_arg(namespace),
+        Callee::Name(_) => None,
+    }
+}
+
+fn resource_pool_type_arg(type_name: &str) -> Option<&str> {
+    type_name
+        .strip_prefix("ResourcePool<")
+        .and_then(|rest| rest.strip_suffix('>'))
 }
 
 fn classify_return_expr(hir: &Hir, expr: &Expr) -> HirReturnProof {
@@ -1173,7 +1258,7 @@ fn function_sig_from_decl(function: &FunctionDecl) -> FunctionSig {
         namespace: None,
         name: function.name.clone(),
         params: function.params.iter().map(param_sig_from_decl).collect(),
-        return_type: function.return_ty.as_ref().map(|ty| ty.name.clone()),
+        return_type: function.return_ty.as_ref().map(type_ref_name),
         returns_fresh: function.returns_fresh,
         retained_params: function
             .effects
@@ -1185,6 +1270,26 @@ fn function_sig_from_decl(function: &FunctionDecl) -> FunctionSig {
             .collect(),
         is_builtin: false,
     }
+}
+
+fn type_ref_name(ty: &TypeRef) -> String {
+    if ty.args.is_empty() {
+        return ty.name.clone();
+    }
+
+    let args = ty
+        .args
+        .iter()
+        .map(type_ref_name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{}<{args}>", ty.name)
+}
+
+fn type_root_name(type_name: &str) -> &str {
+    type_name
+        .split_once('<')
+        .map_or(type_name, |(root, _)| root)
 }
 
 fn record_duplicate_symbol(
@@ -1238,7 +1343,7 @@ fn param_sig_from_decl(param: &Param) -> ParamSig {
     ParamSig {
         name: param.name.clone(),
         effect: param.effect.map(param_effect_from_data_effect),
-        type_name: param.ty.name.clone(),
+        type_name: type_ref_name(&param.ty),
     }
 }
 
@@ -1273,7 +1378,7 @@ fn type_kind_from_decl(kind: TypeKind) -> HirTypeKind {
 fn field_info_from_decl(field: &FieldDecl) -> FieldInfo {
     FieldInfo {
         name: field.name.clone(),
-        type_name: field.ty.name.clone(),
+        type_name: type_ref_name(&field.ty),
         is_handle: field.is_handle,
     }
 }
@@ -1920,6 +2025,72 @@ fn load(path: read Path) -> Unit {
                 type_name: Some(type_name),
                 ..
             }) if type_name == "Image"
+        ));
+    }
+
+    #[test]
+    fn propagates_resource_pool_generic_lease_types() {
+        let source = r#"
+mode: uses-local
+
+resource DbConnection {
+    fd: Int
+
+    drop {
+        Db.close(fd: fd)
+    }
+}
+
+fn run(pool: mut ResourcePool<DbConnection>) -> Unit {
+    with ResourcePool.borrow(pool: mut pool) as conn {
+        DbConnection.query(conn: mut conn)
+    }
+}
+"#;
+
+        let program = parse_source("test.rss", source);
+        let hir = Hir::from_syntax(&program);
+        let body = hir.function_body("run").expect("run body exists");
+
+        assert_eq!(
+            body.bindings[0].type_name.as_deref(),
+            Some("ResourcePool<DbConnection>")
+        );
+        let block = body.block.as_ref().expect("resolved body block exists");
+        let HirStmt::With {
+            resource,
+            body: with_body,
+            ..
+        } = &block.statements[0]
+        else {
+            panic!("expected with statement");
+        };
+        assert!(matches!(
+            resource,
+            HirExpr::Call {
+                type_name: Some(type_name),
+                ..
+            } if type_name == "DbConnection"
+        ));
+        assert!(matches!(
+            &with_body.statements[0],
+            HirStmt::Expr(HirExpr::Call { args, .. })
+                if matches!(
+                    &args[0].value,
+                    HirExpr::Effect {
+                        value,
+                        type_name: Some(type_name),
+                        ..
+                    } if type_name == "DbConnection"
+                        && matches!(
+                            value.as_ref(),
+                            HirExpr::Ident {
+                                name,
+                                type_name: Some(ident_type),
+                                ..
+                            } if name == "conn" && ident_type == "DbConnection"
+                        )
+                )
         ));
     }
 

@@ -95,7 +95,7 @@ struct LocalFlowStep {
     kind: LocalFlowStepKind,
     uses: Vec<(String, Span)>,
     binding: Option<LocalFlowBinding>,
-    resource_binding: Option<String>,
+    resource_binding: Option<LocalFlowResourceBinding>,
     events: Vec<HirEffectEvent>,
     successors: Vec<LocalFlowEdge>,
 }
@@ -106,6 +106,12 @@ struct LocalFlowBinding {
     kind: HirBindingKind,
     type_name: Option<String>,
     value_ident: Option<(String, Span)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocalFlowResourceBinding {
+    name: String,
+    type_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1484,7 +1490,10 @@ fn transfer_flow_step(step: &LocalFlowStep, mut state: BodyState) -> BodyState {
         }
     }
     if let Some(resource_binding) = &step.resource_binding {
-        state.bind_resource(resource_binding.clone());
+        state.bind_resource(resource_binding.name.clone());
+        if let Some(type_name) = &resource_binding.type_name {
+            state.record_type(resource_binding.name.clone(), type_name.clone());
+        }
     }
 
     state.apply_retention_events(&step.events);
@@ -1606,9 +1615,14 @@ fn local_flow_step_binding(statement: &HirStmt) -> Option<LocalFlowBinding> {
     }
 }
 
-fn local_flow_step_resource_binding(statement: &HirStmt) -> Option<String> {
+fn local_flow_step_resource_binding(statement: &HirStmt) -> Option<LocalFlowResourceBinding> {
     match statement {
-        HirStmt::With { binding, .. } => Some(binding.clone()),
+        HirStmt::With {
+            binding, resource, ..
+        } => Some(LocalFlowResourceBinding {
+            name: binding.clone(),
+            type_name: hir_expr_type_name(resource).map(str::to_string),
+        }),
         HirStmt::Let { .. }
         | HirStmt::Return { .. }
         | HirStmt::If { .. }
@@ -1617,6 +1631,20 @@ fn local_flow_step_resource_binding(statement: &HirStmt) -> Option<String> {
         | HirStmt::Continue(_)
         | HirStmt::Expr(_)
         | HirStmt::Unknown(_) => None,
+    }
+}
+
+fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
+    match expr {
+        HirExpr::Ident { type_name, .. }
+        | HirExpr::Call { type_name, .. }
+        | HirExpr::Effect { type_name, .. }
+        | HirExpr::Manage { type_name, .. } => type_name.as_deref(),
+        HirExpr::Field { access, .. } => access.type_name.as_deref(),
+        HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Closure { .. }
+        | HirExpr::Unknown(_) => None,
     }
 }
 
@@ -2323,6 +2351,12 @@ mod tests {
             local_analysis
                 .flow_entry_state(&span(2))
                 .is_some_and(|state| state.is_resource("file"))
+        );
+        assert_eq!(
+            local_analysis
+                .flow_entry_state(&span(2))
+                .and_then(|state| state.value_type("file")),
+            Some("File")
         );
         assert!(
             local_analysis

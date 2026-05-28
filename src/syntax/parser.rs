@@ -619,7 +619,7 @@ fn parse_callee(tokens: &[Token], start: usize, end: usize) -> Option<Callee> {
     }
 
     let dot = find_top_level_dot(tokens, start, end)?;
-    let namespace = parse_type_ref(tokens, start, dot)?.name;
+    let namespace = type_ref_name(&parse_type_ref(tokens, start, dot)?);
     let name = ident_name(tokens.get(dot + 1)?)?.to_string();
     Some(Callee::Qualified { namespace, name })
 }
@@ -697,6 +697,20 @@ fn parse_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<TypeRef>
         args,
         span: tokens[name_index].span.clone(),
     })
+}
+
+fn type_ref_name(ty: &TypeRef) -> String {
+    if ty.args.is_empty() {
+        return ty.name.clone();
+    }
+
+    let args = ty
+        .args
+        .iter()
+        .map(type_ref_name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{}<{args}>", ty.name)
 }
 
 fn parse_data_effect(token: Option<&Token>) -> Option<DataEffect> {

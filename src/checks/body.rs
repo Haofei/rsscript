@@ -509,7 +509,13 @@ fn check_resource_pool_lease_stmt(analyzer: &mut Analyzer<'_>, statement: &HirSt
 }
 
 fn is_resource_pool_borrow(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if namespace == "ResourcePool" && name == "borrow")
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && name == "borrow")
+}
+
+fn type_root_name(type_name: &str) -> &str {
+    type_name
+        .split_once('<')
+        .map_or(type_name, |(root, _)| root)
 }
 
 fn resource_is_active_at(
