@@ -1082,7 +1082,7 @@ may be shared
 may be stored
 may be cyclic
 may be mutated dynamically
-are traced by the runtime
+are held through runtime-managed reference handles
 ```
 
 Even in canonical syntax, `read` and `mut` are review-visible effects, not pointer syntax.
@@ -2453,7 +2453,7 @@ must not retain local values unless expressed through manage
 must not fake fresh values
 must not allow resource escape
 must translate native panics/errors into RSScript diagnostics or Result errors
-must preserve handle tracing requirements
+must preserve managed handle identity and weak-reference requirements
 must preserve source location hooks where applicable
 ```
 
