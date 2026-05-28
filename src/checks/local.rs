@@ -24,7 +24,24 @@ pub(crate) struct LocalAnalysis {
     field_accesses_by_span: HashMap<Span, HirFieldAccess>,
     return_proofs_by_span: HashMap<Span, HirReturnProof>,
     closure_uses_by_span: HashMap<Span, Vec<(String, Span)>>,
-    statement_uses_by_span: HashMap<Span, Vec<(String, Span)>>,
+    flow_steps: Vec<LocalFlowStep>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LocalFlowStepKind {
+    Statement,
+    Branch,
+    Loop,
+    Return,
+    Break,
+    Continue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocalFlowStep {
+    span: Span,
+    kind: LocalFlowStepKind,
+    uses: Vec<(String, Span)>,
 }
 
 impl LocalAnalysis {
@@ -50,10 +67,10 @@ impl LocalAnalysis {
             .as_ref()
             .and_then(|body| body.block.as_ref())
             .map_or_else(HashMap::new, index_closure_uses_from_block);
-        let statement_uses_by_span = body
+        let flow_steps = body
             .as_ref()
             .and_then(|body| body.block.as_ref())
-            .map_or_else(HashMap::new, index_statement_uses_from_block);
+            .map_or_else(Vec::new, collect_local_flow_steps);
 
         Self {
             body,
@@ -62,7 +79,7 @@ impl LocalAnalysis {
             field_accesses_by_span,
             return_proofs_by_span,
             closure_uses_by_span,
-            statement_uses_by_span,
+            flow_steps,
         }
     }
 
@@ -114,11 +131,23 @@ impl LocalAnalysis {
     }
 
     pub(crate) fn statement_ident_uses(&self, span: &Span) -> Option<&[(String, Span)]> {
-        self.statement_uses_by_span.get(span).map(Vec::as_slice)
+        self.flow_steps
+            .iter()
+            .find(|step| step.span == *span && step.kind.collects_statement_uses())
+            .map(|step| step.uses.as_slice())
     }
 
     fn effect_events(&self, span: &Span) -> &[HirEffectEvent] {
         self.events_by_span.get(span).map_or(&[], Vec::as_slice)
+    }
+}
+
+impl LocalFlowStepKind {
+    fn collects_statement_uses(self) -> bool {
+        matches!(
+            self,
+            Self::Statement | Self::Branch | Self::Loop | Self::Return
+        )
     }
 }
 
@@ -585,39 +614,53 @@ fn collect_hir_expr_idents(expr: &HirExpr, uses: &mut Vec<(String, Span)>) {
     }
 }
 
-fn index_statement_uses_from_block(block: &HirBlock) -> HashMap<Span, Vec<(String, Span)>> {
-    let mut uses_by_span = HashMap::new();
-    collect_block_statement_uses(block, &mut uses_by_span);
-    uses_by_span
+fn collect_local_flow_steps(block: &HirBlock) -> Vec<LocalFlowStep> {
+    let mut steps = Vec::new();
+    collect_block_local_flow_steps(block, &mut steps);
+    steps
 }
 
-fn collect_block_statement_uses(
-    block: &HirBlock,
-    uses_by_span: &mut HashMap<Span, Vec<(String, Span)>>,
-) {
+fn collect_block_local_flow_steps(block: &HirBlock, steps: &mut Vec<LocalFlowStep>) {
     for statement in &block.statements {
         let mut uses = Vec::new();
         collect_hir_stmt_idents(statement, &mut uses);
-        uses_by_span.insert(hir_stmt_span(statement).clone(), uses);
+        steps.push(LocalFlowStep {
+            span: hir_stmt_span(statement).clone(),
+            kind: local_flow_step_kind(statement),
+            uses,
+        });
         match statement {
-            HirStmt::With { body, .. } => collect_block_statement_uses(body, uses_by_span),
+            HirStmt::With { body, .. } => collect_block_local_flow_steps(body, steps),
             HirStmt::If {
                 then_body,
                 else_body,
                 ..
             } => {
-                collect_block_statement_uses(then_body, uses_by_span);
+                collect_block_local_flow_steps(then_body, steps);
                 if let Some(else_body) = else_body {
-                    collect_block_statement_uses(else_body, uses_by_span);
+                    collect_block_local_flow_steps(else_body, steps);
                 }
             }
-            HirStmt::Loop { body, .. } => collect_block_statement_uses(body, uses_by_span),
+            HirStmt::Loop { body, .. } => collect_block_local_flow_steps(body, steps),
             HirStmt::Let { .. }
             | HirStmt::Return { .. }
             | HirStmt::Expr(_)
             | HirStmt::Break(_)
             | HirStmt::Continue(_)
             | HirStmt::Unknown(_) => {}
+        }
+    }
+}
+
+fn local_flow_step_kind(statement: &HirStmt) -> LocalFlowStepKind {
+    match statement {
+        HirStmt::If { .. } => LocalFlowStepKind::Branch,
+        HirStmt::Loop { .. } => LocalFlowStepKind::Loop,
+        HirStmt::Return { .. } => LocalFlowStepKind::Return,
+        HirStmt::Break(_) => LocalFlowStepKind::Break,
+        HirStmt::Continue(_) => LocalFlowStepKind::Continue,
+        HirStmt::Let { .. } | HirStmt::With { .. } | HirStmt::Expr(_) | HirStmt::Unknown(_) => {
+            LocalFlowStepKind::Statement
         }
     }
 }
