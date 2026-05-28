@@ -443,6 +443,41 @@ fn bad_image(path: read Path) -> fresh Image {
 }
 
 #[test]
+fn checker_materializes_direct_fresh_read_but_rejects_mut_and_take() {
+    let source = r#"
+features: local
+
+struct Image {
+    width: Int
+}
+
+fn Image.load(path: read Path) -> fresh Image
+fn inspect(image: read Image) -> Unit
+fn resize(image: mut Image) -> Unit
+fn consume(image: take Image) -> Unit
+
+fn ok_read(path: read Path) -> Unit {
+    inspect(image: read Image.load(path: read path))
+}
+
+fn bad_mut(path: read Path) -> Unit {
+    resize(image: mut Image.load(path: read path))
+}
+
+fn bad_take(path: read Path) -> Unit {
+    consume(image: take Image.load(path: read path))
+}
+"#;
+    let diagnostics = analyze_source("fresh-materialization.rss", source);
+    let fresh_materialization_count = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "RS0604")
+        .count();
+
+    assert_eq!(fresh_materialization_count, 2, "{diagnostics:?}");
+}
+
+#[test]
 fn resource_pool_read_parameter_must_be_local_capability() {
     let source = r#"
 features: local

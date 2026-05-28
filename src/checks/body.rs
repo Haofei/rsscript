@@ -1,7 +1,8 @@
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::{
-    HirBindingKind, HirBlock, HirCallArg, HirExpr, HirStmt, HirTypeKind, ParamEffect,
+    CallResolution, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirStmt, HirTypeKind,
+    ParamEffect, ResolvedCalleeKind,
 };
 use crate::syntax::ast::{Callee, FunctionDecl, Item, TypeRef};
 
@@ -292,7 +293,10 @@ fn check_expr_semantics_with_context(
             span,
             ..
         } => {
-            if *effect == ParamEffect::Take {
+            if matches!(effect, ParamEffect::Mut | ParamEffect::Take) && expr_is_fresh_shell(value)
+            {
+                fresh_requires_local_binding_diagnostic(analyzer, value, span);
+            } else if *effect == ParamEffect::Take {
                 check_take_operand_is_local(analyzer, value, span, state);
             } else if !(allow_weak_upgrade_arg && *effect == ParamEffect::Read)
                 && matches!(effect, ParamEffect::Read | ParamEffect::Mut)
@@ -366,6 +370,73 @@ fn check_weak_field_requires_upgrade(analyzer: &mut Analyzer<'_>, value: &HirExp
             "manual",
         ),
     );
+}
+
+fn expr_is_fresh_shell(expr: &HirExpr) -> bool {
+    match expr {
+        HirExpr::Call { resolution, .. } => match resolution {
+            CallResolution::Resolved {
+                signature,
+                kind:
+                    ResolvedCalleeKind::Constructor {
+                        type_kind: HirTypeKind::Struct,
+                    },
+            } => signature.returns_fresh,
+            CallResolution::Resolved { signature, .. } => signature.returns_fresh,
+            CallResolution::EnumVariant | CallResolution::Unknown => false,
+        },
+        HirExpr::Try { value, .. } | HirExpr::Effect { value, .. } => expr_is_fresh_shell(value),
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Binary { .. }
+        | HirExpr::Field { .. }
+        | HirExpr::Index { .. }
+        | HirExpr::Manage { .. }
+        | HirExpr::Spawn { .. }
+        | HirExpr::Closure { .. }
+        | HirExpr::Unknown(_) => false,
+    }
+}
+
+fn fresh_requires_local_binding_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    value: &HirExpr,
+    span: &Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::FRESH_REQUIRES_LOCAL_BINDING,
+            "`fresh` expression must be bound locally before `mut` or `take` use.",
+            span.clone(),
+            "fresh value requires local binding",
+        )
+        .with_cause("Direct fresh expressions can materialize as managed temporaries for `read`; `mut` and `take` require an explicit local owner.")
+        .with_fix(
+            "bind_fresh_local",
+            format!(
+                "Bind the value first, for example `local value = {}`.",
+                hir_expr_hint(value)
+            ),
+            "manual",
+        ),
+    );
+}
+
+fn hir_expr_hint(expr: &HirExpr) -> String {
+    match expr {
+        HirExpr::Call { callee, .. } => body_callee_display(callee),
+        HirExpr::Try { value, .. } => format!("{}?", hir_expr_hint(value)),
+        HirExpr::Ident { name, .. } => name.clone(),
+        _ => "fresh_expr".to_string(),
+    }
+}
+
+fn body_callee_display(callee: &Callee) -> String {
+    match callee {
+        Callee::Name(name) => name.clone(),
+        Callee::Qualified { namespace, name } => format!("{namespace}.{name}"),
+    }
 }
 
 fn weak_field_access_requiring_upgrade(expr: &HirExpr) -> Option<&crate::hir::HirFieldAccess> {

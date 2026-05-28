@@ -42,6 +42,7 @@ pub mod code {
     pub const FRESH_RETURN_NOT_CLEAN: &str = "RS0601";
     pub const FRESHNESS_UNKNOWN: &str = "RS0602";
     pub const INVALID_FRESH_RETURN_TYPE: &str = "RS0603";
+    pub const FRESH_REQUIRES_LOCAL_BINDING: &str = "RS0604";
     pub const RESOURCE_FIELD: &str = "RS0701";
     pub const RESOURCE_ESCAPE: &str = "RS0702";
     pub const INVALID_RESOURCE_POOL_TYPE: &str = "RS0703";
@@ -437,6 +438,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::INVALID_FRESH_RETURN_TYPE,
         title: "invalid fresh return type",
         explanation: "`fresh` may only be used with struct types. Classes and resources are not fresh values.",
+    },
+    DiagnosticExplanation {
+        code: code::FRESH_REQUIRES_LOCAL_BINDING,
+        title: "fresh value requires local binding",
+        explanation: "A direct `fresh` expression may materialize as a managed temporary for `read`, but `mut` and `take` require an explicit `local` binding first.",
     },
     DiagnosticExplanation {
         code: code::RESOURCE_FIELD,
