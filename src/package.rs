@@ -50,6 +50,44 @@ pub struct PackageCheck {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageTree {
+    pub root: PackageTreeNode,
+    pub summary: PackageTreeSummary,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct PackageTreeSummary {
+    pub packages: usize,
+    pub path_dependencies: usize,
+    pub unresolved_dependencies: usize,
+    pub native_packages: usize,
+    pub high_risk_packages: usize,
+    pub unknown_risk_packages: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageTreeNode {
+    pub name: String,
+    pub version: Option<String>,
+    pub requirement: Option<String>,
+    pub source: String,
+    pub risk: PackageRisk,
+    pub features: Vec<String>,
+    pub native: bool,
+    pub dependency_kind: PackageDependencyKind,
+    pub reasons: Vec<String>,
+    pub dependencies: Vec<PackageTreeNode>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageDependencyKind {
+    Root,
+    Normal,
+    Dev,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PackageCheckLock {
     pub path: String,
     pub present: bool,
@@ -266,6 +304,15 @@ struct PackageSource {
     relative_path: String,
     contents: String,
     kind: PackageReviewFileKind,
+}
+
+#[derive(Debug, Clone)]
+struct PackageDependencySpec {
+    name: String,
+    requirement: Option<String>,
+    path: Option<String>,
+    git: Option<String>,
+    features: Vec<String>,
 }
 
 pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
@@ -488,6 +535,14 @@ pub fn check_package_dir(package_dir: &Path) -> Result<PackageCheck, String> {
     })
 }
 
+pub fn package_tree(package_dir: &Path) -> Result<PackageTree, String> {
+    let mut visiting = BTreeSet::new();
+    let root = package_tree_node(package_dir, PackageDependencyKind::Root, &mut visiting)?;
+    let mut summary = PackageTreeSummary::default();
+    collect_package_tree_summary(&root, &mut summary);
+    Ok(PackageTree { root, summary })
+}
+
 pub fn lock_package_dir(package_dir: &Path) -> Result<PackageLock, String> {
     let package = load_package(package_dir)?;
     let review = review_package_dir(package_dir)?;
@@ -558,6 +613,10 @@ pub fn format_package_diff_json(diff: &PackageDiff) -> String {
 
 pub fn format_package_check_json(check: &PackageCheck) -> String {
     serde_json::to_string(check).expect("package check JSON serialization should not fail")
+}
+
+pub fn format_package_tree_json(tree: &PackageTree) -> String {
+    serde_json::to_string(tree).expect("package tree JSON serialization should not fail")
 }
 
 pub fn format_package_lock_json(lock: &PackageLock) -> String {
@@ -687,6 +746,21 @@ pub fn format_package_check_human(check: &PackageCheck) -> String {
             output.push_str(&format!("  - {reason}\n"));
         }
     }
+    output
+}
+
+pub fn format_package_tree_human(tree: &PackageTree) -> String {
+    let mut output = String::new();
+    output.push_str(&format!(
+        "package tree: {} packages; {} path deps; {} unresolved; {} native; {} high risk; {} unknown\n",
+        tree.summary.packages,
+        tree.summary.path_dependencies,
+        tree.summary.unresolved_dependencies,
+        tree.summary.native_packages,
+        tree.summary.high_risk_packages,
+        tree.summary.unknown_risk_packages
+    ));
+    format_package_tree_node_human(&tree.root, "", true, &mut output);
     output
 }
 
@@ -931,6 +1005,248 @@ fn check_package_native_rust(
         risk,
         reasons,
     }))
+}
+
+fn package_tree_node(
+    package_dir: &Path,
+    dependency_kind: PackageDependencyKind,
+    visiting: &mut BTreeSet<String>,
+) -> Result<PackageTreeNode, String> {
+    let package = load_package(package_dir)?;
+    let review = review_package_dir(package_dir)?;
+    let identity = package_identity(&package.manifest);
+    let visit_key = canonical_path_label(package_dir);
+    if !visiting.insert(visit_key.clone()) {
+        return Ok(PackageTreeNode {
+            name: identity.name,
+            version: Some(identity.version),
+            requirement: None,
+            source: format!("path+{}", package_dir.display()),
+            risk: PackageRisk::Elevated,
+            features: package.manifest.features.keys().cloned().collect(),
+            native: review.native_rust.is_some(),
+            dependency_kind,
+            reasons: vec!["dependency cycle truncated".to_string()],
+            dependencies: Vec::new(),
+        });
+    }
+
+    let mut dependencies = Vec::new();
+    dependencies.extend(package_tree_dependencies(
+        package_dir,
+        &package.manifest.dependencies,
+        PackageDependencyKind::Normal,
+        visiting,
+    )?);
+    dependencies.extend(package_tree_dependencies(
+        package_dir,
+        &package.manifest.dev_dependencies,
+        PackageDependencyKind::Dev,
+        visiting,
+    )?);
+    visiting.remove(&visit_key);
+
+    Ok(PackageTreeNode {
+        name: identity.name,
+        version: Some(identity.version),
+        requirement: None,
+        source: format!("path+{}", package_dir.display()),
+        risk: review.risk,
+        features: package.manifest.features.keys().cloned().collect(),
+        native: review.native_rust.is_some(),
+        dependency_kind,
+        reasons: review.reasons,
+        dependencies,
+    })
+}
+
+fn package_tree_dependencies(
+    package_dir: &Path,
+    dependencies: &BTreeMap<String, toml::Value>,
+    dependency_kind: PackageDependencyKind,
+    visiting: &mut BTreeSet<String>,
+) -> Result<Vec<PackageTreeNode>, String> {
+    let mut nodes = Vec::new();
+    for (name, value) in dependencies {
+        let spec = package_dependency_spec(name, value);
+        if let Some(path) = &spec.path {
+            let dependency_dir = package_dir.join(path);
+            if dependency_dir.join("rsspkg.toml").exists() {
+                let mut node = package_tree_node(&dependency_dir, dependency_kind, visiting)?;
+                node.requirement = spec.requirement.clone();
+                node.features = spec.features.clone();
+                node.source = format!("path+{}", dependency_dir.display());
+                nodes.push(node);
+            } else {
+                nodes.push(unresolved_dependency_node(
+                    spec,
+                    dependency_kind,
+                    vec!["path dependency manifest missing".to_string()],
+                ));
+            }
+        } else {
+            nodes.push(unresolved_dependency_node(
+                spec,
+                dependency_kind,
+                vec!["dependency resolver not implemented for this source".to_string()],
+            ));
+        }
+    }
+    Ok(nodes)
+}
+
+fn package_dependency_spec(name: &str, value: &toml::Value) -> PackageDependencySpec {
+    if let Some(requirement) = value.as_str() {
+        return PackageDependencySpec {
+            name: name.to_string(),
+            requirement: Some(requirement.to_string()),
+            path: None,
+            git: None,
+            features: Vec::new(),
+        };
+    }
+    let Some(table) = value.as_table() else {
+        return PackageDependencySpec {
+            name: name.to_string(),
+            requirement: Some(toml_value_label(value)),
+            path: None,
+            git: None,
+            features: Vec::new(),
+        };
+    };
+    PackageDependencySpec {
+        name: name.to_string(),
+        requirement: table
+            .get("version")
+            .and_then(toml::Value::as_str)
+            .map(str::to_string),
+        path: table
+            .get("path")
+            .and_then(toml::Value::as_str)
+            .map(str::to_string),
+        git: table
+            .get("git")
+            .and_then(toml::Value::as_str)
+            .map(str::to_string),
+        features: table
+            .get("features")
+            .and_then(toml::Value::as_array)
+            .map(|features| {
+                features
+                    .iter()
+                    .filter_map(toml::Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
+}
+
+fn unresolved_dependency_node(
+    spec: PackageDependencySpec,
+    dependency_kind: PackageDependencyKind,
+    reasons: Vec<String>,
+) -> PackageTreeNode {
+    let source = if let Some(path) = &spec.path {
+        format!("path+{path}")
+    } else if let Some(git) = &spec.git {
+        format!("git+{git}")
+    } else {
+        "registry".to_string()
+    };
+    PackageTreeNode {
+        name: spec.name,
+        version: None,
+        requirement: spec.requirement,
+        source,
+        risk: PackageRisk::Unknown,
+        features: spec.features,
+        native: false,
+        dependency_kind,
+        reasons,
+        dependencies: Vec::new(),
+    }
+}
+
+fn canonical_path_label(path: &Path) -> String {
+    fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .display()
+        .to_string()
+}
+
+fn collect_package_tree_summary(node: &PackageTreeNode, summary: &mut PackageTreeSummary) {
+    summary.packages += 1;
+    if node.source.starts_with("path+") && node.dependency_kind != PackageDependencyKind::Root {
+        summary.path_dependencies += 1;
+    }
+    if node.risk == PackageRisk::Unknown {
+        summary.unknown_risk_packages += 1;
+    }
+    if node.risk == PackageRisk::High {
+        summary.high_risk_packages += 1;
+    }
+    if node.version.is_none() {
+        summary.unresolved_dependencies += 1;
+    }
+    if node.native {
+        summary.native_packages += 1;
+    }
+    for dependency in &node.dependencies {
+        collect_package_tree_summary(dependency, summary);
+    }
+}
+
+fn format_package_tree_node_human(
+    node: &PackageTreeNode,
+    prefix: &str,
+    is_last: bool,
+    output: &mut String,
+) {
+    let connector = if node.dependency_kind == PackageDependencyKind::Root {
+        ""
+    } else if is_last {
+        "`-- "
+    } else {
+        "|-- "
+    };
+    output.push_str(prefix);
+    output.push_str(connector);
+    output.push_str(&node.name);
+    if let Some(version) = &node.version {
+        output.push(' ');
+        output.push_str(version);
+    }
+    if let Some(requirement) = &node.requirement {
+        output.push_str(" req ");
+        output.push_str(requirement);
+    }
+    output.push_str(" [");
+    output.push_str(package_risk_label(node.risk));
+    if node.native {
+        output.push_str(", native");
+    }
+    if !node.features.is_empty() {
+        output.push_str(", features ");
+        output.push_str(&node.features.join(","));
+    }
+    output.push_str("]\n");
+
+    let child_prefix = if node.dependency_kind == PackageDependencyKind::Root {
+        String::new()
+    } else if is_last {
+        format!("{prefix}    ")
+    } else {
+        format!("{prefix}|   ")
+    };
+    for (index, dependency) in node.dependencies.iter().enumerate() {
+        format_package_tree_node_human(
+            dependency,
+            &child_prefix,
+            index + 1 == node.dependencies.len(),
+            output,
+        );
+    }
 }
 
 fn is_rsscript_source_path(path: &Path) -> bool {

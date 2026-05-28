@@ -11,11 +11,12 @@ use rsscript::{
     format_diagnostics_json, format_package_check_human, format_package_check_json,
     format_package_diff_human, format_package_diff_json, format_package_lock_diff_human,
     format_package_lock_diff_json, format_package_lock_json, format_package_lock_toml,
-    format_package_review_human, format_package_review_json, format_review_human,
-    format_review_json, format_review_map_human, format_review_map_json, lint_source,
-    lock_package_dir, lower_source_to_rust, lower_source_to_rust_package,
-    parse_runtime_diagnostics, parse_source_map_json, remap_rustc_diagnostic_json_lines,
-    review_map_sources, review_package_dir, review_sources, write_generated_rust_package,
+    format_package_review_human, format_package_review_json, format_package_tree_human,
+    format_package_tree_json, format_review_human, format_review_json, format_review_map_human,
+    format_review_map_json, lint_source, lock_package_dir, lower_source_to_rust,
+    lower_source_to_rust_package, package_tree, parse_runtime_diagnostics, parse_source_map_json,
+    remap_rustc_diagnostic_json_lines, review_map_sources, review_package_dir, review_sources,
+    write_generated_rust_package,
 };
 
 fn main() -> ExitCode {
@@ -52,6 +53,7 @@ fn run_package(args: &[String]) -> ExitCode {
             new_lock_path,
         } => run_package_review_update(json, old_lock_path, new_lock_path),
         PackageCommand::Lock { json, path } => run_package_lock(json, path),
+        PackageCommand::Tree { json, path } => run_package_tree(json, path),
         PackageCommand::Diff {
             json,
             old_path,
@@ -811,6 +813,10 @@ enum PackageCommand<'a> {
         json: bool,
         path: &'a str,
     },
+    Tree {
+        json: bool,
+        path: &'a str,
+    },
     Diff {
         json: bool,
         old_path: &'a str,
@@ -844,7 +850,7 @@ fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
             index += 1;
         } else if matches!(
             arg.as_str(),
-            "check" | "review" | "update" | "lock" | "diff"
+            "check" | "review" | "update" | "lock" | "tree" | "diff"
         ) {
             words.push(arg.as_str());
         } else {
@@ -865,6 +871,8 @@ fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
             }
         }
         (["lock"], [path], None, None) => PackageCommand::Lock { json, path },
+        (["tree"], [], None, None) => PackageCommand::Tree { json, path: "." },
+        (["tree"], [path], None, None) => PackageCommand::Tree { json, path },
         (["diff"], [old_path, new_path], None, None) => PackageCommand::Diff {
             json,
             old_path,
@@ -1064,6 +1072,23 @@ fn run_package_review_update(json: bool, old_lock_path: &str, new_lock_path: &st
     ExitCode::SUCCESS
 }
 
+fn run_package_tree(json: bool, path: &str) -> ExitCode {
+    let tree = match package_tree(Path::new(path)) {
+        Ok(tree) => tree,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+
+    if json {
+        println!("{}", format_package_tree_json(&tree));
+    } else {
+        print!("{}", format_package_tree_human(&tree));
+    }
+    ExitCode::SUCCESS
+}
+
 fn run_package_diff(json: bool, old_path: &str, new_path: &str) -> ExitCode {
     let diff = match diff_package_dirs(Path::new(old_path), Path::new(new_path)) {
         Ok(diff) => diff,
@@ -1163,5 +1188,6 @@ fn print_usage() {
         "  rsscript package review update [--json] --from <old-rsspkg.lock> --to <new-rsspkg.lock>"
     );
     eprintln!("  rsscript package lock [--json] <package-directory>");
+    eprintln!("  rsscript package tree [--json] [package-directory]");
     eprintln!("  rsscript package diff [--json] <old-package-directory> <new-package-directory>");
 }

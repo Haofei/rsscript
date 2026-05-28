@@ -46,7 +46,7 @@ let response = Response.ok(body: read user)
 
 Managed values are easy to share, store, and drop into long-lived graphs. This is the default for business logic, agent memory, configuration, caches, ASTs, request/response objects — the broad layer outside hot paths.
 
-Under the hood, managed is reference counted — think Swift's ARC, not a tracing GC. Destruction is deterministic and lowers to Rust's `Arc`, so cross-thread sharing works without extra ceremony at the source level. The usual tradeoffs apply: refcounting has a per-access cost, and cycles need explicit breakers. That cost is exactly why hot paths use `local` instead of paying refcount on every touch.
+Under the hood, managed is reference counted — think Swift's ARC, not a tracing GC. Destruction is deterministic and lowers to Rust's `Arc`, so cross-thread sharing works without extra ceremony at the source level. The usual tradeoffs apply: refcounting has a per-access cost, and cycles need explicit breaker patterns. That cost is exactly why hot paths use `local` instead of paying refcount on every touch.
 
 ### Local when it matters
 
@@ -224,6 +224,7 @@ rss package  check  [--json] [package-directory]
 rss package  review [--json] <package-directory>
 rss package  review update [--json] --from <old-rsspkg.lock> --to <new-rsspkg.lock>
 rss package  lock   [--json] <package-directory>
+rss package  tree   [--json] [package-directory]
 rss package  diff   [--json] <old-package-directory> <new-package-directory>
 rss lower    --rust  <file.rss> [--out-dir <directory>]
 rss run      [--json] <file.rss> [--out-dir <directory>]
@@ -240,6 +241,7 @@ A few details worth knowing:
 - `rss package review` reads `rsspkg.toml`, treats `.rssi` files as the public semantic contract, and raises risk for native Rust wrappers, build scripts, proc macros, unsafe policy, external links, frontend diagnostics, and unknown review-map regions.
 - `rss package review update` compares two `rsspkg.lock` files and reports package version, source, checksum, `.rssi` interface, review metadata, native wrapper, and feature-selection changes.
 - `rss package lock` emits root package lock metadata with SHA-256 hashes for the public `.rssi` contract, review metadata, package contents, and native Rust wrapper contents when enabled.
+- `rss package tree` shows the dependency graph with review risk. Local path dependencies are expanded recursively; unresolved registry or git dependencies are classified as unknown.
 - `rss package diff` compares two local package directories and reports package version changes, RSScript dependency changes, package feature changes, native Rust wrapper metadata changes, and public `.rssi` semantic contract changes.
 - `rss run` lowers to a temporary Rust package and delegates to `cargo run`; `--out-dir` keeps the generated package around for inspection. Diagnostics support `--json`; program stdout stays the program's own.
 - `rss verify-rust --out-dir` keeps the generated package and source map, so unmappable rustc diagnostics can be inspected against the actual generated Rust.

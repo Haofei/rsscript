@@ -2303,12 +2303,15 @@ rss package check
 rss package review
 rss package lock
 rss package review update
+rss package tree
 rss package diff
 ```
 
 `rss package check` validates a local package manifest, runs interface/source frontend checks, regenerates package review metadata, compares the current semantic lock against `rsspkg.lock`, and scans enabled native Rust wrapper metadata for local consistency.
 
 `rss package review update` compares two `rsspkg.lock` files and classifies package version, source, checksum, public interface hash, review metadata hash, native wrapper hash, and feature-selection changes.
+
+`rss package tree` prints the package dependency graph with review risk. The prototype expands local path dependencies recursively and classifies unresolved registry or git dependencies as `unknown`.
 
 ---
 

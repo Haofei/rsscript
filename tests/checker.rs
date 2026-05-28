@@ -12,8 +12,8 @@ use rsscript::{
     format_diagnostics_json, format_package_lock_toml, format_review_human, format_review_json,
     format_review_map_human, format_review_map_json, lint_source, lock_package_dir,
     lower_source_to_rust, lower_source_to_rust_package, lower_source_to_rust_with_map,
-    parse_runtime_diagnostics, remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines,
-    review_map_sources, review_package_dir, review_sources,
+    package_tree, parse_runtime_diagnostics, remap_rustc_diagnostic_json,
+    remap_rustc_diagnostic_json_lines, review_map_sources, review_package_dir, review_sources,
 };
 use serde_json::Value;
 
@@ -2866,6 +2866,122 @@ unsafe = "forbid"
     );
 }
 
+#[test]
+fn package_tree_expands_path_dependencies_and_marks_unresolved() {
+    let root_dir = unique_temp_dir("rsscript-package-tree-root");
+    let dep_dir = unique_temp_dir("rsscript-package-tree-dep");
+    write_named_package_fixture(
+        &dep_dir,
+        "rss-dep",
+        "0.2.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_dep_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+        r#"pub fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
+"#,
+    );
+    fs::create_dir_all(dep_dir.join("native/rust/src")).expect("native src dir should be created");
+    fs::write(
+        dep_dir.join("native/rust/Cargo.toml"),
+        "[package]\nname = \"rss_dep_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("native Cargo.toml should be written");
+    fs::write(
+        dep_dir.join("native/rust/src/lib.rs"),
+        "pub fn parse() {}\n",
+    )
+    .expect("native source should be written");
+    write_package_fixture(
+        &root_dir,
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-dep = {{ path = "{}", features = ["streaming"] }}
+rss-remote = "0.5"
+"#,
+            dep_dir.display()
+        ),
+        r#"pub fn main() -> Unit
+"#,
+    );
+
+    let tree = package_tree(&root_dir).expect("package tree should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_tree_json(&tree))
+        .expect("package tree JSON should parse");
+    let human = rsscript::format_package_tree_human(&tree);
+    let _ = fs::remove_dir_all(&root_dir);
+    let _ = fs::remove_dir_all(&dep_dir);
+
+    assert_eq!(json["root"]["name"], "rss-json");
+    assert_eq!(json["summary"]["packages"], 3);
+    assert_eq!(json["summary"]["path_dependencies"], 1);
+    assert_eq!(json["summary"]["unresolved_dependencies"], 1);
+    assert_eq!(json["summary"]["native_packages"], 1);
+    assert!(json["root"]["dependencies"].as_array().is_some_and(|deps| {
+        deps.iter().any(|dep| {
+            dep["name"] == "rss-dep"
+                && dep["version"] == "0.2.0"
+                && dep["features"][0] == "streaming"
+                && dep["native"] == true
+        }) && deps
+            .iter()
+            .any(|dep| dep["name"] == "rss-remote" && dep["risk"] == "unknown")
+    }));
+    assert!(human.contains("|-- rss-dep 0.2.0 [elevated, native, features streaming]"));
+    assert!(human.contains("`-- rss-remote req 0.5 [unknown]"));
+}
+
+#[test]
+fn rss_package_tree_json_reports_dependency_summary() {
+    let root_dir = unique_temp_dir("rsscript-package-tree-cli-root");
+    let dep_dir = unique_temp_dir("rsscript-package-tree-cli-dep");
+    write_named_package_fixture(
+        &dep_dir,
+        "rss-dep",
+        "0.2.0",
+        "",
+        r#"pub fn parse(text: read String) -> String
+"#,
+    );
+    write_package_fixture(
+        &root_dir,
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-dep = {{ path = "{}" }}
+"#,
+            dep_dir.display()
+        ),
+        r#"pub fn main() -> Unit
+"#,
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("package")
+        .arg("tree")
+        .arg("--json")
+        .arg(&root_dir)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss package tree should execute");
+    let _ = fs::remove_dir_all(&root_dir);
+    let _ = fs::remove_dir_all(&dep_dir);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: Value = serde_json::from_str(&stdout).expect("stdout should be package tree JSON");
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert_eq!(json["summary"]["packages"], 2);
+    assert_eq!(json["summary"]["path_dependencies"], 1);
+    assert_eq!(json["root"]["dependencies"][0]["name"], "rss-dep");
+}
+
 fn fixture_paths(directory: &str) -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = fs::read_dir(directory)
         .unwrap_or_else(|error| panic!("failed to read {directory}: {error}"))
@@ -2923,12 +3039,28 @@ fn write_package_fixture(
     extra_manifest: &str,
     interface_source: &str,
 ) {
+    write_named_package_fixture(
+        directory,
+        "rss-json",
+        version,
+        extra_manifest,
+        interface_source,
+    );
+}
+
+fn write_named_package_fixture(
+    directory: &Path,
+    name: &str,
+    version: &str,
+    extra_manifest: &str,
+    interface_source: &str,
+) {
     fs::create_dir_all(directory.join("interface")).expect("interface dir should be created");
     fs::write(
         directory.join("rsspkg.toml"),
         format!(
             r#"[package]
-name = "rss-json"
+name = "{name}"
 version = "{version}"
 edition = "2026"
 

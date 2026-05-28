@@ -19,15 +19,17 @@ pub use diagnostic::{
 };
 pub use lint::lint_source;
 pub use package::{
-    PackageCheck, PackageCheckLock, PackageDiff, PackageIdentity, PackageInterfaceChange,
-    PackageInterfaceChangeKind, PackageLock, PackageLockDiff, PackageLockFieldChange,
-    PackageLockMetadata, PackageLockPackage, PackageLockPackageChange, PackageManifestChange,
-    PackageNativeRustCheck, PackageNativeRustReview, PackageReview, PackageReviewFile,
-    PackageReviewFileKind, PackageReviewSummary, PackageRisk, check_package_dir, diff_package_dirs,
-    diff_package_locks, format_package_check_human, format_package_check_json,
-    format_package_diff_human, format_package_diff_json, format_package_lock_diff_human,
-    format_package_lock_diff_json, format_package_lock_json, format_package_lock_toml,
-    format_package_review_human, format_package_review_json, lock_package_dir, review_package_dir,
+    PackageCheck, PackageCheckLock, PackageDependencyKind, PackageDiff, PackageIdentity,
+    PackageInterfaceChange, PackageInterfaceChangeKind, PackageLock, PackageLockDiff,
+    PackageLockFieldChange, PackageLockMetadata, PackageLockPackage, PackageLockPackageChange,
+    PackageManifestChange, PackageNativeRustCheck, PackageNativeRustReview, PackageReview,
+    PackageReviewFile, PackageReviewFileKind, PackageReviewSummary, PackageRisk, PackageTree,
+    PackageTreeNode, PackageTreeSummary, check_package_dir, diff_package_dirs, diff_package_locks,
+    format_package_check_human, format_package_check_json, format_package_diff_human,
+    format_package_diff_json, format_package_lock_diff_human, format_package_lock_diff_json,
+    format_package_lock_json, format_package_lock_toml, format_package_review_human,
+    format_package_review_json, format_package_tree_human, format_package_tree_json,
+    lock_package_dir, package_tree, review_package_dir,
 };
 pub use review::{
     ReviewFinding, ReviewFix, ReviewMap, ReviewMapCategorySummary, ReviewMapClassification,
