@@ -119,6 +119,16 @@ pub struct HirBinding {
     pub type_name: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirFieldAccess {
+    pub function_name: String,
+    pub name: String,
+    pub span: Span,
+    pub base_type: Option<String>,
+    pub type_name: Option<String>,
+    pub is_handle: bool,
+}
+
 #[derive(Debug, Default)]
 pub struct Hir {
     signatures: HashMap<String, FunctionSig>,
@@ -130,6 +140,8 @@ pub struct Hir {
     bindings: Vec<HirBinding>,
     bindings_by_span: HashMap<Span, HirBinding>,
     bindings_by_function: HashMap<String, Vec<HirBinding>>,
+    field_accesses: Vec<HirFieldAccess>,
+    field_accesses_by_span: HashMap<Span, HirFieldAccess>,
 }
 
 impl Hir {
@@ -220,6 +232,10 @@ impl Hir {
             .map_or(&[], Vec::as_slice)
     }
 
+    pub fn field_access(&self, span: &Span) -> Option<&HirFieldAccess> {
+        self.field_accesses_by_span.get(span)
+    }
+
     pub fn resolve_call(&self, callee: &Callee) -> CallResolution {
         let call_name = callee_name(callee);
         if is_enum_variant_call(call_name) {
@@ -302,8 +318,14 @@ impl Hir {
                 by_function
             },
         );
+        self.field_accesses_by_span = facts
+            .field_accesses
+            .iter()
+            .map(|field| (field.span.clone(), field.clone()))
+            .collect();
         self.call_sites = facts.call_sites;
         self.bindings = facts.bindings;
+        self.field_accesses = facts.field_accesses;
     }
 }
 
@@ -311,6 +333,7 @@ impl Hir {
 struct BodyFacts {
     call_sites: Vec<HirCallSite>,
     bindings: Vec<HirBinding>,
+    field_accesses: Vec<HirFieldAccess>,
 }
 
 fn collect_function_body_facts(hir: &Hir, function: &FunctionDecl, facts: &mut BodyFacts) {
@@ -418,7 +441,20 @@ fn collect_body_facts_in_expr(
         Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
             collect_body_facts_in_expr(hir, function_name, value, value_types, facts);
         }
-        Expr::Field { base, .. } => {
+        Expr::Field { base, name, span } => {
+            let base_type = infer_hir_expr_type(hir, base, value_types);
+            let field = base_type
+                .as_deref()
+                .and_then(|type_name| hir.type_info(type_name))
+                .and_then(|type_info| type_info.fields.get(name));
+            facts.field_accesses.push(HirFieldAccess {
+                function_name: function_name.to_string(),
+                name: name.clone(),
+                span: span.clone(),
+                base_type,
+                type_name: field.map(|field| field.type_name.clone()),
+                is_handle: field.is_some_and(|field| field.is_handle),
+            });
             collect_body_facts_in_expr(hir, function_name, base, value_types, facts);
         }
         Expr::Closure { body, .. } => {
@@ -1200,5 +1236,41 @@ fn load(path: read Path) -> Unit {
                 .kind,
             HirBindingKind::LocalLet
         ));
+    }
+
+    #[test]
+    fn records_field_access_facts() {
+        let source = r#"
+mode: uses-local
+
+class Rules {
+}
+
+struct Config {
+    rules: handle Rules
+}
+
+fn take_rules(config: mut Config) -> Unit {
+    List.consume(list: take config.rules)
+}
+"#;
+
+        let program = parse_source("test.rss", source);
+        let hir = Hir::from_syntax(&program);
+        let field = hir
+            .field_accesses
+            .first()
+            .expect("field access is recorded");
+
+        assert_eq!(field.function_name, "take_rules");
+        assert_eq!(field.name, "rules");
+        assert_eq!(field.base_type.as_deref(), Some("Config"));
+        assert_eq!(field.type_name.as_deref(), Some("Rules"));
+        assert!(field.is_handle);
+        assert!(
+            hir.field_access(&field.span)
+                .expect("field access lookup by span works")
+                .is_handle
+        );
     }
 }

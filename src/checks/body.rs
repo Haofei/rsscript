@@ -469,8 +469,12 @@ fn check_take_of_handle_field(analyzer: &mut Analyzer<'_>, expr: &Expr, state: &
             value,
             span,
         } => {
-            if let Expr::Field { base, name, .. } = value.as_ref()
-                && is_handle_field(analyzer, state, base, name)
+            if let Expr::Field {
+                base,
+                name,
+                span: field_span,
+            } = value.as_ref()
+                && is_handle_field(analyzer, state, base, name, field_span)
             {
                 analyzer.diagnostics.push(
                     Diagnostic::error(
@@ -840,7 +844,12 @@ fn is_handle_field(
     state: &BodyState,
     base: &Expr,
     field_name: &str,
+    field_span: &crate::diagnostic::Span,
 ) -> bool {
+    if let Some(field) = analyzer.hir.field_access(field_span) {
+        return field.is_handle;
+    }
+
     if let Some(base_type) = infer_expr_type(analyzer, base, state) {
         return analyzer
             .hir
