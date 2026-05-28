@@ -1,0 +1,53 @@
+pub fn OS.close(fd: Fd) -> Unit
+
+pub fn ImageCache.store(
+    cache: mut ImageCache,
+    image: read Image,
+) -> Unit
+    effects(retains(image))
+
+pub fn RowBuffer.new(size: Int) -> fresh RowBuffer
+
+pub fn Csv.read_into(
+    file: mut File,
+    buffer: mut RowBuffer,
+) -> Result<Unit, CsvError>
+
+pub fn Csv.parse_row(buffer: read RowBuffer) -> Result<fresh Row, CsvError>
+
+pub fn Int.add(left: Int, right: Int) -> Int
+
+pub fn List.consume(list: take List) -> Unit
+
+pub fn Buffer.consume(buffer: take Buffer) -> Unit
+
+pub fn String.concat(left: read String, right: read String) -> fresh String
+
+pub fn DbConnection.open(url: read Url) -> fresh DbConnection
+
+pub fn DbConnection.query(
+    conn: mut DbConnection,
+    sql: read String,
+) -> Result<Unit, DbError>
+
+pub fn Db.close(fd: Fd) -> Unit
+
+pub fn RuleLoader.load_rules(path: read Path) -> Result<fresh List<Rule>, ConfigError>
+
+pub fn GlobalConfig.replace(
+    global: mut GlobalConfig,
+    value: read Config,
+) -> Unit
+    effects(retains(value))
+
+pub fn Cache.lookup(cache: read Cache, key: read String)
+
+pub fn Cache.get(cache: read Cache)
+
+pub fn Request.path(request: read Request) -> String
+
+pub fn Counter.add(counter: mut Counter, amount: Int) -> Unit
+
+pub fn Counter.value(counter: read Counter) -> Int
+
+pub fn FunctionObject.new(closure: read Environment) -> fresh FunctionObject

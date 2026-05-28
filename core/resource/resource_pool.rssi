@@ -3,9 +3,8 @@ features: local
 struct ResourcePool<T: Resource>
 
 pub fn ResourcePool.new<T: Resource>(
-    create: read Closure,
+    create: Closure,
     max_size: Int,
 ) -> fresh ResourcePool<T>
 
 pub fn ResourcePool.borrow<T: Resource>(pool: mut ResourcePool<T>) -> T
-

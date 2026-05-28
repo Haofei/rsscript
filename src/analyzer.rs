@@ -3,37 +3,13 @@ use std::collections::{HashMap, HashSet};
 use crate::checks;
 use crate::diagnostic::{Diagnostic, code};
 use crate::hir::{DuplicateSymbolKind, Hir, HirTypeKind};
+use crate::interfaces::CORE_INTERFACES;
 use crate::lexer::{Token, lex};
 use crate::syntax::ast::{
     Block, Callee, DataEffect, EffectDecl, Expr, GenericBound, GenericParam, Item, Stmt, TypeKind,
     TypeRef,
 };
 use crate::syntax::parse_source;
-
-pub const CORE_INTERFACES: &[(&str, &str)] = &[
-    (
-        "core/collections/map.rssi",
-        include_str!("../core/collections/map.rssi"),
-    ),
-    ("core/fs/file.rssi", include_str!("../core/fs/file.rssi")),
-    (
-        "core/image/image.rssi",
-        include_str!("../core/image/image.rssi"),
-    ),
-    (
-        "core/json/json.rssi",
-        include_str!("../core/json/json.rssi"),
-    ),
-    ("core/log/log.rssi", include_str!("../core/log/log.rssi")),
-    (
-        "core/resource/resource_pool.rssi",
-        include_str!("../core/resource/resource_pool.rssi"),
-    ),
-    (
-        "core/test/assert.rssi",
-        include_str!("../core/test/assert.rssi"),
-    ),
-];
 
 pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
     let tokens = lex(file, source);
@@ -1232,6 +1208,7 @@ fn is_copy_type(ty: &TypeRef) -> bool {
                 | "UInt16"
                 | "UInt32"
                 | "UInt64"
+                | "Closure"
                 | "Unit"
         )
 }

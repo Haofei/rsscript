@@ -2,6 +2,7 @@ mod analyzer;
 mod checks;
 mod diagnostic;
 mod hir;
+mod interfaces;
 mod lexer;
 mod review;
 mod rust_lower;

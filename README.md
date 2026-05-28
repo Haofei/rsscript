@@ -384,6 +384,7 @@ source map JSON for generated Rust packages
 rustc diagnostic remapping through source maps
 zero-argument `fn main() -> Unit` package harnesses for runnable Rust output
 core `.rssi` interface signatures
+HIR builtin signatures parsed from `.rssi` interface sources instead of a hand-written Rust table
 CI gates for formatting, linting, tests, and generated Rust fixtures
 golden tests for Rust lowering and source-map shape
 ```
@@ -410,6 +411,8 @@ rss verify-rust [--json] <file.rss> --out-dir <directory>
 ```
 
 `rss check` loads bundled core `.rssi` signatures by default. Use `--no-core` only when testing a file against user-supplied interfaces in isolation.
+
+The checker prototype also keeps a small `core/prototype` interface bundle for real-scenario fixtures such as CSV, DB, cache, and config examples. Those signatures are still `.rssi` sources, not a second Rust-side builtin table.
 
 If a lowered package contains `fn main() -> Unit`, `rss lower --rust --out-dir` also emits a Rust `src/main.rs` harness. `rss run <file.rss>` uses the same lowering path, writes a temporary Rust package, and delegates execution to `cargo run`. Use `rss run <file.rss> --out-dir <directory>` to keep the generated Rust package for inspection.
 

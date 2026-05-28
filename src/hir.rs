@@ -1,10 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::diagnostic::Span;
+use crate::interfaces::builtin_interfaces;
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl, Item,
     LetKind, Param, Program as SyntaxProgram, Stmt, TypeDecl, TypeKind, TypeRef,
 };
+use crate::syntax::parse_source;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParamEffect {
@@ -329,7 +331,7 @@ impl Hir {
         interfaces: &[SyntaxProgram],
     ) -> Self {
         let mut hir = Self::default();
-        hir.insert_builtins();
+        hir.insert_builtin_interfaces();
         let mut type_symbols: HashMap<String, (DuplicateSymbolKind, Span)> = HashMap::new();
         let mut callable_symbols: HashMap<String, (DuplicateSymbolKind, Span)> = HashMap::new();
         for interface in interfaces {
@@ -356,7 +358,7 @@ impl Hir {
                         &function.name,
                         &function.span,
                     );
-                    self.insert_function(function_sig_from_decl(function));
+                    self.insert_function(function_sig_from_decl(function, false));
                 }
                 Item::Type(type_decl) => {
                     record_duplicate_fields(&mut self.duplicate_symbols, type_decl);
@@ -464,7 +466,7 @@ impl Hir {
     }
 
     fn insert_type(&mut self, type_info: TypeInfo) {
-        let constructor = constructor_sig_from_type(&type_info);
+        let constructor = constructor_sig_from_type(&type_info, false);
         for field in type_info.fields.values() {
             self.fields_by_name
                 .entry(field.name.clone())
@@ -475,10 +477,36 @@ impl Hir {
         self.insert_function(constructor);
     }
 
-    fn insert_builtins(&mut self) {
-        for signature in builtin_signatures() {
-            self.insert_function(signature);
+    fn insert_builtin_interfaces(&mut self) {
+        for (file, source) in builtin_interfaces() {
+            let program = parse_source(file, source);
+            self.insert_builtin_interface(&program);
         }
+    }
+
+    fn insert_builtin_interface(&mut self, program: &SyntaxProgram) {
+        for item in &program.items {
+            match item {
+                Item::Function(function) => {
+                    self.insert_function(function_sig_from_decl(function, true));
+                }
+                Item::Type(type_decl) => {
+                    self.insert_builtin_type(type_info_from_decl(type_decl));
+                }
+            }
+        }
+    }
+
+    fn insert_builtin_type(&mut self, type_info: TypeInfo) {
+        let constructor = constructor_sig_from_type(&type_info, true);
+        for field in type_info.fields.values() {
+            self.fields_by_name
+                .entry(field.name.clone())
+                .or_default()
+                .push(field.clone());
+        }
+        self.types.insert(type_info.name.clone(), type_info);
+        self.insert_function(constructor);
     }
 
     fn collect_body_facts(&mut self, program: &SyntaxProgram) {
@@ -1368,7 +1396,7 @@ fn callee_display(callee: &Callee) -> String {
     }
 }
 
-fn function_sig_from_decl(function: &FunctionDecl) -> FunctionSig {
+fn function_sig_from_decl(function: &FunctionDecl, is_builtin: bool) -> FunctionSig {
     let (namespace, name) = split_function_name(&function.name);
     FunctionSig {
         namespace,
@@ -1385,7 +1413,7 @@ fn function_sig_from_decl(function: &FunctionDecl) -> FunctionSig {
                 EffectDecl::Name(_) => None,
             })
             .collect(),
-        is_builtin: false,
+        is_builtin,
     }
 }
 
@@ -1508,7 +1536,7 @@ fn field_info_from_decl(field: &FieldDecl) -> FieldInfo {
     }
 }
 
-fn constructor_sig_from_type(type_info: &TypeInfo) -> FunctionSig {
+fn constructor_sig_from_type(type_info: &TypeInfo, is_builtin: bool) -> FunctionSig {
     let mut fields: Vec<&FieldInfo> = type_info.fields.values().collect();
     fields.sort_by(|left, right| left.name.cmp(&right.name));
 
@@ -1527,393 +1555,12 @@ fn constructor_sig_from_type(type_info: &TypeInfo) -> FunctionSig {
         return_type: Some(type_info.name.clone()),
         returns_fresh: true,
         retained_params: HashSet::new(),
-        is_builtin: false,
+        is_builtin,
     }
 }
 
 fn qualified_key(namespace: &str, name: &str) -> String {
     format!("{namespace}.{name}")
-}
-
-fn builtin_signatures() -> Vec<FunctionSig> {
-    vec![
-        builtin(
-            "Image",
-            "load",
-            &[param("path", ParamEffect::Read, "Path")],
-            Some("Result<Image, ImageError>"),
-            true,
-            &[],
-        ),
-        builtin(
-            "Image",
-            "resize",
-            &[
-                param("image", ParamEffect::Mut, "Image"),
-                copy_param("width", "Int"),
-                copy_param("height", "Int"),
-            ],
-            Some("Unit"),
-            false,
-            &[],
-        ),
-        builtin(
-            "Image",
-            "normalize",
-            &[param("image", ParamEffect::Mut, "Image")],
-            Some("Unit"),
-            false,
-            &[],
-        ),
-        builtin(
-            "Image",
-            "sharpen",
-            &[param("image", ParamEffect::Mut, "Image")],
-            Some("Unit"),
-            false,
-            &[],
-        ),
-        builtin(
-            "Image",
-            "save",
-            &[
-                param("image", ParamEffect::Read, "Image"),
-                param("path", ParamEffect::Read, "Path"),
-            ],
-            Some("Result<Unit, ImageError>"),
-            false,
-            &[],
-        ),
-        builtin(
-            "Image",
-            "inspect",
-            &[param("image", ParamEffect::Read, "Image")],
-            Some("Unit"),
-            false,
-            &[],
-        ),
-        builtin(
-            "ImageCache",
-            "store",
-            &[
-                param("cache", ParamEffect::Mut, "ImageCache"),
-                param("image", ParamEffect::Read, "Image"),
-            ],
-            Some("Unit"),
-            false,
-            &["image"],
-        ),
-        builtin(
-            "File",
-            "open",
-            &[param("path", ParamEffect::Read, "Path")],
-            Some("File"),
-            false,
-            &[],
-        ),
-        builtin(
-            "File",
-            "open_read",
-            &[param("path", ParamEffect::Read, "Path")],
-            Some("File"),
-            false,
-            &[],
-        ),
-        builtin(
-            "File",
-            "open_write",
-            &[param("path", ParamEffect::Read, "Path")],
-            Some("File"),
-            false,
-            &[],
-        ),
-        builtin(
-            "File",
-            "read_all",
-            &[param("file", ParamEffect::Mut, "File")],
-            Some("Result<Bytes, FileError>"),
-            true,
-            &[],
-        ),
-        builtin(
-            "File",
-            "write",
-            &[
-                param("file", ParamEffect::Mut, "File"),
-                param("data", ParamEffect::Read, "Bytes"),
-            ],
-            Some("Result<Unit, FileError>"),
-            false,
-            &[],
-        ),
-        builtin(
-            "OS",
-            "close",
-            &[copy_param("fd", "Fd")],
-            Some("Unit"),
-            false,
-            &[],
-        ),
-        builtin(
-            "Map",
-            "insert",
-            &[
-                param("map", ParamEffect::Mut, "Map"),
-                param("key", ParamEffect::Read, "K"),
-                param("value", ParamEffect::Read, "V"),
-            ],
-            Some("Unit"),
-            false,
-            &["value"],
-        ),
-        builtin(
-            "ResourcePool",
-            "new",
-            &[
-                copy_param("create", "Closure"),
-                copy_param("max_size", "Int"),
-            ],
-            Some("ResourcePool"),
-            true,
-            &[],
-        ),
-        builtin(
-            "ResourcePool",
-            "borrow",
-            &[param("pool", ParamEffect::Mut, "ResourcePool")],
-            None,
-            false,
-            &[],
-        ),
-        builtin(
-            "RowBuffer",
-            "new",
-            &[copy_param("size", "Int")],
-            Some("RowBuffer"),
-            true,
-            &[],
-        ),
-        builtin(
-            "Json",
-            "parse",
-            &[param("text", ParamEffect::Read, "String")],
-            Some("Result<JsonValue, JsonError>"),
-            true,
-            &[],
-        ),
-        builtin(
-            "Json",
-            "field_string",
-            &[
-                param("value", ParamEffect::Read, "JsonValue"),
-                param("name", ParamEffect::Read, "String"),
-            ],
-            Some("Result<String, JsonError>"),
-            false,
-            &[],
-        ),
-        builtin(
-            "Csv",
-            "read_into",
-            &[
-                param("file", ParamEffect::Mut, "File"),
-                param("buffer", ParamEffect::Mut, "RowBuffer"),
-            ],
-            Some("Result<Unit, CsvError>"),
-            false,
-            &[],
-        ),
-        builtin(
-            "Csv",
-            "parse_row",
-            &[param("buffer", ParamEffect::Read, "RowBuffer")],
-            Some("Result<Row, CsvError>"),
-            true,
-            &[],
-        ),
-        builtin(
-            "Int",
-            "add",
-            &[copy_param("left", "Int"), copy_param("right", "Int")],
-            Some("Int"),
-            false,
-            &[],
-        ),
-        builtin(
-            "List",
-            "consume",
-            &[param("list", ParamEffect::Take, "List")],
-            Some("Unit"),
-            false,
-            &[],
-        ),
-        builtin(
-            "Buffer",
-            "consume",
-            &[param("buffer", ParamEffect::Take, "Buffer")],
-            Some("Unit"),
-            false,
-            &[],
-        ),
-        builtin(
-            "String",
-            "concat",
-            &[
-                param("left", ParamEffect::Read, "String"),
-                param("right", ParamEffect::Read, "String"),
-            ],
-            Some("String"),
-            true,
-            &[],
-        ),
-        builtin(
-            "Log",
-            "write",
-            &[param("message", ParamEffect::Read, "String")],
-            Some("Unit"),
-            false,
-            &[],
-        ),
-        builtin(
-            "DbConnection",
-            "open",
-            &[param("url", ParamEffect::Read, "Url")],
-            Some("DbConnection"),
-            true,
-            &[],
-        ),
-        builtin(
-            "DbConnection",
-            "query",
-            &[
-                param("conn", ParamEffect::Mut, "DbConnection"),
-                param("sql", ParamEffect::Read, "String"),
-            ],
-            Some("Result<Unit, DbError>"),
-            false,
-            &[],
-        ),
-        builtin(
-            "Db",
-            "close",
-            &[copy_param("fd", "Fd")],
-            Some("Unit"),
-            false,
-            &[],
-        ),
-        builtin(
-            "RuleLoader",
-            "load_rules",
-            &[param("path", ParamEffect::Read, "Path")],
-            Some("Result<List<Rule>, ConfigError>"),
-            true,
-            &[],
-        ),
-        builtin(
-            "GlobalConfig",
-            "replace",
-            &[
-                param("global", ParamEffect::Mut, "GlobalConfig"),
-                param("value", ParamEffect::Read, "Config"),
-            ],
-            Some("Unit"),
-            false,
-            &["value"],
-        ),
-        builtin(
-            "Cache",
-            "lookup",
-            &[
-                param("cache", ParamEffect::Read, "Cache"),
-                param("key", ParamEffect::Read, "String"),
-            ],
-            None,
-            false,
-            &[],
-        ),
-        builtin(
-            "Cache",
-            "get",
-            &[param("cache", ParamEffect::Read, "Cache")],
-            None,
-            false,
-            &[],
-        ),
-        builtin(
-            "Request",
-            "path",
-            &[param("request", ParamEffect::Read, "Request")],
-            Some("String"),
-            false,
-            &[],
-        ),
-        builtin(
-            "Counter",
-            "add",
-            &[
-                param("counter", ParamEffect::Mut, "Counter"),
-                copy_param("amount", "Int"),
-            ],
-            Some("Unit"),
-            false,
-            &[],
-        ),
-        builtin(
-            "Counter",
-            "value",
-            &[param("counter", ParamEffect::Read, "Counter")],
-            Some("Int"),
-            false,
-            &[],
-        ),
-        builtin(
-            "FunctionObject",
-            "new",
-            &[param("closure", ParamEffect::Read, "Environment")],
-            Some("FunctionObject"),
-            true,
-            &[],
-        ),
-    ]
-}
-
-fn builtin(
-    namespace: &str,
-    name: &str,
-    params: &[ParamSig],
-    return_type: Option<&str>,
-    returns_fresh: bool,
-    retained_params: &[&str],
-) -> FunctionSig {
-    FunctionSig {
-        namespace: Some(namespace.to_string()),
-        name: name.to_string(),
-        is_async: false,
-        params: params.to_vec(),
-        return_type: return_type.map(str::to_string),
-        returns_fresh,
-        retained_params: retained_params
-            .iter()
-            .map(|param| (*param).to_string())
-            .collect(),
-        is_builtin: true,
-    }
-}
-
-fn param(name: &str, effect: ParamEffect, type_name: &str) -> ParamSig {
-    ParamSig {
-        name: name.to_string(),
-        effect: Some(effect),
-        type_name: type_name.to_string(),
-    }
-}
-
-fn copy_param(name: &str, type_name: &str) -> ParamSig {
-    ParamSig {
-        name: name.to_string(),
-        effect: None,
-        type_name: type_name.to_string(),
-    }
 }
 
 #[cfg(test)]
