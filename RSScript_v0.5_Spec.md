@@ -3,7 +3,7 @@
 Status: Draft / Architecture Candidate  
 Version: 0.5  
 Audience: language designers, compiler implementers, standard-library authors, review-tool authors  
-Compatibility note: v0.5 preserves the v0.4.x language core and reorganizes the implementation architecture around **RSScript frontend -> Rust source lowering -> rustc backend**.
+Architecture note: v0.5 organizes the implementation around **RSScript frontend -> Rust source lowering -> rustc backend**.
 
 ---
 
@@ -29,7 +29,7 @@ machine-readable review artifacts
 and Rust-backed execution
 ```
 
-v0.5 keeps the v0.4.x semantic core:
+The semantic core is:
 
 ```text
 let       = managed binding
@@ -291,29 +291,9 @@ lowering.
 
 ---
 
-# 3. Version Delta: v0.4.5 -> v0.5
+# 3. Compilation Architecture
 
-v0.5 makes the following normative or architectural changes:
-
-| Area | v0.4.5 | v0.5 |
-|---|---|---|
-| Execution architecture | unspecified / future runtime possible | Rust source lowering is the primary backend |
-| VM | possible future work | no custom VM in MVP |
-| Backend | unspecified | rustc backend |
-| Managed aliasing | managed dynamic semantics | explicitly runtime-mediated, not Rust borrow-checked |
-| Rust diagnostics | not specified | must be source-mapped or treated as compiler bugs |
-| Lowering | not specified | deterministic lowering shape contract |
-| Runtime crate | implied | required target ABI/type surface before lowering |
-| Roadmap | interpreter/runtime-oriented | frontend -> lowering -> Rust crate -> rustc |
-| Self-hosting | future | self-hosted frontend still emits Rust initially |
-
-No language-level feature is removed from v0.4.5.
-
----
-
-# 4. Compilation Architecture
-
-## 4.1 Pipeline
+## 3.1 Pipeline
 
 The v0.5 compiler pipeline is:
 
@@ -350,7 +330,7 @@ rustc is not the primary source of RSScript user diagnostics.
 
 ---
 
-## 4.2 Why Rust lowering is normative
+## 3.2 Why Rust lowering is normative
 
 RSScript's core value is review-first semantics, not backend technology.
 
@@ -379,7 +359,7 @@ RSScript remains a separate language because its source semantics, diagnostics, 
 
 ---
 
-## 4.3 Rust as typed IR
+## 3.3 Rust as typed IR
 
 In v0.5, generated Rust should be treated as a **typed implementation IR**.
 
@@ -402,7 +382,7 @@ a snapshot-testable artifact
 
 ---
 
-## 4.4 No custom VM in MVP
+## 3.4 No custom VM in MVP
 
 RSScript v0.5 does not define a custom bytecode VM.
 
@@ -420,9 +400,9 @@ An interpreter may exist for experimentation, but it is not the primary runnable
 
 ---
 
-# 5. Rust Lowering Shape Contract
+# 4. Rust Lowering Shape Contract
 
-## 5.1 Deterministic lowering
+## 4.1 Deterministic lowering
 
 Every RSScript semantic construct must lower to a deterministic, documented Rust shape.
 
@@ -450,7 +430,7 @@ review-tool-friendly
 
 ---
 
-## 5.2 One-to-one source mapping
+## 4.2 One-to-one source mapping
 
 The lowering must preserve a stable mapping from RSScript source spans to generated Rust spans.
 
@@ -474,7 +454,7 @@ It is not a post-processing task.
 
 ---
 
-## 5.3 Golden tests
+## 4.3 Golden tests
 
 Implementations must maintain lowering golden tests.
 
@@ -490,7 +470,7 @@ Generated Rust may change only when the lowering contract changes intentionally.
 
 ---
 
-## 5.4 Generated Rust is private
+## 4.4 Generated Rust is private
 
 Generated Rust is not the user-facing source format.
 
@@ -498,9 +478,9 @@ Users may inspect it for debugging, but RSScript compatibility is defined by RSS
 
 ---
 
-# 6. Runtime Crate Target ABI
+# 5. Runtime Crate Target ABI
 
-## 6.1 `rss_rt`
+## 5.1 `rss_rt`
 
 RSScript lowering targets a Rust runtime crate, referred to here as `rss_rt`.
 
@@ -510,7 +490,7 @@ The type surface must be defined before lowering is implemented.
 
 ---
 
-## 6.2 Runtime crate surface before implementation
+## 5.2 Runtime crate surface before implementation
 
 The runtime crate should be split into:
 
@@ -541,7 +521,7 @@ The exact Rust names are implementation details, but the conceptual roles are no
 
 ---
 
-## 6.3 Runtime ABI stability
+## 5.3 Runtime ABI stability
 
 Generated Rust depends on `rss_rt` as an internal ABI.
 
@@ -553,7 +533,7 @@ rssc 0.5.x -> rss_rt 0.5.x
 
 ---
 
-## 6.4 Core library signatures vs runtime implementation
+## 5.4 Core library signatures vs runtime implementation
 
 RSScript core APIs are defined by `.rssi` interface files.
 
@@ -563,9 +543,9 @@ RSScript signatures are the public contract. Rust implementation details are not
 
 ---
 
-# 7. Managed Runtime Semantics
+# 6. Managed Runtime Semantics
 
-## 7.1 Managed values
+## 6.1 Managed values
 
 Managed values are the default for non-Copy values created with `let`.
 
@@ -583,7 +563,7 @@ Managed values are not Rust-owned values exposed to RSScript users.
 
 ---
 
-## 7.2 Boundary-stable managed representation
+## 6.2 Boundary-stable managed representation
 
 The managed layer is the default boundary-stable representation. Managed values
 may cross interface calls and, in the future executable async subset, same-isolate
@@ -596,7 +576,7 @@ review-relevant retention, mutation, resource lifetime, or native boundaries.
 
 ---
 
-## 7.3 Managed aliasing is runtime-mediated
+## 6.3 Managed aliasing is runtime-mediated
 
 In v0.5, managed value aliasing and mutation are mediated by the RSScript runtime, not by Rust's source-level borrow checker.
 
@@ -650,7 +630,7 @@ Therefore, generated Rust will usually represent managed values through runtime 
 
 ---
 
-## 7.4 What rustc checks and does not check
+## 6.4 What rustc checks and does not check
 
 rustc may check generated Rust implementation correctness.
 
@@ -672,7 +652,7 @@ Managed dynamic mutation is a runtime model.
 
 ---
 
-## 7.5 Semantic guarantee table
+## 6.5 Semantic guarantee table
 
 The table below is normative for the v0.5 implementation target. It prevents
 the source language from promising more than the compiler/runtime can currently
@@ -727,7 +707,7 @@ diagnostics before v0.5 can be called semantically hard.
 
 ---
 
-## 7.6 Runtime conflicts
+## 6.6 Runtime conflicts
 
 RSScript managed mutation semantics are dynamically shared.
 
@@ -750,7 +730,7 @@ not as Rust panics pointing into generated code.
 
 ---
 
-## 7.7 No Rust lifetime leakage
+## 6.7 No Rust lifetime leakage
 
 Generated Rust must not leak lifetime parameters, `RefCell`, `Rc`, `Arc`, `Mutex`, or other backend representation details into RSScript diagnostics unless explicitly marked as an internal compiler/runtime error.
 
@@ -758,7 +738,7 @@ RSScript users review RSScript semantics, not Rust lowering mechanics.
 
 ---
 
-# 8. File Features
+# 7. File Features
 
 A file may declare advanced review-relevant capabilities.
 
@@ -766,7 +746,7 @@ If omitted, the file is managed-only and enables no advanced capability.
 
 ---
 
-## 8.1 Omitted features
+## 7.1 Omitted features
 
 A file without a `features:` declaration is managed-only:
 
@@ -783,7 +763,7 @@ Each feature may appear at most once in a `features:` declaration. Duplicate fea
 
 ---
 
-## 8.2 Default Managed File
+## 7.2 Default Managed File
 
 Allowed:
 
@@ -808,7 +788,7 @@ ResourcePool<T>
 
 ---
 
-## 8.3 `features: local`
+## 7.3 `features: local`
 
 Required if a file uses local capability.
 
@@ -831,7 +811,7 @@ Features describe semantic capability, not style.
 
 ---
 
-## 8.4 Review Boundary Features
+## 7.4 Review Boundary Features
 
 The MVP recognizes these feature names as review-relevant capability gates:
 
@@ -893,7 +873,7 @@ There is only one canonical surface style.
 
 ---
 
-# 9. Type Kinds
+# 8. Type Kinds
 
 RSScript has three user-facing type declaration kinds:
 
@@ -907,7 +887,7 @@ There is no `own struct`.
 
 ---
 
-## 9.1 `class`
+## 8.1 `class`
 
 A `class` is a managed identity object.
 
@@ -934,7 +914,7 @@ cannot be resource
 
 ---
 
-## 9.2 `struct`
+## 8.2 `struct`
 
 A `struct` is a value object.
 
@@ -957,7 +937,7 @@ fields may be inline or handle
 
 ---
 
-## 9.3 `resource`
+## 8.3 `resource`
 
 A `resource` requires deterministic cleanup.
 
@@ -991,7 +971,7 @@ with File.open(path: read path)? as file {
 
 ---
 
-## 9.4 Expression modes and materialization
+## 8.4 Expression modes and materialization
 
 RSScript expressions have checker modes. These modes are not user-written type
 kinds; they are semantic states used to define materialization, call effects,
@@ -1069,7 +1049,7 @@ Image.resize(image: mut image, width: 800, height: 600)
 
 ---
 
-# 10. Field Model: Inline vs Handle
+# 9. Field Model: Inline vs Handle
 
 
 Every field is either:
@@ -1082,7 +1062,7 @@ weak handle
 
 ---
 
-## 10.1 Inline fields
+## 9.1 Inline fields
 
 A field is inline if it is stored inside its containing value.
 
@@ -1111,7 +1091,7 @@ If `Rect` is local, both `origin` and `size` are local inline subvalues.
 
 ---
 
-## 10.2 Handle fields
+## 9.2 Handle fields
 
 A handle field stores a managed handle.
 
@@ -1134,7 +1114,7 @@ struct Config {
 }
 ```
 
-## 10.2.1 Weak handle fields
+## 9.2.1 Weak handle fields
 
 A weak field stores a non-owning managed handle.
 
@@ -1182,7 +1162,7 @@ The explicit upgrade keeps possible target disappearance review-visible.
 
 ---
 
-## 10.3 Local structs may contain handle fields
+## 9.3 Local structs may contain handle fields
 
 A local struct can point to managed objects through handle fields.
 
@@ -1214,7 +1194,7 @@ runtime-managed references rather than hidden traced pointers.
 
 ---
 
-## 10.4 `manage` and handle fields
+## 9.4 `manage` and handle fields
 
 When a local value is moved into managed runtime:
 
@@ -1233,7 +1213,7 @@ marks the local binding as moved
 
 ---
 
-## 10.5 Resource fields
+## 9.5 Resource fields
 
 Resource fields are not allowed in ordinary `class` or `struct`.
 
@@ -1249,9 +1229,9 @@ Use `with` or `ResourcePool<T: Resource>`.
 
 ---
 
-# 11. Bindings
+# 10. Bindings
 
-## 11.1 `let`
+## 10.1 `let`
 
 `let` creates a managed binding for non-Copy values.
 
@@ -1263,7 +1243,7 @@ For Copy values, the value is copied normally.
 
 ---
 
-## 11.2 `local`
+## 10.2 `local`
 
 `local` creates a local exclusive binding.
 
@@ -1287,7 +1267,7 @@ cannot be captured by managed closures
 
 ---
 
-## 11.3 `with`
+## 10.3 `with`
 
 `with` introduces a scoped resource binding.
 
@@ -1303,7 +1283,7 @@ The resource is dropped when the block exits.
 
 ---
 
-# 12. Managed and Local Worlds
+# 11. Managed and Local Worlds
 
 RSScript has one default world and one local capability.
 
@@ -1314,7 +1294,7 @@ local   = explicit capability
 
 ---
 
-## 12.1 Managed values
+## 11.1 Managed values
 
 Managed values:
 
@@ -1330,7 +1310,7 @@ Even in canonical syntax, `read` and `mut` are review-visible effects, not point
 
 ---
 
-## 12.2 Local values
+## 11.2 Local values
 
 Local values:
 
@@ -1343,7 +1323,7 @@ cannot be retained by managed objects
 
 ---
 
-## 12.3 Managed -> local does not exist
+## 11.3 Managed -> local does not exist
 
 Illegal:
 
@@ -1369,7 +1349,7 @@ Choose local at creation time.
 
 ---
 
-## 12.4 Deep clone is explicit and library-defined
+## 11.4 Deep clone is explicit and library-defined
 
 RSScript does not provide a generic `to_local` or `owned_copy`.
 
@@ -1383,7 +1363,7 @@ The name must make copying cost obvious.
 
 ---
 
-# 13. Data Effects
+# 12. Data Effects
 
 RSScript has exactly three data effects:
 
@@ -1399,7 +1379,7 @@ Retention is expressed with `effects(retains(param))`.
 
 ---
 
-## 13.1 `read`
+## 12.1 `read`
 
 A `read` parameter may be inspected.
 
@@ -1419,7 +1399,7 @@ cannot be retained, and cannot cross `await`.
 
 ---
 
-## 13.2 `mut`
+## 12.2 `mut`
 
 A `mut` parameter may be modified during the call.
 
@@ -1444,7 +1424,7 @@ compiler checks local exclusivity
 
 ---
 
-## 13.3 `take`
+## 12.3 `take`
 
 A `take` parameter consumes a local value.
 
@@ -1464,7 +1444,7 @@ A managed value cannot be passed to `take`.
 
 ---
 
-## 13.4 Copy parameters
+## 12.4 Copy parameters
 
 Copy parameters do not require data effects.
 
@@ -1476,7 +1456,7 @@ fn resize(image: mut Image, width: Int, height: Int) -> Unit
 
 ---
 
-## 13.5 Same-call place conflicts
+## 12.5 Same-call place conflicts
 
 Within a single call expression, argument places must be pairwise compatible.
 
@@ -1534,7 +1514,7 @@ lock/borrow error.
 
 ---
 
-# 14. Field-Level Effects and Partial Local Access
+# 13. Field-Level Effects and Partial Local Access
 
 
 Field-level access is intentionally conservative.
@@ -1549,7 +1529,7 @@ avoid container index analysis
 
 ---
 
-## 14.1 Place paths
+## 13.1 Place paths
 
 A place path is one of:
 
@@ -1568,7 +1548,7 @@ Index paths contain at least one index operation.
 
 ---
 
-## 14.2 Local-inline field paths
+## 13.2 Local-inline field paths
 
 A field path is local-inline if:
 
@@ -1589,7 +1569,7 @@ is local-inline if `state`, `inner`, and `cache` are inline local fields.
 
 ---
 
-## 14.3 Disjoint nested field paths
+## 13.3 Disjoint nested field paths
 
 Two local-inline field paths are disjoint if:
 
@@ -1620,7 +1600,7 @@ Foo.run(
 
 ---
 
-## 14.4 Prefix conflicts
+## 13.4 Prefix conflicts
 
 A whole prefix conflicts with a subpath.
 
@@ -1651,7 +1631,7 @@ mut state.inner.cache modifies the same reachable subvalue
 
 ---
 
-## 14.5 Handle fields terminate local-inline paths
+## 13.5 Handle fields terminate local-inline paths
 
 A handle field is not an inline subvalue.
 
@@ -1678,7 +1658,7 @@ Foo.run(
 
 ---
 
-## 14.6 Container elements are whole-container access
+## 13.6 Container elements are whole-container access
 
 Any path containing an index operation is treated as access to the whole container for local alias checking.
 
@@ -1699,7 +1679,7 @@ RSScript v0.5 does not prove index inequality.
 
 ---
 
-## 14.7 Explicit split APIs
+## 13.7 Explicit split APIs
 
 Disjoint element access must be expressed through explicit library APIs.
 
@@ -1728,7 +1708,7 @@ The language core does not perform index disjointness analysis.
 
 ---
 
-# 15. Runtime Effects and Guarantees
+# 14. Runtime Effects and Guarantees
 
 RSScript uses a reductive effect model.
 
@@ -1745,7 +1725,7 @@ Source effects express constraints and special behavior.
 
 ---
 
-## 15.1 Effect syntax
+## 14.1 Effect syntax
 
 ```rust
 fn hash(data: read Bytes) -> UInt64
@@ -1757,7 +1737,7 @@ fn hash(data: read Bytes) -> UInt64
 
 ---
 
-## 15.2 Standard effects
+## 14.2 Standard effects
 
 | Effect | Meaning |
 |---|---|
@@ -1793,7 +1773,7 @@ runtime internals.
 
 ---
 
-## 15.3 `retains(x)`
+## 14.3 `retains(x)`
 
 `retains(x)` means the function may keep a managed reference derived from parameter `x` after returning.
 
@@ -1830,7 +1810,7 @@ This avoids ambiguity around `?`, field access, and indexing in review.
 
 ---
 
-## 15.4 Failure and async
+## 14.4 Failure and async
 
 `may_fail` is not an effect.
 
@@ -1857,7 +1837,7 @@ fn load(path: read Path) -> Result<Image, ImageError>
 
 ---
 
-## 15.5 Async signatures in v0.5
+## 14.5 Async signatures in v0.5
 
 In the current v0.5 implementation target, `async fn` is a review-visible
 signature boundary. Executable async function bodies, `await`, and `spawn` are
@@ -1868,7 +1848,7 @@ candidate, not part of the v0.5 executable language.
 
 ---
 
-## 15.6 Future executable async candidate
+## 14.6 Future executable async candidate
 
 The first executable async subset must stay narrow and review-first.
 
@@ -2013,7 +1993,7 @@ unsupported until an explicit `Send`/`Share` capability exists.
 
 ---
 
-# 16. Function Signatures
+# 15. Function Signatures
 
 Public functions must have explicit:
 
@@ -2036,7 +2016,7 @@ Private functions follow canonical syntax.
 
 ---
 
-## 16.1 Return modes
+## 15.1 Return modes
 
 For non-Copy, non-resource returns:
 
@@ -2080,7 +2060,7 @@ returns a fresh `Image`.
 
 ---
 
-## 16.2 Signature complexity budget
+## 15.2 Signature complexity budget
 
 Public signatures should remain reviewable in one screen.
 
@@ -2098,7 +2078,7 @@ RSScript rejects Rust-style lifetime parameters in user-facing signatures.
 
 ---
 
-# 17. Named Arguments
+# 16. Named Arguments
 
 All non-receiver arguments must be named.
 
@@ -2131,27 +2111,27 @@ Dot syntax is namespace access, not method dispatch magic.
 
 ---
 
-# 18. Calls and Effects
+# 17. Calls and Effects
 
-## 18.1 Read call
+## 17.1 Read call
 
 ```rust
 Image.save(image: read image, path: read output)
 ```
 
-## 18.2 Mutating call
+## 17.2 Mutating call
 
 ```rust
 Image.resize(image: mut image, width: 800, height: 600)
 ```
 
-## 18.3 Taking call
+## 17.3 Taking call
 
 ```rust
 Buffer.consume(buffer: take buffer)
 ```
 
-## 18.4 Managing local at call site
+## 17.4 Managing local at call site
 
 ```rust
 Cache.store(cache: mut cache, image: read (manage image))
@@ -2159,7 +2139,7 @@ Cache.store(cache: mut cache, image: read (manage image))
 
 ---
 
-# 19. `fresh`
+# 18. `fresh`
 
 `fresh T` means the returned top-level struct shell is newly created and has no aliases.
 
@@ -2169,7 +2149,7 @@ It does not mean every internal handle is unique.
 
 ---
 
-## 19.1 Valid fresh return types
+## 18.1 Valid fresh return types
 
 `fresh` may be used only with `struct` types.
 
@@ -2191,7 +2171,7 @@ Resources are not fresh values.
 
 ---
 
-## 19.2 Caller selects ownership capability
+## 18.2 Caller selects ownership capability
 
 ```rust
 let image = Image.load(path: read path)?
@@ -2209,11 +2189,11 @@ local image = ...
     local materialization
 ```
 
-This is the same fixed materialization rule defined in section 9.4.
+This is the same fixed materialization rule defined in section 8.4.
 
 ---
 
-## 19.3 Shallow freshness
+## 18.3 Shallow freshness
 
 ```rust
 struct Pair {
@@ -2232,7 +2212,7 @@ The images inside are managed handles and may be shared.
 
 ---
 
-# 20. Fresh-Preservation Analysis
+# 19. Fresh-Preservation Analysis
 
 A function declared as returning `fresh T` must pass compiler freshness checking.
 
@@ -2242,7 +2222,7 @@ Inter-procedural facts are taken only from function signatures.
 
 ---
 
-## 20.1 Fresh expression sources
+## 19.1 Fresh expression sources
 
 An expression is fresh if it is one of:
 
@@ -2255,7 +2235,7 @@ composition of fresh fields into a fresh shell
 
 ---
 
-## 20.2 Clean local binding
+## 19.2 Clean local binding
 
 A local binding is clean if it has not been:
 
@@ -2271,7 +2251,7 @@ assigned into a handle field
 
 ---
 
-## 20.3 Fresh analysis pseudocode
+## 19.3 Fresh analysis pseudocode
 
 ```text
 is_fresh(expr):
@@ -2304,13 +2284,13 @@ is_fresh(expr):
 
 ---
 
-## 20.4 Branches
+## 19.4 Branches
 
 All return branches must return fresh values.
 
 ---
 
-## 20.5 Closures and freshness
+## 19.5 Closures and freshness
 
 A local captured by a managed closure is not clean.
 
@@ -2318,7 +2298,7 @@ A local temporarily used by a noescape closure remains clean if not retained.
 
 ---
 
-## 20.6 Generics and freshness
+## 19.6 Generics and freshness
 
 A generic function returning `fresh T` must require `T: Struct`.
 
@@ -2326,7 +2306,7 @@ If freshness cannot be proven for all valid instantiations, the function is reje
 
 ---
 
-# 21. `manage`
+# 20. `manage`
 
 `manage` moves a local value into the managed runtime.
 
@@ -2339,7 +2319,7 @@ After `manage`, the local binding is moved.
 
 ---
 
-## 21.1 Semantics
+## 20.1 Semantics
 
 `manage x`:
 
@@ -2386,7 +2366,7 @@ Foo.run(
 
 ---
 
-## 21.2 Failure
+## 20.2 Failure
 
 If migration allocation fails:
 
@@ -2398,7 +2378,7 @@ no broken state is exposed
 
 ---
 
-## 21.3 Cost
+## 20.3 Cost
 
 `manage` is not guaranteed O(1).
 
@@ -2408,7 +2388,7 @@ Handle fields are not deep-cloned.
 
 ---
 
-# 22. Resources and `with`
+# 21. Resources and `with`
 
 Resources require deterministic cleanup.
 
@@ -2472,7 +2452,7 @@ Result-returning resource producers.
 
 ---
 
-## 22.1 Drop points
+## 21.1 Drop points
 
 A `with` resource is dropped on:
 
@@ -2486,7 +2466,7 @@ panic unwind, if implementation supports unwinding
 
 ---
 
-## 22.2 Resource escape is forbidden
+## 21.2 Resource escape is forbidden
 
 Inside a `with` block, the resource cannot be:
 
@@ -2501,7 +2481,7 @@ captured by a managed closure
 
 ---
 
-## 22.3 ResourcePool
+## 21.3 ResourcePool
 
 `ResourcePool<T: Resource>` is the standard-library escape hatch for long-lived resources.
 
@@ -2530,9 +2510,9 @@ resource values cannot escape the pool lease
 
 ---
 
-# 23. Containers
+# 22. Containers
 
-## 23.1 Managed containers
+## 22.1 Managed containers
 
 Ordinary containers are managed.
 
@@ -2558,7 +2538,7 @@ List.push(list: mut images, value: read (manage image))
 
 ---
 
-## 23.2 Local containers
+## 22.2 Local containers
 
 Local containers are advanced standard-library types.
 
@@ -2574,7 +2554,7 @@ Container elements do not participate in language-level partial access.
 
 ---
 
-## 23.3 Resource containers
+## 22.3 Resource containers
 
 Only approved resource containers may store resources.
 
@@ -2588,9 +2568,9 @@ is the standard resource container.
 
 ---
 
-# 24. Generics
+# 23. Generics
 
-## 24.1 Default bound
+## 23.1 Default bound
 
 Generic type parameters default to `Managed`.
 
@@ -2630,7 +2610,7 @@ the managed-capable bound.
 
 ---
 
-## 24.2 Struct bound
+## 23.2 Struct bound
 
 Use `T: Struct` for fresh or local-capable values.
 
@@ -2640,7 +2620,7 @@ fn make_pair<T: Struct>(left: read T, right: read T) -> fresh Pair<T>
 
 ---
 
-## 24.3 Resource bound
+## 23.3 Resource bound
 
 Resource generic APIs must be explicit.
 
@@ -2652,7 +2632,7 @@ Ordinary `List<T>` cannot be instantiated with resource types.
 
 ---
 
-## 24.4 Generic resources
+## 23.4 Generic resources
 
 Resource declarations may be generic if all type parameters have explicit bounds.
 
@@ -2680,7 +2660,7 @@ It cannot become managed.
 
 ---
 
-## 24.5 Resource type parameters
+## 23.5 Resource type parameters
 
 A generic resource container must explicitly require resource parameters:
 
@@ -2692,7 +2672,7 @@ struct ResourcePool<T: Resource>
 
 ---
 
-## 24.6 Retention with generics
+## 23.6 Retention with generics
 
 A function retaining a generic parameter must declare it:
 
@@ -2703,7 +2683,7 @@ fn store<T: Managed>(box: mut Box<T>, value: read T) -> Unit
 
 ---
 
-## 24.7 Minimal interfaces, future design candidate
+## 23.7 Minimal interfaces, future design candidate
 
 This section is a design candidate, not a required part of the v0.5 executable
 MVP.
@@ -2913,7 +2893,7 @@ capability boundaries, not maximum type-system expressiveness.
 
 ---
 
-# 25. Closures
+# 24. Closures
 
 RSScript has three closure categories:
 
@@ -2925,7 +2905,7 @@ noescape closure
 
 ---
 
-## 25.1 Managed closure
+## 24.1 Managed closure
 
 A closure bound with `let` is managed.
 
@@ -2951,7 +2931,7 @@ with-bound resources
 
 ---
 
-## 25.2 Local closure
+## 24.2 Local closure
 
 A closure bound with `local` is local and may move-capture local values.
 
@@ -2967,7 +2947,7 @@ local callback = move || {
 
 ---
 
-## 25.3 Noescape closure
+## 24.3 Noescape closure
 
 A noescape closure cannot be stored or returned.
 
@@ -2979,7 +2959,7 @@ Noescape closures may temporarily use local values.
 
 ---
 
-# 26. Error Handling
+# 25. Error Handling
 
 RSScript uses explicit result types for recoverable errors.
 
@@ -2994,7 +2974,7 @@ Use of `?` is allowed only inside functions returning compatible `Result`.
 
 ---
 
-## 26.1 Panic
+## 25.1 Panic
 
 Panic is unrecoverable by default.
 
@@ -3002,7 +2982,7 @@ Functions may panic unless marked `no_panic`.
 
 ---
 
-## 26.2 Exhaustive matching
+## 25.2 Exhaustive matching
 
 Pattern matches must be exhaustive.
 
@@ -3022,7 +3002,7 @@ full enum/type-resolution pass.
 
 ---
 
-# 27. Forbidden Features
+# 26. Forbidden Features
 
 RSScript v0.5 does not support:
 
@@ -3050,7 +3030,7 @@ user-facing Rust lifetime syntax
 
 ---
 
-## 27.1 Operators
+## 26.1 Operators
 
 Operators are limited to built-in types.
 
@@ -3078,7 +3058,7 @@ Money.add(left: read price, right: read tax)
 
 ---
 
-# 28. Standard Library Philosophy
+# 27. Standard Library Philosophy
 
 RSScript standard libraries should follow:
 
@@ -3090,7 +3070,7 @@ Reviewable at the boundary.
 
 ---
 
-## 28.1 User-facing APIs are managed-first
+## 27.1 User-facing APIs are managed-first
 
 Simple public APIs should hide local scratch details.
 
@@ -3100,7 +3080,7 @@ let json = Json.parse(text: read body)?
 
 ---
 
-## 28.2 Library internals are local-first
+## 27.2 Library internals are local-first
 
 Library implementations should use local scratch buffers and `*_into` APIs where performance matters.
 
@@ -3123,7 +3103,7 @@ pub fn parse(text: read String) -> Result<fresh JsonValue, JsonError> {
 
 ---
 
-## 28.3 Expert APIs use `*_into`
+## 27.3 Expert APIs use `*_into`
 
 Hot-path APIs should expose local reuse explicitly.
 
@@ -3137,7 +3117,7 @@ Json.parse_into(
 
 ---
 
-## 28.4 Fresh by default for new values
+## 27.4 Fresh by default for new values
 
 If a function creates a new struct value, it should return `fresh T`.
 
@@ -3145,17 +3125,17 @@ If it returns an existing shared object, it should return managed `T`.
 
 ---
 
-## 28.5 Retention must be declared
+## 27.5 Retention must be declared
 
 Functions that store or retain parameters must declare `retains`.
 
 ---
 
-# 29. Core Library Model
+# 28. Core Library Model
 
 RSScript core is signature-first.
 
-## 29.1 `.rssi` interface files
+## 28.1 `.rssi` interface files
 
 Core APIs should be declared in `.rssi` interface files before implementations exist.
 
@@ -3180,7 +3160,7 @@ The runtime may be implemented in Rust first.
 
 ---
 
-## 29.2 Native implementation behind RSScript signatures
+## 28.2 Native implementation behind RSScript signatures
 
 A Rust native implementation must conform to the `.rssi` signature.
 
@@ -3190,7 +3170,7 @@ Native implementation details are not visible to RSScript users.
 
 ---
 
-## 29.3 Core MVP packages
+## 28.3 Core MVP packages
 
 Minimum core signatures:
 
@@ -3221,7 +3201,7 @@ Agent, GPU, HTTP, networking, and model-client packages are use-case libraries, 
 
 ---
 
-## 29.4 Package Manager Design
+## 28.4 Package Manager Design
 
 RSScript package management is specified separately from the core language syntax.
 
@@ -3297,7 +3277,7 @@ does not live under the configured `[native.rust].crate`.
 
 ---
 
-# 30. Native Core and FFI Boundary
+# 29. Native Core and FFI Boundary
 
 v0.5 supports controlled native core boundaries.
 
@@ -3305,7 +3285,7 @@ It does not define general user FFI.
 
 ---
 
-## 30.1 `native` effect
+## 29.1 `native` effect
 
 A native function must be declared with `effects(native)` or through a native module declaration.
 
@@ -3321,7 +3301,7 @@ keyword itself declares an external implementation.
 
 ---
 
-## 30.2 Native safety obligations
+## 29.2 Native safety obligations
 
 Native implementations must preserve RSScript semantics:
 
@@ -3336,7 +3316,7 @@ must preserve source location hooks where applicable
 
 ---
 
-## 30.3 Native diagnostics
+## 29.3 Native diagnostics
 
 Native boundary failures must report RSScript-level diagnostics whenever possible.
 
@@ -3344,13 +3324,13 @@ Native runtime errors must not expose Rust implementation internals as primary u
 
 ---
 
-# 31. Diagnostics Protocol
+# 30. Diagnostics Protocol
 
 Compiler diagnostics must have both human-readable and machine-readable forms.
 
 ---
 
-## 31.1 JSON form
+## 30.1 JSON form
 
 Example:
 
@@ -3383,7 +3363,7 @@ Example:
 
 ---
 
-## 31.2 Required diagnostic classes
+## 30.2 Required diagnostic classes
 
 Implementations must provide diagnostics for:
 
@@ -3415,9 +3395,9 @@ native boundary violation
 
 ---
 
-# 32. Rust Diagnostic Mapping
+# 31. Rust Diagnostic Mapping
 
-## 32.1 Frontend-first diagnostics
+## 31.1 Frontend-first diagnostics
 
 The RSScript frontend should catch ordinary user errors before Rust lowering.
 
@@ -3435,7 +3415,7 @@ They should not be the normal user experience.
 
 ---
 
-## 32.2 Source mapping is mandatory
+## 31.2 Source mapping is mandatory
 
 Generated Rust must carry sufficient source mapping for every user-originating construct.
 
@@ -3469,7 +3449,7 @@ classify it as `unmapped_backend_environment_error` or
 
 ---
 
-## 32.3 Diagnostic translation quality
+## 31.3 Diagnostic translation quality
 
 A translated diagnostic must include:
 
@@ -3484,7 +3464,7 @@ Raw rustc diagnostics may be attached for debugging under a verbose flag.
 
 ---
 
-# 33. Semantic Review Tools
+# 32. Semantic Review Tools
 
 RSScript review tooling has two modes:
 
@@ -3495,7 +3475,7 @@ rss review --map
 
 ---
 
-## 33.1 `rss review --diff`
+## 32.1 `rss review --diff`
 
 Compares two checked RSScript programs.
 
@@ -3540,7 +3520,7 @@ review diff:
 
 ---
 
-## 33.2 `rss review --map`
+## 32.2 `rss review --map`
 
 Performs absolute semantic review on a single file/module/directory.
 
@@ -3561,7 +3541,7 @@ rss review --map --json src/agent/
 
 ---
 
-## 33.3 Review map categories
+## 32.3 Review map categories
 
 A review map classifies code regions as:
 
@@ -3588,7 +3568,7 @@ safe_to_skip
 
 ---
 
-## 33.4 Entry points
+## 32.4 Entry points
 
 Entry points are always review-visible.
 
@@ -3606,7 +3586,7 @@ agent loop
 
 ---
 
-## 33.5 Must review
+## 32.5 Must review
 
 A function/region is must-review if it contains or exposes:
 
@@ -3646,7 +3626,7 @@ This file-level risk does not require every helper function in the file to be cl
 
 ---
 
-## 33.6 Low semantic risk
+## 32.6 Low semantic risk
 
 A function may be classified `low_semantic_risk` only if all of the following
 hold:
@@ -3678,7 +3658,7 @@ It means no language-visible side-effect, resource, retention, native, or local/
 
 ---
 
-## 33.7 Unknown
+## 32.7 Unknown
 
 If the tool cannot classify a region, it must mark it unknown.
 
@@ -3708,7 +3688,7 @@ ResourcePool borrowing, counter mutation, and HTTP-style orchestration.
 
 ---
 
-## 33.8 Review map JSON
+## 32.8 Review map JSON
 
 The example below uses JSON schema v1, which retains `safe_to_skip` field names
 for compatibility. New human-facing output should label this category
@@ -3765,7 +3745,7 @@ Example:
 
 ---
 
-## 33.9 Limits
+## 32.9 Limits
 
 `rss review --map` does not prove:
 
@@ -3782,9 +3762,9 @@ It reduces review area for language-visible risks.
 
 ---
 
-# 34. Formatter, Linter, and Check
+# 33. Formatter, Linter, and Check
 
-## 34.1 Formatter
+## 33.1 Formatter
 
 `rss fmt` must be deterministic.
 
@@ -3792,7 +3772,7 @@ There are no formatting style options in v0.5.
 
 ---
 
-## 34.2 Linter
+## 33.2 Linter
 
 `rss lint` enforces:
 
@@ -3807,7 +3787,7 @@ signature complexity budget
 
 ---
 
-## 34.3 Check
+## 33.3 Check
 
 `rss check` loads bundled core `.rssi` signatures by default, then runs:
 
@@ -3824,7 +3804,7 @@ diagnostic emission
 
 ---
 
-# 35. Isolate Model
+# 34. Isolate Model
 
 RSScript v0.5 uses a single-isolate model.
 
@@ -3848,9 +3828,9 @@ multi-isolate runtime
 
 ---
 
-# 36. Examples
+# 35. Examples
 
-## 36.1 File write
+## 35.1 File write
 
 ```rust
 fn write_text(path: read Path, text: read String) -> Result<Unit, IOError> {
@@ -3864,7 +3844,7 @@ fn write_text(path: read Path, text: read String) -> Result<Unit, IOError> {
 
 ---
 
-## 36.2 Image pipeline
+## 35.2 Image pipeline
 
 ```rust
 features: local
@@ -3885,7 +3865,7 @@ fn make_thumbnail(input: read Path, output: read Path) -> Result<Unit, ImageErro
 
 ---
 
-## 36.3 Cache retention
+## 35.3 Cache retention
 
 ```rust
 class ImageCache {
@@ -3907,7 +3887,7 @@ cache_put(cache: mut cache, key: read key, value: read (manage image))
 
 ---
 
-## 36.4 Config with handle fields
+## 35.4 Config with handle fields
 
 ```rust
 features: local
@@ -3932,7 +3912,7 @@ fn load_config(path: read Path) -> Result<fresh Config, ConfigError> {
 
 ---
 
-## 36.5 Resource pool
+## 35.5 Resource pool
 
 ```rust
 features: local
@@ -3955,11 +3935,11 @@ fn run_queries(url: read Url, queries: read List<Query>) -> Result<Unit, DbError
 
 ---
 
-# 37. Implementation Roadmap
+# 36. Implementation Roadmap
 
-v0.5 replaces the previous VM/interpreter-first roadmap with a Rust-lowering roadmap.
+v0.5 follows a Rust-lowering roadmap.
 
-## 37.1 Milestones
+## 36.1 Milestones
 
 ```text
 0.5.0  real AST parser
@@ -3977,7 +3957,7 @@ v0.5 replaces the previous VM/interpreter-first roadmap with a Rust-lowering roa
 
 ---
 
-## 37.2 Correct dependency order
+## 36.2 Correct dependency order
 
 The correct dependency graph is:
 
@@ -3996,7 +3976,7 @@ Do not defer source mapping until after lowering.
 
 ---
 
-## 37.3 Self-hosting path
+## 36.3 Self-hosting path
 
 Self-hosting does not require a custom VM.
 
@@ -4018,7 +3998,7 @@ Rust remains the backend.
 
 ---
 
-## 37.4 AI authoring micro-spec
+## 36.4 AI authoring micro-spec
 
 RSScript has no meaningful public corpus today, so general-purpose language
 models should not be expected to write correct RSScript from pretraining alone.
@@ -4062,7 +4042,7 @@ examples should map to stable diagnostic codes.
 
 ---
 
-# 38. Non-goals of v0.5
+# 37. Non-goals of v0.5
 
 RSScript v0.5 does not attempt to support:
 
@@ -4090,7 +4070,7 @@ macro-heavy metaprogramming
 
 ---
 
-# 39. Reviewer Checklist
+# 38. Reviewer Checklist
 
 Reviewers should evaluate v0.5 by asking:
 
@@ -4111,7 +4091,7 @@ Reviewers should evaluate v0.5 by asking:
 
 ---
 
-# 40. Final Model Summary
+# 39. Final Model Summary
 
 RSScript v0.5 can be summarized as:
 
