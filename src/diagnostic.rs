@@ -48,6 +48,7 @@ pub mod code {
     pub const INVALID_RESOURCE_POOL_TYPE: &str = "RS0703";
     pub const RESOURCE_GENERIC_ARGUMENT: &str = "RS0704";
     pub const RESOURCE_POOL_NOT_LOCAL: &str = "RS0705";
+    pub const RESOURCE_PRODUCER_MISSING_TRY: &str = "RS0706";
     pub const LOCAL_CAPTURED_BY_MANAGED_CLOSURE: &str = "RS0801";
     pub const TAKE_HANDLE_FIELD: &str = "RS0901";
     pub const INVALID_WEAK_FIELD: &str = "RS0902";
@@ -468,6 +469,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::RESOURCE_POOL_NOT_LOCAL,
         title: "ResourcePool must be local",
         explanation: "`ResourcePool<T>` must be held in a local binding so its resource lifetime and pool ownership stay explicit.",
+    },
+    DiagnosticExplanation {
+        code: code::RESOURCE_PRODUCER_MISSING_TRY,
+        title: "Result resource producer missing try",
+        explanation: "A `with` resource context consuming `Result<Resource, E>` must use explicit `?` on the producer expression.",
     },
     DiagnosticExplanation {
         code: code::LOCAL_CAPTURED_BY_MANAGED_CLOSURE,

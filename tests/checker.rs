@@ -2802,6 +2802,12 @@ fn ok_with(path: read Path) -> Result<Unit, IOError> {
     return Ok(Unit)
 }
 
+fn bad_with_missing_try(path: read Path) -> Unit {
+    with File.open_result(path: read path) as file {
+        File.stat(file: read file)
+    }
+}
+
 fn bad_let(path: read Path) -> Unit {
     let file = File.open(path: read path)
 }
@@ -2823,6 +2829,12 @@ fn bad_arg(path: read Path) -> Unit {
         .count();
 
     assert_eq!(producer_escape_count, 3, "{diagnostics:?}");
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0706" && diagnostic.label == "missing resource producer `?`"
+        }),
+        "{diagnostics:?}"
+    );
 }
 
 #[test]

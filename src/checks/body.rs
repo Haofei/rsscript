@@ -152,6 +152,7 @@ fn check_stmt_semantics(
         } => {
             check_expr_semantics(analyzer, resource, state);
             check_resource_pool_lease_expr(analyzer, resource, true);
+            check_result_resource_with_has_try(analyzer, resource);
             check_resource_producer_expr(analyzer, resource, true);
             check_resource_escape(analyzer, local_analysis, span);
             let mut scoped_state = state.clone();
@@ -1506,6 +1507,32 @@ fn check_resource_producer_expr(
     }
 }
 
+fn check_result_resource_with_has_try(analyzer: &mut Analyzer<'_>, resource: &HirExpr) {
+    if matches!(resource, HirExpr::Try { .. }) {
+        return;
+    }
+    let Some(resource_type) = result_resource_ok_type(analyzer, resource) else {
+        return;
+    };
+
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::RESOURCE_PRODUCER_MISSING_TRY,
+            format!(
+                "`with` over `Result<{resource_type}, E>` must explicitly unwrap the resource producer with `?`."
+            ),
+            hir_expr_span(resource).clone(),
+            "missing resource producer `?`",
+        )
+        .with_cause("Resource-producing `Result` values are transient; the successful resource must enter the `with` scope explicitly.")
+        .with_fix(
+            "add_try_to_resource_producer",
+            "Write `with producer(...)? as resource { ... }`.",
+            "machine-applicable",
+        ),
+    );
+}
+
 fn check_resource_producer_children(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
     match expr {
         HirExpr::Call { callee, args, .. } => {
@@ -1663,6 +1690,44 @@ fn expr_type_is_resource(analyzer: &Analyzer<'_>, expr: &HirExpr) -> bool {
     hir_expr_type_name(expr).is_some_and(|type_name| {
         analyzer.hir.type_kind(type_root_name(type_name)) == Some(HirTypeKind::Resource)
     })
+}
+
+fn result_resource_ok_type(analyzer: &Analyzer<'_>, expr: &HirExpr) -> Option<String> {
+    let type_name = hir_expr_type_name(expr)?;
+    let ok_type = result_ok_type_name(type_name)?;
+    if analyzer.hir.type_kind(type_root_name(ok_type)) == Some(HirTypeKind::Resource) {
+        Some(ok_type.to_string())
+    } else {
+        None
+    }
+}
+
+fn result_ok_type_name(type_name: &str) -> Option<&str> {
+    let inner = type_name
+        .strip_prefix("Result<")
+        .and_then(|type_name| type_name.strip_suffix('>'))?;
+    split_top_level_type_args(inner).into_iter().next()
+}
+
+fn split_top_level_type_args(args: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0usize;
+    for (index, ch) in args.char_indices() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(args[start..index].trim());
+                start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    if start < args.len() {
+        parts.push(args[start..].trim());
+    }
+    parts
 }
 
 fn check_resource_pool_lease_stmt(analyzer: &mut Analyzer<'_>, statement: &HirStmt) {
