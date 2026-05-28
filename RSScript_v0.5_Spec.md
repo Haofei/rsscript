@@ -2492,7 +2492,7 @@ Package review metadata treats `.rssi` files as the preferred public contract su
 
 `rss package tree` prints the package dependency graph with review risk. The prototype expands local path dependencies recursively and classifies unresolved registry or git dependencies as `unknown`.
 
-`rss package publish --dry-run` performs local pre-publish validation without uploading: package consistency, dependency graph review, semantic version shape, package review metadata, native metadata, and reproducible archive hashing.
+`rss package publish --dry-run` performs local pre-publish validation without uploading: package consistency, dependency graph review, semantic version shape, package review risk classification, native metadata, and reproducible archive hashing. Unknown package review risk blocks publish readiness; it is reported as unknown rather than treated as a safe-to-publish result.
 
 `rss package vendor` copies local path dependencies into `vendor/<name>-<version>/` and writes `vendor/rss-vendor.json` for offline/reproducible review. Registry and git dependencies remain unresolved until the resolver exists.
 

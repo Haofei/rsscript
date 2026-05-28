@@ -6026,6 +6026,48 @@ fn package_publish_dry_run_reports_ready_package() {
 }
 
 #[test]
+fn package_publish_dry_run_blocks_unknown_review_risk() {
+    let temp_dir = unique_temp_dir("rsscript-package-publish-unknown-risk");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-unknown",
+        "0.1.0",
+        r#"[review]
+risk = "unknown"
+"#,
+        r#"pub fn Api.run() -> Unit
+"#,
+    );
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let publish = publish_package_dry_run(&temp_dir).expect("publish dry-run should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_publish_json(&publish))
+        .expect("publish JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!publish.ready);
+    assert_eq!(json["risk"], "unknown");
+    assert!(json["checks"].as_array().is_some_and(|checks| {
+        checks.iter().any(|check| {
+            check["name"] == "package review risk classified"
+                && check["ok"] == false
+                && check["risk"] == "unknown"
+        })
+    }));
+    assert!(json["reasons"].as_array().is_some_and(|reasons| {
+        reasons
+            .iter()
+            .any(|reason| reason == "package review risk classified failed: review risk unknown")
+    }));
+}
+
+#[test]
 fn rss_package_publish_dry_run_reports_local_registry_target() {
     let temp_dir = unique_temp_dir("rsscript-package-publish-registry-cli");
     let registry_dir = unique_temp_dir("rsscript-package-publish-registry-target");

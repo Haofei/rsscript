@@ -1142,8 +1142,8 @@ pub fn publish_package_dry_run_with_registry(
             format!("version {}", package.manifest.package.version),
         ),
         publish_check(
-            "package review metadata generated",
-            true,
+            "package review risk classified",
+            review.risk != PackageRisk::Unknown,
             review.risk,
             format!("review risk {}", package_risk_label(review.risk)),
         ),
