@@ -33,10 +33,23 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
         check_fresh_returns(analyzer, &local_analysis, &function);
         if let Some(body) = &hir_body {
             check_resource_pool_bindings(analyzer, body);
+            check_local_class_bindings(analyzer, body);
         }
         let mut state = local_analysis.initial_state();
         if let Some(block) = hir_body.as_ref().and_then(|body| body.block.as_ref()) {
             check_block(analyzer, &local_analysis, block, &mut state);
+        }
+    }
+}
+
+fn check_local_class_bindings(analyzer: &mut Analyzer<'_>, body: &crate::hir::HirFunctionBody) {
+    for binding in &body.bindings {
+        if binding.kind == HirBindingKind::LocalLet
+            && binding.type_name.as_deref().is_some_and(|type_name| {
+                analyzer.hir.type_kind(type_name) == Some(HirTypeKind::Class)
+            })
+        {
+            local_class_binding_diagnostic(analyzer, &binding.name, binding.span.clone());
         }
     }
 }
@@ -1080,6 +1093,29 @@ fn resource_pool_not_local_diagnostic(
         .with_fix(
             "make_resource_pool_local",
             format!("Declare `{binding}` with `local` instead of `let`."),
+            "machine-applicable",
+        ),
+    );
+}
+
+fn local_class_binding_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    binding: &str,
+    span: crate::diagnostic::Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::LOCAL_CLASS_BINDING,
+            format!("class binding `{binding}` cannot be local."),
+            span,
+            "class bound as local",
+        )
+        .with_cause(
+            "Classes are managed identity objects; their constructors produce managed handles.",
+        )
+        .with_fix(
+            "use_managed_class_binding",
+            format!("Declare `{binding}` with `let` instead of `local`."),
             "machine-applicable",
         ),
     );

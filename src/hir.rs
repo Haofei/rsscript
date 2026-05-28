@@ -1569,7 +1569,7 @@ fn constructor_sig_from_type(type_info: &TypeInfo, is_builtin: bool) -> Function
             })
             .collect(),
         return_type: Some(type_info.name.clone()),
-        returns_fresh: true,
+        returns_fresh: type_info.kind == HirTypeKind::Struct,
         effects: Vec::new(),
         retained_params: HashSet::new(),
         is_builtin,

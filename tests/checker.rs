@@ -944,16 +944,17 @@ fn rust_lowering_emits_machine_readable_source_map() {
     let source = r#"
 features: local
 
-class Session {
+struct Session {
     id: Int
 }
 
 fn save(session: read Session) -> Unit
 
-pub fn make_session(id: Int) -> Session {
+pub fn make_session(id: Int) -> Unit {
     local session = Session(id: id)
     save(session: read session)
-    return manage session
+    let managed = manage session
+    return Unit
 }
 "#;
     let lowered =
@@ -1040,7 +1041,7 @@ fn rustc_diagnostics_map_back_to_rsscript_source_spans() {
     let source = r#"
 features: local
 
-class Session {
+struct Session {
     id: Int
 }
 
@@ -1410,23 +1411,19 @@ fn pooled(pool: mut ResourcePool<TestConnection>) -> Unit {
 #[test]
 fn rust_lowering_wraps_managed_class_returns_in_managed_handle() {
     let source = r#"
-features: local
-
 class Session {
     id: Int
 }
 
 pub fn make_session(id: Int) -> Session {
-    local session = Session(id: id)
-    return manage session
+    return Session(id: id)
 }
 "#;
     let rust = lower_source_to_rust("session.rss", source).expect("source should lower");
 
     assert!(rust.contains("pub struct Session"));
     assert!(rust.contains("pub fn make_session(id: i64) -> rsscript_runtime::Managed<Session>"));
-    assert!(rust.contains("let session = Session { id: id };"));
-    assert!(rust.contains("return rsscript_runtime::manage_at(session, rsscript_runtime::SourceSpan::new(\"session.rss\", 10, 12, 6));"));
+    assert!(rust.contains("return rsscript_runtime::manage_at(Session { id: id }, rsscript_runtime::SourceSpan::new(\"session.rss\", 7, 12, 7));"));
 }
 
 #[test]
@@ -1464,8 +1461,7 @@ fn call(user: mut User) -> Unit {
 }
 
 fn promote(id: Int) -> Unit {
-    local user = User(id: id)
-    let shared = manage user
+    let shared = User(id: id)
     touch(user: mut shared)
 }
 "#;
@@ -1493,8 +1489,7 @@ fn user_id(user: read User) -> Int {
 }
 
 fn main() -> Unit {
-    local user = User(id: 42)
-    let shared = manage user
+    let shared = User(id: 42)
     let id = user_id(user: read shared)
     Assert.equal(left: read "42", right: read "42")
     return Unit

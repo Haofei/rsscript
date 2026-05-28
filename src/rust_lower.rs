@@ -874,7 +874,7 @@ impl<'a> RustLowerer<'a> {
             }
             Expr::Call { callee, args, span } => {
                 if let Callee::Name(name) = callee {
-                    if self.type_kinds.contains_key(name) {
+                    if let Some(type_kind) = self.type_kinds.get(name).copied() {
                         let fields = args
                             .iter()
                             .map(|arg| {
@@ -887,7 +887,14 @@ impl<'a> RustLowerer<'a> {
                             })
                             .collect::<Vec<_>>()
                             .join(", ");
-                        return format!("{} {{ {fields} }}", rust_ident(name));
+                        let constructed = format!("{} {{ {fields} }}", rust_ident(name));
+                        if type_kind == TypeKind::Class {
+                            return format!(
+                                "rsscript_runtime::manage_at({constructed}, {})",
+                                lower_source_span(span)
+                            );
+                        }
+                        return constructed;
                     }
 
                     if is_rust_enum_constructor(name) {

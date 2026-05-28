@@ -1,0 +1,11 @@
+// expect: RS0306
+features: local
+
+class User {
+    id: Int
+}
+
+fn make_user(id: Int) -> Unit {
+    local user = User(id: id)
+    return Unit
+}

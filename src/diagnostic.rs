@@ -33,6 +33,7 @@ pub mod code {
     pub const FIELD_PREFIX_CONFLICT: &str = "RS0303";
     pub const INDEXED_PARTIAL_ACCESS_CONFLICT: &str = "RS0304";
     pub const MOVE_BASE_FIELD_CONFLICT: &str = "RS0305";
+    pub const LOCAL_CLASS_BINDING: &str = "RS0306";
     pub const USE_AFTER_MANAGE: &str = "RS0401";
     pub const LOCAL_VALUE_RETAINED: &str = "RS0501";
     pub const FRESH_RETURN_NOT_CLEAN: &str = "RS0601";
@@ -384,6 +385,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::MOVE_BASE_FIELD_CONFLICT,
         title: "move-base field access conflict",
         explanation: "A call cannot move a local base with `manage` or `take` in the same expression where another argument accesses one of that base's fields.",
+    },
+    DiagnosticExplanation {
+        code: code::LOCAL_CLASS_BINDING,
+        title: "local class binding",
+        explanation: "Classes are managed identity objects in RSScript v0.5. They are created as managed handles and cannot be bound as local exclusive values.",
     },
     DiagnosticExplanation {
         code: code::USE_AFTER_MANAGE,
