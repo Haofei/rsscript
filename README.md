@@ -406,9 +406,12 @@ rss run <file.rss>
 rss run <file.rss> --out-dir <directory>
 rss remap-rustc [--json] <rsscript-source-map.json> <rustc-json-lines>
 rss verify-rust [--json] <file.rss>
+rss verify-rust [--json] <file.rss> --out-dir <directory>
 ```
 
 If a lowered package contains `fn main() -> Unit`, `rss lower --rust --out-dir` also emits a Rust `src/main.rs` harness. `rss run <file.rss>` uses the same lowering path, writes a temporary Rust package, and delegates execution to `cargo run`. Use `rss run <file.rss> --out-dir <directory>` to keep the generated Rust package for inspection.
+
+`rss verify-rust <file.rss> --out-dir <directory>` keeps the generated package used for backend checking, including `rsscript-source-map.json`, so unmappable rustc diagnostics can be inspected against the generated Rust.
 
 The first observable runtime boundary is `Log.write(message: read String)`, which lowers to an explicit runtime output hook.
 

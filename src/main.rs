@@ -215,8 +215,8 @@ fn run_lower_rust_package(path: &str, source: &str, out_dir: &str) -> ExitCode {
 }
 
 fn run_verify_rust(args: &[String]) -> ExitCode {
-    let (json, path) = parse_path_args(args);
-    let Some(path) = path else {
+    let options = parse_verify_args(args);
+    let Some(path) = options.path else {
         print_usage();
         return ExitCode::from(2);
     };
@@ -243,30 +243,43 @@ fn run_verify_rust(args: &[String]) -> ExitCode {
     ) {
         Ok(package) => package,
         Err(diagnostics) => {
-            print_diagnostics(json, &diagnostics);
+            print_diagnostics(options.json, &diagnostics);
             return ExitCode::from(1);
         }
     };
-    let temp_dir = verify_temp_dir(&package.package_name);
-    if let Err(error) = write_generated_rust_package(&temp_dir, &package) {
+    let package_dir = options
+        .out_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(|| verify_temp_dir(&package.package_name));
+    let cleanup_package_dir = options.out_dir.is_none();
+    if let Err(error) = write_generated_rust_package(&package_dir, &package) {
         eprintln!("{error}");
-        cleanup_temp_dir(&temp_dir);
+        if cleanup_package_dir {
+            cleanup_temp_dir(&package_dir);
+        }
         return ExitCode::from(2);
     }
-    let result = match check_generated_rust_package(&temp_dir) {
+    let result = match check_generated_rust_package(&package_dir) {
         Ok(result) => result,
         Err(error) => {
             eprintln!("{error}");
-            cleanup_temp_dir(&temp_dir);
+            if cleanup_package_dir {
+                cleanup_temp_dir(&package_dir);
+            }
             return ExitCode::from(2);
         }
     };
-    cleanup_temp_dir(&temp_dir);
+    if cleanup_package_dir {
+        cleanup_temp_dir(&package_dir);
+    }
 
     if result.diagnostics.is_empty() {
         if result.success {
-            if !json {
+            if !options.json {
                 println!("{path}: rust backend ok");
+                if options.out_dir.is_some() {
+                    println!("generated Rust package kept at {}", package_dir.display());
+                }
             } else {
                 println!("[]");
             }
@@ -279,7 +292,7 @@ fn run_verify_rust(args: &[String]) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    print_diagnostics(json, &result.diagnostics);
+    print_diagnostics(options.json, &result.diagnostics);
     if result
         .diagnostics
         .iter()
@@ -480,6 +493,12 @@ struct RunOptions<'a> {
     out_dir: Option<&'a str>,
 }
 
+struct VerifyOptions<'a> {
+    json: bool,
+    path: Option<&'a str>,
+    out_dir: Option<&'a str>,
+}
+
 struct CheckOptions<'a> {
     json: bool,
     use_core: bool,
@@ -559,6 +578,31 @@ fn parse_run_args(args: &[String]) -> RunOptions<'_> {
     }
 
     RunOptions { path, out_dir }
+}
+
+fn parse_verify_args(args: &[String]) -> VerifyOptions<'_> {
+    let mut json = false;
+    let mut path = None;
+    let mut out_dir = None;
+    let mut index = 0;
+
+    while let Some(arg) = args.get(index) {
+        if arg == "--json" {
+            json = true;
+        } else if arg == "--out-dir" {
+            index += 1;
+            out_dir = args.get(index).map(String::as_str);
+        } else if path.is_none() {
+            path = Some(arg.as_str());
+        }
+        index += 1;
+    }
+
+    VerifyOptions {
+        json,
+        path,
+        out_dir,
+    }
 }
 
 struct InterfaceSource {
@@ -796,6 +840,7 @@ fn print_usage() {
     eprintln!("  rsscript run <file.rss> --out-dir <directory>");
     eprintln!("  rsscript remap-rustc [--json] <rsscript-source-map.json> <rustc-json-lines>");
     eprintln!("  rsscript verify-rust [--json] <file.rss>");
+    eprintln!("  rsscript verify-rust [--json] <file.rss> --out-dir <directory>");
     eprintln!("  rsscript review [--json] --diff <old.rss> <new.rss>");
     eprintln!("  rsscript review [--json] --map <file-or-directory>");
 }
