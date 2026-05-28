@@ -19,24 +19,5 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - name: Check formatting
-        run: cargo fmt --check
-
-      - name: Lint
-        run: cargo clippy --workspace -- -D warnings
-
-      - name: Check generated Rust fixtures
-        run: |
-          cargo check --manifest-path tests/generated/simple/Cargo.toml
-          cargo check --manifest-path tests/generated/managed/Cargo.toml
-          cargo check --manifest-path tests/generated/resource_pool/Cargo.toml
-          cargo check --manifest-path tests/generated/effects/Cargo.toml
-          cargo check --manifest-path tests/generated/result/Cargo.toml
-          cargo check --manifest-path tests/generated/try/Cargo.toml
-          cargo check --manifest-path tests/generated/runnable/Cargo.toml
-
-      - name: Test
-        run: cargo test --workspace
-
-      - name: Check patch whitespace
-        run: git diff --check
+      - name: Check
+        run: RSSCRIPT_FULL_TESTS=1 bash scripts/check.sh

@@ -428,6 +428,14 @@ fn main() -> Unit {
 }
 ```
 
+Local verification:
+
+```sh
+bash scripts/check.sh
+```
+
+CI sets `RSSCRIPT_FULL_TESTS=1` so the same script runs full `cargo test --workspace`.
+
 ---
 
 ## Roadmap
