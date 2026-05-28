@@ -702,6 +702,11 @@ async
 
 `native`, `unsafe`, and `async` are boundary declarations. A file must declare the matching feature before it can contain `native` boundaries, `unsafe` effects, or `async fn` declarations.
 
+`unsafe` is separate from `native`. A native wrapper may expose only safe RSScript
+contracts, and an unsafe function may be implemented without crossing a native
+wrapper boundary. When both appear, `features: native, unsafe` means the file
+crosses a native boundary and also exposes behavior that requires unsafe review.
+
 The following feature names are reserved for future review-relevant capabilities:
 
 ```text

@@ -2002,6 +2002,39 @@ fn package_native_binding_diagnostics(
         .map(str::trim)
         .filter(|name| !name.is_empty());
     let mut diagnostics = Vec::new();
+    let native_enabled = native.is_some_and(|native| native.enabled);
+
+    if !native_enabled {
+        diagnostics.push(
+            Diagnostic::error(
+                code::PACKAGE_NATIVE_BINDING,
+                "native bindings require enabled `[native.rust]` configuration.",
+                native_binding_manifest_span(package_dir),
+                "native binding without native Rust wrapper",
+            )
+            .with_cause("A binding manifest maps RSScript native contracts to Rust wrapper functions, so the package must enable a native Rust wrapper crate.")
+            .with_fix(
+                "enable_native_rust",
+                "Add `[native.rust] enabled = true` with a wrapper crate, or remove `native/bindings.rssbind.toml`.",
+                "manual",
+            ),
+        );
+    } else if crate_name.is_none() {
+        diagnostics.push(
+            Diagnostic::error(
+                code::PACKAGE_NATIVE_BINDING,
+                "native bindings require `[native.rust].crate`.",
+                native_binding_manifest_span(package_dir),
+                "native binding crate missing",
+            )
+            .with_cause("Generated Rust must know which native crate owns the binding targets.")
+            .with_fix(
+                "declare_native_crate",
+                "Set `[native.rust] crate = \"...\"` to the Rust wrapper crate name.",
+                "manual",
+            ),
+        );
+    }
 
     for (symbol, target) in native_bindings {
         let span = native_binding_span(package_dir, symbol);
@@ -2102,6 +2135,18 @@ fn native_binding_span(package_dir: &Path, symbol: &str) -> crate::diagnostic::S
         line: 1,
         column: 1,
         length: symbol.len().max(1),
+    }
+}
+
+fn native_binding_manifest_span(package_dir: &Path) -> crate::diagnostic::Span {
+    crate::diagnostic::Span {
+        file: package_dir
+            .join("native/bindings.rssbind.toml")
+            .display()
+            .to_string(),
+        line: 1,
+        column: 1,
+        length: 10,
     }
 }
 
