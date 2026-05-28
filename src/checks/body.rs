@@ -3,7 +3,8 @@ use std::collections::{HashMap, HashSet};
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, code};
 use crate::hir::{
-    CallResolution, HirBindingKind, HirEffectEventKind, HirTypeKind, ResolvedCalleeKind,
+    CallResolution, HirBindingKind, HirEffectEventKind, HirReturnProof, HirTypeKind,
+    ResolvedCalleeKind,
 };
 use crate::syntax::ast::{Block, Callee, DataEffect, Expr, FunctionDecl, Item, LetKind, Stmt};
 
@@ -704,21 +705,7 @@ fn check_fresh_return(
             );
         }
         Expr::Call { callee, span, .. } => {
-            let resolution = analyzer.resolve_call_site(callee, span);
-            let constructor_is_struct = matches!(
-                resolution,
-                CallResolution::Resolved {
-                    kind: ResolvedCalleeKind::Constructor {
-                        type_kind: HirTypeKind::Struct
-                    },
-                    ..
-                }
-            );
-            let call_returns_fresh = match resolution {
-                CallResolution::Resolved { signature, .. } => signature.returns_fresh,
-                CallResolution::EnumVariant | CallResolution::Unknown => false,
-            };
-            if !constructor_is_struct && !call_returns_fresh {
+            if !hir_return_proves_fresh_call(analyzer, callee, span) {
                 analyzer.diagnostics.push(
                     Diagnostic::warning(
                         code::FRESHNESS_UNKNOWN,
@@ -753,6 +740,35 @@ fn check_fresh_return(
         Expr::Ident(_, _) => {}
         Expr::Number(_, _) | Expr::String(_, _) => {}
     }
+}
+
+fn hir_return_proves_fresh_call(
+    analyzer: &Analyzer<'_>,
+    callee: &Callee,
+    span: &crate::diagnostic::Span,
+) -> bool {
+    if let Some(return_fact) = analyzer.hir.return_fact(span) {
+        return matches!(
+            return_fact.proof,
+            HirReturnProof::StructConstructor | HirReturnProof::FreshCall
+        );
+    }
+
+    let resolution = analyzer.resolve_call_site(callee, span);
+    let constructor_is_struct = matches!(
+        resolution,
+        CallResolution::Resolved {
+            kind: ResolvedCalleeKind::Constructor {
+                type_kind: HirTypeKind::Struct
+            },
+            ..
+        }
+    );
+    let call_returns_fresh = match resolution {
+        CallResolution::Resolved { signature, .. } => signature.returns_fresh,
+        CallResolution::EnumVariant | CallResolution::Unknown => false,
+    };
+    constructor_is_struct || call_returns_fresh
 }
 
 fn fresh_return_diagnostic(

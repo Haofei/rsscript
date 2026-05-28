@@ -145,6 +145,22 @@ pub struct HirEffectEvent {
     pub value_span: Span,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HirReturnProof {
+    NoValue,
+    Ident { name: String },
+    StructConstructor,
+    FreshCall,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirReturn {
+    pub function_name: String,
+    pub span: Span,
+    pub proof: HirReturnProof,
+}
+
 #[derive(Debug, Default)]
 pub struct Hir {
     signatures: HashMap<String, FunctionSig>,
@@ -160,6 +176,8 @@ pub struct Hir {
     field_accesses_by_span: HashMap<Span, HirFieldAccess>,
     effect_events: Vec<HirEffectEvent>,
     effect_events_by_span: HashMap<Span, Vec<HirEffectEvent>>,
+    returns: Vec<HirReturn>,
+    returns_by_span: HashMap<Span, HirReturn>,
 }
 
 impl Hir {
@@ -260,6 +278,10 @@ impl Hir {
             .map_or(&[], Vec::as_slice)
     }
 
+    pub fn return_fact(&self, span: &Span) -> Option<&HirReturn> {
+        self.returns_by_span.get(span)
+    }
+
     pub fn resolve_call(&self, callee: &Callee) -> CallResolution {
         let call_name = callee_name(callee);
         if is_enum_variant_call(call_name) {
@@ -357,10 +379,16 @@ impl Hir {
                 by_span
             },
         );
+        self.returns_by_span = facts
+            .returns
+            .iter()
+            .map(|return_fact| (return_fact.span.clone(), return_fact.clone()))
+            .collect();
         self.call_sites = facts.call_sites;
         self.bindings = facts.bindings;
         self.field_accesses = facts.field_accesses;
         self.effect_events = facts.effect_events;
+        self.returns = facts.returns;
     }
 }
 
@@ -370,6 +398,7 @@ struct BodyFacts {
     bindings: Vec<HirBinding>,
     field_accesses: Vec<HirFieldAccess>,
     effect_events: Vec<HirEffectEvent>,
+    returns: Vec<HirReturn>,
 }
 
 fn collect_function_body_facts(hir: &Hir, function: &FunctionDecl, facts: &mut BodyFacts) {
@@ -428,7 +457,18 @@ fn collect_body_facts_in_stmt(
         }
         Stmt::Return(stmt) => {
             if let Some(value) = &stmt.value {
+                facts.returns.push(HirReturn {
+                    function_name: function_name.to_string(),
+                    span: value.span().clone(),
+                    proof: classify_return_expr(hir, value),
+                });
                 collect_body_facts_in_expr(hir, function_name, value, value_types, facts);
+            } else {
+                facts.returns.push(HirReturn {
+                    function_name: function_name.to_string(),
+                    span: stmt.span.clone(),
+                    proof: HirReturnProof::NoValue,
+                });
             }
         }
         Stmt::With(stmt) => {
@@ -614,6 +654,40 @@ fn infer_hir_expr_type(
                 .map(|field| field.type_name.clone())
         }
         Expr::Closure { .. } | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => None,
+    }
+}
+
+fn classify_return_expr(hir: &Hir, expr: &Expr) -> HirReturnProof {
+    match expr {
+        Expr::Ident(name, _) => HirReturnProof::Ident { name: name.clone() },
+        Expr::Call { callee, .. } => match hir.resolve_call(callee) {
+            CallResolution::Resolved {
+                signature,
+                kind:
+                    ResolvedCalleeKind::Constructor {
+                        type_kind: HirTypeKind::Struct,
+                    },
+            } if signature.returns_fresh => HirReturnProof::StructConstructor,
+            CallResolution::Resolved { signature, .. } if signature.returns_fresh => {
+                HirReturnProof::FreshCall
+            }
+            CallResolution::Resolved {
+                kind:
+                    ResolvedCalleeKind::Constructor {
+                        type_kind: HirTypeKind::Struct,
+                    },
+                ..
+            } => HirReturnProof::StructConstructor,
+            CallResolution::Resolved { .. }
+            | CallResolution::EnumVariant
+            | CallResolution::Unknown => HirReturnProof::Unknown,
+        },
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } => classify_return_expr(hir, value),
+        Expr::Field { .. }
+        | Expr::Closure { .. }
+        | Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::Unknown(_) => HirReturnProof::Unknown,
     }
 }
 
@@ -1338,6 +1412,20 @@ fn render(body: read String) -> Result<fresh Response, HttpError> {
                 .kind,
             HirBindingKind::ManagedLet
         ));
+
+        let returns = &hir.returns;
+        assert_eq!(returns.len(), 1);
+        assert_eq!(returns[0].function_name, "render");
+        assert!(matches!(
+            returns[0].proof,
+            HirReturnProof::Ident { ref name } if name == "response"
+        ));
+        assert!(matches!(
+            hir.return_fact(&returns[0].span)
+                .expect("return lookup by span works")
+                .proof,
+            HirReturnProof::Ident { .. }
+        ));
     }
 
     #[test]
@@ -1435,5 +1523,30 @@ fn publish(cache: mut ImageCache, path: read Path) -> Unit {
         ));
         assert_eq!(hir.effect_events[2].binding_name, "image");
         assert_eq!(hir.effect_events(&hir.effect_events[0].span).len(), 1);
+    }
+
+    #[test]
+    fn classifies_fresh_return_facts() {
+        let source = r#"
+mode: managed
+
+struct Response {
+    status: Int
+}
+
+fn make_response() -> fresh Response {
+    return Response(status: 200)
+}
+"#;
+
+        let program = parse_source("test.rss", source);
+        let hir = Hir::from_syntax(&program);
+        let return_fact = hir.returns.first().expect("return fact exists");
+
+        assert_eq!(return_fact.function_name, "make_response");
+        assert!(matches!(
+            return_fact.proof,
+            HirReturnProof::StructConstructor
+        ));
     }
 }
