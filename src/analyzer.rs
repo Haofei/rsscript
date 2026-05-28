@@ -4,14 +4,19 @@ use crate::ast::{
     FileMode, FunctionDecl, Program, TypeKind, find_matching, ident_name, parse_program,
 };
 use crate::diagnostic::Diagnostic;
+use crate::hir::{FunctionSig, Hir};
 use crate::lexer::{Token, TokenKind, lex};
+use crate::syntax::parse_source;
 
 pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
     let tokens = lex(file, source);
     let program = parse_program(&tokens);
+    let syntax = parse_source(file, source);
+    let hir = Hir::from_syntax(&syntax);
     let mut analyzer = Analyzer {
         tokens: &tokens,
         program,
+        hir,
         diagnostics: Vec::new(),
     };
     analyzer.run();
@@ -21,6 +26,7 @@ pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
 struct Analyzer<'a> {
     tokens: &'a [Token],
     program: Program,
+    hir: Hir,
     diagnostics: Vec<Diagnostic>,
 }
 
@@ -241,17 +247,16 @@ impl Analyzer<'_> {
     }
 
     fn check_call_site_effects(&mut self, call: &CallSite, args: &[ArgRange]) {
-        let Some(function) = self.program.functions.get(&call.name) else {
+        let Some(function) = self.resolve_call(call) else {
             return;
         };
-        let param_effects: HashMap<&str, &str> = function
+        let param_effects: HashMap<String, &'static str> = function
             .params
             .iter()
             .filter_map(|param| {
                 param
                     .effect
-                    .as_deref()
-                    .map(|effect| (param.name.as_str(), effect))
+                    .map(|effect| (param.name.clone(), effect.as_str()))
             })
             .collect();
 
@@ -282,10 +287,11 @@ impl Analyzer<'_> {
     }
 
     fn check_retaining_local_values(&mut self, call: &CallSite, args: &[ArgRange]) {
-        let Some(function) = self.program.functions.get(&call.name) else {
+        let Some(function) = self.resolve_call(call) else {
             return;
         };
-        if function.retained_params.is_empty() {
+        let retained_params = function.retained_params.clone();
+        if retained_params.is_empty() {
             return;
         }
         let Some(owner) = self.enclosing_function(call.open) else {
@@ -297,7 +303,7 @@ impl Analyzer<'_> {
             let Some((name, value_start, value_end)) = named_arg_parts(self.tokens, arg) else {
                 continue;
             };
-            if !function.retained_params.contains(name) {
+            if !retained_params.contains(name) {
                 continue;
             }
             if value_start + 1 < value_end
@@ -656,6 +662,7 @@ impl Analyzer<'_> {
             let open = index + 1;
             let close = find_matching(self.tokens, open, "(", ")")?;
             return Some(CallSite {
+                namespace: None,
                 name: direct_name.to_string(),
                 open,
                 close,
@@ -675,6 +682,7 @@ impl Analyzer<'_> {
             let open = index + 3;
             let close = find_matching(self.tokens, open, "(", ")")?;
             return Some(CallSite {
+                namespace: Some(self.tokens[index].text()),
                 name: self.tokens[index + 2].text(),
                 open,
                 close,
@@ -682,6 +690,11 @@ impl Analyzer<'_> {
         }
 
         None
+    }
+
+    fn resolve_call(&self, call: &CallSite) -> Option<&FunctionSig> {
+        self.hir
+            .resolve_function(call.namespace.as_deref(), &call.name)
     }
 
     fn enclosing_function(&self, token_index: usize) -> Option<&FunctionDecl> {
@@ -694,6 +707,7 @@ impl Analyzer<'_> {
 
 #[derive(Debug)]
 struct CallSite {
+    namespace: Option<String>,
     name: String,
     open: usize,
     close: usize,

@@ -1,0 +1,20 @@
+mode: uses-local
+
+class ImageCache {
+    entries: Map<String, Image>
+}
+
+struct Image {
+    pixels: Buffer
+}
+
+fn good_store(cache: mut ImageCache, input: read Path, output: read Path) -> Result<Unit, ImageError> {
+    local image = Image.load(path: read input)?
+    Image.resize(image: mut image, width: 800, height: 600)
+
+    let shared = manage image
+    ImageCache.store(cache: mut cache, image: read shared)
+    Image.save(image: read shared, path: read output)?
+
+    return Ok(Unit)
+}

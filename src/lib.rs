@@ -1,6 +1,7 @@
 mod analyzer;
 mod ast;
 mod diagnostic;
+mod hir;
 mod lexer;
 pub mod syntax;
 

@@ -10,7 +10,8 @@ It currently implements:
 - `rss check <file.rss>` with human diagnostics
 - `rss check --json <file.rss>` with serde-backed machine-readable diagnostics
 - `rss fmt <file.rss>` as a parse/check gate that prints the source unchanged when valid
-- Lexer, lightweight parser, AST indexing, and semantic checks for the review-critical v0.4.1 rules
+- Lexer, lightweight parser, syntax AST, HIR signature table, and semantic checks for the review-critical v0.4.1 rules
+- Builtin signatures for the current fixture stdlib surface, including `Image`, `File`, `Map`, `ResourcePool`, `Json`, `Csv`, and cache/config helpers
 - Fixture-based pass/fail scenario tests under `tests/fixtures`
 
 Implemented diagnostic classes include:
@@ -41,8 +42,8 @@ Non-goals for this stage:
 
 Near-term roadmap:
 
-1. Replace token-scanning body analysis with a real statement/expression AST.
-2. Lower AST into HIR with symbol tables and builtin signatures.
+1. Migrate remaining token-scanning body analysis onto the syntax AST.
+2. Expand HIR from function signatures into resolved statements, expressions, fields, and type kinds.
 3. Split semantic checks into focused modules for calls, local state, freshness, resources, handles, and forbidden features.
 4. Add CleanLocal dataflow for `fresh`, `manage`, `take`, retaining APIs, and closure capture.
 5. Add `rss review old.rss new.rss` for API/effect/freshness diffing.

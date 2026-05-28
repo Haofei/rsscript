@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::diagnostic::Span;
 use crate::lexer::{Token, TokenKind};
@@ -34,7 +34,6 @@ pub struct TypeDecl {
 #[derive(Debug, Clone)]
 pub struct Param {
     pub name: String,
-    pub effect: Option<String>,
     pub type_name: String,
 }
 
@@ -45,7 +44,6 @@ pub struct FunctionDecl {
     pub returns_fresh: bool,
     pub return_type: Option<String>,
     pub effects: Vec<String>,
-    pub retained_params: HashSet<String>,
     pub body_start: usize,
     pub body_end: usize,
 }
@@ -203,11 +201,10 @@ impl Parser<'_> {
         }
 
         let mut effects = Vec::new();
-        let mut retained_params = HashSet::new();
         if self.at_ident("effects") && self.peek_symbol(1, "(") {
             let open = self.index + 1;
             let close = self.find_matching(open, "(", ")").unwrap_or(open);
-            effects = parse_effects(self.tokens, open + 1, close, &mut retained_params);
+            effects = parse_effects(self.tokens, open + 1, close);
             self.index = close + 1;
         }
 
@@ -228,7 +225,6 @@ impl Parser<'_> {
                 returns_fresh,
                 return_type,
                 effects,
-                retained_params,
                 body_start,
                 body_end,
             },
@@ -350,22 +346,17 @@ fn parse_params(tokens: &[Token], start: usize, end: usize) -> Vec<Param> {
             && tokens.get(i + 1).is_some_and(|token| token.symbol(":"))
         {
             let mut cursor = i + 2;
-            let effect = if tokens.get(cursor).is_some_and(|token| {
+            if tokens.get(cursor).is_some_and(|token| {
                 token.is_ident_text("read")
                     || token.is_ident_text("mut")
                     || token.is_ident_text("take")
             }) {
-                let effect = tokens[cursor].text();
                 cursor += 1;
-                Some(effect)
-            } else {
-                None
-            };
+            }
             let type_end = next_top_level_comma(tokens, cursor, end).unwrap_or(end);
             let type_name = first_type_name(tokens, cursor, type_end).unwrap_or_default();
             params.push(Param {
                 name: name.to_string(),
-                effect,
                 type_name,
             });
             i = type_end + 1;
@@ -390,12 +381,7 @@ fn next_top_level_comma(tokens: &[Token], start: usize, end: usize) -> Option<us
     None
 }
 
-fn parse_effects(
-    tokens: &[Token],
-    start: usize,
-    end: usize,
-    retained_params: &mut HashSet<String>,
-) -> Vec<String> {
+fn parse_effects(tokens: &[Token], start: usize, end: usize) -> Vec<String> {
     let mut effects = Vec::new();
     let mut i = start;
     while i < end {
@@ -404,7 +390,6 @@ fn parse_effects(
                 let open = i + 1;
                 if let Some(close) = find_matching(tokens, open, "(", ")") {
                     if let Some(param) = tokens.get(open + 1).and_then(ident_name) {
-                        retained_params.insert(param.to_string());
                         effects.push(format!("retains({param})"));
                     }
                     i = close + 1;
