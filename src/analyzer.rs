@@ -5,7 +5,8 @@ use crate::diagnostic::{Diagnostic, code};
 use crate::hir::{DuplicateSymbolKind, Hir, HirTypeKind};
 use crate::lexer::{Token, lex};
 use crate::syntax::ast::{
-    Callee, DataEffect, EffectDecl, Expr, GenericBound, GenericParam, Item, Stmt, TypeKind, TypeRef,
+    Block, Callee, DataEffect, EffectDecl, Expr, GenericBound, GenericParam, Item, Stmt, TypeKind,
+    TypeRef,
 };
 use crate::syntax::parse_source;
 
@@ -90,6 +91,7 @@ impl Analyzer<'_> {
     fn run(&mut self) {
         self.check_single_feature_declaration();
         self.check_removed_profile_declarations();
+        self.check_unsupported_syntax();
         self.check_duplicate_declarations();
         self.check_signature_explicitness();
         self.check_generic_constraints();
@@ -140,6 +142,112 @@ impl Analyzer<'_> {
                 ),
             );
         }
+    }
+
+    fn check_unsupported_syntax(&mut self) {
+        let bodies = self
+            .syntax_program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Function(function) => Some(function.body.clone()),
+                Item::Type(_) => None,
+            })
+            .collect::<Vec<_>>();
+        for body in &bodies {
+            self.check_unsupported_syntax_block(body);
+        }
+    }
+
+    fn check_unsupported_syntax_block(&mut self, block: &Block) {
+        for statement in &block.statements {
+            self.check_unsupported_syntax_stmt(statement);
+        }
+    }
+
+    fn check_unsupported_syntax_stmt(&mut self, statement: &Stmt) {
+        match statement {
+            Stmt::Let(stmt) => {
+                if let Some(value) = &stmt.value {
+                    self.check_unsupported_syntax_expr(value);
+                }
+            }
+            Stmt::Return(stmt) => {
+                if let Some(value) = &stmt.value {
+                    self.check_unsupported_syntax_expr(value);
+                }
+            }
+            Stmt::With(stmt) => {
+                self.check_unsupported_syntax_expr(&stmt.resource);
+                self.check_unsupported_syntax_block(&stmt.body);
+            }
+            Stmt::If(stmt) => {
+                self.check_unsupported_syntax_expr(&stmt.condition);
+                self.check_unsupported_syntax_block(&stmt.then_body);
+                if let Some(else_body) = &stmt.else_body {
+                    self.check_unsupported_syntax_block(else_body);
+                }
+            }
+            Stmt::Loop(stmt) => {
+                if let Some(condition) = &stmt.condition {
+                    self.check_unsupported_syntax_expr(condition);
+                }
+                self.check_unsupported_syntax_block(&stmt.body);
+            }
+            Stmt::Expr(expr) => self.check_unsupported_syntax_expr(expr),
+            Stmt::Break(_) | Stmt::Continue(_) => {}
+            Stmt::Unknown(span) => self.unsupported_syntax(
+                span.clone(),
+                "unsupported statement",
+                "This statement is outside the current RSScript parser surface.",
+            ),
+        }
+    }
+
+    fn check_unsupported_syntax_expr(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Binary { left, right, .. } => {
+                self.check_unsupported_syntax_expr(left);
+                self.check_unsupported_syntax_expr(right);
+            }
+            Expr::Field { base, .. } => self.check_unsupported_syntax_expr(base),
+            Expr::Index { base, index, .. } => {
+                self.check_unsupported_syntax_expr(base);
+                self.check_unsupported_syntax_expr(index);
+            }
+            Expr::Call { args, .. } => {
+                for arg in args {
+                    self.check_unsupported_syntax_expr(&arg.value);
+                }
+            }
+            Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
+                self.check_unsupported_syntax_expr(value);
+            }
+            Expr::Closure { body, .. } => self.check_unsupported_syntax_block(body),
+            Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) => {}
+            Expr::Unknown(span) => self.unsupported_syntax(
+                span.clone(),
+                "unsupported expression",
+                "This expression is outside the current RSScript parser surface.",
+            ),
+        }
+    }
+
+    fn unsupported_syntax(&mut self, span: crate::diagnostic::Span, label: &str, cause: &str) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::UNSUPPORTED_SYNTAX,
+                "unsupported RSScript syntax.",
+                span,
+                label,
+            )
+            .with_cause(cause)
+            .with_fix(
+                "rewrite_supported_syntax",
+                "Rewrite this construct using the currently supported RSScript syntax.",
+                "manual",
+            ),
+        );
     }
 
     fn check_signature_explicitness(&mut self) {

@@ -15,6 +15,7 @@ pub mod code {
     pub const REMOVED_RUNTIME_EFFECT: &str = "RS0012";
     pub const INVALID_TRY_OPERATOR: &str = "RS0013";
     pub const INVALID_NOALLOC_ALLOCATION: &str = "RS0014";
+    pub const UNSUPPORTED_SYNTAX: &str = "RS0015";
     pub const FEATURE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
@@ -278,6 +279,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::INVALID_TRY_OPERATOR,
         title: "invalid try operator",
         explanation: "`?` may only be used inside functions that return a compatible `Result<T, E>` type.",
+    },
+    DiagnosticExplanation {
+        code: code::UNSUPPORTED_SYNTAX,
+        title: "unsupported syntax",
+        explanation: "The frontend parser could not lower this source construct into the supported RSScript AST. The checker reports this before Rust lowering so unsupported source does not become generated Rust `todo!()` code.",
     },
     DiagnosticExplanation {
         code: code::INVALID_NOALLOC_ALLOCATION,

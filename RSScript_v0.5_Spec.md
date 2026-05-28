@@ -2365,6 +2365,7 @@ take of handle field
 implicit conversion attempt
 operator overload attempt
 feature violation
+unsupported syntax
 unmappable rustc diagnostic
 native boundary violation
 ```
