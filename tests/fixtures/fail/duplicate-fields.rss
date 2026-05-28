@@ -1,0 +1,11 @@
+// expect: RS0005
+mode: managed
+
+struct Response {
+    status: Int
+    status: String
+}
+
+fn ok() -> Unit {
+    return Unit
+}

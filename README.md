@@ -24,7 +24,7 @@ It currently implements:
 Implemented diagnostic classes include:
 
 - file mode violations
-- duplicate top-level declarations that would make symbol resolution ambiguous
+- duplicate declarations that would make symbol or field resolution ambiguous
 - missing named arguments
 - unknown, missing, and duplicate call arguments for known signatures
 - unknown callees outside known functions, constructors, enum variants, and builtin signatures

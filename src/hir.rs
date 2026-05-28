@@ -67,6 +67,7 @@ pub enum DuplicateSymbolKind {
     Function,
     Type,
     Constructor,
+    Field,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +105,7 @@ impl Hir {
                     hir.insert_function(function_sig_from_decl(function));
                 }
                 Item::Type(type_decl) => {
+                    record_duplicate_fields(&mut hir.duplicate_symbols, type_decl);
                     record_duplicate_symbol(
                         &mut hir.duplicate_symbols,
                         &mut type_symbols,
@@ -223,6 +225,19 @@ fn record_duplicate_symbol(
     symbols.insert(name.to_string(), (kind, span.clone()));
 }
 
+fn record_duplicate_fields(duplicates: &mut Vec<DuplicateSymbol>, type_decl: &TypeDecl) {
+    let mut fields = HashMap::new();
+    for field in &type_decl.fields {
+        record_duplicate_symbol(
+            duplicates,
+            &mut fields,
+            DuplicateSymbolKind::Field,
+            &format!("{}.{}", type_decl.name, field.name),
+            &field.span,
+        );
+    }
+}
+
 fn duplicate_symbol_kind(
     first: DuplicateSymbolKind,
     duplicate: DuplicateSymbolKind,
@@ -232,6 +247,7 @@ fn duplicate_symbol_kind(
             DuplicateSymbolKind::Function
         }
         (DuplicateSymbolKind::Type, DuplicateSymbolKind::Type) => DuplicateSymbolKind::Type,
+        (DuplicateSymbolKind::Field, DuplicateSymbolKind::Field) => DuplicateSymbolKind::Field,
         _ => DuplicateSymbolKind::Constructor,
     }
 }
@@ -785,5 +801,29 @@ fn Image(path: read Path) -> Image {
         assert_eq!(duplicate.name, "Image");
         assert_eq!(duplicate.first_span.line, 4);
         assert_eq!(duplicate.duplicate_span.line, 8);
+    }
+
+    #[test]
+    fn records_duplicate_fields() {
+        let source = r#"
+mode: managed
+
+struct Response {
+    status: Int
+    status: String
+}
+"#;
+
+        let program = parse_source("test.rss", source);
+        let hir = Hir::from_syntax(&program);
+        let duplicate = hir
+            .duplicate_symbols()
+            .first()
+            .expect("duplicate field is recorded");
+
+        assert_eq!(duplicate.kind, DuplicateSymbolKind::Field);
+        assert_eq!(duplicate.name, "Response.status");
+        assert_eq!(duplicate.first_span.line, 5);
+        assert_eq!(duplicate.duplicate_span.line, 6);
     }
 }

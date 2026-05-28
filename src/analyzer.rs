@@ -189,5 +189,6 @@ fn duplicate_symbol_label(kind: DuplicateSymbolKind) -> &'static str {
         DuplicateSymbolKind::Function => "function",
         DuplicateSymbolKind::Type => "type",
         DuplicateSymbolKind::Constructor => "callable",
+        DuplicateSymbolKind::Field => "field",
     }
 }
