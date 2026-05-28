@@ -545,7 +545,7 @@ fn parse_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
     if tokens[start].is_ident_text("while") || tokens[start].is_ident_text("loop") {
         return parse_loop_stmt(tokens, start, limit);
     }
-    if tokens[start].is_ident_text("match") {
+    if tokens[start].is_ident_text("for") || tokens[start].is_ident_text("match") {
         return parse_unsupported_control_stmt(tokens, start, limit);
     }
     if tokens[start].is_ident_text("break") {

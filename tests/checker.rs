@@ -2607,6 +2607,27 @@ fn pick(value: read Option<Int>) -> Int {
 }
 
 #[test]
+fn checker_reports_for_as_unsupported_until_iteration_lowering_exists() {
+    let source = r#"
+fn run(items: read List<Int>) -> Unit {
+    for item in items {
+        Log.write(message: read "x")
+    }
+}
+"#;
+    let diagnostics = analyze_source("for.rss", source);
+
+    assert!(diagnostics.iter().any(
+        |diagnostic| diagnostic.code == "RS0015" && diagnostic.label == "unsupported statement"
+    ));
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "RS0206")
+    );
+}
+
+#[test]
 fn review_map_marks_public_rssi_signatures_review_required() {
     let source = r#"
 struct JsonValue
