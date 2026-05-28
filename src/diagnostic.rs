@@ -10,6 +10,7 @@ pub mod code {
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
     pub const UNKNOWN_ARGUMENT: &str = "RS0203";
     pub const MISSING_ARGUMENT: &str = "RS0204";
+    pub const DUPLICATE_ARGUMENT: &str = "RS0205";
     pub const MANAGED_TO_LOCAL: &str = "RS0301";
     pub const USE_AFTER_MANAGE: &str = "RS0401";
     pub const LOCAL_VALUE_RETAINED: &str = "RS0501";
@@ -230,6 +231,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::MISSING_ARGUMENT,
         title: "missing required argument",
         explanation: "Every parameter in the resolved callee signature must be supplied by name at the call site.",
+    },
+    DiagnosticExplanation {
+        code: code::DUPLICATE_ARGUMENT,
+        title: "duplicate named argument",
+        explanation: "A call may bind each named parameter only once. Duplicate names make effect and ownership review ambiguous.",
     },
     DiagnosticExplanation {
         code: code::MANAGED_TO_LOCAL,

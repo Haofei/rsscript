@@ -120,10 +120,27 @@ fn check_call_args(
         .map(|param| param.name.clone())
         .collect();
 
+    let mut seen_names = HashSet::new();
     for arg in args {
         let Some(name) = &arg.name else {
             continue;
         };
+        if !seen_names.insert(name.as_str()) {
+            analyzer.diagnostics.push(
+                Diagnostic::error(
+                    code::DUPLICATE_ARGUMENT,
+                    format!("call to `{call_name}` repeats argument `{name}`."),
+                    arg.span.clone(),
+                    "duplicate argument",
+                )
+                .with_cause("Each named parameter can be provided at most once.")
+                .with_fix(
+                    "remove_duplicate_argument",
+                    format!("Remove the extra `{name}: ...` argument."),
+                    "manual",
+                ),
+            );
+        }
         if !param_names.contains(name) {
             analyzer.diagnostics.push(
                 Diagnostic::error(
