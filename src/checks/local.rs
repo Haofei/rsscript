@@ -2,9 +2,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::diagnostic::Span;
 use crate::hir::{
-    HirBinding, HirBindingKind, HirBlock, HirEffectEvent, HirEffectEventKind, HirExpr,
-    HirFunctionBody, HirReturnProof, HirStmt, ParamEffect,
+    CallResolution, HirBinding, HirBindingKind, HirBlock, HirEffectEvent, HirEffectEventKind,
+    HirExpr, HirFunctionBody, HirReturnProof, HirStmt, ParamEffect,
 };
+use crate::syntax::ast::Callee;
 
 use super::body::Flow;
 
@@ -38,6 +39,15 @@ pub(crate) struct RetainedLocalUse {
     pub(crate) callee: String,
     pub(crate) param: String,
     pub(crate) span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RetainedClosureCapture {
+    pub(crate) name: String,
+    pub(crate) callee: String,
+    pub(crate) param: String,
+    pub(crate) capture_span: Span,
+    pub(crate) closure_span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -246,6 +256,18 @@ impl LocalAnalysis {
             }
         }
         uses
+    }
+
+    pub(crate) fn retained_closure_captures(&self) -> Vec<RetainedClosureCapture> {
+        let mut captures = Vec::new();
+        if let Some(block) = self.body.as_ref().and_then(|body| body.block.as_ref()) {
+            collect_retained_closure_captures_from_block(
+                block,
+                &self.flow_entry_states_by_span,
+                &mut captures,
+            );
+        }
+        captures
     }
 
     pub(crate) fn fresh_return_issues(&self) -> Vec<FreshReturnIssue> {
@@ -478,6 +500,166 @@ fn push_fresh_return_issue(
     let issue = FreshReturnIssue { kind, span };
     if !issues.contains(&issue) {
         issues.push(issue);
+    }
+}
+
+fn collect_retained_closure_captures_from_block(
+    block: &HirBlock,
+    entry_states: &HashMap<Span, BodyState>,
+    captures: &mut Vec<RetainedClosureCapture>,
+) {
+    for statement in &block.statements {
+        collect_retained_closure_captures_from_stmt(statement, entry_states, captures);
+    }
+}
+
+fn collect_retained_closure_captures_from_stmt(
+    statement: &HirStmt,
+    entry_states: &HashMap<Span, BodyState>,
+    captures: &mut Vec<RetainedClosureCapture>,
+) {
+    let entry_state = entry_states.get(hir_stmt_span(statement));
+    match statement {
+        HirStmt::Let {
+            value: Some(value), ..
+        }
+        | HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => {
+            if let Some(state) = entry_state {
+                collect_retained_closure_captures_from_expr(value, state, captures);
+            }
+        }
+        HirStmt::With { resource, body, .. } => {
+            if let Some(state) = entry_state {
+                collect_retained_closure_captures_from_expr(resource, state, captures);
+            }
+            collect_retained_closure_captures_from_block(body, entry_states, captures);
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            if let Some(state) = entry_state {
+                collect_retained_closure_captures_from_expr(condition, state, captures);
+            }
+            collect_retained_closure_captures_from_block(then_body, entry_states, captures);
+            if let Some(else_body) = else_body {
+                collect_retained_closure_captures_from_block(else_body, entry_states, captures);
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let (Some(condition), Some(state)) = (condition, entry_state) {
+                collect_retained_closure_captures_from_expr(condition, state, captures);
+            }
+            collect_retained_closure_captures_from_block(body, entry_states, captures);
+        }
+        HirStmt::Let { value: None, .. }
+        | HirStmt::Return { value: None, .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn collect_retained_closure_captures_from_expr(
+    expr: &HirExpr,
+    state: &BodyState,
+    captures: &mut Vec<RetainedClosureCapture>,
+) {
+    match expr {
+        HirExpr::Call {
+            callee,
+            args,
+            resolution,
+            ..
+        } => {
+            if let CallResolution::Resolved { signature, .. } = resolution {
+                for arg in args {
+                    let Some(name) = arg.name.as_ref() else {
+                        continue;
+                    };
+                    if !signature.retained_params.contains(name) {
+                        continue;
+                    }
+                    let Some((body, closure_span)) = retained_closure_arg(&arg.value) else {
+                        continue;
+                    };
+                    let mut uses = Vec::new();
+                    collect_hir_block_idents(body, &mut uses);
+                    for (used_name, capture_span) in uses {
+                        if state.is_local(&used_name) {
+                            push_retained_closure_capture(
+                                captures,
+                                RetainedClosureCapture {
+                                    name: used_name,
+                                    callee: callee_display(callee),
+                                    param: name.clone(),
+                                    capture_span,
+                                    closure_span: closure_span.clone(),
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+            for arg in args {
+                collect_retained_closure_captures_from_expr(&arg.value, state, captures);
+            }
+        }
+        HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => {
+            collect_retained_closure_captures_from_expr(value, state, captures);
+        }
+        HirExpr::Field { base, .. } => {
+            collect_retained_closure_captures_from_expr(base, state, captures);
+        }
+        HirExpr::Closure { body, .. } => {
+            collect_retained_closure_captures_from_block(body, &HashMap::new(), captures);
+        }
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn retained_closure_arg(expr: &HirExpr) -> Option<(&HirBlock, &Span)> {
+    match expr {
+        HirExpr::Closure { body, span } => Some((body, span)),
+        HirExpr::Effect {
+            effect: ParamEffect::Read,
+            value,
+            ..
+        } => retained_closure_arg(value),
+        HirExpr::Effect { .. }
+        | HirExpr::Manage { .. }
+        | HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Field { .. }
+        | HirExpr::Call { .. }
+        | HirExpr::Unknown(_) => None,
+    }
+}
+
+fn push_retained_closure_capture(
+    captures: &mut Vec<RetainedClosureCapture>,
+    capture: RetainedClosureCapture,
+) {
+    if !captures.contains(&capture) {
+        captures.push(capture);
+    }
+}
+
+fn callee_display(callee: &Callee) -> String {
+    match callee {
+        Callee::Name(name) => name.clone(),
+        Callee::Qualified { namespace, name } => format!("{namespace}.{name}"),
     }
 }
 

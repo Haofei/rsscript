@@ -1,0 +1,25 @@
+// expect: RS0801
+mode: uses-local
+
+class Scheduler {
+    callbacks: List<Callback>
+}
+
+struct Image {
+    pixels: Buffer
+}
+
+fn schedule(scheduler: mut Scheduler, callback: read Callback) -> Unit
+    effects(retains(callback))
+{
+}
+
+fn bad_schedule(scheduler: mut Scheduler, path: read Path) -> Unit {
+    local image = Image.load(path: read path)
+    schedule(
+        scheduler: mut scheduler,
+        callback: read || {
+            Image.inspect(image: read image)
+        },
+    )
+}

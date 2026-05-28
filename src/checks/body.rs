@@ -5,7 +5,8 @@ use crate::syntax::ast::{Callee, FunctionDecl, Item};
 
 use super::local::{
     BodyState, FreshReturnIssue, FreshReturnIssueKind, LocalAnalysis, ManagedToLocalUse, MovedUse,
-    ResourceEscapeKind, RetainedLocalUse, TakeHandleField, merge_if_state, merge_loop_state,
+    ResourceEscapeKind, RetainedClosureCapture, RetainedLocalUse, TakeHandleField, merge_if_state,
+    merge_loop_state,
 };
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
@@ -25,6 +26,7 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
         check_managed_to_local_uses(analyzer, &local_analysis);
         check_moved_uses(analyzer, &local_analysis);
         check_retained_local_uses(analyzer, &local_analysis);
+        check_retained_closure_captures(analyzer, &local_analysis);
         check_take_handle_fields(analyzer, &local_analysis);
         check_fresh_returns(analyzer, &local_analysis, &function);
         let mut state = local_analysis.initial_state();
@@ -223,6 +225,12 @@ fn check_retained_local_uses(analyzer: &mut Analyzer<'_>, local_analysis: &Local
     }
 }
 
+fn check_retained_closure_captures(analyzer: &mut Analyzer<'_>, local_analysis: &LocalAnalysis) {
+    for capture in local_analysis.retained_closure_captures() {
+        retained_closure_capture_diagnostic(analyzer, capture);
+    }
+}
+
 fn check_take_handle_fields(analyzer: &mut Analyzer<'_>, local_analysis: &LocalAnalysis) {
     for field in local_analysis.take_handle_fields() {
         take_handle_field_diagnostic(analyzer, field);
@@ -308,6 +316,36 @@ fn retained_local_diagnostic(analyzer: &mut Analyzer<'_>, retained: RetainedLoca
                 "Pass `{}` through `manage {}` before retaining it.",
                 retained.param, retained.name
             ),
+            "manual",
+        ),
+    );
+}
+
+fn retained_closure_capture_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    capture: RetainedClosureCapture,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::LOCAL_CAPTURED_BY_MANAGED_CLOSURE,
+            format!(
+                "retained closure passed to `{}` captures local value `{}`.",
+                capture.callee, capture.name
+            ),
+            capture.capture_span,
+            "local captured here",
+        )
+        .with_cause(format!(
+            "`{}` declares `effects(retains({}))`; the closure may outlive local values.",
+            capture.callee, capture.param
+        ))
+        .with_cause(format!(
+            "The retained closure starts at {}:{}.",
+            capture.closure_span.line, capture.closure_span.column
+        ))
+        .with_fix(
+            "avoid_retained_capture",
+            "Do not capture local values in closures passed to retaining APIs.",
             "manual",
         ),
     );

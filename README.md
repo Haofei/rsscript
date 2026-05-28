@@ -35,6 +35,7 @@ It currently implements:
 - HIR-driven call checks for named arguments, data effects, and unknown callees
 - HIR-driven body traversal for body semantics and local state updates
 - Body checks for managed-to-local, use-after-move, HIR/local-flow `fresh` returns, active resource escape, resolved handle-field `take`, managed closure captures, and resource escape traversal now consume HIR body facts and local flow entry state
+- Retained-closure capture checks reject local captures in closures passed to `effects(retains(...))` APIs
 - HIR/local-flow retaining API checks that only reject values local at the retaining call site
 - Local ownership, use-after-move, `fresh` return, managed closure capture, resource-retain escape, and handle-field `take` checks now index statement uses, binding types, fresh-return issue facts, take-handle facts, closure uses, and move/retain events from resolved HIR body trees
 - ResourcePool lease checks that require `ResourcePool.borrow(...)` to be scoped by `with`
@@ -57,6 +58,7 @@ Implemented diagnostic classes include:
 - resource fields and resource escape from `with`
 - ResourcePool borrow lease escape outside `with`
 - local capture by managed closures
+- local capture by closures passed to retaining APIs
 - `take` of handle fields
 - API, type layout, path-aware local/manage boundary, effect, mode, and freshness changes in `rss review`
 - likely operator overload attempts
@@ -75,7 +77,7 @@ Non-goals for this stage:
 
 Near-term roadmap:
 
-1. Expand local/resource dataflow precision around nested closures, retaining APIs, and typed `ResourcePool<T>` lease propagation.
+1. Expand local/resource dataflow precision around typed `ResourcePool<T>` lease propagation and deeper expression-order modeling.
 2. Expand `rss review` boundary diffs from path-aware summaries into structured risk categories.
 
 Run:
