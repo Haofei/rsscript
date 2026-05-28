@@ -4,6 +4,14 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../core/cache/image_cache.rssi"),
     ),
     (
+        "core/collections/buffer.rssi",
+        include_str!("../core/collections/buffer.rssi"),
+    ),
+    (
+        "core/collections/list.rssi",
+        include_str!("../core/collections/list.rssi"),
+    ),
+    (
         "core/collections/map.rssi",
         include_str!("../core/collections/map.rssi"),
     ),
@@ -35,6 +43,7 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../core/json/json.rssi"),
     ),
     ("core/log/log.rssi", include_str!("../core/log/log.rssi")),
+    ("core/os/os.rssi", include_str!("../core/os/os.rssi")),
     (
         "core/resource/resource_pool.rssi",
         include_str!("../core/resource/resource_pool.rssi"),

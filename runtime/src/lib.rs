@@ -355,6 +355,18 @@ pub fn file_write<B: RuntimeBytes + ?Sized>(file: &mut File, data: &B) -> std::i
     file.inner.write_all(data.as_bytes_slice())
 }
 
+pub fn os_close(fd: i64) {
+    let _ = fd;
+}
+
+pub fn list_consume<T>(list: Vec<T>) {
+    drop(list);
+}
+
+pub fn buffer_consume(buffer: Vec<u8>) {
+    drop(buffer);
+}
+
 pub fn request_new(path: &str) -> Request {
     Request {
         path: path.to_string(),
@@ -1047,6 +1059,13 @@ mod tests {
         super::counter_add(&mut counter, 2);
 
         assert_eq!(super::counter_value(&counter), 3);
+    }
+
+    #[test]
+    fn consume_runtime_hooks_take_collections() {
+        super::list_consume(vec![1_i64, 2, 3]);
+        super::buffer_consume(b"bytes".to_vec());
+        super::os_close(0);
     }
 
     #[test]

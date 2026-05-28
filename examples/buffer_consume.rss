@@ -1,0 +1,18 @@
+features: local
+
+fn main() -> Result<Unit, FileError> {
+    let path = "rsscript-buffer-consume.txt"
+
+    with File.open_write(path: read path) as file {
+        File.write(file: mut file, data: read "consume buffer")?
+    }
+
+    with File.open_read(path: read path) as file {
+        local bytes = File.read_all(file: mut file)?
+        Buffer.consume(buffer: take bytes)
+    }
+
+    OS.close(fd: 0)
+    Log.write(message: read "buffer consumed")
+    return Ok(Unit)
+}

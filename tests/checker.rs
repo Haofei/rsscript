@@ -90,6 +90,21 @@ fn bundled_core_interfaces_are_available_to_checker() {
     assert!(
         core_interfaces()
             .iter()
+            .any(|(path, _)| *path == "core/collections/buffer.rssi")
+    );
+    assert!(
+        core_interfaces()
+            .iter()
+            .any(|(path, _)| *path == "core/collections/list.rssi")
+    );
+    assert!(
+        core_interfaces()
+            .iter()
+            .any(|(path, _)| *path == "core/os/os.rssi")
+    );
+    assert!(
+        core_interfaces()
+            .iter()
             .any(|(path, _)| *path == "core/cache/image_cache.rssi")
     );
     assert!(
@@ -324,6 +339,32 @@ pub fn inspect_core(
     assert!(rust.contains("counts: &std::collections::HashMap<String, i64>"));
     assert!(rust.contains("items: &Vec<i64>"));
     assert!(rust.contains("-> Result<Vec<u8>, CoreError>"));
+}
+
+#[test]
+fn rust_lowering_maps_take_consume_core_calls_to_runtime_hooks() {
+    let source = r#"
+features: local
+
+fn close_fd() -> Unit {
+    OS.close(fd: 0)
+}
+
+fn consume_list(list: take List<Int>) -> Unit {
+    List.consume(list: take list)
+}
+
+fn consume_buffer(buffer: take Buffer) -> Unit {
+    Buffer.consume(buffer: take buffer)
+}
+"#;
+    let rust = lower_source_to_rust("consume.rss", source).expect("source should lower");
+
+    assert!(rust.contains("rsscript_runtime::os_close(0);"));
+    assert!(rust.contains("fn consume_list(list: Vec<i64>)"));
+    assert!(rust.contains("rsscript_runtime::list_consume(list);"));
+    assert!(rust.contains("fn consume_buffer(buffer: Vec<u8>)"));
+    assert!(rust.contains("rsscript_runtime::buffer_consume(buffer);"));
 }
 
 #[test]

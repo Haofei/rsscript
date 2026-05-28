@@ -1185,6 +1185,11 @@ fn lower_callee(callee: &Callee) -> String {
     match callee {
         callee if is_log_write_callee(callee) => "rsscript_runtime::log_write".to_string(),
         callee if is_assert_equal_callee(callee) => "rsscript_runtime::assert_equal".to_string(),
+        callee if is_os_close_callee(callee) => "rsscript_runtime::os_close".to_string(),
+        callee if is_list_consume_callee(callee) => "rsscript_runtime::list_consume".to_string(),
+        callee if is_buffer_consume_callee(callee) => {
+            "rsscript_runtime::buffer_consume".to_string()
+        }
         callee if is_file_open_callee(callee) => "rsscript_runtime::file_open".to_string(),
         callee if is_file_open_read_callee(callee) => {
             "rsscript_runtime::file_open_read".to_string()
@@ -1289,6 +1294,18 @@ fn is_log_write_callee(callee: &Callee) -> bool {
 
 fn is_assert_equal_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Assert" && name == "equal")
+}
+
+fn is_os_close_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "OS" && name == "close")
+}
+
+fn is_list_consume_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "List" && name == "consume")
+}
+
+fn is_buffer_consume_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Buffer" && name == "consume")
 }
 
 fn is_string_concat_callee(callee: &Callee) -> bool {
