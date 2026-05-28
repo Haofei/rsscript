@@ -194,6 +194,37 @@ fn build() -> Unit {
 }
 
 #[test]
+fn take_with_resource_reports_resource_escape_not_plain_take_error() {
+    let source = r#"
+features: local
+
+resource File {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+fn consume_file(file: take File) -> Unit {
+}
+
+fn bad_take(path: read Path) -> Unit {
+    with File.open(path: read path) as file {
+        consume_file(file: take file)
+    }
+}
+"#;
+    let codes = analyze_source("resource-take.rss", source)
+        .into_iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+
+    assert!(codes.contains(&"RS0702".to_string()));
+    assert!(!codes.contains(&"RS0308".to_string()));
+}
+
+#[test]
 fn diagnostics_json_uses_protocol_shape() {
     let path = Path::new("tests/fixtures/fail/use-after-manage.rss");
     let source = read_fixture(path);

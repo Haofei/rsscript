@@ -139,12 +139,15 @@ fn check_stmt_semantics(
             resource,
             body,
             span,
+            binding,
             ..
         } => {
             check_expr_semantics(analyzer, resource, state);
             check_resource_pool_lease_expr(analyzer, resource, true);
             check_resource_escape(analyzer, local_analysis, span);
-            check_block(analyzer, local_analysis, body, state)
+            let mut scoped_state = state.clone();
+            scoped_state.bind_resource(binding.clone());
+            check_block(analyzer, local_analysis, body, &mut scoped_state)
         }
         HirStmt::If {
             condition,
@@ -702,6 +705,10 @@ fn check_take_operand_is_local(
         return;
     };
     if !state.is_local(&path.base) {
+        if state.is_resource(&path.base) {
+            resource_escape_diagnostic(analyzer, &path.base, span.clone());
+            return;
+        }
         invalid_take_operand_diagnostic(
             analyzer,
             format!(
