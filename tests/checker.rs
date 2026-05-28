@@ -53,6 +53,29 @@ fn core_interface_files_have_no_diagnostics() {
 }
 
 #[test]
+fn examples_have_no_diagnostics_and_lower_to_runnable_packages() {
+    for path in fixture_paths("examples") {
+        let source = read_fixture(&path);
+        let diagnostics = analyze_source_with_core(path.to_str().unwrap(), &source);
+        assert_eq!(diagnostics, Vec::new(), "{}", path.display());
+
+        let package = lower_source_to_rust_package(
+            path.to_str().unwrap(),
+            &source,
+            path.file_stem().and_then(|stem| stem.to_str()).unwrap(),
+            "/workspace/rsscript/runtime",
+        )
+        .unwrap_or_else(|diagnostics| panic!("{}: {diagnostics:?}", path.display()));
+
+        assert!(
+            package.main_rs.is_some(),
+            "{} should lower to a runnable Rust package",
+            path.display()
+        );
+    }
+}
+
+#[test]
 fn bundled_core_interfaces_are_available_to_checker() {
     assert!(
         core_interfaces()
@@ -654,6 +677,7 @@ fn render(path: take Path) -> fresh Image
 fn syntax_parser_accepts_all_fixtures() {
     let mut paths = fixture_paths("tests/fixtures/pass");
     paths.extend(fixture_paths("tests/fixtures/fail"));
+    paths.extend(fixture_paths("examples"));
 
     for path in paths {
         let source = read_fixture(&path);

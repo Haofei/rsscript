@@ -411,6 +411,19 @@ If a lowered package contains `fn main() -> Unit`, `rss lower --rust --out-dir` 
 
 The first observable runtime boundary is `Log.write(message: read String)`, which lowers to an explicit runtime output hook.
 
+Smallest runnable example:
+
+```sh
+cargo run -- run examples/hello.rss
+```
+
+```rust
+fn main() -> Unit {
+    Log.write(message: read "hello RSScript")
+    return Unit
+}
+```
+
 ---
 
 ## Roadmap
