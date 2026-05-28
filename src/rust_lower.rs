@@ -504,7 +504,7 @@ impl<'a> RustLowerer<'a> {
             for param in &function.params {
                 out.push_str(&format!("    let _ = &{};\n", rust_ident(&param.name)));
             }
-            out.push_str("    todo!(\"RSScript interface function\");\n");
+            out.push_str("    panic!(\"RSScript declaration has no generated implementation\");\n");
         } else {
             self.lower_block(&function.body, out, 1);
         }
@@ -610,9 +610,7 @@ impl<'a> RustLowerer<'a> {
             Stmt::Break(_) => out.push_str(&format!("{pad}break;\n")),
             Stmt::Continue(_) => out.push_str(&format!("{pad}continue;\n")),
             Stmt::Expr(expr) => out.push_str(&format!("{pad}{};\n", self.lower_expr(expr))),
-            Stmt::Unknown(_) => out.push_str(&format!(
-                "{pad}todo!(\"unsupported RSScript statement\");\n"
-            )),
+            Stmt::Unknown(span) => unreachable_lowering("statement", span),
         }
     }
 
@@ -863,7 +861,7 @@ impl<'a> RustLowerer<'a> {
                 out.push('}');
                 out
             }
-            Expr::Unknown(_) => "todo!(\"unsupported RSScript expression\")".to_string(),
+            Expr::Unknown(span) => unreachable_lowering("expression", span),
         }
     }
 
@@ -1920,6 +1918,13 @@ fn runnable_main_kind(function: &FunctionDecl) -> Option<RunnableMainKind> {
         return Some(RunnableMainKind::ResultUnit);
     }
     None
+}
+
+fn unreachable_lowering(kind: &str, span: &Span) -> ! {
+    panic!(
+        "internal RSScript lowering error: unsupported {kind} reached Rust lowering at {}:{}:{}",
+        span.file, span.line, span.column
+    )
 }
 
 fn cargo_crate_name(package_name: &str) -> String {

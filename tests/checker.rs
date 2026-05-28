@@ -76,6 +76,18 @@ fn examples_have_no_diagnostics_and_lower_to_runnable_packages() {
             "{} should lower to a runnable Rust package",
             path.display()
         );
+        assert!(
+            !package.lib_rs.contains("todo!"),
+            "{} generated library should not contain todo! fallbacks",
+            path.display()
+        );
+        if let Some(main_rs) = &package.main_rs {
+            assert!(
+                !main_rs.contains("todo!"),
+                "{} generated main should not contain todo! fallbacks",
+                path.display()
+            );
+        }
     }
 }
 
@@ -1201,6 +1213,7 @@ fn pooled(pool: mut ResourcePool<TestConnection>) -> Unit
     assert!(rust.contains("rsscript_runtime::os_close(self.fd);"));
     assert!(rust.contains("pool: &mut rsscript_runtime::ResourcePool<TestConnection>"));
     assert!(rust.contains("let _ = &pool;"));
+    assert!(!rust.contains("todo!"));
 }
 
 #[test]
@@ -1389,6 +1402,25 @@ fn bad(path: read Path) -> Unit {
         .collect::<Vec<_>>();
 
     assert!(codes.contains(&"RS0401".to_string()));
+}
+
+#[test]
+fn rust_lowering_rejects_unsupported_syntax_before_generation() {
+    let source = r#"
+fn bad(path: read Path) -> Unit {
+    with File.open(path: read path) {
+        return Unit
+    }
+}
+"#;
+    let diagnostics = lower_source_to_rust("unsupported.rss", source)
+        .expect_err("unsupported source should fail before Rust generation");
+    let codes = diagnostics
+        .into_iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+
+    assert!(codes.contains(&"RS0015".to_string()));
 }
 
 #[test]
