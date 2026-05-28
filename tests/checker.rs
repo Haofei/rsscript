@@ -283,6 +283,35 @@ pub fn maybe_value(flag: Bool) -> Option<Int> {
 }
 
 #[test]
+fn rust_lowering_maps_core_surface_types_to_rust_std_types() {
+    let source = r#"
+struct CoreError {
+    code: Int
+}
+
+pub fn inspect_core(
+    path: read Path,
+    bytes: read Bytes,
+    buffer: mut Buffer,
+    names: read Set<String>,
+    counts: read Map<String, Int>,
+    items: read List<Int>,
+) -> Result<fresh Bytes, CoreError> {
+    return Err(CoreError(code: 0))
+}
+"#;
+    let rust = lower_source_to_rust("core-types.rss", source).expect("source should lower");
+
+    assert!(rust.contains("path: &std::path::PathBuf"));
+    assert!(rust.contains("bytes: &Vec<u8>"));
+    assert!(rust.contains("buffer: &mut Vec<u8>"));
+    assert!(rust.contains("names: &std::collections::HashSet<String>"));
+    assert!(rust.contains("counts: &std::collections::HashMap<String, i64>"));
+    assert!(rust.contains("items: &Vec<i64>"));
+    assert!(rust.contains("-> Result<Vec<u8>, CoreError>"));
+}
+
+#[test]
 fn rust_lowering_maps_log_write_to_runtime_output_hook() {
     let source = r#"
 fn main() -> Unit {

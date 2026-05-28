@@ -761,11 +761,24 @@ impl<'a> RustLowerer<'a> {
         let lowered = match ty.name.as_str() {
             "Unit" => "()".to_string(),
             "Bool" => "bool".to_string(),
+            "Byte" => "u8".to_string(),
+            "Char" => "char".to_string(),
             "Int" => "i64".to_string(),
+            "Int8" => "i8".to_string(),
+            "Int16" => "i16".to_string(),
+            "Int32" => "i32".to_string(),
             "Int64" => "i64".to_string(),
+            "UInt" => "u64".to_string(),
+            "UInt8" => "u8".to_string(),
+            "UInt16" => "u16".to_string(),
+            "UInt32" => "u32".to_string(),
             "UInt64" => "u64".to_string(),
             "Float" => "f64".to_string(),
+            "Float32" => "f32".to_string(),
+            "Float64" => "f64".to_string(),
             "String" => "String".to_string(),
+            "Bytes" | "Buffer" => "Vec<u8>".to_string(),
+            "Path" => "std::path::PathBuf".to_string(),
             "Result" if ty.args.len() == 2 => format!(
                 "Result<{}, {}>",
                 self.lower_type_ref(&ty.args[0], ManagedPosition::Nested),
@@ -788,6 +801,12 @@ impl<'a> RustLowerer<'a> {
                 self.lower_type_ref(&ty.args[0], ManagedPosition::Nested),
                 self.lower_type_ref(&ty.args[1], ManagedPosition::Nested)
             ),
+            "Set" if ty.args.len() == 1 => {
+                format!(
+                    "std::collections::HashSet<{}>",
+                    self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
+                )
+            }
             "ResourcePool" if ty.args.len() == 1 => format!(
                 "rsscript_runtime::ResourcePool<{}>",
                 self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
