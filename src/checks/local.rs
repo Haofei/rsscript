@@ -53,8 +53,6 @@ pub(crate) struct FreshReturnIssue {
 
 pub(crate) struct LocalAnalysis {
     body: Option<HirFunctionBody>,
-    events_by_span: HashMap<Span, Vec<HirEffectEvent>>,
-    binding_types_by_span: HashMap<Span, String>,
     managed_closure_uses_by_span: HashMap<Span, Vec<(String, Span)>>,
     resource_escapes_by_with_span: HashMap<Span, Vec<ResourceEscape>>,
     take_handle_fields: Vec<TakeHandleField>,
@@ -114,14 +112,6 @@ pub(crate) struct ResourceEscape {
 impl LocalAnalysis {
     pub(crate) fn new(body: Option<&HirFunctionBody>) -> Self {
         let body = body.cloned();
-        let events_by_span = body
-            .as_ref()
-            .and_then(|body| body.block.as_ref())
-            .map_or_else(HashMap::new, index_events_from_block);
-        let binding_types_by_span = body
-            .as_ref()
-            .and_then(|body| body.block.as_ref())
-            .map_or_else(HashMap::new, index_binding_types_from_block);
         let managed_closure_uses_by_span = body
             .as_ref()
             .and_then(|body| body.block.as_ref())
@@ -143,8 +133,6 @@ impl LocalAnalysis {
 
         Self {
             body,
-            events_by_span,
-            binding_types_by_span,
             managed_closure_uses_by_span,
             resource_escapes_by_with_span,
             take_handle_fields,
@@ -155,18 +143,6 @@ impl LocalAnalysis {
 
     pub(crate) fn initial_state(&self) -> BodyState {
         initial_state_from_body(self.body.as_ref())
-    }
-
-    pub(crate) fn apply_move_events(&self, span: &Span, state: &mut BodyState) {
-        state.apply_move_events(self.effect_events(span));
-    }
-
-    pub(crate) fn apply_retention_events(&self, span: &Span, state: &mut BodyState) {
-        state.apply_retention_events(self.effect_events(span));
-    }
-
-    pub(crate) fn binding_type(&self, span: &Span) -> Option<&str> {
-        self.binding_types_by_span.get(span).map(String::as_str)
     }
 
     pub(crate) fn managed_closure_ident_uses(&self, span: &Span) -> Option<&[(String, Span)]> {
@@ -249,10 +225,6 @@ impl LocalAnalysis {
         }
         issues
     }
-
-    fn effect_events(&self, span: &Span) -> &[HirEffectEvent] {
-        self.events_by_span.get(span).map_or(&[], Vec::as_slice)
-    }
 }
 
 fn initial_state_from_body(body: Option<&HirFunctionBody>) -> BodyState {
@@ -269,154 +241,6 @@ impl LocalFlowStepKind {
             self,
             Self::Statement | Self::Branch | Self::Loop | Self::Return
         )
-    }
-}
-
-fn index_events_from_block(block: &HirBlock) -> HashMap<Span, Vec<HirEffectEvent>> {
-    let mut events = HashMap::new();
-    collect_block_events(block, &mut events);
-    events
-}
-
-fn collect_block_events(block: &HirBlock, events: &mut HashMap<Span, Vec<HirEffectEvent>>) {
-    for statement in &block.statements {
-        collect_stmt_events(statement, events);
-    }
-}
-
-fn collect_stmt_events(statement: &HirStmt, events: &mut HashMap<Span, Vec<HirEffectEvent>>) {
-    match statement {
-        HirStmt::Let {
-            value: Some(value), ..
-        }
-        | HirStmt::Return {
-            value: Some(value), ..
-        }
-        | HirStmt::Expr(value) => collect_expr_events(value, events),
-        HirStmt::With { resource, body, .. } => {
-            collect_expr_events(resource, events);
-            collect_block_events(body, events);
-        }
-        HirStmt::If {
-            condition,
-            then_body,
-            else_body,
-            ..
-        } => {
-            collect_expr_events(condition, events);
-            collect_block_events(then_body, events);
-            if let Some(else_body) = else_body {
-                collect_block_events(else_body, events);
-            }
-        }
-        HirStmt::Loop {
-            condition, body, ..
-        } => {
-            if let Some(condition) = condition {
-                collect_expr_events(condition, events);
-            }
-            collect_block_events(body, events);
-        }
-        HirStmt::Let { value: None, .. }
-        | HirStmt::Return { value: None, .. }
-        | HirStmt::Break(_)
-        | HirStmt::Continue(_)
-        | HirStmt::Unknown(_) => {}
-    }
-}
-
-fn collect_expr_events(expr: &HirExpr, events: &mut HashMap<Span, Vec<HirEffectEvent>>) {
-    match expr {
-        HirExpr::Call {
-            args,
-            events: expr_events,
-            span,
-            ..
-        } => {
-            record_expr_events(events, span, expr_events);
-            for arg in args {
-                collect_expr_events(&arg.value, events);
-            }
-        }
-        HirExpr::Effect {
-            value,
-            events: expr_events,
-            span,
-            ..
-        }
-        | HirExpr::Manage {
-            value,
-            events: expr_events,
-            span,
-            ..
-        } => {
-            record_expr_events(events, span, expr_events);
-            collect_expr_events(value, events);
-        }
-        HirExpr::Field { base, .. } => collect_expr_events(base, events),
-        HirExpr::Closure { body, .. } => collect_block_events(body, events),
-        HirExpr::Ident { .. }
-        | HirExpr::Number { .. }
-        | HirExpr::String { .. }
-        | HirExpr::Unknown(_) => {}
-    }
-}
-
-fn record_expr_events(
-    events: &mut HashMap<Span, Vec<HirEffectEvent>>,
-    span: &Span,
-    expr_events: &[HirEffectEvent],
-) {
-    if expr_events.is_empty() {
-        return;
-    }
-    events
-        .entry(span.clone())
-        .or_default()
-        .extend(expr_events.iter().cloned());
-}
-
-fn index_binding_types_from_block(block: &HirBlock) -> HashMap<Span, String> {
-    let mut types = HashMap::new();
-    collect_block_binding_types(block, &mut types);
-    types
-}
-
-fn collect_block_binding_types(block: &HirBlock, types: &mut HashMap<Span, String>) {
-    for statement in &block.statements {
-        collect_stmt_binding_types(statement, types);
-    }
-}
-
-fn collect_stmt_binding_types(statement: &HirStmt, types: &mut HashMap<Span, String>) {
-    match statement {
-        HirStmt::Let {
-            type_name: Some(type_name),
-            span,
-            ..
-        } => {
-            types.insert(span.clone(), type_name.clone());
-        }
-        HirStmt::With { body, .. } => collect_block_binding_types(body, types),
-        HirStmt::If {
-            then_body,
-            else_body,
-            ..
-        } => {
-            collect_block_binding_types(then_body, types);
-            if let Some(else_body) = else_body {
-                collect_block_binding_types(else_body, types);
-            }
-        }
-        HirStmt::Loop { body, .. } => collect_block_binding_types(body, types),
-        HirStmt::Let {
-            type_name: None, ..
-        }
-        | HirStmt::Return { .. }
-        | HirStmt::Break(_)
-        | HirStmt::Continue(_)
-        | HirStmt::Expr(_)
-        | HirStmt::Unknown(_) => {}
     }
 }
 
@@ -1564,6 +1388,7 @@ impl BodyState {
         self.moved.get(name)
     }
 
+    #[cfg(test)]
     pub(crate) fn value_type(&self, name: &str) -> Option<&str> {
         self.value_types.get(name).map(String::as_str)
     }
@@ -1814,7 +1639,7 @@ mod tests {
                         callee: Callee::Name("store".to_string()),
                         args: Vec::new(),
                         resolution: CallResolution::Unknown,
-                        events: vec![retain_event],
+                        events: vec![retain_event.clone()],
                         type_name: None,
                         span: span(20),
                     }),
@@ -1824,7 +1649,7 @@ mod tests {
                             type_name: Some("Image".to_string()),
                             span: span(21),
                         }),
-                        events: vec![manage_event],
+                        events: vec![manage_event.clone()],
                         type_name: Some("Image".to_string()),
                         span: span(21),
                     }),
@@ -1885,7 +1710,6 @@ mod tests {
         state.bind_local("image");
 
         assert_eq!(state.value_type("pool"), Some("ResourcePool<File>"));
-        assert_eq!(local_analysis.binding_type(&span(2)), Some("Image"));
         assert_eq!(
             local_analysis.take_handle_fields(),
             &[TakeHandleField {
@@ -1893,8 +1717,8 @@ mod tests {
                 span: span(22),
             }]
         );
-        local_analysis.apply_retention_events(&span(20), &mut state);
-        local_analysis.apply_move_events(&span(21), &mut state);
+        state.apply_retention_events(&[retain_event]);
+        state.apply_move_events(&[manage_event]);
 
         assert!(!state.is_clean_local("cached"));
         assert_eq!(state.move_span("image").map(|span| span.line), Some(21));

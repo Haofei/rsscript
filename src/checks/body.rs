@@ -1,7 +1,7 @@
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, code};
-use crate::hir::{CallResolution, HirTypeKind};
-use crate::syntax::ast::{Block, Callee, DataEffect, Expr, FunctionDecl, Item, LetKind, Stmt};
+use crate::hir::{HirBindingKind, HirBlock, HirExpr, HirStmt, HirTypeKind};
+use crate::syntax::ast::{FunctionDecl, Item};
 
 use super::local::{
     BodyState, FreshReturnIssue, FreshReturnIssueKind, LocalAnalysis, ManagedToLocalUse, MovedUse,
@@ -20,19 +20,16 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
         .collect();
 
     for function in functions {
-        let local_analysis = LocalAnalysis::new(analyzer.hir.function_body(&function.name));
+        let hir_body = analyzer.hir.function_body(&function.name).cloned();
+        let local_analysis = LocalAnalysis::new(hir_body.as_ref());
         check_managed_to_local_uses(analyzer, &local_analysis);
         check_moved_uses(analyzer, &local_analysis);
         check_take_handle_fields(analyzer, &local_analysis);
         check_fresh_returns(analyzer, &local_analysis, &function);
         let mut state = local_analysis.initial_state();
-        check_block(
-            analyzer,
-            &local_analysis,
-            &function,
-            &function.body,
-            &mut state,
-        );
+        if let Some(block) = hir_body.as_ref().and_then(|body| body.block.as_ref()) {
+            check_block(analyzer, &local_analysis, block, &mut state);
+        }
     }
 }
 
@@ -47,13 +44,12 @@ pub(crate) enum Flow {
 fn check_block(
     analyzer: &mut Analyzer<'_>,
     local_analysis: &LocalAnalysis,
-    function: &FunctionDecl,
-    block: &Block,
+    block: &HirBlock,
     state: &mut BodyState,
 ) -> Flow {
     for statement in &block.statements {
-        let flow = check_stmt_semantics(analyzer, local_analysis, function, statement, state);
-        apply_stmt_effects(analyzer, local_analysis, statement, state);
+        let flow = check_stmt_semantics(analyzer, local_analysis, statement, state);
+        apply_stmt_effects(statement, state);
         if flow != Flow::Fallthrough {
             return flow;
         }
@@ -64,157 +60,126 @@ fn check_block(
 fn check_stmt_semantics(
     analyzer: &mut Analyzer<'_>,
     local_analysis: &LocalAnalysis,
-    function: &FunctionDecl,
-    statement: &Stmt,
+    statement: &HirStmt,
     state: &mut BodyState,
 ) -> Flow {
     match statement {
-        Stmt::Let(stmt) => {
-            let stmt_state = local_analysis.flow_entry_state(&stmt.span).unwrap_or(state);
-            if stmt.kind == LetKind::Managed {
-                check_managed_closure_captures(
-                    analyzer,
-                    local_analysis,
-                    &stmt.span,
-                    stmt.value.as_ref(),
-                    stmt_state,
-                );
+        HirStmt::Let { kind, span, .. } => {
+            let stmt_state = local_analysis.flow_entry_state(span).unwrap_or(state);
+            if *kind == HirBindingKind::ManagedLet {
+                check_managed_closure_captures(analyzer, local_analysis, span, stmt_state);
             }
 
             Flow::Fallthrough
         }
-        Stmt::Return(_) => Flow::Return,
-        Stmt::With(stmt) => {
-            check_resource_escape(analyzer, local_analysis, &stmt.span);
-            check_block(analyzer, local_analysis, function, &stmt.body, state)
+        HirStmt::Return { .. } => Flow::Return,
+        HirStmt::With { body, span, .. } => {
+            check_resource_escape(analyzer, local_analysis, span);
+            check_block(analyzer, local_analysis, body, state)
         }
-        Stmt::If(stmt) => {
-            apply_expr_effects(local_analysis, &stmt.condition, state);
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            apply_expr_effects(condition, state);
 
             let base_state = state.clone();
             let mut then_state = base_state.clone();
-            let then_flow = check_block(
-                analyzer,
-                local_analysis,
-                function,
-                &stmt.then_body,
-                &mut then_state,
-            );
+            let then_flow = check_block(analyzer, local_analysis, then_body, &mut then_state);
 
-            let else_branch = stmt.else_body.as_ref().map(|else_body| {
+            let else_branch = else_body.as_ref().map(|else_body| {
                 let mut else_state = base_state.clone();
-                let else_flow = check_block(
-                    analyzer,
-                    local_analysis,
-                    function,
-                    else_body,
-                    &mut else_state,
-                );
+                let else_flow = check_block(analyzer, local_analysis, else_body, &mut else_state);
                 (else_state, else_flow)
             });
 
             merge_if_state(state, &base_state, then_state, then_flow, else_branch)
         }
-        Stmt::Loop(stmt) => {
-            if let Some(condition) = &stmt.condition {
-                apply_expr_effects(local_analysis, condition, state);
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                apply_expr_effects(condition, state);
             }
 
             let base_state = state.clone();
             let mut body_state = base_state.clone();
-            let body_flow = check_block(
-                analyzer,
-                local_analysis,
-                function,
-                &stmt.body,
-                &mut body_state,
-            );
+            let body_flow = check_block(analyzer, local_analysis, body, &mut body_state);
 
             merge_loop_state(
                 state,
                 &base_state,
                 body_state,
                 body_flow,
-                stmt.condition.is_some(),
+                condition.is_some(),
             )
         }
-        Stmt::Expr(_) => Flow::Fallthrough,
-        Stmt::Break(_) => Flow::Break,
-        Stmt::Continue(_) => Flow::Continue,
-        Stmt::Unknown(_) => Flow::Fallthrough,
+        HirStmt::Expr(_) => Flow::Fallthrough,
+        HirStmt::Break(_) => Flow::Break,
+        HirStmt::Continue(_) => Flow::Continue,
+        HirStmt::Unknown(_) => Flow::Fallthrough,
     }
 }
 
-fn apply_stmt_effects(
-    analyzer: &mut Analyzer<'_>,
-    local_analysis: &LocalAnalysis,
-    statement: &Stmt,
-    state: &mut BodyState,
-) {
+fn apply_stmt_effects(statement: &HirStmt, state: &mut BodyState) {
     match statement {
-        Stmt::Let(stmt) => {
-            match stmt.kind {
-                LetKind::Managed => {
-                    state.bind_managed(stmt.name.clone());
-                }
-                LetKind::Local => {
-                    state.bind_local(stmt.name.clone());
-                }
+        HirStmt::Let {
+            kind,
+            name,
+            value,
+            type_name,
+            ..
+        } => {
+            match kind {
+                HirBindingKind::ManagedLet => state.bind_managed(name.clone()),
+                HirBindingKind::LocalLet => state.bind_local(name.clone()),
+                HirBindingKind::Param => {}
             }
-            if let Some(value) = &stmt.value {
-                if let Some(type_name) = local_analysis
-                    .binding_type(&stmt.span)
-                    .map(str::to_string)
-                    .or_else(|| infer_expr_type(analyzer, value, state))
-                {
-                    state.record_type(stmt.name.clone(), type_name);
-                }
-                apply_expr_effects(local_analysis, value, state);
+            if let Some(type_name) = type_name {
+                state.record_type(name.clone(), type_name.clone());
             }
-        }
-        Stmt::Return(stmt) => {
-            if let Some(value) = &stmt.value {
-                apply_expr_effects(local_analysis, value, state);
+            if let Some(value) = value {
+                apply_expr_effects(value, state);
             }
         }
-        Stmt::With(stmt) => {
-            apply_expr_effects(local_analysis, &stmt.resource, state);
+        HirStmt::Return { value, .. } => {
+            if let Some(value) = value {
+                apply_expr_effects(value, state);
+            }
         }
-        Stmt::If(_) => {}
-        Stmt::Loop(_) => {}
-        Stmt::Expr(expr) => apply_expr_effects(local_analysis, expr, state),
-        Stmt::Break(_) | Stmt::Continue(_) => {}
-        Stmt::Unknown(_) => {}
+        HirStmt::With { resource, .. } => {
+            apply_expr_effects(resource, state);
+        }
+        HirStmt::If { .. } => {}
+        HirStmt::Loop { .. } => {}
+        HirStmt::Expr(expr) => apply_expr_effects(expr, state),
+        HirStmt::Break(_) | HirStmt::Continue(_) => {}
+        HirStmt::Unknown(_) => {}
     }
 }
 
-fn apply_expr_effects(local_analysis: &LocalAnalysis, expr: &Expr, state: &mut BodyState) {
+fn apply_expr_effects(expr: &HirExpr, state: &mut BodyState) {
     match expr {
-        Expr::Manage { value, span } => {
-            local_analysis.apply_move_events(span, state);
-            apply_expr_effects(local_analysis, value, state);
-        }
-        Expr::Effect {
-            effect: DataEffect::Take,
-            value,
-            span,
-        } => {
-            local_analysis.apply_move_events(span, state);
-            apply_expr_effects(local_analysis, value, state);
-        }
-        Expr::Effect { value, .. } => apply_expr_effects(local_analysis, value, state),
-        Expr::Call { args, span, .. } => {
-            local_analysis.apply_retention_events(span, state);
+        HirExpr::Call { args, events, .. } => {
+            state.apply_retention_events(events);
+            state.apply_move_events(events);
             for arg in args {
-                apply_expr_effects(local_analysis, &arg.value, state);
+                apply_expr_effects(&arg.value, state);
             }
         }
-        Expr::Field { base, .. } => apply_expr_effects(local_analysis, base, state),
-        Expr::Closure { .. }
-        | Expr::Ident(_, _)
-        | Expr::Number(_, _)
-        | Expr::String(_, _)
-        | Expr::Unknown(_) => {}
+        HirExpr::Effect { value, events, .. } | HirExpr::Manage { value, events, .. } => {
+            state.apply_retention_events(events);
+            state.apply_move_events(events);
+            apply_expr_effects(value, state);
+        }
+        HirExpr::Field { base, .. } => apply_expr_effects(base, state),
+        HirExpr::Closure { .. }
+        | HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
     }
 }
 
@@ -321,7 +286,6 @@ fn check_managed_closure_captures(
     analyzer: &mut Analyzer<'_>,
     local_analysis: &LocalAnalysis,
     statement_span: &crate::diagnostic::Span,
-    _value: Option<&Expr>,
     state: &BodyState,
 ) {
     let uses = local_analysis
@@ -460,31 +424,4 @@ fn trusted_fresh_ident(analyzer: &Analyzer<'_>, name: &str) -> bool {
             .hir
             .resolve_function(None, name)
             .is_some_and(|signature| signature.returns_fresh)
-}
-
-fn infer_expr_type(analyzer: &Analyzer<'_>, expr: &Expr, state: &BodyState) -> Option<String> {
-    match expr {
-        Expr::Ident(name, _) => state.value_type(name).map(str::to_string),
-        Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
-            infer_expr_type(analyzer, value, state)
-        }
-        Expr::Call { callee, span, .. } => infer_call_type(analyzer, callee, span),
-        Expr::Field { base, name, .. } => {
-            let base_type = infer_expr_type(analyzer, base, state)?;
-            let field = analyzer.hir.type_info(&base_type)?.fields.get(name)?;
-            Some(field.type_name.clone())
-        }
-        Expr::Closure { .. } | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => None,
-    }
-}
-
-fn infer_call_type(
-    analyzer: &Analyzer<'_>,
-    callee: &Callee,
-    span: &crate::diagnostic::Span,
-) -> Option<String> {
-    match analyzer.resolve_call_site(callee, span) {
-        CallResolution::Resolved { signature, .. } => signature.return_type,
-        CallResolution::EnumVariant | CallResolution::Unknown => None,
-    }
 }
