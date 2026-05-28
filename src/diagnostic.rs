@@ -13,6 +13,7 @@ pub mod code {
     pub const REMOVED_PROFILE_DECLARATION: &str = "RS0010";
     pub const REMOVED_SHARE_EFFECT: &str = "RS0011";
     pub const REMOVED_RUNTIME_EFFECT: &str = "RS0012";
+    pub const INVALID_TRY_OPERATOR: &str = "RS0013";
     pub const FILE_MODE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
@@ -262,6 +263,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::REMOVED_RUNTIME_EFFECT,
         title: "removed runtime effect",
         explanation: "RSScript v0.4.1 uses reductive guarantees. Additive runtime effects such as `io`, `allocates`, `may_panic`, and `may_fail` are not valid effects.",
+    },
+    DiagnosticExplanation {
+        code: code::INVALID_TRY_OPERATOR,
+        title: "invalid try operator",
+        explanation: "`?` may only be used inside functions that return a compatible `Result<T, E>` type.",
     },
     DiagnosticExplanation {
         code: code::FILE_MODE_VIOLATION,

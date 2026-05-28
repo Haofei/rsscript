@@ -1,0 +1,11 @@
+// expect: RS0013
+mode: managed
+
+struct Image {
+    pixels: Buffer
+}
+
+fn load_or_default(path: read Path) -> Image {
+    let image = Image.load(path: read path)?
+    return image
+}

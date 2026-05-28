@@ -35,6 +35,7 @@ impl Analyzer<'_> {
         self.check_removed_profile_declarations();
         self.check_duplicate_declarations();
         self.check_signature_explicitness();
+        self.check_try_operator_result_returns();
         self.check_resource_fields();
         self.check_resource_pool_type_arguments();
         self.check_resource_generic_arguments();
@@ -303,6 +304,57 @@ impl Analyzer<'_> {
                         .with_fix(
                             "remove_pure_or_retains",
                             format!("Remove `pure` or remove `{}`.", effect_display(effect)),
+                            "manual",
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    fn check_try_operator_result_returns(&mut self) {
+        for (index, item) in self.syntax_program.items.iter().enumerate() {
+            let Item::Function(function) = item else {
+                continue;
+            };
+            if function
+                .return_ty
+                .as_ref()
+                .is_some_and(|return_ty| return_ty.name == "Result")
+            {
+                continue;
+            }
+
+            let start = self
+                .tokens
+                .iter()
+                .position(|token| token.span == function.span)
+                .unwrap_or(0);
+            let end = self
+                .syntax_program
+                .items
+                .iter()
+                .skip(index + 1)
+                .map(item_span)
+                .find_map(|span| self.tokens.iter().position(|token| token.span == *span))
+                .unwrap_or(self.tokens.len());
+
+            for token in &self.tokens[start..end] {
+                if token.symbol("?") {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::INVALID_TRY_OPERATOR,
+                            format!(
+                                "`?` in `{}` requires the function to return `Result<T, E>`.",
+                                function.name
+                            ),
+                            token.span.clone(),
+                            "invalid try operator",
+                        )
+                        .with_cause("RSScript represents recoverable failure in explicit `Result` return types.")
+                        .with_fix(
+                            "return_result_or_handle_error",
+                            "Change the return type to `Result<..., E>` or handle the error explicitly.",
                             "manual",
                         ),
                     );
@@ -699,6 +751,13 @@ fn removed_runtime_effect_replacement(effect_name: &str) -> Option<&'static str>
             "Remove `async` from `effects(...)`; write `async fn` when the function itself is async.",
         ),
         _ => None,
+    }
+}
+
+fn item_span(item: &Item) -> &crate::diagnostic::Span {
+    match item {
+        Item::Type(decl) => &decl.span,
+        Item::Function(function) => &function.span,
     }
 }
 
