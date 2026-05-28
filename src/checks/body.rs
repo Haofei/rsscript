@@ -2,10 +2,10 @@ use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, code};
-use crate::hir::{CallResolution, HirBindingKind, HirTypeKind, ResolvedCalleeKind};
-use crate::syntax::ast::{
-    Block, CallArg, Callee, DataEffect, Expr, FunctionDecl, Item, LetKind, Stmt,
+use crate::hir::{
+    CallResolution, HirBindingKind, HirEffectEventKind, HirTypeKind, ResolvedCalleeKind,
 };
+use crate::syntax::ast::{Block, Callee, DataEffect, Expr, FunctionDecl, Item, LetKind, Stmt};
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
     let functions: Vec<FunctionDecl> = analyzer
@@ -339,12 +339,7 @@ fn merge_fallthrough_states(base: &BodyState, left: &BodyState, right: &BodyStat
 fn apply_expr_effects(analyzer: &mut Analyzer<'_>, expr: &Expr, state: &mut BodyState) {
     match expr {
         Expr::Manage { value, span } => {
-            if let Expr::Ident(name, _) = value.as_ref()
-                && state.locals.contains(name)
-            {
-                state.moved.insert(name.clone(), span.clone());
-                state.clean_locals.remove(name);
-            }
+            apply_move_events(analyzer, span, state);
             apply_expr_effects(analyzer, value, state);
         }
         Expr::Effect {
@@ -352,19 +347,12 @@ fn apply_expr_effects(analyzer: &mut Analyzer<'_>, expr: &Expr, state: &mut Body
             value,
             span,
         } => {
-            if let Expr::Ident(name, _) = value.as_ref()
-                && state.locals.contains(name)
-            {
-                state.moved.insert(name.clone(), span.clone());
-                state.clean_locals.remove(name);
-            }
+            apply_move_events(analyzer, span, state);
             apply_expr_effects(analyzer, value, state);
         }
         Expr::Effect { value, .. } => apply_expr_effects(analyzer, value, state),
-        Expr::Call {
-            callee, args, span, ..
-        } => {
-            apply_retention_effects(analyzer, callee, span, args, state);
+        Expr::Call { args, span, .. } => {
+            apply_retention_events(analyzer, span, state);
             for arg in args {
                 apply_expr_effects(analyzer, &arg.value, state);
             }
@@ -378,38 +366,40 @@ fn apply_expr_effects(analyzer: &mut Analyzer<'_>, expr: &Expr, state: &mut Body
     }
 }
 
-fn apply_retention_effects(
+fn apply_move_events(
     analyzer: &Analyzer<'_>,
-    callee: &Callee,
     span: &crate::diagnostic::Span,
-    args: &[CallArg],
     state: &mut BodyState,
 ) {
-    let retained_params = match analyzer.resolve_call_site(callee, span) {
-        CallResolution::Resolved { signature, .. } => signature.retained_params,
-        CallResolution::EnumVariant | CallResolution::Unknown => return,
-    };
-    if retained_params.is_empty() {
-        return;
+    for event in analyzer.hir.effect_events(span) {
+        if !matches!(
+            event.kind,
+            HirEffectEventKind::Manage | HirEffectEventKind::Take
+        ) {
+            continue;
+        }
+        if state.locals.contains(&event.binding_name) {
+            state
+                .moved
+                .insert(event.binding_name.clone(), event.span.clone());
+            state.clean_locals.remove(&event.binding_name);
+        }
     }
+}
 
-    for arg in args {
-        let Some(name) = &arg.name else {
-            continue;
-        };
-        if !retained_params.contains(name) {
+fn apply_retention_events(
+    analyzer: &Analyzer<'_>,
+    span: &crate::diagnostic::Span,
+    state: &mut BodyState,
+) {
+    for event in analyzer.hir.effect_events(span) {
+        if !matches!(event.kind, HirEffectEventKind::Retain { .. }) {
             continue;
         }
-        if let Expr::Effect {
-            effect: DataEffect::Read,
-            value,
-            ..
-        } = &arg.value
-            && let Expr::Ident(name, _) = value.as_ref()
-            && state.locals.contains(name)
-        {
-            state.clean_locals.remove(name);
+        if !state.locals.contains(&event.binding_name) {
+            continue;
         }
+        state.clean_locals.remove(&event.binding_name);
     }
 }
 
@@ -604,10 +594,8 @@ fn check_resource_escape_expr(analyzer: &mut Analyzer<'_>, binding: &str, expr: 
             check_resource_escape_expr(analyzer, binding, value);
         }
         Expr::Effect { value, .. } => check_resource_escape_expr(analyzer, binding, value),
-        Expr::Call {
-            callee, args, span, ..
-        } => {
-            check_resource_retained_by_call(analyzer, binding, callee, span, args);
+        Expr::Call { args, span, .. } => {
+            check_resource_retained_by_call(analyzer, binding, span);
             for arg in args {
                 check_resource_escape_expr(analyzer, binding, &arg.value);
             }
@@ -621,40 +609,24 @@ fn check_resource_escape_expr(analyzer: &mut Analyzer<'_>, binding: &str, expr: 
 fn check_resource_retained_by_call(
     analyzer: &mut Analyzer<'_>,
     binding: &str,
-    callee: &Callee,
     span: &crate::diagnostic::Span,
-    args: &[CallArg],
 ) {
-    let retained_params = match analyzer.resolve_call_site(callee, span) {
-        CallResolution::Resolved { signature, .. } => signature.retained_params,
-        CallResolution::EnumVariant | CallResolution::Unknown => return,
-    };
-    if retained_params.is_empty() {
-        return;
-    }
-
-    for arg in args {
-        let Some(name) = &arg.name else {
-            continue;
-        };
-        if retained_params.contains(name) && expr_is_binding_value(&arg.value, binding) {
-            resource_escape_diagnostic(analyzer, binding, arg.value.span().clone());
-        }
-    }
-}
-
-fn expr_is_binding_value(expr: &Expr, binding: &str) -> bool {
-    match expr {
-        Expr::Ident(name, _) => name == binding,
-        Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
-            expr_is_binding_value(value, binding)
-        }
-        Expr::Field { base, .. } => expr_is_binding_value(base, binding),
-        Expr::Call { .. }
-        | Expr::Closure { .. }
-        | Expr::Number(_, _)
-        | Expr::String(_, _)
-        | Expr::Unknown(_) => false,
+    let escaping_spans: Vec<crate::diagnostic::Span> = analyzer
+        .hir
+        .effect_events(span)
+        .iter()
+        .filter_map(|event| {
+            if matches!(event.kind, HirEffectEventKind::Retain { .. })
+                && event.binding_name == binding
+            {
+                Some(event.value_span.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    for escaping_span in escaping_spans {
+        resource_escape_diagnostic(analyzer, binding, escaping_span);
     }
 }
 

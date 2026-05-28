@@ -129,6 +129,22 @@ pub struct HirFieldAccess {
     pub is_handle: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HirEffectEventKind {
+    Manage,
+    Take,
+    Retain { callee: String, param: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirEffectEvent {
+    pub function_name: String,
+    pub kind: HirEffectEventKind,
+    pub binding_name: String,
+    pub span: Span,
+    pub value_span: Span,
+}
+
 #[derive(Debug, Default)]
 pub struct Hir {
     signatures: HashMap<String, FunctionSig>,
@@ -142,6 +158,8 @@ pub struct Hir {
     bindings_by_function: HashMap<String, Vec<HirBinding>>,
     field_accesses: Vec<HirFieldAccess>,
     field_accesses_by_span: HashMap<Span, HirFieldAccess>,
+    effect_events: Vec<HirEffectEvent>,
+    effect_events_by_span: HashMap<Span, Vec<HirEffectEvent>>,
 }
 
 impl Hir {
@@ -236,6 +254,12 @@ impl Hir {
         self.field_accesses_by_span.get(span)
     }
 
+    pub fn effect_events(&self, span: &Span) -> &[HirEffectEvent] {
+        self.effect_events_by_span
+            .get(span)
+            .map_or(&[], Vec::as_slice)
+    }
+
     pub fn resolve_call(&self, callee: &Callee) -> CallResolution {
         let call_name = callee_name(callee);
         if is_enum_variant_call(call_name) {
@@ -323,9 +347,20 @@ impl Hir {
             .iter()
             .map(|field| (field.span.clone(), field.clone()))
             .collect();
+        self.effect_events_by_span = facts.effect_events.iter().fold(
+            HashMap::<Span, Vec<HirEffectEvent>>::new(),
+            |mut by_span, event| {
+                by_span
+                    .entry(event.span.clone())
+                    .or_default()
+                    .push(event.clone());
+                by_span
+            },
+        );
         self.call_sites = facts.call_sites;
         self.bindings = facts.bindings;
         self.field_accesses = facts.field_accesses;
+        self.effect_events = facts.effect_events;
     }
 }
 
@@ -334,6 +369,7 @@ struct BodyFacts {
     call_sites: Vec<HirCallSite>,
     bindings: Vec<HirBinding>,
     field_accesses: Vec<HirFieldAccess>,
+    effect_events: Vec<HirEffectEvent>,
 }
 
 fn collect_function_body_facts(hir: &Hir, function: &FunctionDecl, facts: &mut BodyFacts) {
@@ -428,17 +464,47 @@ fn collect_body_facts_in_expr(
 ) {
     match expr {
         Expr::Call { callee, args, span } => {
+            let resolution = hir.resolve_call(callee);
             facts.call_sites.push(HirCallSite {
                 function_name: function_name.to_string(),
                 callee: callee.clone(),
                 span: span.clone(),
-                resolution: hir.resolve_call(callee),
+                resolution: resolution.clone(),
             });
+            collect_retain_events(function_name, callee, args, span, &resolution, facts);
             for arg in args {
                 collect_body_facts_in_expr(hir, function_name, &arg.value, value_types, facts);
             }
         }
-        Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
+        Expr::Manage { value, span } => {
+            if let Some((binding_name, value_span)) = direct_ident(value) {
+                facts.effect_events.push(HirEffectEvent {
+                    function_name: function_name.to_string(),
+                    kind: HirEffectEventKind::Manage,
+                    binding_name,
+                    span: span.clone(),
+                    value_span,
+                });
+            }
+            collect_body_facts_in_expr(hir, function_name, value, value_types, facts);
+        }
+        Expr::Effect {
+            effect: DataEffect::Take,
+            value,
+            span,
+        } => {
+            if let Some((binding_name, value_span)) = direct_ident(value) {
+                facts.effect_events.push(HirEffectEvent {
+                    function_name: function_name.to_string(),
+                    kind: HirEffectEventKind::Take,
+                    binding_name,
+                    span: span.clone(),
+                    value_span,
+                });
+            }
+            collect_body_facts_in_expr(hir, function_name, value, value_types, facts);
+        }
+        Expr::Effect { value, .. } => {
             collect_body_facts_in_expr(hir, function_name, value, value_types, facts);
         }
         Expr::Field { base, name, span } => {
@@ -461,6 +527,61 @@ fn collect_body_facts_in_expr(
             collect_body_facts_in_block(hir, function_name, body, value_types, facts);
         }
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+    }
+}
+
+fn collect_retain_events(
+    function_name: &str,
+    callee: &Callee,
+    args: &[crate::syntax::ast::CallArg],
+    call_span: &Span,
+    resolution: &CallResolution,
+    facts: &mut BodyFacts,
+) {
+    let CallResolution::Resolved { signature, .. } = resolution else {
+        return;
+    };
+    if signature.retained_params.is_empty() {
+        return;
+    }
+
+    for arg in args {
+        let Some(name) = &arg.name else {
+            continue;
+        };
+        if !signature.retained_params.contains(name) {
+            continue;
+        }
+        if let Some((binding_name, value_span)) = direct_read_ident(&arg.value) {
+            facts.effect_events.push(HirEffectEvent {
+                function_name: function_name.to_string(),
+                kind: HirEffectEventKind::Retain {
+                    callee: callee_display(callee),
+                    param: name.clone(),
+                },
+                binding_name,
+                span: call_span.clone(),
+                value_span,
+            });
+        }
+    }
+}
+
+fn direct_read_ident(expr: &Expr) -> Option<(String, Span)> {
+    match expr {
+        Expr::Effect {
+            effect: DataEffect::Read,
+            value,
+            ..
+        } => direct_ident(value),
+        _ => None,
+    }
+}
+
+fn direct_ident(expr: &Expr) -> Option<(String, Span)> {
+    match expr {
+        Expr::Ident(name, span) => Some((name.clone(), span.clone())),
+        _ => None,
     }
 }
 
@@ -511,6 +632,13 @@ fn is_enum_variant_call(name: &str) -> bool {
 fn callee_name(callee: &Callee) -> &str {
     match callee {
         Callee::Name(name) | Callee::Qualified { name, .. } => name,
+    }
+}
+
+fn callee_display(callee: &Callee) -> String {
+    match callee {
+        Callee::Name(name) => name.clone(),
+        Callee::Qualified { namespace, name } => format!("{namespace}.{name}"),
     }
 }
 
@@ -1272,5 +1400,40 @@ fn take_rules(config: mut Config) -> Unit {
                 .expect("field access lookup by span works")
                 .is_handle
         );
+    }
+
+    #[test]
+    fn records_effect_events() {
+        let source = r#"
+mode: uses-local
+
+fn publish(cache: mut ImageCache, path: read Path) -> Unit {
+    local image = Image.load(path: read path)
+    let shared = manage image
+    ImageCache.store(cache: mut cache, image: read shared)
+    Buffer.consume(buffer: take image)
+}
+"#;
+
+        let program = parse_source("test.rss", source);
+        let hir = Hir::from_syntax(&program);
+
+        assert_eq!(hir.effect_events.len(), 3);
+        assert!(matches!(
+            hir.effect_events[0].kind,
+            HirEffectEventKind::Manage
+        ));
+        assert_eq!(hir.effect_events[0].binding_name, "image");
+        assert!(matches!(
+            hir.effect_events[1].kind,
+            HirEffectEventKind::Retain { .. }
+        ));
+        assert_eq!(hir.effect_events[1].binding_name, "shared");
+        assert!(matches!(
+            hir.effect_events[2].kind,
+            HirEffectEventKind::Take
+        ));
+        assert_eq!(hir.effect_events[2].binding_name, "image");
+        assert_eq!(hir.effect_events(&hir.effect_events[0].span).len(), 1);
     }
 }
