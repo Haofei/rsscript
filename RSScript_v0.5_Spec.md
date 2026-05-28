@@ -2165,6 +2165,18 @@ Pattern matches must be exhaustive.
 
 Wildcard patterns in public code are discouraged and may be linted.
 
+The v0.5 implementation surface starts with statement-form `match` over the
+standard enum-like result shapes:
+
+```text
+Option<T>: Some(value), None
+Result<T, E>: Ok(value), Err(error)
+```
+
+A match is accepted when it covers `Some` and `None`, covers `Ok` and `Err`, or
+contains a wildcard `_` fallback. Other enum exhaustiveness is reserved for the
+full enum/type-resolution pass.
+
 ---
 
 # 27. Forbidden Features

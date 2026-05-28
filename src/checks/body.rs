@@ -197,6 +197,24 @@ fn check_stmt_semantics(
                 condition.is_some(),
             )
         }
+        HirStmt::Match { value, arms, .. } => {
+            check_expr_semantics(analyzer, value, state);
+            check_resource_pool_lease_expr(analyzer, value, false);
+            apply_expr_effects(value, state);
+
+            let base_state = state.clone();
+            let mut all_return = !arms.is_empty();
+            for arm in arms {
+                let mut arm_state = base_state.clone();
+                let flow = check_block(analyzer, local_analysis, &arm.body, &mut arm_state);
+                all_return &= flow == Flow::Return;
+            }
+            if all_return {
+                Flow::Return
+            } else {
+                Flow::Fallthrough
+            }
+        }
         HirStmt::Expr(expr) => {
             check_expr_semantics(analyzer, expr, state);
             check_resource_pool_lease_expr(analyzer, expr, false);
@@ -239,6 +257,7 @@ fn apply_stmt_effects(statement: &HirStmt, state: &mut BodyState) {
         }
         HirStmt::If { .. } => {}
         HirStmt::Loop { .. } => {}
+        HirStmt::Match { value, .. } => apply_expr_effects(value, state),
         HirStmt::Expr(expr) => apply_expr_effects(expr, state),
         HirStmt::Break(_) | HirStmt::Continue(_) => {}
         HirStmt::Unknown(_) => {}
@@ -334,6 +353,14 @@ fn check_stmt_expr_semantics(analyzer: &mut Analyzer<'_>, statement: &HirStmt, s
             }
             for statement in &body.statements {
                 check_stmt_expr_semantics(analyzer, statement, state);
+            }
+        }
+        HirStmt::Match { value, arms, .. } => {
+            check_expr_semantics(analyzer, value, state);
+            for arm in arms {
+                for statement in &arm.body.statements {
+                    check_stmt_expr_semantics(analyzer, statement, state);
+                }
             }
         }
         HirStmt::Let { value: None, .. }
@@ -1088,6 +1115,14 @@ fn check_resource_pool_lease_stmt(analyzer: &mut Analyzer<'_>, statement: &HirSt
             }
             for statement in &body.statements {
                 check_resource_pool_lease_stmt(analyzer, statement);
+            }
+        }
+        HirStmt::Match { value, arms, .. } => {
+            check_resource_pool_lease_expr(analyzer, value, false);
+            for arm in arms {
+                for statement in &arm.body.statements {
+                    check_resource_pool_lease_stmt(analyzer, statement);
+                }
             }
         }
         HirStmt::Let { value: None, .. }

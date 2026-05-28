@@ -1,7 +1,7 @@
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature,
-    FunctionDecl, GenericBound, GenericParam, Item, LetKind, Param, Program, Stmt, TypeDecl,
-    TypeKind, TypeRef,
+    FunctionDecl, GenericBound, GenericParam, Item, LetKind, MatchPattern, Param, Program, Stmt,
+    TypeDecl, TypeKind, TypeRef,
 };
 use crate::syntax::parse_source;
 
@@ -199,6 +199,21 @@ impl Formatter {
                 self.indent(indent);
                 self.out.push('}');
             }
+            Stmt::Match(stmt) => {
+                self.out.push_str("match ");
+                self.expr(&stmt.value, 0);
+                self.out.push_str(" {\n");
+                for arm in &stmt.arms {
+                    self.indent(indent + 1);
+                    self.match_pattern(&arm.pattern);
+                    self.out.push_str(" => {\n");
+                    self.block(&arm.body, indent + 2);
+                    self.indent(indent + 1);
+                    self.out.push_str("}\n");
+                }
+                self.indent(indent);
+                self.out.push('}');
+            }
             Stmt::Break(_) => self.out.push_str("break"),
             Stmt::Continue(_) => self.out.push_str("continue"),
             Stmt::Expr(expr) => self.expr(expr, 0),
@@ -286,6 +301,23 @@ impl Formatter {
 
     fn type_ref(&mut self, ty: &TypeRef) {
         self.out.push_str(&type_ref_text(ty));
+    }
+
+    fn match_pattern(&mut self, pattern: &MatchPattern) {
+        match pattern {
+            MatchPattern::Wildcard(_) => self.out.push('_'),
+            MatchPattern::Variant {
+                name,
+                binding: Some(binding),
+                ..
+            } => {
+                self.out.push_str(name);
+                self.out.push('(');
+                self.out.push_str(binding);
+                self.out.push(')');
+            }
+            MatchPattern::Variant { name, .. } => self.out.push_str(name),
+        }
     }
 
     fn generic_params(&mut self, params: &[GenericParam]) {

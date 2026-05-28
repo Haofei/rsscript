@@ -4,7 +4,7 @@ use crate::diagnostic::Span;
 use crate::interfaces::builtin_interfaces;
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl, Item,
-    LetKind, Param, Program as SyntaxProgram, Stmt, TypeDecl, TypeKind, TypeRef,
+    LetKind, MatchPattern, Param, Program as SyntaxProgram, Stmt, TypeDecl, TypeKind, TypeRef,
 };
 use crate::syntax::parse_source;
 
@@ -223,10 +223,22 @@ pub enum HirStmt {
         body: HirBlock,
         span: Span,
     },
+    Match {
+        value: HirExpr,
+        arms: Vec<HirMatchArm>,
+        span: Span,
+    },
     Break(Span),
     Continue(Span),
     Expr(HirExpr),
     Unknown(Span),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirMatchArm {
+    pub pattern: MatchPattern,
+    pub body: HirBlock,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -785,6 +797,32 @@ fn lower_hir_stmt(
             },
             span: stmt.span.clone(),
         },
+        Stmt::Match(stmt) => {
+            let value_type = infer_hir_expr_type(hir, &stmt.value, value_types);
+            let value = lower_hir_expr(hir, function_name, &stmt.value, value_types);
+            let arms = stmt
+                .arms
+                .iter()
+                .map(|arm| {
+                    let mut arm_types = value_types.clone();
+                    if let Some((binding, type_name)) =
+                        match_pattern_binding_type(&arm.pattern, value_type.as_deref())
+                    {
+                        arm_types.insert(binding, type_name);
+                    }
+                    HirMatchArm {
+                        pattern: arm.pattern.clone(),
+                        body: lower_hir_block(hir, function_name, &arm.body, &mut arm_types),
+                        span: arm.span.clone(),
+                    }
+                })
+                .collect();
+            HirStmt::Match {
+                value,
+                arms,
+                span: stmt.span.clone(),
+            }
+        }
         Stmt::Expr(expr) => HirStmt::Expr(lower_hir_expr(hir, function_name, expr, value_types)),
         Stmt::Break(span) => HirStmt::Break(span.clone()),
         Stmt::Continue(span) => HirStmt::Continue(span.clone()),
@@ -1060,6 +1098,27 @@ fn collect_body_facts_in_stmt(
                 collect_body_facts_in_expr(hir, function_name, condition, value_types, facts);
             }
             collect_body_facts_in_block(hir, function_name, &stmt.body, value_types, facts);
+        }
+        Stmt::Match(stmt) => {
+            collect_body_facts_in_expr(hir, function_name, &stmt.value, value_types, facts);
+            let value_type = infer_hir_expr_type(hir, &stmt.value, value_types);
+            for arm in &stmt.arms {
+                let mut arm_types = value_types.clone();
+                if let Some((binding, type_name)) =
+                    match_pattern_binding_type(&arm.pattern, value_type.as_deref())
+                {
+                    facts.bindings.push(HirBinding {
+                        function_name: function_name.to_string(),
+                        name: binding.clone(),
+                        kind: HirBindingKind::ManagedLet,
+                        effect: None,
+                        span: arm.span.clone(),
+                        type_name: Some(type_name.clone()),
+                    });
+                    arm_types.insert(binding, type_name);
+                }
+                collect_body_facts_in_block(hir, function_name, &arm.body, &mut arm_types, facts);
+            }
         }
         Stmt::Expr(expr) => {
             collect_body_facts_in_expr(hir, function_name, expr, value_types, facts);
@@ -1346,6 +1405,40 @@ fn result_ok_type(type_name: &str) -> Option<String> {
         .into_iter()
         .next()
         .map(str::to_string)
+}
+
+fn match_pattern_binding_type(
+    pattern: &MatchPattern,
+    value_type: Option<&str>,
+) -> Option<(String, String)> {
+    let MatchPattern::Variant {
+        name,
+        binding: Some(binding),
+        ..
+    } = pattern
+    else {
+        return None;
+    };
+    let value_type = value_type?;
+    let inner = value_type
+        .strip_prefix("Option<")
+        .and_then(|rest| rest.strip_suffix('>'));
+    if name == "Some" {
+        return inner.map(|ty| (binding.clone(), ty.trim().to_string()));
+    }
+    let inner = value_type
+        .strip_prefix("Result<")
+        .and_then(|rest| rest.strip_suffix('>'));
+    let args = inner.map(split_top_level_type_args)?;
+    match name.as_str() {
+        "Ok" => args
+            .first()
+            .map(|ty| (binding.clone(), ty.trim().to_string())),
+        "Err" => args
+            .get(1)
+            .map(|ty| (binding.clone(), ty.trim().to_string())),
+        _ => None,
+    }
 }
 
 fn split_top_level_type_args(args: &str) -> Vec<&str> {

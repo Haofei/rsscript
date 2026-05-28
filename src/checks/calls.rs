@@ -61,6 +61,12 @@ fn check_block(analyzer: &mut Analyzer<'_>, block: &HirBlock, noescape_bindings:
                 }
                 check_block(analyzer, body, noescape_bindings);
             }
+            HirStmt::Match { value, arms, .. } => {
+                check_expr(analyzer, value, noescape_bindings);
+                for arm in arms {
+                    check_block(analyzer, &arm.body, noescape_bindings);
+                }
+            }
             HirStmt::Let { value: None, .. }
             | HirStmt::Return { value: None, .. }
             | HirStmt::Break(_)

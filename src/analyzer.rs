@@ -7,8 +7,8 @@ use crate::interfaces::CORE_INTERFACES;
 use crate::lexer::{Token, lex};
 use crate::syntax::ast::merge_programs;
 use crate::syntax::ast::{
-    Block, Callee, DataEffect, EffectDecl, Expr, GenericBound, GenericParam, Item, Stmt, TypeKind,
-    TypeRef,
+    Block, Callee, DataEffect, EffectDecl, Expr, GenericBound, GenericParam, Item, MatchPattern,
+    Stmt, TypeKind, TypeRef,
 };
 use crate::syntax::parse_source;
 
@@ -113,6 +113,7 @@ impl Analyzer<'_> {
         self.check_duplicate_file_features();
         self.check_removed_profile_declarations();
         self.check_unsupported_syntax();
+        self.check_match_exhaustiveness();
         self.check_duplicate_declarations();
         self.check_signature_explicitness();
         self.check_generic_constraints();
@@ -296,6 +297,12 @@ impl Analyzer<'_> {
                 }
                 self.check_unsupported_syntax_block(&stmt.body);
             }
+            Stmt::Match(stmt) => {
+                self.check_unsupported_syntax_expr(&stmt.value);
+                for arm in &stmt.arms {
+                    self.check_unsupported_syntax_block(&arm.body);
+                }
+            }
             Stmt::Expr(expr) => self.check_unsupported_syntax_expr(expr),
             Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Unknown(span) => self.unsupported_syntax(
@@ -350,6 +357,104 @@ impl Analyzer<'_> {
                 "manual",
             ),
         );
+    }
+
+    fn check_match_exhaustiveness(&mut self) {
+        let items = self.syntax_program.items.clone();
+        for item in &items {
+            let Item::Function(function) = item else {
+                continue;
+            };
+            self.check_match_exhaustiveness_block(&function.body);
+        }
+    }
+
+    fn check_match_exhaustiveness_block(&mut self, block: &Block) {
+        for statement in &block.statements {
+            self.check_match_exhaustiveness_stmt(statement);
+        }
+    }
+
+    fn check_match_exhaustiveness_stmt(&mut self, statement: &Stmt) {
+        match statement {
+            Stmt::Let(stmt) => {
+                if let Some(value) = &stmt.value {
+                    self.check_match_exhaustiveness_expr(value);
+                }
+            }
+            Stmt::Return(stmt) => {
+                if let Some(value) = &stmt.value {
+                    self.check_match_exhaustiveness_expr(value);
+                }
+            }
+            Stmt::With(stmt) => {
+                self.check_match_exhaustiveness_expr(&stmt.resource);
+                self.check_match_exhaustiveness_block(&stmt.body);
+            }
+            Stmt::If(stmt) => {
+                self.check_match_exhaustiveness_expr(&stmt.condition);
+                self.check_match_exhaustiveness_block(&stmt.then_body);
+                if let Some(else_body) = &stmt.else_body {
+                    self.check_match_exhaustiveness_block(else_body);
+                }
+            }
+            Stmt::Loop(stmt) => {
+                if let Some(condition) = &stmt.condition {
+                    self.check_match_exhaustiveness_expr(condition);
+                }
+                self.check_match_exhaustiveness_block(&stmt.body);
+            }
+            Stmt::Match(stmt) => {
+                self.check_match_exhaustiveness_expr(&stmt.value);
+                for arm in &stmt.arms {
+                    self.check_match_exhaustiveness_block(&arm.body);
+                }
+                if !match_is_exhaustive(&stmt.arms) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::NON_EXHAUSTIVE_MATCH,
+                            "match statement is not exhaustive.",
+                            stmt.span.clone(),
+                            "non-exhaustive match",
+                        )
+                        .with_cause(
+                            "Supported match statements must cover `Some`/`None`, `Ok`/`Err`, or include `_`.",
+                        )
+                        .with_fix(
+                            "add_missing_arm",
+                            "Add the missing variant arm or a final `_` fallback.",
+                            "manual",
+                        ),
+                    );
+                }
+            }
+            Stmt::Expr(expr) => self.check_match_exhaustiveness_expr(expr),
+            Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
+        }
+    }
+
+    fn check_match_exhaustiveness_expr(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Binary { left, right, .. } => {
+                self.check_match_exhaustiveness_expr(left);
+                self.check_match_exhaustiveness_expr(right);
+            }
+            Expr::Field { base, .. } => self.check_match_exhaustiveness_expr(base),
+            Expr::Index { base, index, .. } => {
+                self.check_match_exhaustiveness_expr(base);
+                self.check_match_exhaustiveness_expr(index);
+            }
+            Expr::Call { args, .. } => {
+                for arg in args {
+                    self.check_match_exhaustiveness_expr(&arg.value);
+                }
+            }
+            Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
+                self.check_match_exhaustiveness_expr(value);
+            }
+            Expr::Closure { body, .. } => self.check_match_exhaustiveness_block(body),
+            Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        }
     }
 
     fn check_signature_explicitness(&mut self) {
@@ -816,6 +921,12 @@ impl Analyzer<'_> {
                 }
                 self.check_runtime_guarantee_block(guarantee, function_name, &stmt.body);
             }
+            Stmt::Match(stmt) => {
+                self.check_runtime_guarantee_expr(guarantee, function_name, &stmt.value);
+                for arm in &stmt.arms {
+                    self.check_runtime_guarantee_block(guarantee, function_name, &arm.body);
+                }
+            }
             Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
         }
     }
@@ -1086,6 +1197,12 @@ impl Analyzer<'_> {
                 }
                 self.check_resource_pool_calls_in_block(&stmt.body);
             }
+            Stmt::Match(stmt) => {
+                self.check_resource_pool_calls_in_expr(&stmt.value);
+                for arm in &stmt.arms {
+                    self.check_resource_pool_calls_in_block(&arm.body);
+                }
+            }
             Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
         }
     }
@@ -1162,6 +1279,12 @@ impl Analyzer<'_> {
                     self.check_resource_generic_calls_in_expr(condition);
                 }
                 self.check_resource_generic_calls_in_block(&stmt.body);
+            }
+            Stmt::Match(stmt) => {
+                self.check_resource_generic_calls_in_expr(&stmt.value);
+                for arm in &stmt.arms {
+                    self.check_resource_generic_calls_in_block(&arm.body);
+                }
             }
             Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
         }
@@ -1498,6 +1621,20 @@ fn function_has_effect(function: &crate::syntax::ast::FunctionDecl, effect_name:
         .effects
         .iter()
         .any(|effect| matches!(effect, EffectDecl::Name(name) if name == effect_name))
+}
+
+fn match_is_exhaustive(arms: &[crate::syntax::ast::MatchArm]) -> bool {
+    let mut variants = HashSet::new();
+    for arm in arms {
+        match &arm.pattern {
+            MatchPattern::Wildcard(_) => return true,
+            MatchPattern::Variant { name, .. } => {
+                variants.insert(name.as_str());
+            }
+        }
+    }
+    (variants.contains("Some") && variants.contains("None"))
+        || (variants.contains("Ok") && variants.contains("Err"))
 }
 
 fn callee_display(callee: &Callee) -> String {

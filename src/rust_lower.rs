@@ -8,8 +8,8 @@ use crate::diagnostic::{Diagnostic, Severity, Span, code};
 use crate::interfaces::builtin_interfaces;
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature,
-    FunctionDecl, GenericBound, GenericParam, Item, Param, Program, Stmt, TypeDecl, TypeKind,
-    TypeRef, merge_programs,
+    FunctionDecl, GenericBound, GenericParam, Item, MatchPattern, Param, Program, Stmt, TypeDecl,
+    TypeKind, TypeRef, merge_programs,
 };
 use crate::syntax::parse_source;
 
@@ -709,6 +709,19 @@ impl<'a> RustLowerer<'a> {
                 self.lower_block(&stmt.body, out, indent + 1);
                 out.push_str(&format!("{pad}}}\n"));
             }
+            Stmt::Match(stmt) => {
+                out.push_str(&format!("{pad}match {} {{\n", self.lower_expr(&stmt.value)));
+                for arm in &stmt.arms {
+                    out.push_str(&format!(
+                        "{}{} => {{\n",
+                        "    ".repeat(indent + 1),
+                        lower_match_pattern(&arm.pattern)
+                    ));
+                    self.lower_block(&arm.body, out, indent + 2);
+                    out.push_str(&format!("{}}},\n", "    ".repeat(indent + 1)));
+                }
+                out.push_str(&format!("{pad}}}\n"));
+            }
             Stmt::Break(_) => out.push_str(&format!("{pad}break;\n")),
             Stmt::Continue(_) => out.push_str(&format!("{pad}continue;\n")),
             Stmt::Expr(expr) => out.push_str(&format!("{pad}{};\n", self.lower_expr(expr))),
@@ -761,6 +774,12 @@ impl<'a> RustLowerer<'a> {
                     self.record_expr_source_map(condition, generated);
                 }
                 self.record_block_source_map(&stmt.body, generated);
+            }
+            Stmt::Match(stmt) => {
+                self.record_expr_source_map(&stmt.value, generated);
+                for arm in &stmt.arms {
+                    self.record_block_source_map(&arm.body, generated);
+                }
             }
             Stmt::Expr(expr) => self.record_expr_source_map(expr, generated),
             Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
@@ -1272,6 +1291,12 @@ fn collect_mutated_bindings_from_stmt(statement: &Stmt, names: &mut BTreeSet<Str
             }
             collect_mutated_bindings_from_block(&stmt.body, names);
         }
+        Stmt::Match(stmt) => {
+            collect_mutated_bindings_from_expr(&stmt.value, names);
+            for arm in &stmt.arms {
+                collect_mutated_bindings_from_block(&arm.body, names);
+            }
+        }
         Stmt::Expr(expr) => collect_mutated_bindings_from_expr(expr, names),
         Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
     }
@@ -1324,8 +1349,21 @@ fn stmt_span(statement: &Stmt) -> &Span {
         Stmt::With(stmt) => &stmt.span,
         Stmt::If(stmt) => &stmt.span,
         Stmt::Loop(stmt) => &stmt.span,
+        Stmt::Match(stmt) => &stmt.span,
         Stmt::Break(span) | Stmt::Continue(span) | Stmt::Unknown(span) => span,
         Stmt::Expr(expr) => expr.span(),
+    }
+}
+
+fn lower_match_pattern(pattern: &MatchPattern) -> String {
+    match pattern {
+        MatchPattern::Wildcard(_) => "_".to_string(),
+        MatchPattern::Variant {
+            name,
+            binding: Some(binding),
+            ..
+        } => format!("{}({})", rust_ident(name), rust_ident(binding)),
+        MatchPattern::Variant { name, .. } => rust_ident(name),
     }
 }
 

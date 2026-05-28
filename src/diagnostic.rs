@@ -21,6 +21,7 @@ pub mod code {
     pub const INVALID_NO_BLOCK_CALL: &str = "RS0018";
     pub const INVALID_NO_PANIC_CALL: &str = "RS0019";
     pub const INVALID_NOALLOC_CALL: &str = "RS0020";
+    pub const NON_EXHAUSTIVE_MATCH: &str = "RS0021";
     pub const FEATURE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
@@ -330,6 +331,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::INVALID_NOALLOC_CALL,
         title: "invalid noalloc call",
         explanation: "`effects(noalloc)` is a guarantee that the function performs no heap allocation. Calls inside it must target enum variants or functions also declared `effects(noalloc)`, while direct constructors and `manage` are allocation diagnostics.",
+    },
+    DiagnosticExplanation {
+        code: code::NON_EXHAUSTIVE_MATCH,
+        title: "non-exhaustive match",
+        explanation: "`match` must cover every visible variant for the supported enum shapes. In v0.5 that means `Some`/`None`, `Ok`/`Err`, or a `_` fallback.",
     },
     DiagnosticExplanation {
         code: code::FEATURE_VIOLATION,

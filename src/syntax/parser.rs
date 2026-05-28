@@ -4,8 +4,8 @@ use crate::lexer::{Token, TokenKind, lex};
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, DataEffect, DuplicateFileFeature, EffectDecl, Expr,
     FieldDecl, FileFeature, FunctionDecl, GenericBound, GenericParam, IfStmt, Item, LetKind,
-    LetStmt, LoopStmt, Param, Program, ReturnStmt, Stmt, TypeDecl, TypeKind, TypeRef,
-    UnknownFileFeature, WithStmt,
+    LetStmt, LoopStmt, MatchArm, MatchPattern, MatchStmt, Param, Program, ReturnStmt, Stmt,
+    TypeDecl, TypeKind, TypeRef, UnknownFileFeature, WithStmt,
 };
 
 pub fn parse_source(file: &str, source: &str) -> Program {
@@ -548,7 +548,10 @@ fn parse_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
     if tokens[start].is_ident_text("while") || tokens[start].is_ident_text("loop") {
         return parse_loop_stmt(tokens, start, limit);
     }
-    if tokens[start].is_ident_text("for") || tokens[start].is_ident_text("match") {
+    if tokens[start].is_ident_text("match") {
+        return parse_match_stmt(tokens, start, limit);
+    }
+    if tokens[start].is_ident_text("for") {
         return parse_unsupported_control_stmt(tokens, start, limit);
     }
     if tokens[start].is_ident_text("break") {
@@ -722,6 +725,100 @@ fn parse_loop_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize
         }),
         close + 1,
     )
+}
+
+fn parse_match_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
+    let Some(open) = find_control_body_open(tokens, start, limit) else {
+        return (
+            Stmt::Unknown(tokens[start].span.clone()),
+            statement_end(tokens, start, limit),
+        );
+    };
+    let close = find_matching(tokens, open, "{", "}").unwrap_or(open);
+    let value = parse_expr(tokens, start + 1, open)
+        .unwrap_or_else(|| Expr::Unknown(tokens[start].span.clone()));
+
+    (
+        Stmt::Match(MatchStmt {
+            value,
+            arms: parse_match_arms(tokens, open + 1, close),
+            span: tokens[start].span.clone(),
+        }),
+        close + 1,
+    )
+}
+
+fn parse_match_arms(tokens: &[Token], start: usize, end: usize) -> Vec<MatchArm> {
+    let mut arms = Vec::new();
+    let mut index = start;
+    while index < end {
+        while index < end && is_trivia_boundary(&tokens[index]) {
+            index += 1;
+        }
+        if index >= end {
+            break;
+        }
+        let Some(arrow) = find_top_level_symbol(tokens, index, end, "=>") else {
+            break;
+        };
+        let pattern = parse_match_pattern(tokens, index, arrow)
+            .unwrap_or_else(|| MatchPattern::Wildcard(tokens[index].span.clone()));
+        let body_start = arrow + 1;
+        let (body, next) = if tokens
+            .get(body_start)
+            .is_some_and(|token| token.symbol("{"))
+        {
+            let body_close = find_matching(tokens, body_start, "{", "}").unwrap_or(body_start);
+            (parse_block(tokens, body_start, body_close), body_close + 1)
+        } else {
+            let body_end = next_line_or_block_end(tokens, body_start, end);
+            let (statement, next) = parse_stmt(tokens, body_start, body_end);
+            (
+                Block {
+                    statements: vec![statement],
+                    span: tokens[body_start].span.clone(),
+                },
+                next,
+            )
+        };
+        arms.push(MatchArm {
+            pattern,
+            body,
+            span: tokens[index].span.clone(),
+        });
+        index = next;
+    }
+    arms
+}
+
+fn parse_match_pattern(tokens: &[Token], start: usize, end: usize) -> Option<MatchPattern> {
+    let start = trim_outer(tokens, start, end).0;
+    let end = trim_outer(tokens, start, end).1;
+    if start >= end {
+        return None;
+    }
+    let name = ident_name(&tokens[start])?.to_string();
+    if name == "_" {
+        return Some(MatchPattern::Wildcard(tokens[start].span.clone()));
+    }
+    let binding = if tokens.get(start + 1).is_some_and(|token| token.symbol("(")) {
+        let close = find_matching(tokens, start + 1, "(", ")")?;
+        if close + 1 != end {
+            return None;
+        }
+        (start + 2..close)
+            .find_map(|index| ident_name(&tokens[index]).map(str::to_string))
+            .filter(|binding| binding != "_")
+    } else if start + 1 == end {
+        None
+    } else {
+        return None;
+    };
+    Some(MatchPattern::Variant {
+        name,
+        binding,
+        span: tokens[start].span.clone(),
+    })
 }
 
 fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
@@ -1261,6 +1358,25 @@ fn next_line_or_block_end(tokens: &[Token], start: usize, end: usize) -> usize {
     (start..end)
         .find(|index| tokens[*index].span.line > line)
         .unwrap_or(end)
+}
+
+fn find_top_level_symbol(
+    tokens: &[Token],
+    start: usize,
+    end: usize,
+    symbol: &str,
+) -> Option<usize> {
+    let mut depth = 0usize;
+    for (index, token) in tokens.iter().enumerate().take(end).skip(start) {
+        if token.symbol("(") || token.symbol("{") || token.symbol("[") {
+            depth += 1;
+        } else if token.symbol(")") || token.symbol("}") || token.symbol("]") {
+            depth = depth.saturating_sub(1);
+        } else if depth == 0 && token.symbol(symbol) {
+            return Some(index);
+        }
+    }
+    None
 }
 
 fn split_top_level(

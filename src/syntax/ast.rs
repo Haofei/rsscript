@@ -179,6 +179,7 @@ pub enum Stmt {
     With(WithStmt),
     If(IfStmt),
     Loop(LoopStmt),
+    Match(MatchStmt),
     Break(Span),
     Continue(Span),
     Expr(Expr),
@@ -226,6 +227,30 @@ pub struct LoopStmt {
     pub condition: Option<Expr>,
     pub body: Block,
     pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchStmt {
+    pub value: Expr,
+    pub arms: Vec<MatchArm>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchArm {
+    pub pattern: MatchPattern,
+    pub body: Block,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MatchPattern {
+    Variant {
+        name: String,
+        binding: Option<String>,
+        span: Span,
+    },
+    Wildcard(Span),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

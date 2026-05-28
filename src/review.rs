@@ -644,6 +644,12 @@ fn collect_review_map_facts_stmt(statement: &Stmt, hir: &Hir, facts: &mut Review
             }
             collect_review_map_facts_block(&stmt.body, hir, facts);
         }
+        Stmt::Match(stmt) => {
+            collect_review_map_facts_expr(&stmt.value, hir, facts);
+            for arm in &stmt.arms {
+                collect_review_map_facts_block(&arm.body, hir, facts);
+            }
+        }
         Stmt::Expr(expr) => collect_review_map_facts_expr(expr, hir, facts),
         Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
     }
@@ -744,6 +750,12 @@ fn collect_review_map_hir_facts_stmt(
                 collect_review_map_hir_facts_expr(condition, local_bindings, facts);
             }
             collect_review_map_hir_facts_block(body, local_bindings, facts);
+        }
+        HirStmt::Match { value, arms, .. } => {
+            collect_review_map_hir_facts_expr(value, local_bindings, facts);
+            for arm in arms {
+                collect_review_map_hir_facts_block(&arm.body, local_bindings, facts);
+            }
         }
         HirStmt::Expr(expr) => collect_review_map_hir_facts_expr(expr, local_bindings, facts),
         HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
@@ -1547,6 +1559,12 @@ fn collect_boundary_stmt(statement: &Stmt, path: &str, boundary: &mut BoundarySi
                 collect_boundary_expr(condition, &format!("{path}.condition"), boundary);
             }
             collect_boundary_block(&stmt.body, &format!("{path}.loop"), boundary);
+        }
+        Stmt::Match(stmt) => {
+            collect_boundary_expr(&stmt.value, &format!("{path}.match"), boundary);
+            for (index, arm) in stmt.arms.iter().enumerate() {
+                collect_boundary_block(&arm.body, &format!("{path}.arm{}", index + 1), boundary);
+            }
         }
         Stmt::Expr(expr) => collect_boundary_expr(expr, path, boundary),
         Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}

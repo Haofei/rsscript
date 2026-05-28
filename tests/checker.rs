@@ -2877,9 +2877,10 @@ fn main() -> Result<Unit, ImageError> {
 }
 
 #[test]
-fn checker_reports_match_as_unsupported_until_exhaustiveness_exists() {
+fn checker_accepts_exhaustive_option_match() {
     let source = r#"
-fn pick(value: read Option<Int>) -> Int {
+fn pick() -> Int {
+    let value = Some(42)
     match value {
         Some(result) => return result
         None => return 0
@@ -2887,9 +2888,28 @@ fn pick(value: read Option<Int>) -> Int {
 }
 "#;
     let diagnostics = analyze_source("match.rss", source);
+    assert_eq!(diagnostics, Vec::new());
+
+    let lowered = lower_source_to_rust("match.rss", source).expect("match should lower");
+    assert!(lowered.contains("match value"));
+    assert!(lowered.contains("Some(result) =>"));
+    assert!(lowered.contains("None =>"));
+}
+
+#[test]
+fn checker_reports_non_exhaustive_option_match() {
+    let source = r#"
+fn pick() -> Int {
+    let value = Some(42)
+    match value {
+        Some(result) => return result
+    }
+}
+"#;
+    let diagnostics = analyze_source("match.rss", source);
 
     assert!(diagnostics.iter().any(
-        |diagnostic| diagnostic.code == "RS0015" && diagnostic.label == "unsupported statement"
+        |diagnostic| diagnostic.code == "RS0021" && diagnostic.label == "non-exhaustive match"
     ));
 }
 

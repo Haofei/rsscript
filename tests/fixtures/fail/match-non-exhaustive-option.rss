@@ -1,0 +1,7 @@
+// expect: RS0021
+fn pick() -> Int {
+    let value = Some(42)
+    match value {
+        Some(result) => return result
+    }
+}

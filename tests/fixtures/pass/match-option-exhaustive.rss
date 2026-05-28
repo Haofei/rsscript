@@ -1,5 +1,5 @@
-// expect: RS0015
-fn pick(value: read Option<Int>) -> Int {
+fn pick() -> Int {
+    let value = Some(42)
     match value {
         Some(result) => return result
         None => return 0
