@@ -261,6 +261,13 @@ impl Analyzer<'_> {
                         "`native fn` declares an external/native boundary in v0.5. Provide a bodyless declaration and bind the implementation through the native wrapper path.",
                     );
                 }
+                for span in &function.malformed_param_spans {
+                    self.unsupported_syntax(
+                        span.clone(),
+                        "malformed parameter declaration",
+                        "Function parameters must use `name: Type`, `name: read Type`, `name: mut Type`, or `name: take Type`.",
+                    );
+                }
                 for param in &function.params {
                     self.check_unsupported_syntax_type_ref(&param.ty, true);
                 }

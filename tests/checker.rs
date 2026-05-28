@@ -2573,6 +2573,20 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_reports_malformed_parameters_as_unsupported() {
+    let source = r#"
+fn bad(read Path) -> Unit {
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("malformed-parameters.rss", source);
+
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS0015" && diagnostic.label == "malformed parameter declaration"
+    }));
+}
+
+#[test]
 fn checker_reports_malformed_bindings_and_arguments_as_unsupported() {
     let source = r#"
 fn main() -> Unit {

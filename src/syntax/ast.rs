@@ -147,6 +147,7 @@ pub struct FunctionDecl {
     pub is_native: bool,
     pub type_params: Vec<GenericParam>,
     pub params: Vec<Param>,
+    pub malformed_param_spans: Vec<Span>,
     pub return_ty: Option<TypeRef>,
     pub returns_fresh: bool,
     pub effects: Vec<EffectDecl>,

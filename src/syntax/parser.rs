@@ -199,10 +199,13 @@ impl Parser<'_> {
         let type_params = self.parse_generic_params();
 
         let mut params = Vec::new();
+        let mut malformed_param_spans = Vec::new();
         if self.at_symbol("(") {
             let open = self.index;
             let close = find_matching(self.tokens, open, "(", ")")?;
-            params = parse_params(self.tokens, open + 1, close);
+            let parsed_params = parse_params(self.tokens, open + 1, close);
+            params = parsed_params.params;
+            malformed_param_spans = parsed_params.malformed_spans;
             self.index = close + 1;
         }
 
@@ -259,6 +262,7 @@ impl Parser<'_> {
             is_native,
             type_params,
             params,
+            malformed_param_spans,
             return_ty,
             returns_fresh,
             effects,
@@ -329,6 +333,11 @@ impl Parser<'_> {
 
 struct ParsedFields {
     fields: Vec<FieldDecl>,
+    malformed_spans: Vec<crate::diagnostic::Span>,
+}
+
+struct ParsedParams {
+    params: Vec<Param>,
     malformed_spans: Vec<crate::diagnostic::Span>,
 }
 
@@ -449,43 +458,58 @@ fn starts_top_level_item(tokens: &[Token], index: usize) -> bool {
         || token.is_ident_text("native")
 }
 
-fn parse_params(tokens: &[Token], start: usize, end: usize) -> Vec<Param> {
-    split_top_level(tokens, start, end, ",")
-        .into_iter()
-        .filter_map(|(start, end)| {
-            let name = tokens.get(start).and_then(ident_name)?;
-            if !tokens.get(start + 1).is_some_and(|token| token.symbol(":")) {
-                return Some(Param {
-                    name: name.to_string(),
-                    effect: None,
-                    ty: TypeRef {
-                        name: String::new(),
-                        args: Vec::new(),
-                        is_noescape: false,
-                        span: tokens[start].span.clone(),
-                    },
-                    span: tokens[start].span.clone(),
-                });
+fn parse_params(tokens: &[Token], start: usize, end: usize) -> ParsedParams {
+    let mut params = Vec::new();
+    let mut malformed_spans = Vec::new();
+    for (start, end) in split_top_level(tokens, start, end, ",") {
+        let Some(name) = tokens.get(start).and_then(ident_name) else {
+            if let Some(token) = tokens.get(start) {
+                malformed_spans.push(token.span.clone());
             }
+            continue;
+        };
+        if parse_data_effect(tokens.get(start)).is_some() {
+            malformed_spans.push(tokens[start].span.clone());
+            continue;
+        }
 
-            let mut ty_start = start + 2;
-            let effect = parse_data_effect(tokens.get(ty_start)).inspect(|_| {
-                ty_start += 1;
-            });
-            let ty = parse_type_ref(tokens, ty_start, end).unwrap_or_else(|| TypeRef {
-                name: String::new(),
-                args: Vec::new(),
-                is_noescape: false,
-                span: tokens[start].span.clone(),
-            });
-            Some(Param {
+        if !tokens.get(start + 1).is_some_and(|token| token.symbol(":")) {
+            params.push(Param {
                 name: name.to_string(),
-                effect,
-                ty,
+                effect: None,
+                ty: TypeRef {
+                    name: String::new(),
+                    args: Vec::new(),
+                    is_noescape: false,
+                    span: tokens[start].span.clone(),
+                },
                 span: tokens[start].span.clone(),
-            })
-        })
-        .collect()
+            });
+            continue;
+        }
+
+        let mut ty_start = start + 2;
+        let effect = parse_data_effect(tokens.get(ty_start)).inspect(|_| {
+            ty_start += 1;
+        });
+        let ty = parse_type_ref(tokens, ty_start, end).unwrap_or_else(|| TypeRef {
+            name: String::new(),
+            args: Vec::new(),
+            is_noescape: false,
+            span: tokens[start].span.clone(),
+        });
+        params.push(Param {
+            name: name.to_string(),
+            effect,
+            ty,
+            span: tokens[start].span.clone(),
+        });
+    }
+
+    ParsedParams {
+        params,
+        malformed_spans,
+    }
 }
 
 fn parse_effects(tokens: &[Token], start: usize, end: usize) -> Vec<EffectDecl> {
