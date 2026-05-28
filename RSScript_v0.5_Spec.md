@@ -1,4 +1,4 @@
-# RSScript Language Specification v0.5
+# RSScript (Reviewable System Script) Language Specification v0.5
 
 Status: Draft / Architecture Candidate  
 Version: 0.5  
@@ -9,7 +9,7 @@ Compatibility note: v0.5 preserves the v0.4.x language core and reorganizes the 
 
 # 0. Executive Summary
 
-RSScript is a **managed systems language for AI-era software**.
+RSScript (**Reviewable System Script**) is a **managed systems language for AI-era software**.
 
 Its design target is:
 
