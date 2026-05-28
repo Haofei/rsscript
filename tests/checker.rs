@@ -3709,6 +3709,30 @@ pub fn Cache.store(conn: mut DbConnection, image: read Image) -> Unit
     assert_eq!(json["summary"]["resource_apis"], 1);
     assert_eq!(json["summary"]["fresh_returning_apis"], 1);
     assert_eq!(json["summary"]["unknown_apis"], 0);
+    let exports = json["exports"]
+        .as_array()
+        .expect("exports should be an array");
+    assert!(exports.iter().any(|export| {
+        export["name"] == "DbConnection"
+            && export["kind"] == "type"
+            && export["reasons"]
+                .as_array()
+                .is_some_and(|reasons| reasons.iter().any(|reason| reason == "resource type"))
+    }));
+    assert!(exports.iter().any(|export| {
+        export["name"] == "Cache.store"
+            && export["kind"] == "function"
+            && export["classification"] == "review_if_changed"
+            && export["reasons"].as_array().is_some_and(|reasons| {
+                reasons
+                    .iter()
+                    .any(|reason| reason == "mut parameter `conn`")
+                    && reasons.iter().any(|reason| reason == "retains(image)")
+                    && reasons
+                        .iter()
+                        .any(|reason| reason == "resource parameter `conn`")
+            })
+    }));
 }
 
 #[test]
@@ -3745,6 +3769,17 @@ fn helper() -> Unit {
     assert_eq!(json["summary"]["public_functions"], 1);
     assert_eq!(json["summary"]["unknown_apis"], 1);
     assert_eq!(json["review_map"]["summary"]["unknown"]["functions"], 2);
+    assert!(json["exports"].as_array().is_some_and(|exports| {
+        exports.iter().any(|export| {
+            export["name"] == "Api.run"
+                && export["classification"] == "unknown"
+                && export["reasons"].as_array().is_some_and(|reasons| {
+                    reasons
+                        .iter()
+                        .any(|reason| reason == "unknown review-map region")
+                })
+        })
+    }));
 }
 
 #[test]

@@ -32,6 +32,7 @@ pub struct PackageReview {
     pub reasons: Vec<String>,
     pub summary: PackageReviewSummary,
     pub files: Vec<PackageReviewFile>,
+    pub exports: Vec<PackageReviewExport>,
     pub native_rust: Option<PackageNativeRustReview>,
     pub review_map: ReviewMap,
     pub diagnostics: Vec<Diagnostic>,
@@ -70,6 +71,7 @@ pub struct PackageReviewMetadata {
     pub reasons: Vec<String>,
     pub summary: PackageReviewSummary,
     pub files: Vec<PackageReviewFile>,
+    pub exports: Vec<PackageReviewExport>,
     pub native_rust: Option<PackageNativeRustReview>,
     pub review_map: ReviewMap,
     pub diagnostics: Vec<Diagnostic>,
@@ -382,6 +384,14 @@ pub struct PackageReviewFile {
     pub kind: PackageReviewFileKind,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageReviewExport {
+    pub name: String,
+    pub kind: String,
+    pub classification: String,
+    pub reasons: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageReviewFileKind {
@@ -669,6 +679,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
             kind: source.kind,
         })
         .collect();
+    let exports = package_review_exports(sources, &review_map);
 
     Ok(PackageReview {
         package: PackageIdentity {
@@ -681,6 +692,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         reasons,
         summary,
         files,
+        exports,
         native_rust,
         review_map,
         diagnostics,
@@ -2372,6 +2384,135 @@ fn package_unknown_api_count(
         .count()
 }
 
+fn package_review_exports(
+    sources: &[PackageSource],
+    review_map: &ReviewMap,
+) -> Vec<PackageReviewExport> {
+    let interface_type_contracts =
+        collect_package_type_contracts(sources, PackageReviewFileKind::Interface);
+    let source_type_contracts;
+    let type_contracts = if interface_type_contracts.is_empty() {
+        source_type_contracts =
+            collect_package_type_contracts(sources, PackageReviewFileKind::Source);
+        &source_type_contracts
+    } else {
+        &interface_type_contracts
+    };
+    let interface_function_contracts =
+        collect_package_function_contracts(sources, PackageReviewFileKind::Interface);
+    let source_function_contracts;
+    let function_contracts = if interface_function_contracts.is_empty() {
+        source_function_contracts =
+            collect_package_function_contracts(sources, PackageReviewFileKind::Source);
+        &source_function_contracts
+    } else {
+        &interface_function_contracts
+    };
+    let resource_types = type_contracts
+        .values()
+        .filter(|contract| contract.kind == TypeKind::Resource)
+        .map(|contract| contract.name.as_str())
+        .collect::<BTreeSet<_>>();
+
+    let mut exports = Vec::new();
+    exports.extend(type_contracts.values().map(package_type_review_export));
+    exports.extend(
+        function_contracts
+            .values()
+            .map(|contract| package_function_review_export(contract, &resource_types, review_map)),
+    );
+    exports.sort_by(|left, right| {
+        left.kind
+            .cmp(&right.kind)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    exports
+}
+
+fn package_type_review_export(contract: &PackageTypeContract) -> PackageReviewExport {
+    let mut reasons = vec![format!(
+        "public {} type",
+        package_type_kind_label(contract.kind)
+    )];
+    if contract.kind == TypeKind::Resource {
+        reasons.push("resource type".to_string());
+    }
+    if contract.fields.iter().any(|field| field.is_handle) {
+        reasons.push("handle field".to_string());
+    }
+    if contract.fields.iter().any(|field| field.is_weak) {
+        reasons.push("weak field".to_string());
+    }
+    PackageReviewExport {
+        name: contract.name.clone(),
+        kind: "type".to_string(),
+        classification: "review_if_changed".to_string(),
+        reasons,
+    }
+}
+
+fn package_function_review_export(
+    contract: &PackageFunctionContract,
+    resource_types: &BTreeSet<&str>,
+    review_map: &ReviewMap,
+) -> PackageReviewExport {
+    let mut reasons = vec!["public function".to_string()];
+    for param in &contract.params {
+        if matches!(param.effect, Some("mut" | "take")) {
+            reasons.push(format!(
+                "{} parameter `{}`",
+                param.effect.expect("effect matched"),
+                param.name
+            ));
+        }
+        if package_type_name_has_resource_boundary(&param.type_name, resource_types) {
+            reasons.push(format!("resource parameter `{}`", param.name));
+        }
+    }
+    if contract.return_type.as_ref().is_some_and(|return_type| {
+        package_type_name_has_resource_boundary(return_type, resource_types)
+    }) {
+        reasons.push("resource return type".to_string());
+    }
+    if contract.returns_fresh {
+        reasons.push("returns fresh value".to_string());
+    }
+    for effect in &contract.effects {
+        if effect.starts_with("retains(") {
+            reasons.push(effect.clone());
+        } else if matches!(effect.as_str(), "native" | "unsafe") {
+            reasons.push(format!("{effect} boundary"));
+        } else if matches!(
+            effect.as_str(),
+            "no_panic" | "noalloc" | "no_block" | "pure"
+        ) {
+            reasons.push(format!("guarantee `{effect}`"));
+        }
+    }
+    let classification = if package_review_map_function_is_unknown(&contract.name, review_map) {
+        reasons.push("unknown review-map region".to_string());
+        "unknown"
+    } else {
+        "review_if_changed"
+    };
+    reasons.sort();
+    reasons.dedup();
+    PackageReviewExport {
+        name: contract.name.clone(),
+        kind: "function".to_string(),
+        classification: classification.to_string(),
+        reasons,
+    }
+}
+
+fn package_review_map_function_is_unknown(function: &str, review_map: &ReviewMap) -> bool {
+    review_map.files.iter().any(|file| {
+        file.regions.iter().any(|region| {
+            region.function == function && region.classification == ReviewMapClassification::Unknown
+        })
+    })
+}
+
 fn package_contract_has_resource_boundary(
     contract: &PackageFunctionContract,
     resource_types: &BTreeSet<&str>,
@@ -2589,6 +2730,7 @@ fn package_review_metadata_from_review(review: &PackageReview) -> PackageReviewM
         reasons: review.reasons.clone(),
         summary: review.summary.clone(),
         files: review.files.clone(),
+        exports: review.exports.clone(),
         native_rust: review.native_rust.clone(),
         review_map: review.review_map.clone(),
         diagnostics: review.diagnostics.clone(),
@@ -3661,6 +3803,18 @@ fn package_review_hash(review: &PackageReview) -> String {
         review.summary.unsafe_apis,
         review.summary.unknown_apis
     ));
+    for export in &review.exports {
+        input.push_str(&export.kind);
+        input.push('\n');
+        input.push_str(&export.name);
+        input.push('\n');
+        input.push_str(&export.classification);
+        input.push('\n');
+        for reason in &export.reasons {
+            input.push_str(reason);
+            input.push('\n');
+        }
+    }
     if let Some(native) = &review.native_rust {
         input.push_str(&native.path);
         input.push('\n');
