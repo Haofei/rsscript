@@ -3740,6 +3740,8 @@ unsafe = "forbid"
     assert_eq!(json["native_rust"]["cargo_metadata_ok"], true);
     assert_eq!(json["native_rust"]["cargo_package_name"], "rss_json_native");
     assert_eq!(json["native_rust"]["unsafe_detected"], false);
+    assert_eq!(json["native_rust"]["build_env_detected"], false);
+    assert_eq!(json["native_rust"]["build_download_detected"], false);
     assert_eq!(
         json["native_rust"]["linked_libraries"],
         serde_json::json!([])
@@ -3861,6 +3863,127 @@ links = ["ssl"]
             .iter()
             .any(|reason| reason == "native Rust links external libraries")
     }));
+}
+
+#[test]
+fn package_check_reports_native_build_script_environment_usage() {
+    let temp_dir = unique_temp_dir("rsscript-package-check-native-build-env");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_json_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+        r#"native fn Native.parse(text: read String) -> String
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
+    fs::write(
+        temp_dir.join("native/rust/Cargo.toml"),
+        "[package]\nname = \"rss_json_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("native Cargo.toml should be written");
+    fs::write(
+        temp_dir.join("native/rust/build.rs"),
+        r#"fn main() {
+    let _ = std::env::var("OUT_DIR");
+}
+"#,
+    )
+    .expect("native build script should be written");
+    fs::write(
+        temp_dir.join("native/rust/src/lib.rs"),
+        "pub fn parse() {}\n",
+    )
+    .expect("native source should be written");
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&temp_dir).expect("package check should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!check.ok);
+    assert_eq!(json["native_rust"]["build_env_detected"], true);
+    assert!(
+        json["native_rust"]["reasons"]
+            .as_array()
+            .is_some_and(|reasons| reasons
+                .iter()
+                .any(|reason| reason == "native Rust build script reads environment"))
+    );
+}
+
+#[test]
+fn package_check_reports_native_build_script_download_risk() {
+    let temp_dir = unique_temp_dir("rsscript-package-check-native-build-download");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_json_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+        r#"native fn Native.parse(text: read String) -> String
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
+    fs::write(
+        temp_dir.join("native/rust/Cargo.toml"),
+        "[package]\nname = \"rss_json_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("native Cargo.toml should be written");
+    fs::write(
+        temp_dir.join("native/rust/build.rs"),
+        r#"fn main() {
+    // https://example.invalid/commented-out should not be the only signal
+    let _ = std::process::Command::new("curl").arg("https://example.invalid/archive.tar.gz");
+}
+"#,
+    )
+    .expect("native build script should be written");
+    fs::write(
+        temp_dir.join("native/rust/src/lib.rs"),
+        "pub fn parse() {}\n",
+    )
+    .expect("native source should be written");
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&temp_dir).expect("package check should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!check.ok);
+    assert_eq!(json["native_rust"]["build_download_detected"], true);
+    assert!(
+        json["native_rust"]["reasons"]
+            .as_array()
+            .is_some_and(|reasons| reasons
+                .iter()
+                .any(|reason| reason == "native Rust build script may download code"))
+    );
 }
 
 #[test]

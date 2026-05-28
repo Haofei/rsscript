@@ -215,6 +215,8 @@ pub struct PackageNativeRustCheck {
     pub target_kinds: Vec<String>,
     pub unsafe_detected: bool,
     pub linked_libraries: Vec<String>,
+    pub build_env_detected: bool,
+    pub build_download_detected: bool,
     pub file_count: usize,
     pub ok: bool,
     pub risk: PackageRisk,
@@ -1289,7 +1291,7 @@ pub fn format_package_check_human(check: &PackageCheck) -> String {
     ));
     if let Some(native) = &check.native_rust {
         output.push_str(&format!(
-            "native rust: {} cargo_toml={} cargo_metadata={} package={} targets={} unsafe={} links={} files={}\n",
+            "native rust: {} cargo_toml={} cargo_metadata={} package={} targets={} unsafe={} links={} build_env={} build_download={} files={}\n",
             native.path,
             native.cargo_toml_present,
             native.cargo_metadata_ok,
@@ -1305,6 +1307,8 @@ pub fn format_package_check_human(check: &PackageCheck) -> String {
             } else {
                 native.linked_libraries.join(",")
             },
+            native.build_env_detected,
+            native.build_download_detected,
             native.file_count
         ));
     }
@@ -2139,6 +2143,7 @@ fn check_package_native_rust(
         collect_regular_files(&native_root, &mut files)?;
     }
     let unsafe_detected = native_rust_unsafe_detected(&files)?;
+    let build_risk = native_build_script_risks(&files)?;
     let mut reasons = Vec::new();
     if !native_root.exists() {
         reasons.push("native Rust path missing".to_string());
@@ -2160,6 +2165,14 @@ fn check_package_native_rust(
     if unsafe_detected && native.unsafe_policy.as_deref() == Some("forbid") {
         reasons.push("native Rust unsafe usage detected".to_string());
     }
+    if native.build_scripts.as_deref() == Some("forbid") {
+        if build_risk.env_detected {
+            reasons.push("native Rust build script reads environment".to_string());
+        }
+        if build_risk.download_detected {
+            reasons.push("native Rust build script may download code".to_string());
+        }
+    }
     let metadata = if cargo_toml_present {
         scan_native_cargo_metadata(&cargo_toml, native, &mut reasons)?
     } else {
@@ -2180,6 +2193,8 @@ fn check_package_native_rust(
         target_kinds: metadata.target_kinds,
         unsafe_detected,
         linked_libraries: native.links.clone(),
+        build_env_detected: build_risk.env_detected,
+        build_download_detected: build_risk.download_detected,
         file_count: files.len(),
         ok,
         risk,
@@ -2304,6 +2319,90 @@ fn native_rust_unsafe_detected(files: &[PathBuf]) -> Result<bool, String> {
         }
     }
     Ok(false)
+}
+
+#[derive(Debug, Default)]
+struct NativeBuildScriptRisk {
+    env_detected: bool,
+    download_detected: bool,
+}
+
+fn native_build_script_risks(files: &[PathBuf]) -> Result<NativeBuildScriptRisk, String> {
+    let mut risk = NativeBuildScriptRisk::default();
+    for file in files {
+        if file.file_name().and_then(|name| name.to_str()) != Some("build.rs") {
+            continue;
+        }
+        let source = fs::read_to_string(file)
+            .map_err(|error| format!("failed to read {}: {error}", file.display()))?;
+        let stripped = source_without_rust_comments(&source);
+        if build_script_reads_environment(&stripped) {
+            risk.env_detected = true;
+        }
+        if build_script_may_download_code(&stripped) {
+            risk.download_detected = true;
+        }
+    }
+    Ok(risk)
+}
+
+fn build_script_reads_environment(source: &str) -> bool {
+    [
+        "env::var",
+        "env::var_os",
+        "std::env::var",
+        "std::env::var_os",
+        "env!(",
+        "option_env!(",
+    ]
+    .iter()
+    .any(|pattern| source.contains(pattern))
+}
+
+fn build_script_may_download_code(source: &str) -> bool {
+    let lower = source.to_ascii_lowercase();
+    [
+        "http://",
+        "https://",
+        "reqwest",
+        "ureq",
+        "curl",
+        "wget",
+        "git clone",
+        "git2",
+        "tcpstream",
+    ]
+    .iter()
+    .any(|pattern| lower.contains(pattern))
+}
+
+fn source_without_rust_comments(source: &str) -> String {
+    let bytes = source.as_bytes();
+    let mut out = String::with_capacity(source.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                index += 2;
+                while index < bytes.len() && bytes[index] != b'\n' {
+                    index += 1;
+                }
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                index += 2;
+                while index + 1 < bytes.len() && !(bytes[index] == b'*' && bytes[index + 1] == b'/')
+                {
+                    index += 1;
+                }
+                index = (index + 2).min(bytes.len());
+            }
+            _ => {
+                out.push(bytes[index] as char);
+                index += 1;
+            }
+        }
+    }
+    out
 }
 
 fn source_contains_rust_unsafe_keyword(source: &str) -> bool {
