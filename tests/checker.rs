@@ -3650,6 +3650,37 @@ paths = ["interface"]
 }
 
 #[test]
+fn package_review_json_counts_native_and_unsafe_apis_separately() {
+    let temp_dir = unique_temp_dir("rsscript-package-review-api-effects");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+        r#"features: native, unsafe
+
+native fn Native.echo(message: read String) -> String
+fn Native.danger(message: read String) -> String
+    effects(unsafe)
+"#,
+    );
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(json["summary"]["native_apis"], 1);
+    assert_eq!(json["summary"]["unsafe_apis"], 1);
+}
+
+#[test]
 fn package_metadata_dry_run_reports_review_metadata_without_writing() {
     let temp_dir = unique_temp_dir("rsscript-package-metadata-dry-run");
     write_named_package_fixture(

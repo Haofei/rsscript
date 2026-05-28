@@ -363,6 +363,8 @@ pub struct PackageReviewSummary {
     pub dependencies: usize,
     pub dev_dependencies: usize,
     pub package_features: usize,
+    pub native_apis: usize,
+    pub unsafe_apis: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -622,6 +624,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
     reasons.dedup();
 
     let risk = package_risk(manifest, native_rust.as_ref(), &review_map, &diagnostics);
+    let api_summary = package_api_effect_summary(sources);
     let summary = PackageReviewSummary {
         interface_files: sources
             .iter()
@@ -639,6 +642,8 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         dependencies: manifest.dependencies.len(),
         dev_dependencies: manifest.dev_dependencies.len(),
         package_features: manifest.features.len(),
+        native_apis: api_summary.native_apis,
+        unsafe_apis: api_summary.unsafe_apis,
     };
     let files = sources
         .iter()
@@ -1343,11 +1348,13 @@ pub fn format_package_review_human(review: &PackageReview) -> String {
         package_risk_label(review.risk)
     ));
     output.push_str(&format!(
-        "summary: {} interface files; {} source files; {} dependencies; {} package features; {} diagnostics ({} errors)\n",
+        "summary: {} interface files; {} source files; {} dependencies; {} package features; {} native APIs; {} unsafe APIs; {} diagnostics ({} errors)\n",
         review.summary.interface_files,
         review.summary.source_files,
         review.summary.dependencies,
         review.summary.package_features,
+        review.summary.native_apis,
+        review.summary.unsafe_apis,
         review.summary.diagnostics,
         review.summary.errors
     ));
@@ -1378,9 +1385,11 @@ pub fn format_package_metadata_human(metadata: &PackageMetadataReport) -> String
     ));
     output.push_str(&format!("metadata path: {}\n", metadata.metadata_path));
     output.push_str(&format!(
-        "summary: {} interface files; {} source files; {} diagnostics ({} errors)\n",
+        "summary: {} interface files; {} source files; {} native APIs; {} unsafe APIs; {} diagnostics ({} errors)\n",
         metadata.metadata.summary.interface_files,
         metadata.metadata.summary.source_files,
+        metadata.metadata.summary.native_apis,
+        metadata.metadata.summary.unsafe_apis,
         metadata.metadata.summary.diagnostics,
         metadata.metadata.summary.errors
     ));
@@ -1440,11 +1449,13 @@ pub fn format_package_check_human(check: &PackageCheck) -> String {
         package_risk_label(check.risk)
     ));
     output.push_str(&format!(
-        "summary: {} interface files; {} source files; {} dependencies; {} package features; {} diagnostics ({} errors)\n",
+        "summary: {} interface files; {} source files; {} dependencies; {} package features; {} native APIs; {} unsafe APIs; {} diagnostics ({} errors)\n",
         check.summary.interface_files,
         check.summary.source_files,
         check.summary.dependencies,
         check.summary.package_features,
+        check.summary.native_apis,
+        check.summary.unsafe_apis,
         check.summary.diagnostics,
         check.summary.errors
     ));
@@ -2205,6 +2216,46 @@ fn collect_package_function_contracts(
         }
     }
     contracts
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct PackageApiEffectSummary {
+    native_apis: usize,
+    unsafe_apis: usize,
+}
+
+fn package_api_effect_summary(sources: &[PackageSource]) -> PackageApiEffectSummary {
+    let interface_contracts =
+        collect_package_function_contracts(sources, PackageReviewFileKind::Interface);
+    let source_contracts;
+    let contracts = if interface_contracts.is_empty() {
+        source_contracts =
+            collect_package_function_contracts(sources, PackageReviewFileKind::Source);
+        &source_contracts
+    } else {
+        &interface_contracts
+    };
+
+    PackageApiEffectSummary {
+        native_apis: contracts
+            .values()
+            .filter(|contract| {
+                contract
+                    .effects
+                    .iter()
+                    .any(|effect| effect.as_str() == "native")
+            })
+            .count(),
+        unsafe_apis: contracts
+            .values()
+            .filter(|contract| {
+                contract
+                    .effects
+                    .iter()
+                    .any(|effect| effect.as_str() == "unsafe")
+            })
+            .count(),
+    }
 }
 
 fn package_type_contract(type_decl: &TypeDecl) -> PackageTypeContract {

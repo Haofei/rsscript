@@ -2378,6 +2378,8 @@ rss package diff
 
 `rss package check` validates a local package manifest, loads local path dependency `.rssi` contracts into the frontend environment, checks package `.rssi` public contracts against source implementations, rejects unresolved or conflicting local dependency graphs, runs interface/source frontend checks, regenerates package review metadata, compares the current semantic lock against `rsspkg.lock`, and scans enabled native Rust wrapper metadata for local consistency.
 
+Package review metadata treats `.rssi` files as the preferred public contract surface. It reports native API and unsafe API counts separately; if a package has no `.rssi` surface, the prototype falls back to public source functions for those counts.
+
 `rss check <package-directory>` is an alias for package check when the directory contains `rsspkg.toml`. Single-file `rss check <file.rss>` keeps the ordinary frontend diagnostic behavior.
 
 `rss package review update` compares two `rsspkg.lock` files and classifies package version, source, checksum, public interface hash, review metadata hash, native wrapper hash, and feature-selection changes.
