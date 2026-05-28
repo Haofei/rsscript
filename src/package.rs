@@ -572,6 +572,15 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         sources,
         &native_bindings,
     ));
+    diagnostics.extend(package_native_binding_diagnostics(
+        package_dir,
+        sources,
+        &native_bindings,
+        manifest
+            .native
+            .as_ref()
+            .and_then(|native| native.rust.as_ref()),
+    ));
     dedup_diagnostics(&mut diagnostics);
     let review_map = review_map_sources(
         sources
@@ -1977,6 +1986,125 @@ fn package_interface_contract_diagnostics(
     diagnostics
 }
 
+fn package_native_binding_diagnostics(
+    package_dir: &Path,
+    sources: &[PackageSource],
+    native_bindings: &BTreeMap<String, String>,
+    native: Option<&ManifestNativeRust>,
+) -> Vec<Diagnostic> {
+    if native_bindings.is_empty() {
+        return Vec::new();
+    }
+    let interface_function_contracts =
+        collect_package_function_contracts(sources, PackageReviewFileKind::Interface);
+    let crate_name = native
+        .and_then(|native| native.crate_name.as_deref())
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+    let mut diagnostics = Vec::new();
+
+    for (symbol, target) in native_bindings {
+        let span = native_binding_span(package_dir, symbol);
+        if symbol.trim().is_empty() || target.trim().is_empty() {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_NATIVE_BINDING,
+                    "native binding entries must have non-empty RSScript symbols and Rust targets.",
+                    span,
+                    "invalid native binding",
+                )
+                .with_cause("Binding keys name RSScript native functions; values name Rust wrapper functions.")
+                .with_fix(
+                    "fix_native_binding",
+                    "Write a binding such as `\"Native.echo\" = \"rss_json_native::echo\"`.",
+                    "manual",
+                ),
+            );
+            continue;
+        }
+
+        let Some(contract) = interface_function_contracts.get(symbol) else {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_NATIVE_BINDING,
+                    format!("native binding `{symbol}` does not match any package interface function."),
+                    span,
+                    "unknown native binding symbol",
+                )
+                .with_cause("Native bindings are reviewable only when their RSScript side is declared in a package `.rssi` contract.")
+                .with_fix(
+                    "declare_native_interface",
+                    format!("Declare `native fn {symbol}(...)` in the package interface, or remove this binding."),
+                    "manual",
+                ),
+            );
+            continue;
+        };
+
+        if !contract.effects.contains("native") {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_NATIVE_BINDING,
+                    format!("native binding `{symbol}` points to a non-native interface function."),
+                    span.clone(),
+                    "non-native binding symbol",
+                )
+                .with_cause("Only interface functions declared with the native boundary can be implemented by native wrapper bindings.")
+                .with_fix(
+                    "mark_native_interface",
+                    format!("Declare `{symbol}` as `native fn` or add `effects(native)`, or remove this binding."),
+                    "manual",
+                ),
+            );
+        }
+
+        if let Some(crate_name) = crate_name
+            && !target.starts_with(&format!("{crate_name}::"))
+        {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_NATIVE_BINDING,
+                    format!(
+                        "native binding `{symbol}` targets `{target}`, outside configured native crate `{crate_name}`."
+                    ),
+                    span,
+                    "native binding crate mismatch",
+                )
+                .with_cause("The generated Cargo package only wires the configured native Rust crate as a dependency for this package.")
+                .with_fix(
+                    "use_configured_native_crate",
+                    format!("Use a Rust path starting with `{crate_name}::`, or update `[native.rust].crate`."),
+                    "manual",
+                ),
+            );
+        }
+    }
+
+    diagnostics
+}
+
+fn native_binding_span(package_dir: &Path, symbol: &str) -> crate::diagnostic::Span {
+    let path = package_dir.join("native/bindings.rssbind.toml");
+    let file = path.display().to_string();
+    let source = fs::read_to_string(&path).unwrap_or_default();
+    for (index, line) in source.lines().enumerate() {
+        if let Some(column) = line.find(symbol) {
+            return crate::diagnostic::Span {
+                file,
+                line: index + 1,
+                column: column + 1,
+                length: symbol.len().max(1),
+            };
+        }
+    }
+    crate::diagnostic::Span {
+        file,
+        line: 1,
+        column: 1,
+        length: symbol.len().max(1),
+    }
+}
+
 fn package_type_contracts_match(
     interface: &PackageTypeContract,
     source: &PackageTypeContract,
@@ -2026,7 +2154,7 @@ fn collect_package_function_contracts(
             let Item::Function(function) = item else {
                 continue;
             };
-            if function.is_public {
+            if kind == PackageReviewFileKind::Interface || function.is_public {
                 contracts.insert(function.name.clone(), package_function_contract(&function));
             }
         }

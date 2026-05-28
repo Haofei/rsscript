@@ -4558,6 +4558,133 @@ fn main() -> Unit {
 }
 
 #[test]
+fn package_check_reports_unknown_native_binding_symbols() {
+    let temp_dir = unique_temp_dir("rsscript-package-check-native-binding-unknown");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_json_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+        r#"features: native
+
+native fn Native.echo(message: read String) -> String
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
+    fs::write(
+        temp_dir.join("src/main.rss"),
+        "fn main() -> Unit { return Unit }\n",
+    )
+    .expect("source should be written");
+    fs::write(
+        temp_dir.join("native/bindings.rssbind.toml"),
+        r#"[bindings]
+"Native.ehco" = "rss_json_native::echo"
+"#,
+    )
+    .expect("native binding manifest should be written");
+    fs::write(
+        temp_dir.join("native/rust/Cargo.toml"),
+        "[package]\nname = \"rss_json_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("native Cargo.toml should be written");
+    fs::write(
+        temp_dir.join("native/rust/src/lib.rs"),
+        "pub fn echo(message: &String) -> String { message.clone() }\n",
+    )
+    .expect("native source should be written");
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&temp_dir).expect("package check should succeed");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!check.ok);
+    assert!(check.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS1302" && diagnostic.label == "unknown native binding symbol"
+    }));
+}
+
+#[test]
+fn package_check_reports_native_binding_crate_mismatch() {
+    let temp_dir = unique_temp_dir("rsscript-package-check-native-binding-crate");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_json_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+        r#"features: native
+
+native fn Native.echo(message: read String) -> String
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
+    fs::write(
+        temp_dir.join("src/main.rss"),
+        r#"features: native
+
+fn main() -> Unit {
+    let message = Native.echo(message: read "hello native")
+    Log.write(message: read message)
+    return Unit
+}
+"#,
+    )
+    .expect("source should be written");
+    fs::write(
+        temp_dir.join("native/bindings.rssbind.toml"),
+        r#"[bindings]
+"Native.echo" = "other_native::echo"
+"#,
+    )
+    .expect("native binding manifest should be written");
+    fs::write(
+        temp_dir.join("native/rust/Cargo.toml"),
+        "[package]\nname = \"rss_json_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("native Cargo.toml should be written");
+    fs::write(
+        temp_dir.join("native/rust/src/lib.rs"),
+        "pub fn echo(message: &String) -> String { message.clone() }\n",
+    )
+    .expect("native source should be written");
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&temp_dir).expect("package check should succeed");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!check.ok);
+    assert!(check.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS1302" && diagnostic.label == "native binding crate mismatch"
+    }));
+}
+
+#[test]
 fn package_check_reports_native_unsafe_usage() {
     let temp_dir = unique_temp_dir("rsscript-package-check-native-unsafe");
     write_package_fixture(

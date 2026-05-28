@@ -2397,7 +2397,9 @@ interfaces as the call-resolution environment. If `[native.rust]` is enabled,
 
 These bindings map bodyless `native fn` contracts to Rust wrapper functions in
 the generated package. The binding manifest is part of native review metadata
-and native hashing.
+and native hashing. Package checks must reject bindings whose RSScript symbol is
+not declared by a package `.rssi` native function, and bindings whose Rust target
+does not live under the configured `[native.rust].crate`.
 
 ---
 
