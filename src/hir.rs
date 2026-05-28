@@ -283,7 +283,6 @@ pub struct Hir {
     field_accesses: Vec<HirFieldAccess>,
     effect_events: Vec<HirEffectEvent>,
     returns: Vec<HirReturn>,
-    returns_by_span: HashMap<Span, HirReturn>,
     function_bodies: HashMap<String, HirFunctionBody>,
 }
 
@@ -369,10 +368,6 @@ impl Hir {
         self.function_bodies.get(function_name)
     }
 
-    pub fn return_fact(&self, span: &Span) -> Option<&HirReturn> {
-        self.returns_by_span.get(span)
-    }
-
     pub fn resolve_call(&self, callee: &Callee) -> CallResolution {
         let call_name = callee_name(callee);
         if is_enum_variant_call(call_name) {
@@ -439,11 +434,6 @@ impl Hir {
             .call_sites
             .iter()
             .map(|site| (site.span.clone(), site.resolution.clone()))
-            .collect();
-        self.returns_by_span = facts
-            .returns
-            .iter()
-            .map(|return_fact| (return_fact.span.clone(), return_fact.clone()))
             .collect();
         self.function_bodies = build_function_bodies(&facts);
         self.call_sites = facts.call_sites;
@@ -1790,12 +1780,6 @@ fn render(body: read String) -> Result<fresh Response, HttpError> {
         assert!(matches!(
             returns[0].proof,
             HirReturnProof::Ident { ref name } if name == "response"
-        ));
-        assert!(matches!(
-            hir.return_fact(&returns[0].span)
-                .expect("return lookup by span works")
-                .proof,
-            HirReturnProof::Ident { .. }
         ));
 
         let body = hir.function_body("render").expect("function body exists");

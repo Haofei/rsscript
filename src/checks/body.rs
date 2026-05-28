@@ -101,7 +101,7 @@ fn check_stmt_semantics(
         Stmt::Return(stmt) => {
             if let Some(value) = &stmt.value {
                 if function.returns_fresh {
-                    check_fresh_return(analyzer, function, value, state);
+                    check_fresh_return(analyzer, local_analysis, function, value, state);
                 }
                 check_take_of_handle_field(analyzer, local_analysis, value, state);
             }
@@ -534,6 +534,7 @@ fn resource_capture_diagnostic(
 
 fn check_fresh_return(
     analyzer: &mut Analyzer<'_>,
+    local_analysis: &LocalAnalysis,
     function: &FunctionDecl,
     value: &Expr,
     state: &BodyState,
@@ -568,7 +569,7 @@ fn check_fresh_return(
             );
         }
         Expr::Call { callee, span, .. } => {
-            if !hir_return_proves_fresh_call(analyzer, callee, span) {
+            if !hir_return_proves_fresh_call(analyzer, local_analysis, callee, span) {
                 analyzer.diagnostics.push(
                     Diagnostic::warning(
                         code::FRESHNESS_UNKNOWN,
@@ -584,7 +585,7 @@ fn check_fresh_return(
             }
         }
         Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
-            check_fresh_return(analyzer, function, value, state);
+            check_fresh_return(analyzer, local_analysis, function, value, state);
         }
         Expr::Field { span, .. } | Expr::Closure { span, .. } | Expr::Unknown(span) => {
             analyzer.diagnostics.push(
@@ -607,12 +608,13 @@ fn check_fresh_return(
 
 fn hir_return_proves_fresh_call(
     analyzer: &Analyzer<'_>,
+    local_analysis: &LocalAnalysis,
     callee: &Callee,
     span: &crate::diagnostic::Span,
 ) -> bool {
-    if let Some(return_fact) = analyzer.hir.return_fact(span) {
+    if let Some(return_proof) = local_analysis.return_proof(span) {
         return matches!(
-            return_fact.proof,
+            return_proof,
             HirReturnProof::StructConstructor | HirReturnProof::FreshCall
         );
     }

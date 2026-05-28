@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::diagnostic::Span;
 use crate::hir::{
     HirBinding, HirBindingKind, HirBlock, HirEffectEvent, HirEffectEventKind, HirExpr,
-    HirFieldAccess, HirFunctionBody, HirStmt,
+    HirFieldAccess, HirFunctionBody, HirReturnProof, HirStmt,
 };
 
 use super::body::Flow;
@@ -22,6 +22,7 @@ pub(crate) struct LocalAnalysis {
     events_by_span: HashMap<Span, Vec<HirEffectEvent>>,
     binding_types_by_span: HashMap<Span, String>,
     field_accesses_by_span: HashMap<Span, HirFieldAccess>,
+    return_proofs_by_span: HashMap<Span, HirReturnProof>,
 }
 
 impl LocalAnalysis {
@@ -39,12 +40,17 @@ impl LocalAnalysis {
             .as_ref()
             .and_then(|body| body.block.as_ref())
             .map_or_else(HashMap::new, index_field_accesses_from_block);
+        let return_proofs_by_span = body
+            .as_ref()
+            .and_then(|body| body.block.as_ref())
+            .map_or_else(HashMap::new, index_return_proofs_from_block);
 
         Self {
             body,
             events_by_span,
             binding_types_by_span,
             field_accesses_by_span,
+            return_proofs_by_span,
         }
     }
 
@@ -85,6 +91,10 @@ impl LocalAnalysis {
 
     pub(crate) fn field_access(&self, span: &Span) -> Option<&HirFieldAccess> {
         self.field_accesses_by_span.get(span)
+    }
+
+    pub(crate) fn return_proof(&self, span: &Span) -> Option<&HirReturnProof> {
+        self.return_proofs_by_span.get(span)
     }
 
     fn effect_events(&self, span: &Span) -> &[HirEffectEvent] {
@@ -314,6 +324,95 @@ fn collect_expr_field_accesses(expr: &HirExpr, accesses: &mut HashMap<Span, HirF
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn index_return_proofs_from_block(block: &HirBlock) -> HashMap<Span, HirReturnProof> {
+    let mut proofs = HashMap::new();
+    collect_block_return_proofs(block, &mut proofs);
+    proofs
+}
+
+fn collect_block_return_proofs(block: &HirBlock, proofs: &mut HashMap<Span, HirReturnProof>) {
+    for statement in &block.statements {
+        collect_stmt_return_proofs(statement, proofs);
+    }
+}
+
+fn collect_stmt_return_proofs(statement: &HirStmt, proofs: &mut HashMap<Span, HirReturnProof>) {
+    match statement {
+        HirStmt::Return { value, proof, span } => {
+            let proof_span = value.as_ref().map_or(span, hir_expr_span);
+            proofs.insert(proof_span.clone(), proof.clone());
+            if let Some(value) = value {
+                collect_expr_return_proofs(value, proofs);
+            }
+        }
+        HirStmt::Let {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => collect_expr_return_proofs(value, proofs),
+        HirStmt::With { resource, body, .. } => {
+            collect_expr_return_proofs(resource, proofs);
+            collect_block_return_proofs(body, proofs);
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            collect_expr_return_proofs(condition, proofs);
+            collect_block_return_proofs(then_body, proofs);
+            if let Some(else_body) = else_body {
+                collect_block_return_proofs(else_body, proofs);
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                collect_expr_return_proofs(condition, proofs);
+            }
+            collect_block_return_proofs(body, proofs);
+        }
+        HirStmt::Let { value: None, .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn collect_expr_return_proofs(expr: &HirExpr, proofs: &mut HashMap<Span, HirReturnProof>) {
+    match expr {
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                collect_expr_return_proofs(&arg.value, proofs);
+            }
+        }
+        HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => {
+            collect_expr_return_proofs(value, proofs);
+        }
+        HirExpr::Field { base, .. } => collect_expr_return_proofs(base, proofs),
+        HirExpr::Closure { body, .. } => collect_block_return_proofs(body, proofs),
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn hir_expr_span(expr: &HirExpr) -> &Span {
+    match expr {
+        HirExpr::Ident { span, .. }
+        | HirExpr::Number { span, .. }
+        | HirExpr::String { span, .. }
+        | HirExpr::Field { span, .. }
+        | HirExpr::Call { span, .. }
+        | HirExpr::Effect { span, .. }
+        | HirExpr::Manage { span, .. }
+        | HirExpr::Closure { span, .. }
+        | HirExpr::Unknown(span) => span,
     }
 }
 
@@ -635,6 +734,18 @@ mod tests {
                         },
                         span: span(22),
                     }),
+                    HirStmt::Return {
+                        value: Some(HirExpr::Call {
+                            callee: Callee::Name("Image.load".to_string()),
+                            args: Vec::new(),
+                            resolution: CallResolution::Unknown,
+                            events: Vec::new(),
+                            type_name: Some("Image".to_string()),
+                            span: span(23),
+                        }),
+                        proof: HirReturnProof::FreshCall,
+                        span: span(23),
+                    },
                 ],
                 span: span(1),
             }),
@@ -656,6 +767,10 @@ mod tests {
                 .field_access(&span(22))
                 .is_some_and(|access| access.is_handle)
         );
+        assert!(matches!(
+            local_analysis.return_proof(&span(23)),
+            Some(HirReturnProof::FreshCall)
+        ));
 
         local_analysis.apply_retention_events(&span(20), &mut state);
         local_analysis.apply_move_events(&span(21), &mut state);
