@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use serde::Serialize;
+
 use crate::diagnostic::code;
 use crate::syntax::ast::{
     Block, CallArg, DataEffect, EffectDecl, Expr, FieldDecl, FileMode, FunctionDecl, Item, LetKind,
@@ -7,14 +9,15 @@ use crate::syntax::ast::{
 };
 use crate::syntax::parse_source;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReviewFinding {
     pub code: String,
     pub risk: ReviewRisk,
     pub summary: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ReviewRisk {
     Mode,
     Api,
@@ -121,6 +124,10 @@ pub fn format_review_human(findings: &[ReviewFinding]) -> String {
         ));
     }
     output
+}
+
+pub fn format_review_json(findings: &[ReviewFinding]) -> String {
+    serde_json::to_string(findings).expect("review JSON serialization should not fail")
 }
 
 fn review_finding(code: &str, risk: ReviewRisk, summary: impl Into<String>) -> ReviewFinding {

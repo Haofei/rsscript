@@ -5,7 +5,7 @@ use rsscript::syntax::ast::Item;
 use rsscript::syntax::parse_source;
 use rsscript::{
     ReviewRisk, analyze_source, explain_diagnostic_code, format_diagnostic_explanation,
-    format_diagnostics_json, format_review_human, review_sources,
+    format_diagnostics_json, format_review_human, format_review_json, review_sources,
 };
 use serde_json::Value;
 
@@ -75,6 +75,46 @@ fn diagnostic_explanations_are_available_by_code() {
     assert!(formatted.contains("RS0401"));
     assert!(formatted.contains("manage"));
     assert!(explain_diagnostic_code("RS9999").is_none());
+}
+
+#[test]
+fn review_json_uses_protocol_shape() {
+    let old_source = r#"
+mode: managed
+
+fn render(path: read Path) -> Image {
+    Image.load(path: read path)
+}
+"#;
+    let new_source = r#"
+mode: uses-local
+
+fn render(path: take Path) -> fresh Image
+    effects(retains(path))
+{
+    Image.load(path: read path)
+}
+"#;
+    let findings = review_sources("old.rss", old_source, "new.rss", new_source);
+    let json = format_review_json(&findings);
+    let value: Value = serde_json::from_str(&json).expect("review JSON should parse");
+    let items = value.as_array().expect("review JSON should be an array");
+
+    assert!(
+        items
+            .iter()
+            .any(|item| item["code"] == "RSR001" && item["risk"] == "mode")
+    );
+    assert!(
+        items
+            .iter()
+            .any(|item| item["code"] == "RSR006" && item["risk"] == "effect")
+    );
+    assert!(items.iter().all(|item| {
+        item["summary"]
+            .as_str()
+            .is_some_and(|summary| !summary.is_empty())
+    }));
 }
 
 #[test]

@@ -4,7 +4,8 @@ use std::process::ExitCode;
 
 use rsscript::{
     analyze_source, explain_diagnostic_code, format_diagnostic_explanation,
-    format_diagnostics_human, format_diagnostics_json, format_review_human, review_sources,
+    format_diagnostics_human, format_diagnostics_json, format_review_human, format_review_json,
+    review_sources,
 };
 
 fn main() -> ExitCode {
@@ -97,7 +98,8 @@ fn run_fmt(args: &[String]) -> ExitCode {
 }
 
 fn run_review(args: &[String]) -> ExitCode {
-    let [old_path, new_path] = args else {
+    let (json, old_path, new_path) = parse_review_args(args);
+    let (Some(old_path), Some(new_path)) = (old_path, new_path) else {
         print_usage();
         return ExitCode::from(2);
     };
@@ -124,13 +126,23 @@ fn run_review(args: &[String]) -> ExitCode {
         .chain(new_diagnostics.iter())
         .any(|diagnostic| diagnostic.severity.is_error());
     if has_errors {
-        print!("{}", format_diagnostics_human(&old_diagnostics));
-        print!("{}", format_diagnostics_human(&new_diagnostics));
+        if json {
+            let mut diagnostics = old_diagnostics;
+            diagnostics.extend(new_diagnostics);
+            println!("{}", format_diagnostics_json(&diagnostics));
+        } else {
+            print!("{}", format_diagnostics_human(&old_diagnostics));
+            print!("{}", format_diagnostics_human(&new_diagnostics));
+        }
         return ExitCode::from(1);
     }
 
     let findings = review_sources(old_path, &old_source, new_path, &new_source);
-    print!("{}", format_review_human(&findings));
+    if json {
+        println!("{}", format_review_json(&findings));
+    } else {
+        print!("{}", format_review_human(&findings));
+    }
     ExitCode::SUCCESS
 }
 
@@ -156,10 +168,28 @@ fn parse_path_args(args: &[String]) -> (bool, Option<&str>) {
     (json, path)
 }
 
+fn parse_review_args(args: &[String]) -> (bool, Option<&str>, Option<&str>) {
+    let mut json = false;
+    let mut paths = Vec::new();
+
+    for arg in args {
+        if arg == "--json" {
+            json = true;
+        } else {
+            paths.push(arg.as_str());
+        }
+    }
+
+    if paths.len() != 2 {
+        return (json, None, None);
+    }
+    (json, Some(paths[0]), Some(paths[1]))
+}
+
 fn print_usage() {
     eprintln!("usage:");
     eprintln!("  rsscript check [--json] <file.rss>");
     eprintln!("  rsscript check --explain <code>");
     eprintln!("  rsscript fmt <file.rss>");
-    eprintln!("  rsscript review <old.rss> <new.rss>");
+    eprintln!("  rsscript review [--json] <old.rss> <new.rss>");
 }
