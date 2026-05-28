@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use rsscript::syntax::ast::Item;
 use rsscript::syntax::parse_source;
-use rsscript::{analyze_source, format_diagnostics_json};
+use rsscript::{analyze_source, format_diagnostics_json, review_sources};
 use serde_json::Value;
 
 #[test]
@@ -94,6 +94,43 @@ fn syntax_parser_accepts_all_fixtures() {
             path.display()
         );
     }
+}
+
+#[test]
+fn review_reports_api_contract_changes() {
+    let old_source = r#"
+mode: managed
+
+fn render(path: read Path) -> Image
+    effects(no_panic)
+{
+    Image.load(path: read path)
+}
+"#;
+    let new_source = r#"
+mode: uses-local
+
+fn render(path: take Path, width: Int) -> fresh Image
+    effects(retains(path))
+{
+    Image.load(path: read path)
+}
+
+fn inspect(image: read Image) -> Unit {
+    Image.inspect(image: read image)
+}
+"#;
+
+    let codes: Vec<String> = review_sources("old.rss", old_source, "new.rss", new_source)
+        .into_iter()
+        .map(|finding| finding.code)
+        .collect();
+
+    assert!(codes.contains(&"RSR001".to_string()));
+    assert!(codes.contains(&"RSR003".to_string()));
+    assert!(codes.contains(&"RSR004".to_string()));
+    assert!(codes.contains(&"RSR005".to_string()));
+    assert!(codes.contains(&"RSR006".to_string()));
 }
 
 fn fixture_paths(directory: &str) -> Vec<PathBuf> {
