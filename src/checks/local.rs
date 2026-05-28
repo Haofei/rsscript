@@ -49,6 +49,26 @@ impl BodyState {
         self.clean_locals.remove(name);
     }
 
+    pub(crate) fn is_local(&self, name: &str) -> bool {
+        self.locals.contains(name)
+    }
+
+    pub(crate) fn is_managed(&self, name: &str) -> bool {
+        self.managed.contains(name)
+    }
+
+    pub(crate) fn is_clean_local(&self, name: &str) -> bool {
+        self.clean_locals.contains(name)
+    }
+
+    pub(crate) fn move_span(&self, name: &str) -> Option<&Span> {
+        self.moved.get(name)
+    }
+
+    pub(crate) fn value_type(&self, name: &str) -> Option<&str> {
+        self.value_types.get(name).map(String::as_str)
+    }
+
     pub(crate) fn apply_move_events(&mut self, events: &[HirEffectEvent]) {
         for event in events {
             if !matches!(

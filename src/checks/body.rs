@@ -67,7 +67,7 @@ fn check_stmt_semantics(
         Stmt::Let(stmt) => {
             if stmt.kind == LetKind::Local
                 && let Some(Expr::Ident(name, span)) = &stmt.value
-                && state.managed.contains(name)
+                && state.is_managed(name)
             {
                 analyzer.diagnostics.push(
                     Diagnostic::error(
@@ -249,7 +249,7 @@ fn check_moved_uses_in_stmt(analyzer: &mut Analyzer<'_>, statement: &Stmt, state
     let mut uses = Vec::new();
     collect_stmt_idents(statement, &mut uses);
     for (name, span) in uses {
-        if let Some(move_span) = state.moved.get(&name) {
+        if let Some(move_span) = state.move_span(&name) {
             analyzer.diagnostics.push(
                 Diagnostic::error(
                     code::USE_AFTER_MANAGE,
@@ -275,7 +275,7 @@ fn check_managed_closure_captures(analyzer: &mut Analyzer<'_>, body: &Block, sta
     let mut uses = Vec::new();
     collect_block_idents(body, &mut uses);
     for (name, span) in uses {
-        if state.locals.contains(&name) {
+        if state.is_local(&name) {
             analyzer.diagnostics.push(
                 Diagnostic::error(
                     code::LOCAL_CAPTURED_BY_MANAGED_CLOSURE,
@@ -517,11 +517,11 @@ fn check_fresh_return(
     state: &BodyState,
 ) {
     match value {
-        Expr::Ident(name, span) if state.managed.contains(name) => {
+        Expr::Ident(name, span) if state.is_managed(name) => {
             fresh_return_diagnostic(analyzer, function, name, span.clone());
         }
-        Expr::Ident(name, span) if state.locals.contains(name) => {
-            if !state.clean_locals.contains(name) {
+        Expr::Ident(name, span) if state.is_local(name) => {
+            if !state.is_clean_local(name) {
                 fresh_return_diagnostic(analyzer, function, name, span.clone());
             }
         }
@@ -643,7 +643,7 @@ fn is_struct_type(analyzer: &Analyzer<'_>, name: &str) -> bool {
 
 fn infer_expr_type(analyzer: &Analyzer<'_>, expr: &Expr, state: &BodyState) -> Option<String> {
     match expr {
-        Expr::Ident(name, _) => state.value_types.get(name).cloned(),
+        Expr::Ident(name, _) => state.value_type(name).map(str::to_string),
         Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
             infer_expr_type(analyzer, value, state)
         }
