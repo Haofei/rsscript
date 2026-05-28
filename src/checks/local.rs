@@ -1133,8 +1133,18 @@ fn resource_escape_operand_span(expr: &HirExpr, binding: &str) -> Option<Span> {
         HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => {
             resource_escape_operand_span(value, binding)
         }
+        HirExpr::Call { callee, args, .. } if resource_escape_wrapper_callee(callee) => args
+            .iter()
+            .find_map(|arg| resource_escape_operand_span(&arg.value, binding)),
         _ => None,
     }
+}
+
+fn resource_escape_wrapper_callee(callee: &Callee) -> bool {
+    matches!(
+        callee,
+        Callee::Name(name) if matches!(name.as_str(), "Ok" | "Err" | "Some")
+    )
 }
 
 fn hir_block_mentions_ident(block: &HirBlock, binding: &str) -> bool {

@@ -1,0 +1,24 @@
+// expect: RS0702
+features: local
+
+resource LogFile {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+fn LogFile.open(path: read Path) -> LogFile
+
+fn bad_return(path: read Path) -> Unit {
+    with LogFile.open(path: read path) as file {
+        return Ok(file)
+    }
+}
+
+fn bad_binding(path: read Path) -> Unit {
+    with LogFile.open(path: read path) as file {
+        let saved = Some(file)
+    }
+}

@@ -2433,6 +2433,42 @@ fn bad_binding(path: read Path) -> Unit {
 }
 
 #[test]
+fn checker_rejects_resource_escape_through_result_wrapper() {
+    let source = r#"
+features: local
+
+resource LogFile {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+fn LogFile.open(path: read Path) -> LogFile
+
+fn bad_return(path: read Path) -> Unit {
+    with LogFile.open(path: read path) as file {
+        return Ok(file)
+    }
+}
+
+fn bad_binding(path: read Path) -> Unit {
+    with LogFile.open(path: read path) as file {
+        let saved = Some(file)
+    }
+}
+"#;
+    let diagnostics = analyze_source("resource-wrapper-escape.rss", source);
+    let escape_count = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "RS0702" && diagnostic.label == "resource escapes")
+        .count();
+
+    assert_eq!(escape_count, 2, "{diagnostics:?}");
+}
+
+#[test]
 fn checker_tracks_use_after_take_for_local_inline_field() {
     let bad = r#"
 features: local
