@@ -3402,6 +3402,7 @@ operator overload attempt
 feature violation
 unsupported syntax
 async body / await / spawn used in v0.5 executable lowering
+async call not consumed by await or spawn
 unmappable rustc diagnostic
 native boundary violation
 ```

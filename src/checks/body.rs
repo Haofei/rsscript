@@ -274,7 +274,7 @@ fn apply_stmt_effects(statement: &HirStmt, state: &mut BodyState) {
 }
 
 fn check_expr_semantics(analyzer: &mut Analyzer<'_>, expr: &HirExpr, state: &BodyState) {
-    check_expr_semantics_with_context(analyzer, expr, state, false);
+    check_expr_semantics_with_context(analyzer, expr, state, false, false);
 }
 
 fn check_expr_semantics_with_context(
@@ -282,22 +282,30 @@ fn check_expr_semantics_with_context(
     expr: &HirExpr,
     state: &BodyState,
     allow_weak_upgrade_arg: bool,
+    async_call_consumed: bool,
 ) {
     match expr {
-        HirExpr::Call { callee, args, .. } => {
+        HirExpr::Call {
+            callee,
+            args,
+            resolution,
+            span,
+            ..
+        } => {
+            check_async_call_consumed(analyzer, callee, resolution, span, async_call_consumed);
             check_constructor_field_initializers(analyzer, callee, args, expr, state);
             check_call_place_conflicts(analyzer, args, state);
             let weak_upgrade = is_weak_upgrade_callee(callee);
             for arg in args {
-                check_expr_semantics_with_context(analyzer, &arg.value, state, weak_upgrade);
+                check_expr_semantics_with_context(analyzer, &arg.value, state, weak_upgrade, false);
             }
         }
         HirExpr::Spawn { value, .. } => {
             check_spawn_captures(analyzer, value, state);
-            check_expr_semantics_with_context(analyzer, value, state, false);
+            check_expr_semantics_with_context(analyzer, value, state, false, true);
         }
         HirExpr::Await { value, .. } => {
-            check_expr_semantics_with_context(analyzer, value, state, false);
+            check_expr_semantics_with_context(analyzer, value, state, false, true);
         }
         HirExpr::Effect {
             effect,
@@ -315,28 +323,28 @@ fn check_expr_semantics_with_context(
             {
                 check_weak_field_requires_upgrade(analyzer, value);
             }
-            check_expr_semantics_with_context(analyzer, value, state, false);
+            check_expr_semantics_with_context(analyzer, value, state, false, async_call_consumed);
         }
         HirExpr::Try { value, .. } => {
             if let HirExpr::Try { span, .. } = expr {
                 check_try_value_is_result(analyzer, value, span);
             }
-            check_expr_semantics_with_context(analyzer, value, state, false);
+            check_expr_semantics_with_context(analyzer, value, state, false, async_call_consumed);
         }
         HirExpr::Manage { value, span, .. } => {
             check_manage_operand_is_local(analyzer, value, span, state);
-            check_expr_semantics_with_context(analyzer, value, state, false);
+            check_expr_semantics_with_context(analyzer, value, state, false, false);
         }
         HirExpr::Binary { left, right, .. } => {
-            check_expr_semantics_with_context(analyzer, left, state, false);
-            check_expr_semantics_with_context(analyzer, right, state, false);
+            check_expr_semantics_with_context(analyzer, left, state, false, false);
+            check_expr_semantics_with_context(analyzer, right, state, false, false);
         }
         HirExpr::Field { base, .. } => {
-            check_expr_semantics_with_context(analyzer, base, state, false);
+            check_expr_semantics_with_context(analyzer, base, state, false, false);
         }
         HirExpr::Index { base, index, .. } => {
-            check_expr_semantics_with_context(analyzer, base, state, false);
-            check_expr_semantics_with_context(analyzer, index, state, false);
+            check_expr_semantics_with_context(analyzer, base, state, false, false);
+            check_expr_semantics_with_context(analyzer, index, state, false, false);
         }
         HirExpr::Closure { body, .. } => {
             for statement in &body.statements {
@@ -348,6 +356,45 @@ fn check_expr_semantics_with_context(
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}
     }
+}
+
+fn check_async_call_consumed(
+    analyzer: &mut Analyzer<'_>,
+    callee: &Callee,
+    resolution: &CallResolution,
+    span: &Span,
+    async_call_consumed: bool,
+) {
+    let CallResolution::Resolved { signature, .. } = resolution else {
+        return;
+    };
+    if !signature.is_async || async_call_consumed {
+        return;
+    }
+
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::ASYNC_CALL_NOT_CONSUMED,
+            format!(
+                "async call `{}` must be awaited or spawned.",
+                body_callee_display(callee)
+            ),
+            span.clone(),
+            "async call must be awaited or spawned",
+        )
+        .with_cause(
+            "Async calls introduce suspension or task boundaries that must be visible in source.",
+        )
+        .with_fix(
+            "await_or_spawn_async_call",
+            format!(
+                "Write `await {}(...)` or `spawn {}(...)`.",
+                body_callee_display(callee),
+                body_callee_display(callee)
+            ),
+            "manual",
+        ),
+    );
 }
 
 fn is_weak_upgrade_callee(callee: &Callee) -> bool {

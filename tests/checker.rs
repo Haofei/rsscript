@@ -3854,6 +3854,60 @@ fn schedule(url: read Url) -> Unit {
 }
 
 #[test]
+fn checker_rejects_async_call_without_await_or_spawn() {
+    let source = r#"
+features: async
+
+async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError>
+
+fn receive(url: read Url) -> Unit {
+    let bytes = fetch(url: read url)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("async-call-direct.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0022"
+                && diagnostic.label == "async call must be awaited or spawned"
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_gates_async_interface_calls_on_async_feature() {
+    let interface = r#"
+async fn Http.get(url: read Url) -> Result<fresh Bytes, NetworkError>
+"#;
+    let source = r#"
+fn receive(url: read Url) -> Unit {
+    let bytes = Http.get(url: read url)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source_with_interfaces(
+        "async-interface-call.rss",
+        source,
+        &[("net.rssi", interface)],
+    );
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0101" && diagnostic.summary.contains("async")),
+        "{diagnostics:?}"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0022"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn checker_gates_await_on_async_feature() {
     let source = r#"
 async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError>

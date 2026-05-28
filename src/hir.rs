@@ -1174,6 +1174,16 @@ fn collect_body_facts_in_expr(
         }
         Expr::Call { callee, args, span } => {
             let resolution = hir.resolve_call(callee);
+            if matches!(
+                &resolution,
+                CallResolution::Resolved { signature, .. } if signature.is_async
+            ) {
+                facts.feature_uses.push(HirFeatureUse {
+                    function_name: Some(function_name.to_string()),
+                    kind: HirFeatureUseKind::Async,
+                    span: span.clone(),
+                });
+            }
             if is_resource_pool_callee(callee) {
                 facts.feature_uses.push(HirFeatureUse {
                     function_name: Some(function_name.to_string()),
