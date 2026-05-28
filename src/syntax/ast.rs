@@ -7,11 +7,20 @@ pub enum FileFeature {
     Unsafe,
     Async,
     Device,
+    Ffi,
+    Reflection,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownFileFeature {
+    pub name: String,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
     pub features: Vec<FileFeature>,
+    pub unknown_features: Vec<UnknownFileFeature>,
     pub feature_spans: Vec<Span>,
     pub profile_spans: Vec<Span>,
     pub items: Vec<Item>,

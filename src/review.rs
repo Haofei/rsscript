@@ -1101,6 +1101,8 @@ fn feature_name(feature: &FileFeature) -> &'static str {
         FileFeature::Unsafe => "unsafe",
         FileFeature::Async => "async",
         FileFeature::Device => "device",
+        FileFeature::Ffi => "ffi",
+        FileFeature::Reflection => "reflection",
     }
 }
 
@@ -1108,14 +1110,16 @@ fn review_map_file_risk(features: &[FileFeature]) -> ReviewMapFileRisk {
     if features.iter().any(|feature| {
         matches!(
             feature,
-            FileFeature::Native | FileFeature::Unsafe | FileFeature::Device
+            FileFeature::Native | FileFeature::Unsafe | FileFeature::Device | FileFeature::Ffi
         )
     }) {
         ReviewMapFileRisk::High
-    } else if features
-        .iter()
-        .any(|feature| matches!(feature, FileFeature::Local | FileFeature::Async))
-    {
+    } else if features.iter().any(|feature| {
+        matches!(
+            feature,
+            FileFeature::Local | FileFeature::Async | FileFeature::Reflection
+        )
+    }) {
         ReviewMapFileRisk::Elevated
     } else {
         ReviewMapFileRisk::Low
@@ -1136,6 +1140,8 @@ fn review_map_feature_reason(feature: &str) -> Option<&'static str> {
         "unsafe" => Some("unsafe capability enabled"),
         "async" => Some("async control-flow capability enabled"),
         "device" => Some("device capability enabled"),
+        "ffi" => Some("ffi boundary capability enabled"),
+        "reflection" => Some("reflection capability enabled"),
         _ => None,
     }
 }

@@ -16,6 +16,7 @@ pub mod code {
     pub const INVALID_TRY_OPERATOR: &str = "RS0013";
     pub const INVALID_NOALLOC_ALLOCATION: &str = "RS0014";
     pub const UNSUPPORTED_SYNTAX: &str = "RS0015";
+    pub const UNKNOWN_FILE_FEATURE: &str = "RS0016";
     pub const FEATURE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
@@ -289,6 +290,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::INVALID_NOALLOC_ALLOCATION,
         title: "invalid noalloc allocation",
         explanation: "`effects(noalloc)` forbids obvious allocation sites such as value construction and `manage` migration.",
+    },
+    DiagnosticExplanation {
+        code: code::UNKNOWN_FILE_FEATURE,
+        title: "unknown file feature",
+        explanation: "A `features:` header may only list review-relevant capabilities known to this compiler version. Unknown feature names are rejected so typos do not silently change review risk.",
     },
     DiagnosticExplanation {
         code: code::FEATURE_VIOLATION,

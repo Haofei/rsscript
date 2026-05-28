@@ -2544,7 +2544,7 @@ manage operation
 effects(retains(...))
 with resource
 ResourcePool
-file features such as local/native/unsafe/async/device
+file features such as local/native/unsafe/async/device/ffi/reflection
 native / unsafe
 unknown external call
 writes to managed state
@@ -2562,6 +2562,8 @@ async        elevated risk
 native       high risk
 unsafe       high risk
 device       high risk
+ffi          high risk
+reflection   elevated risk
 ```
 
 This file-level risk does not require every helper function in the file to be classified as must-review. Region classification still depends on the function's own semantic facts and propagated callee risk.

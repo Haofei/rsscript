@@ -1643,6 +1643,28 @@ async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError>
 }
 
 #[test]
+fn checker_rejects_unknown_file_features() {
+    let source = r#"
+features: local, locall
+
+fn main() -> Unit {
+    return Unit
+}
+"#;
+    let program = parse_source("features.rss", source);
+
+    assert_eq!(program.features.len(), 1);
+    assert_eq!(program.unknown_features.len(), 1);
+    assert_eq!(program.unknown_features[0].name, "locall");
+    let diagnostics = analyze_source("features.rss", source);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0016")
+    );
+}
+
+#[test]
 fn review_map_marks_public_rssi_signatures_review_required() {
     let source = r#"
 struct JsonValue
@@ -1886,7 +1908,7 @@ fn update(counter: read Counter) -> Unit {
 #[test]
 fn review_map_reports_file_features() {
     let source = r#"
-features: local, native
+features: local, native, ffi, reflection
 
 fn process() -> Unit {
     return Unit
@@ -1894,7 +1916,10 @@ fn process() -> Unit {
 "#;
     let map = review_map_sources(vec![("features.rss", source)]);
 
-    assert_eq!(map.files[0].features, vec!["local", "native"]);
+    assert_eq!(
+        map.files[0].features,
+        vec!["ffi", "local", "native", "reflection"]
+    );
     assert_eq!(map.files[0].risk, ReviewMapFileRisk::High);
     assert!(
         map.files[0]
@@ -1908,12 +1933,26 @@ fn process() -> Unit {
             .iter()
             .any(|reason| reason == "native boundary capability enabled")
     );
+    assert!(
+        map.files[0]
+            .reasons
+            .iter()
+            .any(|reason| reason == "ffi boundary capability enabled")
+    );
+    assert!(
+        map.files[0]
+            .reasons
+            .iter()
+            .any(|reason| reason == "reflection capability enabled")
+    );
     let human = format_review_map_human(&map);
-    assert!(human.contains("features.rss: features local, native; risk high"));
+    assert!(human.contains("features.rss: features ffi, local, native, reflection; risk high"));
     let json: Value =
         serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
-    assert_eq!(json["files"][0]["features"][0], "local");
-    assert_eq!(json["files"][0]["features"][1], "native");
+    assert_eq!(json["files"][0]["features"][0], "ffi");
+    assert_eq!(json["files"][0]["features"][1], "local");
+    assert_eq!(json["files"][0]["features"][2], "native");
+    assert_eq!(json["files"][0]["features"][3], "reflection");
     assert_eq!(json["files"][0]["risk"], "high");
     assert!(
         json["files"][0]["reasons"]

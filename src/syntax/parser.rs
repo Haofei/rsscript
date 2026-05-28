@@ -2,7 +2,7 @@ use crate::lexer::{Token, TokenKind, lex};
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature,
     FunctionDecl, GenericBound, GenericParam, IfStmt, Item, LetKind, LetStmt, LoopStmt, Param,
-    Program, ReturnStmt, Stmt, TypeDecl, TypeKind, TypeRef, WithStmt,
+    Program, ReturnStmt, Stmt, TypeDecl, TypeKind, TypeRef, UnknownFileFeature, WithStmt,
 };
 
 pub fn parse_source(file: &str, source: &str) -> Program {
@@ -19,9 +19,15 @@ struct Parser<'a> {
     index: usize,
 }
 
+struct ParsedFeatures {
+    features: Vec<FileFeature>,
+    unknown_features: Vec<UnknownFileFeature>,
+}
+
 impl Parser<'_> {
     fn parse_program(&mut self) -> Program {
         let mut features = Vec::new();
+        let mut unknown_features = Vec::new();
         let mut feature_spans = Vec::new();
         let mut profile_spans = Vec::new();
         let mut items = Vec::new();
@@ -29,7 +35,9 @@ impl Parser<'_> {
         while !self.is_eof() {
             if self.at_ident("features") && self.peek_symbol(1, ":") {
                 feature_spans.push(self.tokens[self.index].span.clone());
-                features.extend(self.parse_features());
+                let parsed = self.parse_features();
+                features.extend(parsed.features);
+                unknown_features.extend(parsed.unknown_features);
             } else if self.at_ident("profile") && self.peek_symbol(1, ":") {
                 profile_spans.push(self.tokens[self.index].span.clone());
                 self.index += 1;
@@ -49,27 +57,40 @@ impl Parser<'_> {
 
         Program {
             features,
+            unknown_features,
             feature_spans,
             profile_spans,
             items,
         }
     }
 
-    fn parse_features(&mut self) -> Vec<FileFeature> {
+    fn parse_features(&mut self) -> ParsedFeatures {
         self.index += 2;
         let end = declaration_line_end(self.tokens, self.index);
         let mut features = Vec::new();
+        let mut unknown_features = Vec::new();
         while self.index < end {
             if self.at_symbol(",") {
                 self.index += 1;
                 continue;
             }
-            if let Some(feature) = parse_file_feature(self.tokens.get(self.index)) {
+            let token = self.tokens.get(self.index);
+            if let Some(feature) = parse_file_feature(token) {
                 features.push(feature);
+            } else if let Some(token) = token
+                && !matches!(token.kind, TokenKind::Eof)
+            {
+                unknown_features.push(UnknownFileFeature {
+                    name: token.text(),
+                    span: token.span.clone(),
+                });
             }
             self.index += 1;
         }
-        features
+        ParsedFeatures {
+            features,
+            unknown_features,
+        }
     }
 
     fn parse_type_decl(&mut self) -> Option<TypeDecl> {
@@ -1080,6 +1101,10 @@ fn parse_file_feature(token: Option<&Token>) -> Option<FileFeature> {
         Some(FileFeature::Async)
     } else if token.is_ident_text("device") {
         Some(FileFeature::Device)
+    } else if token.is_ident_text("ffi") {
+        Some(FileFeature::Ffi)
+    } else if token.is_ident_text("reflection") {
+        Some(FileFeature::Reflection)
     } else {
         None
     }

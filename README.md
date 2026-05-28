@@ -122,7 +122,7 @@ Files are managed-only by default. Advanced capabilities must be declared with `
 features: local
 ```
 
-The MVP implements only `local`. Future feature names such as `native`, `unsafe`, `async`, and `device` are reserved for capabilities that change review risk or require checker/runtime support. Ordinary libraries like JSON, File, Image, HTTP, Map, and Regex are not features.
+The MVP implements only `local`. Future feature names such as `native`, `unsafe`, `async`, `device`, `ffi`, and `reflection` are reserved for capabilities that change review risk or require checker/runtime support. Ordinary libraries like JSON, File, Image, HTTP, Map, and Regex are not features.
 
 ### Reviewable at the boundary
 

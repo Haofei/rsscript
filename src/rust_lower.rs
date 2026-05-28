@@ -318,10 +318,14 @@ impl<'a> RustLowerer<'a> {
         out.push_str(
             "// Runtime hooks are intentionally explicit while Rust lowering is stabilizing.\n",
         );
-        if self.program.has_feature(FileFeature::Local) {
-            out.push_str("// RSScript features: local\n");
-        } else {
+        let feature_names = lowered_feature_names(&self.program.features);
+        if feature_names.is_empty() {
             out.push_str("// RSScript features: <none>\n");
+        } else {
+            out.push_str(&format!(
+                "// RSScript features: {}\n",
+                feature_names.join(", ")
+            ));
         }
         out.push('\n');
 
@@ -1756,6 +1760,24 @@ fn rust_package_main(program: &Program, package_name: &str) -> Option<String> {
         ),
         main.name, call
     ))
+}
+
+fn lowered_feature_names(features: &[FileFeature]) -> Vec<&'static str> {
+    let mut names = features
+        .iter()
+        .map(|feature| match feature {
+            FileFeature::Local => "local",
+            FileFeature::Native => "native",
+            FileFeature::Unsafe => "unsafe",
+            FileFeature::Async => "async",
+            FileFeature::Device => "device",
+            FileFeature::Ffi => "ffi",
+            FileFeature::Reflection => "reflection",
+        })
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    names.dedup();
+    names
 }
 
 fn is_runnable_main(function: &FunctionDecl) -> bool {

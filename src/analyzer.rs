@@ -66,6 +66,7 @@ pub(crate) struct Analyzer<'a> {
 impl Analyzer<'_> {
     fn run(&mut self) {
         self.check_single_feature_declaration();
+        self.check_unknown_file_features();
         self.check_removed_profile_declarations();
         self.check_unsupported_syntax();
         self.check_duplicate_declarations();
@@ -95,6 +96,27 @@ impl Analyzer<'_> {
                 .with_fix(
                     "remove_duplicate_features",
                     "Merge the feature list into one `features:` declaration.",
+                    "manual",
+                ),
+            );
+        }
+    }
+
+    fn check_unknown_file_features(&mut self) {
+        for feature in &self.syntax_program.unknown_features {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::UNKNOWN_FILE_FEATURE,
+                    format!("Unknown file feature `{}`.", feature.name),
+                    feature.span.clone(),
+                    "unknown feature",
+                )
+                .with_cause(
+                    "File features must be review-relevant capabilities recognized by this compiler.",
+                )
+                .with_fix(
+                    "remove_or_correct_feature",
+                    "Remove the feature name or replace it with a supported feature such as `local`.",
                     "manual",
                 ),
             );
