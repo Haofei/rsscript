@@ -8,7 +8,7 @@ use rsscript::{
     analyze_source_with_core, analyze_source_with_interfaces, core_interfaces,
     explain_diagnostic_code, format_diagnostic_explanation, format_diagnostics_json,
     format_review_human, format_review_json, format_review_map_human, format_review_map_json,
-    lower_source_to_rust, lower_source_to_rust_package, lower_source_to_rust_with_map,
+    lint_source, lower_source_to_rust, lower_source_to_rust_package, lower_source_to_rust_with_map,
     remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines, review_map_sources,
     review_sources,
 };
@@ -194,6 +194,52 @@ fn diagnostic_explanations_are_available_by_code() {
     assert!(formatted.contains("RS0401"));
     assert!(formatted.contains("manage"));
     assert!(explain_diagnostic_code("RS9999").is_none());
+}
+
+#[test]
+fn lint_warns_on_public_signature_complexity() {
+    let source = r#"
+pub fn overloaded<A, B, C, D>(
+    first: read Result<Option<List<Map<String, Image>>>, Error>,
+    second: read String,
+    third: read String,
+    fourth: read String,
+    fifth: read String,
+    sixth: read String,
+    seventh: read String,
+) -> Result<Option<List<Map<String, Image>>>, Error>
+    effects(no_panic, noalloc, no_block, pure, native)
+{
+    return Ok(None)
+}
+"#;
+    let diagnostics = lint_source("lint.rss", source);
+    let codes = diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(codes.contains(&"RSL001"));
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| !diagnostic.severity.is_error())
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.summary.contains("7 parameters"))
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.summary.contains("4 generic parameters"))
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.summary.contains("5 effects"))
+    );
 }
 
 #[test]

@@ -400,6 +400,7 @@ Current CLI surface:
 ```sh
 rss check [--json] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>
 rss check --explain <code>
+rss lint [--json] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>
 rss fmt <file.rss>
 rss review [--json] --diff <old.rss> <new.rss>
 rss review [--json] --map <file-or-directory>
@@ -413,6 +414,8 @@ rss verify-rust [--json] <file.rss> --out-dir <directory>
 ```
 
 `rss check` loads bundled core `.rssi` signatures by default. Use `--no-core` only when testing a file against user-supplied interfaces in isolation. Bundled signatures are ordinary `.rssi` files under `core/`, not a second Rust-side builtin table.
+
+`rss lint` runs the same frontend checks and emits warning diagnostics for reviewability issues. The first lint is `RSL001`, which flags public signatures that exceed the current review budget for parameter count, generic parameter count, effect count, or nested type depth.
 
 If a lowered package contains `fn main() -> Unit` or `fn main() -> Result<Unit, E>`, `rss lower --rust --out-dir` also emits a Rust `src/main.rs` harness. `rss run <file.rss>` uses the same lowering path, writes a temporary Rust package, and delegates execution to `cargo run`. Use `rss run <file.rss> --out-dir <directory>` to keep the generated Rust package for inspection.
 

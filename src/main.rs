@@ -8,7 +8,7 @@ use rsscript::{
     Diagnostic, analyze_source, analyze_source_with_interfaces, check_generated_rust_package,
     core_interfaces, explain_diagnostic_code, format_diagnostic_explanation,
     format_diagnostics_human, format_diagnostics_json, format_review_human, format_review_json,
-    format_review_map_human, format_review_map_json, lower_source_to_rust,
+    format_review_map_human, format_review_map_json, lint_source, lower_source_to_rust,
     lower_source_to_rust_package, parse_source_map_json, remap_rustc_diagnostic_json_lines,
     review_map_sources, review_sources, write_generated_rust_package,
 };
@@ -22,6 +22,7 @@ fn main() -> ExitCode {
 
     match command {
         "check" => run_check(&args[2..]),
+        "lint" => run_lint(&args[2..]),
         "fmt" => run_fmt(&args[2..]),
         "review" => run_review(&args[2..]),
         "lower" => run_lower(&args[2..]),
@@ -32,6 +33,61 @@ fn main() -> ExitCode {
             print_usage();
             ExitCode::from(2)
         }
+    }
+}
+
+fn run_lint(args: &[String]) -> ExitCode {
+    let options = parse_check_args(args);
+    let Some(path) = options.path else {
+        print_usage();
+        return ExitCode::from(2);
+    };
+
+    let source = match fs::read_to_string(path) {
+        Ok(source) => source,
+        Err(error) => {
+            eprintln!("failed to read {path}: {error}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let interfaces = match read_interface_sources(&options.interfaces) {
+        Ok(interfaces) => interfaces,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+    let interface_refs = interfaces
+        .iter()
+        .map(|interface| (interface.path.as_str(), interface.contents.as_str()))
+        .collect::<Vec<_>>();
+    let mut diagnostics = if options.use_core {
+        let mut combined = core_interfaces().to_vec();
+        combined.extend(interface_refs);
+        analyze_source_with_interfaces(path, &source, &combined)
+    } else if interface_refs.is_empty() {
+        analyze_source(path, &source)
+    } else {
+        analyze_source_with_interfaces(path, &source, &interface_refs)
+    };
+    diagnostics.extend(lint_source(path, &source));
+
+    if options.json {
+        println!("{}", format_diagnostics_json(&diagnostics));
+    } else if diagnostics.is_empty() {
+        println!("{path}: lint ok");
+    } else {
+        print!("{}", format_diagnostics_human(&diagnostics));
+    }
+
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity.is_error())
+    {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
     }
 }
 
@@ -834,6 +890,9 @@ fn print_usage() {
     eprintln!("usage:");
     eprintln!(
         "  rsscript check [--json] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>"
+    );
+    eprintln!(
+        "  rsscript lint [--json] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>"
     );
     eprintln!("  rsscript check --explain <code>");
     eprintln!("  rsscript fmt <file.rss>");

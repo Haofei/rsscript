@@ -48,6 +48,7 @@ pub mod code {
     pub const SURFACE_REFERENCE_ATTEMPT: &str = "RS1004";
     pub const RUSTC_DIAGNOSTIC_MAPPED: &str = "RS1101";
     pub const RUSTC_DIAGNOSTIC_UNMAPPABLE: &str = "RS1102";
+    pub const LINT_SIGNATURE_COMPLEXITY: &str = "RSL001";
 
     pub const REVIEW_FEATURES_CHANGED: &str = "RSR001";
     pub const REVIEW_FUNCTION_REMOVED: &str = "RSR002";
@@ -451,6 +452,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::RUSTC_DIAGNOSTIC_UNMAPPABLE,
         title: "unmappable rustc diagnostic",
         explanation: "rustc reported a backend diagnostic whose generated Rust location could not be mapped back to RSScript source. The compiler should surface the generated Rust reference as secondary internal detail instead of exposing raw rustc output as the primary diagnostic.",
+    },
+    DiagnosticExplanation {
+        code: code::LINT_SIGNATURE_COMPLEXITY,
+        title: "signature complexity lint",
+        explanation: "Public signatures should remain reviewable in one screen. The linter warns when public parameters, generic parameters, effect clauses, or nested type shapes exceed the current review budget.",
     },
 ];
 
