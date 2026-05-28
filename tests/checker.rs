@@ -344,6 +344,31 @@ fn bad_image(path: read Path) -> fresh Image {
 }
 
 #[test]
+fn resource_pool_read_parameter_must_be_local_capability() {
+    let source = r#"
+features: local
+
+resource DbConnection {
+    fd: Int
+
+    drop {
+        Db.close(fd: fd)
+    }
+}
+
+fn bad_pool(pool: read ResourcePool<DbConnection>) -> Unit {
+    DbConnection.count(pool: read pool)
+}
+"#;
+    let codes = analyze_source("resourcepool-read-param.rss", source)
+        .into_iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+
+    assert!(codes.contains(&"RS0705".to_string()));
+}
+
+#[test]
 fn diagnostics_json_uses_protocol_shape() {
     let path = Path::new("tests/fixtures/fail/use-after-manage.rss");
     let source = read_fixture(path);

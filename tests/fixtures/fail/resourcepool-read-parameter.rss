@@ -1,0 +1,14 @@
+// expect: RS0705
+features: local
+
+resource DbConnection {
+    fd: Int
+
+    drop {
+        Db.close(fd: fd)
+    }
+}
+
+fn bad_pool(pool: read ResourcePool<DbConnection>) -> Unit {
+    DbConnection.count(pool: read pool)
+}

@@ -56,12 +56,17 @@ fn check_local_class_bindings(analyzer: &mut Analyzer<'_>, body: &crate::hir::Hi
 
 fn check_resource_pool_bindings(analyzer: &mut Analyzer<'_>, body: &crate::hir::HirFunctionBody) {
     for binding in &body.bindings {
-        if binding.kind == HirBindingKind::ManagedLet
-            && binding
-                .type_name
-                .as_deref()
-                .is_some_and(is_resource_pool_type)
+        if !binding
+            .type_name
+            .as_deref()
+            .is_some_and(is_resource_pool_type)
         {
+            continue;
+        }
+        let binding_is_local = binding.kind == HirBindingKind::LocalLet
+            || (binding.kind == HirBindingKind::Param
+                && matches!(binding.effect, Some(ParamEffect::Mut | ParamEffect::Take)));
+        if !binding_is_local {
             resource_pool_not_local_diagnostic(analyzer, &binding.name, binding.span.clone());
         }
     }
@@ -1168,7 +1173,7 @@ fn resource_pool_not_local_diagnostic(
         .with_cause("ResourcePool owns long-lived resources and must not be hidden behind an ordinary managed binding.")
         .with_fix(
             "make_resource_pool_local",
-            format!("Declare `{binding}` with `local` instead of `let`."),
+            format!("Declare `{binding}` with `local`, or pass it as a `mut` local-capability parameter."),
             "machine-applicable",
         ),
     );
