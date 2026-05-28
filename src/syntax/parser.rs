@@ -1370,27 +1370,40 @@ fn parse_index_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> 
 }
 
 fn parse_call_args(tokens: &[Token], start: usize, end: usize) -> Vec<CallArg> {
-    split_top_level(tokens, start, end, ",")
+    split_param_ranges(tokens, start, end)
         .into_iter()
-        .map(|(start, end)| {
+        .filter_map(|range| {
+            if let Some(span) = range.empty_span {
+                return Some(CallArg {
+                    name: None,
+                    value: Expr::Unknown(span.clone()),
+                    malformed: true,
+                    span,
+                });
+            }
+            let start = range.start;
+            let end = range.end;
             if let Some(name) = tokens.get(start).and_then(ident_name)
                 && tokens.get(start + 1).is_some_and(|token| token.symbol(":"))
             {
                 let value = parse_expr(tokens, start + 2, end)
                     .unwrap_or_else(|| Expr::Unknown(tokens[start].span.clone()));
-                CallArg {
+                Some(CallArg {
                     name: Some(name.to_string()),
                     value,
+                    malformed: false,
                     span: tokens[start].span.clone(),
-                }
+                })
             } else {
-                let value = parse_expr(tokens, start, end)
-                    .unwrap_or_else(|| Expr::Unknown(tokens[start].span.clone()));
-                CallArg {
+                let span = tokens.get(start)?.span.clone();
+                let value =
+                    parse_expr(tokens, start, end).unwrap_or_else(|| Expr::Unknown(span.clone()));
+                Some(CallArg {
                     name: None,
                     value,
-                    span: tokens[start].span.clone(),
-                }
+                    malformed: false,
+                    span,
+                })
             }
         })
         .collect()
@@ -1585,33 +1598,6 @@ fn find_top_level_symbol(
         }
     }
     None
-}
-
-fn split_top_level(
-    tokens: &[Token],
-    start: usize,
-    end: usize,
-    delimiter: &str,
-) -> Vec<(usize, usize)> {
-    let mut ranges = Vec::new();
-    let mut range_start = start;
-    let mut depth = 0usize;
-    for (index, token) in tokens.iter().enumerate().take(end).skip(start) {
-        if token.symbol("(") || token.symbol("{") || token.symbol("[") || token.symbol("<") {
-            depth += 1;
-        } else if token.symbol(")") || token.symbol("}") || token.symbol("]") || token.symbol(">") {
-            depth = depth.saturating_sub(1);
-        } else if depth == 0 && token.symbol(delimiter) {
-            if range_start < index {
-                ranges.push((range_start, index));
-            }
-            range_start = index + 1;
-        }
-    }
-    if range_start < end {
-        ranges.push((range_start, end));
-    }
-    ranges
 }
 
 fn trim_outer(tokens: &[Token], start: usize, end: usize) -> (usize, usize) {

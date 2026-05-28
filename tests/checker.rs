@@ -2647,6 +2647,27 @@ fn bad(
 }
 
 #[test]
+fn checker_reports_malformed_empty_call_arguments_as_unsupported() {
+    let source = r#"
+fn main() -> Unit {
+    Log.write(, message: read "hello")
+    Log.write(message: read "hello",, tag: read "demo")
+    Log.write(message: read "trailing comma is ok",)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("malformed-call-args.rss", source);
+    let malformed_count = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == "RS0015" && diagnostic.label == "malformed call argument"
+        })
+        .count();
+
+    assert_eq!(malformed_count, 2, "{diagnostics:?}");
+}
+
+#[test]
 fn checker_reports_malformed_bindings_and_arguments_as_unsupported() {
     let source = r#"
 fn main() -> Unit {

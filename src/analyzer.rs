@@ -396,7 +396,15 @@ impl Analyzer<'_> {
             }
             Expr::Call { args, .. } => {
                 for arg in args {
-                    self.check_unsupported_syntax_expr(&arg.value);
+                    if arg.malformed {
+                        self.unsupported_syntax(
+                            arg.span.clone(),
+                            "malformed call argument",
+                            "Call arguments cannot contain empty argument slots.",
+                        );
+                    } else {
+                        self.check_unsupported_syntax_expr(&arg.value);
+                    }
                 }
             }
             Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
