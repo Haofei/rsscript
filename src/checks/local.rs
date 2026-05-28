@@ -2644,6 +2644,7 @@ mod tests {
                                 base_type: Some("Config".to_string()),
                                 type_name: Some("Rules".to_string()),
                                 is_handle: true,
+                                is_weak: false,
                             },
                             span: span(22),
                         }),

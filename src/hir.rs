@@ -152,6 +152,7 @@ pub struct HirFieldAccess {
     pub base_type: Option<String>,
     pub type_name: Option<String>,
     pub is_handle: bool,
+    pub is_weak: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -882,6 +883,7 @@ fn lower_hir_expr(
                     base_type,
                     type_name: field.map(|field| field.type_name.clone()),
                     is_handle: field.is_some_and(|field| field.is_handle || field.is_weak),
+                    is_weak: field.is_some_and(|field| field.is_weak),
                 },
                 span: span.clone(),
             }
@@ -1253,6 +1255,7 @@ fn collect_body_facts_in_expr(
                 base_type,
                 type_name: field.map(|field| field.type_name.clone()),
                 is_handle: field.is_some_and(|field| field.is_handle || field.is_weak),
+                is_weak: field.is_some_and(|field| field.is_weak),
             });
             collect_body_facts_in_expr(hir, function_name, base, value_types, facts);
         }

@@ -50,6 +50,7 @@ pub mod code {
     pub const LOCAL_CAPTURED_BY_MANAGED_CLOSURE: &str = "RS0801";
     pub const TAKE_HANDLE_FIELD: &str = "RS0901";
     pub const INVALID_WEAK_FIELD: &str = "RS0902";
+    pub const WEAK_FIELD_REQUIRES_UPGRADE: &str = "RS0903";
     pub const OPERATOR_OVERLOAD_ATTEMPT: &str = "RS1001";
     pub const IMPLICIT_CONVERSION_ATTEMPT: &str = "RS1002";
     pub const OWN_STRUCT_ATTEMPT: &str = "RS1003";
@@ -476,6 +477,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::INVALID_WEAK_FIELD,
         title: "invalid weak field",
         explanation: "`weak` fields break managed class cycles. The MVP only allows weak fields whose type is a class.",
+    },
+    DiagnosticExplanation {
+        code: code::WEAK_FIELD_REQUIRES_UPGRADE,
+        title: "weak field requires upgrade",
+        explanation: "`weak` fields are non-owning handles. Upgrade them explicitly with `Weak.upgrade(value: read weak_field)` before using the target value.",
     },
     DiagnosticExplanation {
         code: code::OPERATOR_OVERLOAD_ATTEMPT,

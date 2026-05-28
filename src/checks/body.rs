@@ -265,16 +265,26 @@ fn apply_stmt_effects(statement: &HirStmt, state: &mut BodyState) {
 }
 
 fn check_expr_semantics(analyzer: &mut Analyzer<'_>, expr: &HirExpr, state: &BodyState) {
+    check_expr_semantics_with_context(analyzer, expr, state, false);
+}
+
+fn check_expr_semantics_with_context(
+    analyzer: &mut Analyzer<'_>,
+    expr: &HirExpr,
+    state: &BodyState,
+    allow_weak_upgrade_arg: bool,
+) {
     match expr {
-        HirExpr::Call { args, .. } => {
+        HirExpr::Call { callee, args, .. } => {
             check_call_place_conflicts(analyzer, args, state);
+            let weak_upgrade = is_weak_upgrade_callee(callee);
             for arg in args {
-                check_expr_semantics(analyzer, &arg.value, state);
+                check_expr_semantics_with_context(analyzer, &arg.value, state, weak_upgrade);
             }
         }
         HirExpr::Spawn { value, .. } => {
             check_spawn_captures(analyzer, value, state);
-            check_expr_semantics(analyzer, value, state);
+            check_expr_semantics_with_context(analyzer, value, state, false);
         }
         HirExpr::Effect {
             effect,
@@ -284,27 +294,33 @@ fn check_expr_semantics(analyzer: &mut Analyzer<'_>, expr: &HirExpr, state: &Bod
         } => {
             if *effect == ParamEffect::Take {
                 check_take_operand_is_local(analyzer, value, span, state);
+            } else if !(allow_weak_upgrade_arg && *effect == ParamEffect::Read)
+                && matches!(effect, ParamEffect::Read | ParamEffect::Mut)
+            {
+                check_weak_field_requires_upgrade(analyzer, value);
             }
-            check_expr_semantics(analyzer, value, state);
+            check_expr_semantics_with_context(analyzer, value, state, false);
         }
         HirExpr::Try { value, .. } => {
             if let HirExpr::Try { span, .. } = expr {
                 check_try_value_is_result(analyzer, value, span);
             }
-            check_expr_semantics(analyzer, value, state);
+            check_expr_semantics_with_context(analyzer, value, state, false);
         }
         HirExpr::Manage { value, span, .. } => {
             check_manage_operand_is_local(analyzer, value, span, state);
-            check_expr_semantics(analyzer, value, state);
+            check_expr_semantics_with_context(analyzer, value, state, false);
         }
         HirExpr::Binary { left, right, .. } => {
-            check_expr_semantics(analyzer, left, state);
-            check_expr_semantics(analyzer, right, state);
+            check_expr_semantics_with_context(analyzer, left, state, false);
+            check_expr_semantics_with_context(analyzer, right, state, false);
         }
-        HirExpr::Field { base, .. } => check_expr_semantics(analyzer, base, state),
+        HirExpr::Field { base, .. } => {
+            check_expr_semantics_with_context(analyzer, base, state, false);
+        }
         HirExpr::Index { base, index, .. } => {
-            check_expr_semantics(analyzer, base, state);
-            check_expr_semantics(analyzer, index, state);
+            check_expr_semantics_with_context(analyzer, base, state, false);
+            check_expr_semantics_with_context(analyzer, index, state, false);
         }
         HirExpr::Closure { body, .. } => {
             for statement in &body.statements {
@@ -315,6 +331,146 @@ fn check_expr_semantics(analyzer: &mut Analyzer<'_>, expr: &HirExpr, state: &Bod
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn is_weak_upgrade_callee(callee: &Callee) -> bool {
+    matches!(
+        callee,
+        Callee::Qualified { namespace, name } if namespace == "Weak" && name == "upgrade"
+    )
+}
+
+fn check_weak_field_requires_upgrade(analyzer: &mut Analyzer<'_>, value: &HirExpr) {
+    let Some(access) = weak_field_access_requiring_upgrade(value) else {
+        return;
+    };
+
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::WEAK_FIELD_REQUIRES_UPGRADE,
+            format!(
+                "weak field `{}` must be upgraded before it is used as a value.",
+                access.name
+            ),
+            access.span.clone(),
+            "weak field requires upgrade",
+        )
+        .with_cause("A weak field is a non-owning handle and may no longer point to a live value.")
+        .with_fix(
+            "upgrade_weak_field",
+            format!(
+                "Use `Weak.upgrade(value: read {})` and handle `None`.",
+                access.name
+            ),
+            "manual",
+        ),
+    );
+}
+
+fn weak_field_access_requiring_upgrade(expr: &HirExpr) -> Option<&crate::hir::HirFieldAccess> {
+    match expr {
+        HirExpr::Field { base, access, .. } => {
+            if access.is_weak {
+                Some(access)
+            } else {
+                weak_field_access_requiring_upgrade(base)
+            }
+        }
+        HirExpr::Call { callee, args, .. } if is_weak_upgrade_callee(callee) => {
+            for arg in args {
+                if let HirExpr::Effect { value, .. } = &arg.value
+                    && weak_field_access_requiring_upgrade(value).is_some()
+                {
+                    return None;
+                }
+            }
+            args.iter()
+                .find_map(|arg| weak_field_access_requiring_upgrade(&arg.value))
+        }
+        HirExpr::Call { args, .. } => args
+            .iter()
+            .find_map(|arg| weak_field_access_requiring_upgrade(&arg.value)),
+        HirExpr::Effect { value, .. }
+        | HirExpr::Try { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. } => weak_field_access_requiring_upgrade(value),
+        HirExpr::Index { base, index, .. } => weak_field_access_requiring_upgrade(base)
+            .or_else(|| weak_field_access_requiring_upgrade(index)),
+        HirExpr::Binary { left, right, .. } => weak_field_access_requiring_upgrade(left)
+            .or_else(|| weak_field_access_requiring_upgrade(right)),
+        HirExpr::Closure { body, .. } => body
+            .statements
+            .iter()
+            .find_map(|statement| weak_field_access_requiring_upgrade_in_stmt(statement)),
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => None,
+    }
+}
+
+fn weak_field_access_requiring_upgrade_in_stmt(
+    statement: &HirStmt,
+) -> Option<&crate::hir::HirFieldAccess> {
+    match statement {
+        HirStmt::Let {
+            value: Some(value), ..
+        }
+        | HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => weak_field_access_requiring_upgrade(value),
+        HirStmt::With { resource, body, .. } => weak_field_access_requiring_upgrade(resource)
+            .or_else(|| {
+                body.statements
+                    .iter()
+                    .find_map(weak_field_access_requiring_upgrade_in_stmt)
+            }),
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => weak_field_access_requiring_upgrade(condition)
+            .or_else(|| {
+                then_body
+                    .statements
+                    .iter()
+                    .find_map(weak_field_access_requiring_upgrade_in_stmt)
+            })
+            .or_else(|| {
+                else_body.as_ref().and_then(|body| {
+                    body.statements
+                        .iter()
+                        .find_map(weak_field_access_requiring_upgrade_in_stmt)
+                })
+            }),
+        HirStmt::Loop {
+            condition, body, ..
+        } => condition
+            .as_ref()
+            .and_then(weak_field_access_requiring_upgrade)
+            .or_else(|| {
+                body.statements
+                    .iter()
+                    .find_map(weak_field_access_requiring_upgrade_in_stmt)
+            }),
+        HirStmt::Match { value, arms, .. } => {
+            weak_field_access_requiring_upgrade(value).or_else(|| {
+                arms.iter().find_map(|arm| {
+                    arm.body
+                        .statements
+                        .iter()
+                        .find_map(weak_field_access_requiring_upgrade_in_stmt)
+                })
+            })
+        }
+        HirStmt::Let { value: None, .. }
+        | HirStmt::Return { value: None, .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => None,
     }
 }
 

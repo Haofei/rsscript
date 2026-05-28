@@ -2036,6 +2036,59 @@ fn make_session_from_param(user: read User) -> Session {
 }
 
 #[test]
+fn checker_requires_weak_field_upgrade_before_read_or_mut_use() {
+    let source = r#"
+class User {
+    id: Int
+}
+
+struct Session {
+    owner: weak User
+}
+
+fn User.log(user: read User) -> Unit
+fn User.rename(user: mut User) -> Unit
+
+fn bad_read(session: read Session) -> Unit {
+    User.log(user: read session.owner)
+}
+
+fn bad_mut(session: read Session) -> Unit {
+    User.rename(user: mut session.owner)
+}
+"#;
+    let diagnostics = analyze_source("weak-field-direct-use.rss", source);
+    let weak_use_count = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "RS0903")
+        .count();
+
+    assert_eq!(weak_use_count, 2, "{diagnostics:?}");
+}
+
+#[test]
+fn checker_accepts_explicit_weak_upgrade() {
+    let source = r#"
+class User {
+    id: Int
+}
+
+struct Session {
+    owner: weak User
+}
+
+fn Weak.upgrade(value: read User) -> Option<User>
+
+fn read_owner(session: read Session) -> Unit {
+    let owner = Weak.upgrade(value: read session.owner)
+}
+"#;
+    let diagnostics = analyze_source("weak-field-upgrade.rss", source);
+
+    assert_eq!(diagnostics, Vec::new(), "{diagnostics:?}");
+}
+
+#[test]
 fn rust_lowering_uses_shared_handles_for_managed_class_mut_parameters() {
     let source = r#"
 features: local
