@@ -395,6 +395,7 @@ RSScript manage expr     -> rss_rt::manage(...)
 RSScript read arg        -> runtime read view or cloned handle according to value kind
 RSScript mut arg         -> runtime mut operation according to value kind
 RSScript take arg        -> Rust move of local value
+RSScript fn main() -> Unit -> Rust binary harness calling generated library main
 ```
 
 This contract makes generated Rust source:

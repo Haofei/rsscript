@@ -514,9 +514,34 @@ pub fn make_point(x: Int, y: Int) -> fresh Point {
             .contains("rsscript-runtime = { path = \"/workspace/rsscript/runtime\" }")
     );
     assert!(package.lib_rs.contains("pub struct Point"));
+    assert!(package.main_rs.is_none());
     let source_map: Value =
         serde_json::from_str(&package.source_map_json).expect("source map JSON should parse");
     assert!(source_map.as_array().is_some_and(|items| !items.is_empty()));
+}
+
+#[test]
+fn rust_lowering_can_emit_runnable_main_harness() {
+    let source = r#"
+fn main() -> Unit {
+    return Unit
+}
+"#;
+    let package = lower_source_to_rust_package(
+        "main.rss",
+        source,
+        "Runnable Example.rss",
+        "/workspace/rsscript/runtime",
+    )
+    .expect("source should lower into package");
+    let main_rs = package
+        .main_rs
+        .as_ref()
+        .expect("zero-argument Unit main should emit a Rust binary harness");
+
+    assert_eq!(package.package_name, "runnable-example-rss");
+    assert!(package.lib_rs.contains("pub fn main()"));
+    assert!(main_rs.contains("runnable_example_rss::main();"));
 }
 
 #[test]

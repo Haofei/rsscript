@@ -382,6 +382,7 @@ source-span hooks for manage and ResourcePool borrow lowering
 central runtime unwrap boundary for generated resource operations
 source map JSON for generated Rust packages
 rustc diagnostic remapping through source maps
+zero-argument `fn main() -> Unit` package harnesses for runnable Rust output
 core `.rssi` interface signatures
 CI gates for formatting, linting, tests, and generated Rust fixtures
 golden tests for Rust lowering and source-map shape
@@ -404,6 +405,8 @@ rss lower --rust <file.rss> --out-dir <directory>
 rss remap-rustc [--json] <rsscript-source-map.json> <rustc-json-lines>
 rss verify-rust [--json] <file.rss>
 ```
+
+If a lowered package contains `fn main() -> Unit`, `rss lower --rust --out-dir` also emits a Rust `src/main.rs` harness. That package can be checked or run with Cargo once the generated Rust and runtime crate are supported by the local toolchain.
 
 ---
 
