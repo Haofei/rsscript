@@ -2270,6 +2270,26 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_reports_trailing_expression_tokens_as_unsupported() {
+    let source = r#"
+fn main() -> Unit {
+    let call = Log.write(message: read "hello") extra
+    let name = call extra
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("trailing-expression-token.rss", source);
+    let unsupported_count = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == "RS0015" && diagnostic.label == "unsupported expression"
+        })
+        .count();
+
+    assert_eq!(unsupported_count, 2, "{diagnostics:?}");
+}
+
+#[test]
 fn checker_rejects_retaining_local_inline_field() {
     let source = r#"
 features: local

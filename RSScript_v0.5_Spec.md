@@ -675,9 +675,10 @@ unsupported  rejected before Rust lowering or reserved for later versions
 | unsupported syntax | Unsupported source must not become generated Rust `todo!()` or silently skipped semantics. | static diagnostics for known unsupported constructs; parser completeness is still a hardening area |
 
 Open hardening requirement: unknown top-level constructs, malformed
-declarations, malformed `let`/`local` bindings, and missing call argument
-values are stable diagnostics. Broader expression/body parse errors still need
-grammar-driven diagnostics before v0.5 can be called semantically hard.
+declarations, malformed `let`/`local` bindings, missing call argument values,
+and trailing expression tokens are stable diagnostics. Broader expression/body
+parse errors still need grammar-driven diagnostics before v0.5 can be called
+semantically hard.
 
 ---
 

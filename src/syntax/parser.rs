@@ -852,6 +852,9 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
             });
         };
         let close = find_matching(tokens, open, "{", "}").unwrap_or(open);
+        if close + 1 != end {
+            return Some(Expr::Unknown(tokens[start].span.clone()));
+        }
         return Some(Expr::Closure {
             body: parse_block(tokens, open, close),
             span: tokens[start].span.clone(),
@@ -878,6 +881,9 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
         {
             let close =
                 find_matching(tokens, value_start, "(", ")").unwrap_or(end.saturating_sub(1));
+            if close + 1 != end {
+                return Some(Expr::Unknown(tokens[start].span.clone()));
+            }
             parse_expr(tokens, value_start + 1, close)
         } else {
             parse_expr(tokens, value_start, end)
@@ -897,6 +903,9 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
         {
             let close =
                 find_matching(tokens, value_start, "(", ")").unwrap_or(end.saturating_sub(1));
+            if close + 1 != end {
+                return Some(Expr::Unknown(tokens[start].span.clone()));
+            }
             parse_expr(tokens, value_start + 1, close)
         } else {
             parse_expr(tokens, value_start, end)
@@ -917,6 +926,10 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
 
     if let Some(index) = parse_index_expr(tokens, start, end) {
         return Some(index);
+    }
+
+    if start + 1 != end {
+        return Some(Expr::Unknown(tokens[start].span.clone()));
     }
 
     match tokens.get(start).map(|token| &token.kind)? {
@@ -1096,7 +1109,7 @@ fn parse_call_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
     let open = find_call_open(tokens, start, end)?;
     let callee = parse_callee(tokens, start, open)?;
     let close = find_matching(tokens, open, "(", ")")?;
-    if close >= end {
+    if close + 1 != end {
         return None;
     }
     let args = parse_call_args(tokens, open + 1, close);
@@ -1150,7 +1163,7 @@ fn find_top_level_dot(tokens: &[Token], start: usize, end: usize) -> Option<usiz
 
 fn parse_field_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
     let dot = find_last_top_level_dot(tokens, start, end)?;
-    if dot + 1 >= end {
+    if dot + 2 != end {
         return None;
     }
     Some(Expr::Field {
