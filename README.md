@@ -13,7 +13,7 @@ It currently implements:
 - `rss fmt <file.rss>` as a parse/check gate that prints the source unchanged when valid
 - `rss review <old.rss> <new.rss>` for a first-pass API/type/effect/freshness diff
 - Lexer, lightweight parser, syntax AST, HIR signature table, and semantic checks for the review-critical v0.4.1 rules
-- Builtin signatures for the current fixture stdlib surface, including `Image`, `File`, `Map`, `ResourcePool`, `Json`, `Csv`, and cache/config helpers
+- Builtin signatures for the current fixture stdlib surface, including `Image`, `File`, `Map`, `ResourcePool`, `Json`, `Csv`, database/resource helpers, and cache/config helpers
 - HIR type and field tables for class/struct/resource declarations and handle fields
 - AST-driven mode and call checks for local-only features, named arguments, data effects, and retaining APIs
 - AST-driven body checks for local moves, early-exit-aware `fresh` returns, resource escape, resolved handle-field `take`, and managed closure captures
@@ -24,6 +24,8 @@ Implemented diagnostic classes include:
 
 - file mode violations
 - missing named arguments
+- unknown, missing, and duplicate call arguments for known signatures
+- unknown callees outside known functions, constructors, enum variants, and builtin signatures
 - missing `read` / `mut` / `take` call-site effects for known signatures
 - managed-to-local attempts
 - use after `manage`

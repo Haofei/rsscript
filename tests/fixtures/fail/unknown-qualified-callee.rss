@@ -1,0 +1,11 @@
+// expect: RS0206
+mode: uses-local
+
+struct Image {
+    pixels: Buffer
+}
+
+fn bad_call(path: read Path) -> Unit {
+    local image = Image.load(path: read path)
+    Image.reisze(image: mut image, width: 800, height: 600)
+}

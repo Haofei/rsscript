@@ -102,6 +102,24 @@ fn check_call_args(
     }
 
     let Some(signature) = analyzer.resolve_callee(callee) else {
+        if !is_allowed_unresolved_callee(analyzer, callee) {
+            analyzer.diagnostics.push(
+                Diagnostic::error(
+                    code::UNKNOWN_CALLEE,
+                    format!("call to `{}` does not resolve.", callee_display(callee)),
+                    call_span.clone(),
+                    "unknown callee",
+                )
+                .with_cause(
+                    "The callee is not a user function, known type constructor, enum variant, or builtin signature.",
+                )
+                .with_fix(
+                    "declare_or_import_callee",
+                    "Declare the function or add a builtin signature for this API.",
+                    "manual",
+                ),
+            );
+        }
         return;
     };
     let signature_params = signature.params.clone();
@@ -256,6 +274,13 @@ fn is_enum_variant_call(name: &str) -> bool {
     matches!(name, "Ok" | "Err" | "Some" | "None" | "Result" | "Option")
 }
 
+fn is_allowed_unresolved_callee(analyzer: &Analyzer<'_>, callee: &Callee) -> bool {
+    match callee {
+        Callee::Name(name) => is_enum_variant_call(name) || analyzer.hir.type_info(name).is_some(),
+        Callee::Qualified { .. } => false,
+    }
+}
+
 fn join_param_names(params: &[crate::hir::ParamSig]) -> String {
     params
         .iter()
@@ -268,6 +293,13 @@ fn callee_name(callee: &Callee) -> String {
     match callee {
         Callee::Name(name) => name.clone(),
         Callee::Qualified { name, .. } => name.clone(),
+    }
+}
+
+fn callee_display(callee: &Callee) -> String {
+    match callee {
+        Callee::Name(name) => name.clone(),
+        Callee::Qualified { namespace, name } => format!("{namespace}.{name}"),
     }
 }
 
