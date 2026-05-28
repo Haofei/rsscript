@@ -8,6 +8,8 @@ pub mod code {
     pub const FILE_MODE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
+    pub const UNKNOWN_ARGUMENT: &str = "RS0203";
+    pub const MISSING_ARGUMENT: &str = "RS0204";
     pub const MANAGED_TO_LOCAL: &str = "RS0301";
     pub const USE_AFTER_MANAGE: &str = "RS0401";
     pub const LOCAL_VALUE_RETAINED: &str = "RS0501";
@@ -218,6 +220,16 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::MISSING_DATA_EFFECT,
         title: "missing call-site data effect",
         explanation: "Arguments for non-Copy parameters must use an explicit `read`, `mut`, or `take` effect matching the callee signature.",
+    },
+    DiagnosticExplanation {
+        code: code::UNKNOWN_ARGUMENT,
+        title: "unknown named argument",
+        explanation: "Named call arguments must match the resolved callee signature. This catches misspellings and stale call sites after API changes.",
+    },
+    DiagnosticExplanation {
+        code: code::MISSING_ARGUMENT,
+        title: "missing required argument",
+        explanation: "Every parameter in the resolved callee signature must be supplied by name at the call site.",
     },
     DiagnosticExplanation {
         code: code::MANAGED_TO_LOCAL,

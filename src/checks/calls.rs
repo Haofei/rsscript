@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
-use crate::diagnostic::{Diagnostic, code};
+use crate::diagnostic::{Diagnostic, Span, code};
 use crate::syntax::ast::{Block, CallArg, Callee, DataEffect, Expr, Item, LetKind, Stmt};
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
@@ -53,8 +53,10 @@ fn check_block(analyzer: &mut Analyzer<'_>, block: &Block, locals: &HashSet<Stri
 
 fn check_expr(analyzer: &mut Analyzer<'_>, expr: &Expr, locals: &HashSet<String>) {
     match expr {
-        Expr::Call { callee, args, .. } => {
-            check_call_args(analyzer, callee, args, locals);
+        Expr::Call {
+            callee, args, span, ..
+        } => {
+            check_call_args(analyzer, callee, args, span, locals);
             for arg in args {
                 check_expr(analyzer, &arg.value, locals);
             }
@@ -72,6 +74,7 @@ fn check_call_args(
     analyzer: &mut Analyzer<'_>,
     callee: &Callee,
     args: &[CallArg],
+    call_span: &Span,
     locals: &HashSet<String>,
 ) {
     let call_name = callee_name(callee);
@@ -101,6 +104,7 @@ fn check_call_args(
     let Some(signature) = analyzer.resolve_callee(callee) else {
         return;
     };
+    let signature_params = signature.params.clone();
     let param_effects: HashMap<String, &'static str> = signature
         .params
         .iter()
@@ -111,6 +115,63 @@ fn check_call_args(
         })
         .collect();
     let retained_params = signature.retained_params.clone();
+    let param_names: HashSet<String> = signature_params
+        .iter()
+        .map(|param| param.name.clone())
+        .collect();
+
+    for arg in args {
+        let Some(name) = &arg.name else {
+            continue;
+        };
+        if !param_names.contains(name) {
+            analyzer.diagnostics.push(
+                Diagnostic::error(
+                    code::UNKNOWN_ARGUMENT,
+                    format!("call to `{call_name}` has no argument named `{name}`."),
+                    arg.span.clone(),
+                    "unknown argument",
+                )
+                .with_cause(format!(
+                    "`{call_name}` does not declare a parameter named `{name}`."
+                ))
+                .with_fix(
+                    "rename_argument",
+                    format!("Use one of: {}.", join_param_names(&signature_params)),
+                    "manual",
+                ),
+            );
+        }
+    }
+
+    if args.iter().all(|arg| arg.name.is_some()) {
+        let provided_names: HashSet<&str> =
+            args.iter().filter_map(|arg| arg.name.as_deref()).collect();
+        for param in &signature_params {
+            if !provided_names.contains(param.name.as_str()) {
+                analyzer.diagnostics.push(
+                    Diagnostic::error(
+                        code::MISSING_ARGUMENT,
+                        format!(
+                            "call to `{call_name}` is missing required argument `{}`.",
+                            param.name
+                        ),
+                        call_span.clone(),
+                        "missing argument",
+                    )
+                    .with_cause(format!(
+                        "`{call_name}` requires a named argument `{}`.",
+                        param.name
+                    ))
+                    .with_fix(
+                        "add_argument",
+                        format!("Add `{}: ...` to the call.", param.name),
+                        "manual",
+                    ),
+                );
+            }
+        }
+    }
 
     for arg in args {
         let Some(name) = &arg.name else {
@@ -176,6 +237,14 @@ fn check_call_args(
 
 fn is_enum_variant_call(name: &str) -> bool {
     matches!(name, "Ok" | "Err" | "Some" | "None" | "Result" | "Option")
+}
+
+fn join_param_names(params: &[crate::hir::ParamSig]) -> String {
+    params
+        .iter()
+        .map(|param| param.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn callee_name(callee: &Callee) -> String {
