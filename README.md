@@ -23,7 +23,7 @@ It currently implements:
 - HIR return facts with initial freshness proof classification
 - Resolved HIR statement/expression trees for function bodies, including typed identifiers, resolved calls, field accesses, and per-expression ownership events
 - Per-function HIR body views that group bindings, calls, fields, effects, and returns
-- Initial local flow steps derived from resolved HIR statements as the staging point for CFG-backed CleanLocal dataflow
+- Initial local flow graph nodes with successor edges derived from resolved HIR statements as the staging point for CFG-backed CleanLocal dataflow
 - AST-driven mode and call checks for local-only features, named arguments, data effects, and retaining APIs
 - AST-driven body checks for local moves, early-exit-aware `fresh` returns, resource escape, resolved handle-field `take`, and managed closure captures
 - Local ownership, use-after-move, `fresh` return, managed closure capture, resource-retain escape, and handle-field `take` checks now index statement uses, binding types, return proofs, field accesses, closure uses, and move/retain events from resolved HIR body trees
@@ -64,7 +64,7 @@ Non-goals for this stage:
 Near-term roadmap:
 
 1. Continue moving body checkers from syntax AST plus lookup tables onto the resolved HIR statement/expression tree.
-2. Extend initial local flow steps into a dedicated CFG with successor edges for CleanLocal dataflow.
+2. Use the local flow graph to drive CleanLocal state transfer and path-aware diagnostics.
 3. Expand `rss review` local/manage boundary diffs from summaries into path-aware risk explanations.
 
 Run:
