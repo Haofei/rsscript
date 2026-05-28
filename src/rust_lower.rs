@@ -1,4 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::Path;
+use std::process::Command;
 
 use crate::analyzer::analyze_source;
 use crate::diagnostic::{Diagnostic, Severity, Span, code};
@@ -33,6 +36,14 @@ pub struct RustSourceMapEntry {
 pub struct RemappedRustcDiagnostic {
     pub diagnostic: Diagnostic,
     pub mapped: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RustBackendCheckResult {
+    pub success: bool,
+    pub diagnostics: Vec<Diagnostic>,
+    pub cargo_status: Option<i32>,
+    pub stderr: String,
 }
 
 pub fn lower_source_to_rust(file: &str, source: &str) -> Result<String, Vec<Diagnostic>> {
@@ -78,6 +89,38 @@ pub fn lower_source_to_rust_package(
     })
 }
 
+pub fn write_generated_rust_package(
+    out_dir: &Path,
+    package: &GeneratedRustPackage,
+) -> Result<(), String> {
+    let src_dir = out_dir.join("src");
+    fs::create_dir_all(&src_dir)
+        .map_err(|error| format!("failed to create {}: {error}", src_dir.display()))?;
+    fs::write(out_dir.join("Cargo.toml"), &package.cargo_toml).map_err(|error| {
+        format!(
+            "failed to write {}: {error}",
+            out_dir.join("Cargo.toml").display()
+        )
+    })?;
+    fs::write(src_dir.join("lib.rs"), &package.lib_rs).map_err(|error| {
+        format!(
+            "failed to write {}: {error}",
+            src_dir.join("lib.rs").display()
+        )
+    })?;
+    fs::write(
+        out_dir.join("rsscript-source-map.json"),
+        &package.source_map_json,
+    )
+    .map_err(|error| {
+        format!(
+            "failed to write {}: {error}",
+            out_dir.join("rsscript-source-map.json").display()
+        )
+    })?;
+    Ok(())
+}
+
 pub fn lower_program_to_rust(program: &Program) -> String {
     lower_program_to_rust_with_map(program).rust_source
 }
@@ -95,7 +138,12 @@ pub fn remap_rustc_diagnostic_json(
     source_map: &[RustSourceMapEntry],
     rustc_json: &str,
 ) -> Result<Option<RemappedRustcDiagnostic>, String> {
-    let rustc: RustcJsonDiagnostic = serde_json::from_str(rustc_json)
+    let value: serde_json::Value = serde_json::from_str(rustc_json)
+        .map_err(|error| format!("failed to parse rustc JSON line: {error}"))?;
+    let Some(value) = rustc_diagnostic_value(&value) else {
+        return Ok(None);
+    };
+    let rustc: RustcJsonDiagnostic = serde_json::from_value(value.clone())
         .map_err(|error| format!("failed to parse rustc JSON diagnostic: {error}"))?;
     if !matches!(rustc.level.as_str(), "error" | "warning") {
         return Ok(None);
@@ -181,6 +229,38 @@ pub fn remap_rustc_diagnostic_json_lines(
         }
     }
     Ok(diagnostics)
+}
+
+pub fn check_generated_rust_package(package_dir: &Path) -> Result<RustBackendCheckResult, String> {
+    let source_map_json = fs::read_to_string(package_dir.join("rsscript-source-map.json"))
+        .map_err(|error| {
+            format!(
+                "failed to read {}: {error}",
+                package_dir.join("rsscript-source-map.json").display()
+            )
+        })?;
+    let source_map = parse_source_map_json(&source_map_json)?;
+    let manifest_path = package_dir.join("Cargo.toml");
+    let output = Command::new("cargo")
+        .arg("check")
+        .arg("--manifest-path")
+        .arg(&manifest_path)
+        .arg("--message-format=json")
+        .output()
+        .map_err(|error| format!("failed to run cargo check: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let remapped = remap_rustc_diagnostic_json_lines(&source_map, &stdout)?;
+    let diagnostics = remapped
+        .into_iter()
+        .map(|remapped| remapped.diagnostic)
+        .collect();
+
+    Ok(RustBackendCheckResult {
+        success: output.status.success(),
+        diagnostics,
+        cargo_status: output.status.code(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
 }
 
 struct RustLowerer<'a> {
@@ -715,6 +795,16 @@ fn rustc_severity(level: &str) -> Severity {
     } else {
         Severity::Error
     }
+}
+
+fn rustc_diagnostic_value(value: &serde_json::Value) -> Option<&serde_json::Value> {
+    if value.get("level").is_some() && value.get("message").is_some() {
+        return Some(value);
+    }
+    if value.get("reason").and_then(serde_json::Value::as_str) == Some("compiler-message") {
+        return value.get("message");
+    }
+    None
 }
 
 fn generated_span_from_rustc(span: &RustcJsonSpan) -> Span {

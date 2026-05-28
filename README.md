@@ -380,6 +380,7 @@ rss review [--json] --map <file-or-directory>
 rss lower --rust <file.rss>
 rss lower --rust <file.rss> --out-dir <directory>
 rss remap-rustc [--json] <rsscript-source-map.json> <rustc-json-lines>
+rss verify-rust [--json] <file.rss>
 ```
 
 ---

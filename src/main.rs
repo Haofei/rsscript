@@ -2,13 +2,15 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rsscript::{
-    analyze_source, explain_diagnostic_code, format_diagnostic_explanation,
-    format_diagnostics_human, format_diagnostics_json, format_review_human, format_review_json,
-    format_review_map_human, format_review_map_json, lower_source_to_rust,
-    lower_source_to_rust_package, parse_source_map_json, remap_rustc_diagnostic_json_lines,
-    review_map_sources, review_sources,
+    Diagnostic, analyze_source, check_generated_rust_package, explain_diagnostic_code,
+    format_diagnostic_explanation, format_diagnostics_human, format_diagnostics_json,
+    format_review_human, format_review_json, format_review_map_human, format_review_map_json,
+    lower_source_to_rust, lower_source_to_rust_package, parse_source_map_json,
+    remap_rustc_diagnostic_json_lines, review_map_sources, review_sources,
+    write_generated_rust_package,
 };
 
 fn main() -> ExitCode {
@@ -24,6 +26,7 @@ fn main() -> ExitCode {
         "review" => run_review(&args[2..]),
         "lower" => run_lower(&args[2..]),
         "remap-rustc" => run_remap_rustc(&args[2..]),
+        "verify-rust" => run_verify_rust(&args[2..]),
         _ => {
             print_usage();
             ExitCode::from(2)
@@ -175,33 +178,8 @@ fn run_lower_rust_package(path: &str, source: &str, out_dir: &str) -> ExitCode {
     };
 
     let out_dir = Path::new(out_dir);
-    let src_dir = out_dir.join("src");
-    if let Err(error) = fs::create_dir_all(&src_dir) {
-        eprintln!("failed to create {}: {error}", src_dir.display());
-        return ExitCode::from(2);
-    }
-    if let Err(error) = fs::write(out_dir.join("Cargo.toml"), package.cargo_toml) {
-        eprintln!(
-            "failed to write {}: {error}",
-            out_dir.join("Cargo.toml").display()
-        );
-        return ExitCode::from(2);
-    }
-    if let Err(error) = fs::write(src_dir.join("lib.rs"), package.lib_rs) {
-        eprintln!(
-            "failed to write {}: {error}",
-            src_dir.join("lib.rs").display()
-        );
-        return ExitCode::from(2);
-    }
-    if let Err(error) = fs::write(
-        out_dir.join("rsscript-source-map.json"),
-        package.source_map_json,
-    ) {
-        eprintln!(
-            "failed to write {}: {error}",
-            out_dir.join("rsscript-source-map.json").display()
-        );
+    if let Err(error) = write_generated_rust_package(out_dir, &package) {
+        eprintln!("{error}");
         return ExitCode::from(2);
     }
 
@@ -211,6 +189,83 @@ fn run_lower_rust_package(path: &str, source: &str, out_dir: &str) -> ExitCode {
         out_dir.display()
     );
     ExitCode::SUCCESS
+}
+
+fn run_verify_rust(args: &[String]) -> ExitCode {
+    let (json, path) = parse_path_args(args);
+    let Some(path) = path else {
+        print_usage();
+        return ExitCode::from(2);
+    };
+    let source = match fs::read_to_string(path) {
+        Ok(source) => source,
+        Err(error) => {
+            eprintln!("failed to read {path}: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let runtime_path = match default_runtime_path() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+    let package_name = generated_package_name(path);
+    let package = match lower_source_to_rust_package(
+        path,
+        &source,
+        &package_name,
+        &runtime_path.display().to_string(),
+    ) {
+        Ok(package) => package,
+        Err(diagnostics) => {
+            print_diagnostics(json, &diagnostics);
+            return ExitCode::from(1);
+        }
+    };
+    let temp_dir = verify_temp_dir(&package.package_name);
+    if let Err(error) = write_generated_rust_package(&temp_dir, &package) {
+        eprintln!("{error}");
+        cleanup_temp_dir(&temp_dir);
+        return ExitCode::from(2);
+    }
+    let result = match check_generated_rust_package(&temp_dir) {
+        Ok(result) => result,
+        Err(error) => {
+            eprintln!("{error}");
+            cleanup_temp_dir(&temp_dir);
+            return ExitCode::from(2);
+        }
+    };
+    cleanup_temp_dir(&temp_dir);
+
+    if result.diagnostics.is_empty() {
+        if result.success {
+            if !json {
+                println!("{path}: rust backend ok");
+            } else {
+                println!("[]");
+            }
+            return ExitCode::SUCCESS;
+        }
+        if !result.stderr.trim().is_empty() {
+            eprintln!("{}", result.stderr.trim());
+        }
+        eprintln!("rust backend check failed without mappable diagnostics");
+        return ExitCode::from(1);
+    }
+
+    print_diagnostics(json, &result.diagnostics);
+    if result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity.is_error())
+    {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 fn run_remap_rustc(args: &[String]) -> ExitCode {
@@ -267,6 +322,14 @@ fn run_remap_rustc(args: &[String]) -> ExitCode {
         ExitCode::from(1)
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+fn print_diagnostics(json: bool, diagnostics: &[Diagnostic]) {
+    if json {
+        println!("{}", format_diagnostics_json(diagnostics));
+    } else {
+        print!("{}", format_diagnostics_human(diagnostics));
     }
 }
 
@@ -358,6 +421,21 @@ fn generated_package_name(path: &str) -> String {
         .and_then(|stem| stem.to_str())
         .unwrap_or("rsscript-generated")
         .to_string()
+}
+
+fn verify_temp_dir(package_name: &str) -> PathBuf {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    env::temp_dir().join(format!(
+        "rsscript-verify-{package_name}-{}-{now}",
+        std::process::id()
+    ))
+}
+
+fn cleanup_temp_dir(path: &Path) {
+    let _ = fs::remove_dir_all(path);
 }
 
 enum ReviewCommand<'a> {
@@ -528,6 +606,7 @@ fn print_usage() {
     eprintln!("  rsscript lower --rust <file.rss>");
     eprintln!("  rsscript lower --rust <file.rss> --out-dir <directory>");
     eprintln!("  rsscript remap-rustc [--json] <rsscript-source-map.json> <rustc-json-lines>");
+    eprintln!("  rsscript verify-rust [--json] <file.rss>");
     eprintln!("  rsscript review [--json] --diff <old.rss> <new.rss>");
     eprintln!("  rsscript review [--json] --map <file-or-directory>");
 }

@@ -19,8 +19,9 @@ pub use review::{
     review_sources,
 };
 pub use rust_lower::{
-    GeneratedRustPackage, LoweredRust, RustSourceMapEntry, lower_program_to_rust,
+    GeneratedRustPackage, LoweredRust, RemappedRustcDiagnostic, RustBackendCheckResult,
+    RustSourceMapEntry, check_generated_rust_package, lower_program_to_rust,
     lower_program_to_rust_with_map, lower_source_to_rust, lower_source_to_rust_package,
     lower_source_to_rust_with_map, parse_source_map_json, remap_rustc_diagnostic_json,
-    remap_rustc_diagnostic_json_lines,
+    remap_rustc_diagnostic_json_lines, write_generated_rust_package,
 };

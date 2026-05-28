@@ -198,8 +198,8 @@ fn rustc_diagnostics_report_unmappable_generated_spans() {
 
 #[test]
 fn rustc_diagnostic_line_remap_ignores_non_diagnostic_messages() {
-    let lines = r#"{"message":"build finished","level":"note","spans":[]}
-{"message":"cannot find value","code":{"code":"E0425","explanation":null},"level":"error","spans":[{"file_name":"src/lib.rs","line_start":99,"line_end":99,"column_start":5,"column_end":10,"is_primary":true}]}"#;
+    let lines = r#"{"reason":"compiler-artifact","target":{"name":"generated"}}
+{"reason":"compiler-message","message":{"message":"cannot find value","code":{"code":"E0425","explanation":null},"level":"error","spans":[{"file_name":"src/lib.rs","line_start":99,"line_end":99,"column_start":5,"column_end":10,"is_primary":true}]}}"#;
 
     let remapped =
         remap_rustc_diagnostic_json_lines(&[], lines).expect("rustc JSON lines should parse");
