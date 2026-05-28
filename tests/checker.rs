@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use rsscript::syntax::ast::Item;
 use rsscript::syntax::parse_source;
 use rsscript::{
-    analyze_source, explain_diagnostic_code, format_diagnostic_explanation,
-    format_diagnostics_json, review_sources,
+    ReviewRisk, analyze_source, explain_diagnostic_code, format_diagnostic_explanation,
+    format_diagnostics_json, format_review_human, review_sources,
 };
 use serde_json::Value;
 
@@ -145,6 +145,23 @@ fn inspect(image: read Image) -> Unit {
     assert!(codes.contains(&"RSR004".to_string()));
     assert!(codes.contains(&"RSR005".to_string()));
     assert!(codes.contains(&"RSR006".to_string()));
+    let findings = review_sources("old.rss", old_source, "new.rss", new_source);
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.code == "RSR001" && finding.risk == ReviewRisk::Mode)
+    );
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.code == "RSR006" && finding.risk == ReviewRisk::Effect)
+    );
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.code == "RSR004" && finding.risk == ReviewRisk::Api)
+    );
+    assert!(format_review_human(&findings).contains("RSR006[effect]:"));
 }
 
 #[test]
@@ -187,6 +204,12 @@ struct Session {
     assert!(codes.contains(&"RSR008".to_string()));
     assert!(codes.contains(&"RSR009".to_string()));
     assert!(codes.contains(&"RSR010".to_string()));
+    let findings = review_sources("old.rss", old_source, "new.rss", new_source);
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.code == "RSR010" && finding.risk == ReviewRisk::TypeLayout)
+    );
 }
 
 #[test]
@@ -230,6 +253,7 @@ fn publish(path: read Path) -> Unit {
     assert!(boundary.summary.contains("added manage `image`"));
     assert!(boundary.summary.contains("body[1]"));
     assert!(boundary.summary.contains("body[2].value"));
+    assert_eq!(boundary.risk, ReviewRisk::Boundary);
 }
 
 fn fixture_paths(directory: &str) -> Vec<PathBuf> {

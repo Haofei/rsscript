@@ -15,7 +15,7 @@ It currently implements:
 - `rss check --json <file.rss>` with serde-backed machine-readable diagnostics
 - `rss check --explain <code>` for diagnostic code explanations
 - `rss fmt <file.rss>` as a parse/check gate that prints the source unchanged when valid
-- `rss review <old.rss> <new.rss>` for a first-pass API/type/effect/freshness diff with path-aware local/manage boundary summaries
+- `rss review <old.rss> <new.rss>` for a first-pass API/type/effect/freshness diff with structured risk categories and path-aware local/manage boundary summaries
 - Lexer, lightweight parser, syntax AST, HIR signature table, and semantic checks for the review-critical v0.4.1 rules
 - Builtin signatures for the current fixture stdlib surface, including `Image`, `File`, `Map`, `ResourcePool`, `Json`, `Csv`, database/resource helpers, and cache/config helpers
 - HIR type and field tables for class/struct/resource declarations and handle fields
@@ -61,7 +61,7 @@ Implemented diagnostic classes include:
 - local capture by managed closures
 - local capture by closures passed to retaining APIs
 - `take` of handle fields
-- API, type layout, path-aware local/manage boundary, effect, mode, and freshness changes in `rss review`
+- API, type layout, path-aware local/manage boundary, effect, mode, and freshness changes in `rss review`, tagged with structured risk categories
 - likely operator overload attempts
 
 Non-goals for this stage:
@@ -79,7 +79,7 @@ Non-goals for this stage:
 Near-term roadmap:
 
 1. Expand local/resource dataflow precision around typed `ResourcePool<T>` lease propagation and expression-order coverage for short-circuiting/control expressions.
-2. Expand `rss review` boundary diffs from path-aware summaries into structured risk categories.
+2. Expand `rss review` risk categories into machine-readable JSON output.
 
 Run:
 

@@ -10,7 +10,29 @@ use crate::syntax::parse_source;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewFinding {
     pub code: String,
+    pub risk: ReviewRisk,
     pub summary: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewRisk {
+    Mode,
+    Api,
+    TypeLayout,
+    Effect,
+    Boundary,
+}
+
+impl ReviewRisk {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Mode => "mode",
+            Self::Api => "api",
+            Self::TypeLayout => "type-layout",
+            Self::Effect => "effect",
+            Self::Boundary => "boundary",
+        }
+    }
 }
 
 pub fn review_sources(
@@ -24,14 +46,15 @@ pub fn review_sources(
     let mut findings = Vec::new();
 
     if old_program.mode != new_program.mode {
-        findings.push(ReviewFinding {
-            code: code::REVIEW_MODE_CHANGED.to_string(),
-            summary: format!(
+        findings.push(review_finding(
+            code::REVIEW_MODE_CHANGED,
+            ReviewRisk::Mode,
+            format!(
                 "file mode changed from {} to {}.",
                 file_mode_label(old_program.mode),
                 file_mode_label(new_program.mode)
             ),
-        });
+        ));
     }
 
     let old_types = collect_type_sigs(&old_program.items);
@@ -40,14 +63,16 @@ pub fn review_sources(
 
     for name in type_names {
         match (old_types.get(&name), new_types.get(&name)) {
-            (Some(_), None) => findings.push(ReviewFinding {
-                code: code::REVIEW_TYPE_REMOVED.to_string(),
-                summary: format!("type `{name}` was removed."),
-            }),
-            (None, Some(_)) => findings.push(ReviewFinding {
-                code: code::REVIEW_TYPE_ADDED.to_string(),
-                summary: format!("type `{name}` was added."),
-            }),
+            (Some(_), None) => findings.push(review_finding(
+                code::REVIEW_TYPE_REMOVED,
+                ReviewRisk::TypeLayout,
+                format!("type `{name}` was removed."),
+            )),
+            (None, Some(_)) => findings.push(review_finding(
+                code::REVIEW_TYPE_ADDED,
+                ReviewRisk::TypeLayout,
+                format!("type `{name}` was added."),
+            )),
             (Some(old), Some(new)) => compare_type(old, new, &mut findings),
             (None, None) => {}
         }
@@ -63,14 +88,16 @@ pub fn review_sources(
 
     for name in function_names {
         match (old_functions.get(&name), new_functions.get(&name)) {
-            (Some(_), None) => findings.push(ReviewFinding {
-                code: code::REVIEW_FUNCTION_REMOVED.to_string(),
-                summary: format!("function `{name}` was removed."),
-            }),
-            (None, Some(_)) => findings.push(ReviewFinding {
-                code: code::REVIEW_FUNCTION_ADDED.to_string(),
-                summary: format!("function `{name}` was added."),
-            }),
+            (Some(_), None) => findings.push(review_finding(
+                code::REVIEW_FUNCTION_REMOVED,
+                ReviewRisk::Api,
+                format!("function `{name}` was removed."),
+            )),
+            (None, Some(_)) => findings.push(review_finding(
+                code::REVIEW_FUNCTION_ADDED,
+                ReviewRisk::Api,
+                format!("function `{name}` was added."),
+            )),
             (Some(old), Some(new)) => compare_function(old, new, &mut findings),
             (None, None) => {}
         }
@@ -86,9 +113,22 @@ pub fn format_review_human(findings: &[ReviewFinding]) -> String {
 
     let mut output = String::new();
     for finding in findings {
-        output.push_str(&format!("{}: {}\n", finding.code, finding.summary));
+        output.push_str(&format!(
+            "{}[{}]: {}\n",
+            finding.code,
+            finding.risk.as_str(),
+            finding.summary
+        ));
     }
     output
+}
+
+fn review_finding(code: &str, risk: ReviewRisk, summary: impl Into<String>) -> ReviewFinding {
+    ReviewFinding {
+        code: code.to_string(),
+        risk,
+        summary: summary.into(),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,52 +240,58 @@ fn param_sig(param: &Param) -> ParamSig {
 
 fn compare_function(old: &FunctionSig, new: &FunctionSig, findings: &mut Vec<ReviewFinding>) {
     if old.params != new.params {
-        findings.push(ReviewFinding {
-            code: code::REVIEW_PARAMS_CHANGED.to_string(),
-            summary: format!("function `{}` parameters changed.", old.name),
-        });
+        findings.push(review_finding(
+            code::REVIEW_PARAMS_CHANGED,
+            ReviewRisk::Api,
+            format!("function `{}` parameters changed.", old.name),
+        ));
     }
     if old.return_type != new.return_type || old.returns_fresh != new.returns_fresh {
-        findings.push(ReviewFinding {
-            code: code::REVIEW_RETURN_CHANGED.to_string(),
-            summary: format!("function `{}` return contract changed.", old.name),
-        });
+        findings.push(review_finding(
+            code::REVIEW_RETURN_CHANGED,
+            ReviewRisk::Api,
+            format!("function `{}` return contract changed.", old.name),
+        ));
     }
     if old.effects != new.effects {
-        findings.push(ReviewFinding {
-            code: code::REVIEW_EFFECTS_CHANGED.to_string(),
-            summary: format!("function `{}` effects changed.", old.name),
-        });
+        findings.push(review_finding(
+            code::REVIEW_EFFECTS_CHANGED,
+            ReviewRisk::Effect,
+            format!("function `{}` effects changed.", old.name),
+        ));
     }
     if old.boundary != new.boundary {
-        findings.push(ReviewFinding {
-            code: code::REVIEW_BOUNDARY_CHANGED.to_string(),
-            summary: format!(
+        findings.push(review_finding(
+            code::REVIEW_BOUNDARY_CHANGED,
+            ReviewRisk::Boundary,
+            format!(
                 "function `{}` local/manage boundary changed: {}.",
                 old.name,
                 boundary_change_summary(&old.boundary, &new.boundary)
             ),
-        });
+        ));
     }
 }
 
 fn compare_type(old: &TypeSig, new: &TypeSig, findings: &mut Vec<ReviewFinding>) {
     if old.kind != new.kind {
-        findings.push(ReviewFinding {
-            code: code::REVIEW_TYPE_KIND_CHANGED.to_string(),
-            summary: format!(
+        findings.push(review_finding(
+            code::REVIEW_TYPE_KIND_CHANGED,
+            ReviewRisk::TypeLayout,
+            format!(
                 "type `{}` kind changed from {} to {}.",
                 old.name,
                 type_kind_label(old.kind),
                 type_kind_label(new.kind)
             ),
-        });
+        ));
     }
     if old.fields != new.fields {
-        findings.push(ReviewFinding {
-            code: code::REVIEW_TYPE_FIELDS_CHANGED.to_string(),
-            summary: format!("type `{}` field layout changed.", old.name),
-        });
+        findings.push(review_finding(
+            code::REVIEW_TYPE_FIELDS_CHANGED,
+            ReviewRisk::TypeLayout,
+            format!("type `{}` field layout changed.", old.name),
+        ));
     }
 }
 
