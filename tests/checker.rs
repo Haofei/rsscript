@@ -292,6 +292,42 @@ fn bad_schedule(scheduler: mut Scheduler, path: read Path) -> fresh Image {
 }
 
 #[test]
+fn checker_rejects_retained_wrapped_closure_capturing_local() {
+    let source = r#"
+features: local
+
+struct Image
+struct CallbackOption
+class Scheduler
+
+fn Image.load(path: read Path) -> fresh Image
+fn Image.inspect(image: read Image) -> Unit
+fn schedule(scheduler: mut Scheduler, callback: read CallbackOption) -> Unit
+    effects(retains(callback))
+
+fn bad_schedule(scheduler: mut Scheduler, path: read Path) -> Unit {
+    local image = Image.load(path: read path)
+    schedule(
+        scheduler: mut scheduler,
+        callback: read Some(|| {
+            Image.inspect(image: read image)
+        }),
+    )
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("retained-closure-wrapper.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0801"
+                && diagnostic.label == "local captured here"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn fresh_return_allows_inline_field_of_clean_local() {
     let source = r#"
 features: local

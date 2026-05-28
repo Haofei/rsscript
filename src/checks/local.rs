@@ -872,6 +872,9 @@ fn retained_closure_arg(expr: &HirExpr) -> Option<(&HirBlock, &Span)> {
             value,
             ..
         } => retained_closure_arg(value),
+        HirExpr::Call { callee, args, .. } if retained_closure_wrapper_callee(callee) => {
+            args.iter().find_map(|arg| retained_closure_arg(&arg.value))
+        }
         HirExpr::Effect { .. }
         | HirExpr::Manage { .. }
         | HirExpr::Try { .. }
@@ -884,6 +887,13 @@ fn retained_closure_arg(expr: &HirExpr) -> Option<(&HirBlock, &Span)> {
         | HirExpr::Call { .. }
         | HirExpr::Unknown(_) => None,
     }
+}
+
+fn retained_closure_wrapper_callee(callee: &Callee) -> bool {
+    matches!(
+        callee,
+        Callee::Name(name) if matches!(name.as_str(), "Ok" | "Err" | "Some")
+    )
 }
 
 fn push_retained_closure_capture(
