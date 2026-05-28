@@ -1448,6 +1448,37 @@ struct Session {
 }
 
 #[test]
+fn rust_lowering_uses_shared_handles_for_managed_class_mut_parameters() {
+    let source = r#"
+features: local
+
+class User {
+    id: Int
+}
+
+fn touch(user: mut User) -> Unit
+
+fn call(user: mut User) -> Unit {
+    touch(user: mut user)
+}
+
+fn promote(id: Int) -> Unit {
+    local user = User(id: id)
+    let shared = manage user
+    touch(user: mut shared)
+}
+"#;
+    let rust = lower_source_to_rust("user.rss", source).expect("source should lower");
+
+    assert!(rust.contains("fn touch(user: &rsscript_runtime::Managed<User>)"));
+    assert!(rust.contains("fn call(user: &rsscript_runtime::Managed<User>)"));
+    assert!(rust.contains("touch(user);"));
+    assert!(rust.contains("touch(&shared);"));
+    assert!(!rust.contains("&mut rsscript_runtime::Managed<User>"));
+    assert!(!rust.contains("touch(&mut shared);"));
+}
+
+#[test]
 fn rust_lowering_maps_read_and_mut_effects_to_rust_borrows() {
     let source = r#"
 features: local

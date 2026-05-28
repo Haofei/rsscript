@@ -399,6 +399,7 @@ struct RustLowerer<'a> {
     type_kinds: BTreeMap<String, TypeKind>,
     native_boundary_callees: BTreeSet<String>,
     param_effects: BTreeMap<String, DataEffect>,
+    value_types: BTreeMap<String, TypeRef>,
     mutated_bindings: BTreeSet<String>,
     drop_field_names: BTreeSet<String>,
     source_map: Vec<RustSourceMapEntry>,
@@ -421,6 +422,7 @@ impl<'a> RustLowerer<'a> {
             type_kinds,
             native_boundary_callees,
             param_effects: BTreeMap::new(),
+            value_types: BTreeMap::new(),
             mutated_bindings: BTreeSet::new(),
             drop_field_names: BTreeSet::new(),
             source_map: Vec::new(),
@@ -528,11 +530,17 @@ impl<'a> RustLowerer<'a> {
 
     fn lower_function(&mut self, function: &FunctionDecl, out: &mut String) {
         let previous_param_effects = std::mem::take(&mut self.param_effects);
+        let previous_value_types = std::mem::take(&mut self.value_types);
         let previous_mutated_bindings = std::mem::take(&mut self.mutated_bindings);
         self.param_effects = function
             .params
             .iter()
             .filter_map(|param| param.effect.map(|effect| (param.name.clone(), effect)))
+            .collect();
+        self.value_types = function
+            .params
+            .iter()
+            .map(|param| (param.name.clone(), param.ty.clone()))
             .collect();
         self.mutated_bindings = collect_mutated_bindings(&function.body);
         self.record_source_marker(out, 0, "function", &function.span);
@@ -574,6 +582,7 @@ impl<'a> RustLowerer<'a> {
         }
         out.push_str("}\n");
         self.param_effects = previous_param_effects;
+        self.value_types = previous_value_types;
         self.mutated_bindings = previous_mutated_bindings;
     }
 
@@ -581,6 +590,7 @@ impl<'a> RustLowerer<'a> {
         let ty = self.lower_type_ref(&param.ty, ManagedPosition::Param);
         let rust_ty = match param.effect {
             Some(DataEffect::Read) => format!("&{ty}"),
+            Some(DataEffect::Mut) if self.is_class_type(&param.ty) => format!("&{ty}"),
             Some(DataEffect::Mut) => format!("&mut {ty}"),
             Some(DataEffect::Take) | None => ty,
         };
@@ -614,11 +624,16 @@ impl<'a> RustLowerer<'a> {
                     ""
                 };
                 if let Some(value) = &stmt.value {
+                    let lowered = self.lower_expr(value);
+                    let inferred_ty = self.infer_expr_type(value);
                     out.push_str(&format!(
                         "{pad}let {mutable}{} = {};\n",
                         rust_ident(&stmt.name),
-                        self.lower_expr(value)
+                        lowered
                     ));
+                    if let Some(ty) = inferred_ty {
+                        self.value_types.insert(stmt.name.clone(), ty);
+                    }
                 } else {
                     out.push_str(&format!("{pad}let {mutable}{};\n", rust_ident(&stmt.name)));
                 }
@@ -901,6 +916,11 @@ impl<'a> RustLowerer<'a> {
                         && self.param_effects.get(name) == Some(&DataEffect::Mut)
                     {
                         rust_ident(name)
+                    } else if self
+                        .infer_expr_type(value)
+                        .is_some_and(|ty| self.is_class_type(&ty))
+                    {
+                        format!("&{}", self.lower_expr(value))
                     } else {
                         format!("&mut {}", self.lower_expr(value))
                     }
@@ -926,6 +946,23 @@ impl<'a> RustLowerer<'a> {
                 out
             }
             Expr::Unknown(span) => unreachable_lowering("expression", span),
+        }
+    }
+
+    fn infer_expr_type(&self, expr: &Expr) -> Option<TypeRef> {
+        match expr {
+            Expr::Ident(name, _) => self.value_types.get(name).cloned(),
+            Expr::Call {
+                callee: Callee::Name(name),
+                span,
+                ..
+            } if self.type_kinds.contains_key(name) => Some(TypeRef {
+                name: name.clone(),
+                args: Vec::new(),
+                span: span.clone(),
+            }),
+            Expr::Manage { value, .. } | Expr::Try { value, .. } => self.infer_expr_type(value),
+            _ => None,
         }
     }
 
@@ -1048,6 +1085,10 @@ impl<'a> RustLowerer<'a> {
         ) {
             return false;
         }
+        matches!(self.type_kinds.get(&ty.name), Some(TypeKind::Class))
+    }
+
+    fn is_class_type(&self, ty: &TypeRef) -> bool {
         matches!(self.type_kinds.get(&ty.name), Some(TypeKind::Class))
     }
 }
