@@ -2578,12 +2578,28 @@ fn checker_reports_malformed_parameters_as_unsupported() {
 fn bad(read Path) -> Unit {
     return Unit
 }
+
+fn leading_comma(, path: read Path) -> Unit {
+    return Unit
+}
+
+fn double_comma(path: read Path,, output: read Path) -> Unit {
+    return Unit
+}
+
+fn trailing_comma(path: read Path,) -> Unit {
+    return Unit
+}
 "#;
     let diagnostics = analyze_source("malformed-parameters.rss", source);
+    let malformed_count = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == "RS0015" && diagnostic.label == "malformed parameter declaration"
+        })
+        .count();
 
-    assert!(diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == "RS0015" && diagnostic.label == "malformed parameter declaration"
-    }));
+    assert_eq!(malformed_count, 3, "{diagnostics:?}");
 }
 
 #[test]

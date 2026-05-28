@@ -341,6 +341,12 @@ struct ParsedParams {
     malformed_spans: Vec<crate::diagnostic::Span>,
 }
 
+struct ParamRange {
+    start: usize,
+    end: usize,
+    empty_span: Option<crate::diagnostic::Span>,
+}
+
 fn parse_fields(tokens: &[Token], start: usize, end: usize) -> ParsedFields {
     let mut fields = Vec::new();
     let mut malformed_spans = Vec::new();
@@ -461,7 +467,13 @@ fn starts_top_level_item(tokens: &[Token], index: usize) -> bool {
 fn parse_params(tokens: &[Token], start: usize, end: usize) -> ParsedParams {
     let mut params = Vec::new();
     let mut malformed_spans = Vec::new();
-    for (start, end) in split_top_level(tokens, start, end, ",") {
+    for range in split_param_ranges(tokens, start, end) {
+        if let Some(span) = range.empty_span {
+            malformed_spans.push(span);
+            continue;
+        }
+        let start = range.start;
+        let end = range.end;
         let Some(name) = tokens.get(start).and_then(ident_name) else {
             if let Some(token) = tokens.get(start) {
                 malformed_spans.push(token.span.clone());
@@ -510,6 +522,42 @@ fn parse_params(tokens: &[Token], start: usize, end: usize) -> ParsedParams {
         params,
         malformed_spans,
     }
+}
+
+fn split_param_ranges(tokens: &[Token], start: usize, end: usize) -> Vec<ParamRange> {
+    let mut ranges = Vec::new();
+    let mut range_start = start;
+    let mut depth = 0usize;
+    for (index, token) in tokens.iter().enumerate().take(end).skip(start) {
+        if token.symbol("(") || token.symbol("{") || token.symbol("[") || token.symbol("<") {
+            depth += 1;
+        } else if token.symbol(")") || token.symbol("}") || token.symbol("]") || token.symbol(">") {
+            depth = depth.saturating_sub(1);
+        } else if depth == 0 && token.symbol(",") {
+            if range_start < index {
+                ranges.push(ParamRange {
+                    start: range_start,
+                    end: index,
+                    empty_span: None,
+                });
+            } else {
+                ranges.push(ParamRange {
+                    start: index,
+                    end: index,
+                    empty_span: Some(token.span.clone()),
+                });
+            }
+            range_start = index + 1;
+        }
+    }
+    if range_start < end {
+        ranges.push(ParamRange {
+            start: range_start,
+            end,
+            empty_span: None,
+        });
+    }
+    ranges
 }
 
 fn parse_effects(tokens: &[Token], start: usize, end: usize) -> Vec<EffectDecl> {
