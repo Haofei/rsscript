@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -20,6 +20,58 @@ use rsscript::{
     vendor_package_dir, write_generated_rust_package,
 };
 use serde_json::Value;
+
+const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
+    ("use after manage", "RS0401"),
+    ("managed -> local attempt", "RS0301"),
+    ("missing named argument", "RS0204"),
+    ("missing read/mut/take effect", "RS0202"),
+    ("same-call place conflict", "RS0302"),
+    ("constructor/variant call-like conflict", "RS0203"),
+    ("handle-field same-call conflict", "RS0303"),
+    ("retaining local value", "RS0501"),
+    ("managed closure capturing local/resource", "RS0801"),
+    (
+        "managed closure capture retention in retained contexts",
+        "RS0801",
+    ),
+    ("fresh function returning aliased value", "RS0601"),
+    ("mut/take of unbound fresh expression", "RS0604"),
+    ("resource escaping with", "RS0702"),
+    ("resource wrapped in Ok/Some and escaping", "RS0702"),
+    (
+        "resource-producing expression used outside resource context",
+        "RS0702",
+    ),
+    (
+        "Result-returning resource producer missing explicit ?",
+        "RS0706",
+    ),
+    (
+        "invalid resource type in ordinary Result/Option/container context",
+        "RS0704",
+    ),
+    ("ResourcePool.new used with fallible factory", "RS0707"),
+    ("ResourcePool factory contract violation", "RS0707"),
+    ("local captured by managed closure", "RS0801"),
+    ("take of handle field", "RS0901"),
+    (
+        "weak field initialized without explicit weak handle",
+        "RS0904",
+    ),
+    ("weak field used without explicit upgrade", "RS0903"),
+    ("implicit conversion attempt", "RS1002"),
+    ("operator overload attempt", "RS1001"),
+    ("feature violation", "RS0101"),
+    ("unsupported syntax", "RS0015"),
+    (
+        "async body / await / spawn used in v0.5 executable lowering",
+        "RS0015",
+    ),
+    ("async call not consumed by await or spawn", "RS0022"),
+    ("unmappable rustc diagnostic", "RS1102"),
+    ("native boundary violation", "RS1302"),
+];
 
 #[test]
 fn pass_fixtures_have_no_diagnostics() {
@@ -47,6 +99,27 @@ fn fail_fixtures_report_expected_diagnostic_codes() {
                 path.display()
             );
         }
+    }
+}
+
+#[test]
+fn required_spec_diagnostics_have_regression_coverage() {
+    let fixture_codes = fail_fixture_expected_code_set();
+    let dedicated_test_codes = BTreeSet::from([
+        "RS1102", // rustc_diagnostics_report_unmappable_generated_spans
+        "RS1201", // runtime_diagnostic_lines_parse_to_rsscript_diagnostics
+        "RS1302", // package native binding diagnostics
+    ]);
+
+    for &(spec_class, code) in REQUIRED_SPEC_DIAGNOSTICS {
+        assert!(
+            explain_diagnostic_code(code).is_some(),
+            "{spec_class} maps to {code}, but the code has no explanation"
+        );
+        assert!(
+            fixture_codes.contains(code) || dedicated_test_codes.contains(code),
+            "{spec_class} maps to {code}, but no fail fixture or dedicated regression test covers it"
+        );
     }
 }
 
@@ -7664,6 +7737,17 @@ fn expected_codes(source: &str) -> Vec<String> {
         panic!("fail fixture must start with `// expect:`");
     };
     codes.split_whitespace().map(str::to_string).collect()
+}
+
+fn fail_fixture_expected_code_set() -> BTreeSet<String> {
+    let mut codes = BTreeSet::new();
+    for path in fixture_paths("tests/fixtures/fail") {
+        let source = read_fixture(&path);
+        for code in expected_codes(&source) {
+            codes.insert(code);
+        }
+    }
+    codes
 }
 
 fn source_map_summary(entries: &[rsscript::RustSourceMapEntry]) -> String {

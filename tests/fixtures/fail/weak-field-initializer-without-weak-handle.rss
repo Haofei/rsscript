@@ -1,0 +1,13 @@
+// expect: RS0904
+class User {
+    id: Int
+}
+
+struct Session {
+    owner: weak User
+}
+
+fn make_session() -> Session {
+    let user = User(id: 1)
+    return Session(owner: read user)
+}

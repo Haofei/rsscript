@@ -1,0 +1,13 @@
+// expect: RS0604
+features: local
+
+struct Image {
+    width: Int
+}
+
+fn Image.load(path: read Path) -> fresh Image
+fn resize(image: mut Image) -> Unit
+
+fn bad_mut(path: read Path) -> Unit {
+    resize(image: mut Image.load(path: read path))
+}

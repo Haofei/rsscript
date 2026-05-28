@@ -1,0 +1,14 @@
+// expect: RS0903
+class User {
+    id: Int
+}
+
+struct Session {
+    owner: weak User
+}
+
+fn User.log(user: read User) -> Unit
+
+fn bad_read(session: read Session) -> Unit {
+    User.log(user: read session.owner)
+}

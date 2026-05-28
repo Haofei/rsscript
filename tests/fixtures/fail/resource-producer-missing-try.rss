@@ -1,0 +1,19 @@
+// expect: RS0706
+features: local
+
+resource File {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+fn File.open_result(path: read Path) -> Result<File, IOError>
+fn File.stat(file: read File) -> Unit
+
+fn bad_with_missing_try(path: read Path) -> Unit {
+    with File.open_result(path: read path) as file {
+        File.stat(file: read file)
+    }
+}
