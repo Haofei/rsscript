@@ -4,7 +4,8 @@ use serde::Serialize;
 
 use crate::diagnostic::{Span, code};
 use crate::hir::{
-    CallResolution, Hir, HirBlock, HirExpr, HirStmt, ParamEffect, ResolvedCalleeKind,
+    CallResolution, Hir, HirBindingKind, HirBlock, HirExpr, HirStmt, ParamEffect,
+    ResolvedCalleeKind,
 };
 use crate::syntax::ast::{
     Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature, FunctionDecl,
@@ -398,11 +399,16 @@ fn review_map_region_draft(
 ) -> ReviewMapRegionDraft {
     let mut facts = ReviewMapFacts::default();
     collect_review_map_facts_block(&function.body, hir, &mut facts);
-    if let Some(body) = hir
-        .function_body(&function.name)
-        .and_then(|body| body.block.as_ref())
-    {
-        collect_review_map_hir_facts_block(body, &mut facts);
+    if let Some(hir_body) = hir.function_body(&function.name) {
+        let local_bindings = hir_body
+            .bindings
+            .iter()
+            .filter(|binding| binding.kind == HirBindingKind::LocalLet)
+            .map(|binding| binding.name.as_str())
+            .collect::<BTreeSet<_>>();
+        if let Some(body) = hir_body.block.as_ref() {
+            collect_review_map_hir_facts_block(body, &local_bindings, &mut facts);
+        }
     }
 
     let mut reasons = Vec::new();
@@ -465,6 +471,9 @@ fn review_map_region_draft(
     if facts.has_handle_field_write {
         reasons.push("writes through handle field".to_string());
     }
+    if facts.has_managed_state_write {
+        reasons.push("writes to managed state".to_string());
+    }
     if facts.has_error_boundary {
         reasons.push("error handling boundary".to_string());
     }
@@ -522,6 +531,7 @@ struct ReviewMapFacts {
     has_take: bool,
     has_resource_pool: bool,
     has_handle_field_write: bool,
+    has_managed_state_write: bool,
     has_error_boundary: bool,
     user_calls: BTreeSet<String>,
     unresolved_calls: BTreeSet<String>,
@@ -695,22 +705,30 @@ fn collect_review_map_facts_expr(expr: &Expr, hir: &Hir, facts: &mut ReviewMapFa
     }
 }
 
-fn collect_review_map_hir_facts_block(block: &HirBlock, facts: &mut ReviewMapFacts) {
+fn collect_review_map_hir_facts_block(
+    block: &HirBlock,
+    local_bindings: &BTreeSet<&str>,
+    facts: &mut ReviewMapFacts,
+) {
     for statement in &block.statements {
-        collect_review_map_hir_facts_stmt(statement, facts);
+        collect_review_map_hir_facts_stmt(statement, local_bindings, facts);
     }
 }
 
-fn collect_review_map_hir_facts_stmt(statement: &HirStmt, facts: &mut ReviewMapFacts) {
+fn collect_review_map_hir_facts_stmt(
+    statement: &HirStmt,
+    local_bindings: &BTreeSet<&str>,
+    facts: &mut ReviewMapFacts,
+) {
     match statement {
         HirStmt::Let { value, .. } | HirStmt::Return { value, .. } => {
             if let Some(value) = value {
-                collect_review_map_hir_facts_expr(value, facts);
+                collect_review_map_hir_facts_expr(value, local_bindings, facts);
             }
         }
         HirStmt::With { resource, body, .. } => {
-            collect_review_map_hir_facts_expr(resource, facts);
-            collect_review_map_hir_facts_block(body, facts);
+            collect_review_map_hir_facts_expr(resource, local_bindings, facts);
+            collect_review_map_hir_facts_block(body, local_bindings, facts);
         }
         HirStmt::If {
             condition,
@@ -718,54 +736,76 @@ fn collect_review_map_hir_facts_stmt(statement: &HirStmt, facts: &mut ReviewMapF
             else_body,
             ..
         } => {
-            collect_review_map_hir_facts_expr(condition, facts);
-            collect_review_map_hir_facts_block(then_body, facts);
+            collect_review_map_hir_facts_expr(condition, local_bindings, facts);
+            collect_review_map_hir_facts_block(then_body, local_bindings, facts);
             if let Some(else_body) = else_body {
-                collect_review_map_hir_facts_block(else_body, facts);
+                collect_review_map_hir_facts_block(else_body, local_bindings, facts);
             }
         }
         HirStmt::Loop {
             condition, body, ..
         } => {
             if let Some(condition) = condition {
-                collect_review_map_hir_facts_expr(condition, facts);
+                collect_review_map_hir_facts_expr(condition, local_bindings, facts);
             }
-            collect_review_map_hir_facts_block(body, facts);
+            collect_review_map_hir_facts_block(body, local_bindings, facts);
         }
-        HirStmt::Expr(expr) => collect_review_map_hir_facts_expr(expr, facts),
+        HirStmt::Expr(expr) => collect_review_map_hir_facts_expr(expr, local_bindings, facts),
         HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
     }
 }
 
-fn collect_review_map_hir_facts_expr(expr: &HirExpr, facts: &mut ReviewMapFacts) {
+fn collect_review_map_hir_facts_expr(
+    expr: &HirExpr,
+    local_bindings: &BTreeSet<&str>,
+    facts: &mut ReviewMapFacts,
+) {
     if hir_expr_writes_through_handle_field(expr) {
         facts.has_handle_field_write = true;
     }
+    if hir_expr_writes_to_managed_state(expr, local_bindings) {
+        facts.has_managed_state_write = true;
+    }
     match expr {
         HirExpr::Binary { left, right, .. } => {
-            collect_review_map_hir_facts_expr(left, facts);
-            collect_review_map_hir_facts_expr(right, facts);
+            collect_review_map_hir_facts_expr(left, local_bindings, facts);
+            collect_review_map_hir_facts_expr(right, local_bindings, facts);
         }
-        HirExpr::Field { base, .. } => collect_review_map_hir_facts_expr(base, facts),
+        HirExpr::Field { base, .. } => {
+            collect_review_map_hir_facts_expr(base, local_bindings, facts)
+        }
         HirExpr::Index { base, index, .. } => {
-            collect_review_map_hir_facts_expr(base, facts);
-            collect_review_map_hir_facts_expr(index, facts);
+            collect_review_map_hir_facts_expr(base, local_bindings, facts);
+            collect_review_map_hir_facts_expr(index, local_bindings, facts);
         }
         HirExpr::Call { args, .. } => {
             for arg in args {
-                collect_review_map_hir_facts_expr(&arg.value, facts);
+                collect_review_map_hir_facts_expr(&arg.value, local_bindings, facts);
             }
         }
         HirExpr::Effect { value, .. }
         | HirExpr::Manage { value, .. }
         | HirExpr::Try { value, .. } => {
-            collect_review_map_hir_facts_expr(value, facts);
+            collect_review_map_hir_facts_expr(value, local_bindings, facts);
         }
-        HirExpr::Closure { body, .. } => collect_review_map_hir_facts_block(body, facts),
+        HirExpr::Closure { body, .. } => {
+            collect_review_map_hir_facts_block(body, local_bindings, facts)
+        }
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn hir_expr_writes_to_managed_state(expr: &HirExpr, local_bindings: &BTreeSet<&str>) -> bool {
+    match expr {
+        HirExpr::Effect {
+            effect: ParamEffect::Mut | ParamEffect::Take,
+            value,
+            ..
+        } => hir_place_path_root(value).is_some_and(|root| !local_bindings.contains(root)),
+        _ => false,
     }
 }
 
@@ -777,6 +817,22 @@ fn hir_expr_writes_through_handle_field(expr: &HirExpr) -> bool {
             ..
         } => hir_place_path_crosses_handle_field(value),
         _ => false,
+    }
+}
+
+fn hir_place_path_root(expr: &HirExpr) -> Option<&str> {
+    match expr {
+        HirExpr::Ident { name, .. } => Some(name),
+        HirExpr::Field { base, .. } | HirExpr::Index { base, .. } => hir_place_path_root(base),
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Try { value, .. } => hir_place_path_root(value),
+        HirExpr::Binary { .. }
+        | HirExpr::Call { .. }
+        | HirExpr::Closure { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => None,
     }
 }
 

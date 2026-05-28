@@ -2827,6 +2827,57 @@ fn update(counter: read Counter) -> Unit {
 }
 
 #[test]
+fn review_map_marks_writes_to_managed_state() {
+    let source = r#"
+features: local
+
+struct Counter {
+    value: Int
+}
+
+fn bump(counter: mut Counter) -> Unit
+
+fn update_managed(counter: read Counter) -> Unit {
+    bump(counter: mut counter)
+}
+
+fn update_local() -> Unit {
+    local counter = Counter(value: 1)
+    bump(counter: mut counter)
+}
+"#;
+    let map = review_map_sources(vec![("managed-write.rss", source)]);
+
+    let managed = map.files[0]
+        .regions
+        .iter()
+        .find(|region| region.function == "update_managed")
+        .expect("expected managed update region");
+    assert_eq!(
+        managed.classification,
+        ReviewMapClassification::ReviewRequired
+    );
+    assert!(
+        managed
+            .reasons
+            .iter()
+            .any(|reason| reason == "writes to managed state")
+    );
+
+    let local = map.files[0]
+        .regions
+        .iter()
+        .find(|region| region.function == "update_local")
+        .expect("expected local update region");
+    assert!(
+        local
+            .reasons
+            .iter()
+            .all(|reason| reason != "writes to managed state")
+    );
+}
+
+#[test]
 fn review_map_marks_writes_through_handle_fields() {
     let source = r#"
 class Cache {
