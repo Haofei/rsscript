@@ -3177,6 +3177,50 @@ Rust remains the backend.
 
 ---
 
+## 37.4 AI authoring micro-spec
+
+RSScript has no meaningful public corpus today, so general-purpose language
+models should not be expected to write correct RSScript from pretraining alone.
+
+A future tooling milestone should provide a compact AI authoring micro-spec:
+
+```text
+purpose: teach an LLM to write RSScript through in-context learning
+size: small enough to fit directly in prompts and agent system context
+content: canonical syntax, core semantic rules, and focused examples
+audience: code-generation agents, repair agents, and review assistants
+```
+
+This micro-spec is not a replacement for the normative language spec. It is a
+promptable subset optimized for generation quality.
+
+It should include:
+
+```text
+1. file header rules and `features:` examples
+2. type declarations: class / struct / resource / handle / weak
+3. function signatures with named parameters and read/mut/take
+4. managed-default examples using only `let`
+5. local hot-path examples with `local`, `take`, and `manage`
+6. `with` resource examples and forbidden escape examples
+7. `effects(retains(...))` examples and local-retention errors
+8. `fresh` return examples, including shallow handle-field limits
+9. native/unsafe/async boundary examples as review signals
+10. package `.rssi` contract examples
+11. review-map and diagnostic examples showing what the checker reports
+12. anti-patterns that AI commonly writes and the RSScript rewrite
+```
+
+The examples should be short, canonical, and deliberately repetitive. The goal
+is to make a model imitate the intended surface reliably before RSScript has
+enough real-world code to appear in training data.
+
+The compiler repository should keep this micro-spec executable where possible:
+examples used for prompting should also be checked by `rss check`, and negative
+examples should map to stable diagnostic codes.
+
+---
+
 # 38. Non-goals of v0.5
 
 RSScript v0.5 does not attempt to support:
