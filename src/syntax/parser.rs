@@ -52,7 +52,11 @@ impl Parser<'_> {
                 if let Some(item) = self.parse_type_decl() {
                     items.push(Item::Type(item));
                 }
-            } else if self.at_ident("pub") || self.at_ident("async") || self.at_ident("fn") {
+            } else if self.at_ident("pub")
+                || self.at_ident("async")
+                || self.at_ident("native")
+                || self.at_ident("fn")
+            {
                 if let Some(item) = self.parse_function_decl() {
                     items.push(Item::Function(item));
                 }
@@ -158,12 +162,16 @@ impl Parser<'_> {
         let span = self.current()?.span.clone();
         let mut is_public = false;
         let mut is_async = false;
-        while self.at_ident("pub") || self.at_ident("async") {
+        let mut is_native = false;
+        while self.at_ident("pub") || self.at_ident("async") || self.at_ident("native") {
             if self.at_ident("pub") {
                 is_public = true;
             }
             if self.at_ident("async") {
                 is_async = true;
+            }
+            if self.at_ident("native") {
+                is_native = true;
             }
             self.index += 1;
         }
@@ -203,6 +211,13 @@ impl Parser<'_> {
             let close = find_matching(self.tokens, open, "(", ")").unwrap_or(open);
             effects = parse_effects(self.tokens, open + 1, close);
             self.index = close + 1;
+        }
+        if is_native
+            && !effects
+                .iter()
+                .any(|effect| matches!(effect, EffectDecl::Name(name) if name == "native"))
+        {
+            effects.push(EffectDecl::Name("native".to_string()));
         }
 
         let body = if self.at_symbol("{") {
@@ -388,6 +403,7 @@ fn starts_top_level_item(tokens: &[Token], index: usize) -> bool {
         || token.is_ident_text("fn")
         || token.is_ident_text("pub")
         || token.is_ident_text("async")
+        || token.is_ident_text("native")
 }
 
 fn parse_params(tokens: &[Token], start: usize, end: usize) -> Vec<Param> {

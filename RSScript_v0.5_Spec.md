@@ -2269,6 +2269,35 @@ Agent, GPU, HTTP, networking, and model-client packages are use-case libraries, 
 
 ---
 
+## 29.4 Package Manager Design
+
+RSScript package management is specified separately from the core language syntax.
+
+The package-manager direction is defined in:
+
+```text
+RSScript_Package_Manager_Design.md
+```
+
+See [RSScript Package Manager Design](RSScript_Package_Manager_Design.md).
+
+That design is compatible with this v0.5 spec because it preserves the same implementation boundary:
+
+```text
+RSScript packages expose reviewable .rssi semantic contracts.
+RSScript source lowers to Rust through the compiler pipeline.
+Rust native wrappers are built by Cargo.
+Cargo remains the Rust build and crate dependency substrate.
+Package review metadata reports semantic risk instead of hiding it.
+Unknown package risk is classified as unknown, not safe.
+```
+
+Package features declared in `rsspkg.toml` are package selection features. They are not the same as RSScript file features declared with `features:` at the top of a `.rss` or `.rssi` file.
+
+If a package feature enables native code, unsafe code, build scripts, proc macros, linked libraries, or another advanced boundary, package review metadata must report that risk explicitly.
+
+---
+
 # 30. Native Core and FFI Boundary
 
 v0.5 supports controlled native core boundaries.

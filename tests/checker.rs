@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rsscript::syntax::ast::Item;
+use rsscript::syntax::ast::{EffectDecl, Item};
 use rsscript::syntax::parse_source;
 use rsscript::{
     ReviewMapClassification, ReviewMapFileRisk, ReviewRisk, analyze_source,
@@ -1000,8 +1000,7 @@ fn copy(path: read Path) -> Result<Unit, FileError> {
 #[test]
 fn rust_lowering_maps_native_call_boundaries() {
     let source = r#"
-fn host_emit(message: read String) -> Unit
-    effects(native)
+native fn host_emit(message: read String) -> Unit
 
 pub fn run() -> Unit {
     host_emit(message: read "host")
@@ -1016,8 +1015,8 @@ pub fn run() -> Unit {
         .collect::<Vec<_>>();
 
     assert_eq!(native_calls.len(), 2);
+    assert!(native_calls.iter().any(|entry| entry.source.line == 5));
     assert!(native_calls.iter().any(|entry| entry.source.line == 6));
-    assert!(native_calls.iter().any(|entry| entry.source.line == 7));
 }
 
 #[test]
@@ -1606,6 +1605,29 @@ fn checksum(data: read Bytes) -> UInt64
 }
 
 #[test]
+fn review_reports_native_fn_as_native_boundary() {
+    let old_source = r#"
+fn host_emit(message: read String) -> Unit
+{
+    Log.write(message: read message)
+}
+"#;
+    let new_source = r#"
+native fn host_emit(message: read String) -> Unit
+"#;
+
+    let findings = review_sources("old.rss", old_source, "new.rss", new_source);
+    let unsafe_finding = findings
+        .iter()
+        .find(|finding| finding.code == "RSR012")
+        .expect("expected native boundary review finding");
+
+    assert_eq!(unsafe_finding.risk, ReviewRisk::Unsafe);
+    assert_eq!(unsafe_finding.before.as_deref(), Some("<none>"));
+    assert_eq!(unsafe_finding.after.as_deref(), Some("native"));
+}
+
+#[test]
 fn review_reports_removed_guarantees() {
     let old_source = r#"
 
@@ -1867,6 +1889,26 @@ async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError>
         matches!(&program.items[0], Item::Function(function) if function.name == "fetch" && function.is_async)
     );
     assert!(analyze_source("net.rssi", source).is_empty());
+}
+
+#[test]
+fn parser_accepts_native_function_declaration() {
+    let source = r#"
+native fn Host.emit(message: read String) -> Unit
+"#;
+    let program = parse_source("host.rssi", source);
+
+    let Item::Function(function) = &program.items[0] else {
+        panic!("expected native function declaration");
+    };
+    assert_eq!(function.name, "Host.emit");
+    assert!(
+        function
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, EffectDecl::Name(name) if name == "native"))
+    );
+    assert!(analyze_source("host.rssi", source).is_empty());
 }
 
 #[test]
