@@ -2566,6 +2566,30 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_reports_noescape_as_unsupported_until_lowering_exists() {
+    let source = r#"
+features: local
+
+fn apply(callback: noescape Fn()) -> Unit {
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("noescape.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0015"
+                && diagnostic.label == "unsupported noescape closure")
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "RS0008")
+    );
+}
+
+#[test]
 fn review_map_marks_public_rssi_signatures_review_required() {
     let source = r#"
 struct JsonValue

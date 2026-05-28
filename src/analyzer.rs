@@ -209,17 +209,41 @@ impl Analyzer<'_> {
     }
 
     fn check_unsupported_syntax(&mut self) {
-        let bodies = self
-            .syntax_program
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                Item::Function(function) => Some(function.body.clone()),
-                Item::Type(_) => None,
-            })
-            .collect::<Vec<_>>();
-        for body in &bodies {
-            self.check_unsupported_syntax_block(body);
+        let items = self.syntax_program.items.clone();
+        for item in &items {
+            self.check_unsupported_syntax_item(item);
+        }
+    }
+
+    fn check_unsupported_syntax_item(&mut self, item: &Item) {
+        match item {
+            Item::Function(function) => {
+                for param in &function.params {
+                    self.check_unsupported_syntax_type_ref(&param.ty);
+                }
+                if let Some(return_ty) = &function.return_ty {
+                    self.check_unsupported_syntax_type_ref(return_ty);
+                }
+                self.check_unsupported_syntax_block(&function.body);
+            }
+            Item::Type(type_decl) => {
+                for field in &type_decl.fields {
+                    self.check_unsupported_syntax_type_ref(&field.ty);
+                }
+            }
+        }
+    }
+
+    fn check_unsupported_syntax_type_ref(&mut self, ty: &TypeRef) {
+        if ty.name == "noescape" {
+            self.unsupported_syntax(
+                ty.span.clone(),
+                "unsupported noescape closure",
+                "`noescape Fn(...)` is specified for RSScript v0.5, but this compiler does not support noescape closure parameters yet.",
+            );
+        }
+        for arg in &ty.args {
+            self.check_unsupported_syntax_type_ref(arg);
         }
     }
 
@@ -376,6 +400,7 @@ impl Analyzer<'_> {
                 if param.effect.is_none()
                     && !param.ty.name.is_empty()
                     && param.ty.name != "share"
+                    && !type_ref_contains_unsupported_noescape(&param.ty)
                     && !type_ref_has_surface_reference(&param.ty, self.tokens)
                     && !is_copy_type(&param.ty)
                 {
@@ -1543,6 +1568,10 @@ fn type_ref_name(ty: &TypeRef) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!("{}<{args}>", ty.name)
+}
+
+fn type_ref_contains_unsupported_noescape(ty: &TypeRef) -> bool {
+    ty.name == "noescape" || ty.args.iter().any(type_ref_contains_unsupported_noescape)
 }
 
 fn type_ref_has_surface_reference(ty: &TypeRef, tokens: &[Token]) -> bool {
