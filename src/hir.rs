@@ -1276,6 +1276,9 @@ fn retained_inline_binding(
 ) -> Option<(String, Span)> {
     match expr {
         Expr::Ident(name, span) => Some((name.clone(), span.clone())),
+        Expr::Effect { value, .. } | Expr::Try { value, .. } => {
+            retained_inline_binding(value, hir, value_types)
+        }
         Expr::Field { base, name, span } => {
             let base_type = infer_hir_expr_type(hir, base, value_types)?;
             let field = hir.type_info(&base_type)?.fields.get(name)?;

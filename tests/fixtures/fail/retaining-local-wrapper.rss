@@ -19,4 +19,5 @@ fn bad_store(cache: mut Cache) -> Unit {
     local holder = make_holder()
     Cache.store_option(cache: mut cache, value: read Some(holder.image))
     Cache.store_result(cache: mut cache, value: read Ok(holder.image))
+    Cache.store_option(cache: mut cache, value: read Some(read holder.image))
 }

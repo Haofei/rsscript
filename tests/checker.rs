@@ -2424,6 +2424,7 @@ fn bad_store(cache: mut Cache) -> Unit {
     local holder = make_holder()
     Cache.store_option(cache: mut cache, value: read Some(holder.image))
     Cache.store_result(cache: mut cache, value: read Ok(holder.image))
+    Cache.store_option(cache: mut cache, value: read Some(read holder.image))
 }
 "#;
     let diagnostics = analyze_source("retaining-local-wrapper.rss", source);
@@ -2434,7 +2435,7 @@ fn bad_store(cache: mut Cache) -> Unit {
         })
         .count();
 
-    assert_eq!(retained_count, 2, "{diagnostics:?}");
+    assert_eq!(retained_count, 3, "{diagnostics:?}");
 }
 
 #[test]
