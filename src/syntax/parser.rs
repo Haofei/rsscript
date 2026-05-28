@@ -90,8 +90,14 @@ impl Parser<'_> {
             self.index = close + 1;
             parse_fields(self.tokens, open + 1, close)
         } else {
-            let end = declaration_line_end(self.tokens, self.index);
-            self.index = end;
+            if self
+                .tokens
+                .get(self.index)
+                .is_some_and(|token| token.span.line == span.line)
+            {
+                let end = declaration_line_end(self.tokens, self.index);
+                self.index = end;
+            }
             Vec::new()
         };
 
@@ -121,7 +127,7 @@ impl Parser<'_> {
             return None;
         }
         self.index += 1;
-        let name = self.take_ident_name()?;
+        let name = self.take_function_name()?;
         let type_params = self.parse_generic_params();
 
         let mut params = Vec::new();
@@ -639,7 +645,15 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
 
     if tokens[start].symbol("|") && tokens.get(start + 1).is_some_and(|token| token.symbol("|")) {
         let Some(open) = (start + 2..end).find(|index| tokens[*index].symbol("{")) else {
-            return Some(Expr::Unknown(tokens[start].span.clone()));
+            let value = parse_expr(tokens, start + 2, end)
+                .unwrap_or_else(|| Expr::Unknown(tokens[start].span.clone()));
+            return Some(Expr::Closure {
+                body: Block {
+                    statements: vec![Stmt::Expr(value)],
+                    span: tokens[start].span.clone(),
+                },
+                span: tokens[start].span.clone(),
+            });
         };
         let close = find_matching(tokens, open, "{", "}").unwrap_or(open);
         return Some(Expr::Closure {

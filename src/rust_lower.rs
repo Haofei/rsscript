@@ -320,12 +320,14 @@ impl<'a> RustLowerer<'a> {
         }
         out.push('\n');
 
-        for item in &self.program.items {
+        for (index, item) in self.program.items.iter().enumerate() {
             match item {
                 Item::Type(ty) => self.lower_type_decl(ty, &mut out),
                 Item::Function(function) => self.lower_function(function, &mut out),
             }
-            out.push('\n');
+            if index + 1 < self.program.items.len() {
+                out.push('\n');
+            }
         }
 
         LoweredRust {
@@ -398,9 +400,10 @@ impl<'a> RustLowerer<'a> {
     fn lower_function(&mut self, function: &FunctionDecl, out: &mut String) {
         self.record_source_marker(out, 0, "function", &function.span);
         let async_prefix = if function.is_async { "async " } else { "" };
+        let is_public = function.is_public || is_runnable_main(function);
         out.push_str(&format!(
             "{}{}fn {}{}(",
-            visibility(function.is_public),
+            visibility(is_public),
             async_prefix,
             rust_ident(&function.name),
             lower_generic_params(&function.type_params)
@@ -1095,14 +1098,30 @@ fn rust_ident(name: &str) -> String {
 fn cargo_package_name(name: &str) -> String {
     let mut out = String::new();
     let mut previous_was_dash = false;
+    let mut previous_was_lower_or_digit = false;
 
     for character in name.chars() {
         if character.is_ascii_alphanumeric() {
+            if character.is_ascii_uppercase()
+                && previous_was_lower_or_digit
+                && !previous_was_dash
+                && !out.is_empty()
+            {
+                out.push('-');
+            }
             out.push(character.to_ascii_lowercase());
             previous_was_dash = false;
-        } else if matches!(character, '-' | '_' | '.') && !out.is_empty() && !previous_was_dash {
+            previous_was_lower_or_digit =
+                character.is_ascii_lowercase() || character.is_ascii_digit();
+        } else if (character.is_ascii_whitespace() || matches!(character, '-' | '_' | '.'))
+            && !out.is_empty()
+            && !previous_was_dash
+        {
             out.push('-');
             previous_was_dash = true;
+            previous_was_lower_or_digit = false;
+        } else {
+            previous_was_lower_or_digit = false;
         }
     }
 

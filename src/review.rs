@@ -455,6 +455,7 @@ fn review_map_region_draft(
         reasons.push("ResourcePool usage".to_string());
     }
 
+    let had_review_reason = !reasons.is_empty();
     let classification = if !facts.unresolved_calls.is_empty() {
         let calls = facts
             .unresolved_calls
@@ -463,7 +464,11 @@ fn review_map_region_draft(
             .collect::<Vec<_>>()
             .join(", ");
         reasons.push(format!("unresolved call(s): {calls}"));
-        ReviewMapClassification::Unknown
+        if had_review_reason {
+            ReviewMapClassification::ReviewRequired
+        } else {
+            ReviewMapClassification::Unknown
+        }
     } else if reasons.is_empty() {
         reasons.push("private pure helper with no retention or resource boundary".to_string());
         ReviewMapClassification::Foldable

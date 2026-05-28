@@ -1541,7 +1541,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
             "Image",
             "load",
             &[param("path", ParamEffect::Read, "Path")],
-            Some("Image"),
+            Some("Result<Image, ImageError>"),
             true,
             &[],
         ),
@@ -1580,7 +1580,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
                 param("image", ParamEffect::Read, "Image"),
                 param("path", ParamEffect::Read, "Path"),
             ],
-            Some("Unit"),
+            Some("Result<Unit, ImageError>"),
             false,
             &[],
         ),
@@ -1631,7 +1631,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
             "File",
             "read_all",
             &[param("file", ParamEffect::Mut, "File")],
-            Some("Bytes"),
+            Some("Result<Bytes, FileError>"),
             true,
             &[],
         ),
@@ -1642,7 +1642,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
                 param("file", ParamEffect::Mut, "File"),
                 param("data", ParamEffect::Read, "Bytes"),
             ],
-            Some("Unit"),
+            Some("Result<Unit, FileError>"),
             false,
             &[],
         ),
@@ -1697,7 +1697,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
             "Json",
             "parse",
             &[param("text", ParamEffect::Read, "String")],
-            Some("JsonValue"),
+            Some("Result<JsonValue, JsonError>"),
             true,
             &[],
         ),
@@ -1708,8 +1708,8 @@ fn builtin_signatures() -> Vec<FunctionSig> {
                 param("value", ParamEffect::Read, "JsonValue"),
                 param("name", ParamEffect::Read, "String"),
             ],
-            Some("String"),
-            true,
+            Some("Result<String, JsonError>"),
+            false,
             &[],
         ),
         builtin(
@@ -1719,7 +1719,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
                 param("file", ParamEffect::Mut, "File"),
                 param("buffer", ParamEffect::Mut, "RowBuffer"),
             ],
-            Some("Unit"),
+            Some("Result<Unit, CsvError>"),
             false,
             &[],
         ),
@@ -1727,7 +1727,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
             "Csv",
             "parse_row",
             &[param("buffer", ParamEffect::Read, "RowBuffer")],
-            Some("Row"),
+            Some("Result<Row, CsvError>"),
             true,
             &[],
         ),
@@ -1789,7 +1789,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
                 param("conn", ParamEffect::Mut, "DbConnection"),
                 param("sql", ParamEffect::Read, "String"),
             ],
-            None,
+            Some("Result<Unit, DbError>"),
             false,
             &[],
         ),
@@ -1805,7 +1805,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
             "RuleLoader",
             "load_rules",
             &[param("path", ParamEffect::Read, "Path")],
-            Some("List"),
+            Some("Result<List<Rule>, ConfigError>"),
             true,
             &[],
         ),
@@ -1987,7 +1987,10 @@ fn cache_put(cache: mut Cache, value: read Image) -> Unit
         let load = hir
             .resolve_function(Some("Image"), "load")
             .expect("builtin signature exists");
-        assert_eq!(load.return_type.as_deref(), Some("Image"));
+        assert_eq!(
+            load.return_type.as_deref(),
+            Some("Result<Image, ImageError>")
+        );
     }
 
     #[test]
@@ -2011,8 +2014,8 @@ fn Image(path: read Path) -> Image {
 
         assert_eq!(duplicate.kind, DuplicateSymbolKind::Constructor);
         assert_eq!(duplicate.name, "Image");
-        assert_eq!(duplicate.first_span.line, 4);
-        assert_eq!(duplicate.duplicate_span.line, 8);
+        assert_eq!(duplicate.first_span.line, 3);
+        assert_eq!(duplicate.duplicate_span.line, 7);
     }
 
     #[test]
@@ -2034,8 +2037,8 @@ struct Response {
 
         assert_eq!(duplicate.kind, DuplicateSymbolKind::Field);
         assert_eq!(duplicate.name, "Response.status");
-        assert_eq!(duplicate.first_span.line, 5);
-        assert_eq!(duplicate.duplicate_span.line, 6);
+        assert_eq!(duplicate.first_span.line, 4);
+        assert_eq!(duplicate.duplicate_span.line, 5);
     }
 
     #[test]
@@ -2124,7 +2127,7 @@ fn render(body: read String) -> Result<fresh Response, HttpError> {
 features: local
 
 fn load(path: read Path) -> Unit {
-    local image = Image.load(path: read path)
+    local image = Image.load(path: read path)?
 }
 "#;
 
@@ -2309,7 +2312,7 @@ struct Config {
 }
 
 fn update(cache: mut ImageCache, config: mut Config, path: read Path) -> Unit {
-    local image = Image.load(path: read path)
+    local image = Image.load(path: read path)?
     ImageCache.store(cache: mut cache, image: read image)
     List.consume(list: take config.rules)
 }
@@ -2324,7 +2327,7 @@ fn update(cache: mut ImageCache, config: mut Config, path: read Path) -> Unit {
         let HirStmt::Let {
             kind: HirBindingKind::LocalLet,
             name,
-            value: Some(HirExpr::Call { type_name, .. }),
+            value: Some(HirExpr::Try { type_name, .. }),
             type_name: Some(binding_type),
             ..
         } = &block.statements[0]
