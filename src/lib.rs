@@ -19,8 +19,10 @@ pub use diagnostic::{
 };
 pub use lint::lint_source;
 pub use package::{
-    PackageIdentity, PackageNativeRustReview, PackageReview, PackageReviewFile,
-    PackageReviewFileKind, PackageReviewSummary, PackageRisk, format_package_review_human,
+    PackageDiff, PackageIdentity, PackageInterfaceChange, PackageInterfaceChangeKind,
+    PackageManifestChange, PackageNativeRustReview, PackageReview, PackageReviewFile,
+    PackageReviewFileKind, PackageReviewSummary, PackageRisk, diff_package_dirs,
+    format_package_diff_human, format_package_diff_json, format_package_review_human,
     format_package_review_json, review_package_dir,
 };
 pub use review::{

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::analyzer::{analyze_source_with_core, analyze_source_with_interfaces, core_interfaces};
 use crate::diagnostic::Diagnostic;
-use crate::review::{ReviewMap, review_map_sources};
+use crate::review::{
+    ReviewFinding, ReviewMap, ReviewRisk, format_review_human, review_map_sources, review_sources,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PackageReview {
@@ -19,6 +21,43 @@ pub struct PackageReview {
     pub native_rust: Option<PackageNativeRustReview>,
     pub review_map: ReviewMap,
     pub diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageDiff {
+    pub old_package: PackageIdentity,
+    pub new_package: PackageIdentity,
+    pub risk: PackageRisk,
+    pub reasons: Vec<String>,
+    pub manifest_changes: Vec<PackageManifestChange>,
+    pub interface_changes: Vec<PackageInterfaceChange>,
+    pub old_review: PackageReviewSummary,
+    pub new_review: PackageReviewSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageManifestChange {
+    pub kind: String,
+    pub name: String,
+    pub before: Option<String>,
+    pub after: Option<String>,
+    pub risk: PackageRisk,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageInterfaceChange {
+    pub file: String,
+    pub change: PackageInterfaceChangeKind,
+    pub risk: PackageRisk,
+    pub findings: Vec<ReviewFinding>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageInterfaceChangeKind {
+    Added,
+    Removed,
+    Modified,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -135,31 +174,15 @@ struct ManifestNativeRust {
 #[derive(Debug, Clone)]
 struct PackageSource {
     path: String,
+    relative_path: String,
     contents: String,
     kind: PackageReviewFileKind,
 }
 
 pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
-    let manifest_path = package_dir.join("rsspkg.toml");
-    let manifest_source = fs::read_to_string(&manifest_path)
-        .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
-    let manifest: Manifest = toml::from_str(&manifest_source)
-        .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
-
-    let interface_roots = default_paths(&manifest.interfaces.paths, "interface");
-    let source_roots = default_paths(&manifest.sources.paths, "src");
-    let mut sources = Vec::new();
-    sources.extend(read_package_sources(
-        package_dir,
-        &interface_roots,
-        PackageReviewFileKind::Interface,
-    )?);
-    sources.extend(read_package_sources(
-        package_dir,
-        &source_roots,
-        PackageReviewFileKind::Source,
-    )?);
-    sources.sort_by(|left, right| left.path.cmp(&right.path));
+    let package = load_package(package_dir)?;
+    let manifest = &package.manifest;
+    let sources = &package.sources;
 
     let interface_refs = sources
         .iter()
@@ -203,7 +226,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         });
 
     let mut reasons = Vec::new();
-    collect_manifest_review_reasons(&manifest, &mut reasons);
+    collect_manifest_review_reasons(manifest, &mut reasons);
     collect_native_reasons(native_rust.as_ref(), &mut reasons);
     collect_review_map_reasons(&review_map, &mut reasons);
     if diagnostics
@@ -217,7 +240,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
     reasons.sort();
     reasons.dedup();
 
-    let risk = package_risk(&manifest, native_rust.as_ref(), &review_map, &diagnostics);
+    let risk = package_risk(manifest, native_rust.as_ref(), &review_map, &diagnostics);
     let summary = PackageReviewSummary {
         interface_files: sources
             .iter()
@@ -246,11 +269,11 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
 
     Ok(PackageReview {
         package: PackageIdentity {
-            name: manifest.package.name,
-            version: manifest.package.version,
-            edition: manifest.package.edition,
+            name: manifest.package.name.clone(),
+            version: manifest.package.version.clone(),
+            edition: manifest.package.edition.clone(),
         },
-        manifest_path: manifest_path.display().to_string(),
+        manifest_path: package.manifest_path.display().to_string(),
         risk,
         reasons,
         summary,
@@ -261,8 +284,87 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
     })
 }
 
+pub fn diff_package_dirs(old_dir: &Path, new_dir: &Path) -> Result<PackageDiff, String> {
+    let old_package = load_package(old_dir)?;
+    let new_package = load_package(new_dir)?;
+    let old_review = review_package_dir(old_dir)?;
+    let new_review = review_package_dir(new_dir)?;
+
+    let mut manifest_changes = Vec::new();
+    compare_package_identity(
+        &old_package.manifest,
+        &new_package.manifest,
+        &mut manifest_changes,
+    );
+    compare_value_maps(
+        "dependency",
+        &old_package.manifest.dependencies,
+        &new_package.manifest.dependencies,
+        PackageRisk::High,
+        &mut manifest_changes,
+    );
+    compare_value_maps(
+        "dev-dependency",
+        &old_package.manifest.dev_dependencies,
+        &new_package.manifest.dev_dependencies,
+        PackageRisk::Elevated,
+        &mut manifest_changes,
+    );
+    compare_feature_maps(
+        &old_package.manifest.features,
+        &new_package.manifest.features,
+        &mut manifest_changes,
+    );
+    compare_native_rust(
+        old_package
+            .manifest
+            .native
+            .as_ref()
+            .and_then(|native| native.rust.as_ref()),
+        new_package
+            .manifest
+            .native
+            .as_ref()
+            .and_then(|native| native.rust.as_ref()),
+        &mut manifest_changes,
+    );
+
+    let interface_changes = compare_interface_sources(&old_package.sources, &new_package.sources);
+    let mut reasons = package_diff_reasons(&manifest_changes, &interface_changes);
+    if old_review.risk != new_review.risk {
+        reasons.push(format!(
+            "package risk changed from {} to {}",
+            package_risk_label(old_review.risk),
+            package_risk_label(new_review.risk)
+        ));
+    }
+    reasons.sort();
+    reasons.dedup();
+    let risk = package_diff_risk(
+        &manifest_changes,
+        &interface_changes,
+        old_review.risk,
+        new_review.risk,
+    );
+
+    Ok(PackageDiff {
+        old_package: package_identity(&old_package.manifest),
+        new_package: package_identity(&new_package.manifest),
+        risk,
+        reasons,
+        manifest_changes,
+        interface_changes,
+        old_review: old_review.summary,
+        new_review: new_review.summary,
+    })
+}
+
 pub fn format_package_review_json(review: &PackageReview) -> String {
     serde_json::to_string(review).expect("package review JSON serialization should not fail")
+}
+
+pub fn format_package_diff_json(diff: &PackageDiff) -> String {
+    serde_json::to_string(diff).expect("package diff JSON serialization should not fail")
 }
 
 pub fn format_package_review_human(review: &PackageReview) -> String {
@@ -299,6 +401,79 @@ pub fn format_package_review_human(review: &PackageReview) -> String {
     output
 }
 
+pub fn format_package_diff_human(diff: &PackageDiff) -> String {
+    let mut output = String::new();
+    output.push_str(&format!(
+        "package diff {} {} -> {} risk {}\n",
+        diff.new_package.name,
+        diff.old_package.version,
+        diff.new_package.version,
+        package_risk_label(diff.risk)
+    ));
+    if !diff.reasons.is_empty() {
+        output.push_str("reasons:\n");
+        for reason in &diff.reasons {
+            output.push_str(&format!("  - {reason}\n"));
+        }
+    }
+    for change in &diff.manifest_changes {
+        output.push_str(&format!(
+            "{} {}: {} -> {} ({})\n",
+            change.kind,
+            change.name,
+            change.before.as_deref().unwrap_or("<none>"),
+            change.after.as_deref().unwrap_or("<none>"),
+            package_risk_label(change.risk)
+        ));
+    }
+    for change in &diff.interface_changes {
+        output.push_str(&format!(
+            "interface {} {:?} ({})\n",
+            change.file,
+            change.change,
+            package_risk_label(change.risk)
+        ));
+        if !change.findings.is_empty() {
+            output.push_str(&format_review_human(&change.findings));
+        }
+    }
+    output
+}
+
+struct LoadedPackage {
+    manifest_path: PathBuf,
+    manifest: Manifest,
+    sources: Vec<PackageSource>,
+}
+
+fn load_package(package_dir: &Path) -> Result<LoadedPackage, String> {
+    let manifest_path = package_dir.join("rsspkg.toml");
+    let manifest_source = fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
+    let manifest: Manifest = toml::from_str(&manifest_source)
+        .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
+
+    let interface_roots = default_paths(&manifest.interfaces.paths, "interface");
+    let source_roots = default_paths(&manifest.sources.paths, "src");
+    let mut sources = Vec::new();
+    sources.extend(read_package_sources(
+        package_dir,
+        &interface_roots,
+        PackageReviewFileKind::Interface,
+    )?);
+    sources.extend(read_package_sources(
+        package_dir,
+        &source_roots,
+        PackageReviewFileKind::Source,
+    )?);
+    sources.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(LoadedPackage {
+        manifest_path,
+        manifest,
+        sources,
+    })
+}
+
 fn default_paths(paths: &[String], default: &str) -> Vec<String> {
     if paths.is_empty() {
         vec![default.to_string()]
@@ -326,12 +501,20 @@ fn read_package_sources(
                 .map_err(|error| format!("failed to read {}: {error}", file.display()))?;
             sources.push(PackageSource {
                 path: file.display().to_string(),
+                relative_path: relative_path(package_dir, &file),
                 contents,
                 kind,
             });
         }
     }
     Ok(sources)
+}
+
+fn relative_path(base: &Path, path: &Path) -> String {
+    path.strip_prefix(base)
+        .unwrap_or(path)
+        .display()
+        .to_string()
 }
 
 fn collect_rsscript_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
@@ -416,6 +599,321 @@ fn collect_review_map_reasons(review_map: &ReviewMap, reasons: &mut Vec<String>)
     }
     if review_map.summary.review_required.functions > 0 {
         reasons.push("review map contains must-review functions".to_string());
+    }
+}
+
+fn package_identity(manifest: &Manifest) -> PackageIdentity {
+    PackageIdentity {
+        name: manifest.package.name.clone(),
+        version: manifest.package.version.clone(),
+        edition: manifest.package.edition.clone(),
+    }
+}
+
+fn compare_package_identity(
+    old: &Manifest,
+    new: &Manifest,
+    changes: &mut Vec<PackageManifestChange>,
+) {
+    if old.package.name != new.package.name {
+        changes.push(manifest_change(
+            "package",
+            "name",
+            Some(old.package.name.clone()),
+            Some(new.package.name.clone()),
+            PackageRisk::High,
+        ));
+    }
+    if old.package.version != new.package.version {
+        changes.push(manifest_change(
+            "package",
+            "version",
+            Some(old.package.version.clone()),
+            Some(new.package.version.clone()),
+            PackageRisk::Elevated,
+        ));
+    }
+    if old.package.edition != new.package.edition {
+        changes.push(manifest_change(
+            "package",
+            "edition",
+            Some(old.package.edition.clone()),
+            Some(new.package.edition.clone()),
+            PackageRisk::Elevated,
+        ));
+    }
+}
+
+fn compare_value_maps(
+    kind: &str,
+    old: &BTreeMap<String, toml::Value>,
+    new: &BTreeMap<String, toml::Value>,
+    risk: PackageRisk,
+    changes: &mut Vec<PackageManifestChange>,
+) {
+    let names = old
+        .keys()
+        .chain(new.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    for name in names {
+        let before = old.get(&name).map(toml_value_label);
+        let after = new.get(&name).map(toml_value_label);
+        if before != after {
+            changes.push(manifest_change(kind, name, before, after, risk));
+        }
+    }
+}
+
+fn compare_feature_maps(
+    old: &BTreeMap<String, Vec<String>>,
+    new: &BTreeMap<String, Vec<String>>,
+    changes: &mut Vec<PackageManifestChange>,
+) {
+    let names = old
+        .keys()
+        .chain(new.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    for name in names {
+        let before = old.get(&name).map(|values| feature_values_label(values));
+        let after = new.get(&name).map(|values| feature_values_label(values));
+        if before != after {
+            changes.push(manifest_change(
+                "package-feature",
+                name,
+                before,
+                after,
+                PackageRisk::Elevated,
+            ));
+        }
+    }
+}
+
+fn compare_native_rust(
+    old: Option<&ManifestNativeRust>,
+    new: Option<&ManifestNativeRust>,
+    changes: &mut Vec<PackageManifestChange>,
+) {
+    let old_enabled = old.is_some_and(|native| native.enabled);
+    let new_enabled = new.is_some_and(|native| native.enabled);
+    if old_enabled != new_enabled {
+        changes.push(manifest_change(
+            "native-rust",
+            "enabled",
+            Some(old_enabled.to_string()),
+            Some(new_enabled.to_string()),
+            PackageRisk::High,
+        ));
+    }
+    compare_optional_native_field(
+        "path",
+        old.and_then(|native| native.path.as_deref()),
+        new.and_then(|native| native.path.as_deref()),
+        PackageRisk::Elevated,
+        changes,
+    );
+    compare_optional_native_field(
+        "crate",
+        old.and_then(|native| native.crate_name.as_deref()),
+        new.and_then(|native| native.crate_name.as_deref()),
+        PackageRisk::Elevated,
+        changes,
+    );
+    compare_optional_native_field(
+        "build_scripts",
+        old.and_then(|native| native.build_scripts.as_deref()),
+        new.and_then(|native| native.build_scripts.as_deref()),
+        PackageRisk::High,
+        changes,
+    );
+    compare_optional_native_field(
+        "proc_macros",
+        old.and_then(|native| native.proc_macros.as_deref()),
+        new.and_then(|native| native.proc_macros.as_deref()),
+        PackageRisk::High,
+        changes,
+    );
+    compare_optional_native_field(
+        "unsafe",
+        old.and_then(|native| native.unsafe_policy.as_deref()),
+        new.and_then(|native| native.unsafe_policy.as_deref()),
+        PackageRisk::High,
+        changes,
+    );
+    let old_links = old.map(|native| native.links.join(", "));
+    let new_links = new.map(|native| native.links.join(", "));
+    if old_links != new_links {
+        changes.push(manifest_change(
+            "native-rust",
+            "links",
+            old_links,
+            new_links,
+            PackageRisk::High,
+        ));
+    }
+}
+
+fn compare_optional_native_field(
+    name: &str,
+    old: Option<&str>,
+    new: Option<&str>,
+    risk: PackageRisk,
+    changes: &mut Vec<PackageManifestChange>,
+) {
+    if old != new {
+        changes.push(manifest_change(
+            "native-rust",
+            name,
+            old.map(str::to_string),
+            new.map(str::to_string),
+            risk,
+        ));
+    }
+}
+
+fn compare_interface_sources(
+    old_sources: &[PackageSource],
+    new_sources: &[PackageSource],
+) -> Vec<PackageInterfaceChange> {
+    let old_interfaces = interface_sources_by_relative_path(old_sources);
+    let new_interfaces = interface_sources_by_relative_path(new_sources);
+    let files = old_interfaces
+        .keys()
+        .chain(new_interfaces.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut changes = Vec::new();
+    for file in files {
+        match (old_interfaces.get(&file), new_interfaces.get(&file)) {
+            (Some(old), Some(new)) if old.contents != new.contents => {
+                let findings = review_sources(&old.path, &old.contents, &new.path, &new.contents);
+                changes.push(PackageInterfaceChange {
+                    file,
+                    change: PackageInterfaceChangeKind::Modified,
+                    risk: interface_change_risk(&findings),
+                    findings,
+                });
+            }
+            (None, Some(_)) => changes.push(PackageInterfaceChange {
+                file,
+                change: PackageInterfaceChangeKind::Added,
+                risk: PackageRisk::Elevated,
+                findings: Vec::new(),
+            }),
+            (Some(_), None) => changes.push(PackageInterfaceChange {
+                file,
+                change: PackageInterfaceChangeKind::Removed,
+                risk: PackageRisk::High,
+                findings: Vec::new(),
+            }),
+            _ => {}
+        }
+    }
+    changes
+}
+
+fn interface_sources_by_relative_path(
+    sources: &[PackageSource],
+) -> BTreeMap<String, &PackageSource> {
+    sources
+        .iter()
+        .filter(|source| source.kind == PackageReviewFileKind::Interface)
+        .map(|source| (source.relative_path.clone(), source))
+        .collect()
+}
+
+fn package_diff_reasons(
+    manifest_changes: &[PackageManifestChange],
+    interface_changes: &[PackageInterfaceChange],
+) -> Vec<String> {
+    let mut reasons = Vec::new();
+    if manifest_changes
+        .iter()
+        .any(|change| change.kind == "dependency")
+    {
+        reasons.push("RSScript dependencies changed".to_string());
+    }
+    if manifest_changes
+        .iter()
+        .any(|change| change.kind == "package-feature")
+    {
+        reasons.push("package features changed".to_string());
+    }
+    if manifest_changes
+        .iter()
+        .any(|change| change.kind == "native-rust")
+    {
+        reasons.push("native Rust wrapper metadata changed".to_string());
+    }
+    if !interface_changes.is_empty() {
+        reasons.push("public .rssi semantic contract changed".to_string());
+    }
+    if interface_changes
+        .iter()
+        .any(|change| change.risk == PackageRisk::High)
+    {
+        reasons.push("high-risk interface change detected".to_string());
+    }
+    reasons
+}
+
+fn package_diff_risk(
+    manifest_changes: &[PackageManifestChange],
+    interface_changes: &[PackageInterfaceChange],
+    old_risk: PackageRisk,
+    new_risk: PackageRisk,
+) -> PackageRisk {
+    let mut risk = old_risk.max(new_risk);
+    for change in manifest_changes {
+        risk = risk.max(change.risk);
+    }
+    for change in interface_changes {
+        risk = risk.max(change.risk);
+    }
+    risk
+}
+
+fn interface_change_risk(findings: &[ReviewFinding]) -> PackageRisk {
+    if findings.iter().any(|finding| {
+        matches!(
+            finding.risk,
+            ReviewRisk::Unsafe | ReviewRisk::Effect | ReviewRisk::Boundary | ReviewRisk::Guarantee
+        )
+    }) {
+        PackageRisk::High
+    } else if findings.is_empty() {
+        PackageRisk::Low
+    } else {
+        PackageRisk::Elevated
+    }
+}
+
+fn manifest_change(
+    kind: impl Into<String>,
+    name: impl Into<String>,
+    before: Option<String>,
+    after: Option<String>,
+    risk: PackageRisk,
+) -> PackageManifestChange {
+    PackageManifestChange {
+        kind: kind.into(),
+        name: name.into(),
+        before,
+        after,
+        risk,
+    }
+}
+
+fn toml_value_label(value: &toml::Value) -> String {
+    value.to_string()
+}
+
+fn feature_values_label(values: &[String]) -> String {
+    if values.is_empty() {
+        "[]".to_string()
+    } else {
+        values.join(", ")
     }
 }
 

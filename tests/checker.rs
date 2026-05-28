@@ -7,7 +7,7 @@ use rsscript::syntax::ast::{EffectDecl, Item};
 use rsscript::syntax::parse_source;
 use rsscript::{
     ReviewMapClassification, ReviewMapFileRisk, ReviewRisk, analyze_source,
-    analyze_source_with_core, analyze_source_with_interfaces, core_interfaces,
+    analyze_source_with_core, analyze_source_with_interfaces, core_interfaces, diff_package_dirs,
     explain_diagnostic_code, format_diagnostic_explanation, format_diagnostics_json,
     format_review_human, format_review_json, format_review_map_human, format_review_map_json,
     lint_source, lower_source_to_rust, lower_source_to_rust_package, lower_source_to_rust_with_map,
@@ -2373,6 +2373,119 @@ paths = ["interface"]
     assert_eq!(json["summary"]["interface_files"], 1);
 }
 
+#[test]
+fn package_diff_reports_manifest_and_interface_contract_changes() {
+    let old_dir = unique_temp_dir("rsscript-package-diff-old");
+    let new_dir = unique_temp_dir("rsscript-package-diff-new");
+    write_package_fixture(
+        &old_dir,
+        "0.1.0",
+        r#"[dependencies]
+rss-core = "0.5"
+"#,
+        r#"struct JsonValue
+struct JsonError
+
+pub fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
+"#,
+    );
+    write_package_fixture(
+        &new_dir,
+        "0.2.0",
+        r#"[dependencies]
+rss-core = "0.5"
+rss-cache = "0.1"
+
+[features]
+streaming = []
+
+[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_json_native"
+build_scripts = "review"
+"#,
+        r#"struct JsonValue
+struct JsonError
+
+pub fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
+    effects(native)
+"#,
+    );
+
+    let diff = diff_package_dirs(&old_dir, &new_dir).expect("package diff should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_diff_json(&diff))
+        .expect("package diff JSON should parse");
+    let _ = fs::remove_dir_all(&old_dir);
+    let _ = fs::remove_dir_all(&new_dir);
+
+    assert_eq!(json["new_package"]["version"], "0.2.0");
+    assert_eq!(json["risk"], "high");
+    assert!(json["manifest_changes"].as_array().is_some_and(|changes| {
+        changes
+            .iter()
+            .any(|change| change["kind"] == "dependency" && change["name"] == "rss-cache")
+    }));
+    assert!(json["manifest_changes"].as_array().is_some_and(|changes| {
+        changes
+            .iter()
+            .any(|change| change["kind"] == "native-rust" && change["name"] == "build_scripts")
+    }));
+    assert!(json["interface_changes"].as_array().is_some_and(|changes| {
+        changes
+            .iter()
+            .any(|change| change["file"] == "interface/lib.rssi" && change["risk"] == "high")
+    }));
+}
+
+#[test]
+fn rss_package_diff_json_reports_dependency_upgrade() {
+    let old_dir = unique_temp_dir("rsscript-package-diff-cli-old");
+    let new_dir = unique_temp_dir("rsscript-package-diff-cli-new");
+    write_package_fixture(
+        &old_dir,
+        "0.1.0",
+        r#"[dependencies]
+rss-core = "0.5"
+"#,
+        r#"pub fn add(left: Int, right: Int) -> Int
+"#,
+    );
+    write_package_fixture(
+        &new_dir,
+        "0.1.1",
+        r#"[dependencies]
+rss-core = "0.6"
+"#,
+        r#"pub fn add(left: Int, right: Int) -> Int
+"#,
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("package")
+        .arg("diff")
+        .arg("--json")
+        .arg(&old_dir)
+        .arg(&new_dir)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss package diff should execute");
+    let _ = fs::remove_dir_all(&old_dir);
+    let _ = fs::remove_dir_all(&new_dir);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: Value = serde_json::from_str(&stdout).expect("stdout should be package diff JSON");
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert_eq!(json["risk"], "high");
+    assert!(json["manifest_changes"].as_array().is_some_and(|changes| {
+        changes
+            .iter()
+            .any(|change| change["kind"] == "dependency" && change["name"] == "rss-core")
+    }));
+}
+
 fn fixture_paths(directory: &str) -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = fs::read_dir(directory)
         .unwrap_or_else(|error| panic!("failed to read {directory}: {error}"))
@@ -2422,6 +2535,33 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
     std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
+}
+
+fn write_package_fixture(
+    directory: &Path,
+    version: &str,
+    extra_manifest: &str,
+    interface_source: &str,
+) {
+    fs::create_dir_all(directory.join("interface")).expect("interface dir should be created");
+    fs::write(
+        directory.join("rsspkg.toml"),
+        format!(
+            r#"[package]
+name = "rss-json"
+version = "{version}"
+edition = "2026"
+
+[interfaces]
+paths = ["interface"]
+
+{extra_manifest}
+"#
+        ),
+    )
+    .expect("package manifest should be written");
+    fs::write(directory.join("interface/lib.rssi"), interface_source)
+        .expect("interface should be written");
 }
 
 fn write_runtime_conflict_fixture(path: &Path) {

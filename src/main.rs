@@ -6,12 +6,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rsscript::{
     Diagnostic, analyze_source, analyze_source_with_interfaces, check_generated_rust_package,
-    core_interfaces, explain_diagnostic_code, format_diagnostic_explanation,
-    format_diagnostics_human, format_diagnostics_json, format_package_review_human,
-    format_package_review_json, format_review_human, format_review_json, format_review_map_human,
-    format_review_map_json, lint_source, lower_source_to_rust, lower_source_to_rust_package,
-    parse_runtime_diagnostics, parse_source_map_json, remap_rustc_diagnostic_json_lines,
-    review_map_sources, review_package_dir, review_sources, write_generated_rust_package,
+    core_interfaces, diff_package_dirs, explain_diagnostic_code, format_diagnostic_explanation,
+    format_diagnostics_human, format_diagnostics_json, format_package_diff_human,
+    format_package_diff_json, format_package_review_human, format_package_review_json,
+    format_review_human, format_review_json, format_review_map_human, format_review_map_json,
+    lint_source, lower_source_to_rust, lower_source_to_rust_package, parse_runtime_diagnostics,
+    parse_source_map_json, remap_rustc_diagnostic_json_lines, review_map_sources,
+    review_package_dir, review_sources, write_generated_rust_package,
 };
 
 fn main() -> ExitCode {
@@ -41,6 +42,11 @@ fn main() -> ExitCode {
 fn run_package(args: &[String]) -> ExitCode {
     match parse_package_args(args) {
         PackageCommand::Review { json, path } => run_package_review(json, path),
+        PackageCommand::Diff {
+            json,
+            old_path,
+            new_path,
+        } => run_package_diff(json, old_path, new_path),
         PackageCommand::Invalid => {
             print_usage();
             ExitCode::from(2)
@@ -778,7 +784,15 @@ enum ReviewCommand<'a> {
 }
 
 enum PackageCommand<'a> {
-    Review { json: bool, path: &'a str },
+    Review {
+        json: bool,
+        path: &'a str,
+    },
+    Diff {
+        json: bool,
+        old_path: &'a str,
+        new_path: &'a str,
+    },
     Invalid,
 }
 
@@ -790,7 +804,7 @@ fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
     for arg in args {
         if arg == "--json" {
             json = true;
-        } else if arg == "review" {
+        } else if arg == "review" || arg == "diff" {
             command = Some(arg.as_str());
         } else {
             paths.push(arg.as_str());
@@ -799,6 +813,11 @@ fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
 
     match (command, paths.as_slice()) {
         (Some("review"), [path]) => PackageCommand::Review { json, path },
+        (Some("diff"), [old_path, new_path]) => PackageCommand::Diff {
+            json,
+            old_path,
+            new_path,
+        },
         _ => PackageCommand::Invalid,
     }
 }
@@ -934,6 +953,23 @@ fn run_package_review(json: bool, path: &str) -> ExitCode {
     }
 }
 
+fn run_package_diff(json: bool, old_path: &str, new_path: &str) -> ExitCode {
+    let diff = match diff_package_dirs(Path::new(old_path), Path::new(new_path)) {
+        Ok(diff) => diff,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+
+    if json {
+        println!("{}", format_package_diff_json(&diff));
+    } else {
+        print!("{}", format_package_diff_human(&diff));
+    }
+    ExitCode::SUCCESS
+}
+
 struct ReviewMapSource {
     path: String,
     contents: String,
@@ -1011,4 +1047,5 @@ fn print_usage() {
     eprintln!("  rsscript review [--json] --diff <old.rss> <new.rss>");
     eprintln!("  rsscript review [--json] --map <file-or-directory>");
     eprintln!("  rsscript package review [--json] <package-directory>");
+    eprintln!("  rsscript package diff [--json] <old-package-directory> <new-package-directory>");
 }
