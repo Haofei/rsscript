@@ -2334,6 +2334,96 @@ native fn Json.parse(text: read String) -> Result<fresh JsonValue, JsonError>
 }
 
 #[test]
+fn package_review_loads_path_dependency_interfaces_for_source_checks() {
+    let root_dir = unique_temp_dir("rsscript-package-dep-interface-root");
+    let dep_dir = unique_temp_dir("rsscript-package-dep-interface-dep");
+    write_named_package_fixture(
+        &dep_dir,
+        "rss-dep",
+        "0.2.0",
+        "",
+        r#"pub fn Dep.parse(text: read String) -> String
+"#,
+    );
+    write_named_package_fixture(
+        &root_dir,
+        "rss-app",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-dep = {{ path = "{}" }}
+"#,
+            dep_dir.display()
+        ),
+        "",
+    );
+    fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        root_dir.join("src/lib.rss"),
+        r#"fn render(body: read String) -> String {
+    return Dep.parse(text: read body)
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&root_dir).expect("package review should succeed");
+    let _ = fs::remove_dir_all(&root_dir);
+    let _ = fs::remove_dir_all(&dep_dir);
+
+    assert_eq!(review.summary.source_files, 1);
+    assert_eq!(review.diagnostics, Vec::new());
+}
+
+#[test]
+fn package_review_reports_path_dependency_interface_call_violations() {
+    let root_dir = unique_temp_dir("rsscript-package-dep-interface-violation-root");
+    let dep_dir = unique_temp_dir("rsscript-package-dep-interface-violation-dep");
+    write_named_package_fixture(
+        &dep_dir,
+        "rss-dep",
+        "0.2.0",
+        "",
+        r#"pub fn Dep.parse(text: read String) -> String
+"#,
+    );
+    write_named_package_fixture(
+        &root_dir,
+        "rss-app",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-dep = {{ path = "{}" }}
+"#,
+            dep_dir.display()
+        ),
+        "",
+    );
+    fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        root_dir.join("src/lib.rss"),
+        r#"fn render(body: read String) -> String {
+    return Dep.parse(value: read body)
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&root_dir).expect("package review should succeed");
+    let codes = review
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect::<Vec<_>>();
+    let _ = fs::remove_dir_all(&root_dir);
+    let _ = fs::remove_dir_all(&dep_dir);
+
+    assert!(codes.contains(&"RS0203"), "{codes:?}");
+    assert!(codes.contains(&"RS0204"), "{codes:?}");
+    assert!(!codes.contains(&"RS0206"), "{codes:?}");
+}
+
+#[test]
 fn rss_package_review_json_reports_package_metadata() {
     let temp_dir = unique_temp_dir("rsscript-package-review-cli");
     fs::create_dir_all(temp_dir.join("interface")).expect("interface dir should be created");

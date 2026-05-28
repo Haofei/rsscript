@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::analyzer::{analyze_source_with_core, analyze_source_with_interfaces, core_interfaces};
+use crate::analyzer::{analyze_source_with_interfaces, core_interfaces};
 use crate::diagnostic::Diagnostic;
 use crate::review::{
     ReviewFinding, ReviewMap, ReviewRisk, format_review_human, review_map_sources, review_sources,
@@ -397,13 +397,20 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
     let package = load_package(package_dir)?;
     let manifest = &package.manifest;
     let sources = &package.sources;
+    let dependency_interfaces = collect_dependency_interface_sources(package_dir, manifest)?;
 
     let interface_refs = sources
         .iter()
         .filter(|source| source.kind == PackageReviewFileKind::Interface)
         .map(|source| (source.path.as_str(), source.contents.as_str()))
         .collect::<Vec<_>>();
-    let mut combined_interfaces = core_interfaces().to_vec();
+    let dependency_interface_refs = dependency_interfaces
+        .iter()
+        .map(|source| (source.path.as_str(), source.contents.as_str()))
+        .collect::<Vec<_>>();
+    let mut external_interfaces = core_interfaces().to_vec();
+    external_interfaces.extend(dependency_interface_refs);
+    let mut combined_interfaces = external_interfaces.clone();
     combined_interfaces.extend(interface_refs);
     let diagnostics = sources
         .iter()
@@ -411,7 +418,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
             if source.kind == PackageReviewFileKind::Source {
                 analyze_source_with_interfaces(&source.path, &source.contents, &combined_interfaces)
             } else {
-                analyze_source_with_core(&source.path, &source.contents)
+                analyze_source_with_interfaces(&source.path, &source.contents, &external_interfaces)
             }
         })
         .collect::<Vec<_>>();
@@ -1261,6 +1268,60 @@ fn read_package_sources(
         }
     }
     Ok(sources)
+}
+
+fn collect_dependency_interface_sources(
+    package_dir: &Path,
+    manifest: &Manifest,
+) -> Result<Vec<PackageSource>, String> {
+    let mut visiting = BTreeSet::new();
+    let mut sources = Vec::new();
+    collect_dependency_interface_sources_from_map(
+        package_dir,
+        &manifest.dependencies,
+        &mut visiting,
+        &mut sources,
+    )?;
+    sources.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(sources)
+}
+
+fn collect_dependency_interface_sources_from_map(
+    package_dir: &Path,
+    dependencies: &BTreeMap<String, toml::Value>,
+    visiting: &mut BTreeSet<String>,
+    sources: &mut Vec<PackageSource>,
+) -> Result<(), String> {
+    for (name, value) in dependencies {
+        let spec = package_dependency_spec(name, value);
+        let Some(path) = &spec.path else {
+            continue;
+        };
+        let dependency_dir = package_dir.join(path);
+        if !dependency_dir.join("rsspkg.toml").exists() {
+            continue;
+        }
+        let canonical = canonical_path_label(&dependency_dir);
+        if !visiting.insert(canonical.clone()) {
+            continue;
+        }
+        let dependency_package = load_package(&dependency_dir)?;
+        sources.extend(
+            dependency_package
+                .sources
+                .iter()
+                .filter(|source| source.kind == PackageReviewFileKind::Interface)
+                .cloned(),
+        );
+        collect_dependency_interface_sources_from_map(
+            &dependency_dir,
+            &dependency_package.manifest.dependencies,
+            visiting,
+            sources,
+        )?;
+        visiting.remove(&canonical);
+    }
+    Ok(())
 }
 
 fn relative_path(base: &Path, path: &Path) -> String {
