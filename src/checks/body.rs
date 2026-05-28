@@ -1,7 +1,7 @@
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, code};
 use crate::hir::{HirBindingKind, HirBlock, HirExpr, HirStmt, HirTypeKind};
-use crate::syntax::ast::{FunctionDecl, Item};
+use crate::syntax::ast::{Callee, FunctionDecl, Item};
 
 use super::local::{
     BodyState, FreshReturnIssue, FreshReturnIssueKind, LocalAnalysis, ManagedToLocalUse, MovedUse,
@@ -64,16 +64,32 @@ fn check_stmt_semantics(
     state: &mut BodyState,
 ) -> Flow {
     match statement {
-        HirStmt::Let { kind, span, .. } => {
+        HirStmt::Let {
+            kind, value, span, ..
+        } => {
             let stmt_state = local_analysis.flow_entry_state(span).unwrap_or(state);
             if *kind == HirBindingKind::ManagedLet {
                 check_managed_closure_captures(analyzer, local_analysis, span, stmt_state);
             }
+            if let Some(value) = value {
+                check_resource_pool_lease_expr(analyzer, value, false);
+            }
 
             Flow::Fallthrough
         }
-        HirStmt::Return { .. } => Flow::Return,
-        HirStmt::With { body, span, .. } => {
+        HirStmt::Return { value, .. } => {
+            if let Some(value) = value {
+                check_resource_pool_lease_expr(analyzer, value, false);
+            }
+            Flow::Return
+        }
+        HirStmt::With {
+            resource,
+            body,
+            span,
+            ..
+        } => {
+            check_resource_pool_lease_expr(analyzer, resource, true);
             check_resource_escape(analyzer, local_analysis, span);
             check_block(analyzer, local_analysis, body, state)
         }
@@ -83,6 +99,7 @@ fn check_stmt_semantics(
             else_body,
             ..
         } => {
+            check_resource_pool_lease_expr(analyzer, condition, false);
             apply_expr_effects(condition, state);
 
             let base_state = state.clone();
@@ -101,6 +118,7 @@ fn check_stmt_semantics(
             condition, body, ..
         } => {
             if let Some(condition) = condition {
+                check_resource_pool_lease_expr(analyzer, condition, false);
                 apply_expr_effects(condition, state);
             }
 
@@ -116,7 +134,10 @@ fn check_stmt_semantics(
                 condition.is_some(),
             )
         }
-        HirStmt::Expr(_) => Flow::Fallthrough,
+        HirStmt::Expr(expr) => {
+            check_resource_pool_lease_expr(analyzer, expr, false);
+            Flow::Fallthrough
+        }
         HirStmt::Break(_) => Flow::Break,
         HirStmt::Continue(_) => Flow::Continue,
         HirStmt::Unknown(_) => Flow::Fallthrough,
@@ -333,6 +354,93 @@ fn check_resource_escape(
     }
 }
 
+fn check_resource_pool_lease_expr(
+    analyzer: &mut Analyzer<'_>,
+    expr: &HirExpr,
+    within_with_resource: bool,
+) {
+    match expr {
+        HirExpr::Call {
+            callee, args, span, ..
+        } => {
+            if !within_with_resource && is_resource_pool_borrow(callee) {
+                resource_pool_lease_escape_diagnostic(analyzer, span.clone());
+            }
+            for arg in args {
+                check_resource_pool_lease_expr(analyzer, &arg.value, false);
+            }
+        }
+        HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => {
+            check_resource_pool_lease_expr(analyzer, value, within_with_resource);
+        }
+        HirExpr::Field { base, .. } => {
+            check_resource_pool_lease_expr(analyzer, base, within_with_resource);
+        }
+        HirExpr::Closure { body, .. } => {
+            for statement in &body.statements {
+                check_resource_pool_lease_stmt(analyzer, statement);
+            }
+        }
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn check_resource_pool_lease_stmt(analyzer: &mut Analyzer<'_>, statement: &HirStmt) {
+    match statement {
+        HirStmt::Let {
+            value: Some(value), ..
+        }
+        | HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => check_resource_pool_lease_expr(analyzer, value, false),
+        HirStmt::With { resource, body, .. } => {
+            check_resource_pool_lease_expr(analyzer, resource, true);
+            for statement in &body.statements {
+                check_resource_pool_lease_stmt(analyzer, statement);
+            }
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            check_resource_pool_lease_expr(analyzer, condition, false);
+            for statement in &then_body.statements {
+                check_resource_pool_lease_stmt(analyzer, statement);
+            }
+            if let Some(else_body) = else_body {
+                for statement in &else_body.statements {
+                    check_resource_pool_lease_stmt(analyzer, statement);
+                }
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                check_resource_pool_lease_expr(analyzer, condition, false);
+            }
+            for statement in &body.statements {
+                check_resource_pool_lease_stmt(analyzer, statement);
+            }
+        }
+        HirStmt::Let { value: None, .. }
+        | HirStmt::Return { value: None, .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn is_resource_pool_borrow(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if namespace == "ResourcePool" && name == "borrow")
+}
+
 fn resource_is_active_at(
     local_analysis: &LocalAnalysis,
     binding: &str,
@@ -356,6 +464,26 @@ fn resource_escape_diagnostic(
             "resource escapes",
         )
         .with_cause("A `with` resource must be dropped when the block exits."),
+    );
+}
+
+fn resource_pool_lease_escape_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    span: crate::diagnostic::Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::RESOURCE_ESCAPE,
+            "resource lease from `ResourcePool.borrow` must be scoped by `with`.",
+            span,
+            "resource lease escapes",
+        )
+        .with_cause("Pool leases are resources and must be returned to the pool when the `with` block exits.")
+        .with_fix(
+            "wrap_with",
+            "Use `with ResourcePool.borrow(pool: mut pool) as lease { ... }`.",
+            "manual",
+        ),
     );
 }
 

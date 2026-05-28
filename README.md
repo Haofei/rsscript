@@ -36,6 +36,7 @@ It currently implements:
 - HIR-driven body traversal for body semantics and local state updates
 - Body checks for managed-to-local, use-after-move, HIR/local-flow `fresh` returns, active resource escape, resolved handle-field `take`, managed closure captures, and resource escape traversal now consume HIR body facts and local flow entry state
 - Local ownership, use-after-move, `fresh` return, managed closure capture, resource-retain escape, and handle-field `take` checks now index statement uses, binding types, fresh-return issue facts, take-handle facts, closure uses, and move/retain events from resolved HIR body trees
+- ResourcePool lease checks that require `ResourcePool.borrow(...)` to be scoped by `with`
 - Focused check modules for mode, calls, body semantics, and forbidden operator behavior
 - Fixture-based pass/fail scenario tests under `tests/fixtures`
 
@@ -53,6 +54,7 @@ Implemented diagnostic classes include:
 - fresh functions returning managed values
 - branch/loop/early-exit-sensitive `manage`, `take`, and retaining effects on clean local values
 - resource fields and resource escape from `with`
+- ResourcePool borrow lease escape outside `with`
 - local capture by managed closures
 - `take` of handle fields
 - API, type layout, local/manage boundary, effect, mode, and freshness changes in `rss review`
@@ -72,7 +74,7 @@ Non-goals for this stage:
 
 Near-term roadmap:
 
-1. Expand local/resource dataflow precision around nested closures, retains, and pool leases.
+1. Expand local/resource dataflow precision around nested closures, retaining APIs, and typed `ResourcePool<T>` lease propagation.
 2. Expand `rss review` local/manage boundary diffs from summaries into path-aware risk explanations.
 
 Run:
