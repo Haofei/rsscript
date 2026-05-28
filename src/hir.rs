@@ -161,6 +161,16 @@ pub struct HirReturn {
     pub proof: HirReturnProof,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct HirFunctionBody {
+    pub function_name: String,
+    pub bindings: Vec<HirBinding>,
+    pub call_sites: Vec<HirCallSite>,
+    pub field_accesses: Vec<HirFieldAccess>,
+    pub effect_events: Vec<HirEffectEvent>,
+    pub returns: Vec<HirReturn>,
+}
+
 #[derive(Debug, Default)]
 pub struct Hir {
     signatures: HashMap<String, FunctionSig>,
@@ -171,13 +181,13 @@ pub struct Hir {
     call_resolutions_by_span: HashMap<Span, CallResolution>,
     bindings: Vec<HirBinding>,
     bindings_by_span: HashMap<Span, HirBinding>,
-    bindings_by_function: HashMap<String, Vec<HirBinding>>,
     field_accesses: Vec<HirFieldAccess>,
     field_accesses_by_span: HashMap<Span, HirFieldAccess>,
     effect_events: Vec<HirEffectEvent>,
     effect_events_by_span: HashMap<Span, Vec<HirEffectEvent>>,
     returns: Vec<HirReturn>,
     returns_by_span: HashMap<Span, HirReturn>,
+    function_bodies: HashMap<String, HirFunctionBody>,
 }
 
 impl Hir {
@@ -262,10 +272,8 @@ impl Hir {
         self.bindings_by_span.get(span)
     }
 
-    pub fn function_bindings(&self, function_name: &str) -> &[HirBinding] {
-        self.bindings_by_function
-            .get(function_name)
-            .map_or(&[], Vec::as_slice)
+    pub fn function_body(&self, function_name: &str) -> Option<&HirFunctionBody> {
+        self.function_bodies.get(function_name)
     }
 
     pub fn field_access(&self, span: &Span) -> Option<&HirFieldAccess> {
@@ -354,16 +362,6 @@ impl Hir {
             .iter()
             .map(|binding| (binding.span.clone(), binding.clone()))
             .collect();
-        self.bindings_by_function = facts.bindings.iter().fold(
-            HashMap::<String, Vec<HirBinding>>::new(),
-            |mut by_function, binding| {
-                by_function
-                    .entry(binding.function_name.clone())
-                    .or_default()
-                    .push(binding.clone());
-                by_function
-            },
-        );
         self.field_accesses_by_span = facts
             .field_accesses
             .iter()
@@ -384,12 +382,55 @@ impl Hir {
             .iter()
             .map(|return_fact| (return_fact.span.clone(), return_fact.clone()))
             .collect();
+        self.function_bodies = build_function_bodies(&facts);
         self.call_sites = facts.call_sites;
         self.bindings = facts.bindings;
         self.field_accesses = facts.field_accesses;
         self.effect_events = facts.effect_events;
         self.returns = facts.returns;
     }
+}
+
+fn build_function_bodies(facts: &BodyFacts) -> HashMap<String, HirFunctionBody> {
+    let mut bodies = HashMap::<String, HirFunctionBody>::new();
+    for binding in &facts.bindings {
+        body_entry(&mut bodies, &binding.function_name)
+            .bindings
+            .push(binding.clone());
+    }
+    for site in &facts.call_sites {
+        body_entry(&mut bodies, &site.function_name)
+            .call_sites
+            .push(site.clone());
+    }
+    for field in &facts.field_accesses {
+        body_entry(&mut bodies, &field.function_name)
+            .field_accesses
+            .push(field.clone());
+    }
+    for event in &facts.effect_events {
+        body_entry(&mut bodies, &event.function_name)
+            .effect_events
+            .push(event.clone());
+    }
+    for return_fact in &facts.returns {
+        body_entry(&mut bodies, &return_fact.function_name)
+            .returns
+            .push(return_fact.clone());
+    }
+    bodies
+}
+
+fn body_entry<'a>(
+    bodies: &'a mut HashMap<String, HirFunctionBody>,
+    function_name: &str,
+) -> &'a mut HirFunctionBody {
+    bodies
+        .entry(function_name.to_string())
+        .or_insert_with(|| HirFunctionBody {
+            function_name: function_name.to_string(),
+            ..HirFunctionBody::default()
+        })
 }
 
 #[derive(Default)]
@@ -1398,7 +1439,10 @@ fn render(body: read String) -> Result<fresh Response, HttpError> {
         ));
         assert!(matches!(sites[2].resolution, CallResolution::Unknown));
 
-        let bindings = hir.function_bindings("render");
+        let bindings = &hir
+            .function_body("render")
+            .expect("render body exists")
+            .bindings;
         assert_eq!(bindings.len(), 2);
         assert_eq!(bindings[0].kind, HirBindingKind::Param);
         assert_eq!(bindings[0].name, "body");
@@ -1426,6 +1470,13 @@ fn render(body: read String) -> Result<fresh Response, HttpError> {
                 .proof,
             HirReturnProof::Ident { .. }
         ));
+
+        let body = hir.function_body("render").expect("function body exists");
+        assert_eq!(body.function_name, "render");
+        assert_eq!(body.bindings.len(), 2);
+        assert_eq!(body.call_sites.len(), 3);
+        assert_eq!(body.effect_events.len(), 0);
+        assert_eq!(body.returns.len(), 1);
     }
 
     #[test]
@@ -1440,7 +1491,10 @@ fn load(path: read Path) -> Unit {
 
         let program = parse_source("test.rss", source);
         let hir = Hir::from_syntax(&program);
-        let bindings = hir.function_bindings("load");
+        let bindings = &hir
+            .function_body("load")
+            .expect("load body exists")
+            .bindings;
 
         assert_eq!(bindings.len(), 2);
         assert_eq!(bindings[1].kind, HirBindingKind::LocalLet);

@@ -36,7 +36,10 @@ struct BodyState {
 }
 
 fn seed_function_bindings(analyzer: &Analyzer<'_>, function: &FunctionDecl, state: &mut BodyState) {
-    for binding in analyzer.hir.function_bindings(&function.name) {
+    let Some(body) = analyzer.hir.function_body(&function.name) else {
+        return;
+    };
+    for binding in &body.bindings {
         if binding.kind != HirBindingKind::Param {
             continue;
         }

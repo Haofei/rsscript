@@ -21,6 +21,7 @@ It currently implements:
 - HIR field-access facts with resolved base type, field type, and handle status where known
 - HIR effect events for `manage`, `take`, and retaining calls
 - HIR return facts with initial freshness proof classification
+- Per-function HIR body views that group bindings, calls, fields, effects, and returns
 - AST-driven mode and call checks for local-only features, named arguments, data effects, and retaining APIs
 - AST-driven body checks for local moves, early-exit-aware `fresh` returns, resource escape, resolved handle-field `take`, and managed closure captures
 - Focused check modules for mode, calls, body semantics, and forbidden operator behavior
