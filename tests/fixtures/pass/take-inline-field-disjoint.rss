@@ -1,0 +1,20 @@
+features: local
+
+struct Image
+
+struct Pair {
+    left: Image
+    right: Image
+}
+
+fn make_pair(path: read Path) -> fresh Pair
+
+fn consume(image: take Image) -> Unit
+
+fn inspect(image: read Image) -> Unit
+
+fn ok_take_disjoint(path: read Path) -> Unit {
+    local pair = make_pair(path: read path)
+    consume(image: take pair.left)
+    inspect(image: read pair.right)
+}

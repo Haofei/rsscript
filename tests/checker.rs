@@ -2359,6 +2359,58 @@ fn bad_binding(path: read Path) -> Unit {
 }
 
 #[test]
+fn checker_tracks_use_after_take_for_local_inline_field() {
+    let bad = r#"
+features: local
+
+struct Image
+struct Holder {
+    image: Image
+}
+
+fn make_holder(path: read Path) -> fresh Holder
+fn consume(image: take Image) -> Unit
+fn inspect(image: read Image) -> Unit
+
+fn bad_take_field(path: read Path) -> Unit {
+    local holder = make_holder(path: read path)
+    consume(image: take holder.image)
+    inspect(image: read holder.image)
+}
+"#;
+    let diagnostics = analyze_source("take-inline-field-use-after.rss", bad);
+    assert!(
+        diagnostics.iter().any(
+            |diagnostic| diagnostic.code == "RS0401" && diagnostic.label == "used after manage"
+        )
+    );
+
+    let ok = r#"
+features: local
+
+struct Image
+struct Pair {
+    left: Image
+    right: Image
+}
+
+fn make_pair(path: read Path) -> fresh Pair
+fn consume(image: take Image) -> Unit
+fn inspect(image: read Image) -> Unit
+
+fn ok_take_disjoint(path: read Path) -> Unit {
+    local pair = make_pair(path: read path)
+    consume(image: take pair.left)
+    inspect(image: read pair.right)
+}
+"#;
+    assert_eq!(
+        analyze_source("take-inline-field-disjoint.rss", ok),
+        Vec::new()
+    );
+}
+
+#[test]
 fn review_json_uses_protocol_shape() {
     let old_source = r#"
 

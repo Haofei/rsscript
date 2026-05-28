@@ -16,6 +16,7 @@ pub(crate) struct BodyState {
     pub(crate) managed: HashSet<String>,
     pub(crate) resources: HashSet<String>,
     pub(crate) moved: HashMap<String, Span>,
+    pub(crate) moved_paths: HashMap<String, Span>,
     pub(crate) value_types: HashMap<String, String>,
 }
 
@@ -631,6 +632,8 @@ fn collect_ordered_moved_uses_from_expr(
         HirExpr::Ident { name, span, .. } => {
             if let Some(move_span) = state.move_span(name) {
                 push_moved_use(moved_uses, name.clone(), span.clone(), move_span.clone());
+            } else if let Some((moved_path, move_span)) = state.moved_subpath_span(name) {
+                push_moved_use(moved_uses, moved_path, span.clone(), move_span.clone());
             }
         }
         HirExpr::Call { args, events, .. } => {
@@ -651,7 +654,19 @@ fn collect_ordered_moved_uses_from_expr(
             collect_ordered_moved_uses_from_expr(right, state, moved_uses);
         }
         HirExpr::Field { base, .. } => {
-            collect_ordered_moved_uses_from_expr(base, state, moved_uses);
+            if let Some((path, span)) = hir_expr_path(expr) {
+                if let Some(root) = path_root(&path)
+                    && let Some(move_span) = state.move_span(root)
+                {
+                    push_moved_use(moved_uses, root.to_string(), span, move_span.clone());
+                    return;
+                }
+                if let Some((moved_path, move_span)) = state.moved_path_span(&path) {
+                    push_moved_use(moved_uses, moved_path, span, move_span.clone());
+                }
+            } else {
+                collect_ordered_moved_uses_from_expr(base, state, moved_uses);
+            }
         }
         HirExpr::Index { base, index, .. } => {
             collect_ordered_moved_uses_from_expr(base, state, moved_uses);
@@ -679,6 +694,25 @@ fn push_moved_use(moved_uses: &mut Vec<MovedUse>, name: String, use_span: Span, 
     if !moved_uses.contains(&moved_use) {
         moved_uses.push(moved_use);
     }
+}
+
+fn hir_expr_path(expr: &HirExpr) -> Option<(String, Span)> {
+    match expr {
+        HirExpr::Ident { name, span, .. } => Some((name.clone(), span.clone())),
+        HirExpr::Field {
+            base, name, span, ..
+        } => {
+            let (mut base_path, _) = hir_expr_path(base)?;
+            base_path.push('.');
+            base_path.push_str(name);
+            Some((base_path, span.clone()))
+        }
+        _ => None,
+    }
+}
+
+fn path_root(path: &str) -> Option<&str> {
+    path.split('.').next().filter(|root| !root.is_empty())
 }
 
 fn collect_retained_closure_captures_from_stmt(
@@ -1954,6 +1988,13 @@ fn merge_flow_states(left: &BodyState, right: &BodyState) -> BodyState {
         moved.entry(name.clone()).or_insert_with(|| span.clone());
     }
     moved.retain(|name, _| locals.contains(name));
+    let mut moved_paths = left.moved_paths.clone();
+    for (path, span) in &right.moved_paths {
+        moved_paths
+            .entry(path.clone())
+            .or_insert_with(|| span.clone());
+    }
+    moved_paths.retain(|path, _| path_root(path).is_some_and(|root| locals.contains(root)));
 
     let clean_locals = left
         .clean_locals
@@ -1968,6 +2009,7 @@ fn merge_flow_states(left: &BodyState, right: &BodyState) -> BodyState {
         managed,
         resources,
         moved,
+        moved_paths,
         value_types,
     }
 }
@@ -2114,8 +2156,15 @@ impl BodyState {
     }
 
     pub(crate) fn mark_moved(&mut self, name: &str, span: Span) {
-        self.moved.insert(name.to_string(), span);
-        self.clean_locals.remove(name);
+        if name.contains('.') {
+            self.moved_paths.insert(name.to_string(), span);
+            if let Some(root) = path_root(name) {
+                self.clean_locals.remove(root);
+            }
+        } else {
+            self.moved.insert(name.to_string(), span);
+            self.clean_locals.remove(name);
+        }
     }
 
     pub(crate) fn mark_retained(&mut self, name: &str) {
@@ -2142,6 +2191,25 @@ impl BodyState {
         self.moved.get(name)
     }
 
+    pub(crate) fn moved_path_span(&self, path: &str) -> Option<(String, &Span)> {
+        self.moved_paths
+            .iter()
+            .find(|(moved_path, _)| {
+                path == moved_path.as_str()
+                    || path
+                        .strip_prefix(moved_path.as_str())
+                        .is_some_and(|suffix| suffix.starts_with('.'))
+            })
+            .map(|(path, span)| (path.clone(), span))
+    }
+
+    pub(crate) fn moved_subpath_span(&self, root: &str) -> Option<(String, &Span)> {
+        self.moved_paths
+            .iter()
+            .find(|(path, _)| path_root(path).is_some_and(|path_root| path_root == root))
+            .map(|(path, span)| (path.clone(), span))
+    }
+
     #[cfg(test)]
     pub(crate) fn value_type(&self, name: &str) -> Option<&str> {
         self.value_types.get(name).map(String::as_str)
@@ -2155,7 +2223,11 @@ impl BodyState {
             ) {
                 continue;
             }
-            if self.locals.contains(&event.binding_name) {
+            if event.binding_name.contains('.') {
+                if path_root(&event.binding_name).is_some_and(|root| self.locals.contains(root)) {
+                    self.mark_moved(&event.binding_name, event.span.clone());
+                }
+            } else if self.locals.contains(&event.binding_name) {
                 self.mark_moved(&event.binding_name, event.span.clone());
             }
         }
@@ -2223,12 +2295,14 @@ pub(crate) fn merge_loop_state(
     }
 
     let mut moved = base.moved.clone();
+    let mut moved_paths = base.moved_paths.clone();
     if body_flow != Flow::Return {
         for (name, span) in &body_state.moved {
             if base.locals.contains(name) || base.moved.contains_key(name) {
                 moved.entry(name.clone()).or_insert_with(|| span.clone());
             }
         }
+        merge_moved_paths_from_branch(&mut moved_paths, base, &body_state);
     }
 
     state.locals = base.locals.clone();
@@ -2236,6 +2310,7 @@ pub(crate) fn merge_loop_state(
     state.resources = base.resources.clone();
     state.value_types = base.value_types.clone();
     state.moved = moved;
+    state.moved_paths = moved_paths;
     state.clean_locals = base
         .clean_locals
         .intersection(&body_state.clean_locals)
@@ -2251,11 +2326,13 @@ fn merge_non_fallthrough(left: Flow, right: Flow) -> Flow {
 
 fn fallthrough_projection(base: &BodyState, branch: &BodyState) -> BodyState {
     let mut moved = base.moved.clone();
+    let mut moved_paths = base.moved_paths.clone();
     for (name, span) in &branch.moved {
         if base.locals.contains(name) || base.moved.contains_key(name) {
             moved.entry(name.clone()).or_insert_with(|| span.clone());
         }
     }
+    merge_moved_paths_from_branch(&mut moved_paths, base, branch);
 
     BodyState {
         locals: base.locals.clone(),
@@ -2263,6 +2340,7 @@ fn fallthrough_projection(base: &BodyState, branch: &BodyState) -> BodyState {
         resources: base.resources.clone(),
         value_types: base.value_types.clone(),
         moved,
+        moved_paths,
         clean_locals: branch
             .clean_locals
             .intersection(&base.clean_locals)
@@ -2274,12 +2352,14 @@ fn fallthrough_projection(base: &BodyState, branch: &BodyState) -> BodyState {
 
 fn merge_fallthrough_states(base: &BodyState, left: &BodyState, right: &BodyState) -> BodyState {
     let mut moved = base.moved.clone();
+    let mut moved_paths = base.moved_paths.clone();
     for branch in [left, right] {
         for (name, span) in &branch.moved {
             if base.locals.contains(name) || base.moved.contains_key(name) {
                 moved.entry(name.clone()).or_insert_with(|| span.clone());
             }
         }
+        merge_moved_paths_from_branch(&mut moved_paths, base, branch);
     }
 
     BodyState {
@@ -2288,12 +2368,29 @@ fn merge_fallthrough_states(base: &BodyState, left: &BodyState, right: &BodyStat
         resources: base.resources.clone(),
         value_types: base.value_types.clone(),
         moved,
+        moved_paths,
         clean_locals: left
             .clean_locals
             .intersection(&right.clean_locals)
             .filter(|name| base.locals.contains(*name))
             .cloned()
             .collect(),
+    }
+}
+
+fn merge_moved_paths_from_branch(
+    moved_paths: &mut HashMap<String, Span>,
+    base: &BodyState,
+    branch: &BodyState,
+) {
+    for (path, span) in &branch.moved_paths {
+        if path_root(path).is_some_and(|root| base.locals.contains(root))
+            || base.moved_paths.contains_key(path)
+        {
+            moved_paths
+                .entry(path.clone())
+                .or_insert_with(|| span.clone());
+        }
     }
 }
 

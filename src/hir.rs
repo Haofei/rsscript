@@ -966,7 +966,7 @@ fn effect_events_for_expr(function_name: &str, expr: &Expr) -> Vec<HirEffectEven
             value,
             span,
         } => {
-            let Some((binding_name, value_span)) = direct_ident(value) else {
+            let Some((binding_name, value_span)) = direct_move_binding(value) else {
                 return Vec::new();
             };
             HirEffectEvent {
@@ -1184,7 +1184,7 @@ fn collect_body_facts_in_expr(
                 kind: HirFeatureUseKind::Manage,
                 span: span.clone(),
             });
-            if let Some((binding_name, value_span)) = direct_ident(value) {
+            if let Some((binding_name, value_span)) = direct_move_binding(value) {
                 facts.effect_events.push(HirEffectEvent {
                     function_name: function_name.to_string(),
                     kind: HirEffectEventKind::Manage,
@@ -1292,6 +1292,19 @@ fn retained_inline_binding(
 fn direct_ident(expr: &Expr) -> Option<(String, Span)> {
     match expr {
         Expr::Ident(name, span) => Some((name.clone(), span.clone())),
+        _ => None,
+    }
+}
+
+fn direct_move_binding(expr: &Expr) -> Option<(String, Span)> {
+    match expr {
+        Expr::Ident(name, span) => Some((name.clone(), span.clone())),
+        Expr::Field { base, name, span } => {
+            let (mut base_path, _) = direct_move_binding(base)?;
+            base_path.push('.');
+            base_path.push_str(name);
+            Some((base_path, span.clone()))
+        }
         _ => None,
     }
 }

@@ -1283,6 +1283,9 @@ compiler checks local exclusivity
 
 A `take` parameter consumes a local value.
 
+When `take` consumes a local-inline field path, that path is moved and cannot be
+used again. Disjoint inline fields of the same local struct remain usable.
+
 ```rust
 fn consume(buffer: take Buffer) -> Unit
 consume(buffer: take buffer)

@@ -1,0 +1,20 @@
+// expect: RS0401
+features: local
+
+struct Image
+
+struct Holder {
+    image: Image
+}
+
+fn make_holder(path: read Path) -> fresh Holder
+
+fn consume(image: take Image) -> Unit
+
+fn inspect(image: read Image) -> Unit
+
+fn bad_take_field(path: read Path) -> Unit {
+    local holder = make_holder(path: read path)
+    consume(image: take holder.image)
+    inspect(image: read holder.image)
+}
