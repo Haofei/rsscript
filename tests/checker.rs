@@ -2792,12 +2792,14 @@ resource File {
 }
 
 fn File.open(path: read Path) -> File
+fn File.open_result(path: read Path) -> Result<File, IOError>
 fn File.stat(file: read File) -> Unit
 
-fn ok_with(path: read Path) -> Unit {
-    with File.open(path: read path) as file {
+fn ok_with(path: read Path) -> Result<Unit, IOError> {
+    with File.open_result(path: read path)? as file {
         File.stat(file: read file)
     }
+    return Ok(Unit)
 }
 
 fn bad_let(path: read Path) -> Unit {
@@ -2821,6 +2823,33 @@ fn bad_arg(path: read Path) -> Unit {
         .count();
 
     assert_eq!(producer_escape_count, 3, "{diagnostics:?}");
+}
+
+#[test]
+fn checker_allows_result_resource_only_as_return_producer_contract() {
+    let source = r#"
+resource File {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+struct Holder {
+    file: Result<File, IOError>
+}
+
+fn accept(result: read Result<File, IOError>) -> Unit
+fn File.open(path: read Path) -> Result<File, IOError>
+"#;
+    let diagnostics = analyze_source("result-resource-contract.rss", source);
+    let generic_resource_count = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "RS0704")
+        .count();
+
+    assert_eq!(generic_resource_count, 2, "{diagnostics:?}");
 }
 
 #[test]

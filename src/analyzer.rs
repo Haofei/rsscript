@@ -12,6 +12,20 @@ use crate::syntax::ast::{
 };
 use crate::syntax::parse_source;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResourceGenericContext {
+    Ordinary,
+    Return,
+}
+
+fn resource_result_return_arg_allowed(
+    ty: &TypeRef,
+    index: usize,
+    context: ResourceGenericContext,
+) -> bool {
+    context == ResourceGenericContext::Return && ty.name == "Result" && index == 0
+}
+
 pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
     let tokens = lex(file, source);
     let syntax_program = parse_source(file, source);
@@ -1149,15 +1163,24 @@ impl Analyzer<'_> {
             match item {
                 Item::Type(decl) => {
                     for field in &decl.fields {
-                        self.check_resource_generic_type_ref(&field.ty);
+                        self.check_resource_generic_type_ref(
+                            &field.ty,
+                            ResourceGenericContext::Ordinary,
+                        );
                     }
                 }
                 Item::Function(function) => {
                     for param in &function.params {
-                        self.check_resource_generic_type_ref(&param.ty);
+                        self.check_resource_generic_type_ref(
+                            &param.ty,
+                            ResourceGenericContext::Ordinary,
+                        );
                     }
                     if let Some(return_ty) = &function.return_ty {
-                        self.check_resource_generic_type_ref(return_ty);
+                        self.check_resource_generic_type_ref(
+                            return_ty,
+                            ResourceGenericContext::Return,
+                        );
                     }
                     self.check_resource_generic_calls_in_block(&function.body);
                 }
@@ -1186,16 +1209,21 @@ impl Analyzer<'_> {
         }
     }
 
-    fn check_resource_generic_type_ref(&mut self, ty: &TypeRef) {
+    fn check_resource_generic_type_ref(&mut self, ty: &TypeRef, context: ResourceGenericContext) {
         if ty.name != "ResourcePool" {
-            for arg in &ty.args {
-                if self.hir.type_kind(&arg.name) == Some(HirTypeKind::Resource) {
+            for (index, arg) in ty.args.iter().enumerate() {
+                if self.hir.type_kind(&arg.name) == Some(HirTypeKind::Resource)
+                    && !resource_result_return_arg_allowed(ty, index, context)
+                {
                     self.resource_generic_argument_diagnostic(&ty.name, &arg.name, &arg.span);
                 }
             }
         }
-        for arg in &ty.args {
-            self.check_resource_generic_type_ref(arg);
+        for (index, arg) in ty.args.iter().enumerate() {
+            if resource_result_return_arg_allowed(ty, index, context) {
+                continue;
+            }
+            self.check_resource_generic_type_ref(arg, ResourceGenericContext::Ordinary);
         }
     }
 
