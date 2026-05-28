@@ -3232,7 +3232,10 @@ being hidden as safe-to-skip.
 
 The current prototype gates `tests/fixtures/pass` as a review-map confidence
 corpus: the corpus must classify all known-good fixture functions without
-unknown regions.
+unknown regions. The corpus includes `complex-supported-review-map.rss`, a
+single-file stress case for the currently supported surface: local image
+processing, noescape callback calls, managed cache retention, config reload,
+ResourcePool borrowing, counter mutation, and HTTP-style orchestration.
 
 ---
 

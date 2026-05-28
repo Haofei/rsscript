@@ -3301,6 +3301,20 @@ fn review_map_pass_fixture_unknown_rate_stays_low() {
 }
 
 #[test]
+fn review_map_complex_supported_script_has_no_unknown_regions() {
+    let path = Path::new("tests/fixtures/pass/complex-supported-review-map.rss");
+    let source = read_fixture(path);
+    let map = review_map_sources(vec![(path.to_str().unwrap(), source.as_str())]);
+
+    assert_eq!(map.summary.total_functions, 6);
+    assert!(map.summary.total_lines >= 70);
+    assert_eq!(map.summary.unknown.functions, 0, "{map:?}");
+    assert_eq!(map.summary.unknown.lines, 0, "{map:?}");
+    assert_eq!(map.summary.review_required.functions, 6);
+    assert_eq!(map.summary.foldable.functions, 0);
+}
+
+#[test]
 fn parser_accepts_bodyless_rssi_interface() {
     let source = r#"
 struct JsonValue
