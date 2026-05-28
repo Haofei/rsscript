@@ -2,5 +2,6 @@
 // Runnable harness for RSScript `main`.
 
 fn main() {
+    rsscript_runtime::install_runtime_diagnostic_panic_hook();
     rsscript_generated_runnable::main();
 }

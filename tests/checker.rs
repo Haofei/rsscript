@@ -1629,6 +1629,7 @@ fn main() -> Unit {
 
     assert_eq!(package.package_name, "runnable-example-rss");
     assert!(package.lib_rs.contains("pub fn main()"));
+    assert!(main_rs.contains("rsscript_runtime::install_runtime_diagnostic_panic_hook();"));
     assert!(main_rs.contains("runnable_example_rss::main();"));
 }
 
@@ -1658,6 +1659,7 @@ fn main() -> Result<Unit, MainError> {
             .lib_rs
             .contains("pub fn main() -> Result<(), MainError>")
     );
+    assert!(main_rs.contains("rsscript_runtime::install_runtime_diagnostic_panic_hook();"));
     assert!(main_rs.contains(
         "result_runnable_example_rss::main().expect(\"RSScript main returned an error\");"
     ));
