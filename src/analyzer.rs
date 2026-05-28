@@ -378,6 +378,28 @@ impl Analyzer<'_> {
 
             for effect in &function.effects {
                 let effect_name = effect_name(effect);
+                if effect_name == "fresh" {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::UNKNOWN_EFFECT,
+                            format!(
+                                "`fresh` is not a valid `effects(...)` item in `{}`.",
+                                function.name
+                            ),
+                            function.span.clone(),
+                            "fresh is a return marker",
+                        )
+                        .with_cause(
+                            "`fresh` is a return contract, not a side effect or runtime guarantee.",
+                        )
+                        .with_fix(
+                            "move_fresh_to_return_type",
+                            "Write `-> fresh T` or `-> Result<fresh T, E>` instead.",
+                            "manual",
+                        ),
+                    );
+                    continue;
+                }
                 if let Some(replacement) = removed_runtime_effect_replacement(effect_name) {
                     self.diagnostics.push(
                         Diagnostic::error(

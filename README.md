@@ -235,6 +235,7 @@ rss package  lock   [--json] <package-directory>
 rss package  tree   [--json] [package-directory]
 rss package  publish --dry-run [--json] [package-directory]
 rss package  vendor [--dry-run] [--json] [package-directory]
+rss package  metadata [--dry-run] [--json] [package-directory]
 rss package  diff   [--json] <old-package-directory> <new-package-directory>
 rss lower    --rust  <file.rss> [--out-dir <directory>]
 rss run      [--json] <file.rss> [--out-dir <directory>]
@@ -254,6 +255,7 @@ A few details worth knowing:
 - `rss package tree` shows the dependency graph with review risk. Local path dependencies are expanded recursively; unresolved registry or git dependencies are classified as unknown.
 - `rss package publish --dry-run` runs pre-publish checks without uploading anything: package consistency, dependency graph review, semver shape, review metadata, native metadata, and reproducible archive hashing.
 - `rss package vendor` copies local path dependencies into `vendor/<name>-<version>/` and writes `vendor/rss-vendor.json`; unresolved registry or git dependencies stay unknown.
+- `rss package metadata` writes `review/package-review.json` using the local package review result; `--dry-run` reports the metadata path without writing.
 - `rss package diff` compares two local package directories and reports package version changes, RSScript dependency changes, package feature changes, native Rust wrapper metadata changes, and public `.rssi` semantic contract changes.
 - `rss run` lowers to a temporary Rust package and delegates to `cargo run`; `--out-dir` keeps the generated package around for inspection. Diagnostics support `--json`; program stdout stays the program's own.
 - `rss verify-rust --out-dir` keeps the generated package and source map, so unmappable rustc diagnostics can be inspected against the actual generated Rust.

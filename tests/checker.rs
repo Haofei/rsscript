@@ -12,9 +12,9 @@ use rsscript::{
     format_diagnostics_json, format_package_lock_toml, format_review_human, format_review_json,
     format_review_map_human, format_review_map_json, lint_source, lock_package_dir,
     lower_source_to_rust, lower_source_to_rust_package, lower_source_to_rust_with_map,
-    package_tree, parse_runtime_diagnostics, publish_package_dry_run, remap_rustc_diagnostic_json,
-    remap_rustc_diagnostic_json_lines, review_map_sources, review_package_dir, review_sources,
-    vendor_package_dir,
+    package_metadata, package_tree, parse_runtime_diagnostics, publish_package_dry_run,
+    remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines, review_map_sources,
+    review_package_dir, review_sources, vendor_package_dir,
 };
 use serde_json::Value;
 
@@ -2373,6 +2373,70 @@ paths = ["interface"]
     assert!(stderr.trim().is_empty(), "{stderr}");
     assert_eq!(json["package"]["name"], "rss-math");
     assert_eq!(json["summary"]["interface_files"], 1);
+}
+
+#[test]
+fn package_metadata_dry_run_reports_review_metadata_without_writing() {
+    let temp_dir = unique_temp_dir("rsscript-package-metadata-dry-run");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-metadata",
+        "0.1.0",
+        "",
+        r#"pub fn add(left: Int, right: Int) -> Int
+"#,
+    );
+
+    let metadata = package_metadata(&temp_dir, true).expect("metadata dry-run should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_metadata_json(&metadata))
+        .expect("metadata JSON should parse");
+    let metadata_path_exists = temp_dir.join("review").join("package-review.json").exists();
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(metadata.ok);
+    assert!(!metadata_path_exists);
+    assert_eq!(json["dry_run"], true);
+    assert_eq!(json["written"], false);
+    assert_eq!(json["metadata"]["schema"], "rss.review.package.v1");
+    assert_eq!(json["metadata"]["package"]["name"], "rss-metadata");
+}
+
+#[test]
+fn rss_package_metadata_json_writes_review_metadata_file() {
+    let temp_dir = unique_temp_dir("rsscript-package-metadata-cli");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-metadata",
+        "0.1.0",
+        "",
+        r#"pub fn add(left: Int, right: Int) -> Int
+"#,
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("package")
+        .arg("metadata")
+        .arg("--json")
+        .arg(&temp_dir)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss package metadata should execute");
+    let metadata_path = temp_dir.join("review").join("package-review.json");
+    let metadata_source =
+        fs::read_to_string(&metadata_path).expect("metadata file should be written");
+    let metadata_file_json: Value =
+        serde_json::from_str(&metadata_source).expect("metadata file JSON should parse");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: Value = serde_json::from_str(&stdout).expect("stdout should be metadata JSON");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert_eq!(json["written"], true);
+    assert_eq!(json["metadata"]["schema"], "rss.review.package.v1");
+    assert_eq!(metadata_file_json["schema"], "rss.review.package.v1");
+    assert_eq!(metadata_file_json["package"]["name"], "rss-metadata");
 }
 
 #[test]

@@ -25,6 +25,32 @@ pub struct PackageReview {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageMetadataReport {
+    pub package: PackageIdentity,
+    pub package_dir: String,
+    pub metadata_path: String,
+    pub dry_run: bool,
+    pub written: bool,
+    pub ok: bool,
+    pub risk: PackageRisk,
+    pub reasons: Vec<String>,
+    pub metadata: PackageReviewMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageReviewMetadata {
+    pub schema: String,
+    pub package: PackageIdentity,
+    pub risk: PackageRisk,
+    pub reasons: Vec<String>,
+    pub summary: PackageReviewSummary,
+    pub files: Vec<PackageReviewFile>,
+    pub native_rust: Option<PackageNativeRustReview>,
+    pub review_map: ReviewMap,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PackageDiff {
     pub old_package: PackageIdentity,
     pub new_package: PackageIdentity,
@@ -472,6 +498,40 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
     })
 }
 
+pub fn package_metadata(
+    package_dir: &Path,
+    dry_run: bool,
+) -> Result<PackageMetadataReport, String> {
+    let review = review_package_dir(package_dir)?;
+    let metadata_path = package_dir.join("review").join("package-review.json");
+    let metadata = package_review_metadata_from_review(&review);
+    let ok = review.summary.errors == 0;
+
+    if !dry_run {
+        let parent = metadata_path
+            .parent()
+            .ok_or_else(|| format!("metadata path has no parent: {}", metadata_path.display()))?;
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
+        let json = serde_json::to_string_pretty(&metadata)
+            .expect("package metadata JSON serialization should not fail");
+        fs::write(&metadata_path, json)
+            .map_err(|error| format!("failed to write {}: {error}", metadata_path.display()))?;
+    }
+
+    Ok(PackageMetadataReport {
+        package: review.package,
+        package_dir: package_dir.display().to_string(),
+        metadata_path: metadata_path.display().to_string(),
+        dry_run,
+        written: !dry_run,
+        ok,
+        risk: review.risk,
+        reasons: review.reasons,
+        metadata,
+    })
+}
+
 pub fn diff_package_dirs(old_dir: &Path, new_dir: &Path) -> Result<PackageDiff, String> {
     let old_package = load_package(old_dir)?;
     let new_package = load_package(new_dir)?;
@@ -851,6 +911,10 @@ pub fn format_package_review_json(review: &PackageReview) -> String {
     serde_json::to_string(review).expect("package review JSON serialization should not fail")
 }
 
+pub fn format_package_metadata_json(metadata: &PackageMetadataReport) -> String {
+    serde_json::to_string(metadata).expect("package metadata JSON serialization should not fail")
+}
+
 pub fn format_package_diff_json(diff: &PackageDiff) -> String {
     serde_json::to_string(diff).expect("package diff JSON serialization should not fail")
 }
@@ -913,6 +977,29 @@ pub fn format_package_review_human(review: &PackageReview) -> String {
             output.push_str(&format!(" crate {crate_name}"));
         }
         output.push('\n');
+    }
+    output
+}
+
+pub fn format_package_metadata_human(metadata: &PackageMetadataReport) -> String {
+    let mut output = String::new();
+    output.push_str(&format!(
+        "package metadata {} {} {} risk {}\n",
+        metadata.package.name,
+        metadata.package.version,
+        if metadata.dry_run { "dry-run" } else { "wrote" },
+        package_risk_label(metadata.risk)
+    ));
+    output.push_str(&format!("metadata path: {}\n", metadata.metadata_path));
+    output.push_str(&format!(
+        "summary: {} interface files; {} source files; {} diagnostics ({} errors)\n",
+        metadata.metadata.summary.interface_files,
+        metadata.metadata.summary.source_files,
+        metadata.metadata.summary.diagnostics,
+        metadata.metadata.summary.errors
+    ));
+    for reason in &metadata.reasons {
+        output.push_str(&format!("reason: {reason}\n"));
     }
     output
 }
@@ -1268,6 +1355,20 @@ fn read_package_lock(path: &Path) -> Result<PackageLock, String> {
     let source = fs::read_to_string(path)
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
     toml::from_str(&source).map_err(|error| format!("failed to parse {}: {error}", path.display()))
+}
+
+fn package_review_metadata_from_review(review: &PackageReview) -> PackageReviewMetadata {
+    PackageReviewMetadata {
+        schema: "rss.review.package.v1".to_string(),
+        package: review.package.clone(),
+        risk: review.risk,
+        reasons: review.reasons.clone(),
+        summary: review.summary.clone(),
+        files: review.files.clone(),
+        native_rust: review.native_rust.clone(),
+        review_map: review.review_map.clone(),
+        diagnostics: review.diagnostics.clone(),
+    }
 }
 
 fn check_package_lock(

@@ -1430,6 +1430,19 @@ fn load(path: read Path) -> Result<fresh Image, ImageError>
 
 `async` is function kind, not an effect.
 
+`fresh` is also not an effect. Freshness is a return contract and must be written in the return type:
+
+```rust
+fn load(path: read Path) -> Result<fresh Image, ImageError>
+```
+
+Invalid:
+
+```rust
+fn load(path: read Path) -> Result<Image, ImageError>
+    effects(fresh)
+```
+
 ---
 
 # 16. Function Signatures
@@ -2306,6 +2319,7 @@ rss package review update
 rss package tree
 rss package publish --dry-run
 rss package vendor
+rss package metadata
 rss package diff
 ```
 
@@ -2318,6 +2332,8 @@ rss package diff
 `rss package publish --dry-run` performs local pre-publish validation without uploading: package consistency, dependency graph review, semantic version shape, package review metadata, native metadata, and reproducible archive hashing.
 
 `rss package vendor` copies local path dependencies into `vendor/<name>-<version>/` and writes `vendor/rss-vendor.json` for offline/reproducible review. Registry and git dependencies remain unresolved until the resolver exists.
+
+`rss package metadata` writes `review/package-review.json` with schema `rss.review.package.v1`, using the same local review result as `rss package review`.
 
 ---
 

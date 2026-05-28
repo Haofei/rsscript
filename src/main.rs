@@ -11,14 +11,15 @@ use rsscript::{
     format_diagnostics_json, format_package_check_human, format_package_check_json,
     format_package_diff_human, format_package_diff_json, format_package_lock_diff_human,
     format_package_lock_diff_json, format_package_lock_json, format_package_lock_toml,
-    format_package_publish_human, format_package_publish_json, format_package_review_human,
-    format_package_review_json, format_package_tree_human, format_package_tree_json,
-    format_package_vendor_human, format_package_vendor_json, format_review_human,
-    format_review_json, format_review_map_human, format_review_map_json, lint_source,
-    lock_package_dir, lower_source_to_rust, lower_source_to_rust_package, package_tree,
-    parse_runtime_diagnostics, parse_source_map_json, publish_package_dry_run,
-    remap_rustc_diagnostic_json_lines, review_map_sources, review_package_dir, review_sources,
-    vendor_package_dir, write_generated_rust_package,
+    format_package_metadata_human, format_package_metadata_json, format_package_publish_human,
+    format_package_publish_json, format_package_review_human, format_package_review_json,
+    format_package_tree_human, format_package_tree_json, format_package_vendor_human,
+    format_package_vendor_json, format_review_human, format_review_json, format_review_map_human,
+    format_review_map_json, lint_source, lock_package_dir, lower_source_to_rust,
+    lower_source_to_rust_package, package_metadata, package_tree, parse_runtime_diagnostics,
+    parse_source_map_json, publish_package_dry_run, remap_rustc_diagnostic_json_lines,
+    review_map_sources, review_package_dir, review_sources, vendor_package_dir,
+    write_generated_rust_package,
 };
 
 fn main() -> ExitCode {
@@ -66,6 +67,11 @@ fn run_package(args: &[String]) -> ExitCode {
             dry_run,
             path,
         } => run_package_vendor(json, dry_run, path),
+        PackageCommand::Metadata {
+            json,
+            dry_run,
+            path,
+        } => run_package_metadata(json, dry_run, path),
         PackageCommand::Diff {
             json,
             old_path,
@@ -839,6 +845,11 @@ enum PackageCommand<'a> {
         dry_run: bool,
         path: &'a str,
     },
+    Metadata {
+        json: bool,
+        dry_run: bool,
+        path: &'a str,
+    },
     Diff {
         json: bool,
         old_path: &'a str,
@@ -875,7 +886,15 @@ fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
             index += 1;
         } else if matches!(
             arg.as_str(),
-            "check" | "review" | "update" | "lock" | "tree" | "publish" | "vendor" | "diff"
+            "check"
+                | "review"
+                | "update"
+                | "lock"
+                | "tree"
+                | "publish"
+                | "vendor"
+                | "metadata"
+                | "diff"
         ) {
             words.push(arg.as_str());
         } else {
@@ -914,6 +933,16 @@ fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
             path: ".",
         },
         (["vendor"], [path], None, None) => PackageCommand::Vendor {
+            json,
+            dry_run,
+            path,
+        },
+        (["metadata"], [], None, None) => PackageCommand::Metadata {
+            json,
+            dry_run,
+            path: ".",
+        },
+        (["metadata"], [path], None, None) => PackageCommand::Metadata {
             json,
             dry_run,
             path,
@@ -1182,6 +1211,34 @@ fn run_package_vendor(json: bool, dry_run: bool, path: &str) -> ExitCode {
     }
 }
 
+fn run_package_metadata(json: bool, dry_run: bool, path: &str) -> ExitCode {
+    let metadata = match package_metadata(Path::new(path), dry_run) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+
+    if json {
+        println!("{}", format_package_metadata_json(&metadata));
+    } else {
+        print!("{}", format_package_metadata_human(&metadata));
+        if !metadata.metadata.diagnostics.is_empty() {
+            print!(
+                "{}",
+                format_diagnostics_human(&metadata.metadata.diagnostics)
+            );
+        }
+    }
+
+    if metadata.ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
 fn run_package_diff(json: bool, old_path: &str, new_path: &str) -> ExitCode {
     let diff = match diff_package_dirs(Path::new(old_path), Path::new(new_path)) {
         Ok(diff) => diff,
@@ -1284,5 +1341,6 @@ fn print_usage() {
     eprintln!("  rsscript package tree [--json] [package-directory]");
     eprintln!("  rsscript package publish --dry-run [--json] [package-directory]");
     eprintln!("  rsscript package vendor [--dry-run] [--json] [package-directory]");
+    eprintln!("  rsscript package metadata [--dry-run] [--json] [package-directory]");
     eprintln!("  rsscript package diff [--json] <old-package-directory> <new-package-directory>");
 }
