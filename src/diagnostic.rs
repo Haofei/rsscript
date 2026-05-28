@@ -307,7 +307,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::UNKNOWN_FILE_FEATURE,
         title: "unknown file feature",
-        explanation: "A `features:` header may only list review-relevant capabilities known to this compiler version. Unknown feature names are rejected so typos do not silently change review risk.",
+        explanation: "A `features:` header may only list review-relevant capabilities known to this compiler version. Some known names are reserved review markers that do not unlock executable syntax. Unknown feature names are rejected so typos do not silently change review risk.",
     },
     DiagnosticExplanation {
         code: code::DUPLICATE_FILE_FEATURE,

@@ -3037,7 +3037,7 @@ fn update(state: read State) -> Unit {
 #[test]
 fn review_map_reports_file_features() {
     let source = r#"
-features: local, native, ffi, reflection
+features: local, native, device, ffi, reflection
 
 fn process() -> Unit {
     return Unit
@@ -3047,7 +3047,7 @@ fn process() -> Unit {
 
     assert_eq!(
         map.files[0].features,
-        vec!["ffi", "local", "native", "reflection"]
+        vec!["device", "ffi", "local", "native", "reflection"]
     );
     assert_eq!(map.files[0].risk, ReviewMapFileRisk::High);
     assert!(
@@ -3066,22 +3066,31 @@ fn process() -> Unit {
         map.files[0]
             .reasons
             .iter()
-            .any(|reason| reason == "ffi boundary capability enabled")
+            .any(|reason| reason == "reserved device review marker enabled")
     );
     assert!(
         map.files[0]
             .reasons
             .iter()
-            .any(|reason| reason == "reflection capability enabled")
+            .any(|reason| reason == "reserved ffi review marker enabled")
+    );
+    assert!(
+        map.files[0]
+            .reasons
+            .iter()
+            .any(|reason| reason == "reserved reflection review marker enabled")
     );
     let human = format_review_map_human(&map);
-    assert!(human.contains("features.rss: features ffi, local, native, reflection; risk high"));
+    assert!(
+        human.contains("features.rss: features device, ffi, local, native, reflection; risk high")
+    );
     let json: Value =
         serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
-    assert_eq!(json["files"][0]["features"][0], "ffi");
-    assert_eq!(json["files"][0]["features"][1], "local");
-    assert_eq!(json["files"][0]["features"][2], "native");
-    assert_eq!(json["files"][0]["features"][3], "reflection");
+    assert_eq!(json["files"][0]["features"][0], "device");
+    assert_eq!(json["files"][0]["features"][1], "ffi");
+    assert_eq!(json["files"][0]["features"][2], "local");
+    assert_eq!(json["files"][0]["features"][3], "native");
+    assert_eq!(json["files"][0]["features"][4], "reflection");
     assert_eq!(json["files"][0]["risk"], "high");
     assert!(
         json["files"][0]["reasons"]
@@ -3089,6 +3098,13 @@ fn process() -> Unit {
             .is_some_and(|reasons| reasons
                 .iter()
                 .any(|reason| reason == "native boundary capability enabled"))
+    );
+    assert!(
+        json["files"][0]["reasons"]
+            .as_array()
+            .is_some_and(|reasons| reasons
+                .iter()
+                .any(|reason| reason == "reserved ffi review marker enabled"))
     );
 }
 

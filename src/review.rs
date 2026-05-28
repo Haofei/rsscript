@@ -1322,9 +1322,9 @@ fn review_map_feature_reason(feature: &str) -> Option<&'static str> {
         "native" => Some("native boundary capability enabled"),
         "unsafe" => Some("unsafe capability enabled"),
         "async" => Some("async control-flow capability enabled"),
-        "device" => Some("device capability enabled"),
-        "ffi" => Some("ffi boundary capability enabled"),
-        "reflection" => Some("reflection capability enabled"),
+        "device" => Some("reserved device review marker enabled"),
+        "ffi" => Some("reserved ffi review marker enabled"),
+        "reflection" => Some("reserved reflection review marker enabled"),
         _ => None,
     }
 }
