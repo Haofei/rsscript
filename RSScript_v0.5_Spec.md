@@ -293,7 +293,7 @@ RSScript source
   -> executable / library
 ```
 
-`rss run <file.rss>` is a convenience command over this pipeline. It lowers the file to a temporary Rust package and invokes Cargo on that package. It is not an interpreter and must not bypass frontend diagnostics, source mapping, or the runtime crate target ABI.
+`rss run <file.rss>` is a convenience command over this pipeline. It lowers the file to a Rust package and invokes Cargo on that package. By default the package is temporary; `rss run <file.rss> --out-dir <directory>` keeps the generated Rust package for inspection. It is not an interpreter and must not bypass frontend diagnostics, source mapping, or the runtime crate target ABI.
 
 The RSScript frontend is responsible for RSScript semantics.
 

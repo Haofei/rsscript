@@ -292,8 +292,8 @@ fn run_verify_rust(args: &[String]) -> ExitCode {
 }
 
 fn run_generated_rust(args: &[String]) -> ExitCode {
-    let (_, path) = parse_path_args(args);
-    let Some(path) = path else {
+    let options = parse_run_args(args);
+    let Some(path) = options.path else {
         print_usage();
         return ExitCode::from(2);
     };
@@ -329,27 +329,37 @@ fn run_generated_rust(args: &[String]) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let temp_dir = run_temp_dir(&package.package_name);
-    if let Err(error) = write_generated_rust_package(&temp_dir, &package) {
+    let package_dir = options
+        .out_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(|| run_temp_dir(&package.package_name));
+    let cleanup_package_dir = options.out_dir.is_none();
+    if let Err(error) = write_generated_rust_package(&package_dir, &package) {
         eprintln!("{error}");
-        cleanup_temp_dir(&temp_dir);
+        if cleanup_package_dir {
+            cleanup_temp_dir(&package_dir);
+        }
         return ExitCode::from(2);
     }
     let status = match Command::new("cargo")
         .arg("run")
         .arg("--quiet")
         .arg("--manifest-path")
-        .arg(temp_dir.join("Cargo.toml"))
+        .arg(package_dir.join("Cargo.toml"))
         .status()
     {
         Ok(status) => status,
         Err(error) => {
             eprintln!("failed to run cargo: {error}");
-            cleanup_temp_dir(&temp_dir);
+            if cleanup_package_dir {
+                cleanup_temp_dir(&package_dir);
+            }
             return ExitCode::from(2);
         }
     };
-    cleanup_temp_dir(&temp_dir);
+    if cleanup_package_dir {
+        cleanup_temp_dir(&package_dir);
+    }
 
     status
         .code()
@@ -465,6 +475,11 @@ struct LowerOptions<'a> {
     out_dir: Option<&'a str>,
 }
 
+struct RunOptions<'a> {
+    path: Option<&'a str>,
+    out_dir: Option<&'a str>,
+}
+
 struct CheckOptions<'a> {
     json: bool,
     use_core: bool,
@@ -526,6 +541,24 @@ fn parse_lower_args(args: &[String]) -> LowerOptions<'_> {
         path,
         out_dir,
     }
+}
+
+fn parse_run_args(args: &[String]) -> RunOptions<'_> {
+    let mut path = None;
+    let mut out_dir = None;
+    let mut index = 0;
+
+    while let Some(arg) = args.get(index) {
+        if arg == "--out-dir" {
+            index += 1;
+            out_dir = args.get(index).map(String::as_str);
+        } else if path.is_none() {
+            path = Some(arg.as_str());
+        }
+        index += 1;
+    }
+
+    RunOptions { path, out_dir }
 }
 
 struct InterfaceSource {
@@ -760,6 +793,7 @@ fn print_usage() {
     eprintln!("  rsscript lower --rust <file.rss>");
     eprintln!("  rsscript lower --rust <file.rss> --out-dir <directory>");
     eprintln!("  rsscript run <file.rss>");
+    eprintln!("  rsscript run <file.rss> --out-dir <directory>");
     eprintln!("  rsscript remap-rustc [--json] <rsscript-source-map.json> <rustc-json-lines>");
     eprintln!("  rsscript verify-rust [--json] <file.rss>");
     eprintln!("  rsscript review [--json] --diff <old.rss> <new.rss>");
