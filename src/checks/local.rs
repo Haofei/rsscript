@@ -1094,13 +1094,30 @@ fn collect_resource_escapes_in_block(
 
         if let HirStmt::Let {
             kind: HirBindingKind::ManagedLet,
-            value: Some(HirExpr::Closure { body, span }),
+            value: Some(value),
             ..
         } = statement
-            && hir_block_mentions_ident(body, binding)
+            && let Some(span) = managed_binding_resource_capture_span(value, binding)
         {
-            push_resource_escape(escapes, binding, ResourceEscapeKind::Capture, span.clone());
+            push_resource_escape(escapes, binding, ResourceEscapeKind::Capture, span);
         }
+    }
+}
+
+fn managed_binding_resource_capture_span(expr: &HirExpr, binding: &str) -> Option<Span> {
+    match expr {
+        HirExpr::Closure { body, span } if hir_block_mentions_ident(body, binding) => {
+            Some(span.clone())
+        }
+        HirExpr::Effect {
+            effect: ParamEffect::Read | ParamEffect::Mut,
+            value,
+            ..
+        } => managed_binding_resource_capture_span(value, binding),
+        HirExpr::Call { callee, args, .. } if resource_escape_wrapper_callee(callee) => args
+            .iter()
+            .find_map(|arg| managed_binding_resource_capture_span(&arg.value, binding)),
+        _ => None,
     }
 }
 

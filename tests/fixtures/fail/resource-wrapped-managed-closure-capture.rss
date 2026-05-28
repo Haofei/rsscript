@@ -1,0 +1,21 @@
+// expect: RS0702
+features: local
+
+resource File {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+fn File.open(path: read Path) -> File
+fn File.read_all(file: mut File) -> String
+
+fn bad_capture(path: read Path) -> Unit {
+    with File.open(path: read path) as file {
+        let callback = Some(|| {
+            File.read_all(file: mut file)
+        })
+    }
+}

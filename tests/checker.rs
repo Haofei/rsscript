@@ -254,6 +254,40 @@ fn bad_fresh(path: read Path) -> fresh Image {
 }
 
 #[test]
+fn checker_rejects_resource_capture_in_wrapped_managed_closure() {
+    let source = r#"
+features: local
+
+resource File {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+fn File.open(path: read Path) -> File
+fn File.read_all(file: mut File) -> String
+
+fn bad_capture(path: read Path) -> Unit {
+    with File.open(path: read path) as file {
+        let callback = Some(|| {
+            File.read_all(file: mut file)
+        })
+    }
+}
+"#;
+    let diagnostics = analyze_source("resource-closure-wrapper.rss", source);
+
+    assert!(
+        diagnostics.iter().any(
+            |diagnostic| diagnostic.code == "RS0702" && diagnostic.label == "resource captured"
+        ),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn retained_closure_capture_makes_fresh_local_unclean() {
     let source = r#"
 features: local
