@@ -1,0 +1,14 @@
+mode: uses-local
+
+struct Image {
+    pixels: Buffer
+}
+
+fn store_forever(path: read Path) -> Unit {
+    local image = Image.load(path: read path)
+    loop {
+        let shared = manage image
+        return Unit
+    }
+    Image.inspect(image: read image)
+}

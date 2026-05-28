@@ -1,0 +1,15 @@
+// expect: RS0401
+mode: uses-local
+
+struct Image {
+    pixels: Buffer
+}
+
+fn store_once(path: read Path) -> Unit {
+    local image = Image.load(path: read path)
+    loop {
+        let shared = manage image
+        break
+    }
+    Image.inspect(image: read image)
+}
