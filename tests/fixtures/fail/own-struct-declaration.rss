@@ -1,0 +1,10 @@
+// expect: RS1003
+mode: managed
+
+own struct Buffer {
+    bytes: Bytes
+}
+
+fn make_buffer(bytes: read Bytes) -> fresh Buffer {
+    return Buffer(bytes: read bytes)
+}

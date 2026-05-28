@@ -163,6 +163,7 @@ impl Analyzer<'_> {
                 if param.effect.is_none()
                     && !param.ty.name.is_empty()
                     && param.ty.name != "share"
+                    && !type_ref_has_surface_reference(&param.ty, self.tokens)
                     && !is_copy_type(&param.ty)
                 {
                     self.diagnostics.push(
@@ -746,4 +747,13 @@ fn type_ref_name(ty: &TypeRef) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!("{}<{args}>", ty.name)
+}
+
+fn type_ref_has_surface_reference(ty: &TypeRef, tokens: &[Token]) -> bool {
+    tokens.iter().any(|token| {
+        token.symbol("&")
+            && token.span.file == ty.span.file
+            && token.span.line == ty.span.line
+            && token.span.column + token.span.length <= ty.span.column
+    })
 }

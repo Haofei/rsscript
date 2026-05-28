@@ -35,6 +35,8 @@ pub mod code {
     pub const TAKE_HANDLE_FIELD: &str = "RS0901";
     pub const OPERATOR_OVERLOAD_ATTEMPT: &str = "RS1001";
     pub const IMPLICIT_CONVERSION_ATTEMPT: &str = "RS1002";
+    pub const OWN_STRUCT_ATTEMPT: &str = "RS1003";
+    pub const SURFACE_REFERENCE_ATTEMPT: &str = "RS1004";
 
     pub const REVIEW_MODE_CHANGED: &str = "RSR001";
     pub const REVIEW_FUNCTION_REMOVED: &str = "RSR002";
@@ -370,6 +372,16 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::IMPLICIT_CONVERSION_ATTEMPT,
         title: "implicit conversion attempt",
         explanation: "RSScript rejects cast-style conversion syntax. Conversions must be visible named APIs such as `Type.from(value: read x)`.",
+    },
+    DiagnosticExplanation {
+        code: code::OWN_STRUCT_ATTEMPT,
+        title: "own struct attempt",
+        explanation: "RSScript v0.4.1 has exactly three type declaration kinds: `class`, `struct`, and `resource`. There is no `own struct`.",
+    },
+    DiagnosticExplanation {
+        code: code::SURFACE_REFERENCE_ATTEMPT,
+        title: "surface reference attempt",
+        explanation: "RSScript does not expose `&T` or `&mut T` syntax. Use explicit parameter effects such as `read`, `mut`, and `take`.",
     },
 ];
 

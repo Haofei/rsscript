@@ -1,0 +1,6 @@
+// expect: RS1004
+mode: managed
+
+fn hash(data: &Bytes) -> UInt64 {
+    return Bytes.hash(data: read data)
+}

@@ -1,0 +1,6 @@
+// expect: RS1004
+mode: managed
+
+fn clear(buffer: &mut Buffer) -> Unit {
+    Buffer.clear(buffer: mut buffer)
+}

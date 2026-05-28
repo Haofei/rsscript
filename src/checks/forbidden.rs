@@ -5,6 +5,64 @@ use crate::lexer::TokenKind;
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
     check_operator_overload_attempts(analyzer);
     check_implicit_conversion_attempts(analyzer);
+    check_own_struct_attempts(analyzer);
+    check_surface_reference_attempts(analyzer);
+}
+
+fn check_own_struct_attempts(analyzer: &mut Analyzer<'_>) {
+    for index in 0..analyzer.tokens.len().saturating_sub(1) {
+        if analyzer.tokens[index].is_ident_text("own")
+            && analyzer.tokens[index + 1].is_ident_text("struct")
+        {
+            analyzer.diagnostics.push(
+                Diagnostic::error(
+                    code::OWN_STRUCT_ATTEMPT,
+                    "`own struct` is not part of RSScript v0.4.1.",
+                    analyzer.tokens[index].span.clone(),
+                    "own struct attempt",
+                )
+                .with_cause("v0.4.1 has only `class`, `struct`, and `resource` type declarations.")
+                .with_fix(
+                    "choose_type_kind",
+                    "Use `struct` for inline values, `class` for managed identity, or `resource` for deterministic cleanup.",
+                    "manual",
+                ),
+            );
+        }
+    }
+}
+
+fn check_surface_reference_attempts(analyzer: &mut Analyzer<'_>) {
+    for index in 0..analyzer.tokens.len() {
+        if !analyzer.tokens[index].symbol("&") || is_boolean_and(analyzer, index) {
+            continue;
+        }
+        analyzer.diagnostics.push(
+            Diagnostic::error(
+                code::SURFACE_REFERENCE_ATTEMPT,
+                "surface reference syntax is not part of RSScript.",
+                analyzer.tokens[index].span.clone(),
+                "surface reference attempt",
+            )
+            .with_cause("RSScript uses explicit data effects instead of `&T` or `&mut T` syntax.")
+            .with_fix(
+                "use_data_effect",
+                "Use a parameter effect such as `value: read T` or `value: mut T`.",
+                "manual",
+            ),
+        );
+    }
+}
+
+fn is_boolean_and(analyzer: &Analyzer<'_>, index: usize) -> bool {
+    analyzer
+        .tokens
+        .get(index.wrapping_sub(1))
+        .is_some_and(|token| token.symbol("&"))
+        || analyzer
+            .tokens
+            .get(index + 1)
+            .is_some_and(|token| token.symbol("&"))
 }
 
 fn check_implicit_conversion_attempts(analyzer: &mut Analyzer<'_>) {
