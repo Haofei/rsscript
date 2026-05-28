@@ -1,0 +1,5 @@
+pub fn Weak.from<T: Managed>(value: read T) -> T
+
+pub fn Weak.downgrade<T: Managed>(value: read T) -> T
+
+pub fn Weak.upgrade<T: Managed>(value: read T) -> Option<T>

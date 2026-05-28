@@ -68,6 +68,10 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         "core/test/assert.rssi",
         include_str!("../core/test/assert.rssi"),
     ),
+    (
+        "core/weak/weak.rssi",
+        include_str!("../core/weak/weak.rssi"),
+    ),
 ];
 
 pub(crate) fn builtin_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {

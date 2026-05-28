@@ -939,7 +939,7 @@ impl<'a> RustLowerer<'a> {
                             if is_weak_field {
                                 fields.push(format!(
                                     "{field}: {}",
-                                    self.lower_weak_field_value(&arg.value)
+                                    self.lower_explicit_weak_field_value(&arg.value)
                                 ));
                             } else {
                                 let value = self.lower_expr(&arg.value);
@@ -1201,7 +1201,14 @@ impl<'a> RustLowerer<'a> {
         })
     }
 
-    fn lower_weak_field_value(&mut self, expr: &Expr) -> String {
+    fn lower_explicit_weak_field_value(&mut self, expr: &Expr) -> String {
+        if let Some(value) = explicit_weak_handle_source(expr) {
+            return self.lower_runtime_weak_from_managed(value);
+        }
+        self.lower_expr(expr)
+    }
+
+    fn lower_runtime_weak_from_managed(&mut self, expr: &Expr) -> String {
         if let Expr::Effect {
             effect: DataEffect::Read,
             value,
@@ -1220,6 +1227,23 @@ impl<'a> RustLowerer<'a> {
             return format!("rsscript_runtime::weak(&{value_expr})");
         }
         format!("rsscript_runtime::weak(&{})", self.lower_expr(expr))
+    }
+}
+
+fn explicit_weak_handle_source(expr: &Expr) -> Option<&Expr> {
+    let Expr::Call { callee, args, .. } = expr else {
+        return None;
+    };
+    if !matches!(
+        callee,
+        Callee::Qualified { namespace, name }
+            if namespace == "Weak" && matches!(name.as_str(), "from" | "downgrade")
+    ) {
+        return None;
+    }
+    match args.as_slice() {
+        [arg] if arg.name.as_deref() == Some("value") => Some(&arg.value),
+        _ => None,
     }
 }
 

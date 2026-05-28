@@ -1152,6 +1152,13 @@ match maybe_owner {
 }
 ```
 
+Weak fields must also be initialized from an explicit weak-handle producing
+expression. This keeps the ownership downgrade visible at the constructor site.
+
+```rust
+let session = Session(owner: Weak.from(value: read user))
+```
+
 Invalid:
 
 ```rust
@@ -2106,6 +2113,10 @@ freshness analysis.
 For inline struct fields, initialization from a non-Copy local value requires
 `take`. For handle fields, initialization from a managed value requires `read`.
 For weak fields, initialization requires a weak-handle producing expression.
+
+```rust
+Session(owner: Weak.from(value: read user))
+```
 
 Dot syntax is namespace access, not method dispatch magic.
 
@@ -3383,6 +3394,7 @@ Result-returning resource producer missing explicit ?
 invalid resource type in ordinary Result/Option/container context
 local captured by managed closure
 take of handle field
+weak field initialized without explicit weak handle
 weak field used without explicit upgrade
 implicit conversion attempt
 operator overload attempt

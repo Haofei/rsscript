@@ -146,6 +146,11 @@ fn bundled_core_interfaces_are_available_to_checker() {
             .iter()
             .any(|(path, _)| *path == "core/interpreter/interpreter.rssi")
     );
+    assert!(
+        core_interfaces()
+            .iter()
+            .any(|(path, _)| *path == "core/weak/weak.rssi")
+    );
 
     let source = r#"
 fn check_label(actual: read String, expected: read String) -> Unit {
@@ -2074,11 +2079,11 @@ struct Session {
 
 fn make_session() -> Session {
     let user = User(id: 1)
-    return Session(owner: read user)
+    return Session(owner: Weak.from(value: read user))
 }
 
 fn make_session_from_param(user: read User) -> Session {
-    return Session(owner: read user)
+    return Session(owner: Weak.from(value: read user))
 }
 "#;
     let rust = lower_source_to_rust("weak-session.rss", source).expect("source should lower");
@@ -2104,6 +2109,32 @@ fn make_session_from_param(user: read User) -> Session {
         check.success,
         "diagnostics={:?}\nstderr={}",
         check.diagnostics, check.stderr
+    );
+}
+
+#[test]
+fn checker_requires_explicit_weak_handle_for_weak_field_initialization() {
+    let source = r#"
+class User {
+    id: Int
+}
+
+struct Session {
+    owner: weak User
+}
+
+fn make_session() -> Session {
+    let user = User(id: 1)
+    return Session(owner: read user)
+}
+"#;
+    let diagnostics = analyze_source("weak-field-initializer.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0904"),
+        "{diagnostics:?}"
     );
 }
 

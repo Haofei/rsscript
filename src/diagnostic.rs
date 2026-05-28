@@ -53,6 +53,7 @@ pub mod code {
     pub const TAKE_HANDLE_FIELD: &str = "RS0901";
     pub const INVALID_WEAK_FIELD: &str = "RS0902";
     pub const WEAK_FIELD_REQUIRES_UPGRADE: &str = "RS0903";
+    pub const WEAK_FIELD_REQUIRES_WEAK_HANDLE: &str = "RS0904";
     pub const OPERATOR_OVERLOAD_ATTEMPT: &str = "RS1001";
     pub const IMPLICIT_CONVERSION_ATTEMPT: &str = "RS1002";
     pub const OWN_STRUCT_ATTEMPT: &str = "RS1003";
@@ -494,6 +495,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::WEAK_FIELD_REQUIRES_UPGRADE,
         title: "weak field requires upgrade",
         explanation: "`weak` fields are non-owning handles. Upgrade them explicitly with `Weak.upgrade(value: read weak_field)` before using the target value.",
+    },
+    DiagnosticExplanation {
+        code: code::WEAK_FIELD_REQUIRES_WEAK_HANDLE,
+        title: "weak field requires weak handle",
+        explanation: "`weak` fields must be initialized from an explicit weak-handle expression such as `Weak.from(value: read target)`.",
     },
     DiagnosticExplanation {
         code: code::OPERATOR_OVERLOAD_ATTEMPT,

@@ -645,7 +645,26 @@ fn check_constructor_field_initializers(
             continue;
         };
         let actual_effect = expr_data_effect(&arg.value);
-        if field.is_handle && actual_effect != Some("read") {
+        if field.is_weak && !is_weak_handle_producing_expr(&arg.value) {
+            analyzer.diagnostics.push(
+                Diagnostic::error(
+                    code::WEAK_FIELD_REQUIRES_WEAK_HANDLE,
+                    format!(
+                        "weak field `{name}` for `{constructor_name}` must be initialized from an explicit weak handle."
+                    ),
+                    hir_expr_span(&arg.value).clone(),
+                    "weak field requires weak handle",
+                )
+                .with_cause(
+                    "Weak fields are non-owning handles. Initializing them must be syntax-visible.",
+                )
+                .with_fix(
+                    "wrap_with_weak_from",
+                    format!("Write `{name}: Weak.from(value: read target)` in the constructor."),
+                    "manual",
+                ),
+            );
+        } else if field.is_handle && actual_effect != Some("read") {
             constructor_field_effect_diagnostic(
                 analyzer,
                 &constructor_name,
@@ -692,6 +711,31 @@ fn constructor_arg_place_path(expr: &HirExpr) -> Option<PlacePath> {
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => None,
     }
+}
+
+fn is_weak_handle_producing_expr(expr: &HirExpr) -> bool {
+    let HirExpr::Call { callee, args, .. } = expr else {
+        return false;
+    };
+    if !matches!(
+        callee,
+        Callee::Qualified { namespace, name }
+            if namespace == "Weak" && matches!(name.as_str(), "from" | "downgrade")
+    ) {
+        return false;
+    }
+    matches!(
+        args.as_slice(),
+        [HirCallArg {
+            name: Some(name),
+            value:
+                HirExpr::Effect {
+                    effect: ParamEffect::Read,
+                    ..
+                },
+            ..
+        }] if name == "value"
+    )
 }
 
 fn expr_data_effect(expr: &HirExpr) -> Option<&'static str> {
