@@ -2386,6 +2386,19 @@ rss package diff
 
 `rss package metadata` writes `review/package-review.json` with schema `rss.review.package.v1`, using the same local review result as `rss package review`.
 
+Package Rust lowering loads the package's own `.rssi` contracts plus dependency
+interfaces as the call-resolution environment. If `[native.rust]` is enabled,
+`native/bindings.rssbind.toml` may provide a minimal binding table:
+
+```toml
+[bindings]
+"Native.echo" = "rss_json_native::echo"
+```
+
+These bindings map bodyless `native fn` contracts to Rust wrapper functions in
+the generated package. The binding manifest is part of native review metadata
+and native hashing.
+
 ---
 
 # 30. Native Core and FFI Boundary

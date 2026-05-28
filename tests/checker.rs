@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -1646,6 +1647,82 @@ unsafe = "forbid"
 }
 
 #[test]
+fn rss_verify_rust_lowers_native_binding_manifest_calls() {
+    let temp_dir = unique_temp_dir("rsscript-verify-native-binding-package-cli");
+    let out_dir = temp_dir.join("generated-rust");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-verify-native-binding-package",
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_json_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+        r#"features: native
+
+native fn Native.echo(message: read String) -> String
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
+    fs::create_dir_all(temp_dir.join("native")).expect("native dir should be created");
+    fs::write(
+        temp_dir.join("src/main.rss"),
+        r#"features: native
+
+fn main() -> Unit {
+    let message = Native.echo(message: read "hello native")
+    Log.write(message: read message)
+    return Unit
+}
+"#,
+    )
+    .expect("source should be written");
+    fs::write(
+        temp_dir.join("native/bindings.rssbind.toml"),
+        r#"[bindings]
+"Native.echo" = "rss_json_native::echo"
+"#,
+    )
+    .expect("native binding manifest should be written");
+    fs::write(
+        temp_dir.join("native/rust/Cargo.toml"),
+        "[package]\nname = \"rss_json_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("native Cargo.toml should be written");
+    fs::write(
+        temp_dir.join("native/rust/src/lib.rs"),
+        "pub fn echo(message: &String) -> String { message.clone() }\n",
+    )
+    .expect("native source should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("verify-rust")
+        .arg("--json")
+        .arg(&temp_dir)
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss verify-rust package directory should execute");
+    let generated_lib_rs =
+        fs::read_to_string(out_dir.join("src/lib.rs")).expect("generated lib.rs should exist");
+    let _ = fs::remove_dir_all(&temp_dir);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: Value = serde_json::from_str(&stdout).expect("stdout should be diagnostics JSON");
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert_eq!(json, serde_json::json!([]));
+    assert!(generated_lib_rs.contains("rss_json_native::echo"));
+}
+
+#[test]
 fn rust_lowering_targets_runtime_crate_hooks() {
     let source = r#"
 features: local
@@ -1929,6 +2006,7 @@ fn main() -> Unit {
         &[NativeRustDependency {
             crate_name: "rss_json_native".to_string(),
             path: "/workspace/rss-json/native/rust".to_string(),
+            bindings: BTreeMap::new(),
         }],
     )
     .expect("source should lower into package with native dependency");
@@ -4406,6 +4484,76 @@ native fn Native.parse(text: read String) -> String
         json["native_rust"]["target_kinds"]
             .as_array()
             .is_some_and(|kinds| kinds.iter().any(|kind| kind == "lib"))
+    );
+}
+
+#[test]
+fn package_check_accepts_bound_native_interface_functions() {
+    let temp_dir = unique_temp_dir("rsscript-package-check-native-binding");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_json_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+        r#"features: native
+
+native fn Native.echo(message: read String) -> String
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
+    fs::write(
+        temp_dir.join("src/main.rss"),
+        r#"features: native
+
+fn main() -> Unit {
+    let message = Native.echo(message: read "hello native")
+    Log.write(message: read message)
+    return Unit
+}
+"#,
+    )
+    .expect("source should be written");
+    fs::write(
+        temp_dir.join("native/bindings.rssbind.toml"),
+        r#"[bindings]
+"Native.echo" = "rss_json_native::echo"
+"#,
+    )
+    .expect("native binding manifest should be written");
+    fs::write(
+        temp_dir.join("native/rust/Cargo.toml"),
+        "[package]\nname = \"rss_json_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("native Cargo.toml should be written");
+    fs::write(
+        temp_dir.join("native/rust/src/lib.rs"),
+        "pub fn echo(message: &String) -> String { message.clone() }\n",
+    )
+    .expect("native source should be written");
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&temp_dir).expect("package check should succeed");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(check.ok, "{:?}", check.diagnostics);
+    assert!(
+        check
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "RS1301")
     );
 }
 

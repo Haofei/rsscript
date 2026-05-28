@@ -26,6 +26,7 @@ pub struct GeneratedRustPackage {
 pub struct NativeRustDependency {
     pub crate_name: String,
     pub path: String,
+    pub bindings: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,7 +154,12 @@ pub fn lower_sources_to_rust_package_with_options(
             .iter()
             .map(|(path, source)| parse_source(path, source)),
     );
-    let lowered = lower_program_to_rust_with_map(&program);
+    let native_bindings = native_dependencies
+        .iter()
+        .flat_map(|dependency| dependency.bindings.iter())
+        .map(|(symbol, target)| (symbol.clone(), target.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let lowered = lower_program_to_rust_with_map_with_native_bindings(&program, native_bindings);
     let package_name = cargo_package_name(package_name);
     let native_dependency_toml = native_dependencies
         .iter()
@@ -257,7 +263,14 @@ pub fn lower_program_to_rust(program: &Program) -> String {
 }
 
 pub fn lower_program_to_rust_with_map(program: &Program) -> LoweredRust {
-    RustLowerer::new(program).lower()
+    lower_program_to_rust_with_map_with_native_bindings(program, BTreeMap::new())
+}
+
+fn lower_program_to_rust_with_map_with_native_bindings(
+    program: &Program,
+    native_bindings: BTreeMap<String, String>,
+) -> LoweredRust {
+    RustLowerer::new(program, native_bindings).lower()
 }
 
 pub fn parse_source_map_json(source_map_json: &str) -> Result<Vec<RustSourceMapEntry>, String> {
@@ -398,6 +411,7 @@ struct RustLowerer<'a> {
     program: &'a Program,
     type_kinds: BTreeMap<String, TypeKind>,
     native_boundary_callees: BTreeSet<String>,
+    native_bindings: BTreeMap<String, String>,
     param_effects: BTreeMap<String, DataEffect>,
     value_types: BTreeMap<String, TypeRef>,
     mutated_bindings: BTreeSet<String>,
@@ -406,7 +420,7 @@ struct RustLowerer<'a> {
 }
 
 impl<'a> RustLowerer<'a> {
-    fn new(program: &'a Program) -> Self {
+    fn new(program: &'a Program, native_bindings: BTreeMap<String, String>) -> Self {
         let type_kinds = program
             .items
             .iter()
@@ -421,6 +435,7 @@ impl<'a> RustLowerer<'a> {
             program,
             type_kinds,
             native_boundary_callees,
+            native_bindings,
             param_effects: BTreeMap::new(),
             value_types: BTreeMap::new(),
             mutated_bindings: BTreeSet::new(),
@@ -826,8 +841,8 @@ impl<'a> RustLowerer<'a> {
     }
 
     fn is_native_boundary_call(&self, callee: &Callee) -> bool {
-        self.native_boundary_callees
-            .contains(&native_boundary_callee_key(callee))
+        let key = native_boundary_callee_key(callee);
+        self.native_boundary_callees.contains(&key) || self.native_bindings.contains_key(&key)
     }
 
     fn lower_expr(&mut self, expr: &Expr) -> String {
@@ -926,6 +941,18 @@ impl<'a> RustLowerer<'a> {
                 }
                 if is_string_concat_callee(callee) {
                     return lower_string_concat_call(self, args);
+                }
+                if let Some(native_target) = self
+                    .native_bindings
+                    .get(&native_boundary_callee_key(callee))
+                    .cloned()
+                {
+                    let args = args
+                        .iter()
+                        .map(|arg| self.lower_expr(&arg.value))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return format!("{native_target}({args})");
                 }
                 if is_resource_pool_new_callee(callee) {
                     return lower_resource_pool_new_call(self, args);

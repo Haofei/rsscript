@@ -12,13 +12,14 @@ use crate::analyzer::{
     analyze_source_with_interfaces, analyze_sources_with_interfaces, core_interfaces,
 };
 use crate::diagnostic::{Diagnostic, code};
+use crate::formatter::format_program;
 use crate::review::{
     ReviewFinding, ReviewMap, ReviewRisk, format_review_human, review_map_sources, review_sources,
 };
 use crate::rust_lower::NativeRustDependency;
 use crate::syntax::ast::{
-    DataEffect, EffectDecl, FieldDecl, FunctionDecl, GenericBound, GenericParam, Item, Param,
-    TypeDecl, TypeKind, TypeRef,
+    DataEffect, EffectDecl, FieldDecl, FileFeature, FunctionDecl, GenericBound, GenericParam, Item,
+    Param, Program, TypeDecl, TypeKind, TypeRef,
 };
 use crate::syntax::parse_source;
 
@@ -464,6 +465,12 @@ struct CargoMetadataTarget {
     kind: Vec<String>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct NativeBindingsManifest {
+    #[serde(default)]
+    bindings: BTreeMap<String, String>,
+}
+
 #[derive(Debug, Clone)]
 struct PackageSource {
     path: String,
@@ -526,6 +533,8 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
     let manifest = &package.manifest;
     let sources = &package.sources;
     let dependency_interfaces = collect_dependency_interface_sources(package_dir, manifest)?;
+    let native_bindings = package_native_bindings(package_dir)?;
+    let native_binding_interfaces = native_binding_interface_sources(sources, &native_bindings);
 
     let interface_refs = sources
         .iter()
@@ -540,6 +549,12 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
     external_interfaces.extend(dependency_interface_refs);
     let mut combined_interfaces = external_interfaces.clone();
     combined_interfaces.extend(interface_refs.clone());
+    let native_binding_interface_refs = native_binding_interfaces
+        .iter()
+        .map(|source| (source.path.as_str(), source.contents.as_str()))
+        .collect::<Vec<_>>();
+    let mut source_interfaces = external_interfaces.clone();
+    source_interfaces.extend(native_binding_interface_refs);
     let source_refs = sources
         .iter()
         .filter(|source| source.kind == PackageReviewFileKind::Source)
@@ -551,9 +566,12 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
     }));
     diagnostics.extend(analyze_sources_with_interfaces(
         &source_refs,
-        &external_interfaces,
+        &source_interfaces,
     ));
-    diagnostics.extend(package_interface_contract_diagnostics(sources));
+    diagnostics.extend(package_interface_contract_diagnostics(
+        sources,
+        &native_bindings,
+    ));
     dedup_diagnostics(&mut diagnostics);
     let review_map = review_map_sources(
         sources
@@ -677,8 +695,12 @@ pub fn package_lowering_input(package_dir: &Path) -> Result<PackageLoweringInput
     let dependency_interfaces =
         collect_dependency_interface_sources(package_dir, &package.manifest)?;
     let native_dependencies = package_native_rust_dependencies(package_dir, &package.manifest)?;
+    let native_bindings = package_native_bindings(package_dir)?;
+    let native_binding_interfaces =
+        native_binding_interface_sources(&package.sources, &native_bindings);
     let interfaces = dependency_interfaces
         .iter()
+        .chain(native_binding_interfaces.iter())
         .map(|source| (source.path.clone(), source.contents.clone()))
         .collect::<Vec<_>>();
 
@@ -731,12 +753,14 @@ fn package_native_rust_dependencies(
             "native.rust enabled packages must declare `crate` before Rust lowering.".to_string()
         })?;
     let native_path = native.path.as_deref().unwrap_or("native/rust");
+    let bindings = package_native_bindings(package_dir)?;
     Ok(vec![NativeRustDependency {
         crate_name: crate_name.to_string(),
         path: absolute_package_path(package_dir)
             .join(native_path)
             .display()
             .to_string(),
+        bindings,
     }])
 }
 
@@ -747,6 +771,80 @@ fn absolute_package_path(package_dir: &Path) -> PathBuf {
     env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
         .join(package_dir)
+}
+
+fn package_native_bindings(package_dir: &Path) -> Result<BTreeMap<String, String>, String> {
+    let path = package_dir.join("native/bindings.rssbind.toml");
+    if !path.exists() {
+        return Ok(BTreeMap::new());
+    }
+    let source = fs::read_to_string(&path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    let manifest: NativeBindingsManifest = toml::from_str(&source)
+        .map_err(|error| format!("failed to parse {}: {error}", path.display()))?;
+    Ok(manifest.bindings)
+}
+
+fn native_binding_interface_sources(
+    sources: &[PackageSource],
+    native_bindings: &BTreeMap<String, String>,
+) -> Vec<PackageSource> {
+    if native_bindings.is_empty() {
+        return Vec::new();
+    }
+    let source_type_names = sources
+        .iter()
+        .filter(|source| source.kind == PackageReviewFileKind::Source)
+        .flat_map(|source| parse_source(&source.path, &source.contents).items)
+        .filter_map(|item| match item {
+            Item::Type(type_decl) => Some(type_decl.name),
+            Item::Function(_) => None,
+        })
+        .collect::<BTreeSet<_>>();
+
+    sources
+        .iter()
+        .filter(|source| source.kind == PackageReviewFileKind::Interface)
+        .filter_map(|source| {
+            let mut selected_items = Vec::new();
+            for item in parse_source(&source.path, &source.contents).items {
+                match item {
+                    Item::Type(type_decl) if !source_type_names.contains(&type_decl.name) => {
+                        selected_items.push(Item::Type(type_decl));
+                    }
+                    Item::Function(function)
+                        if function
+                            .effects
+                            .contains(&EffectDecl::Name("native".to_string()))
+                            && native_bindings.contains_key(&function.name) =>
+                    {
+                        selected_items.push(Item::Function(function));
+                    }
+                    _ => {}
+                }
+            }
+            if !selected_items
+                .iter()
+                .any(|item| matches!(item, Item::Function(_)))
+            {
+                return None;
+            }
+            let program = Program {
+                features: vec![FileFeature::Native],
+                unknown_features: Vec::new(),
+                duplicate_features: Vec::new(),
+                feature_spans: Vec::new(),
+                profile_spans: Vec::new(),
+                items: selected_items,
+            };
+            Some(PackageSource {
+                path: format!("{}#native-bindings", source.path),
+                relative_path: format!("{}#native-bindings", source.relative_path),
+                contents: format_program(&program),
+                kind: PackageReviewFileKind::Interface,
+            })
+        })
+        .collect()
 }
 
 pub fn diff_package_dirs(old_dir: &Path, new_dir: &Path) -> Result<PackageDiff, String> {
@@ -1764,7 +1862,10 @@ fn package_interface_environment_diagnostics(interfaces: &[(&str, &str)]) -> Vec
         .collect()
 }
 
-fn package_interface_contract_diagnostics(sources: &[PackageSource]) -> Vec<Diagnostic> {
+fn package_interface_contract_diagnostics(
+    sources: &[PackageSource],
+    native_bindings: &BTreeMap<String, String>,
+) -> Vec<Diagnostic> {
     if !sources
         .iter()
         .any(|source| source.kind == PackageReviewFileKind::Source)
@@ -1827,6 +1928,10 @@ fn package_interface_contract_diagnostics(sources: &[PackageSource]) -> Vec<Diag
 
     for (name, interface_contract) in interface_function_contracts {
         let Some(source_contract) = source_function_contracts.get(&name) else {
+            if interface_contract.effects.contains("native") && native_bindings.contains_key(&name)
+            {
+                continue;
+            }
             diagnostics.push(
                 Diagnostic::error(
                     code::PACKAGE_INTERFACE_MISMATCH,
@@ -3245,6 +3350,15 @@ fn package_native_hash(
             input.push_str(&sha256_label(&contents));
             input.push('\n');
         }
+    }
+    let binding_manifest = package_dir.join("native/bindings.rssbind.toml");
+    if binding_manifest.exists() {
+        input.push_str(&relative_path(package_dir, &binding_manifest));
+        input.push('\n');
+        let contents = fs::read(&binding_manifest)
+            .map_err(|error| format!("failed to read {}: {error}", binding_manifest.display()))?;
+        input.push_str(&sha256_label(&contents));
+        input.push('\n');
     }
 
     Ok(Some(sha256_label(input.as_bytes())))
