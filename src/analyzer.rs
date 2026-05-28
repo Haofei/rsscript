@@ -1,19 +1,16 @@
-use crate::ast::{Program, parse_program};
 use crate::checks;
 use crate::diagnostic::Diagnostic;
 use crate::hir::{FunctionSig, Hir, HirTypeKind};
 use crate::lexer::{Token, lex};
-use crate::syntax::ast::{Callee, Item};
+use crate::syntax::ast::{Callee, EffectDecl, Item};
 use crate::syntax::parse_source;
 
 pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
     let tokens = lex(file, source);
-    let program = parse_program(&tokens);
     let syntax_program = parse_source(file, source);
     let hir = Hir::from_syntax(&syntax_program);
     let mut analyzer = Analyzer {
         tokens: &tokens,
-        program,
         syntax_program,
         hir,
         diagnostics: Vec::new(),
@@ -24,7 +21,6 @@ pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
 
 pub(crate) struct Analyzer<'a> {
     pub(crate) tokens: &'a [Token],
-    pub(crate) program: Program,
     pub(crate) syntax_program: crate::syntax::ast::Program,
     pub(crate) hir: Hir,
     pub(crate) diagnostics: Vec<Diagnostic>,
@@ -42,7 +38,7 @@ impl Analyzer<'_> {
     }
 
     fn check_file_mode_present(&mut self) {
-        if self.program.mode.is_none() {
+        if self.syntax_program.mode.is_none() {
             let span = self.tokens.first().map(|token| token.span.clone()).unwrap();
             self.diagnostics.push(
                 Diagnostic::error(
@@ -61,23 +57,16 @@ impl Analyzer<'_> {
     }
 
     fn check_signature_explicitness(&mut self) {
-        for function in self.program.functions.values() {
-            if function
-                .return_type
-                .as_deref()
-                .unwrap_or_default()
-                .is_empty()
-            {
-                let span = self
-                    .tokens
-                    .get(function.body_start.saturating_sub(1))
-                    .map(|token| token.span.clone())
-                    .unwrap_or_else(|| self.tokens[0].span.clone());
+        for item in &self.syntax_program.items {
+            let Item::Function(function) = item else {
+                continue;
+            };
+            if function.return_ty.is_none() {
                 self.diagnostics.push(
                     Diagnostic::error(
                         "RS0002",
                         format!("function `{}` must declare an explicit return type.", function.name),
-                        span,
+                        function.span.clone(),
                         "missing return type",
                     )
                     .with_cause("Public APIs must not rely on inference; this checker applies the canonical rule to all functions.")
@@ -86,12 +75,7 @@ impl Analyzer<'_> {
             }
 
             for param in &function.params {
-                if param.type_name.is_empty() {
-                    let span = self
-                        .tokens
-                        .get(function.body_start.saturating_sub(1))
-                        .map(|token| token.span.clone())
-                        .unwrap_or_else(|| self.tokens[0].span.clone());
+                if param.ty.name.is_empty() {
                     self.diagnostics.push(
                         Diagnostic::error(
                             "RS0003",
@@ -99,7 +83,7 @@ impl Analyzer<'_> {
                                 "parameter `{}` in `{}` must declare an explicit type.",
                                 param.name, function.name
                             ),
-                            span,
+                            param.span.clone(),
                             "missing parameter type",
                         )
                         .with_fix(
@@ -112,23 +96,19 @@ impl Analyzer<'_> {
             }
 
             for effect in &function.effects {
-                let valid = effect == "no_panic"
-                    || effect == "noalloc"
-                    || effect == "no_block"
-                    || effect == "pure"
-                    || effect == "unsafe"
-                    || effect == "native"
-                    || effect.starts_with("retains(");
+                let effect_name = effect_name(effect);
+                let valid = effect_name == "no_panic"
+                    || effect_name == "noalloc"
+                    || effect_name == "no_block"
+                    || effect_name == "pure"
+                    || effect_name == "unsafe"
+                    || effect_name == "native"
+                    || matches!(effect, EffectDecl::Retains(_));
                 if !valid {
-                    let span = self
-                        .tokens
-                        .get(function.body_start.saturating_sub(1))
-                        .map(|token| token.span.clone())
-                        .unwrap_or_else(|| self.tokens[0].span.clone());
                     self.diagnostics.push(Diagnostic::warning(
                         "RS0004",
-                        format!("unknown effect `{effect}` in `{}`.", function.name),
-                        span,
+                        format!("unknown effect `{effect_name}` in `{}`.", function.name),
+                        function.span.clone(),
                         "unknown effect",
                     ));
                 }
@@ -168,5 +148,11 @@ impl Analyzer<'_> {
                 self.hir.resolve_function(Some(namespace), name)
             }
         }
+    }
+}
+
+fn effect_name(effect: &EffectDecl) -> &str {
+    match effect {
+        EffectDecl::Name(name) | EffectDecl::Retains(name) => name,
     }
 }

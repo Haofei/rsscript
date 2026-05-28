@@ -1,0 +1,6 @@
+// expect: RS0002 RS0003
+mode: managed
+
+fn missing_signature(path) {
+    Request.path(request: read path)
+}

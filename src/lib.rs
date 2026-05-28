@@ -1,5 +1,4 @@
 mod analyzer;
-mod ast;
 mod checks;
 mod diagnostic;
 mod hir;

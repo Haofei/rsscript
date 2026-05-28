@@ -247,14 +247,27 @@ fn parse_params(tokens: &[Token], start: usize, end: usize) -> Vec<Param> {
         .filter_map(|(start, end)| {
             let name = tokens.get(start).and_then(ident_name)?;
             if !tokens.get(start + 1).is_some_and(|token| token.symbol(":")) {
-                return None;
+                return Some(Param {
+                    name: name.to_string(),
+                    effect: None,
+                    ty: TypeRef {
+                        name: String::new(),
+                        args: Vec::new(),
+                        span: tokens[start].span.clone(),
+                    },
+                    span: tokens[start].span.clone(),
+                });
             }
 
             let mut ty_start = start + 2;
             let effect = parse_data_effect(tokens.get(ty_start)).inspect(|_| {
                 ty_start += 1;
             });
-            let ty = parse_type_ref(tokens, ty_start, end)?;
+            let ty = parse_type_ref(tokens, ty_start, end).unwrap_or_else(|| TypeRef {
+                name: String::new(),
+                args: Vec::new(),
+                span: tokens[start].span.clone(),
+            });
             Some(Param {
                 name: name.to_string(),
                 effect,
