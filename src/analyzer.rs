@@ -23,6 +23,7 @@ pub const CORE_INTERFACES: &[(&str, &str)] = &[
         "core/json/json.rssi",
         include_str!("../core/json/json.rssi"),
     ),
+    ("core/log/log.rssi", include_str!("../core/log/log.rssi")),
     (
         "core/resource/resource_pool.rssi",
         include_str!("../core/resource/resource_pool.rssi"),

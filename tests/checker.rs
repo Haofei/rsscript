@@ -59,10 +59,16 @@ fn bundled_core_interfaces_are_available_to_checker() {
             .iter()
             .any(|(path, _)| *path == "core/test/assert.rssi")
     );
+    assert!(
+        core_interfaces()
+            .iter()
+            .any(|(path, _)| *path == "core/log/log.rssi")
+    );
 
     let source = r#"
 fn check_label(actual: read String, expected: read String) -> Unit {
     Assert.equal(left: read actual, right: read expected)
+    Log.write(message: read actual)
 }
 "#;
 
@@ -234,6 +240,19 @@ pub fn unit_result() -> Result<Unit, BuildError> {
     assert!(rust.contains("return Err(BuildError { code: code });"));
     assert!(rust.contains("pub fn unit_result() -> Result<(), BuildError>"));
     assert!(rust.contains("return Ok(());"));
+}
+
+#[test]
+fn rust_lowering_maps_log_write_to_runtime_output_hook() {
+    let source = r#"
+fn main() -> Unit {
+    Log.write(message: read "hello RSScript")
+    return Unit
+}
+"#;
+    let rust = lower_source_to_rust("log.rss", source).expect("source should lower");
+
+    assert!(rust.contains("rsscript_runtime::log_write(&\"hello RSScript\".to_string());"));
 }
 
 #[test]

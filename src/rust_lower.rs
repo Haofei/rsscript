@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use crate::analyzer::analyze_source;
+use crate::analyzer::analyze_source_with_core;
 use crate::diagnostic::{Diagnostic, Severity, Span, code};
 use crate::syntax::ast::{
     BinaryOp, Block, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature, FunctionDecl,
@@ -55,7 +55,7 @@ pub fn lower_source_to_rust_with_map(
     file: &str,
     source: &str,
 ) -> Result<LoweredRust, Vec<Diagnostic>> {
-    let diagnostics = analyze_source(file, source);
+    let diagnostics = analyze_source_with_core(file, source);
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity.is_error())
@@ -73,7 +73,7 @@ pub fn lower_source_to_rust_package(
     package_name: &str,
     runtime_path: &str,
 ) -> Result<GeneratedRustPackage, Vec<Diagnostic>> {
-    let diagnostics = analyze_source(file, source);
+    let diagnostics = analyze_source_with_core(file, source);
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity.is_error())
@@ -1012,6 +1012,7 @@ fn is_native_boundary(effect: &EffectDecl) -> bool {
 
 fn lower_callee(callee: &Callee) -> String {
     match callee {
+        callee if is_log_write_callee(callee) => "rsscript_runtime::log_write".to_string(),
         Callee::Name(name) => rust_ident(name),
         Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" => {
             format!("rsscript_runtime::ResourcePool::{}", rust_ident(name))
@@ -1020,6 +1021,10 @@ fn lower_callee(callee: &Callee) -> String {
             format!("{}::{}", lower_namespace(namespace), rust_ident(name))
         }
     }
+}
+
+fn is_log_write_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Log" && name == "write")
 }
 
 fn is_resource_pool_borrow_callee(callee: &Callee) -> bool {

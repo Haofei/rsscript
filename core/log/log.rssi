@@ -1,0 +1,2 @@
+pub fn Log.write(message: read String) -> Unit
+    effects(native)

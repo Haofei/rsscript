@@ -1769,7 +1769,7 @@ fn builtin_signatures() -> Vec<FunctionSig> {
         builtin(
             "Log",
             "write",
-            &[copy_param("message", "String")],
+            &[param("message", ParamEffect::Read, "String")],
             Some("Unit"),
             false,
             &[],

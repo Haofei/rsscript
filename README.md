@@ -409,6 +409,8 @@ rss verify-rust [--json] <file.rss>
 
 If a lowered package contains `fn main() -> Unit`, `rss lower --rust --out-dir` also emits a Rust `src/main.rs` harness. `rss run <file.rss>` uses the same lowering path, writes a temporary Rust package, and delegates execution to `cargo run`.
 
+The first observable runtime boundary is `Log.write(message: read String)`, which lowers to an explicit runtime output hook.
+
 ---
 
 ## Roadmap

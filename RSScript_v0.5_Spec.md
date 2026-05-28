@@ -2256,6 +2256,7 @@ File
 ResourcePool<T: Resource>
 Diagnostic
 Span
+Log
 Test
 Assert
 ```

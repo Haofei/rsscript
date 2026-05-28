@@ -3,5 +3,6 @@
 // RSScript features: <none>
 
 pub fn main() {
+    rsscript_runtime::log_write(&"hello RSScript".to_string());
     return ();
 }
