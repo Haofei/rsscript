@@ -34,6 +34,7 @@ pub mod code {
     pub const INDEXED_PARTIAL_ACCESS_CONFLICT: &str = "RS0304";
     pub const MOVE_BASE_FIELD_CONFLICT: &str = "RS0305";
     pub const LOCAL_CLASS_BINDING: &str = "RS0306";
+    pub const INVALID_MANAGE_OPERAND: &str = "RS0307";
     pub const USE_AFTER_MANAGE: &str = "RS0401";
     pub const LOCAL_VALUE_RETAINED: &str = "RS0501";
     pub const FRESH_RETURN_NOT_CLEAN: &str = "RS0601";
@@ -390,6 +391,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::LOCAL_CLASS_BINDING,
         title: "local class binding",
         explanation: "Classes are managed identity objects in RSScript v0.5. They are created as managed handles and cannot be bound as local exclusive values.",
+    },
+    DiagnosticExplanation {
+        code: code::INVALID_MANAGE_OPERAND,
+        title: "invalid manage operand",
+        explanation: "`manage value` moves a local exclusive binding into the managed runtime. The operand must be a local binding that has not already become managed.",
     },
     DiagnosticExplanation {
         code: code::USE_AFTER_MANAGE,

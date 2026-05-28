@@ -245,12 +245,14 @@ fn check_expr_semantics(analyzer: &mut Analyzer<'_>, expr: &HirExpr, state: &Bod
                 check_expr_semantics(analyzer, &arg.value, state);
             }
         }
-        HirExpr::Effect { value, .. }
-        | HirExpr::Manage { value, .. }
-        | HirExpr::Try { value, .. } => {
+        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => {
             if let HirExpr::Try { span, .. } = expr {
                 check_try_value_is_result(analyzer, value, span);
             }
+            check_expr_semantics(analyzer, value, state);
+        }
+        HirExpr::Manage { value, span, .. } => {
+            check_manage_operand_is_local(analyzer, value, span, state);
             check_expr_semantics(analyzer, value, state);
         }
         HirExpr::Binary { left, right, .. } => {
@@ -649,6 +651,36 @@ fn move_base_field_conflict_diagnostic(
             "manual",
         ),
     );
+}
+
+fn check_manage_operand_is_local(
+    analyzer: &mut Analyzer<'_>,
+    value: &HirExpr,
+    span: &Span,
+    state: &BodyState,
+) {
+    let Some(name) = hir_ident_name(value) else {
+        invalid_manage_operand_diagnostic(
+            analyzer,
+            "`manage` can only move a named local binding.",
+            span.clone(),
+        );
+        return;
+    };
+    if !state.is_local(name) {
+        invalid_manage_operand_diagnostic(
+            analyzer,
+            format!("`{name}` is not a local binding and cannot be moved with `manage`."),
+            span.clone(),
+        );
+    }
+}
+
+fn hir_ident_name(expr: &HirExpr) -> Option<&str> {
+    match expr {
+        HirExpr::Ident { name, .. } => Some(name),
+        _ => None,
+    }
 }
 
 fn apply_expr_effects(expr: &HirExpr, state: &mut BodyState) {
@@ -1117,6 +1149,27 @@ fn local_class_binding_diagnostic(
             "use_managed_class_binding",
             format!("Declare `{binding}` with `let` instead of `local`."),
             "machine-applicable",
+        ),
+    );
+}
+
+fn invalid_manage_operand_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    cause: impl Into<String>,
+    span: crate::diagnostic::Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::INVALID_MANAGE_OPERAND,
+            "`manage` requires a local binding.",
+            span,
+            "not a local binding",
+        )
+        .with_cause(cause)
+        .with_fix(
+            "remove_manage_or_create_local",
+            "Remove `manage`, or create the value as `local` at its origin.",
+            "manual",
         ),
     );
 }

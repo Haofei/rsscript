@@ -1,0 +1,12 @@
+// expect: RS0307
+features: local
+
+class User {
+    id: Int
+}
+
+fn bad(id: Int) -> Unit {
+    let user = User(id: id)
+    let again = manage user
+    return Unit
+}
