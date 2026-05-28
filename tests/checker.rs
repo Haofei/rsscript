@@ -2317,6 +2317,33 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_rejects_effect_wrapped_managed_to_local() {
+    let source = r#"
+features: local
+
+struct Widget
+
+fn make_widget() -> fresh Widget
+
+fn bad() -> Unit {
+    let shared = make_widget()
+    local read_copy = read shared
+    local mut_copy = mut shared
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("managed-to-local-effect.rss", source);
+    let managed_to_local_count = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == "RS0301" && diagnostic.label == "managed value used as local"
+        })
+        .count();
+
+    assert_eq!(managed_to_local_count, 2, "{diagnostics:?}");
+}
+
+#[test]
 fn checker_rejects_retaining_local_inline_field() {
     let source = r#"
 features: local

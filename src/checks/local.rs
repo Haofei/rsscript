@@ -2040,20 +2040,7 @@ fn local_flow_step_binding(statement: &HirStmt) -> Option<LocalFlowBinding> {
             name: name.clone(),
             kind: *kind,
             type_name: type_name.clone(),
-            value_ident: value.as_ref().and_then(|value| match value {
-                HirExpr::Ident { name, span, .. } => Some((name.clone(), span.clone())),
-                HirExpr::Number { .. }
-                | HirExpr::String { .. }
-                | HirExpr::Binary { .. }
-                | HirExpr::Field { .. }
-                | HirExpr::Index { .. }
-                | HirExpr::Call { .. }
-                | HirExpr::Effect { .. }
-                | HirExpr::Manage { .. }
-                | HirExpr::Try { .. }
-                | HirExpr::Closure { .. }
-                | HirExpr::Unknown(_) => None,
-            }),
+            value_ident: value.as_ref().and_then(local_binding_source_ident),
         }),
         HirStmt::Return { .. }
         | HirStmt::With { .. }
@@ -2064,6 +2051,28 @@ fn local_flow_step_binding(statement: &HirStmt) -> Option<LocalFlowBinding> {
         | HirStmt::Continue(_)
         | HirStmt::Expr(_)
         | HirStmt::Unknown(_) => None,
+    }
+}
+
+fn local_binding_source_ident(value: &HirExpr) -> Option<(String, Span)> {
+    match value {
+        HirExpr::Ident { name, span, .. } => Some((name.clone(), span.clone())),
+        HirExpr::Effect {
+            effect: ParamEffect::Read | ParamEffect::Mut,
+            value,
+            ..
+        } => local_binding_source_ident(value),
+        HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Binary { .. }
+        | HirExpr::Field { .. }
+        | HirExpr::Index { .. }
+        | HirExpr::Call { .. }
+        | HirExpr::Effect { .. }
+        | HirExpr::Manage { .. }
+        | HirExpr::Try { .. }
+        | HirExpr::Closure { .. }
+        | HirExpr::Unknown(_) => None,
     }
 }
 
