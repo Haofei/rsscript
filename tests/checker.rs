@@ -2270,6 +2270,34 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_rejects_retaining_local_inline_field() {
+    let source = r#"
+features: local
+
+struct Image
+struct Holder {
+    image: Image
+}
+struct Cache
+
+fn Cache.store(cache: mut Cache, value: read Image) -> Unit
+    effects(retains(value))
+
+fn make_holder(path: read Path) -> fresh Holder
+
+fn bad_store(cache: mut Cache, path: read Path) -> Unit {
+    local holder = make_holder(path: read path)
+    Cache.store(cache: mut cache, value: read holder.image)
+}
+"#;
+    let diagnostics = analyze_source("retaining-local-field.rss", source);
+
+    assert!(diagnostics.iter().any(
+        |diagnostic| diagnostic.code == "RS0501" && diagnostic.label == "local value retained"
+    ));
+}
+
+#[test]
 fn review_json_uses_protocol_shape() {
     let old_source = r#"
 

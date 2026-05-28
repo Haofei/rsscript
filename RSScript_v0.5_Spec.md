@@ -1553,7 +1553,8 @@ fn cache_put(cache: mut Cache, key: read String, value: read Image) -> Unit
     effects(retains(value))
 ```
 
-A local value cannot be passed directly to a retaining parameter.
+A local value cannot be passed directly to a retaining parameter. This includes
+local-inline fields reached without crossing a `handle` or `weak` field.
 
 Correct:
 

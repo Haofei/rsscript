@@ -888,7 +888,15 @@ fn lower_hir_expr(
         },
         Expr::Call { callee, args, span } => {
             let resolution = hir.resolve_call(callee);
-            let events = retain_events_for_call(function_name, callee, args, span, &resolution);
+            let events = retain_events_for_call(
+                function_name,
+                callee,
+                args,
+                span,
+                &resolution,
+                hir,
+                value_types,
+            );
             let type_name = infer_hir_expr_type(hir, expr, value_types);
             HirExpr::Call {
                 callee: callee.clone(),
@@ -981,6 +989,8 @@ fn retain_events_for_call(
     args: &[crate::syntax::ast::CallArg],
     call_span: &Span,
     resolution: &CallResolution,
+    hir: &Hir,
+    value_types: &HashMap<String, String>,
 ) -> Vec<HirEffectEvent> {
     let CallResolution::Resolved { signature, .. } = resolution else {
         return Vec::new();
@@ -995,7 +1005,8 @@ fn retain_events_for_call(
             if !signature.retained_params.contains(name) {
                 return None;
             }
-            let (binding_name, value_span) = direct_read_ident(&arg.value)?;
+            let (binding_name, value_span) =
+                direct_read_retained_binding(&arg.value, hir, value_types)?;
             Some(HirEffectEvent {
                 function_name: function_name.to_string(),
                 kind: HirEffectEventKind::Retain {
@@ -1154,7 +1165,15 @@ fn collect_body_facts_in_expr(
                 span: span.clone(),
                 resolution: resolution.clone(),
             });
-            collect_retain_events(function_name, callee, args, span, &resolution, facts);
+            facts.effect_events.extend(retain_events_for_call(
+                function_name,
+                callee,
+                args,
+                span,
+                &resolution,
+                hir,
+                value_types,
+            ));
             for arg in args {
                 collect_body_facts_in_expr(hir, function_name, &arg.value, value_types, facts);
             }
@@ -1230,55 +1249,42 @@ fn collect_body_facts_in_expr(
     }
 }
 
-fn collect_retain_events(
-    function_name: &str,
-    callee: &Callee,
-    args: &[crate::syntax::ast::CallArg],
-    call_span: &Span,
-    resolution: &CallResolution,
-    facts: &mut BodyFacts,
-) {
-    let CallResolution::Resolved { signature, .. } = resolution else {
-        return;
-    };
-    if signature.retained_params.is_empty() {
-        return;
-    }
-
-    for arg in args {
-        let Some(name) = &arg.name else {
-            continue;
-        };
-        if !signature.retained_params.contains(name) {
-            continue;
-        }
-        if let Some((binding_name, value_span)) = direct_read_ident(&arg.value) {
-            facts.effect_events.push(HirEffectEvent {
-                function_name: function_name.to_string(),
-                kind: HirEffectEventKind::Retain {
-                    callee: callee_display(callee),
-                    param: name.clone(),
-                },
-                binding_name,
-                span: call_span.clone(),
-                value_span,
-            });
-        }
-    }
-}
-
 fn is_resource_pool_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Name(name) if name == "ResourcePool")
         || matches!(callee, Callee::Qualified { namespace, .. } if type_root_name(namespace) == "ResourcePool")
 }
 
-fn direct_read_ident(expr: &Expr) -> Option<(String, Span)> {
+fn direct_read_retained_binding(
+    expr: &Expr,
+    hir: &Hir,
+    value_types: &HashMap<String, String>,
+) -> Option<(String, Span)> {
     match expr {
         Expr::Effect {
             effect: DataEffect::Read,
             value,
             ..
-        } => direct_ident(value),
+        } => retained_inline_binding(value, hir, value_types),
+        _ => None,
+    }
+}
+
+fn retained_inline_binding(
+    expr: &Expr,
+    hir: &Hir,
+    value_types: &HashMap<String, String>,
+) -> Option<(String, Span)> {
+    match expr {
+        Expr::Ident(name, span) => Some((name.clone(), span.clone())),
+        Expr::Field { base, name, span } => {
+            let base_type = infer_hir_expr_type(hir, base, value_types)?;
+            let field = hir.type_info(&base_type)?.fields.get(name)?;
+            if field.is_handle || field.is_weak {
+                return None;
+            }
+            let (binding_name, _) = retained_inline_binding(base, hir, value_types)?;
+            Some((binding_name, span.clone()))
+        }
         _ => None,
     }
 }
