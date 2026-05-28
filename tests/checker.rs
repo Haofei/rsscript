@@ -2597,6 +2597,95 @@ fn package_review_reports_interface_implementation_signature_mismatch() {
 }
 
 #[test]
+fn package_review_reports_missing_interface_type_declaration() {
+    let temp_dir = unique_temp_dir("rsscript-package-missing-interface-type");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-missing-type",
+        "0.1.0",
+        "",
+        r#"struct PublicConfig {
+    name: String
+}
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("src/lib.rss"),
+        r#"fn main() -> Unit {
+    return Unit
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let check = check_package_dir(&temp_dir).expect("package check should succeed");
+    let codes = review
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect::<Vec<_>>();
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(codes.contains(&"RS1301"), "{codes:?}");
+    assert!(!check.ok);
+}
+
+#[test]
+fn package_review_reports_interface_type_contract_mismatch() {
+    let temp_dir = unique_temp_dir("rsscript-package-interface-type-mismatch");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-type-mismatch",
+        "0.1.0",
+        "",
+        r#"class Session<T: Managed> {
+    user: handle User
+}
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("src/lib.rss"),
+        r#"struct Session<T: Managed> {
+    user: User
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let codes = review
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect::<Vec<_>>();
+    let causes = review
+        .diagnostics
+        .iter()
+        .flat_map(|diagnostic| diagnostic.causes.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(codes.contains(&"RS1301"), "{codes:?}");
+    assert!(
+        causes
+            .iter()
+            .any(|cause| cause
+                .contains("interface: class Session<T: Managed> { user: handle User }")),
+        "{causes:?}"
+    );
+    assert!(
+        causes
+            .iter()
+            .any(|cause| cause.contains("source: struct Session<T: Managed> { user: User }")),
+        "{causes:?}"
+    );
+}
+
+#[test]
 fn package_review_reports_path_dependency_interface_call_violations() {
     let root_dir = unique_temp_dir("rsscript-package-dep-interface-violation-root");
     let dep_dir = unique_temp_dir("rsscript-package-dep-interface-violation-dep");

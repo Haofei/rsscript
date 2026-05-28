@@ -12,7 +12,10 @@ use crate::diagnostic::{Diagnostic, code};
 use crate::review::{
     ReviewFinding, ReviewMap, ReviewRisk, format_review_human, review_map_sources, review_sources,
 };
-use crate::syntax::ast::{DataEffect, EffectDecl, FunctionDecl, Item, Param, TypeRef};
+use crate::syntax::ast::{
+    DataEffect, EffectDecl, FieldDecl, FunctionDecl, GenericBound, GenericParam, Item, Param,
+    TypeDecl, TypeKind, TypeRef,
+};
 use crate::syntax::parse_source;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -431,6 +434,28 @@ struct PackageParamContract {
     name: String,
     effect: Option<&'static str>,
     type_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PackageTypeContract {
+    name: String,
+    kind: TypeKind,
+    type_params: Vec<PackageGenericContract>,
+    fields: Vec<PackageFieldContract>,
+    span: crate::diagnostic::Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PackageGenericContract {
+    name: String,
+    bound: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PackageFieldContract {
+    name: String,
+    type_name: String,
+    is_handle: bool,
 }
 
 pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
@@ -1570,14 +1595,62 @@ fn package_interface_contract_diagnostics(sources: &[PackageSource]) -> Vec<Diag
     {
         return Vec::new();
     }
-    let source_contracts =
+    let source_type_contracts =
+        collect_package_type_contracts(sources, PackageReviewFileKind::Source);
+    let interface_type_contracts =
+        collect_package_type_contracts(sources, PackageReviewFileKind::Interface);
+    let source_function_contracts =
         collect_package_function_contracts(sources, PackageReviewFileKind::Source);
-    let interface_contracts =
+    let interface_function_contracts =
         collect_package_function_contracts(sources, PackageReviewFileKind::Interface);
     let mut diagnostics = Vec::new();
 
-    for (name, interface_contract) in interface_contracts {
-        let Some(source_contract) = source_contracts.get(&name) else {
+    for (name, interface_contract) in interface_type_contracts {
+        let Some(source_contract) = source_type_contracts.get(&name) else {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_INTERFACE_MISMATCH,
+                    format!("package interface type `{name}` has no source declaration."),
+                    interface_contract.span.clone(),
+                    "missing source declaration",
+                )
+                .with_cause("Package `.rssi` files are the public semantic contract; every interface type must be declared by package source.")
+                .with_fix(
+                    "implement_interface_type",
+                    format!("Add `{}` to the package source, or remove it from the interface.", package_type_contract_label(&interface_contract)),
+                    "manual",
+                ),
+            );
+            continue;
+        };
+
+        if !package_type_contracts_match(&interface_contract, source_contract) {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_INTERFACE_MISMATCH,
+                    format!("package interface type `{name}` does not match its source declaration."),
+                    interface_contract.span.clone(),
+                    "interface/source type mismatch",
+                )
+                .with_cause(format!(
+                    "interface: {}",
+                    package_type_contract_label(&interface_contract)
+                ))
+                .with_cause(format!(
+                    "source: {}",
+                    package_type_contract_label(source_contract)
+                ))
+                .with_fix(
+                    "align_interface_and_source",
+                    "Update the `.rssi` contract or the source declaration so their public type contracts match exactly.",
+                    "manual",
+                ),
+            );
+        }
+    }
+
+    for (name, interface_contract) in interface_function_contracts {
+        let Some(source_contract) = source_function_contracts.get(&name) else {
             diagnostics.push(
                 Diagnostic::error(
                     code::PACKAGE_INTERFACE_MISMATCH,
@@ -1623,6 +1696,16 @@ fn package_interface_contract_diagnostics(sources: &[PackageSource]) -> Vec<Diag
     diagnostics
 }
 
+fn package_type_contracts_match(
+    interface: &PackageTypeContract,
+    source: &PackageTypeContract,
+) -> bool {
+    interface.name == source.name
+        && interface.kind == source.kind
+        && interface.type_params == source.type_params
+        && interface.fields == source.fields
+}
+
 fn package_function_contracts_match(
     interface: &PackageFunctionContract,
     source: &PackageFunctionContract,
@@ -1632,6 +1715,23 @@ fn package_function_contracts_match(
         && interface.return_type == source.return_type
         && interface.returns_fresh == source.returns_fresh
         && interface.effects == source.effects
+}
+
+fn collect_package_type_contracts(
+    sources: &[PackageSource],
+    kind: PackageReviewFileKind,
+) -> BTreeMap<String, PackageTypeContract> {
+    let mut contracts = BTreeMap::new();
+    for source in sources.iter().filter(|source| source.kind == kind) {
+        let program = parse_source(&source.path, &source.contents);
+        for item in program.items {
+            let Item::Type(type_decl) = item else {
+                continue;
+            };
+            contracts.insert(type_decl.name.clone(), package_type_contract(&type_decl));
+        }
+    }
+    contracts
 }
 
 fn collect_package_function_contracts(
@@ -1653,6 +1753,24 @@ fn collect_package_function_contracts(
     contracts
 }
 
+fn package_type_contract(type_decl: &TypeDecl) -> PackageTypeContract {
+    PackageTypeContract {
+        name: type_decl.name.clone(),
+        kind: type_decl.kind,
+        type_params: type_decl
+            .type_params
+            .iter()
+            .map(package_generic_contract)
+            .collect(),
+        fields: type_decl
+            .fields
+            .iter()
+            .map(package_field_contract)
+            .collect(),
+        span: type_decl.span.clone(),
+    }
+}
+
 fn package_function_contract(function: &FunctionDecl) -> PackageFunctionContract {
     PackageFunctionContract {
         name: function.name.clone(),
@@ -1661,6 +1779,29 @@ fn package_function_contract(function: &FunctionDecl) -> PackageFunctionContract
         returns_fresh: function.returns_fresh,
         effects: function.effects.iter().map(package_effect_name).collect(),
         span: function.span.clone(),
+    }
+}
+
+fn package_generic_contract(param: &GenericParam) -> PackageGenericContract {
+    PackageGenericContract {
+        name: param.name.clone(),
+        bound: param.bound.map(package_generic_bound_label),
+    }
+}
+
+fn package_generic_bound_label(bound: GenericBound) -> &'static str {
+    match bound {
+        GenericBound::Managed => "Managed",
+        GenericBound::Struct => "Struct",
+        GenericBound::Resource => "Resource",
+    }
+}
+
+fn package_field_contract(field: &FieldDecl) -> PackageFieldContract {
+    PackageFieldContract {
+        name: field.name.clone(),
+        type_name: package_type_name(&field.ty),
+        is_handle: field.is_handle,
     }
 }
 
@@ -1698,6 +1839,54 @@ fn package_type_name(ty: &TypeRef) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!("{}<{args}>", ty.name)
+}
+
+fn package_type_kind_label(kind: TypeKind) -> &'static str {
+    match kind {
+        TypeKind::Class => "class",
+        TypeKind::Struct => "struct",
+        TypeKind::Resource => "resource",
+    }
+}
+
+fn package_type_contract_label(contract: &PackageTypeContract) -> String {
+    let type_params = if contract.type_params.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<{}>",
+            contract
+                .type_params
+                .iter()
+                .map(|param| match param.bound {
+                    Some(bound) => format!("{}: {bound}", param.name),
+                    None => param.name.clone(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    let fields = if contract.fields.is_empty() {
+        "<none>".to_string()
+    } else {
+        contract
+            .fields
+            .iter()
+            .map(|field| {
+                if field.is_handle {
+                    format!("{}: handle {}", field.name, field.type_name)
+                } else {
+                    format!("{}: {}", field.name, field.type_name)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!(
+        "{} {}{type_params} {{ {fields} }}",
+        package_type_kind_label(contract.kind),
+        contract.name
+    )
 }
 
 fn package_function_contract_label(contract: &PackageFunctionContract) -> String {

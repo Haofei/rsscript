@@ -483,7 +483,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::PACKAGE_INTERFACE_MISMATCH,
         title: "package interface mismatch",
-        explanation: "A package `.rssi` public contract must be implemented by the package source with the same signature, return freshness, and declared effects.",
+        explanation: "A package `.rssi` public contract must be implemented by the package source with the same type declarations, function signatures, return freshness, and declared effects.",
     },
     DiagnosticExplanation {
         code: code::LINT_SIGNATURE_COMPLEXITY,
