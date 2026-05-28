@@ -513,7 +513,15 @@ impl<'a> RustLowerer<'a> {
             source: field.span.clone(),
             generated: generated_span_at_end(out, "src/lib.rs", "field"),
         });
-        if field.is_handle || matches!(self.type_kinds.get(&field.ty.name), Some(TypeKind::Class)) {
+        if field.is_weak {
+            out.push_str(&format!(
+                "    pub {}: rsscript_runtime::WeakManaged<{}>,\n",
+                rust_ident(&field.name),
+                rust_ty
+            ));
+        } else if field.is_handle
+            || matches!(self.type_kinds.get(&field.ty.name), Some(TypeKind::Class))
+        {
             out.push_str(&format!(
                 "    pub {}: rsscript_runtime::Managed<{}>,\n",
                 rust_ident(&field.name),
@@ -875,18 +883,28 @@ impl<'a> RustLowerer<'a> {
             Expr::Call { callee, args, span } => {
                 if let Callee::Name(name) = callee {
                     if let Some(type_kind) = self.type_kinds.get(name).copied() {
-                        let fields = args
-                            .iter()
-                            .map(|arg| {
-                                let field = arg
-                                    .name
-                                    .as_deref()
-                                    .map(rust_ident)
-                                    .unwrap_or_else(|| "/* unnamed */".to_string());
-                                format!("{field}: {}", self.lower_expr(&arg.value))
-                            })
-                            .collect::<Vec<_>>()
-                            .join(", ");
+                        let mut fields = Vec::new();
+                        for arg in args {
+                            let field = arg
+                                .name
+                                .as_deref()
+                                .map(rust_ident)
+                                .unwrap_or_else(|| "/* unnamed */".to_string());
+                            let is_weak_field = arg
+                                .name
+                                .as_deref()
+                                .is_some_and(|field_name| self.is_weak_field(name, field_name));
+                            if is_weak_field {
+                                fields.push(format!(
+                                    "{field}: {}",
+                                    self.lower_weak_field_value(&arg.value)
+                                ));
+                            } else {
+                                let value = self.lower_expr(&arg.value);
+                                fields.push(format!("{field}: {value}"));
+                            }
+                        }
+                        let fields = fields.join(", ");
                         let constructed = format!("{} {{ {fields} }}", rust_ident(name));
                         if type_kind == TypeKind::Class {
                             return format!(
@@ -1109,6 +1127,37 @@ impl<'a> RustLowerer<'a> {
 
     fn is_class_type(&self, ty: &TypeRef) -> bool {
         matches!(self.type_kinds.get(&ty.name), Some(TypeKind::Class))
+    }
+
+    fn is_weak_field(&self, type_name: &str, field_name: &str) -> bool {
+        self.program.items.iter().any(|item| match item {
+            Item::Type(ty) if ty.name == type_name => ty
+                .fields
+                .iter()
+                .any(|field| field.name == field_name && field.is_weak),
+            _ => false,
+        })
+    }
+
+    fn lower_weak_field_value(&mut self, expr: &Expr) -> String {
+        if let Expr::Effect {
+            effect: DataEffect::Read,
+            value,
+            ..
+        } = expr
+        {
+            let value_expr = self.lower_expr(value);
+            if let Expr::Ident(name, _) = &**value
+                && matches!(
+                    self.param_effects.get(name),
+                    Some(DataEffect::Read | DataEffect::Mut)
+                )
+            {
+                return format!("rsscript_runtime::weak({value_expr})");
+            }
+            return format!("rsscript_runtime::weak(&{value_expr})");
+        }
+        format!("rsscript_runtime::weak(&{})", self.lower_expr(expr))
     }
 }
 

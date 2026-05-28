@@ -326,11 +326,18 @@ fn parse_fields(tokens: &[Token], start: usize, end: usize) -> Vec<FieldDecl> {
                 .is_some_and(|token| token.symbol(":"))
         {
             let mut ty_start = name_index + 2;
-            let is_handle = tokens
-                .get(ty_start)
-                .is_some_and(|token| token.is_ident_text("handle"));
-            if is_handle {
-                ty_start += 1;
+            let mut is_handle = false;
+            let mut is_weak = false;
+            while let Some(token) = tokens.get(ty_start) {
+                if token.is_ident_text("handle") {
+                    is_handle = true;
+                    ty_start += 1;
+                } else if token.is_ident_text("weak") {
+                    is_weak = true;
+                    ty_start += 1;
+                } else {
+                    break;
+                }
             }
             let ty_end = next_line_or_block_end(tokens, ty_start, end);
             if let Some(ty) = parse_type_ref(tokens, ty_start, ty_end) {
@@ -338,6 +345,7 @@ fn parse_fields(tokens: &[Token], start: usize, end: usize) -> Vec<FieldDecl> {
                     name: name.to_string(),
                     ty,
                     is_handle,
+                    is_weak,
                     span: tokens[name_index].span.clone(),
                 });
             }
@@ -1086,8 +1094,9 @@ fn parse_call_args(tokens: &[Token], start: usize, end: usize) -> Vec<CallArg> {
 
 fn parse_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<TypeRef> {
     let name_index = (start..end).find(|index| {
-        ident_name(&tokens[*index])
-            .is_some_and(|name| !matches!(name, "read" | "mut" | "take" | "fresh" | "handle"))
+        ident_name(&tokens[*index]).is_some_and(|name| {
+            !matches!(name, "read" | "mut" | "take" | "fresh" | "handle" | "weak")
+        })
     })?;
     let name = ident_name(&tokens[name_index])?.to_string();
     let mut args = Vec::new();

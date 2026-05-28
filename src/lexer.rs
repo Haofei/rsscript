@@ -258,6 +258,7 @@ fn keyword(text: &str) -> Option<&'static str> {
         "struct" => "struct",
         "resource" => "resource",
         "handle" => "handle",
+        "weak" => "weak",
         "drop" => "drop",
         "let" => "let",
         "local" => "local",

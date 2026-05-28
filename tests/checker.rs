@@ -1446,6 +1446,52 @@ struct Session {
 }
 
 #[test]
+fn rust_lowering_maps_weak_class_fields_to_runtime_weak_handles() {
+    let source = r#"
+class User {
+    id: Int
+}
+
+struct Session {
+    owner: weak User
+}
+
+fn make_session() -> Session {
+    let user = User(id: 1)
+    return Session(owner: read user)
+}
+
+fn make_session_from_param(user: read User) -> Session {
+    return Session(owner: read user)
+}
+"#;
+    let rust = lower_source_to_rust("weak-session.rss", source).expect("source should lower");
+
+    assert!(rust.contains("pub owner: rsscript_runtime::WeakManaged<User>"));
+    assert!(rust.contains("owner: rsscript_runtime::weak(&user)"));
+    assert!(rust.contains("owner: rsscript_runtime::weak(user)"));
+
+    let package = lower_source_to_rust_package(
+        "weak-session.rss",
+        source,
+        "weak-session",
+        &format!("{}/runtime", env!("CARGO_MANIFEST_DIR")),
+    )
+    .expect("source should lower into package");
+    let temp_dir = unique_temp_dir("rsscript-weak-session");
+    write_generated_rust_package(&temp_dir, &package).expect("generated package should be written");
+    let check =
+        check_generated_rust_package(&temp_dir).expect("generated package should be checked");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(
+        check.success,
+        "diagnostics={:?}\nstderr={}",
+        check.diagnostics, check.stderr
+    );
+}
+
+#[test]
 fn rust_lowering_uses_shared_handles_for_managed_class_mut_parameters() {
     let source = r#"
 features: local

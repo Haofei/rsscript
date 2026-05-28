@@ -48,6 +48,7 @@ pub mod code {
     pub const RESOURCE_POOL_NOT_LOCAL: &str = "RS0705";
     pub const LOCAL_CAPTURED_BY_MANAGED_CLOSURE: &str = "RS0801";
     pub const TAKE_HANDLE_FIELD: &str = "RS0901";
+    pub const INVALID_WEAK_FIELD: &str = "RS0902";
     pub const OPERATOR_OVERLOAD_ATTEMPT: &str = "RS1001";
     pub const IMPLICIT_CONVERSION_ATTEMPT: &str = "RS1002";
     pub const OWN_STRUCT_ATTEMPT: &str = "RS1003";
@@ -462,6 +463,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::TAKE_HANDLE_FIELD,
         title: "take of handle field",
         explanation: "Handle fields are managed references. They cannot be consumed with `take` as if they were inline local fields.",
+    },
+    DiagnosticExplanation {
+        code: code::INVALID_WEAK_FIELD,
+        title: "invalid weak field",
+        explanation: "`weak` fields break managed class cycles. The MVP only allows weak fields whose type is a class.",
     },
     DiagnosticExplanation {
         code: code::OPERATOR_OVERLOAD_ATTEMPT,

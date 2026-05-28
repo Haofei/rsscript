@@ -877,6 +877,7 @@ struct TypeSig {
 struct FieldSig {
     type_name: String,
     is_handle: bool,
+    is_weak: bool,
 }
 
 fn collect_type_sigs(items: &[Item]) -> BTreeMap<String, TypeSig> {
@@ -906,6 +907,7 @@ fn field_sig(field: &FieldDecl) -> FieldSig {
     FieldSig {
         type_name: type_name(&field.ty),
         is_handle: field.is_handle,
+        is_weak: field.is_weak,
     }
 }
 
@@ -1270,7 +1272,9 @@ fn fields_contract(fields: &BTreeMap<String, FieldSig>) -> String {
     fields
         .iter()
         .map(|(name, field)| {
-            if field.is_handle {
+            if field.is_weak {
+                format!("{name}: weak {}", field.type_name)
+            } else if field.is_handle {
                 format!("{name}: handle {}", field.type_name)
             } else {
                 format!("{name}: {}", field.type_name)

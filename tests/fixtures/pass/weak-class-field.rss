@@ -1,0 +1,12 @@
+class User {
+    name: String
+}
+
+struct Session {
+    owner: weak User
+}
+
+fn make_session() -> Session {
+    let user = User(name: "Ada")
+    return Session(owner: read user)
+}

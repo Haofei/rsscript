@@ -4,7 +4,7 @@ use std::fmt;
 use std::io::{Read, Write};
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::str::Utf8Error;
 
 pub const RUNTIME_DIAGNOSTIC_PREFIX: &str = "RSSCRIPT_RUNTIME_DIAGNOSTIC:";
@@ -815,6 +815,37 @@ impl<T> Managed<T> {
     }
 }
 
+#[derive(Clone)]
+pub struct WeakManaged<T> {
+    inner: Weak<RefCell<T>>,
+    origin_span: Option<SourceSpan>,
+}
+
+impl<T> WeakManaged<T> {
+    pub fn upgrade(&self) -> Option<Managed<T>> {
+        self.inner.upgrade().map(|inner| Managed {
+            inner,
+            origin_span: self.origin_span.clone(),
+        })
+    }
+
+    pub fn origin_span(&self) -> Option<&SourceSpan> {
+        self.origin_span.as_ref()
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for WeakManaged<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.upgrade() {
+            Some(value) => formatter
+                .debug_tuple("WeakManaged")
+                .field(&value.read())
+                .finish(),
+            None => formatter.write_str("WeakManaged(<dropped>)"),
+        }
+    }
+}
+
 impl<T: fmt::Debug> fmt::Debug for Managed<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -830,6 +861,13 @@ pub fn manage<T>(value: T) -> Managed<T> {
 
 pub fn manage_at<T>(value: T, span: SourceSpan) -> Managed<T> {
     Managed::new_at(value, span)
+}
+
+pub fn weak<T>(value: &Managed<T>) -> WeakManaged<T> {
+    WeakManaged {
+        inner: Rc::downgrade(&value.inner),
+        origin_span: value.origin_span.clone(),
+    }
 }
 
 pub fn unwrap_runtime<T>(result: Result<T, RuntimeError>) -> T {
@@ -1096,6 +1134,20 @@ mod tests {
         let value = manage(String::from("cached"));
 
         assert_eq!(&*value.read(), "cached");
+    }
+
+    #[test]
+    fn weak_handles_upgrade_while_managed_value_is_alive() {
+        let value = manage(String::from("cached"));
+        let weak = super::weak(&value);
+
+        assert_eq!(
+            &*weak.upgrade().expect("value should still be live").read(),
+            "cached"
+        );
+
+        drop(value);
+        assert!(weak.upgrade().is_none());
     }
 
     #[test]

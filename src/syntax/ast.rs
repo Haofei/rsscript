@@ -118,6 +118,7 @@ pub struct FieldDecl {
     pub name: String,
     pub ty: TypeRef,
     pub is_handle: bool,
+    pub is_weak: bool,
     pub span: Span,
 }
 

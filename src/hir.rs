@@ -57,6 +57,7 @@ pub struct FieldInfo {
     pub name: String,
     pub type_name: String,
     pub is_handle: bool,
+    pub is_weak: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -417,7 +418,8 @@ impl Hir {
 
     #[cfg(test)]
     fn is_handle_field_name(&self, field_name: &str) -> bool {
-        self.fields_named(field_name).any(|field| field.is_handle)
+        self.fields_named(field_name)
+            .any(|field| field.is_handle || field.is_weak)
     }
 
     pub fn duplicate_symbols(&self) -> &[DuplicateSymbol] {
@@ -806,7 +808,7 @@ fn lower_hir_expr(
                     span: span.clone(),
                     base_type,
                     type_name: field.map(|field| field.type_name.clone()),
-                    is_handle: field.is_some_and(|field| field.is_handle),
+                    is_handle: field.is_some_and(|field| field.is_handle || field.is_weak),
                 },
                 span: span.clone(),
             }
@@ -1124,7 +1126,7 @@ fn collect_body_facts_in_expr(
                 span: span.clone(),
                 base_type,
                 type_name: field.map(|field| field.type_name.clone()),
-                is_handle: field.is_some_and(|field| field.is_handle),
+                is_handle: field.is_some_and(|field| field.is_handle || field.is_weak),
             });
             collect_body_facts_in_expr(hir, function_name, base, value_types, facts);
         }
@@ -1552,6 +1554,7 @@ fn field_info_from_decl(field: &FieldDecl) -> FieldInfo {
         name: field.name.clone(),
         type_name: type_ref_name(&field.ty),
         is_handle: field.is_handle,
+        is_weak: field.is_weak,
     }
 }
 
@@ -1607,6 +1610,7 @@ resource File {
 
 struct Session {
     user: handle User
+    parent: weak User
     file_name: String
 }
 "#;
@@ -1621,10 +1625,20 @@ struct Session {
         let user_field = hir.fields_named("user").next().expect("user field exists");
         assert_eq!(user_field.type_name, "User");
         assert!(user_field.is_handle);
+        assert!(!user_field.is_weak);
+        let parent_field = hir
+            .fields_named("parent")
+            .next()
+            .expect("parent field exists");
+        assert_eq!(parent_field.type_name, "User");
+        assert!(!parent_field.is_handle);
+        assert!(parent_field.is_weak);
         let session = hir.type_info("Session").expect("session type exists");
         assert!(session.fields["user"].is_handle);
+        assert!(session.fields["parent"].is_weak);
         assert!(!session.fields["file_name"].is_handle);
         assert!(hir.is_handle_field_name("user"));
+        assert!(hir.is_handle_field_name("parent"));
         assert!(!hir.is_handle_field_name("file_name"));
     }
 

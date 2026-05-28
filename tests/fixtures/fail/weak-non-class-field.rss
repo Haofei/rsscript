@@ -1,0 +1,12 @@
+// expect: RS0902
+struct User {
+    name: String
+}
+
+struct Session {
+    owner: weak User
+}
+
+fn main() -> Unit {
+    return Unit
+}

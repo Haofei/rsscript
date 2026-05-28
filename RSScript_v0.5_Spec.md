@@ -751,6 +751,7 @@ has reference identity
 may be shared
 may be cyclic
 fields are managed or Copy
+weak fields may break managed cycles
 cannot be local
 cannot be fresh
 cannot be resource
@@ -822,6 +823,7 @@ Every field is either:
 ```text
 inline
 handle
+weak handle
 ```
 
 ---
@@ -877,6 +879,32 @@ struct Config {
     rules: handle List<Rule>
 }
 ```
+
+## 10.2.1 Weak handle fields
+
+A weak field stores a non-owning managed handle.
+
+```rust
+class User { ... }
+
+struct Session {
+    owner: weak User
+}
+```
+
+Properties:
+
+```text
+weak fields are handles
+weak fields do not keep the target object alive
+weak fields terminate local-inline paths
+weak fields cannot be taken as inline local fields
+weak fields are for managed class identity objects
+```
+
+In the MVP, `weak` fields may only target `class` types. This keeps weak references tied to the managed identity-object model and avoids implying weak ownership for inline value structs.
+
+Generated Rust lowers a weak field to the runtime weak-handle surface, not to a direct Rust reference.
 
 ---
 

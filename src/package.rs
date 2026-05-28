@@ -518,6 +518,7 @@ struct PackageFieldContract {
     name: String,
     type_name: String,
     is_handle: bool,
+    is_weak: bool,
 }
 
 pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
@@ -1977,6 +1978,7 @@ fn package_field_contract(field: &FieldDecl) -> PackageFieldContract {
         name: field.name.clone(),
         type_name: package_type_name(&field.ty),
         is_handle: field.is_handle,
+        is_weak: field.is_weak,
     }
 }
 
@@ -2048,7 +2050,9 @@ fn package_type_contract_label(contract: &PackageTypeContract) -> String {
             .fields
             .iter()
             .map(|field| {
-                if field.is_handle {
+                if field.is_weak {
+                    format!("{}: weak {}", field.name, field.type_name)
+                } else if field.is_handle {
                     format!("{}: handle {}", field.name, field.type_name)
                 } else {
                     format!("{}: {}", field.name, field.type_name)

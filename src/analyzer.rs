@@ -119,6 +119,7 @@ impl Analyzer<'_> {
         self.check_runtime_guarantee_bodies();
         self.check_try_operator_result_returns();
         self.check_resource_fields();
+        self.check_weak_fields();
         self.check_resource_pool_type_arguments();
         self.check_resource_generic_arguments();
         checks::features::check(self);
@@ -898,6 +899,40 @@ impl Analyzer<'_> {
                         )
                         .with_cause("Resources must be used through `with` or approved resource containers.")
                         .with_fix("use_with", "Use `with` or `ResourcePool<T: Resource>` instead.", "manual"),
+                    );
+                }
+            }
+        }
+    }
+
+    fn check_weak_fields(&mut self) {
+        for item in &self.syntax_program.items {
+            let Item::Type(decl) = item else {
+                continue;
+            };
+            for field in &decl.fields {
+                if !field.is_weak {
+                    continue;
+                }
+                if self.hir.type_kind(&field.ty.name) != Some(HirTypeKind::Class) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::INVALID_WEAK_FIELD,
+                            format!(
+                                "weak field `{}` must point to a class, but `{}` is not a class.",
+                                field.name, field.ty.name
+                            ),
+                            field.span.clone(),
+                            "invalid weak field",
+                        )
+                        .with_cause(
+                            "`weak` is only for breaking managed identity-object cycles in the MVP.",
+                        )
+                        .with_fix(
+                            "use_class_or_remove_weak",
+                            "Use a class type for the weak field, or remove `weak`.",
+                            "manual",
+                        ),
                     );
                 }
             }
