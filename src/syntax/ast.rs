@@ -154,6 +154,7 @@ pub struct FunctionDecl {
     pub return_ty: Option<TypeRef>,
     pub returns_fresh: bool,
     pub effects: Vec<EffectDecl>,
+    pub malformed_effect_spans: Vec<Span>,
     pub body: Block,
     pub span: Span,
 }

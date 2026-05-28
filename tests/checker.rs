@@ -2668,6 +2668,38 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_reports_malformed_effect_declarations_as_unsupported() {
+    let source = r#"
+fn empty_effect_slot(value: read String) -> Unit
+    effects(no_panic,, native)
+{
+    return Unit
+}
+
+fn empty_retains(value: read String) -> Unit
+    effects(retains())
+{
+    return Unit
+}
+
+fn unknown_effect_call(value: read String) -> Unit
+    effects(custom(value))
+{
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("malformed-effects.rss", source);
+    let malformed_count = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == "RS0015" && diagnostic.label == "malformed effect declaration"
+        })
+        .count();
+
+    assert_eq!(malformed_count, 3, "{diagnostics:?}");
+}
+
+#[test]
 fn checker_reports_malformed_bindings_and_arguments_as_unsupported() {
     let source = r#"
 fn main() -> Unit {

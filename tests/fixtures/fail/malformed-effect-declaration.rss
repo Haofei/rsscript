@@ -1,0 +1,19 @@
+// expect: RS0015
+
+fn empty_effect_slot(value: read String) -> Unit
+    effects(no_panic,, native)
+{
+    return Unit
+}
+
+fn empty_retains(value: read String) -> Unit
+    effects(retains())
+{
+    return Unit
+}
+
+fn unknown_effect_call(value: read String) -> Unit
+    effects(custom(value))
+{
+    return Unit
+}

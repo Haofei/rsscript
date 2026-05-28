@@ -268,6 +268,13 @@ impl Analyzer<'_> {
                         "`native fn` declares an external/native boundary in v0.5. Provide a bodyless declaration and bind the implementation through the native wrapper path.",
                     );
                 }
+                for span in &function.malformed_effect_spans {
+                    self.unsupported_syntax(
+                        span.clone(),
+                        "malformed effect declaration",
+                        "Effects must use a bare effect name or `retains(parameter)`.",
+                    );
+                }
                 for span in &function.malformed_param_spans {
                     self.unsupported_syntax(
                         span.clone(),
