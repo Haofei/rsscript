@@ -138,7 +138,33 @@ impl Analyzer<'_> {
                         ),
                     );
                 }
-                if param.effect.is_none() && !param.ty.name.is_empty() && !is_copy_type(&param.ty) {
+                if param.effect.is_none() && param.ty.name == "share" {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::REMOVED_SHARE_EFFECT,
+                            format!(
+                                "parameter `{}` in `{}` uses removed `share` data effect.",
+                                param.name, function.name
+                            ),
+                            param.ty.span.clone(),
+                            "removed share data effect",
+                        )
+                        .with_cause("RSScript v0.4.1 has exactly three data effects: `read`, `mut`, and `take`.")
+                        .with_fix(
+                            "replace_share_effect",
+                            format!(
+                                "Use `{}: read T` and add `effects(retains({}))` if the function retains it.",
+                                param.name, param.name
+                            ),
+                            "manual",
+                        ),
+                    );
+                }
+                if param.effect.is_none()
+                    && !param.ty.name.is_empty()
+                    && param.ty.name != "share"
+                    && !is_copy_type(&param.ty)
+                {
                     self.diagnostics.push(
                         Diagnostic::error(
                             code::MISSING_PARAMETER_EFFECT,

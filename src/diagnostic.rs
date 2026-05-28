@@ -11,6 +11,7 @@ pub mod code {
     pub const MISSING_PARAMETER_EFFECT: &str = "RS0008";
     pub const INVALID_PURE_EFFECT: &str = "RS0009";
     pub const REMOVED_PROFILE_DECLARATION: &str = "RS0010";
+    pub const REMOVED_SHARE_EFFECT: &str = "RS0011";
     pub const FILE_MODE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
@@ -248,6 +249,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::REMOVED_PROFILE_DECLARATION,
         title: "removed profile declaration",
         explanation: "RSScript v0.4.1 removed `profile:` declarations. The only top-level semantic file declaration is `mode:`.",
+    },
+    DiagnosticExplanation {
+        code: code::REMOVED_SHARE_EFFECT,
+        title: "removed share data effect",
+        explanation: "RSScript v0.4.1 removed `share` as a data effect. Retention must be declared with `effects(retains(param))`.",
     },
     DiagnosticExplanation {
         code: code::FILE_MODE_VIOLATION,
