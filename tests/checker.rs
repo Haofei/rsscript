@@ -961,6 +961,33 @@ pub fn make_session(id: Int) -> Session {
 }
 
 #[test]
+fn rust_lowering_maps_with_resource_drop_points() {
+    let source = r#"
+fn copy(path: read Path) -> Result<Unit, FileError> {
+    with File.open_read(path: read path) as file {
+        File.read_all(file: mut file)?
+    }
+
+    return Ok(Unit)
+}
+"#;
+    let lowered =
+        lower_source_to_rust_with_map("resource.rss", source).expect("source should lower");
+
+    assert!(
+        lowered
+            .rust_source
+            .contains("// rss:span kind=resource_drop file=resource.rss")
+    );
+    assert!(
+        lowered
+            .source_map
+            .iter()
+            .any(|entry| entry.kind == "resource_drop" && entry.source.file == "resource.rss")
+    );
+}
+
+#[test]
 fn rustc_diagnostics_map_back_to_rsscript_source_spans() {
     let source = r#"
 features: local
