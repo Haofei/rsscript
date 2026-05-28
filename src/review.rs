@@ -19,6 +19,7 @@ pub struct ReviewFinding {
     pub before: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub after: Option<String>,
+    pub fixes: Vec<ReviewFix>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -28,6 +29,13 @@ pub struct ReviewSpan {
     pub column: usize,
     pub length: usize,
     pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReviewFix {
+    pub kind: String,
+    pub title: String,
+    pub applicability: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -174,7 +182,63 @@ fn review_finding(
         spans,
         before,
         after,
+        fixes: review_fixes(code),
     }
+}
+
+fn review_fixes(code: &str) -> Vec<ReviewFix> {
+    let (kind, title) = match code {
+        code::REVIEW_MODE_CHANGED => (
+            "review_file_mode",
+            "Review whether this file should allow local ownership features.",
+        ),
+        code::REVIEW_FUNCTION_REMOVED => (
+            "restore_or_migrate_function",
+            "Restore the function or migrate all call sites.",
+        ),
+        code::REVIEW_FUNCTION_ADDED => (
+            "review_new_api",
+            "Review the new API surface and ownership contract.",
+        ),
+        code::REVIEW_PARAMS_CHANGED => (
+            "update_call_sites",
+            "Update call sites for the changed parameter contract.",
+        ),
+        code::REVIEW_RETURN_CHANGED => (
+            "review_return_contract",
+            "Review callers that depend on the old return and freshness contract.",
+        ),
+        code::REVIEW_EFFECTS_CHANGED => (
+            "review_effect_contract",
+            "Review added or removed effects and update callers.",
+        ),
+        code::REVIEW_TYPE_REMOVED => (
+            "restore_or_migrate_type",
+            "Restore the type or migrate all consumers.",
+        ),
+        code::REVIEW_TYPE_ADDED => (
+            "review_type_exposure",
+            "Review the new type's ownership and resource fields.",
+        ),
+        code::REVIEW_TYPE_KIND_CHANGED => (
+            "review_type_kind",
+            "Review class, struct, or resource lifetime semantics for this type.",
+        ),
+        code::REVIEW_TYPE_FIELDS_CHANGED => (
+            "review_type_layout",
+            "Review field ownership, handle markers, and resource containment.",
+        ),
+        code::REVIEW_BOUNDARY_CHANGED => (
+            "review_local_manage_boundary",
+            "Review the changed local ownership and manage boundary.",
+        ),
+        _ => ("review_change", "Review this source-level contract change."),
+    };
+    vec![ReviewFix {
+        kind: kind.to_string(),
+        title: title.to_string(),
+        applicability: "manual".to_string(),
+    }]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -12,5 +12,5 @@ pub use diagnostic::{
     format_diagnostic_explanation, format_diagnostics_human, format_diagnostics_json,
 };
 pub use review::{
-    ReviewFinding, ReviewRisk, format_review_human, format_review_json, review_sources,
+    ReviewFinding, ReviewFix, ReviewRisk, format_review_human, format_review_json, review_sources,
 };

@@ -123,6 +123,17 @@ fn render(path: take Path) -> fresh Image
             .as_array()
             .is_some_and(|spans| spans.len() == 2)
     );
+    let effect_fixes = effect["fixes"]
+        .as_array()
+        .expect("review finding should include fixes");
+    assert!(effect_fixes.iter().any(|fix| {
+        fix["kind"] == "review_effect_contract" && fix["applicability"] == "manual"
+    }));
+    assert!(items.iter().all(|item| {
+        item["fixes"]
+            .as_array()
+            .is_some_and(|fixes| !fixes.is_empty())
+    }));
     assert!(items.iter().all(|item| {
         item["summary"]
             .as_str()
@@ -307,6 +318,12 @@ fn publish(path: read Path) -> Unit {
     assert!(boundary.summary.contains("body[1]"));
     assert!(boundary.summary.contains("body[2].value"));
     assert_eq!(boundary.risk, ReviewRisk::Boundary);
+    assert!(
+        boundary
+            .fixes
+            .iter()
+            .any(|fix| fix.kind == "review_local_manage_boundary")
+    );
 }
 
 fn fixture_paths(directory: &str) -> Vec<PathBuf> {
