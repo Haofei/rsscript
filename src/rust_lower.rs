@@ -23,6 +23,12 @@ pub struct GeneratedRustPackage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeRustDependency {
+    pub crate_name: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoweredRust {
     pub rust_source: String,
     pub source_map: Vec<RustSourceMapEntry>,
@@ -114,6 +120,16 @@ pub fn lower_sources_to_rust_package_with_interfaces(
     runtime_path: &str,
     interfaces: &[(String, String)],
 ) -> Result<GeneratedRustPackage, Vec<Diagnostic>> {
+    lower_sources_to_rust_package_with_options(sources, package_name, runtime_path, interfaces, &[])
+}
+
+pub fn lower_sources_to_rust_package_with_options(
+    sources: &[(String, String)],
+    package_name: &str,
+    runtime_path: &str,
+    interfaces: &[(String, String)],
+    native_dependencies: &[NativeRustDependency],
+) -> Result<GeneratedRustPackage, Vec<Diagnostic>> {
     let mut interface_refs = builtin_interfaces().collect::<Vec<_>>();
     interface_refs.extend(
         interfaces
@@ -139,9 +155,19 @@ pub fn lower_sources_to_rust_package_with_interfaces(
     );
     let lowered = lower_program_to_rust_with_map(&program);
     let package_name = cargo_package_name(package_name);
+    let native_dependency_toml = native_dependencies
+        .iter()
+        .map(|dependency| {
+            format!(
+                "\"{}\" = {{ path = \"{}\" }}\n",
+                toml_string(&dependency.crate_name),
+                toml_string(&dependency.path)
+            )
+        })
+        .collect::<String>();
     let cargo_toml = format!(
-        "[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n\n[dependencies]\nrsscript-runtime = {{ path = \"{}\" }}\n",
-        toml_string(runtime_path)
+        "[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n\n[dependencies]\nrsscript-runtime = {{ path = \"{}\" }}\n{native_dependency_toml}",
+        toml_string(runtime_path),
     );
     let main_rs = rust_package_main(&program, &package_name);
     let source_map_json =

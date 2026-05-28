@@ -6,15 +6,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rsscript::syntax::ast::{EffectDecl, Item};
 use rsscript::syntax::parse_source;
 use rsscript::{
-    ReviewMapClassification, ReviewMapFileRisk, ReviewRisk, analyze_source,
+    NativeRustDependency, ReviewMapClassification, ReviewMapFileRisk, ReviewRisk, analyze_source,
     analyze_source_with_core, analyze_source_with_interfaces, check_package_dir, core_interfaces,
     diff_package_dirs, diff_package_locks, explain_diagnostic_code, format_diagnostic_explanation,
     format_diagnostics_json, format_package_lock_toml, format_review_human, format_review_json,
     format_review_map_human, format_review_map_json, lint_source, lock_package_dir,
     lower_source_to_rust, lower_source_to_rust_package, lower_source_to_rust_with_map,
-    package_metadata, package_tree, parse_runtime_diagnostics, publish_package_dry_run,
-    remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines, review_map_sources,
-    review_package_dir, review_sources, vendor_package_dir,
+    lower_sources_to_rust_package_with_options, package_lowering_input, package_metadata,
+    package_tree, parse_runtime_diagnostics, publish_package_dry_run, remap_rustc_diagnostic_json,
+    remap_rustc_diagnostic_json_lines, review_map_sources, review_package_dir, review_sources,
+    vendor_package_dir,
 };
 use serde_json::Value;
 
@@ -1296,6 +1297,67 @@ fn rss_verify_rust_json_accepts_package_directory() {
 }
 
 #[test]
+fn rss_verify_rust_accepts_package_native_wrapper_dependency() {
+    let temp_dir = unique_temp_dir("rsscript-verify-native-package-cli");
+    let out_dir = temp_dir.join("generated-rust");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-verify-native-package",
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_json_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+        "",
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
+    fs::write(
+        temp_dir.join("src/main.rss"),
+        r#"fn main() -> Unit {
+    Log.write(message: read "verify native package")
+}
+"#,
+    )
+    .expect("source should be written");
+    fs::write(
+        temp_dir.join("native/rust/Cargo.toml"),
+        "[package]\nname = \"rss_json_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("native Cargo.toml should be written");
+    fs::write(
+        temp_dir.join("native/rust/src/lib.rs"),
+        "pub fn parse() {}\n",
+    )
+    .expect("native source should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("verify-rust")
+        .arg("--json")
+        .arg(&temp_dir)
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss verify-rust package directory should execute");
+    let generated_cargo_toml =
+        fs::read_to_string(out_dir.join("Cargo.toml")).expect("generated Cargo.toml should exist");
+    let _ = fs::remove_dir_all(&temp_dir);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: Value = serde_json::from_str(&stdout).expect("stdout should be diagnostics JSON");
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert_eq!(json, serde_json::json!([]));
+    assert!(generated_cargo_toml.contains("\"rss_json_native\" = { path = "));
+}
+
+#[test]
 fn rust_lowering_targets_runtime_crate_hooks() {
     let source = r#"
 features: local
@@ -1427,6 +1489,32 @@ pub fn make_point(x: Int, y: Int) -> fresh Point {
     let source_map: Value =
         serde_json::from_str(&package.source_map_json).expect("source map JSON should parse");
     assert!(source_map.as_array().is_some_and(|items| !items.is_empty()));
+}
+
+#[test]
+fn rust_lowering_can_emit_native_wrapper_path_dependencies() {
+    let source = r#"
+fn main() -> Unit {
+    return Unit
+}
+"#;
+    let package = lower_sources_to_rust_package_with_options(
+        &[("main.rss".to_string(), source.to_string())],
+        "Native Example.rss",
+        "/workspace/rsscript/runtime",
+        &[],
+        &[NativeRustDependency {
+            crate_name: "rss_json_native".to_string(),
+            path: "/workspace/rss-json/native/rust".to_string(),
+        }],
+    )
+    .expect("source should lower into package with native dependency");
+
+    assert!(
+        package
+            .cargo_toml
+            .contains("\"rss_json_native\" = { path = \"/workspace/rss-json/native/rust\" }")
+    );
 }
 
 #[test]
@@ -3602,6 +3690,64 @@ unsafe = "forbid"
             .is_some_and(|reasons| reasons
                 .iter()
                 .any(|reason| reason == "native Rust Cargo.toml missing"))
+    );
+}
+
+#[test]
+fn package_lowering_input_records_native_wrapper_dependency() {
+    let temp_dir = unique_temp_dir("rsscript-package-native-lowering-input");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_json_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+        "",
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
+    fs::write(
+        temp_dir.join("src/main.rss"),
+        r#"fn main() -> Unit {
+    return Unit
+}
+"#,
+    )
+    .expect("source should be written");
+    fs::write(
+        temp_dir.join("native/rust/Cargo.toml"),
+        "[package]\nname = \"rss_json_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("native Cargo.toml should be written");
+    fs::write(
+        temp_dir.join("native/rust/src/lib.rs"),
+        "pub fn parse() {}\n",
+    )
+    .expect("native source should be written");
+
+    let input = package_lowering_input(&temp_dir).expect("package should lower");
+    let package = lower_sources_to_rust_package_with_options(
+        &input.sources,
+        &input.package.name,
+        "/workspace/rsscript/runtime",
+        &input.interfaces,
+        &input.native_dependencies,
+    )
+    .expect("package source should lower with native dependency");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(input.native_dependencies.len(), 1);
+    assert_eq!(input.native_dependencies[0].crate_name, "rss_json_native");
+    assert!(input.native_dependencies[0].path.ends_with("native/rust"));
+    assert!(
+        package
+            .cargo_toml
+            .contains("\"rss_json_native\" = { path = ")
     );
 }
 

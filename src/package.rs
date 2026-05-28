@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -12,6 +13,7 @@ use crate::diagnostic::{Diagnostic, code};
 use crate::review::{
     ReviewFinding, ReviewMap, ReviewRisk, format_review_human, review_map_sources, review_sources,
 };
+use crate::rust_lower::NativeRustDependency;
 use crate::syntax::ast::{
     DataEffect, EffectDecl, FieldDecl, FunctionDecl, GenericBound, GenericParam, Item, Param,
     TypeDecl, TypeKind, TypeRef,
@@ -40,6 +42,7 @@ pub struct PackageLoweringInput {
     pub source: String,
     pub sources: Vec<(String, String)>,
     pub interfaces: Vec<(String, String)>,
+    pub native_dependencies: Vec<NativeRustDependency>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -613,6 +616,7 @@ pub fn package_lowering_input(package_dir: &Path) -> Result<PackageLoweringInput
     let package = load_package(package_dir)?;
     let dependency_interfaces =
         collect_dependency_interface_sources(package_dir, &package.manifest)?;
+    let native_dependencies = package_native_rust_dependencies(package_dir, &package.manifest)?;
     let interfaces = dependency_interfaces
         .iter()
         .map(|source| (source.path.clone(), source.contents.clone()))
@@ -640,7 +644,49 @@ pub fn package_lowering_input(package_dir: &Path) -> Result<PackageLoweringInput
         source: source.contents.clone(),
         sources,
         interfaces,
+        native_dependencies,
     })
+}
+
+fn package_native_rust_dependencies(
+    package_dir: &Path,
+    manifest: &Manifest,
+) -> Result<Vec<NativeRustDependency>, String> {
+    let Some(native) = manifest
+        .native
+        .as_ref()
+        .and_then(|native| native.rust.as_ref())
+    else {
+        return Ok(Vec::new());
+    };
+    if !native.enabled {
+        return Ok(Vec::new());
+    }
+    let crate_name = native
+        .crate_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| {
+            "native.rust enabled packages must declare `crate` before Rust lowering.".to_string()
+        })?;
+    let native_path = native.path.as_deref().unwrap_or("native/rust");
+    Ok(vec![NativeRustDependency {
+        crate_name: crate_name.to_string(),
+        path: absolute_package_path(package_dir)
+            .join(native_path)
+            .display()
+            .to_string(),
+    }])
+}
+
+fn absolute_package_path(package_dir: &Path) -> PathBuf {
+    if package_dir.is_absolute() {
+        return package_dir.to_path_buf();
+    }
+    env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(package_dir)
 }
 
 pub fn diff_package_dirs(old_dir: &Path, new_dir: &Path) -> Result<PackageDiff, String> {
@@ -2059,6 +2105,14 @@ fn check_package_native_rust(
     }
     if !cargo_toml_present {
         reasons.push("native Rust Cargo.toml missing".to_string());
+    }
+    if native
+        .crate_name
+        .as_deref()
+        .map(str::trim)
+        .is_none_or(str::is_empty)
+    {
+        reasons.push("native Rust crate name missing".to_string());
     }
     if files.is_empty() {
         reasons.push("native Rust source files missing".to_string());
