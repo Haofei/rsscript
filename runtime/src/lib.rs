@@ -95,7 +95,7 @@ pub struct Environment {
 
 #[derive(Clone)]
 pub struct FunctionObject {
-    closure: Managed<Environment>,
+    closure: WeakManaged<Environment>,
 }
 
 impl fmt::Debug for Environment {
@@ -112,7 +112,7 @@ impl fmt::Debug for FunctionObject {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("FunctionObject")
-            .field("has_closure", &true)
+            .field("has_closure", &self.closure.upgrade().is_some())
             .finish()
     }
 }
@@ -573,13 +573,12 @@ pub fn environment_has_function(env: &Managed<Environment>) -> bool {
 
 pub fn function_object_new(closure: &Managed<Environment>) -> FunctionObject {
     FunctionObject {
-        closure: closure.clone(),
+        closure: weak(closure),
     }
 }
 
 pub fn function_object_has_closure(function: &Managed<FunctionObject>) -> bool {
-    let _closure = function.read().closure.clone();
-    true
+    function.read().closure.upgrade().is_some()
 }
 
 pub fn db_connection_open(url: &str) -> DbConnection {
@@ -1306,6 +1305,11 @@ mod tests {
         assert!(super::environment_has_parent(&child));
         assert!(super::environment_has_function(&child));
         assert!(super::function_object_has_closure(&function));
+
+        drop(child);
+        drop(child_handle);
+
+        assert!(!super::function_object_has_closure(&function));
     }
 
     #[test]
