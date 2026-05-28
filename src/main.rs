@@ -1387,17 +1387,18 @@ fn print_usage() {
     eprintln!("  rsscript verify-rust [--json] <file-or-package-directory> --out-dir <directory>");
     eprintln!("  rsscript review [--json] --diff <old.rss> <new.rss>");
     eprintln!("  rsscript review [--json] --map <file-or-directory>");
-    eprintln!("  rsscript package check [--json] [package-directory]");
-    eprintln!("  rsscript package review [--json] <package-directory>");
+    eprintln!("  rsscript pkg check [--json] [package-directory]");
+    eprintln!("  rsscript pkg review [--json] <package-directory>");
     eprintln!(
-        "  rsscript package review update [--json] --from <old-rsspkg.lock> --to <new-rsspkg.lock>"
+        "  rsscript pkg review update [--json] --from <old-rsspkg.lock> --to <new-rsspkg.lock>"
     );
-    eprintln!("  rsscript package lock [--json] <package-directory>");
-    eprintln!("  rsscript package tree [--json] [package-directory]");
+    eprintln!("  rsscript pkg lock [--json] <package-directory>");
+    eprintln!("  rsscript pkg tree [--json] [package-directory]");
     eprintln!(
-        "  rsscript package publish --dry-run [--json] [--registry <directory>] [package-directory]"
+        "  rsscript pkg publish --dry-run [--json] [--registry <directory>] [package-directory]"
     );
-    eprintln!("  rsscript package vendor [--dry-run] [--json] [package-directory]");
-    eprintln!("  rsscript package metadata [--dry-run] [--json] [package-directory]");
-    eprintln!("  rsscript package diff [--json] <old-package-directory> <new-package-directory>");
+    eprintln!("  rsscript pkg vendor [--dry-run] [--json] [package-directory]");
+    eprintln!("  rsscript pkg metadata [--dry-run] [--json] [package-directory]");
+    eprintln!("  rsscript pkg diff [--json] <old-package-directory> <new-package-directory>");
+    eprintln!("  rsscript package ... is accepted as a compatibility alias for rsscript pkg ...");
 }

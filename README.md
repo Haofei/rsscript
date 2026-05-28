@@ -56,7 +56,7 @@ let response = Response.ok(body: read user)
 
 Managed values are easy to share, store, and drop into long-lived graphs. This is the default for business logic, agent memory, configuration, caches, ASTs, request/response objects — the broad layer outside hot paths.
 
-Under the hood, managed is reference counted — think Swift's ARC, not a tracing GC. Destruction is deterministic and lowers to Rust's `Arc`, so cross-thread sharing works without extra ceremony at the source level. The usual tradeoffs apply: refcounting has a per-access cost, and cycles are broken with a `weak` keyword the same way Swift does it.
+Under the hood, managed is reference counted — think Swift's ARC, not a tracing GC. Destruction is deterministic and the reference runtime uses Rust `Arc`/`RwLock`-like primitives internally. RSScript v0.5 still exposes a single-isolate source model; future cross-thread transfer should be explicit instead of implicit. The usual tradeoffs apply: refcounting has a per-access cost, and cycles are broken with a `weak` keyword the same way Swift does it.
 
 That per-access cost is relative to native Rust, not to other managed languages. Primitives (`Int`, `Bool`, `Float`, etc.) stay on the stack; refcount only touches heap objects you actually share; there's no GIL, no interpreter loop, no per-object dict header. Managed-only RSScript still lowers to monomorphic Rust through LLVM — typically an order of magnitude faster than Python without ever opting into `local`. `local` is for when you want to compete with hand-tuned Rust, not for routine performance.
 
@@ -246,15 +246,15 @@ rss lint     [--json] [--core|--no-core] [--interface <f.rssi> ...] <file.rss>
 rss fmt      <file.rss>
 rss review   [--json] --diff <old.rss> <new.rss>
 rss review   [--json] --map  <file-or-directory>
-rss package  check  [--json] [package-directory]
-rss package  review [--json] <package-directory>
-rss package  review update [--json] --from <old-rsspkg.lock> --to <new-rsspkg.lock>
-rss package  lock   [--json] <package-directory>
-rss package  tree   [--json] [package-directory]
-rss package  publish --dry-run [--json] [--registry <directory>] [package-directory]
-rss package  vendor [--dry-run] [--json] [package-directory]
-rss package  metadata [--dry-run] [--json] [package-directory]
-rss package  diff   [--json] <old-package-directory> <new-package-directory>
+rss pkg      check  [--json] [package-directory]
+rss pkg      review [--json] <package-directory>
+rss pkg      review update [--json] --from <old-rsspkg.lock> --to <new-rsspkg.lock>
+rss pkg      lock   [--json] <package-directory>
+rss pkg      tree   [--json] [package-directory]
+rss pkg      publish --dry-run [--json] [--registry <directory>] [package-directory]
+rss pkg      vendor [--dry-run] [--json] [package-directory]
+rss pkg      metadata [--dry-run] [--json] [package-directory]
+rss pkg      diff   [--json] <old-package-directory> <new-package-directory>
 rss lower    --rust  <file.rss> [--out-dir <directory>]
 rss run      [--json] <file-or-package-directory> [--out-dir <directory>]
 rss remap-rustc  [--json] <rsscript-source-map.json> <rustc-json-lines>
@@ -267,15 +267,15 @@ A few details worth knowing:
 - `rss lint` reuses the frontend checks and emits warnings. The first lint is `RSL001` — public signatures over the review budget for parameter count, generics, effects, or nested-type depth.
 - `rss review --map` validates inputs first, so files with frontend errors get diagnostics instead of misleading classifications.
 - `rss review --map --json` reports `unknown_ratio` and `unknown_function_ratio` directly. `tests/fixtures/pass` is treated as the current review-map confidence corpus: it currently reports 71 functions / 417 lines with 0 unknown functions and 0 unknown lines, including `complex-supported-review-map.rss`; tests fail if this known-good corpus regresses to unknown.
-- `rss package check` validates a local package, loads local path dependency `.rssi` contracts, checks package `.rssi` type and function contracts against source implementations or explicit native bindings, rejects unresolved or conflicting local dependency graphs, runs package review, compares the current semantic lock against `rsspkg.lock`, and scans enabled native Rust wrappers with Cargo metadata. Packages can set `[review] unknown_is_error = true` to make unknown review risk fail the check.
-- `rss package review` reads `rsspkg.toml`, treats `.rssi` files as the public semantic contract, reports package feature names, summarizes public type/function/API counts plus mutating, retaining, resource, fresh-returning, native, unsafe, and unknown APIs, emits per-export review classifications, counts frontend errors in `.rssi` contracts as unknown contract exports, and raises risk for native Rust wrappers, build scripts, proc macros, unsafe policy, external links, frontend diagnostics, and unknown review-map regions.
-- `rss package review update` compares two `rsspkg.lock` files and reports package version, source, checksum, `.rssi` interface, review metadata, native wrapper, and feature-selection changes.
-- `rss package lock` emits semantic lock metadata for the root package and local path dependency graph, with SHA-256 hashes for public `.rssi` contracts, review metadata, package contents, and native Rust wrapper contents when enabled.
-- `rss package tree` shows the dependency graph with review risk. Local path dependencies are expanded recursively; unresolved registry or git dependencies are classified as unknown.
-- `rss package publish --dry-run` runs pre-publish checks without uploading anything: package consistency, dependency graph review, semver shape, review risk classification, native metadata, a reproducible archive manifest with per-file checksums, and a registry index entry. Unknown package review risk blocks publish readiness instead of being treated as safe. `--registry <directory>` reports the local registry index and archive-manifest paths that would be written.
-- `rss package vendor` copies local path dependencies into `vendor/<name>-<version>/` and writes `vendor/rss-vendor.json`; unresolved registry or git dependencies stay unknown.
-- `rss package metadata` writes `review/package-review.json` using the local package review result; `--dry-run` reports the metadata path without writing. Unknown review risk is preserved in the metadata and makes the command result not ok.
-- `rss package diff` compares two local package directories and reports package version changes, RSScript dependency changes, package feature changes, native Rust wrapper metadata changes, and public `.rssi` semantic contract changes.
+- `rss pkg check` validates a local package, loads local path dependency `.rssi` contracts, checks package `.rssi` type and function contracts against source implementations or explicit native bindings, rejects unresolved or conflicting local dependency graphs, runs package review, compares the current semantic lock against `rsspkg.lock`, and scans enabled native Rust wrappers with Cargo metadata. Packages can set `[review] unknown_is_error = true` to make unknown review risk fail the check.
+- `rss pkg review` reads `rsspkg.toml`, treats `.rssi` files as the public semantic contract, reports package feature names, summarizes public type/function/API counts plus mutating, retaining, resource, fresh-returning, native, unsafe, and unknown APIs, emits per-export review classifications, counts frontend errors in `.rssi` contracts as unknown contract exports, and raises risk for native Rust wrappers, build scripts, proc macros, unsafe policy, external links, frontend diagnostics, and unknown review-map regions.
+- `rss pkg review update` compares two `rsspkg.lock` files and reports package version, source, checksum, `.rssi` interface, review metadata, native wrapper, and feature-selection changes.
+- `rss pkg lock` emits semantic lock metadata for the root package and local path dependency graph, with SHA-256 hashes for public `.rssi` contracts, review metadata, package contents, and native Rust wrapper contents when enabled.
+- `rss pkg tree` shows the dependency graph with review risk. Local path dependencies are expanded recursively; unresolved registry or git dependencies are classified as unknown.
+- `rss pkg publish --dry-run` runs pre-publish checks without uploading anything: package consistency, dependency graph review, semver shape, review risk classification, native metadata, a reproducible archive manifest with per-file checksums, and a registry index entry. Unknown package review risk blocks publish readiness instead of being treated as safe. `--registry <directory>` reports the local registry index and archive-manifest paths that would be written.
+- `rss pkg vendor` copies local path dependencies into `vendor/<name>-<version>/` and writes `vendor/rss-vendor.json`; unresolved registry or git dependencies stay unknown.
+- `rss pkg metadata` writes `review/package-review.json` using the local package review result; `--dry-run` reports the metadata path without writing. Unknown review risk is preserved in the metadata and makes the command result not ok.
+- `rss pkg diff` compares two local package directories and reports package version changes, RSScript dependency changes, package feature changes, native Rust wrapper metadata changes, and public `.rssi` semantic contract changes.
 - `rss run` lowers a single file, or a package directory with `src/main.rss`, to a temporary Rust package and delegates to `cargo run`; package lowering carries enabled `[native.rust]` wrappers through as generated Cargo path dependencies and maps `native/bindings.rssbind.toml` call bindings into generated Rust calls. `--out-dir` keeps the generated package around for inspection. Diagnostics support `--json`; program stdout stays the program's own.
 - `rss verify-rust --out-dir` works for the same file-or-package inputs and keeps the generated package and source map, so unmappable rustc diagnostics can be inspected against the actual generated Rust.
 
