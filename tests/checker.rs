@@ -3248,6 +3248,59 @@ async fn ping(url: read Url) -> Result<Unit, NetworkError>
 }
 
 #[test]
+fn review_map_marks_noescape_callback_calls_review_required_not_unknown() {
+    let source = r#"
+features: local
+
+fn apply(callback: noescape Fn()) -> Unit {
+    callback()
+    return Unit
+}
+"#;
+    let map = review_map_sources(vec![("callback.rss", source)]);
+    let region = map.files[0]
+        .regions
+        .iter()
+        .find(|region| region.function == "apply")
+        .expect("expected apply region");
+
+    assert_eq!(
+        region.classification,
+        ReviewMapClassification::ReviewRequired
+    );
+    assert!(
+        region
+            .reasons
+            .iter()
+            .any(|reason| reason == "noescape callback call `callback`"),
+        "{region:?}"
+    );
+    assert_eq!(map.summary.unknown.functions, 0);
+}
+
+#[test]
+fn review_map_pass_fixture_unknown_rate_stays_low() {
+    let owned_sources = fixture_paths("tests/fixtures/pass")
+        .into_iter()
+        .map(|path| {
+            let file = path.display().to_string();
+            let source = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+            (file, source)
+        })
+        .collect::<Vec<_>>();
+    let sources = owned_sources
+        .iter()
+        .map(|(file, source)| (file.as_str(), source.as_str()))
+        .collect::<Vec<_>>();
+    let map = review_map_sources(sources);
+
+    assert!(map.summary.total_functions >= 60);
+    assert_eq!(map.summary.unknown.functions, 0, "{map:?}");
+    assert_eq!(map.summary.unknown.lines, 0, "{map:?}");
+}
+
+#[test]
 fn parser_accepts_bodyless_rssi_interface() {
     let source = r#"
 struct JsonValue

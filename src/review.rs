@@ -398,7 +398,8 @@ fn review_map_region_draft(
     total_lines: usize,
 ) -> ReviewMapRegionDraft {
     let mut facts = ReviewMapFacts::default();
-    collect_review_map_facts_block(&function.body, hir, &mut facts);
+    let callback_params = review_map_callback_params(function);
+    collect_review_map_facts_block(&function.body, hir, &callback_params, &mut facts);
     if let Some(hir_body) = hir.function_body(&function.name) {
         let local_bindings = hir_body
             .bindings
@@ -480,6 +481,9 @@ fn review_map_region_draft(
     if facts.has_error_boundary {
         reasons.push("error handling boundary".to_string());
     }
+    for callback in &facts.callback_calls {
+        reasons.push(format!("noescape callback call `{callback}`"));
+    }
 
     let classification = if !facts.unresolved_calls.is_empty() {
         let calls = facts
@@ -533,6 +537,7 @@ struct ReviewMapFacts {
     has_error_boundary: bool,
     user_calls: BTreeSet<String>,
     unresolved_calls: BTreeSet<String>,
+    callback_calls: BTreeSet<String>,
 }
 
 fn propagate_review_map_call_classifications(drafts: &mut [ReviewMapRegionDraft]) {
@@ -608,75 +613,103 @@ fn propagate_review_required_calls(drafts: &mut [ReviewMapRegionDraft]) {
     }
 }
 
-fn collect_review_map_facts_block(block: &Block, hir: &Hir, facts: &mut ReviewMapFacts) {
+fn review_map_callback_params(function: &FunctionDecl) -> BTreeSet<String> {
+    function
+        .params
+        .iter()
+        .filter(|param| param.ty.is_noescape && param.ty.name == "Fn")
+        .map(|param| param.name.clone())
+        .collect()
+}
+
+fn collect_review_map_facts_block(
+    block: &Block,
+    hir: &Hir,
+    callback_params: &BTreeSet<String>,
+    facts: &mut ReviewMapFacts,
+) {
     for statement in &block.statements {
-        collect_review_map_facts_stmt(statement, hir, facts);
+        collect_review_map_facts_stmt(statement, hir, callback_params, facts);
     }
 }
 
-fn collect_review_map_facts_stmt(statement: &Stmt, hir: &Hir, facts: &mut ReviewMapFacts) {
+fn collect_review_map_facts_stmt(
+    statement: &Stmt,
+    hir: &Hir,
+    callback_params: &BTreeSet<String>,
+    facts: &mut ReviewMapFacts,
+) {
     match statement {
         Stmt::Let(stmt) => {
             if stmt.kind == LetKind::Local {
                 facts.has_local = true;
             }
             if let Some(value) = &stmt.value {
-                collect_review_map_facts_expr(value, hir, facts);
+                collect_review_map_facts_expr(value, hir, callback_params, facts);
             }
         }
         Stmt::Return(stmt) => {
             if let Some(value) = &stmt.value {
-                collect_review_map_facts_expr(value, hir, facts);
+                collect_review_map_facts_expr(value, hir, callback_params, facts);
             }
         }
         Stmt::With(stmt) => {
             facts.has_with = true;
-            collect_review_map_facts_expr(&stmt.resource, hir, facts);
-            collect_review_map_facts_block(&stmt.body, hir, facts);
+            collect_review_map_facts_expr(&stmt.resource, hir, callback_params, facts);
+            collect_review_map_facts_block(&stmt.body, hir, callback_params, facts);
         }
         Stmt::If(stmt) => {
-            collect_review_map_facts_expr(&stmt.condition, hir, facts);
-            collect_review_map_facts_block(&stmt.then_body, hir, facts);
+            collect_review_map_facts_expr(&stmt.condition, hir, callback_params, facts);
+            collect_review_map_facts_block(&stmt.then_body, hir, callback_params, facts);
             if let Some(else_body) = &stmt.else_body {
-                collect_review_map_facts_block(else_body, hir, facts);
+                collect_review_map_facts_block(else_body, hir, callback_params, facts);
             }
         }
         Stmt::Loop(stmt) => {
             if let Some(condition) = &stmt.condition {
-                collect_review_map_facts_expr(condition, hir, facts);
+                collect_review_map_facts_expr(condition, hir, callback_params, facts);
             }
-            collect_review_map_facts_block(&stmt.body, hir, facts);
+            collect_review_map_facts_block(&stmt.body, hir, callback_params, facts);
         }
         Stmt::Match(stmt) => {
-            collect_review_map_facts_expr(&stmt.value, hir, facts);
+            collect_review_map_facts_expr(&stmt.value, hir, callback_params, facts);
             for arm in &stmt.arms {
-                collect_review_map_facts_block(&arm.body, hir, facts);
+                collect_review_map_facts_block(&arm.body, hir, callback_params, facts);
             }
         }
-        Stmt::Expr(expr) => collect_review_map_facts_expr(expr, hir, facts),
+        Stmt::Expr(expr) => collect_review_map_facts_expr(expr, hir, callback_params, facts),
         Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
     }
 }
 
-fn collect_review_map_facts_expr(expr: &Expr, hir: &Hir, facts: &mut ReviewMapFacts) {
+fn collect_review_map_facts_expr(
+    expr: &Expr,
+    hir: &Hir,
+    callback_params: &BTreeSet<String>,
+    facts: &mut ReviewMapFacts,
+) {
     match expr {
         Expr::Call { callee, args, .. } => {
             if is_resource_pool_callee(callee) {
                 facts.has_resource_pool = true;
             }
-            match hir.resolve_call(callee) {
-                CallResolution::Resolved { signature, kind } => {
-                    if kind == ResolvedCalleeKind::UserFunction {
-                        facts.user_calls.insert(function_sig_key(&signature));
+            if let Some(callback) = review_map_callback_call(callee, callback_params) {
+                facts.callback_calls.insert(callback.to_string());
+            } else {
+                match hir.resolve_call(callee) {
+                    CallResolution::Resolved { signature, kind } => {
+                        if kind == ResolvedCalleeKind::UserFunction {
+                            facts.user_calls.insert(function_sig_key(&signature));
+                        }
                     }
+                    CallResolution::Unknown => {
+                        facts.unresolved_calls.insert(review_callee_display(callee));
+                    }
+                    CallResolution::EnumVariant => {}
                 }
-                CallResolution::Unknown => {
-                    facts.unresolved_calls.insert(review_callee_display(callee));
-                }
-                CallResolution::EnumVariant => {}
             }
             for arg in args {
-                collect_review_map_facts_expr(&arg.value, hir, facts);
+                collect_review_map_facts_expr(&arg.value, hir, callback_params, facts);
             }
         }
         Expr::Effect { effect, value, .. } => {
@@ -685,27 +718,41 @@ fn collect_review_map_facts_expr(expr: &Expr, hir: &Hir, facts: &mut ReviewMapFa
                 DataEffect::Take => facts.has_take = true,
                 DataEffect::Read => {}
             }
-            collect_review_map_facts_expr(value, hir, facts);
+            collect_review_map_facts_expr(value, hir, callback_params, facts);
         }
         Expr::Manage { value, .. } => {
             facts.has_manage = true;
-            collect_review_map_facts_expr(value, hir, facts);
+            collect_review_map_facts_expr(value, hir, callback_params, facts);
         }
         Expr::Try { value, .. } => {
             facts.has_error_boundary = true;
-            collect_review_map_facts_expr(value, hir, facts);
+            collect_review_map_facts_expr(value, hir, callback_params, facts);
         }
         Expr::Binary { left, right, .. } => {
-            collect_review_map_facts_expr(left, hir, facts);
-            collect_review_map_facts_expr(right, hir, facts);
+            collect_review_map_facts_expr(left, hir, callback_params, facts);
+            collect_review_map_facts_expr(right, hir, callback_params, facts);
         }
-        Expr::Field { base, .. } => collect_review_map_facts_expr(base, hir, facts),
+        Expr::Field { base, .. } => {
+            collect_review_map_facts_expr(base, hir, callback_params, facts)
+        }
         Expr::Index { base, index, .. } => {
-            collect_review_map_facts_expr(base, hir, facts);
-            collect_review_map_facts_expr(index, hir, facts);
+            collect_review_map_facts_expr(base, hir, callback_params, facts);
+            collect_review_map_facts_expr(index, hir, callback_params, facts);
         }
-        Expr::Closure { body, .. } => collect_review_map_facts_block(body, hir, facts),
+        Expr::Closure { body, .. } => {
+            collect_review_map_facts_block(body, hir, callback_params, facts)
+        }
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+    }
+}
+
+fn review_map_callback_call<'a>(
+    callee: &Callee,
+    callback_params: &'a BTreeSet<String>,
+) -> Option<&'a str> {
+    match callee {
+        Callee::Name(name) => callback_params.get(name).map(String::as_str),
+        Callee::Qualified { .. } => None,
     }
 }
 

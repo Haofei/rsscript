@@ -3224,6 +3224,16 @@ Early implementations may over-report review area.
 
 They must not under-report risk.
 
+The reference implementation must track unknown rate as a product metric before
+expanding runtime scope. A known-good review corpus should keep unknown
+functions and unknown lines near zero; unresolved callback, interface, package,
+or native-boundary cases should become targeted classifier work rather than
+being hidden as safe-to-skip.
+
+The current prototype gates `tests/fixtures/pass` as a review-map confidence
+corpus: the corpus must classify all known-good fixture functions without
+unknown regions.
+
 ---
 
 ## 33.8 Review map JSON
