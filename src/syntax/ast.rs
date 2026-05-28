@@ -136,6 +136,7 @@ pub struct FieldDecl {
 pub struct TypeRef {
     pub name: String,
     pub args: Vec<TypeRef>,
+    pub malformed_arg_spans: Vec<Span>,
     pub is_noescape: bool,
     pub span: Span,
 }

@@ -313,6 +313,13 @@ impl Analyzer<'_> {
                 "`noescape Fn(...)` is only supported as a direct function parameter type.",
             );
         }
+        for span in &ty.malformed_arg_spans {
+            self.unsupported_syntax(
+                span.clone(),
+                "malformed type argument",
+                "Type arguments must be valid type references; empty or unsupported type argument slots are not allowed.",
+            );
+        }
         for arg in &ty.args {
             self.check_unsupported_syntax_type_ref(arg, false);
         }

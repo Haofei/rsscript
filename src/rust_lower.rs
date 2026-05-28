@@ -1060,6 +1060,7 @@ impl<'a> RustLowerer<'a> {
             } if self.type_kinds.contains_key(name) => Some(TypeRef {
                 name: name.clone(),
                 args: Vec::new(),
+                malformed_arg_spans: Vec::new(),
                 is_noescape: false,
                 span: span.clone(),
             }),

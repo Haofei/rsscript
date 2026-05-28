@@ -509,6 +509,7 @@ fn parse_params(tokens: &[Token], start: usize, end: usize) -> ParsedParams {
                 ty: TypeRef {
                     name: String::new(),
                     args: Vec::new(),
+                    malformed_arg_spans: Vec::new(),
                     is_noescape: false,
                     span: tokens[start].span.clone(),
                 },
@@ -524,6 +525,7 @@ fn parse_params(tokens: &[Token], start: usize, end: usize) -> ParsedParams {
         let ty = parse_type_ref(tokens, ty_start, end).unwrap_or_else(|| TypeRef {
             name: String::new(),
             args: Vec::new(),
+            malformed_arg_spans: Vec::new(),
             is_noescape: false,
             span: tokens[start].span.clone(),
         });
@@ -1409,19 +1411,33 @@ fn parse_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<TypeRef>
     })?;
     let name = ident_name(&tokens[name_index])?.to_string();
     let mut args = Vec::new();
+    let mut malformed_arg_spans = Vec::new();
     if tokens
         .get(name_index + 1)
         .is_some_and(|token| token.symbol("<"))
-        && let Some(close) = find_matching(tokens, name_index + 1, "<", ">")
     {
-        args = split_top_level(tokens, name_index + 2, close, ",")
-            .into_iter()
-            .filter_map(|(start, end)| parse_type_ref(tokens, start, end))
-            .collect();
+        if let Some(close) = find_matching(tokens, name_index + 1, "<", ">") {
+            for range in split_param_ranges(tokens, name_index + 2, close) {
+                if let Some(span) = range.empty_span {
+                    malformed_arg_spans.push(span);
+                    continue;
+                }
+                let Some(arg) = parse_type_ref(tokens, range.start, range.end) else {
+                    if let Some(token) = tokens.get(range.start) {
+                        malformed_arg_spans.push(token.span.clone());
+                    }
+                    continue;
+                };
+                args.push(arg);
+            }
+        } else {
+            malformed_arg_spans.push(tokens[name_index + 1].span.clone());
+        }
     }
     Some(TypeRef {
         name,
         args,
+        malformed_arg_spans,
         is_noescape,
         span: tokens[name_index].span.clone(),
     })

@@ -2626,6 +2626,27 @@ fn bad<read T>(value: read String) -> Unit {
 }
 
 #[test]
+fn checker_reports_malformed_type_arguments_as_unsupported() {
+    let source = r#"
+fn bad(
+    values: read Map<, String>,
+    backup: read Result<String,, IOError>,
+) -> Unit {
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("malformed-type-args.rss", source);
+    let malformed_count = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == "RS0015" && diagnostic.label == "malformed type argument"
+        })
+        .count();
+
+    assert_eq!(malformed_count, 2, "{diagnostics:?}");
+}
+
+#[test]
 fn checker_reports_malformed_bindings_and_arguments_as_unsupported() {
     let source = r#"
 fn main() -> Unit {
