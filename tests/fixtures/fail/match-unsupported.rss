@@ -1,0 +1,7 @@
+// expect: RS0015
+fn pick(value: read Option<Int>) -> Int {
+    match value {
+        Some(result) => return result
+        None => return 0
+    }
+}

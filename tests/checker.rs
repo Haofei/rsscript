@@ -2590,6 +2590,23 @@ fn apply(callback: noescape Fn()) -> Unit {
 }
 
 #[test]
+fn checker_reports_match_as_unsupported_until_exhaustiveness_exists() {
+    let source = r#"
+fn pick(value: read Option<Int>) -> Int {
+    match value {
+        Some(result) => return result
+        None => return 0
+    }
+}
+"#;
+    let diagnostics = analyze_source("match.rss", source);
+
+    assert!(diagnostics.iter().any(
+        |diagnostic| diagnostic.code == "RS0015" && diagnostic.label == "unsupported statement"
+    ));
+}
+
+#[test]
 fn review_map_marks_public_rssi_signatures_review_required() {
     let source = r#"
 struct JsonValue
