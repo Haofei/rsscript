@@ -8,6 +8,7 @@ pub mod code {
     pub const DUPLICATE_DECLARATION: &str = "RS0005";
     pub const DUPLICATE_FILE_MODE: &str = "RS0006";
     pub const UNKNOWN_RETAINED_PARAMETER: &str = "RS0007";
+    pub const MISSING_PARAMETER_EFFECT: &str = "RS0008";
     pub const FILE_MODE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
@@ -229,6 +230,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::UNKNOWN_RETAINED_PARAMETER,
         title: "unknown retained parameter",
         explanation: "`effects(retains(param))` must name a parameter declared by the function signature.",
+    },
+    DiagnosticExplanation {
+        code: code::MISSING_PARAMETER_EFFECT,
+        title: "missing parameter data effect",
+        explanation: "Non-Copy parameters must declare `read`, `mut`, or `take` in the function signature so call effects are review-visible.",
     },
     DiagnosticExplanation {
         code: code::FILE_MODE_VIOLATION,

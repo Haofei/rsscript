@@ -118,6 +118,25 @@ impl Analyzer<'_> {
                         ),
                     );
                 }
+                if param.effect.is_none() && !param.ty.name.is_empty() && !is_copy_type(&param.ty) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::MISSING_PARAMETER_EFFECT,
+                            format!(
+                                "parameter `{}` in `{}` must declare `read`, `mut`, or `take`.",
+                                param.name, function.name
+                            ),
+                            param.span.clone(),
+                            "missing parameter effect",
+                        )
+                        .with_cause("Non-Copy parameters must expose their data effect in the function signature.")
+                        .with_fix(
+                            "add_parameter_effect",
+                            format!("Write `{}: read {}` or another explicit effect.", param.name, type_ref_name(&param.ty)),
+                            "manual",
+                        ),
+                    );
+                }
             }
 
             for effect in &function.effects {
@@ -541,4 +560,42 @@ fn duplicate_symbol_label(kind: DuplicateSymbolKind) -> &'static str {
         DuplicateSymbolKind::Constructor => "callable",
         DuplicateSymbolKind::Field => "field",
     }
+}
+
+fn is_copy_type(ty: &TypeRef) -> bool {
+    ty.args.is_empty()
+        && matches!(
+            ty.name.as_str(),
+            "Bool"
+                | "Byte"
+                | "Char"
+                | "Float"
+                | "Float32"
+                | "Float64"
+                | "Int"
+                | "Int8"
+                | "Int16"
+                | "Int32"
+                | "Int64"
+                | "UInt"
+                | "UInt8"
+                | "UInt16"
+                | "UInt32"
+                | "UInt64"
+                | "Unit"
+        )
+}
+
+fn type_ref_name(ty: &TypeRef) -> String {
+    if ty.args.is_empty() {
+        return ty.name.clone();
+    }
+
+    let args = ty
+        .args
+        .iter()
+        .map(type_ref_name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{}<{args}>", ty.name)
 }

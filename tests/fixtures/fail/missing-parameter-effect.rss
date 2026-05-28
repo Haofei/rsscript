@@ -1,0 +1,10 @@
+// expect: RS0008
+mode: managed
+
+struct Image {
+    pixels: Buffer
+}
+
+fn inspect(image: Image) -> Unit {
+    Image.inspect(image: read image)
+}
