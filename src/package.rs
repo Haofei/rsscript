@@ -30,6 +30,7 @@ pub struct PackageReview {
     pub manifest_path: String,
     pub risk: PackageRisk,
     pub reasons: Vec<String>,
+    pub features: Vec<String>,
     pub summary: PackageReviewSummary,
     pub files: Vec<PackageReviewFile>,
     pub exports: Vec<PackageReviewExport>,
@@ -69,6 +70,7 @@ pub struct PackageReviewMetadata {
     pub package: PackageIdentity,
     pub risk: PackageRisk,
     pub reasons: Vec<String>,
+    pub features: Vec<String>,
     pub summary: PackageReviewSummary,
     pub files: Vec<PackageReviewFile>,
     pub exports: Vec<PackageReviewExport>,
@@ -679,6 +681,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
             kind: source.kind,
         })
         .collect();
+    let features = manifest.features.keys().cloned().collect::<Vec<_>>();
     let exports = package_review_exports(sources, &review_map);
 
     Ok(PackageReview {
@@ -690,6 +693,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         manifest_path: package.manifest_path.display().to_string(),
         risk,
         reasons,
+        features,
         summary,
         files,
         exports,
@@ -1401,6 +1405,12 @@ pub fn format_package_review_human(review: &PackageReview) -> String {
             output.push_str(&format!("  - {reason}\n"));
         }
     }
+    if !review.features.is_empty() {
+        output.push_str(&format!(
+            "package features: {}\n",
+            review.features.join(", ")
+        ));
+    }
     if let Some(native) = &review.native_rust {
         output.push_str(&format!("native rust: {}", native.path));
         if let Some(crate_name) = &native.crate_name {
@@ -1441,6 +1451,12 @@ pub fn format_package_metadata_human(metadata: &PackageMetadataReport) -> String
     ));
     for reason in &metadata.reasons {
         output.push_str(&format!("reason: {reason}\n"));
+    }
+    if !metadata.metadata.features.is_empty() {
+        output.push_str(&format!(
+            "package features: {}\n",
+            metadata.metadata.features.join(", ")
+        ));
     }
     output.push_str(&format_package_review_exports_human(
         &metadata.metadata.exports,
@@ -2750,6 +2766,7 @@ fn package_review_metadata_from_review(review: &PackageReview) -> PackageReviewM
         package: review.package.clone(),
         risk: review.risk,
         reasons: review.reasons.clone(),
+        features: review.features.clone(),
         summary: review.summary.clone(),
         files: review.files.clone(),
         exports: review.exports.clone(),
@@ -3803,6 +3820,10 @@ fn package_review_hash(review: &PackageReview) -> String {
     input.push('\n');
     for reason in &review.reasons {
         input.push_str(reason);
+        input.push('\n');
+    }
+    for feature in &review.features {
+        input.push_str(feature);
         input.push('\n');
     }
     input.push_str(&format!(

@@ -3287,10 +3287,12 @@ native fn Json.parse(text: read String) -> Result<fresh JsonValue, JsonError>
     let review = review_package_dir(&temp_dir).expect("package review should succeed");
     let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
         .expect("package review JSON should parse");
+    let human = rsscript::format_package_review_human(&review);
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert_eq!(json["package"]["name"], "rss-json");
     assert_eq!(json["risk"], "high");
+    assert_eq!(json["features"], serde_json::json!(["streaming"]));
     assert_eq!(json["summary"]["interface_files"], 1);
     assert_eq!(json["summary"]["source_files"], 1);
     assert!(json["reasons"].as_array().is_some_and(|reasons| {
@@ -3303,6 +3305,7 @@ native fn Json.parse(text: read String) -> Result<fresh JsonValue, JsonError>
             .iter()
             .any(|reason| reason == "native Rust wrapper enabled")
     }));
+    assert!(human.contains("package features: streaming"));
 }
 
 #[test]
@@ -3797,7 +3800,9 @@ fn package_metadata_dry_run_reports_review_metadata_without_writing() {
         &temp_dir,
         "rss-metadata",
         "0.1.0",
-        "",
+        r#"[features]
+fast = []
+"#,
         r#"pub fn add(left: Int, right: Int) -> Int
 "#,
     );
@@ -3814,6 +3819,7 @@ fn package_metadata_dry_run_reports_review_metadata_without_writing() {
     assert_eq!(json["written"], false);
     assert_eq!(json["metadata"]["schema"], "rss.review.package.v1");
     assert_eq!(json["metadata"]["package"]["name"], "rss-metadata");
+    assert_eq!(json["metadata"]["features"], serde_json::json!(["fast"]));
 }
 
 #[test]
