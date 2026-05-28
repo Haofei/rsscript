@@ -988,6 +988,29 @@ fn copy(path: read Path) -> Result<Unit, FileError> {
 }
 
 #[test]
+fn rust_lowering_maps_native_call_boundaries() {
+    let source = r#"
+fn host_emit(message: read String) -> Unit
+    effects(native)
+
+pub fn run() -> Unit {
+    host_emit(message: read "host")
+    Log.write(message: read "core")
+}
+"#;
+    let lowered = lower_source_to_rust_with_map("native.rss", source).expect("source should lower");
+    let native_calls = lowered
+        .source_map
+        .iter()
+        .filter(|entry| entry.kind == "native_call")
+        .collect::<Vec<_>>();
+
+    assert_eq!(native_calls.len(), 2);
+    assert!(native_calls.iter().any(|entry| entry.source.line == 6));
+    assert!(native_calls.iter().any(|entry| entry.source.line == 7));
+}
+
+#[test]
 fn rustc_diagnostics_map_back_to_rsscript_source_spans() {
     let source = r#"
 features: local

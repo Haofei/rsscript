@@ -5,6 +5,7 @@ use std::process::Command;
 
 use crate::analyzer::analyze_source_with_core;
 use crate::diagnostic::{Diagnostic, Severity, Span, code};
+use crate::interfaces::builtin_interfaces;
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature,
     FunctionDecl, GenericBound, GenericParam, Item, Param, Program, Stmt, TypeDecl, TypeKind,
@@ -287,6 +288,7 @@ pub fn check_generated_rust_package(package_dir: &Path) -> Result<RustBackendChe
 struct RustLowerer<'a> {
     program: &'a Program,
     type_kinds: BTreeMap<String, TypeKind>,
+    native_boundary_callees: BTreeSet<String>,
     param_effects: BTreeMap<String, DataEffect>,
     mutated_bindings: BTreeSet<String>,
     source_map: Vec<RustSourceMapEntry>,
@@ -302,10 +304,12 @@ impl<'a> RustLowerer<'a> {
                 Item::Function(_) => None,
             })
             .collect();
+        let native_boundary_callees = collect_native_boundary_callees(program);
 
         Self {
             program,
             type_kinds,
+            native_boundary_callees,
             param_effects: BTreeMap::new(),
             mutated_bindings: BTreeSet::new(),
             source_map: Vec::new(),
@@ -639,12 +643,19 @@ impl<'a> RustLowerer<'a> {
                 self.record_expr_source_map(base, generated);
                 self.record_expr_source_map(index, generated);
             }
-            Expr::Call { args, span, .. } => {
+            Expr::Call { callee, args, span } => {
                 self.source_map.push(RustSourceMapEntry {
                     kind: "call".to_string(),
                     source: span.clone(),
                     generated: generated.clone(),
                 });
+                if self.is_native_boundary_call(callee) {
+                    self.source_map.push(RustSourceMapEntry {
+                        kind: "native_call".to_string(),
+                        source: span.clone(),
+                        generated: generated.clone(),
+                    });
+                }
                 for arg in args {
                     self.source_map.push(RustSourceMapEntry {
                         kind: "named_arg".to_string(),
@@ -674,6 +685,11 @@ impl<'a> RustLowerer<'a> {
             Expr::Closure { body, .. } => self.record_block_source_map(body, generated),
             Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
         }
+    }
+
+    fn is_native_boundary_call(&self, callee: &Callee) -> bool {
+        self.native_boundary_callees
+            .contains(&native_boundary_callee_key(callee))
     }
 
     fn lower_expr(&mut self, expr: &Expr) -> String {
@@ -915,6 +931,42 @@ impl<'a> RustLowerer<'a> {
             return false;
         }
         matches!(self.type_kinds.get(&ty.name), Some(TypeKind::Class))
+    }
+}
+
+fn collect_native_boundary_callees(program: &Program) -> BTreeSet<String> {
+    let mut callees = BTreeSet::new();
+    for (file, source) in builtin_interfaces() {
+        let interface = parse_source(file, source);
+        collect_native_boundary_callees_from_program(&interface, &mut callees);
+    }
+    collect_native_boundary_callees_from_program(program, &mut callees);
+    callees
+}
+
+fn collect_native_boundary_callees_from_program(program: &Program, callees: &mut BTreeSet<String>) {
+    for item in &program.items {
+        let Item::Function(function) = item else {
+            continue;
+        };
+        if function.effects.iter().any(is_native_boundary) {
+            callees.insert(native_boundary_function_key(&function.name));
+        }
+    }
+}
+
+fn native_boundary_function_key(name: &str) -> String {
+    if let Some((namespace, name)) = name.rsplit_once('.') {
+        format!("{}.{}", type_root_name(namespace), name)
+    } else {
+        name.to_string()
+    }
+}
+
+fn native_boundary_callee_key(callee: &Callee) -> String {
+    match callee {
+        Callee::Name(name) => name.clone(),
+        Callee::Qualified { namespace, name } => format!("{}.{}", type_root_name(namespace), name),
     }
 }
 
