@@ -345,14 +345,16 @@ impl Hir {
         self.type_info(name).map(|info| info.kind)
     }
 
-    pub fn fields_named(&self, field_name: &str) -> impl Iterator<Item = &FieldInfo> {
+    #[cfg(test)]
+    fn fields_named(&self, field_name: &str) -> impl Iterator<Item = &FieldInfo> {
         self.fields_by_name
             .get(field_name)
             .into_iter()
             .flat_map(|fields| fields.iter())
     }
 
-    pub fn is_handle_field_name(&self, field_name: &str) -> bool {
+    #[cfg(test)]
+    fn is_handle_field_name(&self, field_name: &str) -> bool {
         self.fields_named(field_name).any(|field| field.is_handle)
     }
 

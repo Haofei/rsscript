@@ -29,7 +29,7 @@ It currently implements:
 - Initial local flow state propagation for local bindings, managed bindings, scoped `with` resource bindings, `manage` / `take` moves, and retaining calls
 - AST-driven mode and call checks for local-only features, named arguments, data effects, and retaining APIs
 - Body checks for managed-to-local, use-after-move, early-exit-aware `fresh` returns, active resource escape, resolved handle-field `take`, managed closure captures, and resource escape traversal now consume HIR body facts and local flow entry state
-- Local ownership, use-after-move, `fresh` return, managed closure capture, resource-retain escape, and handle-field `take` checks now index statement uses, binding types, return proofs, field accesses, closure uses, and move/retain events from resolved HIR body trees
+- Local ownership, use-after-move, `fresh` return, managed closure capture, resource-retain escape, and handle-field `take` checks now index statement uses, binding types, return proofs, take-handle facts, closure uses, and move/retain events from resolved HIR body trees
 - Focused check modules for mode, calls, body semantics, and forbidden operator behavior
 - Fixture-based pass/fail scenario tests under `tests/fixtures`
 

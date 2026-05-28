@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use crate::diagnostic::Span;
 use crate::hir::{
     HirBinding, HirBindingKind, HirBlock, HirEffectEvent, HirEffectEventKind, HirExpr,
-    HirFieldAccess, HirFunctionBody, HirReturnProof, HirStmt,
+    HirFunctionBody, HirReturnProof, HirStmt, ParamEffect,
 };
 
 use super::body::Flow;
@@ -32,14 +32,20 @@ pub(crate) struct ManagedToLocalUse {
     pub(crate) span: Span,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TakeHandleField {
+    pub(crate) name: String,
+    pub(crate) span: Span,
+}
+
 pub(crate) struct LocalAnalysis {
     body: Option<HirFunctionBody>,
     events_by_span: HashMap<Span, Vec<HirEffectEvent>>,
     binding_types_by_span: HashMap<Span, String>,
-    field_accesses_by_span: HashMap<Span, HirFieldAccess>,
     return_proofs_by_span: HashMap<Span, HirReturnProof>,
     managed_closure_uses_by_span: HashMap<Span, Vec<(String, Span)>>,
     resource_escapes_by_with_span: HashMap<Span, Vec<ResourceEscape>>,
+    take_handle_fields: Vec<TakeHandleField>,
     flow_steps: Vec<LocalFlowStep>,
     flow_entry_states_by_span: HashMap<Span, BodyState>,
 }
@@ -104,10 +110,6 @@ impl LocalAnalysis {
             .as_ref()
             .and_then(|body| body.block.as_ref())
             .map_or_else(HashMap::new, index_binding_types_from_block);
-        let field_accesses_by_span = body
-            .as_ref()
-            .and_then(|body| body.block.as_ref())
-            .map_or_else(HashMap::new, index_field_accesses_from_block);
         let return_proofs_by_span = body
             .as_ref()
             .and_then(|body| body.block.as_ref())
@@ -120,6 +122,10 @@ impl LocalAnalysis {
             .as_ref()
             .and_then(|body| body.block.as_ref())
             .map_or_else(HashMap::new, index_resource_escapes_from_block);
+        let take_handle_fields = body
+            .as_ref()
+            .and_then(|body| body.block.as_ref())
+            .map_or_else(Vec::new, collect_take_handle_fields);
         let flow_steps = body
             .as_ref()
             .and_then(|body| body.block.as_ref())
@@ -131,10 +137,10 @@ impl LocalAnalysis {
             body,
             events_by_span,
             binding_types_by_span,
-            field_accesses_by_span,
             return_proofs_by_span,
             managed_closure_uses_by_span,
             resource_escapes_by_with_span,
+            take_handle_fields,
             flow_steps,
             flow_entry_states_by_span,
         }
@@ -156,10 +162,6 @@ impl LocalAnalysis {
         self.binding_types_by_span.get(span).map(String::as_str)
     }
 
-    pub(crate) fn field_access(&self, span: &Span) -> Option<&HirFieldAccess> {
-        self.field_accesses_by_span.get(span)
-    }
-
     pub(crate) fn return_proof(&self, span: &Span) -> Option<&HirReturnProof> {
         self.return_proofs_by_span.get(span)
     }
@@ -174,6 +176,10 @@ impl LocalAnalysis {
         self.resource_escapes_by_with_span
             .get(span)
             .map(Vec::as_slice)
+    }
+
+    pub(crate) fn take_handle_fields(&self) -> &[TakeHandleField] {
+        &self.take_handle_fields
     }
 
     pub(crate) fn flow_entry_state(&self, span: &Span) -> Option<&BodyState> {
@@ -399,19 +405,19 @@ fn collect_stmt_binding_types(statement: &HirStmt, types: &mut HashMap<Span, Str
     }
 }
 
-fn index_field_accesses_from_block(block: &HirBlock) -> HashMap<Span, HirFieldAccess> {
-    let mut accesses = HashMap::new();
-    collect_block_field_accesses(block, &mut accesses);
-    accesses
+fn collect_take_handle_fields(block: &HirBlock) -> Vec<TakeHandleField> {
+    let mut fields = Vec::new();
+    collect_block_take_handle_fields(block, &mut fields);
+    fields
 }
 
-fn collect_block_field_accesses(block: &HirBlock, accesses: &mut HashMap<Span, HirFieldAccess>) {
+fn collect_block_take_handle_fields(block: &HirBlock, fields: &mut Vec<TakeHandleField>) {
     for statement in &block.statements {
-        collect_stmt_field_accesses(statement, accesses);
+        collect_stmt_take_handle_fields(statement, fields);
     }
 }
 
-fn collect_stmt_field_accesses(statement: &HirStmt, accesses: &mut HashMap<Span, HirFieldAccess>) {
+fn collect_stmt_take_handle_fields(statement: &HirStmt, fields: &mut Vec<TakeHandleField>) {
     match statement {
         HirStmt::Let {
             value: Some(value), ..
@@ -419,10 +425,10 @@ fn collect_stmt_field_accesses(statement: &HirStmt, accesses: &mut HashMap<Span,
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value) => collect_expr_field_accesses(value, accesses),
+        | HirStmt::Expr(value) => collect_expr_take_handle_fields(value, fields),
         HirStmt::With { resource, body, .. } => {
-            collect_expr_field_accesses(resource, accesses);
-            collect_block_field_accesses(body, accesses);
+            collect_expr_take_handle_fields(resource, fields);
+            collect_block_take_handle_fields(body, fields);
         }
         HirStmt::If {
             condition,
@@ -430,19 +436,19 @@ fn collect_stmt_field_accesses(statement: &HirStmt, accesses: &mut HashMap<Span,
             else_body,
             ..
         } => {
-            collect_expr_field_accesses(condition, accesses);
-            collect_block_field_accesses(then_body, accesses);
+            collect_expr_take_handle_fields(condition, fields);
+            collect_block_take_handle_fields(then_body, fields);
             if let Some(else_body) = else_body {
-                collect_block_field_accesses(else_body, accesses);
+                collect_block_take_handle_fields(else_body, fields);
             }
         }
         HirStmt::Loop {
             condition, body, ..
         } => {
             if let Some(condition) = condition {
-                collect_expr_field_accesses(condition, accesses);
+                collect_expr_take_handle_fields(condition, fields);
             }
-            collect_block_field_accesses(body, accesses);
+            collect_block_take_handle_fields(body, fields);
         }
         HirStmt::Let { value: None, .. }
         | HirStmt::Return { value: None, .. }
@@ -452,27 +458,42 @@ fn collect_stmt_field_accesses(statement: &HirStmt, accesses: &mut HashMap<Span,
     }
 }
 
-fn collect_expr_field_accesses(expr: &HirExpr, accesses: &mut HashMap<Span, HirFieldAccess>) {
+fn collect_expr_take_handle_fields(expr: &HirExpr, fields: &mut Vec<TakeHandleField>) {
     match expr {
-        HirExpr::Field {
-            base, access, span, ..
+        HirExpr::Effect {
+            effect: ParamEffect::Take,
+            value,
+            span,
+            ..
         } => {
-            accesses.insert(span.clone(), access.clone());
-            collect_expr_field_accesses(base, accesses);
-        }
-        HirExpr::Call { args, .. } => {
-            for arg in args {
-                collect_expr_field_accesses(&arg.value, accesses);
+            if let HirExpr::Field { name, access, .. } = value.as_ref()
+                && access.is_handle
+            {
+                push_take_handle_field(fields, name.clone(), span.clone());
             }
+            collect_expr_take_handle_fields(value, fields);
         }
         HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => {
-            collect_expr_field_accesses(value, accesses);
+            collect_expr_take_handle_fields(value, fields);
         }
-        HirExpr::Closure { body, .. } => collect_block_field_accesses(body, accesses),
+        HirExpr::Field { base, .. } => collect_expr_take_handle_fields(base, fields),
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                collect_expr_take_handle_fields(&arg.value, fields);
+            }
+        }
+        HirExpr::Closure { body, .. } => collect_block_take_handle_fields(body, fields),
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn push_take_handle_field(fields: &mut Vec<TakeHandleField>, name: String, span: Span) {
+    let field = TakeHandleField { name, span };
+    if !fields.contains(&field) {
+        fields.push(field);
     }
 }
 
@@ -1756,21 +1777,27 @@ mod tests {
                         type_name: Some("Image".to_string()),
                         span: span(21),
                     }),
-                    HirStmt::Expr(HirExpr::Field {
-                        base: Box::new(HirExpr::Ident {
-                            name: "config".to_string(),
-                            type_name: Some("Config".to_string()),
+                    HirStmt::Expr(HirExpr::Effect {
+                        effect: ParamEffect::Take,
+                        value: Box::new(HirExpr::Field {
+                            base: Box::new(HirExpr::Ident {
+                                name: "config".to_string(),
+                                type_name: Some("Config".to_string()),
+                                span: span(22),
+                            }),
+                            name: "rules".to_string(),
+                            access: HirFieldAccess {
+                                function_name: "run".to_string(),
+                                name: "rules".to_string(),
+                                span: span(22),
+                                base_type: Some("Config".to_string()),
+                                type_name: Some("Rules".to_string()),
+                                is_handle: true,
+                            },
                             span: span(22),
                         }),
-                        name: "rules".to_string(),
-                        access: HirFieldAccess {
-                            function_name: "run".to_string(),
-                            name: "rules".to_string(),
-                            span: span(22),
-                            base_type: Some("Config".to_string()),
-                            type_name: Some("Rules".to_string()),
-                            is_handle: true,
-                        },
+                        events: Vec::new(),
+                        type_name: Some("Rules".to_string()),
                         span: span(22),
                     }),
                     HirStmt::Return {
@@ -1808,10 +1835,12 @@ mod tests {
 
         assert_eq!(state.value_type("pool"), Some("ResourcePool<File>"));
         assert_eq!(local_analysis.binding_type(&span(2)), Some("Image"));
-        assert!(
-            local_analysis
-                .field_access(&span(22))
-                .is_some_and(|access| access.is_handle)
+        assert_eq!(
+            local_analysis.take_handle_fields(),
+            &[TakeHandleField {
+                name: "rules".to_string(),
+                span: span(22),
+            }]
         );
         assert!(matches!(
             local_analysis.return_proof(&span(23)),

@@ -4,8 +4,8 @@ use crate::hir::{CallResolution, HirReturnProof, HirTypeKind, ResolvedCalleeKind
 use crate::syntax::ast::{Block, Callee, DataEffect, Expr, FunctionDecl, Item, LetKind, Stmt};
 
 use super::local::{
-    BodyState, LocalAnalysis, ManagedToLocalUse, MovedUse, ResourceEscapeKind, merge_if_state,
-    merge_loop_state,
+    BodyState, LocalAnalysis, ManagedToLocalUse, MovedUse, ResourceEscapeKind, TakeHandleField,
+    merge_if_state, merge_loop_state,
 };
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
@@ -23,6 +23,7 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
         let local_analysis = LocalAnalysis::new(analyzer.hir.function_body(&function.name));
         check_managed_to_local_uses(analyzer, &local_analysis);
         check_moved_uses(analyzer, &local_analysis);
+        check_take_handle_fields(analyzer, &local_analysis);
         let mut state = local_analysis.initial_state();
         check_block(
             analyzer,
@@ -79,9 +80,6 @@ fn check_stmt_semantics(
                 );
             }
 
-            if let Some(value) = &stmt.value {
-                check_take_of_handle_field(analyzer, local_analysis, value, stmt_state);
-            }
             Flow::Fallthrough
         }
         Stmt::Return(stmt) => {
@@ -90,19 +88,14 @@ fn check_stmt_semantics(
                 if function.returns_fresh {
                     check_fresh_return(analyzer, local_analysis, function, value, return_state);
                 }
-                check_take_of_handle_field(analyzer, local_analysis, value, return_state);
             }
             Flow::Return
         }
         Stmt::With(stmt) => {
-            let stmt_state = local_analysis.flow_entry_state(&stmt.span).unwrap_or(state);
-            check_take_of_handle_field(analyzer, local_analysis, &stmt.resource, stmt_state);
             check_resource_escape(analyzer, local_analysis, &stmt.span);
             check_block(analyzer, local_analysis, function, &stmt.body, state)
         }
         Stmt::If(stmt) => {
-            let stmt_state = local_analysis.flow_entry_state(&stmt.span).unwrap_or(state);
-            check_take_of_handle_field(analyzer, local_analysis, &stmt.condition, stmt_state);
             apply_expr_effects(local_analysis, &stmt.condition, state);
 
             let base_state = state.clone();
@@ -130,9 +123,7 @@ fn check_stmt_semantics(
             merge_if_state(state, &base_state, then_state, then_flow, else_branch)
         }
         Stmt::Loop(stmt) => {
-            let stmt_state = local_analysis.flow_entry_state(&stmt.span).unwrap_or(state);
             if let Some(condition) = &stmt.condition {
-                check_take_of_handle_field(analyzer, local_analysis, condition, stmt_state);
                 apply_expr_effects(local_analysis, condition, state);
             }
 
@@ -154,13 +145,7 @@ fn check_stmt_semantics(
                 stmt.condition.is_some(),
             )
         }
-        Stmt::Expr(expr) => {
-            let stmt_state = local_analysis
-                .flow_entry_state(stmt_span(statement))
-                .unwrap_or(state);
-            check_take_of_handle_field(analyzer, local_analysis, expr, stmt_state);
-            Flow::Fallthrough
-        }
+        Stmt::Expr(_) => Flow::Fallthrough,
         Stmt::Break(_) => Flow::Break,
         Stmt::Continue(_) => Flow::Continue,
         Stmt::Unknown(_) => Flow::Fallthrough,
@@ -252,6 +237,12 @@ fn check_managed_to_local_uses(analyzer: &mut Analyzer<'_>, local_analysis: &Loc
     }
 }
 
+fn check_take_handle_fields(analyzer: &mut Analyzer<'_>, local_analysis: &LocalAnalysis) {
+    for field in local_analysis.take_handle_fields() {
+        take_handle_field_diagnostic(analyzer, field);
+    }
+}
+
 fn managed_to_local_diagnostic(analyzer: &mut Analyzer<'_>, managed_to_local: ManagedToLocalUse) {
     analyzer.diagnostics.push(
         Diagnostic::error(
@@ -271,6 +262,20 @@ fn managed_to_local_diagnostic(analyzer: &mut Analyzer<'_>, managed_to_local: Ma
             "create_local",
             "Create the value as `local` at its creation point.",
             "manual",
+        ),
+    );
+}
+
+fn take_handle_field_diagnostic(analyzer: &mut Analyzer<'_>, field: &TakeHandleField) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::TAKE_HANDLE_FIELD,
+            format!("cannot `take` handle field `{}`.", field.name),
+            field.span.clone(),
+            "take of handle field",
+        )
+        .with_cause(
+            "Handle fields are managed references and cannot be consumed as local inline values.",
         ),
     );
 }
@@ -325,111 +330,6 @@ fn check_managed_closure_captures(
                 ),
             );
         }
-    }
-}
-
-fn check_take_of_handle_field(
-    analyzer: &mut Analyzer<'_>,
-    local_analysis: &LocalAnalysis,
-    expr: &Expr,
-    state: &BodyState,
-) {
-    match expr {
-        Expr::Effect {
-            effect: DataEffect::Take,
-            value,
-            span,
-        } => {
-            if let Expr::Field {
-                base,
-                name,
-                span: field_span,
-            } = value.as_ref()
-                && is_handle_field(analyzer, local_analysis, state, base, name, field_span)
-            {
-                analyzer.diagnostics.push(
-                    Diagnostic::error(
-                        code::TAKE_HANDLE_FIELD,
-                        format!("cannot `take` handle field `{name}`."),
-                        span.clone(),
-                        "take of handle field",
-                    )
-                    .with_cause("Handle fields are managed references and cannot be consumed as local inline values."),
-                );
-            }
-            check_take_of_handle_field(analyzer, local_analysis, value, state);
-        }
-        Expr::Effect { value, .. } => {
-            check_take_of_handle_field(analyzer, local_analysis, value, state);
-        }
-        Expr::Manage { value, .. } => {
-            check_take_of_handle_field(analyzer, local_analysis, value, state);
-        }
-        Expr::Call { args, .. } => {
-            for arg in args {
-                check_take_of_handle_field(analyzer, local_analysis, &arg.value, state);
-            }
-        }
-        Expr::Field { base, .. } => {
-            check_take_of_handle_field(analyzer, local_analysis, base, state);
-        }
-        Expr::Closure { body, .. } => {
-            for statement in &body.statements {
-                check_take_of_handle_in_stmt(analyzer, local_analysis, statement, state);
-            }
-        }
-        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
-    }
-}
-
-fn check_take_of_handle_in_stmt(
-    analyzer: &mut Analyzer<'_>,
-    local_analysis: &LocalAnalysis,
-    statement: &Stmt,
-    state: &BodyState,
-) {
-    let state = local_analysis
-        .flow_entry_state(stmt_span(statement))
-        .unwrap_or(state);
-    match statement {
-        Stmt::Let(stmt) => {
-            if let Some(value) = &stmt.value {
-                check_take_of_handle_field(analyzer, local_analysis, value, state);
-            }
-        }
-        Stmt::Return(stmt) => {
-            if let Some(value) = &stmt.value {
-                check_take_of_handle_field(analyzer, local_analysis, value, state);
-            }
-        }
-        Stmt::With(stmt) => {
-            check_take_of_handle_field(analyzer, local_analysis, &stmt.resource, state);
-            for statement in &stmt.body.statements {
-                check_take_of_handle_in_stmt(analyzer, local_analysis, statement, state);
-            }
-        }
-        Stmt::If(stmt) => {
-            check_take_of_handle_field(analyzer, local_analysis, &stmt.condition, state);
-            for statement in &stmt.then_body.statements {
-                check_take_of_handle_in_stmt(analyzer, local_analysis, statement, state);
-            }
-            if let Some(else_body) = &stmt.else_body {
-                for statement in &else_body.statements {
-                    check_take_of_handle_in_stmt(analyzer, local_analysis, statement, state);
-                }
-            }
-        }
-        Stmt::Loop(stmt) => {
-            if let Some(condition) = &stmt.condition {
-                check_take_of_handle_field(analyzer, local_analysis, condition, state);
-            }
-            for statement in &stmt.body.statements {
-                check_take_of_handle_in_stmt(analyzer, local_analysis, statement, state);
-            }
-        }
-        Stmt::Expr(expr) => check_take_of_handle_field(analyzer, local_analysis, expr, state),
-        Stmt::Break(_) | Stmt::Continue(_) => {}
-        Stmt::Unknown(_) => {}
     }
 }
 
@@ -654,40 +554,5 @@ fn infer_call_type(
     match analyzer.resolve_call_site(callee, span) {
         CallResolution::Resolved { signature, .. } => signature.return_type,
         CallResolution::EnumVariant | CallResolution::Unknown => None,
-    }
-}
-
-fn is_handle_field(
-    analyzer: &Analyzer<'_>,
-    local_analysis: &LocalAnalysis,
-    state: &BodyState,
-    base: &Expr,
-    field_name: &str,
-    field_span: &crate::diagnostic::Span,
-) -> bool {
-    if let Some(field) = local_analysis.field_access(field_span) {
-        return field.is_handle;
-    }
-
-    if let Some(base_type) = infer_expr_type(analyzer, base, state) {
-        return analyzer
-            .hir
-            .type_info(&base_type)
-            .and_then(|type_info| type_info.fields.get(field_name))
-            .is_some_and(|field| field.is_handle);
-    }
-
-    !matches!(base, Expr::Ident(_, _)) && analyzer.hir.is_handle_field_name(field_name)
-}
-
-fn stmt_span(statement: &Stmt) -> &crate::diagnostic::Span {
-    match statement {
-        Stmt::Let(stmt) => &stmt.span,
-        Stmt::Return(stmt) => &stmt.span,
-        Stmt::With(stmt) => &stmt.span,
-        Stmt::If(stmt) => &stmt.span,
-        Stmt::Loop(stmt) => &stmt.span,
-        Stmt::Break(span) | Stmt::Continue(span) | Stmt::Unknown(span) => span,
-        Stmt::Expr(expr) => expr.span(),
     }
 }
