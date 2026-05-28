@@ -615,6 +615,28 @@ when the lowered Rust types satisfy Rust's ordinary thread-safety rules.
 RSScript v0.5 does not require a custom global tracing heap, moving collector,
 or actor runtime to make that work.
 
+This reference runtime model is normative at the RSScript-observable level:
+
+```text
+read x  acquires a shared runtime read view of managed x
+mut x   acquires an exclusive runtime write view of managed x
+```
+
+Ordinary concurrent contention serializes or waits according to the reference
+runtime lock semantics. It is not reported as an RSScript semantic error.
+Runtime diagnostics are reserved for poison, internal runtime failure, or
+reentrant conflict cases where the runtime cannot safely continue and can report
+an RSScript source span.
+
+Other runtime strategies may optimize the internals, but only if they are
+observationally equivalent at the RSScript level:
+
+```text
+aliases observe managed mutation according to the language model
+read/mut do not expose backend-specific borrow errors
+runtime failures are reported as RSScript diagnostics, not Rust panics
+```
+
 Reference-counting means strong cycles are representable but not automatically
 collected. Cyclic identity graphs should use `weak` fields at ownership
 back-edges so the cycle is review-visible.
@@ -662,11 +684,11 @@ unsupported  rejected before Rust lowering or reserved for later versions
 
 | Surface | v0.5 meaning | Current enforcement |
 | --- | --- | --- |
-| `read x` call-site effect | Callee may inspect `x`. It is not a snapshot guarantee. For managed handles this is a runtime read view; for plain lowered values it is a Rust shared borrow. | static argument/effect checking; dynamic managed read conflict reporting where `Managed<T>` read guards are used |
-| `mut x` call-site effect | Callee may mutate `x`. For managed handles, mutation must go through the runtime handle and require dynamic exclusive write access. | static argument/effect checking; dynamic managed write conflict reporting where `Managed<T>` write guards are used |
+| `read x` call-site effect | Callee may inspect `x`. It is not a snapshot guarantee. For managed handles this is a shared runtime read view; ordinary contention waits/serializes rather than becoming a semantic error. For plain lowered values it is a Rust shared borrow. | static argument/effect checking; dynamic runtime diagnostics only for poison/internal/reentrant failures where `Managed<T>` read guards are used |
+| `mut x` call-site effect | Callee may mutate `x`. For managed handles, mutation goes through the runtime handle and acquires an exclusive runtime write view; ordinary contention waits/serializes rather than becoming a semantic error. | static argument/effect checking; dynamic runtime diagnostics only for poison/internal/reentrant failures where `Managed<T>` write guards are used |
 | `take x` call-site effect | Callee consumes a local/owned value. It is not valid for managed handles or handle fields. | static checking for parameter effect, managed value take, handle-field take, and local move/use |
-| managed sharing | Managed values may be shared, stored, and cyclic. Strong cycles are representable and must use `weak` review markers at back edges when collection matters. | dynamic `Arc<RwLock<T>>` handle semantics for `Managed<T>`; weak handles implemented; cycle collection unsupported |
-| managed alias observes mutation | Aliases of the same managed handle observe mutation through the runtime handle. Ordering is the ordering of the generated Rust execution plus the runtime lock implementation; no stronger memory model is promised. | dynamic for `Managed<T>` aliases; not a compile-time proof |
+| managed sharing | Managed values may be shared, stored, and cyclic. The reference runtime is reference-counted and lock-mediated. Strong cycles are representable and must use `weak` review markers at back edges when collection matters. | dynamic `Arc<RwLock<T>>`-like handle semantics for `Managed<T>`; weak handles implemented; cycle collection unsupported |
+| managed alias observes mutation | Aliases of the same managed handle observe mutation through the runtime handle. Alternative runtimes may optimize internally only if this RSScript-observable reference semantics is preserved. | dynamic for `Managed<T>` aliases; not a compile-time proof |
 | managed -> local | A managed value cannot be silently recovered as a local exclusive value, including through `read`/`mut` wrappers, enum wrappers, handle-field access, or enum wrappers around handle-field access. | static |
 | managed boundary crossing | Managed values and Copy values may cross interface calls, async suspension points, and spawned task boundaries. Local values and resources may not cross those boundaries unless explicitly converted through `manage` or an approved resource container. | static for local/resource boundary checks where implemented; dynamic for managed handle behavior |
 | `manage x` | Moves a local value into a managed runtime handle; the local binding is no longer usable. | static move/use checking plus generated runtime handle creation |
@@ -701,11 +723,20 @@ RSScript managed mutation semantics are dynamically shared.
 
 Aliases observe mutation.
 
-Implementations may use runtime interior mutability, copy-on-write, cell-like storage, or another safe strategy.
+The reference v0.5 managed runtime is `Arc<RwLock<T>>`-like: `read` obtains a
+shared runtime read view, and `mut` obtains an exclusive runtime write view.
 
-If an implementation uses dynamic borrow guards internally, valid RSScript programs should not expose raw Rust borrow errors to the user.
+Ordinary lock contention is part of normal execution and waits or serializes. It
+is not an RSScript semantic error.
 
-Any runtime conflict must be reported as an RSScript runtime diagnostic with RSScript source location, not as a Rust panic pointing into generated code.
+Alternative implementations may use runtime interior mutability, copy-on-write,
+cell-like storage, or another safe strategy only if they preserve the same
+RSScript-observable reference semantics.
+
+Valid RSScript programs must not expose raw Rust borrow errors, lock poison
+panics, or backend-specific contention behavior to the user. Runtime failures
+must be reported as RSScript runtime diagnostics with RSScript source locations,
+not as Rust panics pointing into generated code.
 
 ---
 
@@ -730,6 +761,10 @@ If omitted, the file is managed-only and enables no advanced capability.
 A file without a `features:` declaration is managed-only:
 
 ```rust
+fn main() -> Unit {
+    Log.write(message: read "hello")
+    return Unit
+}
 ```
 
 This lowers entry friction for ordinary scripts.
@@ -1579,6 +1614,11 @@ Correct:
 cache_put(cache: mut cache, key: read key, value: read (manage image))
 ```
 
+The data-effect wrapper applies to the value produced by its inner expression.
+For `read (manage image)`, `manage image` is evaluated first and produces a
+managed temporary; `read` then applies to that temporary, not to the original
+local binding.
+
 ---
 
 ## 15.4 Failure and async
@@ -1677,11 +1717,17 @@ async call must be awaited or spawned
 (await expr)?
 ```
 
-`spawn` is an explicit task and retention boundary. It may retain non-Copy
-arguments until task completion. It may capture managed values and Copy values.
-It must not capture local values, local-inline fields, resources, or with-bound
-resources. To pass a local value to a spawned task, source must first cross the
-review-visible boundary:
+`spawn` is an explicit task and retention boundary. It is a built-in retaining
+boundary, not an ordinary function call. It may retain every non-Copy managed
+argument captured by the spawned operation until task completion.
+
+Although `spawn` retention is not written as `effects(retains(...))` on a user
+function signature, it is part of the semantic effect system. The compiler must
+record spawn captures as synthetic retention effects in review metadata.
+
+`spawn` may capture managed values and Copy values. It must not capture local
+values, local-inline fields, resources, or with-bound resources. To pass a local
+value to a spawned task, source must first cross the review-visible boundary:
 
 ```rust
 let shared = manage local_value
@@ -1732,6 +1778,7 @@ async function signature
 public async entry point
 await native async call
 spawn task
+spawn retains-until-task-complete captures
 detached task
 async call with mut parameter
 async call with retains
@@ -2045,6 +2092,36 @@ may allocate
 may abort current isolate on allocation failure
 ```
 
+`manage` is evaluated before any outer data-effect wrapper is applied.
+
+```rust
+Cache.put(value: read (manage image))
+```
+
+is equivalent to:
+
+```rust
+let __tmp = manage image
+Cache.put(value: read __tmp)
+```
+
+where `__tmp` is an expression-scoped managed temporary. The original local
+binding is moved at the `manage` expression and cannot be used again.
+
+Call arguments are evaluated in written source order. However, if any argument
+uses `manage` or `take` to move a local binding, the same call may not also
+`read`, `mut`, `take`, or `manage` that original local binding in another
+argument. This rule avoids making named argument order part of review reasoning.
+
+Invalid:
+
+```rust
+Foo.run(
+    a: read (manage image),
+    b: read image,
+)
+```
+
 ---
 
 ## 21.2 Failure
@@ -2290,11 +2367,15 @@ fn store<T: Managed>(box: mut Box<T>, value: read T) -> Unit
 
 ---
 
-## 24.7 Minimal interfaces, future capability contracts
+## 24.7 Minimal interfaces, future design candidate
 
-RSScript should not expose Rust-style traits at the source level. Generated Rust
-may use Rust traits as a lowering strategy, but RSScript diagnostics and public
-contracts must speak in RSScript terms.
+This section is a design candidate, not a required part of the v0.5 executable
+MVP.
+
+RSScript interfaces are not Rust traits. RSScript should not expose Rust-style
+traits at the source level. Generated Rust may use Rust traits as a lowering
+strategy, but RSScript diagnostics and public contracts must speak in RSScript
+terms.
 
 A future language-level `interface` feature should be minimal:
 
@@ -2331,6 +2412,9 @@ lifetime bounds
 arbitrary where clauses
 operator overloading
 auto method resolution
+implicit method dispatch
+auto-deref or auto-ref receiver matching
+interface inheritance
 default methods
 ```
 
@@ -2378,6 +2462,9 @@ self: read Self  = read through the managed boundary
 self: mut Self   = mutate through the managed/runtime boundary
 retains(value)   = may store a managed handle or managed value
 ```
+
+`Self` is only a placeholder type in interface signatures. `self` is an
+ordinary explicit named parameter by convention, not special receiver syntax.
 
 RSScript users do not need to choose between:
 
