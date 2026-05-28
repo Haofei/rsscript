@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::diagnostic::Span;
-use crate::hir::{HirBinding, HirBindingKind, HirEffectEvent, HirEffectEventKind};
+use crate::hir::{HirBinding, HirBindingKind, HirEffectEvent, HirEffectEventKind, HirFunctionBody};
 
 use super::body::Flow;
 
@@ -12,6 +12,50 @@ pub(crate) struct BodyState {
     pub(crate) managed: HashSet<String>,
     pub(crate) moved: HashMap<String, Span>,
     pub(crate) value_types: HashMap<String, String>,
+}
+
+pub(crate) struct LocalAnalysis {
+    body: Option<HirFunctionBody>,
+}
+
+impl LocalAnalysis {
+    pub(crate) fn new(body: Option<&HirFunctionBody>) -> Self {
+        Self {
+            body: body.cloned(),
+        }
+    }
+
+    pub(crate) fn initial_state(&self) -> BodyState {
+        let mut state = BodyState::default();
+        if let Some(body) = &self.body {
+            state.seed_params(&body.bindings);
+        }
+        state
+    }
+
+    pub(crate) fn apply_move_events(&self, span: &Span, state: &mut BodyState) {
+        state.apply_move_events(self.effect_events(span));
+    }
+
+    pub(crate) fn apply_retention_events(&self, span: &Span, state: &mut BodyState) {
+        state.apply_retention_events(self.effect_events(span));
+    }
+
+    fn effect_events(&self, span: &Span) -> &[HirEffectEvent] {
+        self.body
+            .as_ref()
+            .and_then(|body| events_at_span(&body.effect_events, span))
+            .unwrap_or(&[])
+    }
+}
+
+fn events_at_span<'a>(events: &'a [HirEffectEvent], span: &Span) -> Option<&'a [HirEffectEvent]> {
+    let start = events.iter().position(|event| event.span == *span)?;
+    let end = events[start..]
+        .iter()
+        .position(|event| event.span != *span)
+        .map_or(events.len(), |offset| start + offset);
+    Some(&events[start..end])
 }
 
 impl BodyState {
@@ -256,5 +300,51 @@ mod tests {
         assert!(!state.clean_locals.contains("cached"));
         assert!(!state.clean_locals.contains("image"));
         assert_eq!(state.moved["image"].line, 11);
+    }
+
+    #[test]
+    fn local_analysis_seeds_params_and_applies_events_by_span() {
+        let body = HirFunctionBody {
+            function_name: "run".to_string(),
+            bindings: vec![HirBinding {
+                function_name: "run".to_string(),
+                name: "pool".to_string(),
+                kind: HirBindingKind::Param,
+                span: span(1),
+                type_name: Some("ResourcePool<File>".to_string()),
+            }],
+            effect_events: vec![
+                HirEffectEvent {
+                    function_name: "run".to_string(),
+                    kind: HirEffectEventKind::Retain {
+                        callee: "Cache.store".to_string(),
+                        param: "value".to_string(),
+                    },
+                    binding_name: "cached".to_string(),
+                    span: span(20),
+                    value_span: span(20),
+                },
+                HirEffectEvent {
+                    function_name: "run".to_string(),
+                    kind: HirEffectEventKind::Manage,
+                    binding_name: "image".to_string(),
+                    span: span(21),
+                    value_span: span(21),
+                },
+            ],
+            ..HirFunctionBody::default()
+        };
+        let local_analysis = LocalAnalysis::new(Some(&body));
+        let mut state = local_analysis.initial_state();
+        state.bind_local("cached");
+        state.bind_local("image");
+
+        assert_eq!(state.value_type("pool"), Some("ResourcePool<File>"));
+
+        local_analysis.apply_retention_events(&span(20), &mut state);
+        local_analysis.apply_move_events(&span(21), &mut state);
+
+        assert!(!state.is_clean_local("cached"));
+        assert_eq!(state.move_span("image").map(|span| span.line), Some(21));
     }
 }

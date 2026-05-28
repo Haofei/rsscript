@@ -5,7 +5,7 @@ use crate::hir::{
 };
 use crate::syntax::ast::{Block, Callee, DataEffect, Expr, FunctionDecl, Item, LetKind, Stmt};
 
-use super::local::{BodyState, merge_if_state, merge_loop_state};
+use super::local::{BodyState, LocalAnalysis, merge_if_state, merge_loop_state};
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
     let functions: Vec<FunctionDecl> = analyzer
@@ -19,17 +19,16 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
         .collect();
 
     for function in functions {
-        let mut state = BodyState::default();
-        seed_function_bindings(analyzer, &function, &mut state);
-        check_block(analyzer, &function, &function.body, &mut state);
+        let local_analysis = LocalAnalysis::new(analyzer.hir.function_body(&function.name));
+        let mut state = local_analysis.initial_state();
+        check_block(
+            analyzer,
+            &local_analysis,
+            &function,
+            &function.body,
+            &mut state,
+        );
     }
-}
-
-fn seed_function_bindings(analyzer: &Analyzer<'_>, function: &FunctionDecl, state: &mut BodyState) {
-    let Some(body) = analyzer.hir.function_body(&function.name) else {
-        return;
-    };
-    state.seed_params(&body.bindings);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,14 +41,15 @@ pub(crate) enum Flow {
 
 fn check_block(
     analyzer: &mut Analyzer<'_>,
+    local_analysis: &LocalAnalysis,
     function: &FunctionDecl,
     block: &Block,
     state: &mut BodyState,
 ) -> Flow {
     for statement in &block.statements {
         check_moved_uses_in_stmt(analyzer, statement, state);
-        let flow = check_stmt_semantics(analyzer, function, statement, state);
-        apply_stmt_effects(analyzer, statement, state);
+        let flow = check_stmt_semantics(analyzer, local_analysis, function, statement, state);
+        apply_stmt_effects(analyzer, local_analysis, statement, state);
         if flow != Flow::Fallthrough {
             return flow;
         }
@@ -59,6 +59,7 @@ fn check_block(
 
 fn check_stmt_semantics(
     analyzer: &mut Analyzer<'_>,
+    local_analysis: &LocalAnalysis,
     function: &FunctionDecl,
     statement: &Stmt,
     state: &mut BodyState,
@@ -110,19 +111,31 @@ fn check_stmt_semantics(
         }
         Stmt::With(stmt) => {
             check_resource_escape(analyzer, &stmt.binding, &stmt.body);
-            check_block(analyzer, function, &stmt.body, state)
+            check_block(analyzer, local_analysis, function, &stmt.body, state)
         }
         Stmt::If(stmt) => {
             check_take_of_handle_field(analyzer, &stmt.condition, state);
-            apply_expr_effects(analyzer, &stmt.condition, state);
+            apply_expr_effects(local_analysis, &stmt.condition, state);
 
             let base_state = state.clone();
             let mut then_state = base_state.clone();
-            let then_flow = check_block(analyzer, function, &stmt.then_body, &mut then_state);
+            let then_flow = check_block(
+                analyzer,
+                local_analysis,
+                function,
+                &stmt.then_body,
+                &mut then_state,
+            );
 
             let else_branch = stmt.else_body.as_ref().map(|else_body| {
                 let mut else_state = base_state.clone();
-                let else_flow = check_block(analyzer, function, else_body, &mut else_state);
+                let else_flow = check_block(
+                    analyzer,
+                    local_analysis,
+                    function,
+                    else_body,
+                    &mut else_state,
+                );
                 (else_state, else_flow)
             });
 
@@ -131,12 +144,18 @@ fn check_stmt_semantics(
         Stmt::Loop(stmt) => {
             if let Some(condition) = &stmt.condition {
                 check_take_of_handle_field(analyzer, condition, state);
-                apply_expr_effects(analyzer, condition, state);
+                apply_expr_effects(local_analysis, condition, state);
             }
 
             let base_state = state.clone();
             let mut body_state = base_state.clone();
-            let body_flow = check_block(analyzer, function, &stmt.body, &mut body_state);
+            let body_flow = check_block(
+                analyzer,
+                local_analysis,
+                function,
+                &stmt.body,
+                &mut body_state,
+            );
 
             merge_loop_state(
                 state,
@@ -156,7 +175,12 @@ fn check_stmt_semantics(
     }
 }
 
-fn apply_stmt_effects(analyzer: &mut Analyzer<'_>, statement: &Stmt, state: &mut BodyState) {
+fn apply_stmt_effects(
+    analyzer: &mut Analyzer<'_>,
+    local_analysis: &LocalAnalysis,
+    statement: &Stmt,
+    state: &mut BodyState,
+) {
     match statement {
         Stmt::Let(stmt) => {
             match stmt.kind {
@@ -173,20 +197,20 @@ fn apply_stmt_effects(analyzer: &mut Analyzer<'_>, statement: &Stmt, state: &mut
                 {
                     state.record_type(stmt.name.clone(), type_name);
                 }
-                apply_expr_effects(analyzer, value, state);
+                apply_expr_effects(local_analysis, value, state);
             }
         }
         Stmt::Return(stmt) => {
             if let Some(value) = &stmt.value {
-                apply_expr_effects(analyzer, value, state);
+                apply_expr_effects(local_analysis, value, state);
             }
         }
         Stmt::With(stmt) => {
-            apply_expr_effects(analyzer, &stmt.resource, state);
+            apply_expr_effects(local_analysis, &stmt.resource, state);
         }
         Stmt::If(_) => {}
         Stmt::Loop(_) => {}
-        Stmt::Expr(expr) => apply_expr_effects(analyzer, expr, state),
+        Stmt::Expr(expr) => apply_expr_effects(local_analysis, expr, state),
         Stmt::Break(_) | Stmt::Continue(_) => {}
         Stmt::Unknown(_) => {}
     }
@@ -199,50 +223,34 @@ fn hir_binding_type(analyzer: &Analyzer<'_>, span: &crate::diagnostic::Span) -> 
         .and_then(|binding| binding.type_name.clone())
 }
 
-fn apply_expr_effects(analyzer: &mut Analyzer<'_>, expr: &Expr, state: &mut BodyState) {
+fn apply_expr_effects(local_analysis: &LocalAnalysis, expr: &Expr, state: &mut BodyState) {
     match expr {
         Expr::Manage { value, span } => {
-            apply_move_events(analyzer, span, state);
-            apply_expr_effects(analyzer, value, state);
+            local_analysis.apply_move_events(span, state);
+            apply_expr_effects(local_analysis, value, state);
         }
         Expr::Effect {
             effect: DataEffect::Take,
             value,
             span,
         } => {
-            apply_move_events(analyzer, span, state);
-            apply_expr_effects(analyzer, value, state);
+            local_analysis.apply_move_events(span, state);
+            apply_expr_effects(local_analysis, value, state);
         }
-        Expr::Effect { value, .. } => apply_expr_effects(analyzer, value, state),
+        Expr::Effect { value, .. } => apply_expr_effects(local_analysis, value, state),
         Expr::Call { args, span, .. } => {
-            apply_retention_events(analyzer, span, state);
+            local_analysis.apply_retention_events(span, state);
             for arg in args {
-                apply_expr_effects(analyzer, &arg.value, state);
+                apply_expr_effects(local_analysis, &arg.value, state);
             }
         }
-        Expr::Field { base, .. } => apply_expr_effects(analyzer, base, state),
+        Expr::Field { base, .. } => apply_expr_effects(local_analysis, base, state),
         Expr::Closure { .. }
         | Expr::Ident(_, _)
         | Expr::Number(_, _)
         | Expr::String(_, _)
         | Expr::Unknown(_) => {}
     }
-}
-
-fn apply_move_events(
-    analyzer: &Analyzer<'_>,
-    span: &crate::diagnostic::Span,
-    state: &mut BodyState,
-) {
-    state.apply_move_events(analyzer.hir.effect_events(span));
-}
-
-fn apply_retention_events(
-    analyzer: &Analyzer<'_>,
-    span: &crate::diagnostic::Span,
-    state: &mut BodyState,
-) {
-    state.apply_retention_events(analyzer.hir.effect_events(span));
 }
 
 fn check_moved_uses_in_stmt(analyzer: &mut Analyzer<'_>, statement: &Stmt, state: &BodyState) {
