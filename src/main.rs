@@ -816,6 +816,18 @@ fn run_review_map(json: bool, path: &str) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let diagnostics = sources
+        .iter()
+        .flat_map(|source| analyze_source(&source.path, &source.contents))
+        .collect::<Vec<_>>();
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity.is_error())
+    {
+        print_diagnostics(json, &diagnostics);
+        return ExitCode::from(1);
+    }
+
     let source_refs = sources
         .iter()
         .map(|source| (source.path.as_str(), source.contents.as_str()))

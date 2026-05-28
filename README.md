@@ -417,6 +417,8 @@ rss verify-rust [--json] <file.rss> --out-dir <directory>
 
 `rss lint` runs the same frontend checks and emits warning diagnostics for reviewability issues. The first lint is `RSL001`, which flags public signatures that exceed the current review budget for parameter count, generic parameter count, effect count, or nested type depth.
 
+`rss review --map` checks inputs before emitting a map. Files with frontend errors produce diagnostics instead of potentially misleading review classifications.
+
 If a lowered package contains `fn main() -> Unit` or `fn main() -> Result<Unit, E>`, `rss lower --rust --out-dir` also emits a Rust `src/main.rs` harness. `rss run <file.rss>` uses the same lowering path, writes a temporary Rust package, and delegates execution to `cargo run`. Use `rss run <file.rss> --out-dir <directory>` to keep the generated Rust package for inspection.
 
 `rss verify-rust <file.rss> --out-dir <directory>` keeps the generated package used for backend checking, including `rsscript-source-map.json`, so unmappable rustc diagnostics can be inspected against the generated Rust.
