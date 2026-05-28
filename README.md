@@ -10,7 +10,7 @@ It currently implements:
 - `rss check <file.rss>` with human diagnostics
 - `rss check --json <file.rss>` with serde-backed machine-readable diagnostics
 - `rss fmt <file.rss>` as a parse/check gate that prints the source unchanged when valid
-- `rss review <old.rss> <new.rss>` for a first-pass API/effect/freshness diff
+- `rss review <old.rss> <new.rss>` for a first-pass API/type/effect/freshness diff
 - Lexer, lightweight parser, syntax AST, HIR signature table, and semantic checks for the review-critical v0.4.1 rules
 - Builtin signatures for the current fixture stdlib surface, including `Image`, `File`, `Map`, `ResourcePool`, `Json`, `Csv`, and cache/config helpers
 - HIR type and field tables for class/struct/resource declarations and handle fields
@@ -32,7 +32,7 @@ Implemented diagnostic classes include:
 - resource fields and resource escape from `with`
 - local capture by managed closures
 - `take` of handle fields
-- API, effect, mode, and freshness changes in `rss review`
+- API, type layout, effect, mode, and freshness changes in `rss review`
 - likely operator overload attempts
 
 Non-goals for this stage:
@@ -51,7 +51,7 @@ Near-term roadmap:
 
 1. Expand HIR from declarations into resolved statements and expressions.
 2. Extend branch-aware CleanLocal dataflow to loops and early exits.
-3. Expand `rss review` from function signatures into field/type layout and local/manage boundary diffs.
+3. Expand `rss review` from API/type layout into local/manage boundary diffs.
 
 Run:
 

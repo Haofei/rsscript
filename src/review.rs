@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::syntax::ast::{DataEffect, EffectDecl, FileMode, FunctionDecl, Item, Param, TypeRef};
+use crate::syntax::ast::{
+    DataEffect, EffectDecl, FieldDecl, FileMode, FunctionDecl, Item, Param, TypeDecl, TypeKind,
+    TypeRef,
+};
 use crate::syntax::parse_source;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,15 +33,34 @@ pub fn review_sources(
         });
     }
 
+    let old_types = collect_type_sigs(&old_program.items);
+    let new_types = collect_type_sigs(&new_program.items);
+    let type_names: BTreeSet<_> = old_types.keys().chain(new_types.keys()).cloned().collect();
+
+    for name in type_names {
+        match (old_types.get(&name), new_types.get(&name)) {
+            (Some(_), None) => findings.push(ReviewFinding {
+                code: "RSR007".to_string(),
+                summary: format!("type `{name}` was removed."),
+            }),
+            (None, Some(_)) => findings.push(ReviewFinding {
+                code: "RSR008".to_string(),
+                summary: format!("type `{name}` was added."),
+            }),
+            (Some(old), Some(new)) => compare_type(old, new, &mut findings),
+            (None, None) => {}
+        }
+    }
+
     let old_functions = collect_function_sigs(&old_program.items);
     let new_functions = collect_function_sigs(&new_program.items);
-    let names: BTreeSet<_> = old_functions
+    let function_names: BTreeSet<_> = old_functions
         .keys()
         .chain(new_functions.keys())
         .cloned()
         .collect();
 
-    for name in names {
+    for name in function_names {
         match (old_functions.get(&name), new_functions.get(&name)) {
             (Some(_), None) => findings.push(ReviewFinding {
                 code: "RSR002".to_string(),
@@ -82,6 +104,48 @@ struct ParamSig {
     name: String,
     effect: Option<&'static str>,
     type_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TypeSig {
+    name: String,
+    kind: TypeKind,
+    fields: BTreeMap<String, FieldSig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FieldSig {
+    type_name: String,
+    is_handle: bool,
+}
+
+fn collect_type_sigs(items: &[Item]) -> BTreeMap<String, TypeSig> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Type(type_decl) => Some((type_decl.name.clone(), type_sig(type_decl))),
+            Item::Function(_) => None,
+        })
+        .collect()
+}
+
+fn type_sig(type_decl: &TypeDecl) -> TypeSig {
+    TypeSig {
+        name: type_decl.name.clone(),
+        kind: type_decl.kind,
+        fields: type_decl
+            .fields
+            .iter()
+            .map(|field| (field.name.clone(), field_sig(field)))
+            .collect(),
+    }
+}
+
+fn field_sig(field: &FieldDecl) -> FieldSig {
+    FieldSig {
+        type_name: type_name(&field.ty),
+        is_handle: field.is_handle,
+    }
 }
 
 fn collect_function_sigs(items: &[Item]) -> BTreeMap<String, FunctionSig> {
@@ -133,11 +197,39 @@ fn compare_function(old: &FunctionSig, new: &FunctionSig, findings: &mut Vec<Rev
     }
 }
 
+fn compare_type(old: &TypeSig, new: &TypeSig, findings: &mut Vec<ReviewFinding>) {
+    if old.kind != new.kind {
+        findings.push(ReviewFinding {
+            code: "RSR009".to_string(),
+            summary: format!(
+                "type `{}` kind changed from {} to {}.",
+                old.name,
+                type_kind_label(old.kind),
+                type_kind_label(new.kind)
+            ),
+        });
+    }
+    if old.fields != new.fields {
+        findings.push(ReviewFinding {
+            code: "RSR010".to_string(),
+            summary: format!("type `{}` field layout changed.", old.name),
+        });
+    }
+}
+
 fn file_mode_label(mode: Option<FileMode>) -> &'static str {
     match mode {
         Some(FileMode::Managed) => "managed",
         Some(FileMode::UsesLocal) => "uses-local",
         None => "<missing>",
+    }
+}
+
+fn type_kind_label(kind: TypeKind) -> &'static str {
+    match kind {
+        TypeKind::Class => "class",
+        TypeKind::Struct => "struct",
+        TypeKind::Resource => "resource",
     }
 }
 
