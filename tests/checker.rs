@@ -979,6 +979,14 @@ fn copy(path: read Path) -> Result<Unit, FileError> {
     assert!(
         lowered
             .rust_source
+            .contains("    {\n        let mut file = rsscript_runtime::file_open_read(&path)?;")
+    );
+    assert!(lowered.rust_source.contains(
+        "        rsscript_runtime::file_read_all(&mut file)?;\n        // rss:span kind=resource_drop"
+    ));
+    assert!(
+        lowered
+            .rust_source
             .contains("// rss:span kind=resource_drop file=resource.rss")
     );
     assert!(

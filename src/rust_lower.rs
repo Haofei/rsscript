@@ -575,12 +575,13 @@ impl<'a> RustLowerer<'a> {
                 } else {
                     resource
                 };
+                out.push_str(&format!("{pad}{{\n"));
+                let inner_pad = "    ".repeat(indent + 1);
                 out.push_str(&format!(
-                    "{pad}let mut {} = {};\n",
+                    "{inner_pad}let mut {} = {};\n",
                     rust_ident(&stmt.binding),
                     resource
                 ));
-                out.push_str(&format!("{pad}{{\n"));
                 self.lower_block(&stmt.body, out, indent + 1);
                 self.record_source_marker(out, indent + 1, "resource_drop", &stmt.span);
                 out.push_str(&format!("{pad}}}\n"));
