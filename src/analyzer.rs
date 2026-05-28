@@ -4,7 +4,7 @@ use crate::checks;
 use crate::diagnostic::{Diagnostic, code};
 use crate::hir::{DuplicateSymbolKind, Hir, HirTypeKind};
 use crate::lexer::{Token, lex};
-use crate::syntax::ast::{Callee, EffectDecl, Expr, Item, Stmt, TypeRef};
+use crate::syntax::ast::{Callee, DataEffect, EffectDecl, Expr, Item, Stmt, TypeRef};
 use crate::syntax::parse_source;
 
 pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
@@ -182,6 +182,60 @@ impl Analyzer<'_> {
                         .with_fix(
                             "fix_retains_parameter",
                             "Rename the retained parameter or remove this retention effect.",
+                            "manual",
+                        ),
+                    );
+                }
+            }
+
+            if function
+                .effects
+                .iter()
+                .any(|effect| matches!(effect, EffectDecl::Name(name) if name == "pure"))
+            {
+                for param in function
+                    .params
+                    .iter()
+                    .filter(|param| param.effect == Some(DataEffect::Mut))
+                {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::INVALID_PURE_EFFECT,
+                            format!(
+                                "`{}` is declared pure but parameter `{}` is mutable.",
+                                function.name, param.name
+                            ),
+                            param.span.clone(),
+                            "mutable parameter in pure function",
+                        )
+                        .with_cause("A `pure` function must not mutate reachable managed state.")
+                        .with_fix(
+                            "remove_pure_or_mut",
+                            "Remove `pure`, or change the parameter to `read` if the function does not mutate it.",
+                            "manual",
+                        ),
+                    );
+                }
+
+                for effect in function
+                    .effects
+                    .iter()
+                    .filter(|effect| matches!(effect, EffectDecl::Retains(_)))
+                {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::INVALID_PURE_EFFECT,
+                            format!(
+                                "`{}` is declared pure but also retains a parameter.",
+                                function.name
+                            ),
+                            function.span.clone(),
+                            "retention in pure function",
+                        )
+                        .with_cause("A `pure` function must not retain parameters after returning.")
+                        .with_fix(
+                            "remove_pure_or_retains",
+                            format!("Remove `pure` or remove `{}`.", effect_display(effect)),
                             "manual",
                         ),
                     );
@@ -550,6 +604,13 @@ fn split_top_level_type_args(args: &str) -> Vec<&str> {
 fn effect_name(effect: &EffectDecl) -> &str {
     match effect {
         EffectDecl::Name(name) | EffectDecl::Retains(name) => name,
+    }
+}
+
+fn effect_display(effect: &EffectDecl) -> String {
+    match effect {
+        EffectDecl::Name(name) => name.clone(),
+        EffectDecl::Retains(param) => format!("retains({param})"),
     }
 }
 

@@ -1,0 +1,12 @@
+// expect: RS0009
+mode: managed
+
+struct Image {
+    pixels: Buffer
+}
+
+fn normalize(image: mut Image) -> Image
+    effects(pure)
+{
+    return image
+}
