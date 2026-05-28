@@ -3699,6 +3699,7 @@ pub fn Cache.store(conn: mut DbConnection, image: read Image) -> Unit
     let review = review_package_dir(&temp_dir).expect("package review should succeed");
     let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
         .expect("package review JSON should parse");
+    let human = rsscript::format_package_review_human(&review);
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert_eq!(json["summary"]["public_types"], 2);
@@ -3733,6 +3734,10 @@ pub fn Cache.store(conn: mut DbConnection, image: read Image) -> Unit
                         .any(|reason| reason == "resource parameter `conn`")
             })
     }));
+    assert!(human.contains("exports:"));
+    assert!(human.contains("function Cache.store: review_if_changed"));
+    assert!(human.contains("retains(image)"));
+    assert!(human.contains("type DbConnection: review_if_changed"));
 }
 
 #[test]
@@ -3764,6 +3769,7 @@ fn helper() -> Unit {
     let review = review_package_dir(&temp_dir).expect("package review should succeed");
     let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
         .expect("package review JSON should parse");
+    let human = rsscript::format_package_review_human(&review);
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert_eq!(json["summary"]["public_functions"], 1);
@@ -3780,6 +3786,8 @@ fn helper() -> Unit {
                 })
         })
     }));
+    assert!(human.contains("function Api.run: unknown"));
+    assert!(human.contains("unknown review-map region"));
 }
 
 #[test]

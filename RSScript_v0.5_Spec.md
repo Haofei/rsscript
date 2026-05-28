@@ -969,7 +969,8 @@ cfg.workspace is inline local
 cfg.rules is a managed handle
 ```
 
-The runtime must trace handle fields in live local values.
+Live local values may contain managed handles, but those handles remain explicit
+runtime-managed references rather than hidden traced pointers.
 
 ---
 

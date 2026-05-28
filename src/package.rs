@@ -1408,6 +1408,7 @@ pub fn format_package_review_human(review: &PackageReview) -> String {
         }
         output.push('\n');
     }
+    output.push_str(&format_package_review_exports_human(&review.exports));
     output
 }
 
@@ -1440,6 +1441,27 @@ pub fn format_package_metadata_human(metadata: &PackageMetadataReport) -> String
     ));
     for reason in &metadata.reasons {
         output.push_str(&format!("reason: {reason}\n"));
+    }
+    output.push_str(&format_package_review_exports_human(
+        &metadata.metadata.exports,
+    ));
+    output
+}
+
+fn format_package_review_exports_human(exports: &[PackageReviewExport]) -> String {
+    if exports.is_empty() {
+        return String::new();
+    }
+    let mut output = String::from("exports:\n");
+    for export in exports {
+        output.push_str(&format!(
+            "  - {} {}: {}",
+            export.kind, export.name, export.classification
+        ));
+        if !export.reasons.is_empty() {
+            output.push_str(&format!(" ({})", export.reasons.join(", ")));
+        }
+        output.push('\n');
     }
     output
 }
