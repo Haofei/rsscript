@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::diagnostic::Span;
 use crate::hir::{
     HirBinding, HirBindingKind, HirBlock, HirEffectEvent, HirEffectEventKind, HirExpr,
-    HirFunctionBody, HirStmt,
+    HirFieldAccess, HirFunctionBody, HirStmt,
 };
 
 use super::body::Flow;
@@ -21,6 +21,7 @@ pub(crate) struct LocalAnalysis {
     body: Option<HirFunctionBody>,
     events_by_span: HashMap<Span, Vec<HirEffectEvent>>,
     binding_types_by_span: HashMap<Span, String>,
+    field_accesses_by_span: HashMap<Span, HirFieldAccess>,
 }
 
 impl LocalAnalysis {
@@ -34,11 +35,16 @@ impl LocalAnalysis {
             .as_ref()
             .and_then(|body| body.block.as_ref())
             .map_or_else(HashMap::new, index_binding_types_from_block);
+        let field_accesses_by_span = body
+            .as_ref()
+            .and_then(|body| body.block.as_ref())
+            .map_or_else(HashMap::new, index_field_accesses_from_block);
 
         Self {
             body,
             events_by_span,
             binding_types_by_span,
+            field_accesses_by_span,
         }
     }
 
@@ -75,6 +81,10 @@ impl LocalAnalysis {
 
     pub(crate) fn binding_type(&self, span: &Span) -> Option<&str> {
         self.binding_types_by_span.get(span).map(String::as_str)
+    }
+
+    pub(crate) fn field_access(&self, span: &Span) -> Option<&HirFieldAccess> {
+        self.field_accesses_by_span.get(span)
     }
 
     fn effect_events(&self, span: &Span) -> &[HirEffectEvent] {
@@ -227,6 +237,83 @@ fn collect_stmt_binding_types(statement: &HirStmt, types: &mut HashMap<Span, Str
         | HirStmt::Continue(_)
         | HirStmt::Expr(_)
         | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn index_field_accesses_from_block(block: &HirBlock) -> HashMap<Span, HirFieldAccess> {
+    let mut accesses = HashMap::new();
+    collect_block_field_accesses(block, &mut accesses);
+    accesses
+}
+
+fn collect_block_field_accesses(block: &HirBlock, accesses: &mut HashMap<Span, HirFieldAccess>) {
+    for statement in &block.statements {
+        collect_stmt_field_accesses(statement, accesses);
+    }
+}
+
+fn collect_stmt_field_accesses(statement: &HirStmt, accesses: &mut HashMap<Span, HirFieldAccess>) {
+    match statement {
+        HirStmt::Let {
+            value: Some(value), ..
+        }
+        | HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => collect_expr_field_accesses(value, accesses),
+        HirStmt::With { resource, body, .. } => {
+            collect_expr_field_accesses(resource, accesses);
+            collect_block_field_accesses(body, accesses);
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            collect_expr_field_accesses(condition, accesses);
+            collect_block_field_accesses(then_body, accesses);
+            if let Some(else_body) = else_body {
+                collect_block_field_accesses(else_body, accesses);
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                collect_expr_field_accesses(condition, accesses);
+            }
+            collect_block_field_accesses(body, accesses);
+        }
+        HirStmt::Let { value: None, .. }
+        | HirStmt::Return { value: None, .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn collect_expr_field_accesses(expr: &HirExpr, accesses: &mut HashMap<Span, HirFieldAccess>) {
+    match expr {
+        HirExpr::Field {
+            base, access, span, ..
+        } => {
+            accesses.insert(span.clone(), access.clone());
+            collect_expr_field_accesses(base, accesses);
+        }
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                collect_expr_field_accesses(&arg.value, accesses);
+            }
+        }
+        HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => {
+            collect_expr_field_accesses(value, accesses);
+        }
+        HirExpr::Closure { body, .. } => collect_block_field_accesses(body, accesses),
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
     }
 }
 
@@ -435,7 +522,7 @@ fn merge_fallthrough_states(base: &BodyState, left: &BodyState, right: &BodyStat
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hir::{CallResolution, HirBlock, HirExpr, HirStmt};
+    use crate::hir::{CallResolution, HirBlock, HirExpr, HirFieldAccess, HirStmt};
     use crate::syntax::ast::Callee;
 
     fn span(line: usize) -> Span {
@@ -531,6 +618,23 @@ mod tests {
                         type_name: Some("Image".to_string()),
                         span: span(21),
                     }),
+                    HirStmt::Expr(HirExpr::Field {
+                        base: Box::new(HirExpr::Ident {
+                            name: "config".to_string(),
+                            type_name: Some("Config".to_string()),
+                            span: span(22),
+                        }),
+                        name: "rules".to_string(),
+                        access: HirFieldAccess {
+                            function_name: "run".to_string(),
+                            name: "rules".to_string(),
+                            span: span(22),
+                            base_type: Some("Config".to_string()),
+                            type_name: Some("Rules".to_string()),
+                            is_handle: true,
+                        },
+                        span: span(22),
+                    }),
                 ],
                 span: span(1),
             }),
@@ -546,6 +650,11 @@ mod tests {
         assert_eq!(
             local_analysis.retained_value_spans(&span(20), "cached"),
             vec![span(20)]
+        );
+        assert!(
+            local_analysis
+                .field_access(&span(22))
+                .is_some_and(|access| access.is_handle)
         );
 
         local_analysis.apply_retention_events(&span(20), &mut state);

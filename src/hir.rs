@@ -281,7 +281,6 @@ pub struct Hir {
     call_resolutions_by_span: HashMap<Span, CallResolution>,
     bindings: Vec<HirBinding>,
     field_accesses: Vec<HirFieldAccess>,
-    field_accesses_by_span: HashMap<Span, HirFieldAccess>,
     effect_events: Vec<HirEffectEvent>,
     returns: Vec<HirReturn>,
     returns_by_span: HashMap<Span, HirReturn>,
@@ -370,10 +369,6 @@ impl Hir {
         self.function_bodies.get(function_name)
     }
 
-    pub fn field_access(&self, span: &Span) -> Option<&HirFieldAccess> {
-        self.field_accesses_by_span.get(span)
-    }
-
     pub fn return_fact(&self, span: &Span) -> Option<&HirReturn> {
         self.returns_by_span.get(span)
     }
@@ -444,11 +439,6 @@ impl Hir {
             .call_sites
             .iter()
             .map(|site| (site.span.clone(), site.resolution.clone()))
-            .collect();
-        self.field_accesses_by_span = facts
-            .field_accesses
-            .iter()
-            .map(|field| (field.span.clone(), field.clone()))
             .collect();
         self.returns_by_span = facts
             .returns
@@ -1891,9 +1881,11 @@ fn take_rules(config: mut Config) -> Unit {
         assert_eq!(field.type_name.as_deref(), Some("Rules"));
         assert!(field.is_handle);
         assert!(
-            hir.field_access(&field.span)
-                .expect("field access lookup by span works")
-                .is_handle
+            hir.function_body("take_rules")
+                .expect("body exists")
+                .field_accesses
+                .iter()
+                .any(|access| access.name == "rules" && access.is_handle)
         );
     }
 
