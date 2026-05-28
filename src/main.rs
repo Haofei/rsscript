@@ -1,7 +1,7 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rsscript::{
@@ -26,6 +26,7 @@ fn main() -> ExitCode {
         "fmt" => run_fmt(&args[2..]),
         "review" => run_review(&args[2..]),
         "lower" => run_lower(&args[2..]),
+        "run" => run_generated_rust(&args[2..]),
         "remap-rustc" => run_remap_rustc(&args[2..]),
         "verify-rust" => run_verify_rust(&args[2..]),
         _ => {
@@ -290,6 +291,72 @@ fn run_verify_rust(args: &[String]) -> ExitCode {
     }
 }
 
+fn run_generated_rust(args: &[String]) -> ExitCode {
+    let (_, path) = parse_path_args(args);
+    let Some(path) = path else {
+        print_usage();
+        return ExitCode::from(2);
+    };
+    let source = match fs::read_to_string(path) {
+        Ok(source) => source,
+        Err(error) => {
+            eprintln!("failed to read {path}: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let runtime_path = match default_runtime_path() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+    let package_name = generated_package_name(path);
+    let package = match lower_source_to_rust_package(
+        path,
+        &source,
+        &package_name,
+        &runtime_path.display().to_string(),
+    ) {
+        Ok(package) => package,
+        Err(diagnostics) => {
+            print_diagnostics(false, &diagnostics);
+            return ExitCode::from(1);
+        }
+    };
+    if package.main_rs.is_none() {
+        eprintln!("rss run requires a zero-argument `fn main() -> Unit`.");
+        return ExitCode::from(1);
+    }
+
+    let temp_dir = run_temp_dir(&package.package_name);
+    if let Err(error) = write_generated_rust_package(&temp_dir, &package) {
+        eprintln!("{error}");
+        cleanup_temp_dir(&temp_dir);
+        return ExitCode::from(2);
+    }
+    let status = match Command::new("cargo")
+        .arg("run")
+        .arg("--quiet")
+        .arg("--manifest-path")
+        .arg(temp_dir.join("Cargo.toml"))
+        .status()
+    {
+        Ok(status) => status,
+        Err(error) => {
+            eprintln!("failed to run cargo: {error}");
+            cleanup_temp_dir(&temp_dir);
+            return ExitCode::from(2);
+        }
+    };
+    cleanup_temp_dir(&temp_dir);
+
+    status
+        .code()
+        .map(|code| ExitCode::from(code as u8))
+        .unwrap_or_else(|| ExitCode::from(1))
+}
+
 fn run_remap_rustc(args: &[String]) -> ExitCode {
     let (json, paths) = parse_multi_path_args(args);
     let [source_map_path, rustc_json_path] = paths.as_slice() else {
@@ -503,12 +570,20 @@ fn generated_package_name(path: &str) -> String {
 }
 
 fn verify_temp_dir(package_name: &str) -> PathBuf {
+    temp_package_dir("rsscript-verify", package_name)
+}
+
+fn run_temp_dir(package_name: &str) -> PathBuf {
+    temp_package_dir("rsscript-run", package_name)
+}
+
+fn temp_package_dir(prefix: &str, package_name: &str) -> PathBuf {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
     env::temp_dir().join(format!(
-        "rsscript-verify-{package_name}-{}-{now}",
+        "{prefix}-{package_name}-{}-{now}",
         std::process::id()
     ))
 }
@@ -684,6 +759,7 @@ fn print_usage() {
     eprintln!("  rsscript fmt <file.rss>");
     eprintln!("  rsscript lower --rust <file.rss>");
     eprintln!("  rsscript lower --rust <file.rss> --out-dir <directory>");
+    eprintln!("  rsscript run <file.rss>");
     eprintln!("  rsscript remap-rustc [--json] <rsscript-source-map.json> <rustc-json-lines>");
     eprintln!("  rsscript verify-rust [--json] <file.rss>");
     eprintln!("  rsscript review [--json] --diff <old.rss> <new.rss>");

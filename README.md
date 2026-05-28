@@ -402,11 +402,12 @@ rss review [--json] --diff <old.rss> <new.rss>
 rss review [--json] --map <file-or-directory>
 rss lower --rust <file.rss>
 rss lower --rust <file.rss> --out-dir <directory>
+rss run <file.rss>
 rss remap-rustc [--json] <rsscript-source-map.json> <rustc-json-lines>
 rss verify-rust [--json] <file.rss>
 ```
 
-If a lowered package contains `fn main() -> Unit`, `rss lower --rust --out-dir` also emits a Rust `src/main.rs` harness. That package can be checked or run with Cargo once the generated Rust and runtime crate are supported by the local toolchain.
+If a lowered package contains `fn main() -> Unit`, `rss lower --rust --out-dir` also emits a Rust `src/main.rs` harness. `rss run <file.rss>` uses the same lowering path, writes a temporary Rust package, and delegates execution to `cargo run`.
 
 ---
 

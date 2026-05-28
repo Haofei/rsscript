@@ -293,6 +293,8 @@ RSScript source
   -> executable / library
 ```
 
+`rss run <file.rss>` is a convenience command over this pipeline. It lowers the file to a temporary Rust package and invokes Cargo on that package. It is not an interpreter and must not bypass frontend diagnostics, source mapping, or the runtime crate target ABI.
+
 The RSScript frontend is responsible for RSScript semantics.
 
 rustc is responsible for:
