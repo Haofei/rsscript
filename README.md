@@ -510,6 +510,19 @@ The goal is to make code clear enough that humans and tools can review it reliab
 
 ---
 
+## License
+
+Licensed under either of:
+
+```text
+Apache License, Version 2.0
+MIT license
+```
+
+at your option.
+
+---
+
 ## Design summary
 
 RSScript exists because AI can write code now.

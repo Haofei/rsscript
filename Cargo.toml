@@ -3,7 +3,7 @@ name = "rsscript"
 version = "0.1.0"
 edition = "2024"
 description = "RSScript v0.5 review-first front-end checker and Rust lowering prototype"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 
 [workspace]
 members = ["runtime"]
