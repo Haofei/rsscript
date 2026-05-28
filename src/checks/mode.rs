@@ -1,5 +1,5 @@
 use crate::analyzer::Analyzer;
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, code};
 use crate::syntax::ast::{
     DataEffect, Expr, FileMode as SyntaxFileMode, Item, LetKind, Stmt, TypeRef,
 };
@@ -142,7 +142,7 @@ fn check_type_ref(analyzer: &mut Analyzer<'_>, ty: &TypeRef) {
 
 fn mode_violation(analyzer: &mut Analyzer<'_>, summary: &str, span: crate::diagnostic::Span) {
     analyzer.diagnostics.push(
-        Diagnostic::error("RS0101", summary, span, "mode violation").with_fix(
+        Diagnostic::error(code::FILE_MODE_VIOLATION, summary, span, "mode violation").with_fix(
             "change_mode",
             "Change the file declaration to `mode: uses-local`.",
             "manual",

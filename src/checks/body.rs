@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, code};
 use crate::syntax::ast::{
     Block, CallArg, Callee, DataEffect, Expr, FunctionDecl, Item, LetKind, Stmt,
 };
@@ -76,7 +76,7 @@ fn check_stmt_semantics(
             {
                 analyzer.diagnostics.push(
                     Diagnostic::error(
-                        "RS0301",
+                        code::MANAGED_TO_LOCAL,
                         format!(
                             "managed value cannot be converted to local binding `{}`.",
                             stmt.name
@@ -397,7 +397,7 @@ fn check_moved_uses_in_stmt(analyzer: &mut Analyzer<'_>, statement: &Stmt, state
         if let Some(move_span) = state.moved.get(&name) {
             analyzer.diagnostics.push(
                 Diagnostic::error(
-                    "RS0401",
+                    code::USE_AFTER_MANAGE,
                     format!("`{name}` was moved into the managed runtime by `manage {name}`."),
                     span,
                     "used after manage",
@@ -423,7 +423,7 @@ fn check_managed_closure_captures(analyzer: &mut Analyzer<'_>, body: &Block, sta
         if state.locals.contains(&name) {
             analyzer.diagnostics.push(
                 Diagnostic::error(
-                    "RS0801",
+                    code::LOCAL_CAPTURED_BY_MANAGED_CLOSURE,
                     format!("managed closure captures local value `{name}`."),
                     span,
                     "local captured here",
@@ -451,7 +451,7 @@ fn check_take_of_handle_field(analyzer: &mut Analyzer<'_>, expr: &Expr, state: &
             {
                 analyzer.diagnostics.push(
                     Diagnostic::error(
-                        "RS0901",
+                        code::TAKE_HANDLE_FIELD,
                         format!("cannot `take` handle field `{name}`."),
                         span.clone(),
                         "take of handle field",
@@ -641,7 +641,7 @@ fn resource_escape_diagnostic(
 ) {
     analyzer.diagnostics.push(
         Diagnostic::error(
-            "RS0702",
+            code::RESOURCE_ESCAPE,
             format!("resource `{binding}` cannot escape its `with` block."),
             span,
             "resource escapes",
@@ -657,7 +657,7 @@ fn resource_capture_diagnostic(
 ) {
     analyzer.diagnostics.push(
         Diagnostic::error(
-            "RS0702",
+            code::RESOURCE_ESCAPE,
             format!("resource `{binding}` cannot be captured by a managed closure."),
             span,
             "resource captured",
@@ -690,7 +690,7 @@ fn check_fresh_return(
         {
             analyzer.diagnostics.push(
                 Diagnostic::warning(
-                    "RS0602",
+                    code::FRESHNESS_UNKNOWN,
                     format!(
                         "freshness of return value in `{}` could not be proven.",
                         function.name
@@ -712,7 +712,7 @@ fn check_fresh_return(
             if !constructor_is_struct && !call_returns_fresh {
                 analyzer.diagnostics.push(
                     Diagnostic::warning(
-                        "RS0602",
+                        code::FRESHNESS_UNKNOWN,
                         format!(
                             "freshness of return value in `{}` could not be proven.",
                             function.name
@@ -730,7 +730,7 @@ fn check_fresh_return(
         Expr::Field { span, .. } | Expr::Closure { span, .. } | Expr::Unknown(span) => {
             analyzer.diagnostics.push(
                 Diagnostic::warning(
-                    "RS0602",
+                    code::FRESHNESS_UNKNOWN,
                     format!(
                         "freshness of return value in `{}` could not be proven.",
                         function.name
@@ -754,7 +754,7 @@ fn fresh_return_diagnostic(
 ) {
     analyzer.diagnostics.push(
         Diagnostic::error(
-            "RS0601",
+            code::FRESH_RETURN_NOT_CLEAN,
             format!(
                 "fresh function `{}` returns managed value `{name}`.",
                 function.name

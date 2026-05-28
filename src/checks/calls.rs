@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, code};
 use crate::syntax::ast::{Block, CallArg, Callee, DataEffect, Expr, Item, LetKind, Stmt};
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
@@ -83,7 +83,7 @@ fn check_call_args(
         if arg.name.is_none() {
             analyzer.diagnostics.push(
                 Diagnostic::error(
-                    "RS0201",
+                    code::UNNAMED_ARGUMENT,
                     format!("call to `{call_name}` uses an unnamed argument."),
                     arg.span.clone(),
                     "argument must be named",
@@ -122,7 +122,7 @@ fn check_call_args(
         if expr_data_effect(&arg.value) != Some(*expected) {
             analyzer.diagnostics.push(
                 Diagnostic::error(
-                    "RS0202",
+                    code::MISSING_DATA_EFFECT,
                     format!("argument `{name}` for `{call_name}` is missing `{expected}`."),
                     arg.value.span().clone(),
                     "missing data effect",
@@ -154,7 +154,7 @@ fn check_call_args(
         {
             analyzer.diagnostics.push(
                 Diagnostic::error(
-                    "RS0501",
+                    code::LOCAL_VALUE_RETAINED,
                     format!("retaining API `{call_name}` cannot retain local value `{var}`."),
                     span.clone(),
                     "local value retained",

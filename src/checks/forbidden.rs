@@ -1,5 +1,5 @@
 use crate::analyzer::Analyzer;
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, code};
 use crate::lexer::TokenKind;
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
@@ -30,7 +30,7 @@ fn check_operator_overload_attempts(analyzer: &mut Analyzer<'_>) {
         if !left_number && !right_number && likely_type_name {
             analyzer.diagnostics.push(
                 Diagnostic::error(
-                    "RS1001",
+                    code::OPERATOR_OVERLOAD_ATTEMPT,
                     "operators cannot be overloaded for user-defined types.",
                     analyzer.tokens[i].span.clone(),
                     "operator on non-builtin-looking value",

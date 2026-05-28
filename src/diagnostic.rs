@@ -1,5 +1,37 @@
 use serde::Serialize;
 
+pub mod code {
+    pub const MISSING_FILE_MODE: &str = "RS0001";
+    pub const MISSING_RETURN_TYPE: &str = "RS0002";
+    pub const MISSING_PARAMETER_TYPE: &str = "RS0003";
+    pub const UNKNOWN_EFFECT: &str = "RS0004";
+    pub const FILE_MODE_VIOLATION: &str = "RS0101";
+    pub const UNNAMED_ARGUMENT: &str = "RS0201";
+    pub const MISSING_DATA_EFFECT: &str = "RS0202";
+    pub const MANAGED_TO_LOCAL: &str = "RS0301";
+    pub const USE_AFTER_MANAGE: &str = "RS0401";
+    pub const LOCAL_VALUE_RETAINED: &str = "RS0501";
+    pub const FRESH_RETURN_NOT_CLEAN: &str = "RS0601";
+    pub const FRESHNESS_UNKNOWN: &str = "RS0602";
+    pub const RESOURCE_FIELD: &str = "RS0701";
+    pub const RESOURCE_ESCAPE: &str = "RS0702";
+    pub const LOCAL_CAPTURED_BY_MANAGED_CLOSURE: &str = "RS0801";
+    pub const TAKE_HANDLE_FIELD: &str = "RS0901";
+    pub const OPERATOR_OVERLOAD_ATTEMPT: &str = "RS1001";
+
+    pub const REVIEW_MODE_CHANGED: &str = "RSR001";
+    pub const REVIEW_FUNCTION_REMOVED: &str = "RSR002";
+    pub const REVIEW_FUNCTION_ADDED: &str = "RSR003";
+    pub const REVIEW_PARAMS_CHANGED: &str = "RSR004";
+    pub const REVIEW_RETURN_CHANGED: &str = "RSR005";
+    pub const REVIEW_EFFECTS_CHANGED: &str = "RSR006";
+    pub const REVIEW_TYPE_REMOVED: &str = "RSR007";
+    pub const REVIEW_TYPE_ADDED: &str = "RSR008";
+    pub const REVIEW_TYPE_KIND_CHANGED: &str = "RSR009";
+    pub const REVIEW_TYPE_FIELDS_CHANGED: &str = "RSR010";
+    pub const REVIEW_BOUNDARY_CHANGED: &str = "RSR011";
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Severity {
     Error,
@@ -153,87 +185,87 @@ pub fn format_diagnostics_human(diagnostics: &[Diagnostic]) -> String {
 
 static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
-        code: "RS0001",
+        code: code::MISSING_FILE_MODE,
         title: "missing file mode",
         explanation: "Every RSScript source file must declare `mode: managed` or `mode: uses-local` so reviewers can see whether local ownership features are allowed.",
     },
     DiagnosticExplanation {
-        code: "RS0002",
+        code: code::MISSING_RETURN_TYPE,
         title: "missing return type",
         explanation: "Function signatures must spell out their return type. The checker applies this review rule broadly so API contracts do not rely on inference.",
     },
     DiagnosticExplanation {
-        code: "RS0003",
+        code: code::MISSING_PARAMETER_TYPE,
         title: "missing parameter type",
         explanation: "Parameters must have explicit types so call effects, freshness, and resource rules can be checked against a stable signature.",
     },
     DiagnosticExplanation {
-        code: "RS0004",
+        code: code::UNKNOWN_EFFECT,
         title: "unknown effect",
         explanation: "The effect list contains an effect name outside the currently recognized MVP surface.",
     },
     DiagnosticExplanation {
-        code: "RS0101",
+        code: code::FILE_MODE_VIOLATION,
         title: "file mode violation",
         explanation: "`mode: managed` files cannot use local-only features such as `local`, `manage`, `take`, or `ResourcePool<T>`.",
     },
     DiagnosticExplanation {
-        code: "RS0201",
+        code: code::UNNAMED_ARGUMENT,
         title: "unnamed argument",
         explanation: "RSScript requires named call arguments so signature and review diffs remain readable.",
     },
     DiagnosticExplanation {
-        code: "RS0202",
+        code: code::MISSING_DATA_EFFECT,
         title: "missing call-site data effect",
         explanation: "Arguments for non-Copy parameters must use an explicit `read`, `mut`, or `take` effect matching the callee signature.",
     },
     DiagnosticExplanation {
-        code: "RS0301",
+        code: code::MANAGED_TO_LOCAL,
         title: "managed-to-local conversion",
         explanation: "Managed values cannot be rebound as local values. Create the value locally at its origin if local ownership is required.",
     },
     DiagnosticExplanation {
-        code: "RS0401",
+        code: code::USE_AFTER_MANAGE,
         title: "use after manage",
         explanation: "`manage value` moves a local value into the managed runtime. The original local binding cannot be used afterwards on any reachable path.",
     },
     DiagnosticExplanation {
-        code: "RS0501",
+        code: code::LOCAL_VALUE_RETAINED,
         title: "local value retained",
         explanation: "APIs marked `effects(retains(param))` may store the argument beyond the call. Passing a clean local value directly would let local ownership escape.",
     },
     DiagnosticExplanation {
-        code: "RS0601",
+        code: code::FRESH_RETURN_NOT_CLEAN,
         title: "fresh return is not clean",
         explanation: "A `fresh` function may only return a newly created value, a known fresh call, or a clean local value that has not escaped through manage, take, retain, or capture.",
     },
     DiagnosticExplanation {
-        code: "RS0602",
+        code: code::FRESHNESS_UNKNOWN,
         title: "freshness unknown",
         explanation: "The MVP checker could not prove the returned value is fresh. Current proof support trusts clean locals, struct constructors, and known fresh calls.",
     },
     DiagnosticExplanation {
-        code: "RS0701",
+        code: code::RESOURCE_FIELD,
         title: "resource field",
         explanation: "Resource values cannot be stored directly in ordinary class or struct fields. Use `with` or an approved resource container such as `ResourcePool<T>`.",
     },
     DiagnosticExplanation {
-        code: "RS0702",
+        code: code::RESOURCE_ESCAPE,
         title: "resource escape",
         explanation: "A resource introduced by `with` must not escape the block through return, manage, retention, or managed closure capture.",
     },
     DiagnosticExplanation {
-        code: "RS0801",
+        code: code::LOCAL_CAPTURED_BY_MANAGED_CLOSURE,
         title: "local captured by managed closure",
         explanation: "A closure bound with `let` is managed and may outlive clean local values. Use a local/noescape callback shape instead.",
     },
     DiagnosticExplanation {
-        code: "RS0901",
+        code: code::TAKE_HANDLE_FIELD,
         title: "take of handle field",
         explanation: "Handle fields are managed references. They cannot be consumed with `take` as if they were inline local fields.",
     },
     DiagnosticExplanation {
-        code: "RS1001",
+        code: code::OPERATOR_OVERLOAD_ATTEMPT,
         title: "operator overload attempt",
         explanation: "The MVP language surface rejects likely user-defined operator overloads to keep review semantics explicit.",
     },

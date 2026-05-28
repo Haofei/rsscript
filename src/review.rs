@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::diagnostic::code;
 use crate::syntax::ast::{
     Block, CallArg, DataEffect, EffectDecl, Expr, FieldDecl, FileMode, FunctionDecl, Item, LetKind,
     Param, Stmt, TypeDecl, TypeKind, TypeRef,
@@ -24,7 +25,7 @@ pub fn review_sources(
 
     if old_program.mode != new_program.mode {
         findings.push(ReviewFinding {
-            code: "RSR001".to_string(),
+            code: code::REVIEW_MODE_CHANGED.to_string(),
             summary: format!(
                 "file mode changed from {} to {}.",
                 file_mode_label(old_program.mode),
@@ -40,11 +41,11 @@ pub fn review_sources(
     for name in type_names {
         match (old_types.get(&name), new_types.get(&name)) {
             (Some(_), None) => findings.push(ReviewFinding {
-                code: "RSR007".to_string(),
+                code: code::REVIEW_TYPE_REMOVED.to_string(),
                 summary: format!("type `{name}` was removed."),
             }),
             (None, Some(_)) => findings.push(ReviewFinding {
-                code: "RSR008".to_string(),
+                code: code::REVIEW_TYPE_ADDED.to_string(),
                 summary: format!("type `{name}` was added."),
             }),
             (Some(old), Some(new)) => compare_type(old, new, &mut findings),
@@ -63,11 +64,11 @@ pub fn review_sources(
     for name in function_names {
         match (old_functions.get(&name), new_functions.get(&name)) {
             (Some(_), None) => findings.push(ReviewFinding {
-                code: "RSR002".to_string(),
+                code: code::REVIEW_FUNCTION_REMOVED.to_string(),
                 summary: format!("function `{name}` was removed."),
             }),
             (None, Some(_)) => findings.push(ReviewFinding {
-                code: "RSR003".to_string(),
+                code: code::REVIEW_FUNCTION_ADDED.to_string(),
                 summary: format!("function `{name}` was added."),
             }),
             (Some(old), Some(new)) => compare_function(old, new, &mut findings),
@@ -188,25 +189,25 @@ fn param_sig(param: &Param) -> ParamSig {
 fn compare_function(old: &FunctionSig, new: &FunctionSig, findings: &mut Vec<ReviewFinding>) {
     if old.params != new.params {
         findings.push(ReviewFinding {
-            code: "RSR004".to_string(),
+            code: code::REVIEW_PARAMS_CHANGED.to_string(),
             summary: format!("function `{}` parameters changed.", old.name),
         });
     }
     if old.return_type != new.return_type || old.returns_fresh != new.returns_fresh {
         findings.push(ReviewFinding {
-            code: "RSR005".to_string(),
+            code: code::REVIEW_RETURN_CHANGED.to_string(),
             summary: format!("function `{}` return contract changed.", old.name),
         });
     }
     if old.effects != new.effects {
         findings.push(ReviewFinding {
-            code: "RSR006".to_string(),
+            code: code::REVIEW_EFFECTS_CHANGED.to_string(),
             summary: format!("function `{}` effects changed.", old.name),
         });
     }
     if old.boundary != new.boundary {
         findings.push(ReviewFinding {
-            code: "RSR011".to_string(),
+            code: code::REVIEW_BOUNDARY_CHANGED.to_string(),
             summary: format!("function `{}` local/manage boundary changed.", old.name),
         });
     }
@@ -215,7 +216,7 @@ fn compare_function(old: &FunctionSig, new: &FunctionSig, findings: &mut Vec<Rev
 fn compare_type(old: &TypeSig, new: &TypeSig, findings: &mut Vec<ReviewFinding>) {
     if old.kind != new.kind {
         findings.push(ReviewFinding {
-            code: "RSR009".to_string(),
+            code: code::REVIEW_TYPE_KIND_CHANGED.to_string(),
             summary: format!(
                 "type `{}` kind changed from {} to {}.",
                 old.name,
@@ -226,7 +227,7 @@ fn compare_type(old: &TypeSig, new: &TypeSig, findings: &mut Vec<ReviewFinding>)
     }
     if old.fields != new.fields {
         findings.push(ReviewFinding {
-            code: "RSR010".to_string(),
+            code: code::REVIEW_TYPE_FIELDS_CHANGED.to_string(),
             summary: format!("type `{}` field layout changed.", old.name),
         });
     }

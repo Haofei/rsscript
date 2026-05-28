@@ -1,5 +1,5 @@
 use crate::checks;
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, code};
 use crate::hir::{FunctionSig, Hir, HirTypeKind};
 use crate::lexer::{Token, lex};
 use crate::syntax::ast::{Callee, EffectDecl, Item};
@@ -42,7 +42,7 @@ impl Analyzer<'_> {
             let span = self.tokens.first().map(|token| token.span.clone()).unwrap();
             self.diagnostics.push(
                 Diagnostic::error(
-                    "RS0001",
+                    code::MISSING_FILE_MODE,
                     "RSScript files must declare exactly one file mode.",
                     span,
                     "missing mode",
@@ -64,7 +64,7 @@ impl Analyzer<'_> {
             if function.return_ty.is_none() {
                 self.diagnostics.push(
                     Diagnostic::error(
-                        "RS0002",
+                        code::MISSING_RETURN_TYPE,
                         format!("function `{}` must declare an explicit return type.", function.name),
                         function.span.clone(),
                         "missing return type",
@@ -78,7 +78,7 @@ impl Analyzer<'_> {
                 if param.ty.name.is_empty() {
                     self.diagnostics.push(
                         Diagnostic::error(
-                            "RS0003",
+                            code::MISSING_PARAMETER_TYPE,
                             format!(
                                 "parameter `{}` in `{}` must declare an explicit type.",
                                 param.name, function.name
@@ -106,7 +106,7 @@ impl Analyzer<'_> {
                     || matches!(effect, EffectDecl::Retains(_));
                 if !valid {
                     self.diagnostics.push(Diagnostic::warning(
-                        "RS0004",
+                        code::UNKNOWN_EFFECT,
                         format!("unknown effect `{effect_name}` in `{}`.", function.name),
                         function.span.clone(),
                         "unknown effect",
@@ -128,7 +128,7 @@ impl Analyzer<'_> {
                 if self.hir.type_kind(&field.ty.name) == Some(HirTypeKind::Resource) {
                     self.diagnostics.push(
                         Diagnostic::error(
-                            "RS0701",
+                            code::RESOURCE_FIELD,
                             format!("resource `{}` cannot be stored in `{}`.", field.ty.name, decl.name),
                             field.span.clone(),
                             "resource field",
