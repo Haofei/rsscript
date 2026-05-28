@@ -279,6 +279,23 @@ fn main() -> Unit {
 }
 
 #[test]
+fn rust_lowering_maps_assert_equal_to_runtime_hook() {
+    let source = r#"
+fn main() -> Unit {
+    Assert.equal(left: read "rss", right: read "rss")
+    return Unit
+}
+"#;
+    let rust = lower_source_to_rust("assert.rss", source).expect("source should lower");
+
+    assert!(
+        rust.contains(
+            "rsscript_runtime::assert_equal(&\"rss\".to_string(), &\"rss\".to_string());"
+        )
+    );
+}
+
+#[test]
 fn rust_lowering_maps_try_operator_to_rust_result_propagation() {
     let source = r#"
 features: local

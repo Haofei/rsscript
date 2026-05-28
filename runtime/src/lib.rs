@@ -93,6 +93,10 @@ pub fn log_write(message: &str) {
     println!("{message}");
 }
 
+pub fn assert_equal(left: &str, right: &str) {
+    assert_eq!(left, right);
+}
+
 pub struct GcRead<'a, T>(Ref<'a, T>);
 
 impl<T> Deref for GcRead<'_, T> {

@@ -1016,6 +1016,7 @@ fn is_native_boundary(effect: &EffectDecl) -> bool {
 fn lower_callee(callee: &Callee) -> String {
     match callee {
         callee if is_log_write_callee(callee) => "rsscript_runtime::log_write".to_string(),
+        callee if is_assert_equal_callee(callee) => "rsscript_runtime::assert_equal".to_string(),
         Callee::Name(name) => rust_ident(name),
         Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" => {
             format!("rsscript_runtime::ResourcePool::{}", rust_ident(name))
@@ -1028,6 +1029,10 @@ fn lower_callee(callee: &Callee) -> String {
 
 fn is_log_write_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Log" && name == "write")
+}
+
+fn is_assert_equal_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Assert" && name == "equal")
 }
 
 fn is_resource_pool_borrow_callee(callee: &Callee) -> bool {

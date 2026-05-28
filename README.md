@@ -418,7 +418,7 @@ If a lowered package contains `fn main() -> Unit` or `fn main() -> Result<Unit, 
 
 `rss verify-rust <file.rss> --out-dir <directory>` keeps the generated package used for backend checking, including `rsscript-source-map.json`, so unmappable rustc diagnostics can be inspected against the generated Rust.
 
-The first observable runtime boundary is `Log.write(message: read String)`, which lowers to an explicit runtime output hook.
+The first observable runtime boundaries are `Log.write(message: read String)` and `Assert.equal(left: read String, right: read String)`, which lower to explicit runtime hooks.
 
 Smallest runnable example:
 
