@@ -1192,6 +1192,66 @@ fn rss_run_json_maps_runtime_conflict_to_diagnostics_json() {
 }
 
 #[test]
+fn rss_run_accepts_package_directory() {
+    let temp_dir = unique_temp_dir("rsscript-run-package-cli");
+    write_named_package_fixture(&temp_dir, "rss-run-package", "0.1.0", "", "");
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("src/main.rss"),
+        r#"fn main() -> Unit {
+    Log.write(message: read "hello package")
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg(&temp_dir)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss run package directory should execute");
+    let _ = fs::remove_dir_all(&temp_dir);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert!(stdout.contains("hello package"), "{stdout}");
+}
+
+#[test]
+fn rss_verify_rust_json_accepts_package_directory() {
+    let temp_dir = unique_temp_dir("rsscript-verify-package-cli");
+    write_named_package_fixture(&temp_dir, "rss-verify-package", "0.1.0", "", "");
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("src/main.rss"),
+        r#"fn main() -> Unit {
+    Log.write(message: read "verify package")
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("verify-rust")
+        .arg("--json")
+        .arg(&temp_dir)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss verify-rust package directory should execute");
+    let _ = fs::remove_dir_all(&temp_dir);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: Value = serde_json::from_str(&stdout).expect("stdout should be diagnostics JSON");
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert_eq!(json, serde_json::json!([]));
+}
+
+#[test]
 fn rust_lowering_targets_runtime_crate_hooks() {
     let source = r#"
 features: local

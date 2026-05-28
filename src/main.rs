@@ -16,7 +16,8 @@ use rsscript::{
     format_package_tree_human, format_package_tree_json, format_package_vendor_human,
     format_package_vendor_json, format_review_human, format_review_json, format_review_map_human,
     format_review_map_json, lint_source, lock_package_dir, lower_source_to_rust,
-    lower_source_to_rust_package, package_metadata, package_tree, parse_runtime_diagnostics,
+    lower_source_to_rust_package, lower_source_to_rust_package_with_interfaces,
+    package_lowering_input, package_metadata, package_tree, parse_runtime_diagnostics,
     parse_source_map_json, publish_package_dry_run, remap_rustc_diagnostic_json_lines,
     review_map_sources, review_package_dir, review_sources, vendor_package_dir,
     write_generated_rust_package,
@@ -319,18 +320,48 @@ fn run_lower_rust_package(path: &str, source: &str, out_dir: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn lower_cli_input_to_rust_package(
+    path: &str,
+    runtime_path: &Path,
+    json: bool,
+) -> Result<rsscript::GeneratedRustPackage, ExitCode> {
+    let runtime_path = runtime_path.display().to_string();
+    if is_package_directory(path) {
+        let input = package_lowering_input(Path::new(path)).map_err(|error| {
+            eprintln!("{error}");
+            ExitCode::from(2)
+        })?;
+        return lower_source_to_rust_package_with_interfaces(
+            &input.source_path,
+            &input.source,
+            &input.package.name,
+            &runtime_path,
+            &input.interfaces,
+        )
+        .map_err(|diagnostics| {
+            print_diagnostics(json, &diagnostics);
+            ExitCode::from(1)
+        });
+    }
+
+    let source = fs::read_to_string(path).map_err(|error| {
+        eprintln!("failed to read {path}: {error}");
+        ExitCode::from(2)
+    })?;
+    let package_name = generated_package_name(path);
+    lower_source_to_rust_package(path, &source, &package_name, &runtime_path).map_err(
+        |diagnostics| {
+            print_diagnostics(json, &diagnostics);
+            ExitCode::from(1)
+        },
+    )
+}
+
 fn run_verify_rust(args: &[String]) -> ExitCode {
     let options = parse_verify_args(args);
     let Some(path) = options.path else {
         print_usage();
         return ExitCode::from(2);
-    };
-    let source = match fs::read_to_string(path) {
-        Ok(source) => source,
-        Err(error) => {
-            eprintln!("failed to read {path}: {error}");
-            return ExitCode::from(2);
-        }
     };
     let runtime_path = match default_runtime_path() {
         Ok(path) => path,
@@ -339,18 +370,9 @@ fn run_verify_rust(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let package_name = generated_package_name(path);
-    let package = match lower_source_to_rust_package(
-        path,
-        &source,
-        &package_name,
-        &runtime_path.display().to_string(),
-    ) {
+    let package = match lower_cli_input_to_rust_package(path, &runtime_path, options.json) {
         Ok(package) => package,
-        Err(diagnostics) => {
-            print_diagnostics(options.json, &diagnostics);
-            return ExitCode::from(1);
-        }
+        Err(exit_code) => return exit_code,
     };
     let package_dir = options
         .out_dir
@@ -415,13 +437,6 @@ fn run_generated_rust(args: &[String]) -> ExitCode {
         print_usage();
         return ExitCode::from(2);
     };
-    let source = match fs::read_to_string(path) {
-        Ok(source) => source,
-        Err(error) => {
-            eprintln!("failed to read {path}: {error}");
-            return ExitCode::from(2);
-        }
-    };
     let runtime_path = match default_runtime_path() {
         Ok(path) => path,
         Err(error) => {
@@ -429,18 +444,9 @@ fn run_generated_rust(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let package_name = generated_package_name(path);
-    let package = match lower_source_to_rust_package(
-        path,
-        &source,
-        &package_name,
-        &runtime_path.display().to_string(),
-    ) {
+    let package = match lower_cli_input_to_rust_package(path, &runtime_path, options.json) {
         Ok(package) => package,
-        Err(diagnostics) => {
-            print_diagnostics(options.json, &diagnostics);
-            return ExitCode::from(1);
-        }
+        Err(exit_code) => return exit_code,
     };
     if package.main_rs.is_none() {
         eprintln!(
@@ -1334,11 +1340,11 @@ fn print_usage() {
     eprintln!("  rsscript fmt <file.rss>");
     eprintln!("  rsscript lower --rust <file.rss>");
     eprintln!("  rsscript lower --rust <file.rss> --out-dir <directory>");
-    eprintln!("  rsscript run [--json] <file.rss>");
-    eprintln!("  rsscript run [--json] <file.rss> --out-dir <directory>");
+    eprintln!("  rsscript run [--json] <file-or-package-directory>");
+    eprintln!("  rsscript run [--json] <file-or-package-directory> --out-dir <directory>");
     eprintln!("  rsscript remap-rustc [--json] <rsscript-source-map.json> <rustc-json-lines>");
-    eprintln!("  rsscript verify-rust [--json] <file.rss>");
-    eprintln!("  rsscript verify-rust [--json] <file.rss> --out-dir <directory>");
+    eprintln!("  rsscript verify-rust [--json] <file-or-package-directory>");
+    eprintln!("  rsscript verify-rust [--json] <file-or-package-directory> --out-dir <directory>");
     eprintln!("  rsscript review [--json] --diff <old.rss> <new.rss>");
     eprintln!("  rsscript review [--json] --map <file-or-directory>");
     eprintln!("  rsscript package check [--json] [package-directory]");

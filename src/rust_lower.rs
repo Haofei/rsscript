@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use crate::analyzer::analyze_source_with_core;
+use crate::analyzer::{analyze_source_with_core, analyze_source_with_interfaces};
 use crate::diagnostic::{Diagnostic, Severity, Span, code};
 use crate::interfaces::builtin_interfaces;
 use crate::syntax::ast::{
@@ -90,7 +90,23 @@ pub fn lower_source_to_rust_package(
     package_name: &str,
     runtime_path: &str,
 ) -> Result<GeneratedRustPackage, Vec<Diagnostic>> {
-    let diagnostics = analyze_source_with_core(file, source);
+    lower_source_to_rust_package_with_interfaces(file, source, package_name, runtime_path, &[])
+}
+
+pub fn lower_source_to_rust_package_with_interfaces(
+    file: &str,
+    source: &str,
+    package_name: &str,
+    runtime_path: &str,
+    interfaces: &[(String, String)],
+) -> Result<GeneratedRustPackage, Vec<Diagnostic>> {
+    let mut interface_refs = builtin_interfaces().collect::<Vec<_>>();
+    interface_refs.extend(
+        interfaces
+            .iter()
+            .map(|(path, contents)| (path.as_str(), contents.as_str())),
+    );
+    let diagnostics = analyze_source_with_interfaces(file, source, &interface_refs);
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity.is_error())

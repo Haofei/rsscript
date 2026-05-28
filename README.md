@@ -238,9 +238,9 @@ rss package  vendor [--dry-run] [--json] [package-directory]
 rss package  metadata [--dry-run] [--json] [package-directory]
 rss package  diff   [--json] <old-package-directory> <new-package-directory>
 rss lower    --rust  <file.rss> [--out-dir <directory>]
-rss run      [--json] <file.rss> [--out-dir <directory>]
+rss run      [--json] <file-or-package-directory> [--out-dir <directory>]
 rss remap-rustc  [--json] <rsscript-source-map.json> <rustc-json-lines>
-rss verify-rust  [--json] <file.rss> [--out-dir <directory>]
+rss verify-rust  [--json] <file-or-package-directory> [--out-dir <directory>]
 ```
 
 A few details worth knowing:
@@ -257,8 +257,8 @@ A few details worth knowing:
 - `rss package vendor` copies local path dependencies into `vendor/<name>-<version>/` and writes `vendor/rss-vendor.json`; unresolved registry or git dependencies stay unknown.
 - `rss package metadata` writes `review/package-review.json` using the local package review result; `--dry-run` reports the metadata path without writing.
 - `rss package diff` compares two local package directories and reports package version changes, RSScript dependency changes, package feature changes, native Rust wrapper metadata changes, and public `.rssi` semantic contract changes.
-- `rss run` lowers to a temporary Rust package and delegates to `cargo run`; `--out-dir` keeps the generated package around for inspection. Diagnostics support `--json`; program stdout stays the program's own.
-- `rss verify-rust --out-dir` keeps the generated package and source map, so unmappable rustc diagnostics can be inspected against the actual generated Rust.
+- `rss run` lowers a single file, or a package directory with one runnable source file, to a temporary Rust package and delegates to `cargo run`; `--out-dir` keeps the generated package around for inspection. Diagnostics support `--json`; program stdout stays the program's own.
+- `rss verify-rust --out-dir` works for the same file-or-package inputs and keeps the generated package and source map, so unmappable rustc diagnostics can be inspected against the actual generated Rust.
 
 Smallest runnable example:
 
