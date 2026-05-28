@@ -2298,6 +2298,33 @@ fn bad_store(cache: mut Cache, path: read Path) -> Unit {
 }
 
 #[test]
+fn checker_accepts_managed_closure_capturing_handle_field() {
+    let source = r#"
+features: local
+
+class Image
+
+struct Holder {
+    image: handle Image
+}
+
+fn make_holder(path: read Path) -> fresh Holder
+
+fn use_image(image: read Image) -> Unit
+
+fn ok_capture(path: read Path) -> Unit {
+    local holder = make_holder(path: read path)
+    let callback = || {
+        use_image(image: read holder.image)
+    }
+}
+"#;
+    let diagnostics = analyze_source("managed-closure-handle-field.rss", source);
+
+    assert_eq!(diagnostics, Vec::new());
+}
+
+#[test]
 fn review_json_uses_protocol_shape() {
     let old_source = r#"
 

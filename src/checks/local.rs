@@ -767,7 +767,7 @@ fn collect_retained_closure_captures_from_expr(
                         continue;
                     };
                     let mut uses = Vec::new();
-                    collect_hir_block_idents(body, &mut uses);
+                    collect_hir_block_inline_capture_uses(body, &mut uses);
                     for (used_name, capture_span) in uses {
                         if state.is_local(&used_name) {
                             push_retained_closure_capture(
@@ -1141,7 +1141,7 @@ fn collect_stmt_managed_closure_uses(
             ..
         } => {
             let mut uses = Vec::new();
-            collect_hir_block_idents(body, &mut uses);
+            collect_hir_block_inline_capture_uses(body, &mut uses);
             closures.insert(span.clone(), uses);
             collect_block_managed_closure_uses(body, closures);
         }
@@ -1373,6 +1373,95 @@ fn collect_hir_expr_idents(expr: &HirExpr, uses: &mut Vec<(String, Span)>) {
             collect_hir_expr_idents(right, uses);
         }
         HirExpr::Closure { body, .. } => collect_hir_block_idents(body, uses),
+        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn collect_hir_block_inline_capture_uses(block: &HirBlock, uses: &mut Vec<(String, Span)>) {
+    for statement in &block.statements {
+        collect_hir_stmt_inline_capture_uses(statement, uses);
+        match statement {
+            HirStmt::With { body, .. } => collect_hir_block_inline_capture_uses(body, uses),
+            HirStmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_hir_block_inline_capture_uses(then_body, uses);
+                if let Some(else_body) = else_body {
+                    collect_hir_block_inline_capture_uses(else_body, uses);
+                }
+            }
+            HirStmt::Loop { body, .. } => collect_hir_block_inline_capture_uses(body, uses),
+            HirStmt::Match { arms, .. } => {
+                for arm in arms {
+                    collect_hir_block_inline_capture_uses(&arm.body, uses);
+                }
+            }
+            HirStmt::Let { .. }
+            | HirStmt::Return { .. }
+            | HirStmt::Expr(_)
+            | HirStmt::Break(_)
+            | HirStmt::Continue(_)
+            | HirStmt::Unknown(_) => {}
+        }
+    }
+}
+
+fn collect_hir_stmt_inline_capture_uses(statement: &HirStmt, uses: &mut Vec<(String, Span)>) {
+    match statement {
+        HirStmt::Let {
+            value: Some(value), ..
+        }
+        | HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => collect_hir_expr_inline_capture_uses(value, uses),
+        HirStmt::With { resource, .. } => collect_hir_expr_inline_capture_uses(resource, uses),
+        HirStmt::If { condition, .. } => collect_hir_expr_inline_capture_uses(condition, uses),
+        HirStmt::Loop {
+            condition: Some(condition),
+            ..
+        } => collect_hir_expr_inline_capture_uses(condition, uses),
+        HirStmt::Match { value, .. } => collect_hir_expr_inline_capture_uses(value, uses),
+        HirStmt::Let { value: None, .. }
+        | HirStmt::Return { value: None, .. }
+        | HirStmt::Loop {
+            condition: None, ..
+        }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn collect_hir_expr_inline_capture_uses(expr: &HirExpr, uses: &mut Vec<(String, Span)>) {
+    match expr {
+        HirExpr::Ident { name, span, .. } => uses.push((name.clone(), span.clone())),
+        HirExpr::Field { base, access, .. } => {
+            if !access.is_handle {
+                collect_hir_expr_inline_capture_uses(base, uses);
+            }
+        }
+        HirExpr::Index { base, index, .. } => {
+            collect_hir_expr_inline_capture_uses(base, uses);
+            collect_hir_expr_inline_capture_uses(index, uses);
+        }
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                collect_hir_expr_inline_capture_uses(&arg.value, uses);
+            }
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Try { value, .. } => {
+            collect_hir_expr_inline_capture_uses(value, uses);
+        }
+        HirExpr::Binary { left, right, .. } => {
+            collect_hir_expr_inline_capture_uses(left, uses);
+            collect_hir_expr_inline_capture_uses(right, uses);
+        }
+        HirExpr::Closure { body, .. } => collect_hir_block_inline_capture_uses(body, uses),
         HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
     }
 }
@@ -1649,7 +1738,7 @@ fn collect_stmt_managed_closure_capture_names(statement: &HirStmt, captures: &mu
             kind: HirBindingKind::ManagedLet,
             value: Some(HirExpr::Closure { body, .. }),
             ..
-        } => push_hir_block_ident_names(body, captures),
+        } => push_hir_block_inline_capture_names(body, captures),
         HirStmt::Let {
             value: Some(value), ..
         }
@@ -1697,7 +1786,7 @@ fn collect_expr_managed_closure_capture_names(expr: &HirExpr, captures: &mut Vec
                         continue;
                     }
                     if let Some((body, _)) = retained_closure_arg(&arg.value) {
-                        push_hir_block_ident_names(body, captures);
+                        push_hir_block_inline_capture_names(body, captures);
                     }
                 }
             }
@@ -1727,9 +1816,9 @@ fn collect_expr_managed_closure_capture_names(expr: &HirExpr, captures: &mut Vec
     }
 }
 
-fn push_hir_block_ident_names(block: &HirBlock, captures: &mut Vec<String>) {
+fn push_hir_block_inline_capture_names(block: &HirBlock, captures: &mut Vec<String>) {
     let mut uses = Vec::new();
-    collect_hir_block_idents(block, &mut uses);
+    collect_hir_block_inline_capture_uses(block, &mut uses);
     for (name, _) in uses {
         if !captures.contains(&name) {
             captures.push(name);

@@ -1,0 +1,18 @@
+features: local
+
+class Image
+
+struct Holder {
+    image: handle Image
+}
+
+fn make_holder(path: read Path) -> fresh Holder
+
+fn use_image(image: read Image) -> Unit
+
+fn ok_capture(path: read Path) -> Unit {
+    local holder = make_holder(path: read path)
+    let callback = || {
+        use_image(image: read holder.image)
+    }
+}

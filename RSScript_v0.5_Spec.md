@@ -2158,6 +2158,7 @@ Managed closures may capture:
 ```text
 Copy values
 managed values
+handle or weak field paths, because those fields are managed handles
 ```
 
 They may not capture:
