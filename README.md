@@ -46,6 +46,8 @@ let response = Response.ok(body: read user)
 
 Managed values are easy to share, store, and drop into long-lived graphs. This is the default for business logic, agent memory, configuration, caches, ASTs, request/response objects — the broad layer outside hot paths.
 
+Under the hood, managed is reference counted — think Swift's ARC, not a tracing GC. Destruction is deterministic and lowers to Rust's `Arc`, so cross-thread sharing works without extra ceremony at the source level. The usual tradeoffs apply: refcounting has a per-access cost, and cycles need explicit breakers. That cost is exactly why hot paths use `local` instead of paying refcount on every touch.
+
 ### Local when it matters
 
 Hot paths can opt in to local exclusive values, and the checker protects those values from silent retention by managed objects or managed closures:
