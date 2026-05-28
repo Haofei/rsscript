@@ -119,12 +119,29 @@ pub struct PackagePublishDryRun {
     pub ready: bool,
     pub risk: PackageRisk,
     pub reasons: Vec<String>,
+    pub registry_index: PackageRegistryIndexEntry,
     pub archive_format: String,
     pub archive_hash: String,
     pub archive_files: Vec<PackageArchiveFile>,
     pub review: PackageReviewSummary,
     pub dependency_summary: PackageTreeSummary,
     pub checks: Vec<PackagePublishCheck>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageRegistryIndexEntry {
+    pub schema: String,
+    pub name: String,
+    pub version: String,
+    pub checksum: String,
+    pub interface_hash: String,
+    pub review_hash: String,
+    pub native_hash: Option<String>,
+    pub risk: PackageRisk,
+    pub native: bool,
+    #[serde(rename = "unsafe")]
+    pub unsafe_boundary: bool,
+    pub dependencies: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -856,6 +873,13 @@ pub fn publish_package_dry_run(package_dir: &Path) -> Result<PackagePublishDryRu
     let tree = package_tree(package_dir)?;
     let archive_files = package_archive_files(package_dir)?;
     let archive_hash = package_archive_hash(&archive_files);
+    let root_features = package
+        .manifest
+        .features
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    let root_lock_entry = lock_package_entry(package_dir, &package, root_features)?;
 
     let version_ok = is_semver_like(&package.manifest.package.version);
     let dependency_graph_ok = tree.summary.unknown_risk_packages == 0;
@@ -958,6 +982,13 @@ pub fn publish_package_dry_run(package_dir: &Path) -> Result<PackagePublishDryRu
     reasons.extend(check.reasons);
     reasons.sort();
     reasons.dedup();
+    let registry_index = package_registry_index_entry(
+        &package,
+        &root_lock_entry,
+        check.native_rust.as_ref(),
+        risk,
+        &archive_hash,
+    );
 
     Ok(PackagePublishDryRun {
         package: package_identity(&package.manifest),
@@ -965,6 +996,7 @@ pub fn publish_package_dry_run(package_dir: &Path) -> Result<PackagePublishDryRu
         ready,
         risk,
         reasons,
+        registry_index,
         archive_format: "rss.package.archive.v1".to_string(),
         archive_hash,
         archive_files,
@@ -1362,6 +1394,15 @@ pub fn format_package_publish_human(publish: &PackagePublishDryRun) -> String {
         publish.archive_format,
         publish.archive_files.len(),
         publish.archive_hash
+    ));
+    output.push_str(&format!(
+        "registry index: {} {} {} risk {} native={} unsafe={}\n",
+        publish.registry_index.schema,
+        publish.registry_index.name,
+        publish.registry_index.version,
+        package_risk_label(publish.registry_index.risk),
+        publish.registry_index.native,
+        publish.registry_index.unsafe_boundary
     ));
     for check in &publish.checks {
         output.push_str(&format!(
@@ -2775,6 +2816,68 @@ fn publish_check(
         risk,
         detail: detail.into(),
     }
+}
+
+fn package_registry_index_entry(
+    package: &LoadedPackage,
+    lock_entry: &PackageLockPackage,
+    native_check: Option<&PackageNativeRustCheck>,
+    risk: PackageRisk,
+    archive_hash: &str,
+) -> PackageRegistryIndexEntry {
+    PackageRegistryIndexEntry {
+        schema: "rss.registry.index.v1".to_string(),
+        name: package.manifest.package.name.clone(),
+        version: package.manifest.package.version.clone(),
+        checksum: archive_hash.to_string(),
+        interface_hash: lock_entry.interface_hash.clone(),
+        review_hash: lock_entry.review_hash.clone(),
+        native_hash: lock_entry.native_hash.clone(),
+        risk,
+        native: package
+            .manifest
+            .native
+            .as_ref()
+            .and_then(|native| native.rust.as_ref())
+            .is_some_and(|native| native.enabled),
+        unsafe_boundary: package_index_unsafe_boundary(&package.manifest, native_check),
+        dependencies: package_index_dependencies(&package.manifest.dependencies),
+    }
+}
+
+fn package_index_unsafe_boundary(
+    manifest: &Manifest,
+    native_check: Option<&PackageNativeRustCheck>,
+) -> bool {
+    manifest
+        .review
+        .as_ref()
+        .and_then(|review| review.allow_unsafe)
+        .unwrap_or(false)
+        || manifest
+            .native
+            .as_ref()
+            .and_then(|native| native.rust.as_ref())
+            .and_then(|native| native.unsafe_policy.as_deref())
+            .is_some_and(|policy| policy != "forbid")
+        || native_check.is_some_and(|native| native.unsafe_detected)
+}
+
+fn package_index_dependencies(
+    dependencies: &BTreeMap<String, toml::Value>,
+) -> BTreeMap<String, String> {
+    dependencies
+        .iter()
+        .map(|(name, value)| {
+            let spec = package_dependency_spec(name, value);
+            let requirement = spec
+                .requirement
+                .or_else(|| spec.git.map(|git| format!("git+{git}")))
+                .or_else(|| spec.path.map(|path| format!("path+{path}")))
+                .unwrap_or_else(|| "*".to_string());
+            (spec.name, requirement)
+        })
+        .collect()
 }
 
 fn is_semver_like(version: &str) -> bool {

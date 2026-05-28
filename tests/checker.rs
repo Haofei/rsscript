@@ -4259,6 +4259,23 @@ fn package_publish_dry_run_reports_ready_package() {
     assert!(publish.ready);
     assert_eq!(publish.archive_hash, publish_again.archive_hash);
     assert_eq!(json["package"]["name"], "rss-ready");
+    assert_eq!(json["registry_index"]["schema"], "rss.registry.index.v1");
+    assert_eq!(json["registry_index"]["name"], "rss-ready");
+    assert_eq!(json["registry_index"]["version"], "0.1.0");
+    assert_eq!(json["registry_index"]["checksum"], json["archive_hash"]);
+    assert_eq!(json["registry_index"]["risk"], "elevated");
+    assert_eq!(json["registry_index"]["native"], false);
+    assert_eq!(json["registry_index"]["unsafe"], false);
+    assert!(
+        json["registry_index"]["interface_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.starts_with("sha256:"))
+    );
+    assert!(
+        json["registry_index"]["review_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.starts_with("sha256:"))
+    );
     assert_eq!(json["archive_format"], "rss.package.archive.v1");
     assert!(
         json["archive_hash"]
@@ -4294,6 +4311,49 @@ fn package_publish_dry_run_reports_ready_package() {
             .iter()
             .any(|check| check["name"] == "package archive reproducible" && check["ok"] == true)
     }));
+}
+
+#[test]
+fn package_publish_dry_run_reports_registry_index_dependencies() {
+    let root_dir = unique_temp_dir("rsscript-package-publish-index-root");
+    let dep_dir = unique_temp_dir("rsscript-package-publish-index-dep");
+    write_named_package_fixture(
+        &dep_dir,
+        "rss-dep",
+        "0.2.0",
+        "",
+        r#"pub fn Dep.value() -> Int
+"#,
+    );
+    write_named_package_fixture(
+        &root_dir,
+        "rss-index-root",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-dep = {{ version = "0.2.0", path = "{}" }}
+"#,
+            dep_dir.display()
+        ),
+        r#"pub fn Root.value() -> Int
+"#,
+    );
+    fs::write(
+        root_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&root_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let publish = publish_package_dry_run(&root_dir).expect("publish dry-run should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_publish_json(&publish))
+        .expect("publish JSON should parse");
+    let _ = fs::remove_dir_all(&root_dir);
+    let _ = fs::remove_dir_all(&dep_dir);
+
+    assert!(publish.ready);
+    assert_eq!(json["registry_index"]["dependencies"]["rss-dep"], "0.2.0");
 }
 
 #[test]
