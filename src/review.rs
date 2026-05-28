@@ -626,6 +626,7 @@ fn collect_review_map_facts_expr(expr: &Expr, hir: &Hir, facts: &mut ReviewMapFa
             facts.has_manage = true;
             collect_review_map_facts_expr(value, hir, facts);
         }
+        Expr::Try { value, .. } => collect_review_map_facts_expr(value, hir, facts),
         Expr::Binary { left, right, .. } => {
             collect_review_map_facts_expr(left, hir, facts);
             collect_review_map_facts_expr(right, hir, facts);
@@ -1277,7 +1278,9 @@ fn collect_boundary_expr(expr: &Expr, path: &str, boundary: &mut BoundarySig) {
             );
             collect_boundary_expr(value, &format!("{path}.take"), boundary);
         }
-        Expr::Effect { value, .. } => collect_boundary_expr(value, path, boundary),
+        Expr::Effect { value, .. } | Expr::Try { value, .. } => {
+            collect_boundary_expr(value, path, boundary);
+        }
         Expr::Manage { value, .. } => {
             push_boundary_event(
                 boundary,
@@ -1328,7 +1331,9 @@ fn push_boundary_event(
 fn boundary_expr_subject(expr: &Expr) -> Option<String> {
     match expr {
         Expr::Ident(name, _) => Some(name.clone()),
-        Expr::Effect { value, .. } | Expr::Manage { value, .. } => boundary_expr_subject(value),
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
+            boundary_expr_subject(value)
+        }
         Expr::Field { name, .. } => Some(format!(".{name}")),
         Expr::Index { .. } => None,
         Expr::Call { .. }

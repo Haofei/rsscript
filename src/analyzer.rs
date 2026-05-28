@@ -601,7 +601,9 @@ impl Analyzer<'_> {
                 );
                 self.check_noalloc_expr(function_name, value);
             }
-            Expr::Effect { value, .. } => self.check_noalloc_expr(function_name, value),
+            Expr::Effect { value, .. } | Expr::Try { value, .. } => {
+                self.check_noalloc_expr(function_name, value);
+            }
             Expr::Binary { left, right, .. } => {
                 self.check_noalloc_expr(function_name, left);
                 self.check_noalloc_expr(function_name, right);
@@ -803,7 +805,7 @@ impl Analyzer<'_> {
                 self.check_resource_pool_calls_in_expr(left);
                 self.check_resource_pool_calls_in_expr(right);
             }
-            Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
+            Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
                 self.check_resource_pool_calls_in_expr(value);
             }
             Expr::Field { base, .. } => self.check_resource_pool_calls_in_expr(base),
@@ -877,7 +879,7 @@ impl Analyzer<'_> {
                 self.check_resource_generic_calls_in_expr(left);
                 self.check_resource_generic_calls_in_expr(right);
             }
-            Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
+            Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
                 self.check_resource_generic_calls_in_expr(value);
             }
             Expr::Field { base, .. } => self.check_resource_generic_calls_in_expr(base),

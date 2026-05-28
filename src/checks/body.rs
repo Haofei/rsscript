@@ -232,7 +232,9 @@ fn check_expr_semantics(analyzer: &mut Analyzer<'_>, expr: &HirExpr, state: &Bod
                 check_expr_semantics(analyzer, &arg.value, state);
             }
         }
-        HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => {
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Try { value, .. } => {
             check_expr_semantics(analyzer, value, state);
         }
         HirExpr::Binary { left, right, .. } => {
@@ -347,7 +349,7 @@ fn expr_moves_path(expr: &HirExpr) -> bool {
             ..
         }
         | HirExpr::Manage { .. } => true,
-        HirExpr::Effect { value, .. } => expr_moves_path(value),
+        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => expr_moves_path(value),
         HirExpr::Field { base, .. } => expr_moves_path(base),
         HirExpr::Index { base, index, .. } => expr_moves_path(base) || expr_moves_path(index),
         HirExpr::Binary { left, right, .. } => expr_moves_path(left) || expr_moves_path(right),
@@ -601,6 +603,7 @@ fn apply_expr_effects(expr: &HirExpr, state: &mut BodyState) {
             state.apply_move_events(events);
             apply_expr_effects(value, state);
         }
+        HirExpr::Try { value, .. } => apply_expr_effects(value, state),
         HirExpr::Binary { left, right, .. } => {
             apply_expr_effects(left, state);
             apply_expr_effects(right, state);
@@ -875,7 +878,9 @@ fn check_resource_pool_lease_expr(
                 check_resource_pool_lease_expr(analyzer, &arg.value, false);
             }
         }
-        HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => {
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Try { value, .. } => {
             check_resource_pool_lease_expr(analyzer, value, within_with_resource);
         }
         HirExpr::Binary { left, right, .. } => {

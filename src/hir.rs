@@ -274,6 +274,11 @@ pub enum HirExpr {
         type_name: Option<String>,
         span: Span,
     },
+    Try {
+        value: Box<HirExpr>,
+        type_name: Option<String>,
+        span: Span,
+    },
     Closure {
         body: HirBlock,
         span: Span,
@@ -817,6 +822,11 @@ fn lower_hir_expr(
             type_name: infer_hir_expr_type(hir, expr, value_types),
             span: span.clone(),
         },
+        Expr::Try { value, span } => HirExpr::Try {
+            value: Box::new(lower_hir_expr(hir, function_name, value, value_types)),
+            type_name: infer_hir_expr_type(hir, expr, value_types),
+            span: span.clone(),
+        },
         Expr::Closure { body, span } => {
             let mut closure_types = value_types.clone();
             HirExpr::Closure {
@@ -1067,6 +1077,9 @@ fn collect_body_facts_in_expr(
         Expr::Effect { value, .. } => {
             collect_body_facts_in_expr(hir, function_name, value, value_types, facts);
         }
+        Expr::Try { value, .. } => {
+            collect_body_facts_in_expr(hir, function_name, value, value_types, facts);
+        }
         Expr::Field { base, name, span } => {
             let base_type = infer_hir_expr_type(hir, base, value_types);
             let field = base_type
@@ -1172,6 +1185,9 @@ fn infer_hir_expr_type(
         Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
             infer_hir_expr_type(hir, value, value_types)
         }
+        Expr::Try { value, .. } => {
+            infer_hir_expr_type(hir, value, value_types).and_then(|ty| result_ok_type(&ty))
+        }
         Expr::Call { callee, args, .. } => match hir.resolve_call(callee) {
             CallResolution::Resolved { signature, .. } => {
                 infer_builtin_generic_return_type(callee, args, value_types)
@@ -1219,7 +1235,7 @@ fn resource_pool_borrow_type(
 
 fn resource_pool_arg_type(expr: &Expr, value_types: &HashMap<String, String>) -> Option<String> {
     let type_name = match expr {
-        Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
             return resource_pool_arg_type(value, value_types);
         }
         Expr::Ident(name, _) => value_types.get(name)?,
@@ -1258,6 +1274,37 @@ fn resource_pool_type_arg(type_name: &str) -> Option<&str> {
         .and_then(|rest| rest.strip_suffix('>'))
 }
 
+fn result_ok_type(type_name: &str) -> Option<String> {
+    let inner = type_name
+        .strip_prefix("Result<")
+        .and_then(|rest| rest.strip_suffix('>'))?;
+    split_top_level_type_args(inner)
+        .into_iter()
+        .next()
+        .map(str::to_string)
+}
+
+fn split_top_level_type_args(args: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0usize;
+    for (index, ch) in args.char_indices() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(args[start..index].trim());
+                start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    if start < args.len() {
+        parts.push(args[start..].trim());
+    }
+    parts
+}
+
 fn classify_return_expr(hir: &Hir, expr: &Expr) -> HirReturnProof {
     match expr {
         Expr::Ident(name, _) => HirReturnProof::Ident { name: name.clone() },
@@ -1283,7 +1330,9 @@ fn classify_return_expr(hir: &Hir, expr: &Expr) -> HirReturnProof {
             | CallResolution::EnumVariant
             | CallResolution::Unknown => HirReturnProof::Unknown,
         },
-        Expr::Effect { value, .. } | Expr::Manage { value, .. } => classify_return_expr(hir, value),
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
+            classify_return_expr(hir, value)
+        }
         Expr::Field { .. }
         | Expr::Index { .. }
         | Expr::Binary { .. }

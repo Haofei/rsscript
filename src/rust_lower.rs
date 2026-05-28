@@ -618,6 +618,14 @@ impl<'a> RustLowerer<'a> {
                 });
                 self.record_expr_source_map(value, generated);
             }
+            Expr::Try { value, span } => {
+                self.source_map.push(RustSourceMapEntry {
+                    kind: "try".to_string(),
+                    source: span.clone(),
+                    generated: generated.clone(),
+                });
+                self.record_expr_source_map(value, generated);
+            }
             Expr::Closure { body, .. } => self.record_block_source_map(body, generated),
             Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
         }
@@ -704,6 +712,7 @@ impl<'a> RustLowerer<'a> {
                     lower_source_span(span)
                 )
             }
+            Expr::Try { value, .. } => format!("{}?", self.lower_expr(value)),
             Expr::Closure { body, .. } => {
                 let mut out = String::new();
                 out.push_str("|| {\n");

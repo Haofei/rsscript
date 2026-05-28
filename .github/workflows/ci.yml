@@ -32,6 +32,7 @@ jobs:
           cargo check --manifest-path tests/generated/resource_pool/Cargo.toml
           cargo check --manifest-path tests/generated/effects/Cargo.toml
           cargo check --manifest-path tests/generated/result/Cargo.toml
+          cargo check --manifest-path tests/generated/try/Cargo.toml
 
       - name: Test
         run: cargo test --workspace

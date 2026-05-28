@@ -657,6 +657,14 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
         return Some(binary);
     }
 
+    if let Some(question) = find_trailing_top_level_question(tokens, start, end) {
+        let value = parse_expr(tokens, start, question)?;
+        return Some(Expr::Try {
+            value: Box::new(value),
+            span: tokens[question].span.clone(),
+        });
+    }
+
     if let Some(effect) = parse_data_effect(tokens.get(start)) {
         let value_start = start + 1;
         let value = if tokens
@@ -731,6 +739,24 @@ fn parse_binary_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr>
                 span: tokens[operator].span.clone(),
             })
         })
+}
+
+fn find_trailing_top_level_question(tokens: &[Token], start: usize, end: usize) -> Option<usize> {
+    if end <= start || !tokens.get(end - 1).is_some_and(|token| token.symbol("?")) {
+        return None;
+    }
+
+    let mut depth = 0usize;
+    for (index, token) in tokens.iter().enumerate().take(end).skip(start) {
+        if token.symbol("(") || token.symbol("{") || token.symbol("[") || token.symbol("<") {
+            depth += 1;
+        } else if token.symbol(")") || token.symbol("}") || token.symbol("]") || token.symbol(">") {
+            depth = depth.saturating_sub(1);
+        } else if index == end - 1 && depth == 0 && token.symbol("?") {
+            return Some(index);
+        }
+    }
+    None
 }
 
 fn find_top_level_binary_operator(

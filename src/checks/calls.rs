@@ -76,7 +76,9 @@ fn check_expr(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
                 check_expr(analyzer, &arg.value);
             }
         }
-        HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => {
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Try { value, .. } => {
             check_expr(analyzer, value);
         }
         HirExpr::Binary { left, right, .. } => {
@@ -301,6 +303,7 @@ fn hir_expr_span(expr: &HirExpr) -> &Span {
         | HirExpr::Call { span, .. }
         | HirExpr::Effect { span, .. }
         | HirExpr::Manage { span, .. }
+        | HirExpr::Try { span, .. }
         | HirExpr::Closure { span, .. }
         | HirExpr::Unknown(span) => span,
     }

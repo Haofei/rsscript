@@ -236,6 +236,44 @@ pub fn unit_result() -> Result<Unit, BuildError> {
 }
 
 #[test]
+fn rust_lowering_maps_try_operator_to_rust_result_propagation() {
+    let source = r#"
+mode: uses-local
+
+struct BuildError {
+    code: Int
+}
+
+struct Point {
+    x: Int
+    y: Int
+}
+
+fn maybe_point(x: Int, y: Int) -> Result<fresh Point, BuildError> {
+    return Ok(Point(x: x, y: y))
+}
+
+fn shift(point: mut Point) -> Unit
+
+pub fn use_try(x: Int, y: Int) -> Result<fresh Point, BuildError> {
+    local point = maybe_point(x: x, y: y)?
+    shift(point: mut point)
+    return Ok(point)
+}
+"#;
+    let lowered = lower_source_to_rust_with_map("try.rss", source).expect("source should lower");
+
+    assert!(
+        lowered
+            .rust_source
+            .contains("let mut point = maybe_point(x, y)?;")
+    );
+    assert!(lowered.rust_source.contains("shift(&mut point);"));
+    assert!(lowered.rust_source.contains("return Ok(point);"));
+    assert!(lowered.source_map.iter().any(|entry| entry.kind == "try"));
+}
+
+#[test]
 fn rust_lowering_matches_golden_fixture() {
     let source = read_fixture(Path::new("tests/golden/lowering/simple.rss"));
     let expected_rust = read_fixture(Path::new("tests/golden/lowering/simple.rs"));
