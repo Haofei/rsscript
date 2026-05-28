@@ -161,9 +161,109 @@ pub struct HirReturn {
     pub proof: HirReturnProof,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirBlock {
+    pub statements: Vec<HirStmt>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HirStmt {
+    Let {
+        kind: HirBindingKind,
+        name: String,
+        value: Option<HirExpr>,
+        type_name: Option<String>,
+        span: Span,
+    },
+    Return {
+        value: Option<HirExpr>,
+        proof: HirReturnProof,
+        span: Span,
+    },
+    With {
+        resource: HirExpr,
+        binding: String,
+        body: HirBlock,
+        span: Span,
+    },
+    If {
+        condition: HirExpr,
+        then_body: HirBlock,
+        else_body: Option<HirBlock>,
+        span: Span,
+    },
+    Loop {
+        condition: Option<HirExpr>,
+        body: HirBlock,
+        span: Span,
+    },
+    Break(Span),
+    Continue(Span),
+    Expr(HirExpr),
+    Unknown(Span),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HirExpr {
+    Ident {
+        name: String,
+        type_name: Option<String>,
+        span: Span,
+    },
+    Number {
+        value: String,
+        span: Span,
+    },
+    String {
+        value: String,
+        span: Span,
+    },
+    Field {
+        base: Box<HirExpr>,
+        name: String,
+        access: HirFieldAccess,
+        span: Span,
+    },
+    Call {
+        callee: Callee,
+        args: Vec<HirCallArg>,
+        resolution: CallResolution,
+        events: Vec<HirEffectEvent>,
+        type_name: Option<String>,
+        span: Span,
+    },
+    Effect {
+        effect: ParamEffect,
+        value: Box<HirExpr>,
+        events: Vec<HirEffectEvent>,
+        type_name: Option<String>,
+        span: Span,
+    },
+    Manage {
+        value: Box<HirExpr>,
+        events: Vec<HirEffectEvent>,
+        type_name: Option<String>,
+        span: Span,
+    },
+    Closure {
+        body: HirBlock,
+        span: Span,
+    },
+    Unknown(Span),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirCallArg {
+    pub name: Option<String>,
+    pub value: HirExpr,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct HirFunctionBody {
     pub function_name: String,
+    pub block: Option<HirBlock>,
     pub bindings: Vec<HirBinding>,
     pub call_sites: Vec<HirCallSite>,
     pub field_accesses: Vec<HirFieldAccess>,
@@ -393,6 +493,9 @@ impl Hir {
 
 fn build_function_bodies(facts: &BodyFacts) -> HashMap<String, HirFunctionBody> {
     let mut bodies = HashMap::<String, HirFunctionBody>::new();
+    for (function_name, block) in &facts.blocks {
+        body_entry(&mut bodies, function_name).block = Some(block.clone());
+    }
     for binding in &facts.bindings {
         body_entry(&mut bodies, &binding.function_name)
             .bindings
@@ -435,6 +538,7 @@ fn body_entry<'a>(
 
 #[derive(Default)]
 struct BodyFacts {
+    blocks: HashMap<String, HirBlock>,
     call_sites: Vec<HirCallSite>,
     bindings: Vec<HirBinding>,
     field_accesses: Vec<HirFieldAccess>,
@@ -454,7 +558,273 @@ fn collect_function_body_facts(hir: &Hir, function: &FunctionDecl, facts: &mut B
             type_name: Some(param.ty.name.clone()),
         });
     }
+    let mut lowering_value_types = value_types.clone();
+    facts.blocks.insert(
+        function.name.clone(),
+        lower_hir_block(
+            hir,
+            &function.name,
+            &function.body,
+            &mut lowering_value_types,
+        ),
+    );
     collect_body_facts_in_block(hir, &function.name, &function.body, &mut value_types, facts);
+}
+
+fn lower_hir_block(
+    hir: &Hir,
+    function_name: &str,
+    block: &Block,
+    value_types: &mut HashMap<String, String>,
+) -> HirBlock {
+    HirBlock {
+        statements: block
+            .statements
+            .iter()
+            .map(|statement| lower_hir_stmt(hir, function_name, statement, value_types))
+            .collect(),
+        span: block.span.clone(),
+    }
+}
+
+fn lower_hir_stmt(
+    hir: &Hir,
+    function_name: &str,
+    statement: &Stmt,
+    value_types: &mut HashMap<String, String>,
+) -> HirStmt {
+    match statement {
+        Stmt::Let(stmt) => {
+            let type_name = stmt
+                .value
+                .as_ref()
+                .and_then(|value| infer_hir_expr_type(hir, value, value_types));
+            let value = stmt
+                .value
+                .as_ref()
+                .map(|value| lower_hir_expr(hir, function_name, value, value_types));
+            if let Some(type_name) = &type_name {
+                value_types.insert(stmt.name.clone(), type_name.clone());
+            }
+            HirStmt::Let {
+                kind: hir_binding_kind(stmt.kind),
+                name: stmt.name.clone(),
+                value,
+                type_name,
+                span: stmt.span.clone(),
+            }
+        }
+        Stmt::Return(stmt) => {
+            let proof = stmt
+                .value
+                .as_ref()
+                .map_or(HirReturnProof::NoValue, |value| {
+                    classify_return_expr(hir, value)
+                });
+            HirStmt::Return {
+                value: stmt
+                    .value
+                    .as_ref()
+                    .map(|value| lower_hir_expr(hir, function_name, value, value_types)),
+                proof,
+                span: stmt.span.clone(),
+            }
+        }
+        Stmt::With(stmt) => HirStmt::With {
+            resource: lower_hir_expr(hir, function_name, &stmt.resource, value_types),
+            binding: stmt.binding.clone(),
+            body: lower_hir_block(hir, function_name, &stmt.body, value_types),
+            span: stmt.span.clone(),
+        },
+        Stmt::If(stmt) => HirStmt::If {
+            condition: lower_hir_expr(hir, function_name, &stmt.condition, value_types),
+            then_body: {
+                let mut then_types = value_types.clone();
+                lower_hir_block(hir, function_name, &stmt.then_body, &mut then_types)
+            },
+            else_body: stmt.else_body.as_ref().map(|else_body| {
+                let mut else_types = value_types.clone();
+                lower_hir_block(hir, function_name, else_body, &mut else_types)
+            }),
+            span: stmt.span.clone(),
+        },
+        Stmt::Loop(stmt) => HirStmt::Loop {
+            condition: stmt
+                .condition
+                .as_ref()
+                .map(|condition| lower_hir_expr(hir, function_name, condition, value_types)),
+            body: {
+                let mut body_types = value_types.clone();
+                lower_hir_block(hir, function_name, &stmt.body, &mut body_types)
+            },
+            span: stmt.span.clone(),
+        },
+        Stmt::Expr(expr) => HirStmt::Expr(lower_hir_expr(hir, function_name, expr, value_types)),
+        Stmt::Break(span) => HirStmt::Break(span.clone()),
+        Stmt::Continue(span) => HirStmt::Continue(span.clone()),
+        Stmt::Unknown(span) => HirStmt::Unknown(span.clone()),
+    }
+}
+
+fn lower_hir_expr(
+    hir: &Hir,
+    function_name: &str,
+    expr: &Expr,
+    value_types: &HashMap<String, String>,
+) -> HirExpr {
+    match expr {
+        Expr::Ident(name, span) => HirExpr::Ident {
+            name: name.clone(),
+            type_name: value_types.get(name).cloned(),
+            span: span.clone(),
+        },
+        Expr::Number(value, span) => HirExpr::Number {
+            value: value.clone(),
+            span: span.clone(),
+        },
+        Expr::String(value, span) => HirExpr::String {
+            value: value.clone(),
+            span: span.clone(),
+        },
+        Expr::Field { base, name, span } => {
+            let base_type = infer_hir_expr_type(hir, base, value_types);
+            let field = base_type
+                .as_deref()
+                .and_then(|type_name| hir.type_info(type_name))
+                .and_then(|type_info| type_info.fields.get(name));
+            HirExpr::Field {
+                base: Box::new(lower_hir_expr(hir, function_name, base, value_types)),
+                name: name.clone(),
+                access: HirFieldAccess {
+                    function_name: function_name.to_string(),
+                    name: name.clone(),
+                    span: span.clone(),
+                    base_type,
+                    type_name: field.map(|field| field.type_name.clone()),
+                    is_handle: field.is_some_and(|field| field.is_handle),
+                },
+                span: span.clone(),
+            }
+        }
+        Expr::Call { callee, args, span } => {
+            let resolution = hir.resolve_call(callee);
+            let events = retain_events_for_call(function_name, callee, args, span, &resolution);
+            HirExpr::Call {
+                callee: callee.clone(),
+                args: args
+                    .iter()
+                    .map(|arg| HirCallArg {
+                        name: arg.name.clone(),
+                        value: lower_hir_expr(hir, function_name, &arg.value, value_types),
+                        span: arg.span.clone(),
+                    })
+                    .collect(),
+                type_name: match &resolution {
+                    CallResolution::Resolved { signature, .. } => signature.return_type.clone(),
+                    CallResolution::EnumVariant | CallResolution::Unknown => None,
+                },
+                resolution,
+                events,
+                span: span.clone(),
+            }
+        }
+        Expr::Effect {
+            effect,
+            value,
+            span,
+        } => HirExpr::Effect {
+            effect: param_effect_from_data_effect(*effect),
+            value: Box::new(lower_hir_expr(hir, function_name, value, value_types)),
+            events: effect_events_for_expr(function_name, expr),
+            type_name: infer_hir_expr_type(hir, expr, value_types),
+            span: span.clone(),
+        },
+        Expr::Manage { value, span } => HirExpr::Manage {
+            value: Box::new(lower_hir_expr(hir, function_name, value, value_types)),
+            events: effect_events_for_expr(function_name, expr),
+            type_name: infer_hir_expr_type(hir, expr, value_types),
+            span: span.clone(),
+        },
+        Expr::Closure { body, span } => {
+            let mut closure_types = value_types.clone();
+            HirExpr::Closure {
+                body: lower_hir_block(hir, function_name, body, &mut closure_types),
+                span: span.clone(),
+            }
+        }
+        Expr::Unknown(span) => HirExpr::Unknown(span.clone()),
+    }
+}
+
+fn effect_events_for_expr(function_name: &str, expr: &Expr) -> Vec<HirEffectEvent> {
+    let event = match expr {
+        Expr::Manage { value, span } => {
+            let Some((binding_name, value_span)) = direct_ident(value) else {
+                return Vec::new();
+            };
+            HirEffectEvent {
+                function_name: function_name.to_string(),
+                kind: HirEffectEventKind::Manage,
+                binding_name,
+                span: span.clone(),
+                value_span,
+            }
+        }
+        Expr::Effect {
+            effect: DataEffect::Take,
+            value,
+            span,
+        } => {
+            let Some((binding_name, value_span)) = direct_ident(value) else {
+                return Vec::new();
+            };
+            HirEffectEvent {
+                function_name: function_name.to_string(),
+                kind: HirEffectEventKind::Take,
+                binding_name,
+                span: span.clone(),
+                value_span,
+            }
+        }
+        Expr::Effect { .. } => return Vec::new(),
+        _ => return Vec::new(),
+    };
+    vec![event]
+}
+
+fn retain_events_for_call(
+    function_name: &str,
+    callee: &Callee,
+    args: &[crate::syntax::ast::CallArg],
+    call_span: &Span,
+    resolution: &CallResolution,
+) -> Vec<HirEffectEvent> {
+    let CallResolution::Resolved { signature, .. } = resolution else {
+        return Vec::new();
+    };
+    if signature.retained_params.is_empty() {
+        return Vec::new();
+    }
+
+    args.iter()
+        .filter_map(|arg| {
+            let name = arg.name.as_ref()?;
+            if !signature.retained_params.contains(name) {
+                return None;
+            }
+            let (binding_name, value_span) = direct_read_ident(&arg.value)?;
+            Some(HirEffectEvent {
+                function_name: function_name.to_string(),
+                kind: HirEffectEventKind::Retain {
+                    callee: callee_display(callee),
+                    param: name.clone(),
+                },
+                binding_name,
+                span: call_span.clone(),
+                value_span,
+            })
+        })
+        .collect()
 }
 
 fn collect_body_facts_in_block(
@@ -1577,6 +1947,82 @@ fn publish(cache: mut ImageCache, path: read Path) -> Unit {
         ));
         assert_eq!(hir.effect_events[2].binding_name, "image");
         assert_eq!(hir.effect_events(&hir.effect_events[0].span).len(), 1);
+    }
+
+    #[test]
+    fn lowers_resolved_statement_expression_tree_for_function_body() {
+        let source = r#"
+mode: uses-local
+
+class Rules {
+}
+
+struct Config {
+    rules: handle Rules
+}
+
+fn update(cache: mut ImageCache, config: mut Config, path: read Path) -> Unit {
+    local image = Image.load(path: read path)
+    ImageCache.store(cache: mut cache, image: read image)
+    List.consume(list: take config.rules)
+}
+"#;
+
+        let program = parse_source("test.rss", source);
+        let hir = Hir::from_syntax(&program);
+        let body = hir.function_body("update").expect("body exists");
+        let block = body.block.as_ref().expect("resolved HIR block exists");
+
+        assert_eq!(block.statements.len(), 3);
+        let HirStmt::Let {
+            kind: HirBindingKind::LocalLet,
+            name,
+            value: Some(HirExpr::Call { type_name, .. }),
+            type_name: Some(binding_type),
+            ..
+        } = &block.statements[0]
+        else {
+            panic!("first statement should be a typed local call binding");
+        };
+        assert_eq!(name, "image");
+        assert_eq!(type_name.as_deref(), Some("Image"));
+        assert_eq!(binding_type, "Image");
+
+        let HirStmt::Expr(HirExpr::Call {
+            resolution, events, ..
+        }) = &block.statements[1]
+        else {
+            panic!("second statement should be a resolved retaining call");
+        };
+        assert!(matches!(
+            resolution,
+            CallResolution::Resolved {
+                kind: ResolvedCalleeKind::BuiltinFunction,
+                ..
+            }
+        ));
+        assert!(matches!(events[0].kind, HirEffectEventKind::Retain { .. }));
+        assert_eq!(events[0].binding_name, "image");
+
+        let HirStmt::Expr(HirExpr::Call { args, .. }) = &block.statements[2] else {
+            panic!("third statement should be a call");
+        };
+        let HirExpr::Effect {
+            effect: ParamEffect::Take,
+            value,
+            events,
+            ..
+        } = &args[0].value
+        else {
+            panic!("call argument should be a take expression");
+        };
+        assert!(events.is_empty());
+        let HirExpr::Field { access, .. } = value.as_ref() else {
+            panic!("take value should be a field access");
+        };
+        assert_eq!(access.base_type.as_deref(), Some("Config"));
+        assert_eq!(access.type_name.as_deref(), Some("Rules"));
+        assert!(access.is_handle);
     }
 
     #[test]

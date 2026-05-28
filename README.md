@@ -21,6 +21,7 @@ It currently implements:
 - HIR field-access facts with resolved base type, field type, and handle status where known
 - HIR effect events for `manage`, `take`, and retaining calls
 - HIR return facts with initial freshness proof classification
+- Resolved HIR statement/expression trees for function bodies, including typed identifiers, resolved calls, field accesses, and per-expression ownership events
 - Per-function HIR body views that group bindings, calls, fields, effects, and returns
 - AST-driven mode and call checks for local-only features, named arguments, data effects, and retaining APIs
 - AST-driven body checks for local moves, early-exit-aware `fresh` returns, resource escape, resolved handle-field `take`, and managed closure captures
@@ -60,7 +61,7 @@ Non-goals for this stage:
 
 Near-term roadmap:
 
-1. Expand HIR from declarations into resolved statements and expressions.
+1. Start moving body checkers from syntax AST plus lookup tables onto the resolved HIR statement/expression tree.
 2. Extend CleanLocal dataflow from structured statements into a dedicated CFG representation.
 3. Expand `rss review` local/manage boundary diffs from summaries into path-aware risk explanations.
 
