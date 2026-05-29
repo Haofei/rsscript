@@ -7570,6 +7570,117 @@ fn Native.danger(message: read String) -> String
 }
 
 #[test]
+fn package_check_applies_public_signature_policy_limits() {
+    let temp_dir = unique_temp_dir("rsscript-package-check-signature-policy");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[review.policy]
+max_public_params = 2
+max_nested_type_depth = 2
+"#,
+        r#"struct Error
+
+pub fn Api.run(
+    first: read String,
+    second: read String,
+    third: read String,
+) -> Result<List<String>, Error>
+"#,
+    );
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&temp_dir).expect("package check should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!check.ok);
+    assert_eq!(json["risk"], "high");
+    assert!(json["diagnostics"].as_array().is_some_and(|diagnostics| {
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == "PKG0501" && diagnostic["label"] == "max_public_params"
+        }) && diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == "PKG0501" && diagnostic["label"] == "max_nested_type_depth"
+        })
+    }));
+}
+
+#[test]
+fn package_review_policy_maps_native_api_risk_to_elevated() {
+    let temp_dir = unique_temp_dir("rsscript-package-native-api-risk");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[review.policy]
+native_api_risk = "elevated"
+
+[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+        r#"features: native
+
+native fn Native.echo(message: read String) -> String
+"#,
+    );
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(json["risk"], "elevated");
+    assert_eq!(json["summary"]["native_apis"], 1);
+}
+
+#[test]
+fn package_check_reports_invalid_review_policy_values() {
+    let temp_dir = unique_temp_dir("rsscript-package-invalid-review-policy");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[review.policy]
+native_api_risk = "low"
+build_execution_default = "sometimes"
+"#,
+        r#"pub fn Api.run() -> Unit
+"#,
+    );
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&temp_dir).expect("package check should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!check.ok);
+    assert!(json["diagnostics"].as_array().is_some_and(|diagnostics| {
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == "PKG0501" && diagnostic["label"] == "native_api_risk"
+        }) && diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == "PKG0501" && diagnostic["label"] == "build_execution_default"
+        })
+    }));
+}
+
+#[test]
 fn package_review_marks_broken_rssi_contract_diagnostics_unknown() {
     let temp_dir = unique_temp_dir("rsscript-package-review-broken-rssi");
     write_package_fixture(

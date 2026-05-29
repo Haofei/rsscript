@@ -736,7 +736,10 @@ Canonical policy keys:
 deny_unknown       fail when computed package risk is unknown or required facts are unknown
 deny_native        fail when selected public APIs or implementation facts require native boundaries
 deny_unsafe_apis   fail when selected public APIs expose effects(unsafe)
+max_public_params  fail when a public API exceeds the configured parameter budget
+max_nested_type_depth fail when a public API type exceeds the configured nesting budget
 native_api_risk    when native is not denied, map public native APIs to elevated or high
+build_execution_default default build-execution policy for package/native review
 ```
 
 This section is a policy, not a self-declared risk result. Computed metadata
