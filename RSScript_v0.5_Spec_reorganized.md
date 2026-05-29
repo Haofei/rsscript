@@ -588,21 +588,25 @@ match (statement form, over Option/Result variants)
 returning `Result<U, E>`, `expr` must have type `Result<T, E>` with the *same*
 error type `E`. A mismatched error type is a diagnostic, not a silent conversion
 (§2.4 forbids implicit `From`/`Into` chains; this is the `?`-specific application
-of that rule). Conversion must be written explicitly:
+of that rule). Conversion must be written explicitly, for example with a
+statement-form `match` that maps the error before returning:
 
 ```rust
-let file = match File.open(path: read path) {
-    Ok(file) => file,
-    Err(e) => return Err(AppError.from_io(error: read e)),
+match Config.parse(text: read text) {
+    Ok(config) => {
+        Config.apply(config: read config)
+    }
+    Err(e) => {
+        return Err(AppError.from_config(error: read e))
+    }
 }
 ```
 
-A future explicit `map_err` API would also be explicit, never an implicit
-backend conversion:
-
-```rust
-File.open(path: read path).map_err(mapper: noescape |e| AppError.from_io(error: read e))?
-```
+A future version may add an explicit `Result.map_err` API for this in canonical
+call form (`Result.map_err(result: ..., mapper: ...)`); it would still be an
+explicit, named call, never an implicit backend conversion. It is described here
+in prose because the closure-parameter syntax it would need is not part of the
+v0.5 surface.
 
 `?` is the only implicit control transfer in RSScript, and it is visible in the
 source as the `?` token.
@@ -1730,11 +1734,9 @@ fn ResourcePool<T: Resource>.new(
 
 `new` is the v0.5 constructor and requires an **infallible** factory: `create` must return a resource `T`, never `Result<T, E>`. Construction is eager and exact: the runtime calls `create` exactly `max_size` times, stores the `max_size` resources in the local pool, then discards the factory closure. In v0.5, `max_size` must be a positive `Int` literal; a non-positive literal is a diagnostic (RS0708), not a runtime condition — this keeps `new` infallible without needing a `Result` for a degenerate pool size. Because construction cannot fail, `new` returns the pool directly, not a `Result`. "Eager" and "exactly `max_size`" together remove any ambiguity with lazy replenishment: the pool never creates a resource after construction.
 
-Implementation note (non-normative): a conforming v0.5 frontend rejects a
-non-positive `max_size` literal (RS0708) before lowering. A prototype runtime may
-additionally clamp a non-positive size to an empty pool defensively, but that is
-not RSScript source semantics — the source-level rule is the RS0708 rejection
-above, and the roadmap (Chapter 20) tracks implementation.
+Implementation note (non-normative): a prototype runtime may defensively diagnose
+invalid or empty pools, but this is not RSScript source semantics. A conforming
+v0.5 frontend rejects non-positive `max_size` literals (RS0708) before lowering.
 
 A fallible factory passed to `new` is rejected (diagnostic RS0707): hiding a creation failure inside `new` would violate no-hidden-behavior, since failure is represented by a return type (section 14.3). The closure literal is checked against the expected `noescape Fn() -> T` parameter contract, including its result type: the user need not annotate the closure's return type, but the checker takes the expected result `T` from the parameter and rejects a factory whose result is `Result<T, E>` (that is the RS0707 case). The `-> T` in the contract is the expected result the checker enforces, not mere documentation.
 
