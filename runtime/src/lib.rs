@@ -453,6 +453,22 @@ pub fn os_close(fd: i64) {
     let _ = fd;
 }
 
+pub fn list_new<T>() -> Vec<T> {
+    Vec::new()
+}
+
+pub fn list_push<T: Clone>(list: &mut Vec<T>, value: &T) {
+    list.push(value.clone());
+}
+
+pub fn list_len<T>(list: &[T]) -> i64 {
+    list.len() as i64
+}
+
+pub fn list_get<T: Clone>(list: &[T], index: i64) -> T {
+    list[index as usize].clone()
+}
+
 pub fn list_consume<T>(list: Vec<T>) {
     drop(list);
 }

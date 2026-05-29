@@ -1,3 +1,18 @@
 features: local
 
+pub fn List.new<T>() -> fresh List<T>
+
+pub fn List.push<T>(
+    list: mut List<T>,
+    value: read T,
+) -> Unit
+    effects(retains(value))
+
+pub fn List.len<T>(list: read List<T>) -> Int
+
+pub fn List.get<T>(
+    list: read List<T>,
+    index: Int,
+) -> T
+
 pub fn List.consume<T>(list: take List<T>) -> Unit

@@ -1754,6 +1754,10 @@ fn lower_callee(callee: &Callee) -> String {
             "rsscript_runtime::assert_equal_bool".to_string()
         }
         callee if is_os_close_callee(callee) => "rsscript_runtime::os_close".to_string(),
+        callee if is_list_new_callee(callee) => "rsscript_runtime::list_new".to_string(),
+        callee if is_list_push_callee(callee) => "rsscript_runtime::list_push".to_string(),
+        callee if is_list_len_callee(callee) => "rsscript_runtime::list_len".to_string(),
+        callee if is_list_get_callee(callee) => "rsscript_runtime::list_get".to_string(),
         callee if is_list_consume_callee(callee) => "rsscript_runtime::list_consume".to_string(),
         callee if is_buffer_new_callee(callee) => "rsscript_runtime::buffer_new".to_string(),
         callee if is_buffer_clear_callee(callee) => "rsscript_runtime::buffer_clear".to_string(),
@@ -1900,6 +1904,22 @@ fn is_assert_equal_bool_callee(callee: &Callee) -> bool {
 
 fn is_os_close_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "OS" && name == "close")
+}
+
+fn is_list_new_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "List" && name == "new")
+}
+
+fn is_list_push_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "List" && name == "push")
+}
+
+fn is_list_len_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "List" && name == "len")
+}
+
+fn is_list_get_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "List" && name == "get")
 }
 
 fn is_list_consume_callee(callee: &Callee) -> bool {

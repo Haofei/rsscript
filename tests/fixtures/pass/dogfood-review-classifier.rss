@@ -1,3 +1,5 @@
+features: local
+
 struct ReviewFacts {
     public_api: Bool
     has_unknown_call: Bool
@@ -339,29 +341,53 @@ fn add_decision(
     )
 }
 
-fn summarize_four(
-    a: read ReviewFacts,
-    b: read ReviewFacts,
-    c: read ReviewFacts,
-    d: read ReviewFacts,
+fn summarize_list_from(
+    items: read List<ReviewFacts>,
+    index: Int,
+    summary: read ReviewSummary,
 ) -> fresh ReviewSummary {
-    let first = add_decision(
-        summary: read empty_summary(),
-        decision_value: read classify_function(facts: read a),
-    )
-    let second = add_decision(
-        summary: read first,
-        decision_value: read classify_function(facts: read b),
-    )
-    let third = add_decision(
-        summary: read second,
-        decision_value: read classify_function(facts: read c),
-    )
+    if index >= List.len(list: read items) {
+        return ReviewSummary(
+            total_functions: summary.total_functions,
+            must_review_functions: summary.must_review_functions,
+            low_risk_functions: summary.low_risk_functions,
+            unknown_functions: summary.unknown_functions,
+            suggested_lines: summary.suggested_lines,
+        )
+    }
 
-    return add_decision(
-        summary: read third,
-        decision_value: read classify_function(facts: read d),
+    let facts = List.get(list: read items, index: index)
+    let decision_value = classify_function(facts: read facts)
+    let next = add_decision(summary: read summary, decision_value: read decision_value)
+
+    return summarize_list_from(
+        items: read items,
+        index: index + 1,
+        summary: read next,
     )
+}
+
+fn summarize_list(items: read List<ReviewFacts>) -> fresh ReviewSummary {
+    return summarize_list_from(
+        items: read items,
+        index: 0,
+        summary: read empty_summary(),
+    )
+}
+
+fn dogfood_fact_list() -> fresh List<ReviewFacts> {
+    local items = List<ReviewFacts>.new()
+    let helper = make_low_helper(lines: 4)
+    let native_entry = make_native_entry(lines: 20)
+    let resource_worker = make_resource_worker(lines: 18)
+    let cache_worker = make_retaining_cache(lines: 12)
+
+    List.push(list: mut items, value: read helper)
+    List.push(list: mut items, value: read native_entry)
+    List.push(list: mut items, value: read resource_worker)
+    List.push(list: mut items, value: read cache_worker)
+
+    return items
 }
 
 fn unknown_ratio_percent(summary: read ReviewSummary) -> Int {
@@ -373,17 +399,9 @@ fn unknown_ratio_percent(summary: read ReviewSummary) -> Int {
 }
 
 fn dogfood_sample_summary() -> fresh ReviewSummary {
-    let helper = make_low_helper(lines: 4)
-    let native_entry = make_native_entry(lines: 20)
-    let resource_worker = make_resource_worker(lines: 18)
-    let cache_worker = make_retaining_cache(lines: 12)
+    let items = dogfood_fact_list()
 
-    return summarize_four(
-        a: read helper,
-        b: read native_entry,
-        c: read resource_worker,
-        d: read cache_worker,
-    )
+    return summarize_list(items: read items)
 }
 
 fn dogfood_shape_is_expected() -> Bool {
