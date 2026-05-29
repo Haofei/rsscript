@@ -7681,6 +7681,107 @@ build_execution_default = "sometimes"
 }
 
 #[test]
+fn package_check_applies_build_execution_default_to_native_wrapper() {
+    let temp_dir = unique_temp_dir("rsscript-package-build-default-forbid");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[review.policy]
+build_execution_default = "forbid"
+
+[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_json_native"
+unsafe = "forbid"
+"#,
+        r#"features: native
+
+native fn Native.parse(text: read String) -> String
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
+    fs::write(
+        temp_dir.join("native/rust/Cargo.toml"),
+        "[package]\nname = \"rss_json_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\nbuild = \"build.rs\"\n",
+    )
+    .expect("native Cargo.toml should be written");
+    fs::write(
+        temp_dir.join("native/rust/build.rs"),
+        r#"fn main() {
+    let _ = std::env::var("OUT_DIR");
+}
+"#,
+    )
+    .expect("native build script should be written");
+    fs::write(
+        temp_dir.join("native/rust/src/lib.rs"),
+        "pub fn parse() {}\n",
+    )
+    .expect("native source should be written");
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&temp_dir).expect("package check should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!check.ok);
+    assert_eq!(json["native_rust"]["build_env_detected"], true);
+    assert!(
+        json["native_rust"]["reasons"]
+            .as_array()
+            .is_some_and(|reasons| reasons
+                .iter()
+                .any(|reason| reason == "native Rust build script reads environment"))
+    );
+}
+
+#[test]
+fn package_review_uses_build_execution_default_as_native_review_policy() {
+    let temp_dir = unique_temp_dir("rsscript-package-build-default-review");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[review.policy]
+build_execution_default = "review"
+
+[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_json_native"
+unsafe = "forbid"
+"#,
+        r#"features: native
+
+native fn Native.parse(text: read String) -> String
+"#,
+    );
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(json["native_rust"]["build_scripts"], "review");
+    assert_eq!(json["native_rust"]["proc_macros"], "review");
+    assert!(json["reasons"].as_array().is_some_and(|reasons| {
+        reasons
+            .iter()
+            .any(|reason| reason == "native Rust build scripts require review")
+            && reasons
+                .iter()
+                .any(|reason| reason == "native Rust proc macros require review")
+    }));
+}
+
+#[test]
 fn package_review_marks_broken_rssi_contract_diagnostics_unknown() {
     let temp_dir = unique_temp_dir("rsscript-package-review-broken-rssi");
     write_package_fixture(

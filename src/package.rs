@@ -675,8 +675,8 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
                 .clone()
                 .unwrap_or_else(|| "native/rust".to_string()),
             crate_name: native.crate_name.clone(),
-            build_scripts: native.build_scripts.clone(),
-            proc_macros: native.proc_macros.clone(),
+            build_scripts: native_effective_build_policy(manifest, native.build_scripts.as_deref()),
+            proc_macros: native_effective_build_policy(manifest, native.proc_macros.as_deref()),
             unsafe_policy: native.unsafe_policy.clone(),
             links: native.links.clone(),
         });
@@ -4601,6 +4601,19 @@ fn package_review_policy_value_diagnostics(
         ));
     }
     diagnostics
+}
+
+fn native_effective_build_policy(manifest: &Manifest, value: Option<&str>) -> Option<String> {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            manifest
+                .review
+                .as_ref()
+                .and_then(|review| review.policy.build_execution_default.as_deref())
+                .filter(|value| matches!(*value, "forbid" | "review" | "allow"))
+        })
+        .map(str::to_string)
 }
 
 fn package_type_name_depth(type_name: &str) -> usize {
