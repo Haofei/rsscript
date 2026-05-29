@@ -3577,6 +3577,22 @@ fn rss_run_accepts_noescape_callback_managing_callback_local_value() {
 }
 
 #[test]
+fn rss_run_accepts_noescape_callback_reading_captured_local_value() {
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("tests/fixtures/pass/noescape-local-callback.rss")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss run should execute noescape local callback fixture");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stdout.contains("image bytes="), "{stdout}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+}
+
+#[test]
 fn rss_run_accepts_local_closure_that_mutates_captured_local() {
     let temp_dir = unique_temp_dir("rsscript-run-local-closure-fnmut");
     fs::create_dir_all(&temp_dir).expect("temp dir should be created");

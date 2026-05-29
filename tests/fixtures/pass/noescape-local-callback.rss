@@ -13,8 +13,21 @@ fn use_local(path: read Path) -> Result<fresh Image, ImageError> {
     return Ok(image)
 }
 
-fn main() -> Result<Unit, ImageError> {
+fn main() -> Result<Unit, FileError> {
     let path = Path.from_string(value: read "rsscript-image-input.bin")
-    use_local(path: read path)?
-    return Ok(Unit)
+    let data = Bytes.from_string(value: read "raw image bytes")
+
+    with File.open_write(path: read path) as file {
+        File.write(file: mut file, data: read data)?
+    }
+
+    match use_local(path: read path) {
+        Ok(image) => {
+            return Ok(Unit)
+        }
+        Err(error) => {
+            Log.write(message: read "noescape local callback failed")
+            return Ok(Unit)
+        }
+    }
 }
