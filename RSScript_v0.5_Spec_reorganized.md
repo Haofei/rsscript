@@ -186,6 +186,31 @@ RSScript lowers to Rust source while keeping Rust lifetimes, trait-bound complex
 
 Valid RSScript code should not require the user to understand generated Rust.
 
+### 2.8 Feature admission rule
+
+RSScript features must aggregate rather than interact. Most feature-interaction
+complexity in other languages comes from independently designed mechanisms that
+meet in an implicit resolution layer, producing combinations no one designed.
+RSScript avoids this by construction: its features are coordinated projections
+of one model — the review protocol — and they are surfaced only through
+explicit, named syntax.
+
+A candidate feature is admissible only if both hold:
+
+```text
+1. It can be phrased as a reviewer question
+   (what mutates, what is retained, who owns a resource, what is fresh,
+    what crosses local/managed/native/unsafe, what public behavior changed).
+2. It can be expressed with explicit, named, single-canonical syntax,
+   without adding an implicit rule to make it ergonomic.
+```
+
+If a feature can only be made ergonomic by an implicit mechanism — implicit
+conversion, auto method resolution, hidden control flow, positional magic, or
+inferred promotion — it is rejected, even when convenient. Convenience bought
+with implicitness is how a coherent language slides into feature fights. The
+rejected influences in section 20.1 are the first applications of this rule.
+
 ---
 
 ## 3. v0.5 Scope
