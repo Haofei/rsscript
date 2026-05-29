@@ -4039,6 +4039,7 @@ fn collect_manifest_review_reasons(manifest: &Manifest, reasons: &mut Vec<String
     if !manifest.features.is_empty() {
         reasons.push("package declares selectable package features".to_string());
     }
+    collect_package_feature_boundary_reasons(&manifest.features, reasons);
     if let Some(review) = &manifest.review {
         if review.risk.as_deref() == Some("unknown") {
             reasons.push("manifest declares unknown package risk".to_string());
@@ -4053,6 +4054,33 @@ fn collect_manifest_review_reasons(manifest: &Manifest, reasons: &mut Vec<String
             reasons.push("manifest allows unsafe boundaries".to_string());
         }
     }
+}
+
+fn collect_package_feature_boundary_reasons(
+    features: &BTreeMap<String, Vec<String>>,
+    reasons: &mut Vec<String>,
+) {
+    for (name, values) in features {
+        if package_feature_may_change_boundary_risk(name, values) {
+            reasons.push(format!(
+                "package feature `{name}` may change native/unsafe/build risk"
+            ));
+        }
+    }
+}
+
+fn package_feature_may_change_boundary_risk(name: &str, values: &[String]) -> bool {
+    package_feature_token_is_boundary_risk(name)
+        || values
+            .iter()
+            .any(|value| package_feature_token_is_boundary_risk(value))
+}
+
+fn package_feature_token_is_boundary_risk(token: &str) -> bool {
+    let normalized = token.to_ascii_lowercase();
+    ["native", "unsafe", "ffi", "build", "proc", "macro", "link"]
+        .iter()
+        .any(|marker| normalized.contains(marker))
 }
 
 fn collect_native_reasons(native: Option<&PackageNativeRustReview>, reasons: &mut Vec<String>) {
@@ -4172,14 +4200,28 @@ fn compare_feature_maps(
         let before = old.get(&name).map(|values| feature_values_label(values));
         let after = new.get(&name).map(|values| feature_values_label(values));
         if before != after {
+            let risk = new
+                .get(&name)
+                .or_else(|| old.get(&name))
+                .map_or(PackageRisk::Elevated, |values| {
+                    package_feature_risk(&name, values)
+                });
             changes.push(manifest_change(
                 "package-feature",
                 name,
                 before,
                 after,
-                PackageRisk::Elevated,
+                risk,
             ));
         }
+    }
+}
+
+fn package_feature_risk(name: &str, values: &[String]) -> PackageRisk {
+    if package_feature_may_change_boundary_risk(name, values) {
+        PackageRisk::High
+    } else {
+        PackageRisk::Elevated
     }
 }
 
@@ -4619,6 +4661,13 @@ fn package_risk(
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity.is_error())
+    {
+        return PackageRisk::High;
+    }
+    if manifest
+        .features
+        .iter()
+        .any(|(name, values)| package_feature_may_change_boundary_risk(name, values))
     {
         return PackageRisk::High;
     }

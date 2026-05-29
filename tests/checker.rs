@@ -6067,6 +6067,34 @@ native fn Json.parse(text: read String) -> Result<fresh JsonValue, JsonError>
 }
 
 #[test]
+fn package_review_reports_feature_boundary_risk() {
+    let temp_dir = unique_temp_dir("rsscript-package-feature-risk");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-feature-risk",
+        "0.1.0",
+        r#"[features]
+native-tls = ["native"]
+"#,
+        r#"pub fn add(left: Int, right: Int) -> Int
+"#,
+    );
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(json["risk"], "high");
+    assert_eq!(json["features"], serde_json::json!(["native-tls"]));
+    assert!(json["reasons"].as_array().is_some_and(|reasons| {
+        reasons.iter().any(|reason| {
+            reason == "package feature `native-tls` may change native/unsafe/build risk"
+        })
+    }));
+}
+
+#[test]
 fn package_review_loads_path_dependency_interfaces_for_source_checks() {
     let root_dir = unique_temp_dir("rsscript-package-dep-interface-root");
     let dep_dir = unique_temp_dir("rsscript-package-dep-interface-dep");
@@ -6950,6 +6978,45 @@ pub fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
         changes
             .iter()
             .any(|change| change["file"] == "interface/lib.rssi" && change["risk"] == "high")
+    }));
+}
+
+#[test]
+fn package_diff_marks_boundary_package_feature_changes_high_risk() {
+    let old_dir = unique_temp_dir("rsscript-package-feature-diff-old");
+    let new_dir = unique_temp_dir("rsscript-package-feature-diff-new");
+    write_named_package_fixture(
+        &old_dir,
+        "rss-feature-diff",
+        "0.1.0",
+        "",
+        r#"pub fn add(left: Int, right: Int) -> Int
+"#,
+    );
+    write_named_package_fixture(
+        &new_dir,
+        "rss-feature-diff",
+        "0.1.0",
+        r#"[features]
+native-tls = ["native"]
+"#,
+        r#"pub fn add(left: Int, right: Int) -> Int
+"#,
+    );
+
+    let diff = diff_package_dirs(&old_dir, &new_dir).expect("package diff should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_diff_json(&diff))
+        .expect("package diff JSON should parse");
+    let _ = fs::remove_dir_all(&old_dir);
+    let _ = fs::remove_dir_all(&new_dir);
+
+    assert_eq!(json["risk"], "high");
+    assert!(json["manifest_changes"].as_array().is_some_and(|changes| {
+        changes.iter().any(|change| {
+            change["kind"] == "package-feature"
+                && change["name"] == "native-tls"
+                && change["risk"] == "high"
+        })
     }));
 }
 
