@@ -88,6 +88,10 @@ pub fn lower_source_to_rust_with_map(
     }
 
     let program = parse_source(file, source);
+    let lowering_diagnostics = validate_executable_declarations(&program);
+    if !lowering_diagnostics.is_empty() {
+        return Err(lowering_diagnostics);
+    }
     Ok(lower_program_to_rust_with_map(&program))
 }
 
@@ -154,6 +158,10 @@ pub fn lower_sources_to_rust_package_with_options(
             .iter()
             .map(|(path, source)| parse_source(path, source)),
     );
+    let lowering_diagnostics = validate_executable_declarations(&program);
+    if !lowering_diagnostics.is_empty() {
+        return Err(lowering_diagnostics);
+    }
     let native_bindings = native_dependencies
         .iter()
         .flat_map(|dependency| dependency.bindings.iter())
@@ -271,6 +279,169 @@ fn lower_program_to_rust_with_map_with_native_bindings(
     native_bindings: BTreeMap<String, String>,
 ) -> LoweredRust {
     RustLowerer::new(program, native_bindings).lower()
+}
+
+fn validate_executable_declarations(program: &Program) -> Vec<Diagnostic> {
+    let mut implemented = BTreeSet::new();
+    let mut bodyless = BTreeMap::new();
+    for item in &program.items {
+        let Item::Function(function) = item else {
+            continue;
+        };
+        let key = executable_declaration_function_key(&function.name);
+        if function.body.statements.is_empty() {
+            if !function.is_native {
+                bodyless.insert(key, function.name.clone());
+            }
+        } else {
+            implemented.insert(key);
+        }
+    }
+    for key in &implemented {
+        bodyless.remove(key);
+    }
+    if bodyless.is_empty() {
+        return Vec::new();
+    }
+
+    let mut diagnostics = Vec::new();
+    for item in &program.items {
+        let Item::Function(function) = item else {
+            continue;
+        };
+        if function.body.statements.is_empty() {
+            continue;
+        }
+        validate_executable_declarations_in_block(&function.body, &bodyless, &mut diagnostics);
+    }
+    diagnostics
+}
+
+fn validate_executable_declarations_in_block(
+    block: &Block,
+    bodyless: &BTreeMap<String, String>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for statement in &block.statements {
+        validate_executable_declarations_in_stmt(statement, bodyless, diagnostics);
+    }
+}
+
+fn validate_executable_declarations_in_stmt(
+    statement: &Stmt,
+    bodyless: &BTreeMap<String, String>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match statement {
+        Stmt::Let(stmt) => {
+            if let Some(value) = &stmt.value {
+                validate_executable_declarations_in_expr(value, bodyless, diagnostics);
+            }
+        }
+        Stmt::Return(stmt) => {
+            if let Some(value) = &stmt.value {
+                validate_executable_declarations_in_expr(value, bodyless, diagnostics);
+            }
+        }
+        Stmt::With(stmt) => {
+            validate_executable_declarations_in_expr(&stmt.resource, bodyless, diagnostics);
+            validate_executable_declarations_in_block(&stmt.body, bodyless, diagnostics);
+        }
+        Stmt::If(stmt) => {
+            validate_executable_declarations_in_expr(&stmt.condition, bodyless, diagnostics);
+            validate_executable_declarations_in_block(&stmt.then_body, bodyless, diagnostics);
+            if let Some(else_body) = &stmt.else_body {
+                validate_executable_declarations_in_block(else_body, bodyless, diagnostics);
+            }
+        }
+        Stmt::Loop(stmt) => {
+            if let Some(condition) = &stmt.condition {
+                validate_executable_declarations_in_expr(condition, bodyless, diagnostics);
+            }
+            validate_executable_declarations_in_block(&stmt.body, bodyless, diagnostics);
+        }
+        Stmt::Match(stmt) => {
+            validate_executable_declarations_in_expr(&stmt.value, bodyless, diagnostics);
+            for arm in &stmt.arms {
+                validate_executable_declarations_in_block(&arm.body, bodyless, diagnostics);
+            }
+        }
+        Stmt::Expr(expr) => validate_executable_declarations_in_expr(expr, bodyless, diagnostics),
+        Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::MalformedWith(_)
+        | Stmt::MalformedIf(_)
+        | Stmt::MalformedLoop(_)
+        | Stmt::MalformedMatch(_)
+        | Stmt::Unknown(_) => {}
+    }
+}
+
+fn validate_executable_declarations_in_expr(
+    expr: &Expr,
+    bodyless: &BTreeMap<String, String>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match expr {
+        Expr::Call { callee, args, span } => {
+            let key = executable_declaration_callee_key(callee);
+            if runtime_intrinsic_target(callee).is_none()
+                && let Some(function_name) = bodyless.get(&key)
+            {
+                diagnostics.push(
+                    Diagnostic::error(
+                        code::UNSUPPORTED_SYNTAX,
+                        "unsupported executable RSScript declaration call.",
+                        span.clone(),
+                        "unimplemented declaration call",
+                    )
+                    .with_cause(format!(
+                        "`{function_name}` is a declaration without a RSScript body. Provide an implementation or bind it as a native/runtime intrinsic before executable lowering."
+                    )),
+                );
+            }
+            for arg in args {
+                validate_executable_declarations_in_expr(&arg.value, bodyless, diagnostics);
+            }
+        }
+        Expr::Binary { left, right, .. } => {
+            validate_executable_declarations_in_expr(left, bodyless, diagnostics);
+            validate_executable_declarations_in_expr(right, bodyless, diagnostics);
+        }
+        Expr::Field { base, .. } => {
+            validate_executable_declarations_in_expr(base, bodyless, diagnostics);
+        }
+        Expr::Index { base, index, .. } => {
+            validate_executable_declarations_in_expr(base, bodyless, diagnostics);
+            validate_executable_declarations_in_expr(index, bodyless, diagnostics);
+        }
+        Expr::Effect { value, .. }
+        | Expr::Manage { value, .. }
+        | Expr::Spawn { value, .. }
+        | Expr::Await { value, .. }
+        | Expr::Try { value, .. } => {
+            validate_executable_declarations_in_expr(value, bodyless, diagnostics);
+        }
+        Expr::Closure { body, .. } => {
+            validate_executable_declarations_in_block(body, bodyless, diagnostics);
+        }
+        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+    }
+}
+
+fn executable_declaration_function_key(name: &str) -> String {
+    if let Some((namespace, name)) = name.rsplit_once('.') {
+        format!("{}.{}", type_root_name(namespace), name)
+    } else {
+        name.to_string()
+    }
+}
+
+fn executable_declaration_callee_key(callee: &Callee) -> String {
+    match callee {
+        Callee::Name(name) => name.clone(),
+        Callee::Qualified { namespace, name } => format!("{}.{}", type_root_name(namespace), name),
+    }
 }
 
 pub fn parse_source_map_json(source_map_json: &str) -> Result<Vec<RustSourceMapEntry>, String> {

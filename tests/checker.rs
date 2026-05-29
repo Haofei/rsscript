@@ -1577,7 +1577,9 @@ fn maybe_point(x: Int, y: Int) -> Result<fresh Point, BuildError> {
     return Ok(Point(x: x, y: y))
 }
 
-fn shift(point: mut Point) -> Unit
+fn shift(point: mut Point) -> Unit {
+    return Unit
+}
 
 pub fn use_try(x: Int, y: Int) -> Result<fresh Point, BuildError> {
     local point = maybe_point(x: x, y: y)?
@@ -1645,7 +1647,9 @@ struct Session {
     id: Int
 }
 
-fn save(session: read Session) -> Unit
+fn save(session: read Session) -> Unit {
+    return Unit
+}
 
 pub fn make_session(id: Int) -> Unit {
     local session = Session(id: id)
@@ -2347,7 +2351,9 @@ resource TestConnection {
     fd: Int
 }
 
-fn TestConnection.query(conn: mut TestConnection, sql: read String) -> Unit
+fn TestConnection.query(conn: mut TestConnection, sql: read String) -> Unit {
+    return Unit
+}
 
 fn pooled(pool: mut ResourcePool<TestConnection>) -> Unit {
     with ResourcePool.borrow(pool: mut pool) as conn {
@@ -2861,6 +2867,34 @@ fn bad(path: read Path) -> Unit {
         .collect::<Vec<_>>();
 
     assert!(codes.contains(&"RS0015".to_string()));
+}
+
+#[test]
+fn rust_lowering_rejects_unimplemented_declaration_calls_before_generation() {
+    let source = r#"
+features: local
+
+struct Meter {
+    value: Int
+}
+
+fn touch(counter: mut Meter) -> Unit
+
+pub fn run() -> Unit {
+    local counter = Meter(value: 1)
+    touch(counter: mut counter)
+    return Unit
+}
+"#;
+    let diagnostics = lower_source_to_rust("unimplemented.rss", source)
+        .expect_err("unimplemented declaration call should fail before Rust generation");
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0015" && diagnostic.label == "unimplemented declaration call"
+        }),
+        "{diagnostics:?}"
+    );
 }
 
 #[test]
