@@ -11,6 +11,7 @@ struct PackageRiskFacts {
     has_native_proc_macro: Bool
     has_native_unsafe: Bool
     has_native_links: Bool
+    has_feature_boundary: Bool
     has_review_must: Bool
     unmodeled_reasons: Int
 }
@@ -63,6 +64,10 @@ fn package_reason_is_modeled(reason: read String) -> Bool {
     }
 
     if reason == "package declares selectable package features" {
+        return true
+    }
+
+    if reason == "package feature `native-tls` may change native/unsafe/build risk" {
         return true
     }
 
@@ -163,6 +168,7 @@ fn parse_package_risk_facts(value: read JsonValue) -> Result<fresh PackageRiskFa
         has_native_proc_macro: Json.array_contains_string(value: read reasons, item: read "native Rust proc macros require review")?,
         has_native_unsafe: Json.array_contains_string(value: read reasons, item: read "native Rust unsafe policy requires review")?,
         has_native_links: Json.array_contains_string(value: read reasons, item: read "native Rust links external libraries")?,
+        has_feature_boundary: Json.array_contains_string(value: read reasons, item: read "package feature `native-tls` may change native/unsafe/build risk")?,
         has_review_must: Json.array_contains_string(value: read reasons, item: read "review map contains must-review functions")?,
         unmodeled_reasons: count_unmodeled_package_reasons(reasons: read reasons)?,
     )
@@ -177,7 +183,7 @@ fn classify_package_risk(facts: read PackageRiskFacts) -> Int {
         return PackageRisk.high()
     }
 
-    if facts.has_native_build || facts.has_native_proc_macro || facts.has_native_unsafe || facts.has_native_links {
+    if facts.has_native_build || facts.has_native_proc_macro || facts.has_native_unsafe || facts.has_native_links || facts.has_feature_boundary {
         return PackageRisk.high()
     }
 
@@ -346,12 +352,12 @@ pub fn main() -> Result<Unit, JsonError> {
 
     Log.write(message: read summary_line)
 
-    Assert.equal_int(left: summary.total_cases, right: 4)
+    Assert.equal_int(left: summary.total_cases, right: 5)
     Assert.equal_int(left: summary.mismatches, right: 0)
     Assert.equal_int(left: summary.unmodeled_reasons, right: 0)
     Assert.equal_int(left: summary.low_cases, right: 1)
     Assert.equal_int(left: summary.elevated_cases, right: 1)
-    Assert.equal_int(left: summary.high_cases, right: 1)
+    Assert.equal_int(left: summary.high_cases, right: 2)
     Assert.equal_int(left: summary.unknown_cases, right: 1)
 
     return Ok(Unit)

@@ -4505,7 +4505,7 @@ fn rss_run_accepts_dogfood_package_risk_classifier() {
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
     assert_eq!(
         stdout.trim(),
-        "dogfood package risk cases=4 mismatches=0 unmodeled_reasons=0 low=1 elevated=1 high=1 unknown=1"
+        "dogfood package risk cases=5 mismatches=0 unmodeled_reasons=0 low=1 elevated=1 high=2 unknown=1"
     );
     assert!(stderr.trim().is_empty(), "{stderr}");
 }
@@ -4537,7 +4537,7 @@ fn rss_run_reports_dogfood_package_risk_mismatch() {
 
     assert!(!output.status.success(), "{stdout}");
     assert!(
-        stdout.contains("dogfood package risk cases=4 mismatches=1 unmodeled_reasons=0 low=1 elevated=1 high=1 unknown=1"),
+        stdout.contains("dogfood package risk cases=5 mismatches=1 unmodeled_reasons=0 low=1 elevated=1 high=2 unknown=1"),
         "{stdout}"
     );
 }
@@ -4828,10 +4828,23 @@ risk = "unknown"
 "#,
     );
 
+    let feature_high_dir = temp_dir.join("package-feature-high");
+    write_named_package_fixture(
+        &feature_high_dir,
+        "rss-dogfood-feature-high",
+        "0.1.0",
+        r#"[features]
+native-tls = ["native"]
+"#,
+        r#"pub fn Api.run() -> Unit
+"#,
+    );
+
     Value::Array(vec![
         package_review_json_for_dir(&low_dir),
         package_review_json_for_dir(&elevated_dir),
         package_review_json_for_dir(&high_dir),
+        package_review_json_for_dir(&feature_high_dir),
         package_review_json_for_dir(&unknown_dir),
     ])
 }
