@@ -1991,6 +1991,48 @@ fn main() -> Result<Unit, DbError> {
 }
 
 #[test]
+fn rss_run_accepts_non_consuming_noescape_callback() {
+    let temp_dir = unique_temp_dir("rsscript-run-noescape-fnmut");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    let source_path = temp_dir.join("noescape_fnmut.rss");
+    fs::write(
+        &source_path,
+        r#"features: local
+
+fn apply_twice(callback: noescape Fn()) -> Unit {
+    callback()
+    callback()
+    return Unit
+}
+
+fn main() -> Unit {
+    local buffer = Buffer.new(size: 16)
+    apply_twice(callback: || {
+        Buffer.clear(buffer: mut buffer)
+    })
+    Log.write(message: read "noescape fnmut ran")
+    return Unit
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg(&source_path)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss run should execute");
+    let _ = fs::remove_dir_all(&temp_dir);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert_eq!(stdout, "noescape fnmut ran\n");
+}
+
+#[test]
 fn rss_run_accepts_package_directory() {
     let temp_dir = unique_temp_dir("rsscript-run-package-cli");
     write_named_package_fixture(&temp_dir, "rss-run-package", "0.1.0", "", "");
@@ -6211,8 +6253,36 @@ fn main() -> Result<Unit, ImageError> {
 
     let lowered = lower_source_to_rust("noescape.rss", source)
         .expect("noescape callback source should lower");
-    assert!(lowered.contains("callback: impl FnOnce()"));
+    assert!(lowered.contains("mut callback: impl FnMut()"));
     assert!(lowered.contains("callback();"));
+}
+
+#[test]
+fn rust_lowering_noescape_callbacks_are_non_consuming_fnmut() {
+    let source = r#"
+features: local
+
+fn apply_twice(callback: noescape Fn()) -> Unit {
+    callback()
+    callback()
+    return Unit
+}
+
+fn use_local_buffer() -> Unit {
+    local buffer = Buffer.new(size: 16)
+    apply_twice(callback: || {
+        Buffer.clear(buffer: mut buffer)
+    })
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("noescape-twice.rss", source);
+    assert_eq!(diagnostics, Vec::new());
+
+    let lowered = lower_source_to_rust("noescape-twice.rss", source)
+        .expect("noescape callback source should lower");
+    assert!(lowered.contains("fn apply_twice(mut callback: impl FnMut())"));
+    assert_eq!(lowered.matches("callback();").count(), 2);
 }
 
 #[test]

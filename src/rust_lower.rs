@@ -797,7 +797,12 @@ impl<'a> RustLowerer<'a> {
             Some(DataEffect::Mut) => format!("&mut {ty}"),
             Some(DataEffect::Take) | None => ty,
         };
-        format!("{}: {}", rust_ident(&param.name), rust_ty)
+        let name = rust_ident(&param.name);
+        if param.ty.is_noescape && param.ty.name == "Fn" {
+            format!("mut {name}: {rust_ty}")
+        } else {
+            format!("{name}: {rust_ty}")
+        }
     }
 
     fn lower_return_type(&self, ty: &TypeRef, returns_fresh: bool) -> String {
@@ -1352,8 +1357,8 @@ impl<'a> RustLowerer<'a> {
                 )
             });
             return match position {
-                ManagedPosition::Param => format!("impl FnOnce(){}", return_ty.unwrap_or_default()),
-                _ => format!("Box<dyn FnOnce(){}>", return_ty.unwrap_or_default()),
+                ManagedPosition::Param => format!("impl FnMut(){}", return_ty.unwrap_or_default()),
+                _ => format!("Box<dyn FnMut(){}>", return_ty.unwrap_or_default()),
             };
         }
         let lowered = match ty.name.as_str() {
