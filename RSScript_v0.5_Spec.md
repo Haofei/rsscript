@@ -1661,6 +1661,9 @@ the `Ok` payload is `Int`, not `String`. This rule is generic: standard APIs
 such as `ResourcePool<T>.new(create: noescape Fn() -> T, ...)` and
 `ResourcePool<T>.try_new(create: noescape Fn() -> Result<T, E>, ...)` use the
 same callback return contract rather than a ResourcePool-only type shortcut.
+Nested callback wrapper payloads are checked recursively under the same rule:
+`noescape Fn() -> Result<Option<String>, E>` rejects `callback: || Ok(Some(42))`
+before Rust lowering.
 
 `Fn` may also declare positional parameter types:
 

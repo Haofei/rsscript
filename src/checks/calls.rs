@@ -1597,6 +1597,18 @@ fn check_callback_payload_return_type(
     };
     check_callback_call_argument_types(analyzer, payload, contract);
     check_callback_operator_operand_types(analyzer, payload, contract);
+    if let Some((variant, nested_payload)) = enum_variant_payload(payload)
+        && let Some(expected_payload) = expected_variant_payload_type(expected, variant)
+    {
+        check_callback_payload_return_type(
+            analyzer,
+            nested_payload,
+            &expected_payload,
+            payload,
+            contract,
+        );
+        return;
+    }
     let Some(actual) = callback_expr_type_name(payload, contract.params, contract.param_types)
     else {
         return;

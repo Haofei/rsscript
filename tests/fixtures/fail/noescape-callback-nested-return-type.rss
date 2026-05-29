@@ -1,0 +1,14 @@
+// expect: RS0207
+
+class BuildProblem {
+    code: Int
+}
+
+fn apply(callback: noescape Fn() -> Result<Option<String>, BuildProblem>) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: || Ok(Some(42)))
+    return Unit
+}

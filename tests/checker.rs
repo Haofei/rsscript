@@ -1475,6 +1475,34 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_reports_noescape_callback_nested_result_payload_mismatch() {
+    let source = r#"
+class BuildProblem {
+    code: Int
+}
+
+fn apply(callback: noescape Fn() -> Result<Option<String>, BuildProblem>) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: || Ok(Some(42)))
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-nested-result-return-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "callback argument `callback` for `apply` returns `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn checker_reports_noescape_callback_early_return_type_mismatch() {
     let source = r#"
 fn apply(callback: noescape Fn() -> Result<String, BuildError>) -> Unit {
@@ -1492,6 +1520,39 @@ fn main() -> Unit {
 }
 "#;
     let diagnostics = analyze_source("callback-early-return-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "callback argument `callback` for `apply` returns `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_noescape_callback_nested_early_return_type_mismatch() {
+    let source = r#"
+class BuildProblem {
+    code: Int
+}
+
+fn apply(callback: noescape Fn() -> Result<Option<String>, BuildProblem>) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: || {
+        if true {
+            return Ok(Some(42))
+        }
+        return Ok(None)
+    })
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-nested-early-return-type.rss", source);
 
     assert!(
         diagnostics.iter().any(|diagnostic| {
