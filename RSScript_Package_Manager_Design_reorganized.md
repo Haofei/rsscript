@@ -1682,8 +1682,11 @@ MVP 6: Public registry
 9. Should .rssi normalization be part of the compiler or package manager?
 10. How should async runtime dependencies be represented without leaking Rust runtime details?
 11. Should future retained ResourcePool factory signatures use a first-class retained-closure syntax or remain expressed through effects(retains(create))?
-12. Should schema v2 remove legacy review category names and emit only `low_semantic_risk`?
 ```
+
+Review-map category naming is not open in v0.5: package metadata must use
+`low_semantic_risk` and must not emit legacy category names such as
+the old skip-safety label.
 
 ---
 

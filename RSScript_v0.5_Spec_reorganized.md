@@ -1622,7 +1622,8 @@ low_semantic_risk
 unknown
 ```
 
-`safe_to_skip` is removed as a review-map category. Implementations must emit `low_semantic_risk`.
+The old skip-safety label is not a v0.5 review-map category. Implementations
+must emit `low_semantic_risk`.
 
 ### 16.3 Must-review facts
 

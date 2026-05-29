@@ -6823,6 +6823,7 @@ fn docs_do_not_reintroduce_legacy_gc_runtime_surface() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let legacy_runtime_name = ["runtime ", "G", "c"].concat();
     let legacy_runtime_path = ["rsscript_runtime::", "G", "c"].concat();
+    let legacy_review_category = ["safe", "_to_", "skip"].concat();
 
     for relative_path in [
         "README.md",
@@ -6839,6 +6840,10 @@ fn docs_do_not_reintroduce_legacy_gc_runtime_surface() {
         assert!(
             !source.contains(&legacy_runtime_path),
             "{relative_path} must not expose legacy managed runtime aliases"
+        );
+        assert!(
+            !source.contains(&legacy_review_category),
+            "{relative_path} must emit low_semantic_risk instead of legacy review categories"
         );
     }
 }
