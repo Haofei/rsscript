@@ -1,0 +1,17 @@
+{
+  "risk": "high",
+  "package_changes": [
+    {
+      "risk": "high",
+      "changes": [
+        {
+          "field": "features",
+          "risk": "high"
+        }
+      ]
+    }
+  ],
+  "reasons": [
+    "package feature selection changed"
+  ]
+}

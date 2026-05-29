@@ -1,0 +1,20 @@
+[
+  {
+    "code": "RS1101",
+    "severity": "error",
+    "summary": "backend diagnostic mapped to RSScript: mismatched types",
+    "spans": [
+      {
+        "file": "src/main.rss",
+        "line": 4,
+        "column": 31,
+        "length": 5
+      }
+    ],
+    "causes": [
+      "rustc code: E0308",
+      "generated Rust: src/lib.rs:12:9",
+      "mismatched types"
+    ]
+  }
+]

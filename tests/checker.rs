@@ -6770,6 +6770,54 @@ fn rss_run_accepts_current_review_reason_families_in_dogfood_classifier() {
 }
 
 #[test]
+fn rss_run_accepts_checked_in_dogfood_scripts_directly() {
+    let cases = [
+        (
+            "tests/fixtures/pass/dogfood-review-classifier.rss",
+            "dogfood review summary total=14 must=10 low=4 unknown=0",
+        ),
+        (
+            "tests/fixtures/pass/dogfood-package-risk.rss",
+            "dogfood package risk cases=5 mismatches=0 unmodeled_reasons=0",
+        ),
+        (
+            "tests/fixtures/pass/dogfood-package-exports.rss",
+            "dogfood package exports types=2 functions=3 apis=5",
+        ),
+        (
+            "tests/fixtures/pass/dogfood-package-diff.rss",
+            "dogfood package diff manifest=8 interface=2 high_manifest=5 high_interface=2",
+        ),
+        (
+            "tests/fixtures/pass/dogfood-package-lock-diff.rss",
+            "dogfood package lock diff packages=1 high_packages=1 high_features=1",
+        ),
+        (
+            "tests/fixtures/pass/dogfood-rustc-remap.rss",
+            "dogfood rustc remap diagnostics=1 mapped=1 rustc_code=1",
+        ),
+    ];
+
+    for (script, expected) in cases {
+        let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+            .arg("run")
+            .arg(script)
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .expect("rss run should execute checked-in dogfood script");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert!(
+            output.status.success(),
+            "{script}\nstdout={stdout}\nstderr={stderr}"
+        );
+        assert!(stdout.contains(expected), "{script}\n{stdout}");
+        assert!(stderr.trim().is_empty(), "{script}\n{stderr}");
+    }
+}
+
+#[test]
 fn rss_run_accepts_dogfood_package_risk_classifier() {
     let temp_dir = unique_temp_dir("rsscript-dogfood-package-risk");
     let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-risk.rss")

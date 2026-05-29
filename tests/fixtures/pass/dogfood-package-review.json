@@ -1,0 +1,43 @@
+[
+  {
+    "risk": "low",
+    "reasons": [],
+    "summary": {
+      "errors": 0
+    }
+  },
+  {
+    "risk": "elevated",
+    "reasons": [
+      "native Rust wrapper enabled"
+    ],
+    "summary": {
+      "errors": 0
+    }
+  },
+  {
+    "risk": "high",
+    "reasons": [],
+    "summary": {
+      "errors": 1
+    }
+  },
+  {
+    "risk": "high",
+    "reasons": [
+      "package feature `native-tls` may change native/unsafe/build risk"
+    ],
+    "summary": {
+      "errors": 0
+    }
+  },
+  {
+    "risk": "unknown",
+    "reasons": [
+      "manifest declares unknown package risk"
+    ],
+    "summary": {
+      "errors": 0
+    }
+  }
+]

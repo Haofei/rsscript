@@ -1,0 +1,57 @@
+{
+  "risk": "high",
+  "old_review": {
+    "errors": 0,
+    "native_apis": 0,
+    "unknown_apis": 0,
+    "public_apis": 0
+  },
+  "new_review": {
+    "errors": 0,
+    "native_apis": 1,
+    "unknown_apis": 0,
+    "public_apis": 1
+  },
+  "manifest_changes": [
+    {
+      "risk": "high"
+    },
+    {
+      "risk": "high"
+    },
+    {
+      "risk": "high"
+    },
+    {
+      "risk": "high"
+    },
+    {
+      "risk": "high"
+    },
+    {
+      "risk": "low"
+    },
+    {
+      "risk": "low"
+    },
+    {
+      "risk": "low"
+    }
+  ],
+  "interface_changes": [
+    {
+      "risk": "high"
+    },
+    {
+      "risk": "high"
+    }
+  ],
+  "reasons": [
+    "RSScript dependencies changed",
+    "package features changed",
+    "native Rust wrapper metadata changed",
+    "public .rssi semantic contract changed",
+    "high-risk interface change detected",
+    "package risk changed from low to high"
+  ]
+}

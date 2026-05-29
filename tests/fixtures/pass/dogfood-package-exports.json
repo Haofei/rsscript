@@ -1,0 +1,55 @@
+{
+  "summary": {
+    "public_types": 2,
+    "public_functions": 3,
+    "public_apis": 5,
+    "mutating_apis": 1,
+    "retaining_apis": 1,
+    "resource_apis": 1,
+    "fresh_returning_apis": 1,
+    "unknown_apis": 1
+  },
+  "exports": [
+    {
+      "kind": "type",
+      "classification": "must_review",
+      "reasons": [
+        "public struct type"
+      ]
+    },
+    {
+      "kind": "type",
+      "classification": "must_review",
+      "reasons": [
+        "public resource type",
+        "resource type"
+      ]
+    },
+    {
+      "kind": "function",
+      "classification": "must_review",
+      "reasons": [
+        "public function",
+        "returns fresh value"
+      ]
+    },
+    {
+      "kind": "function",
+      "classification": "must_review",
+      "reasons": [
+        "public function",
+        "mut parameter `conn`",
+        "resource parameter `conn`",
+        "retains(image)"
+      ]
+    },
+    {
+      "kind": "function",
+      "classification": "unknown",
+      "reasons": [
+        "public function",
+        "unknown review-map region"
+      ]
+    }
+  ]
+}
