@@ -1636,6 +1636,20 @@ A `noescape Fn(...)` parameter cannot store, return, or retain the closure. Noes
 fn apply(callback: noescape Fn()) -> Unit
 ```
 
+When the parameter has an explicit return contract, the closure literal is
+checked at the call site:
+
+```rust
+fn build(callback: noescape Fn() -> Result<String, BuildError>) -> Unit
+```
+
+The callback's known return expression must match the declared `Fn` return type
+before lowering. `callback: || Ok(42)` is rejected for the example above because
+the `Ok` payload is `Int`, not `String`. This rule is generic: standard APIs
+such as `ResourcePool<T>.new(create: noescape Fn() -> T, ...)` and
+`ResourcePool<T>.try_new(create: noescape Fn() -> Result<T, E>, ...)` use the
+same callback return contract rather than a ResourcePool-only type shortcut.
+
 v0.5 `noescape Fn` closures are **non-consuming**: a callee may call the closure
 any number of times (for example `ResourcePool.new` calls its factory `max_size`
 times), so the closure may `read` or `mut` a captured local but must not `take`
@@ -2618,6 +2632,7 @@ ResourcePool factory contract violation
 ResourcePool max_size not a positive Int literal
 ResourcePool active lease conflict
 managed object field-split conflict
+noescape callback return type mismatch
 noescape closure consuming a captured local
 `?` operand error type does not match the function error type
 Fd used outside native/resource internals

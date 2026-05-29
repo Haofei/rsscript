@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, Span, code};
-use crate::hir::{CallResolution, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirStmt};
+use crate::hir::{
+    CallResolution, FunctionSig, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirStmt,
+};
 use crate::syntax::ast::{Callee, FunctionDecl, Item, TypeRef};
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
@@ -813,6 +815,8 @@ fn check_call_args(
         }
     }
 
+    let type_param_substitutions = call_type_param_substitutions(analyzer, callee, signature);
+
     for arg in args {
         let Some(name) = &arg.name else {
             continue;
@@ -820,14 +824,26 @@ fn check_call_args(
         let Some(expected_param) = signature.params.iter().find(|param| param.name == *name) else {
             continue;
         };
-        if type_contains_unresolved_generic(&expected_param.type_name, &signature.type_params) {
+        let expected_type =
+            substitute_type_params(&expected_param.type_name, &type_param_substitutions);
+        if check_noescape_closure_return_type(
+            analyzer,
+            &call_name,
+            name,
+            &expected_type,
+            &signature.type_params,
+            &arg.value,
+        ) {
+            continue;
+        }
+        if type_contains_unresolved_generic(&expected_type, &signature.type_params) {
             continue;
         }
         if check_argument_variant_payload_type(
             analyzer,
             &call_name,
             name,
-            &expected_param.type_name,
+            &expected_type,
             &arg.value,
         ) {
             continue;
@@ -838,13 +854,13 @@ fn check_call_args(
         if unresolved_generic_type(actual_type) {
             continue;
         }
-        if !argument_type_matches(&expected_param.type_name, actual_type) {
+        if !argument_type_matches(&expected_type, actual_type) {
             analyzer.diagnostics.push(
                 Diagnostic::error(
                     code::ARGUMENT_TYPE_MISMATCH,
                     format!(
                         "argument `{name}` for `{call_name}` has type `{actual_type}`, expected `{}`.",
-                        expected_param.type_name
+                        expected_type
                     ),
                     hir_expr_span(&arg.value).clone(),
                     "argument type mismatch",
@@ -853,8 +869,7 @@ fn check_call_args(
                 .with_fix(
                     "match_argument_type",
                     format!(
-                        "Pass a value of type `{}` for `{name}`.",
-                        expected_param.type_name
+                        "Pass a value of type `{expected_type}` for `{name}`.",
                     ),
                     "manual",
                 ),
@@ -885,6 +900,306 @@ fn check_call_args(
             LocalClosureEscapeContext::Pass { callee: &call_name },
         );
     }
+}
+
+fn call_type_param_substitutions(
+    analyzer: &Analyzer<'_>,
+    callee: &Callee,
+    signature: &FunctionSig,
+) -> HashMap<String, String> {
+    let mut substitutions = HashMap::new();
+    let generic_params = signature
+        .type_params
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let Callee::Qualified { namespace, .. } = callee else {
+        return substitutions;
+    };
+    let root = type_root_name(namespace);
+    let Some(type_info) = analyzer.hir.type_info(root) else {
+        return substitutions;
+    };
+    let Some(namespace_args) = type_arg_names(namespace) else {
+        return substitutions;
+    };
+    for (param, actual) in type_info.type_params.iter().zip(namespace_args) {
+        if generic_params.contains(param.as_str()) {
+            substitutions.insert(param.clone(), actual.to_string());
+        }
+    }
+    substitutions
+}
+
+fn substitute_type_params(type_name: &str, substitutions: &HashMap<String, String>) -> String {
+    if let Some(replacement) = substitutions.get(type_name) {
+        return replacement.clone();
+    }
+    if let Some(return_ty) = noescape_return_type(type_name) {
+        return format!(
+            "noescape Fn() -> {}",
+            substitute_type_params(return_ty, substitutions)
+        );
+    }
+    let Some(args) = type_arg_names(type_name) else {
+        return type_name.to_string();
+    };
+    let root = type_root_name(type_name);
+    let args = args
+        .into_iter()
+        .map(|arg| substitute_type_params(arg, substitutions))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{root}<{args}>")
+}
+
+fn check_noescape_closure_return_type(
+    analyzer: &mut Analyzer<'_>,
+    call_name: &str,
+    arg_name: &str,
+    expected_type: &str,
+    generic_params: &[String],
+    value: &HirExpr,
+) -> bool {
+    if !is_noescape_fn_type(expected_type) {
+        return false;
+    }
+    let HirExpr::Closure { body, .. } = value else {
+        return false;
+    };
+    let expected_return = noescape_return_type(expected_type).unwrap_or("Unit");
+    match closure_return_expr(body) {
+        ClosureReturn::Expr(expr) => {
+            check_callback_return_expr_type(
+                analyzer,
+                call_name,
+                arg_name,
+                expr,
+                expected_return,
+                generic_params,
+            );
+        }
+        ClosureReturn::Unit(span) => {
+            if !type_pattern_matches(expected_return, "Unit", generic_params) {
+                callback_return_type_mismatch_diagnostic(
+                    analyzer,
+                    call_name,
+                    arg_name,
+                    "Unit",
+                    expected_return,
+                    span,
+                );
+            }
+        }
+        ClosureReturn::Unknown => {}
+    }
+    true
+}
+
+enum ClosureReturn<'a> {
+    Expr(&'a HirExpr),
+    Unit(&'a Span),
+    Unknown,
+}
+
+fn closure_return_expr(body: &HirBlock) -> ClosureReturn<'_> {
+    let Some(statement) = body.statements.iter().next_back() else {
+        return ClosureReturn::Unknown;
+    };
+    match statement {
+        HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => ClosureReturn::Expr(value),
+        HirStmt::Return {
+            value: None, span, ..
+        }
+        | HirStmt::Let { span, .. } => ClosureReturn::Unit(span),
+        HirStmt::With { .. }
+        | HirStmt::If { .. }
+        | HirStmt::Loop { .. }
+        | HirStmt::Match { .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => ClosureReturn::Unknown,
+    }
+}
+
+fn check_callback_return_expr_type(
+    analyzer: &mut Analyzer<'_>,
+    call_name: &str,
+    arg_name: &str,
+    expr: &HirExpr,
+    expected: &str,
+    generic_params: &[String],
+) {
+    if check_callback_variant_return_type(
+        analyzer,
+        call_name,
+        arg_name,
+        expr,
+        expected,
+        generic_params,
+    ) {
+        return;
+    }
+    let Some(actual) = hir_expr_type_name(expr) else {
+        return;
+    };
+    if !type_pattern_matches(expected, actual, generic_params) {
+        callback_return_type_mismatch_diagnostic(
+            analyzer,
+            call_name,
+            arg_name,
+            actual,
+            expected,
+            hir_expr_span(expr),
+        );
+    }
+}
+
+fn check_callback_variant_return_type(
+    analyzer: &mut Analyzer<'_>,
+    call_name: &str,
+    arg_name: &str,
+    expr: &HirExpr,
+    expected: &str,
+    generic_params: &[String],
+) -> bool {
+    let Some((variant, payload)) = enum_variant_payload(expr) else {
+        return false;
+    };
+    match (type_root_name(expected), variant) {
+        ("Option", "None") => true,
+        ("Option", "Some") => {
+            let Some(expected_payload) = type_arg_names(expected)
+                .and_then(|args| args.first().map(|arg| arg.trim().to_string()))
+            else {
+                return false;
+            };
+            check_callback_payload_return_type(
+                analyzer,
+                call_name,
+                arg_name,
+                payload,
+                &expected_payload,
+                generic_params,
+                expr,
+            );
+            true
+        }
+        ("Result", "Ok" | "Err") => {
+            let Some(args) = type_arg_names(expected) else {
+                return false;
+            };
+            let Some(expected_payload) = (match variant {
+                "Ok" => args.first(),
+                "Err" => args.get(1),
+                _ => None,
+            }) else {
+                return false;
+            };
+            check_callback_payload_return_type(
+                analyzer,
+                call_name,
+                arg_name,
+                payload,
+                expected_payload.trim(),
+                generic_params,
+                expr,
+            );
+            true
+        }
+        _ => false,
+    }
+}
+
+fn check_callback_payload_return_type(
+    analyzer: &mut Analyzer<'_>,
+    call_name: &str,
+    arg_name: &str,
+    payload: Option<&HirExpr>,
+    expected: &str,
+    generic_params: &[String],
+    fallback: &HirExpr,
+) {
+    let Some(payload) = payload else {
+        if !type_pattern_matches(expected, "Unit", generic_params) {
+            callback_return_type_mismatch_diagnostic(
+                analyzer,
+                call_name,
+                arg_name,
+                "Unit",
+                expected,
+                hir_expr_span(fallback),
+            );
+        }
+        return;
+    };
+    let Some(actual) = hir_expr_type_name(payload) else {
+        return;
+    };
+    if !type_pattern_matches(expected, actual, generic_params) {
+        callback_return_type_mismatch_diagnostic(
+            analyzer,
+            call_name,
+            arg_name,
+            actual,
+            expected,
+            hir_expr_span(payload),
+        );
+    }
+}
+
+fn callback_return_type_mismatch_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    call_name: &str,
+    arg_name: &str,
+    actual: &str,
+    expected: &str,
+    span: &Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::ARGUMENT_TYPE_MISMATCH,
+            format!(
+                "callback argument `{arg_name}` for `{call_name}` returns `{actual}`, expected `{expected}`."
+            ),
+            span.clone(),
+            "argument type mismatch",
+        )
+        .with_cause(
+            "`noescape Fn() -> T` callback return types are part of the call signature and must be checked before Rust lowering.",
+        )
+        .with_fix(
+            "match_callback_return_type",
+            format!("Return a `{expected}` value from this callback."),
+            "manual",
+        ),
+    );
+}
+
+fn type_pattern_matches(expected: &str, actual: &str, generic_params: &[String]) -> bool {
+    if argument_type_matches(expected, actual) {
+        return true;
+    }
+    if generic_params.iter().any(|param| param == expected) {
+        return true;
+    }
+    let Some(expected_args) = type_arg_names(expected) else {
+        return false;
+    };
+    let Some(actual_args) = type_arg_names(actual) else {
+        return false;
+    };
+    type_root_name(expected) == type_root_name(actual)
+        && expected_args.len() == actual_args.len()
+        && expected_args
+            .into_iter()
+            .zip(actual_args)
+            .all(|(expected, actual)| {
+                type_pattern_matches(expected.trim(), actual.trim(), generic_params)
+            })
 }
 
 fn check_argument_variant_payload_type(
@@ -1416,6 +1731,10 @@ fn call_arg_targets_noescape_param(arg: &HirCallArg, resolution: &CallResolution
 
 fn is_noescape_fn_type(type_name: &str) -> bool {
     type_name == "noescape Fn()" || type_name.starts_with("noescape Fn() -> ")
+}
+
+fn noescape_return_type(type_name: &str) -> Option<&str> {
+    type_name.strip_prefix("noescape Fn() -> ")
 }
 
 fn noescape_escape_diagnostic(

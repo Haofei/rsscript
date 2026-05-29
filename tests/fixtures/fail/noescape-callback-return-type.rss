@@ -1,0 +1,10 @@
+// expect: RS0207
+
+fn apply(callback: noescape Fn() -> Result<String, BuildError>) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: || Ok(42))
+    return Unit
+}
