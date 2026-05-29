@@ -1285,7 +1285,7 @@ Conceptual contracts:
 
 ```rust
 fn ResourcePool<T: Resource>.new(
-    create: Closure,
+    create: noescape Fn(),
     max_size: Int,
 ) -> fresh ResourcePool<T>
 ```

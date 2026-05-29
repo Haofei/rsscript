@@ -5649,6 +5649,30 @@ fn main() -> Result<Unit, ImageError> {
 }
 
 #[test]
+fn resource_pool_new_core_signature_uses_noescape_factory() {
+    let signature = core_interfaces()
+        .iter()
+        .find_map(|(file, source)| {
+            (file.contains("resource_pool.rssi")).then(|| parse_source(file, source))
+        })
+        .and_then(|program| {
+            program.items.into_iter().find_map(|item| match item {
+                Item::Function(function) if function.name == "ResourcePool.new" => Some(function),
+                _ => None,
+            })
+        })
+        .expect("ResourcePool.new should be available from core interfaces");
+    let create = signature
+        .params
+        .iter()
+        .find(|param| param.name == "create")
+        .expect("ResourcePool.new should have create parameter");
+
+    assert!(create.ty.is_noescape);
+    assert_eq!(create.ty.name, "Fn");
+}
+
+#[test]
 fn checker_accepts_exhaustive_option_match() {
     let source = r#"
 fn pick() -> Int {
