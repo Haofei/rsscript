@@ -1,52 +1,115 @@
 {
-  "summary": {
-    "total_functions": 4,
-    "unknown_ratio": 0.0
-  },
-  "files": [
-    {
-      "file": "dogfood-supported-review-map.rss",
-      "regions": [
-        {
-          "function": "helper",
-          "classification": "low_semantic_risk",
-          "line_count": 4,
-          "reasons": [
-            "private pure helper with no retention or resource boundary"
-          ]
+    "summary": {
+        "total_functions": 6,
+        "total_lines": 74,
+        "must_review_lines": 74,
+        "low_semantic_risk_lines": 0,
+        "unknown_lines": 0,
+        "suggested_review_lines": 74,
+        "review_ratio": 1.0,
+        "unknown_ratio": 0.0,
+        "unknown_function_ratio": 0.0,
+        "must_review": {
+            "functions": 6,
+            "lines": 74
         },
-        {
-          "function": "native_entry",
-          "classification": "must_review",
-          "line_count": 20,
-          "reasons": [
-            "public entry point",
-            "native boundary",
-            "fresh guarantee boundary",
-            "error handling boundary"
-          ]
+        "low_semantic_risk": {
+            "functions": 0,
+            "lines": 0
         },
-        {
-          "function": "resource_worker",
-          "classification": "must_review",
-          "line_count": 18,
-          "reasons": [
-            "resource lifetime boundary",
-            "mut call-site effect",
-            "local binding",
-            "error handling boundary"
-          ]
-        },
-        {
-          "function": "cache_worker",
-          "classification": "must_review",
-          "line_count": 12,
-          "reasons": [
-            "retention boundary",
-            "mut call-site effect"
-          ]
+        "unknown": {
+            "functions": 0,
+            "lines": 0
         }
-      ]
-    }
-  ]
+    },
+    "files": [
+        {
+            "file": "tests/fixtures/pass/complex-supported-review-map.rss",
+            "features": [
+                "local"
+            ],
+            "risk": "elevated",
+            "reasons": [
+                "local capability enabled"
+            ],
+            "regions": [
+                {
+                    "function": "audit_step",
+                    "classification": "must_review",
+                    "line": 8,
+                    "line_count": 5,
+                    "reasons": [
+                        "noescape callback call `callback`"
+                    ]
+                },
+                {
+                    "function": "decode_upload",
+                    "classification": "must_review",
+                    "line": 13,
+                    "line_count": 11,
+                    "reasons": [
+                        "fresh guarantee boundary",
+                        "error handling boundary"
+                    ]
+                },
+                {
+                    "function": "transform_image",
+                    "classification": "must_review",
+                    "line": 24,
+                    "line_count": 18,
+                    "reasons": [
+                        "mut parameter `cache`",
+                        "local binding",
+                        "manage boundary",
+                        "mut call-site effect",
+                        "writes to managed state",
+                        "error handling boundary"
+                    ]
+                },
+                {
+                    "function": "reload_settings",
+                    "classification": "must_review",
+                    "line": 42,
+                    "line_count": 7,
+                    "reasons": [
+                        "mut parameter `store`",
+                        "mut call-site effect",
+                        "writes to managed state",
+                        "error handling boundary"
+                    ]
+                },
+                {
+                    "function": "run_query",
+                    "classification": "must_review",
+                    "line": 49,
+                    "line_count": 13,
+                    "reasons": [
+                        "entry point",
+                        "local binding",
+                        "resource with block",
+                        "mut call-site effect",
+                        "ResourcePool usage",
+                        "writes to managed state",
+                        "error handling boundary"
+                    ]
+                },
+                {
+                    "function": "handle_upload",
+                    "classification": "must_review",
+                    "line": 62,
+                    "line_count": 20,
+                    "reasons": [
+                        "entry point",
+                        "mut parameter `cache`",
+                        "mut parameter `config_store`",
+                        "mut parameter `counter`",
+                        "fresh guarantee boundary",
+                        "mut call-site effect",
+                        "writes to managed state",
+                        "error handling boundary"
+                    ]
+                }
+            ]
+        }
+    ]
 }

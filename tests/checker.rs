@@ -1042,6 +1042,7 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     let count = Json.array_len(value: read value)?
     let first = Json.array_get(value: read value, index: 0)?
     let has_profile = Json.array_contains_string(value: read value, item: read "profile")?
+    let has_profile_prefix = Json.array_contains_substring(value: read value, text: read "prof")?
     let profile = Json.field(value: read value, name: read "profile")?
     let active = Json.field_bool(value: read profile, name: read "active")?
     let age = Json.field_int(value: read profile, name: read "age")?
@@ -1060,6 +1061,9 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     assert!(rust.contains("let first = rsscript_runtime::json_array_get(&value, 0)?;"));
     assert!(rust.contains(
         "let has_profile = rsscript_runtime::json_array_contains_string(&value, &\"profile\".to_string())?;"
+    ));
+    assert!(rust.contains(
+        "let has_profile_prefix = rsscript_runtime::json_array_contains_substring(&value, &\"prof\".to_string())?;"
     ));
     assert!(rust.contains(
         "let active = rsscript_runtime::json_field_bool(&profile, &\"active\".to_string())?;"
@@ -4290,7 +4294,7 @@ fn rss_run_accepts_dogfood_classifier() {
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
     assert_eq!(
         stdout.trim(),
-        "dogfood review summary total=4 must=3 low=1 unknown=0 lines=50"
+        "dogfood review summary total=6 must=6 low=0 unknown=0 lines=74"
     );
     assert!(stderr.trim().is_empty(), "{stderr}");
 }

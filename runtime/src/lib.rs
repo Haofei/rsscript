@@ -952,6 +952,15 @@ pub fn json_array_contains_string(value: &JsonValue, item: &str) -> Result<bool,
         .any(|value| value.as_str().is_some_and(|text| text == item)))
 }
 
+pub fn json_array_contains_substring(value: &JsonValue, text: &str) -> Result<bool, JsonError> {
+    let Some(items) = value.inner.as_array() else {
+        return Err(JsonError::new("JSON value is not an array"));
+    };
+    Ok(items
+        .iter()
+        .any(|value| value.as_str().is_some_and(|item| item.contains(text))))
+}
+
 pub fn row_buffer_new(size: i64) -> RowBuffer {
     RowBuffer {
         bytes: Vec::with_capacity(size.max(0) as usize),
@@ -1577,6 +1586,8 @@ mod tests {
             super::json_parse(r#"["public entry point","error handling boundary"]"#).unwrap();
         let has_public = super::json_array_contains_string(&reasons, "public entry point").unwrap();
         let has_native = super::json_array_contains_string(&reasons, "native boundary").unwrap();
+        let has_error = super::json_array_contains_substring(&reasons, "error handling").unwrap();
+        let has_pool = super::json_array_contains_substring(&reasons, "ResourcePool").unwrap();
 
         assert_eq!(file_len, 1);
         assert_eq!(len, 1);
@@ -1585,6 +1596,8 @@ mod tests {
         assert!(active);
         assert!(has_public);
         assert!(!has_native);
+        assert!(has_error);
+        assert!(!has_pool);
         let _ = std::fs::remove_file(path);
     }
 
