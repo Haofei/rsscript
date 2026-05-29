@@ -4798,8 +4798,8 @@ fn review_map_app_benchmark_has_no_unknown_regions() {
         serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
     assert_eq!(json["summary"]["unknown_ratio"], 0.0);
     assert_eq!(json["summary"]["unknown_function_ratio"], 0.0);
-    assert_eq!(json["summary"]["must_review"]["functions"], 32);
-    assert_eq!(json["summary"]["low_semantic_risk"]["functions"], 10);
+    assert_eq!(json["summary"]["must_review"]["functions"], 33);
+    assert_eq!(json["summary"]["low_semantic_risk"]["functions"], 9);
 }
 
 #[test]
@@ -6622,6 +6622,32 @@ fn pure_helper(value: read Int) -> Int
                 .reasons
                 .iter()
                 .any(|reason| reason == "guarantee `pure`")
+    }));
+}
+
+#[test]
+fn review_map_marks_native_calls_as_review_required_boundaries() {
+    let source = r#"
+features: native
+
+native fn Native.echo(message: read String) -> String
+    effects(native)
+
+fn caller(message: read String) -> String {
+    return Native.echo(message: read message)
+}
+"#;
+    let map = review_map_sources(vec![("native-call-map.rss", source)]);
+
+    assert_eq!(map.summary.total_functions, 2);
+    assert_eq!(map.summary.review_required.functions, 2);
+    assert!(map.files[0].regions.iter().any(|region| {
+        region.function == "caller"
+            && region.classification == ReviewMapClassification::ReviewRequired
+            && region
+                .reasons
+                .iter()
+                .any(|reason| reason == "native call `Native.echo`")
     }));
 }
 

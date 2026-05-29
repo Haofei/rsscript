@@ -466,6 +466,12 @@ fn review_map_region_draft(
             _ => {}
         }
     }
+    for call in &facts.native_calls {
+        reasons.push(format!("native call `{call}`"));
+    }
+    for call in &facts.unsafe_calls {
+        reasons.push(format!("unsafe call `{call}`"));
+    }
     if facts.has_local {
         reasons.push("local binding".to_string());
     }
@@ -576,6 +582,8 @@ struct ReviewMapFacts {
     user_calls: BTreeSet<String>,
     unresolved_calls: BTreeSet<String>,
     callback_calls: BTreeSet<String>,
+    native_calls: BTreeSet<String>,
+    unsafe_calls: BTreeSet<String>,
     spawn_captures: BTreeSet<String>,
     managed_closure_captures: BTreeSet<String>,
 }
@@ -913,6 +921,7 @@ fn collect_review_map_facts_expr(
             } else if review_map_local_closure_call(callee, local_closure_bindings).is_none() {
                 match hir.resolve_call(callee) {
                     CallResolution::Resolved { signature, kind } => {
+                        collect_call_boundary_facts(&signature, facts);
                         if kind == ResolvedCalleeKind::UserFunction {
                             facts.user_calls.insert(function_sig_key(&signature));
                         }
@@ -1031,6 +1040,16 @@ fn collect_review_map_facts_expr(
             facts,
         ),
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+    }
+}
+
+fn collect_call_boundary_facts(signature: &HirFunctionSig, facts: &mut ReviewMapFacts) {
+    let callee = function_sig_key(signature);
+    if signature.effects.iter().any(|effect| effect == "native") {
+        facts.native_calls.insert(callee.clone());
+    }
+    if signature.effects.iter().any(|effect| effect == "unsafe") {
+        facts.unsafe_calls.insert(callee);
     }
 }
 
