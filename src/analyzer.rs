@@ -751,6 +751,28 @@ impl Analyzer<'_> {
                 }
             }
 
+            if function.is_native && !function_has_effect(function, "native") {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::FEATURE_VIOLATION,
+                        format!(
+                            "`native fn {}` must declare `effects(native)`.",
+                            function.name
+                        ),
+                        function.span.clone(),
+                        "native boundary missing effect",
+                    )
+                    .with_cause(
+                        "`native fn` is an implementation boundary, and v0.5 requires that boundary to appear in the effect list for review maps and semantic diffs.",
+                    )
+                    .with_fix(
+                        "add_native_effect",
+                        "Add `effects(native)` to the native function declaration.",
+                        "manual",
+                    ),
+                );
+            }
+
             let param_names: HashSet<&str> = function
                 .params
                 .iter()

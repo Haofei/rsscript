@@ -360,7 +360,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::FEATURE_VIOLATION,
         title: "feature violation",
-        explanation: "Files must declare review-relevant capabilities before using them. `local`, `manage`, `take`, `ResourcePool<T>`, `native`, `unsafe`, and `async` boundaries require matching `features:` entries.",
+        explanation: "Files must declare review-relevant capabilities before using them. `local`, `manage`, `take`, `ResourcePool<T>`, `native`, `unsafe`, and `async` boundaries require matching `features:` entries, and `native fn` declarations must also spell the boundary as `effects(native)`.",
     },
     DiagnosticExplanation {
         code: code::UNNAMED_ARGUMENT,

@@ -1722,6 +1722,7 @@ fn rust_lowering_maps_native_call_boundaries() {
 features: native
 
 native fn host_emit(message: read String) -> Unit
+    effects(native)
 
 pub fn run() -> Unit {
     host_emit(message: read "host")
@@ -1736,8 +1737,8 @@ pub fn run() -> Unit {
         .collect::<Vec<_>>();
 
     assert_eq!(native_calls.len(), 2);
-    assert!(native_calls.iter().any(|entry| entry.source.line == 7));
     assert!(native_calls.iter().any(|entry| entry.source.line == 8));
+    assert!(native_calls.iter().any(|entry| entry.source.line == 9));
 }
 
 #[test]
@@ -2082,6 +2083,7 @@ unsafe = "forbid"
         r#"features: native
 
 native fn Native.echo(message: read String) -> String
+    effects(native)
 "#,
     );
     fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
@@ -2261,6 +2263,7 @@ unsafe = "forbid"
         r#"features: native
 
 native fn Native.echo(message: read String) -> String
+    effects(native)
 "#,
     );
     fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
@@ -4175,6 +4178,7 @@ fn host_emit(message: read String) -> Unit
 "#;
     let new_source = r#"
 native fn host_emit(message: read String) -> Unit
+    effects(native)
 "#;
 
     let findings = review_sources("old.rss", old_source, "new.rss", new_source);
@@ -5481,6 +5485,7 @@ unsafe = "forbid"
         r#"features: native
 
 native fn Native.echo(message: read String) -> String
+    effects(native)
 "#,
     );
 
@@ -5655,6 +5660,7 @@ unsafe = "forbid"
         r#"features: native
 
 native fn Native.echo(message: read String) -> String
+    effects(native)
 "#,
     );
     fs::create_dir_all(package_dir.join("src")).expect("source dir should be created");
@@ -6063,6 +6069,7 @@ fn parser_accepts_native_function_declaration() {
 features: native
 
 native fn Host.emit(message: read String) -> Unit
+    effects(native)
 "#;
     let program = parse_source("host.rssi", source);
 
@@ -6085,7 +6092,9 @@ fn checker_reports_native_bodies_as_unsupported_until_native_binding_exists() {
     let source = r#"
 features: native
 
-native fn Host.emit(message: read String) -> Unit {
+native fn Host.emit(message: read String) -> Unit
+    effects(native)
+{
     return Unit
 }
 "#;
@@ -6885,6 +6894,7 @@ struct JsonValue
 struct JsonError
 
 native fn Json.parse(text: read String) -> Result<fresh JsonValue, JsonError>
+    effects(native)
 "#,
     )
     .expect("interface should be written");
@@ -7609,6 +7619,7 @@ unsafe = "forbid"
         r#"features: native, unsafe
 
 native fn Native.echo(message: read String) -> String
+    effects(native)
 fn Native.danger(message: read String) -> String
     effects(unsafe)
 "#,
@@ -7864,6 +7875,7 @@ deny_native = true
         r#"features: native
 
 native fn Native.echo(message: read String) -> String
+    effects(native)
 "#,
     );
     fs::write(
@@ -7998,6 +8010,7 @@ unsafe = "forbid"
         r#"features: native
 
 native fn Native.echo(message: read String) -> String
+    effects(native)
 "#,
     );
 
@@ -8064,6 +8077,7 @@ unsafe = "forbid"
         r#"features: native
 
 native fn Native.parse(text: read String) -> String
+    effects(native)
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -8127,6 +8141,7 @@ unsafe = "forbid"
         r#"features: native
 
 native fn Native.parse(text: read String) -> String
+    effects(native)
 "#,
     );
 
@@ -8476,6 +8491,7 @@ struct Bytes
 pub fn Bytes.len(value: read Bytes) -> Int
 
 native fn Bytes.decode(value: read Bytes) -> String
+    effects(native)
 "#,
     );
 
@@ -8732,6 +8748,7 @@ unsafe = "forbid"
         r#"features: native
 
 native fn Native.one(message: read String) -> String
+    effects(native)
 "#,
     );
     write_package_fixture(
@@ -8741,7 +8758,9 @@ native fn Native.one(message: read String) -> String
         r#"features: native
 
 native fn Native.one(message: read String) -> String
+    effects(native)
 native fn Native.two(message: read String) -> String
+    effects(native)
 "#,
     );
     fs::create_dir_all(old_dir.join("native")).expect("old native dir should be created");
@@ -9458,6 +9477,7 @@ unsafe = "forbid"
         r#"features: native
 
 native fn Native.parse(text: read String) -> String
+    effects(native)
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -9509,6 +9529,7 @@ unsafe = "forbid"
         r#"features: native
 
 native fn Native.parse(text: read String) -> String
+    effects(native)
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -9570,6 +9591,7 @@ unsafe = "forbid"
         r#"features: native
 
 native fn Native.echo(message: read String) -> String
+    effects(native)
 "#,
     );
     fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
@@ -9640,6 +9662,7 @@ unsafe = "forbid"
         r#"features: native
 
 native fn Native.echo(message: read String) -> String
+    effects(native)
 "#,
     );
     fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
@@ -9700,6 +9723,7 @@ unsafe = "forbid"
         r#"features: native
 
 native fn Native.echo(message: read String) -> String
+    effects(native)
 "#,
     );
     fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
@@ -9760,6 +9784,7 @@ fn package_check_reports_native_binding_without_native_rust() {
         r#"features: native
 
 native fn Native.echo(message: read String) -> String
+    effects(native)
 "#,
     );
     fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
@@ -9810,6 +9835,7 @@ unsafe = "forbid"
         r#"features: native
 
 native fn Native.echo(message: read String) -> String
+    effects(native)
 "#,
     );
     fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
@@ -9870,6 +9896,7 @@ unsafe = "forbid"
         r#"features: native
 
 native fn Native.parse(text: read String) -> String
+    effects(native)
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -9930,6 +9957,7 @@ links = ["ssl"]
         r#"features: native
 
 native fn Native.parse(text: read String) -> String
+    effects(native)
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -9986,6 +10014,7 @@ unsafe = "forbid"
         r#"features: native
 
 native fn Native.parse(text: read String) -> String
+    effects(native)
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -10048,6 +10077,7 @@ unsafe = "forbid"
         r#"features: native
 
 native fn Native.parse(text: read String) -> String
+    effects(native)
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -10111,6 +10141,7 @@ unsafe = "forbid"
         r#"features: native
 
 native fn Native.parse(text: read String) -> String
+    effects(native)
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");

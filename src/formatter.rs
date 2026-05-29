@@ -579,6 +579,7 @@ fn save(image: read Image, path: read Path) -> Result<Unit, IOError>
     fn preserves_native_function_declarations() {
         let source = r#"features: native
 native   fn Host.emit(message:read String)->Unit
+effects(native)
 "#;
 
         assert_eq!(

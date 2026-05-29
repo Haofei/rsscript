@@ -298,14 +298,6 @@ impl Parser<'_> {
             malformed_effect_spans = parsed_effects.malformed_spans;
             self.index = close + 1;
         }
-        if is_native
-            && !effects
-                .iter()
-                .any(|effect| matches!(effect, EffectDecl::Name(name) if name == "native"))
-        {
-            effects.push(EffectDecl::Name("native".to_string()));
-        }
-
         let body = if self.at_symbol("{") {
             let open = self.index;
             let close = find_matching(self.tokens, open, "{", "}")?;
