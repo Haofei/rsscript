@@ -1294,6 +1294,8 @@ fn rust_lowering_maps_assert_equal_to_runtime_hook() {
     let source = r#"
 fn main() -> Unit {
     Assert.equal(left: read "rss", right: read "rss")
+    Assert.equal_int(left: 42, right: 42)
+    Assert.equal_bool(left: true, right: true)
     return Unit
 }
 "#;
@@ -1304,6 +1306,8 @@ fn main() -> Unit {
             "rsscript_runtime::assert_equal(&\"rss\".to_string(), &\"rss\".to_string());"
         )
     );
+    assert!(rust.contains("rsscript_runtime::assert_equal_int(42, 42);"));
+    assert!(rust.contains("rsscript_runtime::assert_equal_bool(true, true);"));
 }
 
 #[test]
@@ -4127,18 +4131,18 @@ fn review_map_dogfood_classifier_has_no_unknown_regions() {
     let source = read_fixture(path);
     let map = review_map_sources(vec![(path.to_str().unwrap(), source.as_str())]);
 
-    assert_eq!(map.summary.total_functions, 27);
-    assert!(map.summary.total_lines >= 350, "{map:?}");
+    assert_eq!(map.summary.total_functions, 28);
+    assert!(map.summary.total_lines >= 390, "{map:?}");
     assert_eq!(map.files[0].risk, ReviewMapFileRisk::Low);
     assert_eq!(map.summary.unknown.functions, 0, "{map:?}");
     assert_eq!(map.summary.unknown.lines, 0, "{map:?}");
-    assert!(map.summary.review_required.functions >= 15, "{map:?}");
+    assert!(map.summary.review_required.functions >= 16, "{map:?}");
 
     let json: Value =
         serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
     assert_eq!(json["summary"]["unknown_ratio"], 0.0);
     assert_eq!(json["summary"]["unknown_function_ratio"], 0.0);
-    assert_eq!(json["summary"]["must_review"]["functions"], 15);
+    assert_eq!(json["summary"]["must_review"]["functions"], 16);
     assert_eq!(json["summary"]["low_semantic_risk"]["functions"], 12);
 }
 
@@ -4189,6 +4193,22 @@ fn rss_verify_rust_json_accepts_dogfood_classifier() {
             .iter()
             .all(|diagnostic| diagnostic["severity"] != "error")
     }));
+}
+
+#[test]
+fn rss_run_accepts_dogfood_classifier() {
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("tests/fixtures/pass/dogfood-review-classifier.rss")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss run should execute dogfood classifier");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stdout.trim().is_empty(), "{stdout}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
 }
 
 #[test]

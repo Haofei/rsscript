@@ -1043,6 +1043,14 @@ pub fn assert_equal(left: &str, right: &str) {
     assert_eq!(left, right);
 }
 
+pub fn assert_equal_int(left: i64, right: i64) {
+    assert_eq!(left, right);
+}
+
+pub fn assert_equal_bool(left: bool, right: bool) {
+    assert_eq!(left, right);
+}
+
 pub struct ManagedRead<'a, T>(RwLockReadGuard<'a, T>);
 
 pub type GcRead<'a, T> = ManagedRead<'a, T>;

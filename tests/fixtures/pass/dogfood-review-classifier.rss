@@ -408,3 +408,19 @@ fn dogfood_shape_is_expected() -> Bool {
 
     return unknown_percent == 0
 }
+
+pub fn main() -> Unit {
+    let summary = dogfood_sample_summary()
+    let unknown_region = make_unknown_region(lines: 7)
+    let unknown_decision = classify_function(facts: read unknown_region)
+
+    Assert.equal_int(left: summary.total_functions, right: 4)
+    Assert.equal_int(left: summary.must_review_functions, right: 3)
+    Assert.equal_int(left: summary.low_risk_functions, right: 1)
+    Assert.equal_int(left: summary.unknown_functions, right: 0)
+    Assert.equal_int(left: summary.suggested_lines, right: 50)
+    Assert.equal_int(left: unknown_decision.classification, right: ReviewClass.unknown())
+    Assert.equal_bool(left: dogfood_shape_is_expected(), right: true)
+
+    return Unit
+}

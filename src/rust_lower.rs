@@ -1747,6 +1747,12 @@ fn lower_callee(callee: &Callee) -> String {
     match callee {
         callee if is_log_write_callee(callee) => "rsscript_runtime::log_write".to_string(),
         callee if is_assert_equal_callee(callee) => "rsscript_runtime::assert_equal".to_string(),
+        callee if is_assert_equal_int_callee(callee) => {
+            "rsscript_runtime::assert_equal_int".to_string()
+        }
+        callee if is_assert_equal_bool_callee(callee) => {
+            "rsscript_runtime::assert_equal_bool".to_string()
+        }
         callee if is_os_close_callee(callee) => "rsscript_runtime::os_close".to_string(),
         callee if is_list_consume_callee(callee) => "rsscript_runtime::list_consume".to_string(),
         callee if is_buffer_new_callee(callee) => "rsscript_runtime::buffer_new".to_string(),
@@ -1882,6 +1888,14 @@ fn is_log_write_callee(callee: &Callee) -> bool {
 
 fn is_assert_equal_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Assert" && name == "equal")
+}
+
+fn is_assert_equal_int_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Assert" && name == "equal_int")
+}
+
+fn is_assert_equal_bool_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Assert" && name == "equal_bool")
 }
 
 fn is_os_close_callee(callee: &Callee) -> bool {

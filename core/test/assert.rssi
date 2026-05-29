@@ -1,2 +1,5 @@
 pub fn Assert.equal(left: read String, right: read String) -> Unit
 
+pub fn Assert.equal_int(left: Int, right: Int) -> Unit
+
+pub fn Assert.equal_bool(left: Bool, right: Bool) -> Unit
