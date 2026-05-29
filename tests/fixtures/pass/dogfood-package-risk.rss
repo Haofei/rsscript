@@ -71,11 +71,27 @@ fn package_reason_is_modeled(reason: read String) -> Bool {
         return true
     }
 
-    if reason == "unknown package risk is configured as an error" {
+    if reason == "package policy denies unknown review risk" {
         return true
     }
 
-    if reason == "manifest allows native boundaries" || reason == "manifest allows unsafe boundaries" {
+    if reason == "package policy denies native boundaries" || reason == "package policy denies unsafe APIs" {
+        return true
+    }
+
+    if reason == "package policy denies native public APIs" || reason == "package policy denies native Rust wrappers" {
+        return true
+    }
+
+    if reason == "package policy denies native implementation risk" {
+        return true
+    }
+
+    if reason == "package policy denies unsafe public APIs" || reason == "package policy denies native unsafe policy" {
+        return true
+    }
+
+    if reason == "package policy denies detected unsafe native code" {
         return true
     }
 

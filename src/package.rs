@@ -444,12 +444,27 @@ struct ManifestPathSection {
     paths: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ManifestReview {
+    #[serde(default)]
+    policy: ManifestReviewPolicy,
+    #[serde(default)]
+    expect: ManifestReviewExpect,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManifestReviewPolicy {
+    deny_unknown: Option<bool>,
+    deny_native: Option<bool>,
+    deny_unsafe_apis: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManifestReviewExpect {
     risk: Option<String>,
-    allow_native: Option<bool>,
-    allow_unsafe: Option<bool>,
-    unknown_is_error: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1004,11 +1019,6 @@ pub fn diff_package_dirs(old_dir: &Path, new_dir: &Path) -> Result<PackageDiff, 
 
 pub fn check_package_dir(package_dir: &Path) -> Result<PackageCheck, String> {
     let package = load_package(package_dir)?;
-    let unknown_is_error = package
-        .manifest
-        .review
-        .as_ref()
-        .is_some_and(|review| review.unknown_is_error == Some(true));
     let review = review_package_dir(package_dir)?;
     let current_lock = lock_package_dir(package_dir)?;
     let graph = check_package_graph(package_dir)?;
@@ -1021,6 +1031,12 @@ pub fn check_package_dir(package_dir: &Path) -> Result<PackageCheck, String> {
     if let Some(native) = &native_rust {
         reasons.extend(native.reasons.clone());
     }
+    collect_manifest_review_policy_violations(
+        &package.manifest,
+        &review,
+        native_rust.as_ref(),
+        &mut reasons,
+    );
     reasons.sort();
     reasons.dedup();
 
@@ -1031,11 +1047,18 @@ pub fn check_package_dir(package_dir: &Path) -> Result<PackageCheck, String> {
     let native_ok = native_rust
         .as_ref()
         .is_none_or(|native_check| native_check.ok);
-    let unknown_ok = !(unknown_is_error && review.risk == PackageRisk::Unknown);
-    let ok = !diagnostics_have_errors && unknown_ok && graph.ok && lock.matches && native_ok;
+    let policy_ok = package_review_policy_ok(&package.manifest, &review, native_rust.as_ref());
+    let ok = !diagnostics_have_errors && policy_ok && graph.ok && lock.matches && native_ok;
     let mut risk = review.risk.max(graph.risk).max(lock.risk);
     if let Some(native) = &native_rust {
         risk = risk.max(native.risk);
+    }
+    if package_review_policy_has_high_risk_violation(
+        &package.manifest,
+        &review,
+        native_rust.as_ref(),
+    ) {
+        risk = risk.max(PackageRisk::High);
     }
 
     Ok(PackageCheck {
@@ -3656,16 +3679,11 @@ fn package_index_unsafe_boundary(
     native_check: Option<&PackageNativeRustCheck>,
 ) -> bool {
     manifest
-        .review
+        .native
         .as_ref()
-        .and_then(|review| review.allow_unsafe)
-        .unwrap_or(false)
-        || manifest
-            .native
-            .as_ref()
-            .and_then(|native| native.rust.as_ref())
-            .and_then(|native| native.unsafe_policy.as_deref())
-            .is_some_and(|policy| policy != "forbid")
+        .and_then(|native| native.rust.as_ref())
+        .and_then(|native| native.unsafe_policy.as_deref())
+        .is_some_and(|policy| policy != "forbid")
         || native_check.is_some_and(|native| native.unsafe_detected)
 }
 
@@ -4052,19 +4070,121 @@ fn collect_manifest_review_reasons(manifest: &Manifest, reasons: &mut Vec<String
     }
     collect_package_feature_boundary_reasons(&manifest.features, reasons);
     if let Some(review) = &manifest.review {
-        if review.risk.as_deref() == Some("unknown") {
+        if review.expect.risk.as_deref() == Some("unknown") {
             reasons.push("manifest declares unknown package risk".to_string());
         }
-        if review.unknown_is_error == Some(true) {
-            reasons.push("unknown package risk is configured as an error".to_string());
+        if review.policy.deny_unknown == Some(true) {
+            reasons.push("package policy denies unknown review risk".to_string());
         }
-        if review.allow_native == Some(true) {
-            reasons.push("manifest allows native boundaries".to_string());
+        if review.policy.deny_native == Some(true) {
+            reasons.push("package policy denies native boundaries".to_string());
         }
-        if review.allow_unsafe == Some(true) {
-            reasons.push("manifest allows unsafe boundaries".to_string());
+        if review.policy.deny_unsafe_apis == Some(true) {
+            reasons.push("package policy denies unsafe APIs".to_string());
         }
     }
+}
+
+fn package_review_policy_ok(
+    manifest: &Manifest,
+    review: &PackageReview,
+    native_check: Option<&PackageNativeRustCheck>,
+) -> bool {
+    let Some(review_policy) = manifest.review.as_ref() else {
+        return true;
+    };
+    let policy = &review_policy.policy;
+    if policy.deny_unknown == Some(true) && review.risk == PackageRisk::Unknown {
+        return false;
+    }
+    if policy.deny_native == Some(true)
+        && (review.summary.native_apis > 0
+            || manifest_native_enabled(manifest)
+            || native_check.is_some_and(|native| native.risk >= PackageRisk::Elevated))
+    {
+        return false;
+    }
+    if policy.deny_unsafe_apis == Some(true)
+        && (review.summary.unsafe_apis > 0
+            || manifest_native_unsafe_boundary(manifest)
+            || native_check.is_some_and(|native| native.unsafe_detected))
+    {
+        return false;
+    }
+    true
+}
+
+fn package_review_policy_has_high_risk_violation(
+    manifest: &Manifest,
+    review: &PackageReview,
+    native_check: Option<&PackageNativeRustCheck>,
+) -> bool {
+    let Some(review_policy) = manifest.review.as_ref() else {
+        return false;
+    };
+    let policy = &review_policy.policy;
+    policy.deny_native == Some(true)
+        && (review.summary.native_apis > 0
+            || manifest_native_enabled(manifest)
+            || native_check.is_some_and(|native| native.risk >= PackageRisk::Elevated))
+        || policy.deny_unsafe_apis == Some(true)
+            && (review.summary.unsafe_apis > 0
+                || manifest_native_unsafe_boundary(manifest)
+                || native_check.is_some_and(|native| native.unsafe_detected))
+}
+
+fn collect_manifest_review_policy_violations(
+    manifest: &Manifest,
+    review: &PackageReview,
+    native_check: Option<&PackageNativeRustCheck>,
+    reasons: &mut Vec<String>,
+) {
+    let Some(review_policy) = manifest.review.as_ref() else {
+        return;
+    };
+    let policy = &review_policy.policy;
+    if policy.deny_unknown == Some(true) && review.risk == PackageRisk::Unknown {
+        reasons.push("package policy denies unknown review risk".to_string());
+    }
+    if policy.deny_native == Some(true) && review.summary.native_apis > 0 {
+        reasons.push("package policy denies native public APIs".to_string());
+    }
+    if policy.deny_native == Some(true) && manifest_native_enabled(manifest) {
+        reasons.push("package policy denies native Rust wrappers".to_string());
+    }
+    if policy.deny_native == Some(true)
+        && native_check.is_some_and(|native| native.risk >= PackageRisk::Elevated)
+    {
+        reasons.push("package policy denies native implementation risk".to_string());
+    }
+    if policy.deny_unsafe_apis == Some(true) && review.summary.unsafe_apis > 0 {
+        reasons.push("package policy denies unsafe public APIs".to_string());
+    }
+    if policy.deny_unsafe_apis == Some(true) && manifest_native_unsafe_boundary(manifest) {
+        reasons.push("package policy denies native unsafe policy".to_string());
+    }
+    if policy.deny_unsafe_apis == Some(true)
+        && native_check.is_some_and(|native| native.unsafe_detected)
+    {
+        reasons.push("package policy denies detected unsafe native code".to_string());
+    }
+}
+
+fn manifest_native_enabled(manifest: &Manifest) -> bool {
+    manifest
+        .native
+        .as_ref()
+        .and_then(|native| native.rust.as_ref())
+        .is_some_and(|native| native.enabled)
+}
+
+fn manifest_native_unsafe_boundary(manifest: &Manifest) -> bool {
+    manifest
+        .native
+        .as_ref()
+        .and_then(|native| native.rust.as_ref())
+        .and_then(|native| native.unsafe_policy.as_deref())
+        .is_some_and(|policy| policy != "forbid")
 }
 
 fn collect_package_feature_boundary_reasons(
@@ -4951,7 +5071,7 @@ fn package_risk(
     if manifest
         .review
         .as_ref()
-        .and_then(|review| review.risk.as_deref())
+        .and_then(|review| review.expect.risk.as_deref())
         == Some("unknown")
         || review_map.summary.unknown.functions > 0
     {

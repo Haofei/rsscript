@@ -5179,7 +5179,7 @@ native fn Native.echo(message: read String) -> String
         &unknown_dir,
         "rss-dogfood-unknown",
         "0.1.0",
-        r#"[review]
+        r#"[review.expect]
 risk = "unknown"
 "#,
     );
@@ -6488,9 +6488,8 @@ rss-core = "0.5"
 [features]
 streaming = []
 
-[review]
+[review.expect]
 risk = "low"
-allow_native = true
 
 [native.rust]
 enabled = true
@@ -6999,7 +6998,7 @@ fn package_review_explains_manifest_unknown_risk() {
     write_package_fixture(
         &temp_dir,
         "0.1.0",
-        r#"[review]
+        r#"[review.expect]
 risk = "unknown"
 "#,
         r#"pub fn Api.run() -> Unit
@@ -7253,9 +7252,11 @@ fn package_check_fails_unknown_review_when_configured_as_error() {
         r#"[sources]
 paths = ["src"]
 
-[review]
+[review.expect]
 risk = "unknown"
-unknown_is_error = true
+
+[review.policy]
+deny_unknown = true
 "#,
         r#"pub fn Api.run() -> Unit
 "#,
@@ -7289,7 +7290,101 @@ unknown_is_error = true
     assert!(json["reasons"].as_array().is_some_and(|reasons| {
         reasons
             .iter()
-            .any(|reason| reason == "unknown package risk is configured as an error")
+            .any(|reason| reason == "package policy denies unknown review risk")
+    }));
+}
+
+#[test]
+fn package_manifest_rejects_legacy_review_policy_aliases() {
+    let temp_dir = unique_temp_dir("rsscript-package-review-policy-alias");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[review]
+unknown_is_error = true
+"#,
+        r#"pub fn Api.run() -> Unit
+"#,
+    );
+
+    let error =
+        review_package_dir(&temp_dir).expect_err("legacy review aliases should be rejected");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(error.contains("unknown field"), "{error}");
+    assert!(error.contains("unknown_is_error"), "{error}");
+}
+
+#[test]
+fn package_check_fails_when_policy_denies_native_api() {
+    let temp_dir = unique_temp_dir("rsscript-package-check-deny-native");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[review.policy]
+deny_native = true
+"#,
+        r#"features: native
+
+native fn Native.echo(message: read String) -> String
+"#,
+    );
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&temp_dir).expect("package check should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!check.ok);
+    assert_eq!(json["risk"], "high");
+    assert!(json["reasons"].as_array().is_some_and(|reasons| {
+        reasons
+            .iter()
+            .any(|reason| reason == "package policy denies native public APIs")
+    }));
+}
+
+#[test]
+fn package_check_fails_when_policy_denies_unsafe_api() {
+    let temp_dir = unique_temp_dir("rsscript-package-check-deny-unsafe");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[review.policy]
+deny_unsafe_apis = true
+"#,
+        r#"features: unsafe
+
+fn Native.danger(message: read String) -> String
+    effects(unsafe)
+"#,
+    );
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&temp_dir).expect("package check should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!check.ok);
+    assert_eq!(json["risk"], "high");
+    assert!(json["reasons"].as_array().is_some_and(|reasons| {
+        reasons
+            .iter()
+            .any(|reason| reason == "package policy denies unsafe public APIs")
     }));
 }
 
@@ -7367,7 +7462,7 @@ fn package_metadata_reports_unknown_review_risk_not_ok() {
         &temp_dir,
         "rss-metadata-unknown",
         "0.1.0",
-        r#"[review]
+        r#"[review.expect]
 risk = "unknown"
 "#,
         r#"pub fn Api.run() -> Unit
@@ -9503,7 +9598,7 @@ fn package_publish_dry_run_blocks_unknown_review_risk() {
         &temp_dir,
         "rss-unknown",
         "0.1.0",
-        r#"[review]
+        r#"[review.expect]
 risk = "unknown"
 "#,
         r#"pub fn Api.run() -> Unit
