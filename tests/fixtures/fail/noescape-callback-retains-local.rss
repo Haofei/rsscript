@@ -1,0 +1,23 @@
+// expect: RS0501
+
+features: local
+
+struct ImageData {
+    size: Int
+}
+
+fn Cache.store(image: read ImageData) -> Unit
+    effects(retains(image))
+
+fn apply(callback: noescape Fn()) -> Unit {
+    callback()
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: || {
+        local image = ImageData(size: 1)
+        Cache.store(image: read image)
+    })
+    return Unit
+}

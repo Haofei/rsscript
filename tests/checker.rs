@@ -1595,6 +1595,84 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_rejects_noescape_callback_retaining_local_created_inside_callback() {
+    let source = r#"
+features: local
+
+struct ImageData {
+    size: Int
+}
+
+class BuildProblem {
+    code: Int
+}
+
+fn Cache.store(image: read ImageData) -> Unit
+    effects(retains(image))
+
+fn apply(callback: noescape Fn() -> Result<fresh ImageData, BuildProblem>) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: || {
+        local image = ImageData(size: 1)
+        Cache.store(image: read image)
+        return Ok(image)
+    })
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-retains-local.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0501"
+                && diagnostic.summary
+                    == "retaining API `Cache.store` cannot retain local value `image`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_rejects_noescape_callback_retaining_local_inside_wrapper() {
+    let source = r#"
+features: local
+
+struct ImageData {
+    size: Int
+}
+
+fn Cache.store_option(image: read Option<ImageData>) -> Unit
+    effects(retains(image))
+
+fn apply(callback: noescape Fn()) -> Unit {
+    callback()
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: || {
+        local image = ImageData(size: 1)
+        Cache.store_option(image: read Some(image))
+    })
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-retains-local-wrapper.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0501"
+                && diagnostic.summary
+                    == "retaining API `Cache.store_option` cannot retain local value `image`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn checker_reports_noescape_callback_early_return_type_mismatch() {
     let source = r#"
 fn apply(callback: noescape Fn() -> Result<String, BuildError>) -> Unit {

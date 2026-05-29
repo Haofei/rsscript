@@ -1325,6 +1325,7 @@ fn check_noescape_closure_return_type(
         local_bindings,
         managed_bindings,
     };
+    check_callback_body_call_argument_types(analyzer, body, &contract);
     let returns = closure_return_sites(body);
     if returns.is_empty() {
         if !type_pattern_matches(expected_return, "Unit", generic_params) {
@@ -1556,6 +1557,59 @@ fn collect_implicit_closure_return_sites<'a>(
         | HirStmt::Break(_)
         | HirStmt::Continue(_)
         | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn check_callback_body_call_argument_types(
+    analyzer: &mut Analyzer<'_>,
+    body: &HirBlock,
+    contract: &CallbackContract<'_>,
+) {
+    for statement in &body.statements {
+        match statement {
+            HirStmt::Let {
+                value: Some(value), ..
+            }
+            | HirStmt::Return {
+                value: Some(value), ..
+            }
+            | HirStmt::Expr(value) => check_callback_call_argument_types(analyzer, value, contract),
+            HirStmt::With { resource, body, .. } => {
+                check_callback_call_argument_types(analyzer, resource, contract);
+                check_callback_body_call_argument_types(analyzer, body, contract);
+            }
+            HirStmt::If {
+                condition,
+                then_body,
+                else_body,
+                ..
+            } => {
+                check_callback_call_argument_types(analyzer, condition, contract);
+                check_callback_body_call_argument_types(analyzer, then_body, contract);
+                if let Some(else_body) = else_body {
+                    check_callback_body_call_argument_types(analyzer, else_body, contract);
+                }
+            }
+            HirStmt::Loop {
+                condition, body, ..
+            } => {
+                if let Some(condition) = condition {
+                    check_callback_call_argument_types(analyzer, condition, contract);
+                }
+                check_callback_body_call_argument_types(analyzer, body, contract);
+            }
+            HirStmt::Match { value, arms, .. } => {
+                check_callback_call_argument_types(analyzer, value, contract);
+                for arm in arms {
+                    check_callback_body_call_argument_types(analyzer, &arm.body, contract);
+                }
+            }
+            HirStmt::Let { value: None, .. }
+            | HirStmt::Return { value: None, .. }
+            | HirStmt::Break(_)
+            | HirStmt::Continue(_)
+            | HirStmt::Unknown(_) => {}
+        }
     }
 }
 
@@ -1901,6 +1955,12 @@ fn check_callback_resolved_call_argument_types(
         if type_contains_unresolved_generic(&expected_type, &signature.type_params) {
             continue;
         }
+        if signature.retained_params.contains(name)
+            && let Some((local_name, local_span)) =
+                callback_retained_local_use(&arg.value, contract)
+        {
+            callback_retained_local_diagnostic(analyzer, &call_name, name, &local_name, local_span);
+        }
         let Some(actual_type) =
             callback_expr_type_name(&arg.value, contract.params, contract.param_types)
         else {
@@ -1919,6 +1979,42 @@ fn check_callback_resolved_call_argument_types(
                 hir_expr_span(&arg.value),
             );
         }
+    }
+}
+
+fn callback_retained_local_use(
+    expr: &HirExpr,
+    contract: &CallbackContract<'_>,
+) -> Option<(String, Span)> {
+    match expr {
+        HirExpr::Ident { name, span, .. } if contract.local_bindings.contains(name) => {
+            Some((name.clone(), span.clone()))
+        }
+        HirExpr::Field {
+            base, access, span, ..
+        } if !access.is_handle && !access.is_weak => fresh_return_ident(base)
+            .filter(|name| contract.local_bindings.contains(*name))
+            .map(|name| (name.to_string(), span.clone()))
+            .or_else(|| callback_retained_local_use(base, contract)),
+        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => {
+            callback_retained_local_use(value, contract)
+        }
+        HirExpr::Call { args, .. } => args
+            .iter()
+            .find_map(|arg| callback_retained_local_use(&arg.value, contract)),
+        HirExpr::Binary { left, right, .. } => callback_retained_local_use(left, contract)
+            .or_else(|| callback_retained_local_use(right, contract)),
+        HirExpr::Index { base, index, .. } => callback_retained_local_use(base, contract)
+            .or_else(|| callback_retained_local_use(index, contract)),
+        HirExpr::Manage { .. }
+        | HirExpr::Spawn { .. }
+        | HirExpr::Await { .. }
+        | HirExpr::Field { .. }
+        | HirExpr::Closure { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_)
+        | HirExpr::Ident { .. } => None,
     }
 }
 
@@ -2136,6 +2232,29 @@ fn callback_fresh_return_unknown_diagnostic(
         .with_fix(
             "return_fresh_callback_value",
             "Return a struct constructor, fresh call, or local value created inside the callback.",
+            "manual",
+        ),
+    );
+}
+
+fn callback_retained_local_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    callee: &str,
+    param: &str,
+    local_name: &str,
+    span: Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::LOCAL_VALUE_RETAINED,
+            format!("retaining API `{callee}` cannot retain local value `{local_name}`."),
+            span,
+            "local value retained",
+        )
+        .with_cause(format!("`{callee}` declares `effects(retains({param}))`."))
+        .with_fix(
+            "manage_local",
+            format!("Pass `{param}` through `manage {local_name}` before retaining it."),
             "manual",
         ),
     );

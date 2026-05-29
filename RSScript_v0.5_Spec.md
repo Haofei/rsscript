@@ -1695,6 +1695,10 @@ times), so the closure may `read` or `mut` a captured local but must not `take`
 or `manage` a captured local — that would move it on the first call and leave it
 gone on the next. Taking or managing a captured local in a `noescape` closure is
 a diagnostic. A consuming `FnOnce`-style parameter is a future feature.
+The same local/retention rule applies inside the callback body: a local value
+created inside a `noescape` callback still cannot be passed to an
+`effects(retains(...))` parameter unless it first crosses an explicit `manage`
+boundary.
 
 ```rust
 local seed = Buffer.new(size: 1024)
