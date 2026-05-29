@@ -7,4 +7,9 @@ pub fn ResourcePool.new<T: Resource>(
     max_size: Int,
 ) -> fresh ResourcePool<T>
 
+pub fn ResourcePool.try_new<T: Resource, E>(
+    create: noescape Fn() -> Result<T, E>,
+    max_size: Int,
+) -> Result<fresh ResourcePool<T>, E>
+
 pub fn ResourcePool.borrow<T: Resource>(pool: mut ResourcePool<T>) -> T

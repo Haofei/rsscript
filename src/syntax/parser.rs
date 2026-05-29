@@ -594,6 +594,7 @@ fn parse_params(tokens: &[Token], start: usize, end: usize) -> ParsedParams {
                     args: Vec::new(),
                     malformed_arg_spans: Vec::new(),
                     is_noescape: false,
+                    fn_return: None,
                     span: tokens[start].span.clone(),
                 },
                 span: tokens[start].span.clone(),
@@ -610,6 +611,7 @@ fn parse_params(tokens: &[Token], start: usize, end: usize) -> ParsedParams {
             args: Vec::new(),
             malformed_arg_spans: Vec::new(),
             is_noescape: false,
+            fn_return: None,
             span: tokens[start].span.clone(),
         });
         params.push(Param {
@@ -1559,9 +1561,10 @@ fn parse_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<TypeRef>
     let (name, name_end) = parse_type_name(tokens, name_index, end)?;
     let mut args = Vec::new();
     let mut malformed_arg_spans = Vec::new();
-    if tokens.get(name_end).is_some_and(|token| token.symbol("<")) {
-        if let Some(close) = find_matching(tokens, name_end, "<", ">") {
-            for range in split_param_ranges(tokens, name_end + 1, close) {
+    let mut cursor = name_end;
+    if tokens.get(cursor).is_some_and(|token| token.symbol("<")) {
+        if let Some(close) = find_matching(tokens, cursor, "<", ">") {
+            for range in split_param_ranges(tokens, cursor + 1, close) {
                 if let Some(span) = range.empty_span {
                     malformed_arg_spans.push(span);
                     continue;
@@ -1574,15 +1577,28 @@ fn parse_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<TypeRef>
                 };
                 args.push(arg);
             }
+            cursor = close + 1;
         } else {
-            malformed_arg_spans.push(tokens[name_end].span.clone());
+            malformed_arg_spans.push(tokens[cursor].span.clone());
         }
     }
+    if name == "Fn"
+        && tokens.get(cursor).is_some_and(|token| token.symbol("("))
+        && let Some(close) = find_matching(tokens, cursor, "(", ")")
+    {
+        cursor = close + 1;
+    }
+    let fn_return = if name == "Fn" && tokens.get(cursor).is_some_and(|token| token.symbol("->")) {
+        parse_type_ref(tokens, cursor + 1, end).map(Box::new)
+    } else {
+        None
+    };
     Some(TypeRef {
         name,
         args,
         malformed_arg_spans,
         is_noescape,
+        fn_return,
         span: tokens[name_index].span.clone(),
     })
 }
@@ -1608,6 +1624,9 @@ fn qualify_type_ref(ty: &mut TypeRef, namespace: &str, generic_names: &HashSet<&
     }
     for arg in &mut ty.args {
         qualify_type_ref(arg, namespace, generic_names);
+    }
+    if let Some(return_ty) = ty.fn_return.as_mut() {
+        qualify_type_ref(return_ty, namespace, generic_names);
     }
 }
 
@@ -1673,8 +1692,13 @@ fn type_ref_name(ty: &TypeRef) -> String {
         format!("{}<{args}>", ty.name)
     };
     if ty.is_noescape {
-        if ty.name == "Fn" && ty.args.is_empty() {
-            return "noescape Fn()".to_string();
+        if ty.name == "Fn" {
+            let return_ty = ty
+                .fn_return
+                .as_ref()
+                .map(|return_ty| format!(" -> {}", type_ref_name(return_ty)))
+                .unwrap_or_default();
+            return format!("noescape Fn(){return_ty}");
         }
         format!("noescape {name}")
     } else {

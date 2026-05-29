@@ -2,6 +2,8 @@ resource DbConnection
 
 pub fn DbConnection.open(url: read Url) -> DbConnection
 
+pub fn DbConnection.try_open(url: read Url) -> Result<DbConnection, DbError>
+
 pub fn DbConnection.query(
     conn: mut DbConnection,
     sql: read String,

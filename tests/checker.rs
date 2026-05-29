@@ -1266,6 +1266,31 @@ fn run_query(url: read Url, sql: read String) -> Result<Unit, DbError> {
 }
 
 #[test]
+fn rust_lowering_maps_resource_pool_try_new_to_runtime_hooks() {
+    let source = r#"
+features: local
+
+fn run_query(url: read Url, sql: read String) -> Result<Unit, DbError> {
+    local pool = ResourcePool<DbConnection>.try_new(
+        create: || DbConnection.try_open(url: read url),
+        max_size: 2,
+    )?
+
+    with ResourcePool.borrow(pool: mut pool) as conn {
+        DbConnection.query(conn: mut conn, sql: read sql)?
+    }
+
+    return Ok(Unit)
+}
+"#;
+    let rust = lower_source_to_rust("db-try-pool.rss", source).expect("source should lower");
+
+    assert!(rust.contains("-> Result<(), rsscript_runtime::DbError>"));
+    assert!(rust.contains("let mut pool = rsscript_runtime::ResourcePool::try_from_factory(2, || rsscript_runtime::db_connection_try_open(&url))?;"));
+    assert!(rust.contains("rsscript_runtime::db_connection_query(&mut conn, &sql)?;"));
+}
+
+#[test]
 fn rust_lowering_maps_config_reload_to_runtime_hooks() {
     let source = r#"
 features: local
@@ -1890,6 +1915,54 @@ fn main() -> Unit {
     return Unit
 }
 "#
+    );
+}
+
+#[test]
+fn rss_run_accepts_resource_pool_try_new() {
+    let temp_dir = unique_temp_dir("rsscript-run-resource-pool-try-new");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    let source_path = temp_dir.join("try_pool.rss");
+    fs::write(
+        &source_path,
+        r#"features: local
+
+fn run_query(url: read Url, sql: read String) -> Result<Unit, DbError> {
+    local pool = ResourcePool<DbConnection>.try_new(
+        create: || DbConnection.try_open(url: read url),
+        max_size: 2,
+    )?
+
+    with ResourcePool.borrow(pool: mut pool) as conn {
+        DbConnection.query(conn: mut conn, sql: read sql)?
+    }
+
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, DbError> {
+    run_query(url: read "db://local", sql: read "select 1")?
+    return Ok(Unit)
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg(&source_path)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss run should execute");
+    let _ = fs::remove_dir_all(&temp_dir);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert!(
+        stdout.contains("db query on db://local: select 1"),
+        "{stdout}"
     );
 }
 
@@ -3622,6 +3695,47 @@ fn dynamic_pool(url: read String, count: Int) -> Unit {
         .count();
 
     assert_eq!(invalid_max_size_count, 3, "{diagnostics:?}");
+}
+
+#[test]
+fn checker_matches_resource_pool_constructor_to_factory_result_shape() {
+    let source = r#"
+features: local
+
+resource DbConnection {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+fn DbConnection.open(url: read String) -> DbConnection
+fn DbConnection.try_open(url: read String) -> Result<DbConnection, DbError>
+
+fn bad_new(url: read String) -> Unit {
+    local pool = ResourcePool<DbConnection>.new(
+        create: || DbConnection.try_open(url: read url),
+        max_size: 1,
+    )
+}
+
+fn bad_try_new(url: read String) -> Result<Unit, DbError> {
+    local pool = ResourcePool<DbConnection>.try_new(
+        create: || DbConnection.open(url: read url),
+        max_size: 1,
+    )?
+
+    return Ok(Unit)
+}
+"#;
+    let diagnostics = analyze_source("resourcepool-factory-shape.rss", source);
+    let factory_contract_count = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "RS0707")
+        .count();
+
+    assert_eq!(factory_contract_count, 2, "{diagnostics:?}");
 }
 
 #[test]
@@ -6007,27 +6121,93 @@ fn main() -> Result<Unit, ImageError> {
 }
 
 #[test]
-fn resource_pool_new_core_signature_uses_noescape_factory() {
-    let signature = core_interfaces()
+fn parser_preserves_noescape_function_return_types() {
+    let source = r#"fn build(create: noescape Fn() -> Result<DbConnection, DbError>) -> Unit"#;
+    let program = parse_source("fn-return-type.rssi", source);
+    let function = program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(function) => Some(function),
+            _ => None,
+        })
+        .find(|function| function.name == "build")
+        .expect("function should parse");
+    let create = &function.params[0].ty;
+
+    assert!(create.is_noescape);
+    assert_eq!(create.name, "Fn");
+    assert_eq!(
+        create
+            .fn_return
+            .as_ref()
+            .map(|return_ty| return_ty.name.as_str()),
+        Some("Result")
+    );
+    assert_eq!(
+        create
+            .fn_return
+            .as_ref()
+            .map(|return_ty| return_ty.args.len()),
+        Some(2)
+    );
+}
+
+#[test]
+fn resource_pool_core_signatures_use_typed_noescape_factories() {
+    let program = core_interfaces()
         .iter()
         .find_map(|(file, source)| {
             (file.contains("resource_pool.rssi")).then(|| parse_source(file, source))
         })
-        .and_then(|program| {
-            program.items.into_iter().find_map(|item| match item {
-                Item::Function(function) if function.name == "ResourcePool.new" => Some(function),
-                _ => None,
-            })
+        .expect("ResourcePool interface should be available");
+    let functions = program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(function) => Some(function),
+            _ => None,
         })
+        .collect::<Vec<_>>();
+    let new_signature = functions
+        .iter()
+        .find(|function| function.name == "ResourcePool.new")
         .expect("ResourcePool.new should be available from core interfaces");
-    let create = signature
+    let new_create = new_signature
         .params
         .iter()
         .find(|param| param.name == "create")
         .expect("ResourcePool.new should have create parameter");
+    let try_new_signature = functions
+        .iter()
+        .find(|function| function.name == "ResourcePool.try_new")
+        .expect("ResourcePool.try_new should be available from core interfaces");
+    let try_create = try_new_signature
+        .params
+        .iter()
+        .find(|param| param.name == "create")
+        .expect("ResourcePool.try_new should have create parameter");
 
-    assert!(create.ty.is_noescape);
-    assert_eq!(create.ty.name, "Fn");
+    assert!(new_create.ty.is_noescape);
+    assert_eq!(new_create.ty.name, "Fn");
+    assert_eq!(
+        new_create
+            .ty
+            .fn_return
+            .as_ref()
+            .map(|return_ty| return_ty.name.as_str()),
+        Some("T")
+    );
+    assert!(try_create.ty.is_noescape);
+    assert_eq!(try_create.ty.name, "Fn");
+    assert_eq!(
+        try_create
+            .ty
+            .fn_return
+            .as_ref()
+            .map(|return_ty| return_ty.name.as_str()),
+        Some("Result")
+    );
 }
 
 #[test]

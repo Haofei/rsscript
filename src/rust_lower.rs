@@ -1029,6 +1029,9 @@ impl<'a> RustLowerer<'a> {
                 if is_resource_pool_new_callee(callee) {
                     return lower_resource_pool_new_call(self, args);
                 }
+                if is_resource_pool_try_new_callee(callee) {
+                    return lower_resource_pool_try_new_call(self, args);
+                }
                 let is_resource_pool_borrow = is_resource_pool_borrow_callee(callee);
                 let callee = if is_resource_pool_borrow {
                     "rsscript_runtime::ResourcePool::borrow_at".to_string()
@@ -1148,6 +1151,7 @@ impl<'a> RustLowerer<'a> {
                 args: Vec::new(),
                 malformed_arg_spans: Vec::new(),
                 is_noescape: false,
+                fn_return: None,
                 span: span.clone(),
             }),
             Expr::Manage { value, .. } | Expr::Try { value, .. } => self.infer_expr_type(value),
@@ -1174,9 +1178,15 @@ impl<'a> RustLowerer<'a> {
 
     fn lower_type_ref(&self, ty: &TypeRef, position: ManagedPosition) -> String {
         if ty.is_noescape && ty.name == "Fn" {
+            let return_ty = ty.fn_return.as_ref().map(|return_ty| {
+                format!(
+                    " -> {}",
+                    self.lower_type_ref(return_ty, ManagedPosition::Return)
+                )
+            });
             return match position {
-                ManagedPosition::Param => "impl FnOnce()".to_string(),
-                _ => "Box<dyn FnOnce()>".to_string(),
+                ManagedPosition::Param => format!("impl FnOnce(){}", return_ty.unwrap_or_default()),
+                _ => format!("Box<dyn FnOnce(){}>", return_ty.unwrap_or_default()),
             };
         }
         let lowered = match ty.name.as_str() {
@@ -1887,6 +1897,9 @@ fn lower_callee(callee: &Callee) -> String {
         callee if is_db_connection_open_callee(callee) => {
             "rsscript_runtime::db_connection_open".to_string()
         }
+        callee if is_db_connection_try_open_callee(callee) => {
+            "rsscript_runtime::db_connection_try_open".to_string()
+        }
         callee if is_db_connection_query_callee(callee) => {
             "rsscript_runtime::db_connection_query".to_string()
         }
@@ -2184,6 +2197,10 @@ fn is_db_connection_open_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "DbConnection" && name == "open")
 }
 
+fn is_db_connection_try_open_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "DbConnection" && name == "try_open")
+}
+
 fn is_db_connection_query_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "DbConnection" && name == "query")
 }
@@ -2324,6 +2341,10 @@ fn is_resource_pool_new_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && name == "new")
 }
 
+fn is_resource_pool_try_new_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && name == "try_new")
+}
+
 fn is_resource_pool_borrow_expr(expr: &Expr) -> bool {
     matches!(expr, Expr::Call { callee, .. } if is_resource_pool_borrow_callee(callee))
 }
@@ -2338,6 +2359,18 @@ fn lower_resource_pool_new_call(lowerer: &mut RustLowerer<'_>, args: &[CallArg])
     );
     let max_size = lower_call_arg(lowerer, args, "max_size", 1, "0");
     format!("rsscript_runtime::ResourcePool::from_factory({max_size}, {create})")
+}
+
+fn lower_resource_pool_try_new_call(lowerer: &mut RustLowerer<'_>, args: &[CallArg]) -> String {
+    let create = lower_call_arg(
+        lowerer,
+        args,
+        "create",
+        0,
+        "|| panic!(\"missing resource factory\")",
+    );
+    let max_size = lower_call_arg(lowerer, args, "max_size", 1, "0");
+    format!("rsscript_runtime::ResourcePool::try_from_factory({max_size}, {create})")
 }
 
 fn lower_builtin_value_ident(name: &str) -> Option<&'static str> {

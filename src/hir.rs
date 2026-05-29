@@ -1734,8 +1734,13 @@ fn type_ref_name(ty: &TypeRef) -> String {
         format!("{}<{args}>", ty.name)
     };
     if ty.is_noescape {
-        if ty.name == "Fn" && ty.args.is_empty() {
-            return "noescape Fn()".to_string();
+        if ty.name == "Fn" {
+            let return_ty = ty
+                .fn_return
+                .as_ref()
+                .map(|return_ty| format!(" -> {}", type_ref_name(return_ty)))
+                .unwrap_or_default();
+            return format!("noescape Fn(){return_ty}");
         }
         format!("noescape {name}")
     } else {

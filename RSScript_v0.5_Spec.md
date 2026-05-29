@@ -1848,9 +1848,11 @@ A fallible factory passed to `new` is rejected (diagnostic RS0707): hiding a cre
 
 The canonical example below uses `DbConnection.open` as an *infallible* factory — it returns `DbConnection`, not `Result`, which is what makes it valid with `new`. This is a deliberate simplification: most real poolable resources (database connections, sockets, file handles) fail to create and need the fallible constructor below.
 
-#### Fallible construction: `try_new` (deferred, not excluded)
+#### Fallible construction: `try_new`
 
-The realistic case is a factory that can fail. `try_new` is a future API — not in the v0.5 executable MVP — recorded here with its binding contract so the design space is fixed:
+The realistic case is a factory that can fail. `try_new` is part of the v0.5
+executable MVP because resource allocation failure must stay explicit instead
+of being hidden behind an infallible pool constructor.
 
 ```rust
 fn ResourcePool<T: Resource>.try_new<E>(

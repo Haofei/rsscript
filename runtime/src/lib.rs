@@ -775,6 +775,13 @@ pub fn db_connection_open(url: &str) -> DbConnection {
     }
 }
 
+pub fn db_connection_try_open(url: &str) -> Result<DbConnection, DbError> {
+    if url.trim().is_empty() {
+        return Err(DbError::new("database URL is empty"));
+    }
+    Ok(db_connection_open(url))
+}
+
 pub fn db_connection_query(conn: &mut DbConnection, sql: &str) -> Result<(), DbError> {
     if sql.trim().is_empty() {
         return Err(DbError::new("SQL query is empty"));
@@ -1334,6 +1341,18 @@ impl<T: Resource> ResourcePool<T> {
         let count = max_size.max(0) as usize;
         let values = (0..count).map(|_| create()).collect();
         Self::new(values)
+    }
+
+    pub fn try_from_factory<E, F>(max_size: i64, mut create: F) -> Result<Self, E>
+    where
+        F: FnMut() -> Result<T, E>,
+    {
+        let count = max_size.max(0) as usize;
+        let mut values = Vec::with_capacity(count);
+        for _ in 0..count {
+            values.push(create()?);
+        }
+        Ok(Self::new(values))
     }
 
     pub fn empty() -> Self {

@@ -16,7 +16,10 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
                 .bindings
                 .iter()
                 .filter_map(|binding| {
-                    (binding.type_name.as_deref() == Some("noescape Fn()"))
+                    binding
+                        .type_name
+                        .as_deref()
+                        .is_some_and(is_noescape_fn_type)
                         .then_some((binding.name.clone(), binding.span.clone()))
                 })
                 .collect::<HashMap<_, _>>();
@@ -443,7 +446,7 @@ fn check_call_args(
             .name
             .as_ref()
             .and_then(|name| signature.params.iter().find(|param| param.name == *name));
-        if expected_param.is_some_and(|param| param.type_name == "noescape Fn()") {
+        if expected_param.is_some_and(|param| is_noescape_fn_type(&param.type_name)) {
             continue;
         }
         check_noescape_escape(
@@ -873,7 +876,11 @@ fn call_arg_targets_noescape_param(arg: &HirCallArg, resolution: &CallResolution
     arg.name
         .as_ref()
         .and_then(|name| signature.params.iter().find(|param| param.name == *name))
-        .is_some_and(|param| param.type_name == "noescape Fn()")
+        .is_some_and(|param| is_noescape_fn_type(&param.type_name))
+}
+
+fn is_noescape_fn_type(type_name: &str) -> bool {
+    type_name == "noescape Fn()" || type_name.starts_with("noescape Fn() -> ")
 }
 
 fn noescape_escape_diagnostic(
