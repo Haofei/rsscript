@@ -1944,9 +1944,10 @@ with ResourcePool.borrow(pool: mut pool) as a {
 ```
 
 *v0.5 enforcement status: exhausted borrow is enforced at runtime (an empty pool
-produces a resource-pool-empty diagnostic with a source span). The static
-nested-borrow rejection is the specified frontend obligation; if the checker does
-not yet reject it, that is a known gap to close, not a different rule.*
+produces a resource-pool-empty diagnostic with a source span). The static active
+lease rule is a frontend obligation: nested borrow and any other read/mut/take
+or manage use of the same pool root inside the lease body are diagnostics before
+lowering.*
 
 ---
 

@@ -3809,6 +3809,7 @@ resource DbConnection {
 
 fn DbConnection.open(url: read String) -> DbConnection
 fn Pool.consume(pool: take ResourcePool<DbConnection>) -> Unit
+fn Pool.stats(pool: read ResourcePool<DbConnection>) -> Int
 
 fn bad_nested_borrow(url: read String) -> Unit {
     local pool = ResourcePool<DbConnection>.new(
@@ -3831,6 +3832,18 @@ fn bad_take_during_lease(url: read String) -> Unit {
 
     with ResourcePool.borrow(pool: mut pool) as conn {
         Pool.consume(pool: take pool)
+    }
+}
+
+fn bad_read_during_lease(url: read String) -> Unit {
+    local pool = ResourcePool<DbConnection>.new(
+        create: || DbConnection.open(url: read url),
+        max_size: 1,
+    )
+
+    with ResourcePool.borrow(pool: mut pool) as conn {
+        let count = Pool.stats(pool: read pool)
+        Log.write(message: read "unreachable")
     }
 }
 
@@ -3859,7 +3872,7 @@ fn ok_different_pool(url: read String) -> Unit {
         })
         .count();
 
-    assert_eq!(active_lease_conflicts, 2, "{diagnostics:?}");
+    assert_eq!(active_lease_conflicts, 3, "{diagnostics:?}");
 }
 
 #[test]
