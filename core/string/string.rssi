@@ -1,15 +1,20 @@
 pub fn String.concat(left: read String, right: read String) -> fresh String
+    effects(pure)
 
 pub fn String.from_int(value: Int) -> fresh String
+    effects(pure)
 
 pub fn String.from_bool(value: Bool) -> fresh String
+    effects(pure)
 
 pub fn String.starts_with(
     value: read String,
     prefix: read String,
 ) -> Bool
+    effects(pure)
 
 pub fn String.ends_with(
     value: read String,
     suffix: read String,
 ) -> Bool
+    effects(pure)

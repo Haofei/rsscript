@@ -1,0 +1,12 @@
+fn has_review_prefix(reason: read String) -> Bool
+    effects(pure)
+{
+    return String.starts_with(value: read reason, prefix: read "review:")
+}
+
+fn render_review_label(count: Int) -> fresh String
+    effects(pure)
+{
+    let value = String.from_int(value: count)
+    return String.concat(left: read "review:", right: read value)
+}
