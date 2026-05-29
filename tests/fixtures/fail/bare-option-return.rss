@@ -1,0 +1,5 @@
+// expect: RS0208
+
+fn maybe_name() -> Option<String> {
+    return "ok"
+}

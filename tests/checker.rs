@@ -946,6 +946,43 @@ fn maybe_name() -> Option<String> {
 }
 
 #[test]
+fn checker_rejects_bare_option_some_return_before_backend_lowering() {
+    let source = r#"
+fn maybe_name() -> Option<String> {
+    return "ok"
+}
+"#;
+    let diagnostics = analyze_source("option-bare-return.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0208"
+                && diagnostic.summary
+                    == "return in `maybe_name` has type `String`, expected `Option<String>`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn rust_lowering_rejects_bare_option_some_return_before_rustc() {
+    let source = r#"
+fn maybe_name() -> Option<String> {
+    return "ok"
+}
+"#;
+    let diagnostics = lower_source_to_rust("option-bare-return.rss", source)
+        .expect_err("bare Option success return should fail before Rust generation");
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0208"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn checker_allows_bare_result_success_returns_to_match_ok_type() {
     let source = r#"
 class BuildError {

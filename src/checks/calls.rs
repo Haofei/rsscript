@@ -548,8 +548,14 @@ fn check_option_return_expr_type(
                         span,
                     );
                 }
-            } else if !argument_type_matches(&some_ty, actual) {
-                return_type_mismatch_diagnostic(analyzer, &function.name, actual, &some_ty, span);
+            } else {
+                return_type_mismatch_diagnostic(
+                    analyzer,
+                    &function.name,
+                    actual,
+                    &expected_option,
+                    span,
+                );
             }
         }
     }

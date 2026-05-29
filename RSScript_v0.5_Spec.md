@@ -524,6 +524,9 @@ Ok(fresh_expr) / Some(fresh_expr)
     preserves freshness only when the enclosing return type is
     Result<fresh T, E> / Option<fresh T>
 
+Option return values must be written as `Some(value)` or `None`.
+There is no bare-success shortcut for `Option<T>`.
+
 read fresh_expr
     materializes a managed temporary
 
