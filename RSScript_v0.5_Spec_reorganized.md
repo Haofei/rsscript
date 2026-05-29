@@ -302,7 +302,7 @@ Generated Rust targets a Rust runtime crate, referred to here as `rss_rt`.
 Minimum conceptual surface:
 
 ```text
-Managed<T>
+Managed<T> (single-isolate, non-atomic, intentionally !Send/!Sync)
 Handle<T>
 Local<T> or equivalent generated-owned form
 Resource<T> / ResourceGuard<T>

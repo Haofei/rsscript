@@ -317,6 +317,17 @@ Near term: checker prototype → real AST parser → HIR and symbol table → se
 
 Longer term: deeper semantic review tooling, a larger core library, agent and runtime examples, stronger optimization paths, and an experimental self-hosted frontend.
 
+Post-v0.5 design directions (see spec §20.1) build on the single-isolate, non-`Send` managed model, which is what lets async stay ergonomic without exposing Rust's `Pin`/`Poll`/`Waker`:
+
+- **Ergonomic async.** `Future<T>` as an ordinary isolate-local managed handle, `await`, and a `Stream<T>` / `await for` async-sequence form, on a single-threaded cooperative executor per isolate. Read/mut guards may not cross `await`.
+- **Cross-isolate messaging with zero-copy transfer.** Explicit typed channels between isolates; `take`-based moves are the zero-copy transfer path, with single ownership enforced at compile time. Managed handles never cross isolates — only explicit messages do.
+- **Two-tier execution.** A HIR-level interpreter for the managed subset gives a fast edit-run loop; Rust lowering stays the production/AOT path. Both observe identical semantics and diagnostics.
+- **Structured-fix tooling.** An `rss fix` command applying machine-applicable fixes, plus an analysis server streaming diagnostics and fixes to both human editors and AI repair agents.
+- **User-defined sum types** modeled on sealed types with exhaustive `match` (not Rust enums), with exhaustiveness checked before lowering.
+- **Registry review-risk badges.** The package registry surfaces review-risk signals (native, unsafe, unknown, mutating/retaining ratios) as first-class quality badges, reusing existing package review metadata.
+
+These intentionally exclude Dart-style conveniences that conflict with review-first semantics: cascade (`..`), extension methods / implicit method resolution, and positional records / implicit flow promotion.
+
 ---
 
 ## Non-goals
