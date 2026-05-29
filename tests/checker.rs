@@ -4538,6 +4538,71 @@ fn rss_run_reports_dogfood_package_risk_mismatch() {
     );
 }
 
+#[test]
+fn rss_run_accepts_dogfood_package_export_classifier() {
+    let temp_dir = unique_temp_dir("rsscript-dogfood-package-exports");
+    let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-exports.rss")
+    else {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return;
+    };
+    let package_review_json = generated_dogfood_package_exports_json(&temp_dir);
+    fs::write(
+        fixture_dir.join("dogfood-package-exports.json"),
+        serde_json::to_vec(&package_review_json).expect("package review JSON should serialize"),
+    )
+    .expect("generated package review should write");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("tests/fixtures/pass/dogfood-package-exports.rss")
+        .current_dir(&temp_dir)
+        .output()
+        .expect("rss run should execute dogfood package export classifier");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "dogfood package exports types=2 functions=3 apis=5 mutating=1 retaining=1 resource=1 fresh=1 unknown=1 mismatches=0 unmodeled_reasons=0"
+    );
+    assert!(stderr.trim().is_empty(), "{stderr}");
+}
+
+#[test]
+fn rss_run_reports_dogfood_package_export_mismatch() {
+    let temp_dir = unique_temp_dir("rsscript-dogfood-package-exports-mismatch");
+    let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-exports.rss")
+    else {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return;
+    };
+    let mut package_review_json = generated_dogfood_package_exports_json(&temp_dir);
+    package_review_json["summary"]["mutating_apis"] = Value::from(0);
+    fs::write(
+        fixture_dir.join("dogfood-package-exports.json"),
+        serde_json::to_vec(&package_review_json).expect("package review JSON should serialize"),
+    )
+    .expect("mutated package review should write");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("tests/fixtures/pass/dogfood-package-exports.rss")
+        .current_dir(&temp_dir)
+        .output()
+        .expect("rss run should execute dogfood package export classifier");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!output.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("dogfood package exports types=2 functions=3 apis=5 mutating=1 retaining=1 resource=1 fresh=1 unknown=1 mismatches=1 unmodeled_reasons=0"),
+        "{stdout}"
+    );
+}
+
 fn prepare_dogfood_run_dir(temp_dir: &Path) -> Option<PathBuf> {
     prepare_dogfood_run_dir_for(temp_dir, "dogfood-review-classifier.rss")
 }
@@ -4641,6 +4706,36 @@ fn package_review_json_for_dir(package_dir: &Path) -> Value {
     let review = review_package_dir(package_dir).expect("package review should succeed");
     serde_json::from_str(&rsscript::format_package_review_json(&review))
         .expect("package review JSON should parse")
+}
+
+fn generated_dogfood_package_exports_json(temp_dir: &Path) -> Value {
+    let package_dir = temp_dir.join("package-exports");
+    write_named_package_fixture(
+        &package_dir,
+        "rss-dogfood-exports",
+        "0.1.0",
+        "",
+        r#"struct Image
+resource DbConnection
+
+pub fn Image.load(path: read String) -> fresh Image
+pub fn Cache.store(conn: mut DbConnection, image: read Image) -> Unit
+    effects(retains(image))
+pub fn Api.run() -> Unit
+"#,
+    );
+    fs::create_dir_all(package_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        package_dir.join("src/main.rss"),
+        r#"pub fn Api.run() -> Unit {
+    Missing.call()
+    return Unit
+}
+"#,
+    )
+    .expect("source should be written");
+
+    package_review_json_for_dir(&package_dir)
 }
 
 #[test]

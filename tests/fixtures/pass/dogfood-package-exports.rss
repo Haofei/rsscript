@@ -1,0 +1,313 @@
+features: local
+
+struct PackageExportSummary {
+    public_types: Int
+    public_functions: Int
+    public_apis: Int
+    mutating_apis: Int
+    retaining_apis: Int
+    resource_apis: Int
+    fresh_returning_apis: Int
+    unknown_apis: Int
+    unmodeled_reasons: Int
+}
+
+fn empty_export_summary() -> fresh PackageExportSummary {
+    return PackageExportSummary(
+        public_types: 0,
+        public_functions: 0,
+        public_apis: 0,
+        mutating_apis: 0,
+        retaining_apis: 0,
+        resource_apis: 0,
+        fresh_returning_apis: 0,
+        unknown_apis: 0,
+        unmodeled_reasons: 0,
+    )
+}
+
+fn export_reason_is_modeled(reason: read String) -> Bool {
+    if reason == "public struct type" || reason == "public resource type" {
+        return true
+    }
+
+    if reason == "resource type" || reason == "public function" {
+        return true
+    }
+
+    if reason == "returns fresh value" || reason == "unknown review-map region" {
+        return true
+    }
+
+    if String.starts_with(value: read reason, prefix: read "mut parameter") {
+        return true
+    }
+
+    if String.starts_with(value: read reason, prefix: read "take parameter") {
+        return true
+    }
+
+    if String.starts_with(value: read reason, prefix: read "resource parameter") {
+        return true
+    }
+
+    if String.starts_with(value: read reason, prefix: read "resource return type") {
+        return true
+    }
+
+    if String.starts_with(value: read reason, prefix: read "retains(") {
+        return true
+    }
+
+    if String.starts_with(value: read reason, prefix: read "native boundary") {
+        return true
+    }
+
+    if String.starts_with(value: read reason, prefix: read "unsafe boundary") {
+        return true
+    }
+
+    if String.starts_with(value: read reason, prefix: read "guarantee `") {
+        return true
+    }
+
+    return false
+}
+
+fn count_unmodeled_export_reasons_from(
+    reasons: read JsonValue,
+    index: Int,
+    limit: Int,
+) -> Result<Int, JsonError> {
+    if index >= limit {
+        return Ok(0)
+    }
+
+    let item = Json.array_get(value: read reasons, index: index)?
+    let reason = Json.as_string(value: read item)?
+    let rest = count_unmodeled_export_reasons_from(
+        reasons: read reasons,
+        index: index + 1,
+        limit: limit,
+    )?
+
+    if export_reason_is_modeled(reason: read reason) {
+        return Ok(rest)
+    }
+
+    return Ok(rest + 1)
+}
+
+fn count_unmodeled_export_reasons(reasons: read JsonValue) -> Result<Int, JsonError> {
+    let limit = Json.array_len(value: read reasons)?
+
+    return count_unmodeled_export_reasons_from(
+        reasons: read reasons,
+        index: 0,
+        limit: limit,
+    )
+}
+
+fn export_has_resource_boundary(
+    kind: read String,
+    reasons: read JsonValue,
+) -> Result<Bool, JsonError> {
+    if kind != "function" {
+        return Ok(false)
+    }
+
+    if Json.array_contains_prefix(value: read reasons, prefix: read "resource parameter")? {
+        return Ok(true)
+    }
+
+    return Json.array_contains_string(value: read reasons, item: read "resource return type")
+}
+
+fn add_export_summary(
+    summary: read PackageExportSummary,
+    export: read JsonValue,
+) -> Result<fresh PackageExportSummary, JsonError> {
+    let kind = Json.field_string(value: read export, name: read "kind")?
+    let classification = Json.field_string(value: read export, name: read "classification")?
+    let reasons = Json.field(value: read export, name: read "reasons")?
+    let is_function = kind == "function"
+    let is_type = kind == "type"
+    let mutating = is_function && Json.array_contains_prefix(value: read reasons, prefix: read "mut parameter")?
+    let retaining = is_function && Json.array_contains_prefix(value: read reasons, prefix: read "retains(")?
+    let resource = export_has_resource_boundary(kind: read kind, reasons: read reasons)?
+    let fresh = is_function && Json.array_contains_string(value: read reasons, item: read "returns fresh value")?
+    let unknown = is_function && classification == "unknown"
+    let unmodeled = count_unmodeled_export_reasons(reasons: read reasons)?
+
+    return PackageExportSummary(
+        public_types: add_bool(value: summary.public_types, condition: is_type),
+        public_functions: add_bool(value: summary.public_functions, condition: is_function),
+        public_apis: summary.public_apis + 1,
+        mutating_apis: add_bool(value: summary.mutating_apis, condition: mutating),
+        retaining_apis: add_bool(value: summary.retaining_apis, condition: retaining),
+        resource_apis: add_bool(value: summary.resource_apis, condition: resource),
+        fresh_returning_apis: add_bool(value: summary.fresh_returning_apis, condition: fresh),
+        unknown_apis: add_bool(value: summary.unknown_apis, condition: unknown),
+        unmodeled_reasons: summary.unmodeled_reasons + unmodeled,
+    )
+}
+
+fn add_bool(value: Int, condition: Bool) -> Int {
+    if condition {
+        return value + 1
+    }
+
+    return value
+}
+
+fn summarize_exports_from(
+    exports: read JsonValue,
+    index: Int,
+    limit: Int,
+    summary: read PackageExportSummary,
+) -> Result<fresh PackageExportSummary, JsonError> {
+    if index >= limit {
+        return PackageExportSummary(
+            public_types: summary.public_types,
+            public_functions: summary.public_functions,
+            public_apis: summary.public_apis,
+            mutating_apis: summary.mutating_apis,
+            retaining_apis: summary.retaining_apis,
+            resource_apis: summary.resource_apis,
+            fresh_returning_apis: summary.fresh_returning_apis,
+            unknown_apis: summary.unknown_apis,
+            unmodeled_reasons: summary.unmodeled_reasons,
+        )
+    }
+
+    let export = Json.array_get(value: read exports, index: index)?
+    let next = add_export_summary(summary: read summary, export: read export)?
+
+    return summarize_exports_from(
+        exports: read exports,
+        index: index + 1,
+        limit: limit,
+        summary: read next,
+    )
+}
+
+fn dogfood_export_summary() -> Result<fresh PackageExportSummary, JsonError> {
+    let path = Path.from_string(value: read "tests/fixtures/pass/dogfood-package-exports.json")
+    let json = Json.parse_file(path: read path)?
+    let exports = Json.field(value: read json, name: read "exports")?
+    let limit = Json.array_len(value: read exports)?
+
+    return summarize_exports_from(
+        exports: read exports,
+        index: 0,
+        limit: limit,
+        summary: read empty_export_summary(),
+    )
+}
+
+fn expected_export_summary() -> Result<fresh PackageExportSummary, JsonError> {
+    let path = Path.from_string(value: read "tests/fixtures/pass/dogfood-package-exports.json")
+    let json = Json.parse_file(path: read path)?
+    let summary = Json.field(value: read json, name: read "summary")?
+
+    return PackageExportSummary(
+        public_types: Json.field_int(value: read summary, name: read "public_types")?,
+        public_functions: Json.field_int(value: read summary, name: read "public_functions")?,
+        public_apis: Json.field_int(value: read summary, name: read "public_apis")?,
+        mutating_apis: Json.field_int(value: read summary, name: read "mutating_apis")?,
+        retaining_apis: Json.field_int(value: read summary, name: read "retaining_apis")?,
+        resource_apis: Json.field_int(value: read summary, name: read "resource_apis")?,
+        fresh_returning_apis: Json.field_int(value: read summary, name: read "fresh_returning_apis")?,
+        unknown_apis: Json.field_int(value: read summary, name: read "unknown_apis")?,
+        unmodeled_reasons: 0,
+    )
+}
+
+fn export_mismatch_count(
+    actual: read PackageExportSummary,
+    expected: read PackageExportSummary,
+) -> Int {
+    if actual.public_types != expected.public_types {
+        return 1
+    }
+
+    if actual.public_functions != expected.public_functions {
+        return 1
+    }
+
+    if actual.public_apis != expected.public_apis {
+        return 1
+    }
+
+    if actual.mutating_apis != expected.mutating_apis {
+        return 1
+    }
+
+    if actual.retaining_apis != expected.retaining_apis {
+        return 1
+    }
+
+    if actual.resource_apis != expected.resource_apis {
+        return 1
+    }
+
+    if actual.fresh_returning_apis != expected.fresh_returning_apis {
+        return 1
+    }
+
+    if actual.unknown_apis != expected.unknown_apis {
+        return 1
+    }
+
+    return 0
+}
+
+fn export_summary_line(
+    actual: read PackageExportSummary,
+    mismatches: Int,
+) -> fresh String {
+    let types = String.from_int(value: actual.public_types)
+    let functions = String.from_int(value: actual.public_functions)
+    let apis = String.from_int(value: actual.public_apis)
+    let mutating = String.from_int(value: actual.mutating_apis)
+    let retaining = String.from_int(value: actual.retaining_apis)
+    let resource = String.from_int(value: actual.resource_apis)
+    let fresh = String.from_int(value: actual.fresh_returning_apis)
+    let unknown = String.from_int(value: actual.unknown_apis)
+    let mismatch_count = String.from_int(value: mismatches)
+    let unmodeled = String.from_int(value: actual.unmodeled_reasons)
+    let first = String.concat(left: read "dogfood package exports types=", right: read types)
+    let second = String.concat(left: read first, right: read " functions=")
+    let third = String.concat(left: read second, right: read functions)
+    let fourth = String.concat(left: read third, right: read " apis=")
+    let fifth = String.concat(left: read fourth, right: read apis)
+    let sixth = String.concat(left: read fifth, right: read " mutating=")
+    let seventh = String.concat(left: read sixth, right: read mutating)
+    let eighth = String.concat(left: read seventh, right: read " retaining=")
+    let ninth = String.concat(left: read eighth, right: read retaining)
+    let tenth = String.concat(left: read ninth, right: read " resource=")
+    let eleventh = String.concat(left: read tenth, right: read resource)
+    let twelfth = String.concat(left: read eleventh, right: read " fresh=")
+    let thirteenth = String.concat(left: read twelfth, right: read fresh)
+    let fourteenth = String.concat(left: read thirteenth, right: read " unknown=")
+    let fifteenth = String.concat(left: read fourteenth, right: read unknown)
+    let sixteenth = String.concat(left: read fifteenth, right: read " mismatches=")
+    let seventeenth = String.concat(left: read sixteenth, right: read mismatch_count)
+    let eighteenth = String.concat(left: read seventeenth, right: read " unmodeled_reasons=")
+
+    return String.concat(left: read eighteenth, right: read unmodeled)
+}
+
+pub fn main() -> Result<Unit, JsonError> {
+    let actual = dogfood_export_summary()?
+    let expected = expected_export_summary()?
+    let mismatches = export_mismatch_count(actual: read actual, expected: read expected)
+    let summary = export_summary_line(actual: read actual, mismatches: mismatches)
+
+    Log.write(message: read summary)
+
+    Assert.equal_int(left: mismatches, right: 0)
+    Assert.equal_int(left: actual.unmodeled_reasons, right: 0)
+
+    return Ok(Unit)
+}
