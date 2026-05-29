@@ -322,7 +322,15 @@ read x  acquires a shared runtime read view
 mut x   acquires an exclusive runtime write view
 ```
 
-Ordinary contention waits or serializes. It is not an RSScript semantic error. Runtime failures such as poison, internal failure, or reentrant conflicts that cannot safely continue must become RSScript runtime diagnostics with source spans, not raw Rust panics.
+RSScript v0.5 exposes a single-isolate source model. Within that model,
+frontend-visible conflicts such as same-call `read`/`mut`/`take`/`manage`
+overlap are static diagnostics. Runtime lock conflicts that remain after
+frontend checking are treated as reentrant managed-access conflicts or internal
+runtime failures; they must become RSScript runtime diagnostics with source
+spans, not raw Rust panics or deadlocks.
+
+Waiting or serializing ordinary contention is a future cross-thread or
+cross-isolate runtime behavior, not a v0.5 source-level promise.
 
 Alternative runtimes may optimize internally only if they preserve RSScript-observable semantics:
 
