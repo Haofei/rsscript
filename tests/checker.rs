@@ -970,6 +970,7 @@ fn copy_file(input: read Path, output: read Path) -> Result<Unit, IOError> {
     with File.open_read(path: read input) as reader {
         with File.open_write(path: read output) as writer {
             let bytes = File.read_all(file: mut reader)?
+            let text = File.read_all_string(file: mut reader)?
             File.write(file: mut writer, data: read bytes)?
         }
     }
@@ -982,6 +983,7 @@ fn copy_file(input: read Path, output: read Path) -> Result<Unit, IOError> {
     assert!(rust.contains("let mut reader = rsscript_runtime::file_open_read(&input)?;"));
     assert!(rust.contains("let mut writer = rsscript_runtime::file_open_write(&output)?;"));
     assert!(rust.contains("let bytes = rsscript_runtime::file_read_all(&mut reader)?;"));
+    assert!(rust.contains("let text = rsscript_runtime::file_read_all_string(&mut reader)?;"));
     assert!(rust.contains("rsscript_runtime::file_write(&mut writer, &bytes)?;"));
 }
 
@@ -1035,6 +1037,8 @@ fn rust_lowering_maps_json_core_calls_to_runtime_hooks() {
     let source = r#"
 fn read_name(text: read String) -> Result<String, JsonError> {
     let value = Json.parse(text: read text)?
+    let path = Path.from_string(value: read "profile.json")
+    let value_from_file = Json.parse_file(path: read path)?
     let count = Json.array_len(value: read value)?
     let first = Json.array_get(value: read value, index: 0)?
     let profile = Json.field(value: read value, name: read "profile")?
@@ -1047,6 +1051,7 @@ fn read_name(text: read String) -> Result<String, JsonError> {
 
     assert!(rust.contains("-> Result<String, rsscript_runtime::JsonError>"));
     assert!(rust.contains("let value = rsscript_runtime::json_parse(&text)?;"));
+    assert!(rust.contains("let value_from_file = rsscript_runtime::json_parse_file(&path)?;"));
     assert!(rust.contains(
         "let profile = rsscript_runtime::json_field(&value, &\"profile\".to_string())?;"
     ));
@@ -4203,7 +4208,7 @@ fn review_map_dogfood_classifier_has_no_unknown_regions() {
     let source = read_fixture(path);
     let map = review_map_sources(vec![(path.to_str().unwrap(), source.as_str())]);
 
-    assert_eq!(map.summary.total_functions, 34);
+    assert_eq!(map.summary.total_functions, 33);
     assert!(map.summary.total_lines >= 480, "{map:?}");
     assert_eq!(map.files[0].risk, ReviewMapFileRisk::Elevated);
     assert_eq!(map.summary.unknown.functions, 0, "{map:?}");
@@ -4215,7 +4220,7 @@ fn review_map_dogfood_classifier_has_no_unknown_regions() {
     assert_eq!(json["summary"]["unknown_ratio"], 0.0);
     assert_eq!(json["summary"]["unknown_function_ratio"], 0.0);
     assert_eq!(json["summary"]["must_review"]["functions"], 21);
-    assert_eq!(json["summary"]["low_semantic_risk"]["functions"], 13);
+    assert_eq!(json["summary"]["low_semantic_risk"]["functions"], 12);
 }
 
 #[test]

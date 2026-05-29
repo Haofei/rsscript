@@ -340,10 +340,6 @@ fn parse_fact_list_from(
     return Ok(Unit)
 }
 
-fn dogfood_facts_json() -> String {
-    return "[{\"public_api\":false,\"has_unknown_call\":false,\"has_native_boundary\":false,\"has_unsafe_boundary\":false,\"has_resource_boundary\":false,\"has_retains\":false,\"has_mut\":false,\"has_local\":false,\"has_fresh_return\":false,\"has_noescape\":false,\"has_error_boundary\":false,\"callee_risk\":1,\"line_count\":4},{\"public_api\":true,\"has_unknown_call\":false,\"has_native_boundary\":true,\"has_unsafe_boundary\":false,\"has_resource_boundary\":false,\"has_retains\":false,\"has_mut\":false,\"has_local\":false,\"has_fresh_return\":true,\"has_noescape\":false,\"has_error_boundary\":true,\"callee_risk\":1,\"line_count\":20},{\"public_api\":false,\"has_unknown_call\":false,\"has_native_boundary\":false,\"has_unsafe_boundary\":false,\"has_resource_boundary\":true,\"has_retains\":false,\"has_mut\":true,\"has_local\":true,\"has_fresh_return\":false,\"has_noescape\":false,\"has_error_boundary\":true,\"callee_risk\":1,\"line_count\":18},{\"public_api\":false,\"has_unknown_call\":false,\"has_native_boundary\":false,\"has_unsafe_boundary\":false,\"has_resource_boundary\":false,\"has_retains\":true,\"has_mut\":true,\"has_local\":false,\"has_fresh_return\":false,\"has_noescape\":false,\"has_error_boundary\":false,\"callee_risk\":1,\"line_count\":12}]"
-}
-
 fn empty_summary() -> fresh ReviewSummary {
     return ReviewSummary(
         total_functions: 0,
@@ -422,8 +418,8 @@ fn summarize_list(items: read List<ReviewFacts>) -> fresh ReviewSummary {
 }
 
 fn dogfood_fact_list() -> Result<fresh List<ReviewFacts>, JsonError> {
-    let text = dogfood_facts_json()
-    let json = Json.parse(text: read text)?
+    let path = Path.from_string(value: read "tests/fixtures/pass/dogfood-review-facts.json")
+    let json = Json.parse_file(path: read path)?
     let limit = Json.array_len(value: read json)?
     local items = List<ReviewFacts>.new()
 

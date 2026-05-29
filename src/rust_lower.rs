@@ -1782,6 +1782,9 @@ fn lower_callee(callee: &Callee) -> String {
             "rsscript_runtime::file_open_write".to_string()
         }
         callee if is_file_read_all_callee(callee) => "rsscript_runtime::file_read_all".to_string(),
+        callee if is_file_read_all_string_callee(callee) => {
+            "rsscript_runtime::file_read_all_string".to_string()
+        }
         callee if is_file_read_into_callee(callee) => {
             "rsscript_runtime::file_read_into".to_string()
         }
@@ -1872,6 +1875,9 @@ fn lower_callee(callee: &Callee) -> String {
             "rsscript_runtime::image_cache_len".to_string()
         }
         callee if is_json_parse_callee(callee) => "rsscript_runtime::json_parse".to_string(),
+        callee if is_json_parse_file_callee(callee) => {
+            "rsscript_runtime::json_parse_file".to_string()
+        }
         callee if is_json_field_callee(callee) => "rsscript_runtime::json_field".to_string(),
         callee if is_json_field_string_callee(callee) => {
             "rsscript_runtime::json_field_string".to_string()
@@ -1998,6 +2004,10 @@ fn is_file_open_write_callee(callee: &Callee) -> bool {
 
 fn is_file_read_all_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && name == "read_all")
+}
+
+fn is_file_read_all_string_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && name == "read_all_string")
 }
 
 fn is_file_read_into_callee(callee: &Callee) -> bool {
@@ -2166,6 +2176,10 @@ fn is_image_cache_len_callee(callee: &Callee) -> bool {
 
 fn is_json_parse_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "parse")
+}
+
+fn is_json_parse_file_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "parse_file")
 }
 
 fn is_json_field_callee(callee: &Callee) -> bool {

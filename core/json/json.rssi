@@ -2,6 +2,8 @@ struct JsonValue
 
 pub fn Json.parse(text: read String) -> Result<fresh JsonValue, JsonError>
 
+pub fn Json.parse_file(path: read Path) -> Result<fresh JsonValue, JsonError>
+
 pub fn Json.field(
     value: read JsonValue,
     name: read String,

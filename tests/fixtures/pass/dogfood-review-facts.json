@@ -1,0 +1,62 @@
+[
+  {
+    "public_api": false,
+    "has_unknown_call": false,
+    "has_native_boundary": false,
+    "has_unsafe_boundary": false,
+    "has_resource_boundary": false,
+    "has_retains": false,
+    "has_mut": false,
+    "has_local": false,
+    "has_fresh_return": false,
+    "has_noescape": false,
+    "has_error_boundary": false,
+    "callee_risk": 1,
+    "line_count": 4
+  },
+  {
+    "public_api": true,
+    "has_unknown_call": false,
+    "has_native_boundary": true,
+    "has_unsafe_boundary": false,
+    "has_resource_boundary": false,
+    "has_retains": false,
+    "has_mut": false,
+    "has_local": false,
+    "has_fresh_return": true,
+    "has_noescape": false,
+    "has_error_boundary": true,
+    "callee_risk": 1,
+    "line_count": 20
+  },
+  {
+    "public_api": false,
+    "has_unknown_call": false,
+    "has_native_boundary": false,
+    "has_unsafe_boundary": false,
+    "has_resource_boundary": true,
+    "has_retains": false,
+    "has_mut": true,
+    "has_local": true,
+    "has_fresh_return": false,
+    "has_noescape": false,
+    "has_error_boundary": true,
+    "callee_risk": 1,
+    "line_count": 18
+  },
+  {
+    "public_api": false,
+    "has_unknown_call": false,
+    "has_native_boundary": false,
+    "has_unsafe_boundary": false,
+    "has_resource_boundary": false,
+    "has_retains": true,
+    "has_mut": true,
+    "has_local": false,
+    "has_fresh_return": false,
+    "has_noescape": false,
+    "has_error_boundary": false,
+    "callee_risk": 1,
+    "line_count": 12
+  }
+]

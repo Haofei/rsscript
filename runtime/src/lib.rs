@@ -318,6 +318,12 @@ impl From<serde_json::Error> for JsonError {
     }
 }
 
+impl From<std::io::Error> for JsonError {
+    fn from(error: std::io::Error) -> Self {
+        Self::new(error.to_string())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RowBuffer {
     bytes: Vec<u8>,
@@ -437,6 +443,12 @@ pub fn file_read_all(file: &mut File) -> std::io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     file.inner.read_to_end(&mut bytes)?;
     Ok(bytes)
+}
+
+pub fn file_read_all_string(file: &mut File) -> std::io::Result<String> {
+    let mut text = String::new();
+    file.inner.read_to_string(&mut text)?;
+    Ok(text)
 }
 
 pub fn file_read_into(file: &mut File, buffer: &mut Vec<u8>) -> std::io::Result<bool> {
@@ -859,6 +871,11 @@ pub fn json_parse(text: &str) -> Result<JsonValue, JsonError> {
     serde_json::from_str(text)
         .map(|inner| JsonValue { inner })
         .map_err(JsonError::from)
+}
+
+pub fn json_parse_file<P: RuntimePath + ?Sized>(path: &P) -> Result<JsonValue, JsonError> {
+    let text = std::fs::read_to_string(path.as_path())?;
+    json_parse(&text)
 }
 
 pub fn json_field(value: &JsonValue, name: &str) -> Result<JsonValue, JsonError> {
@@ -1495,8 +1512,11 @@ mod tests {
 
         let mut file = super::file_open_read(&path).expect("file should open for read");
         let bytes = super::file_read_all(&mut file).expect("read should succeed");
+        let mut file = super::file_open_read(&path).expect("file should reopen for text read");
+        let text = super::file_read_all_string(&mut file).expect("text read should succeed");
 
         assert_eq!(bytes, b"hello file");
+        assert_eq!(text, "hello file");
         let _ = std::fs::remove_file(path);
     }
 
@@ -1526,9 +1546,17 @@ mod tests {
 
     #[test]
     fn json_runtime_hooks_parse_nested_fields() {
-        let value =
-            super::json_parse(r#"{"profiles":[{"name":"RSScript","age":1,"active":true}]}"#)
-                .expect("JSON should parse");
+        let json_text = r#"{"profiles":[{"name":"RSScript","age":1,"active":true}]}"#;
+        let path =
+            std::env::temp_dir().join(format!("rsscript-runtime-json-{}.json", std::process::id()));
+        std::fs::write(&path, json_text).expect("JSON fixture should write");
+
+        let value = super::json_parse(json_text).expect("JSON should parse");
+        let value_from_file = super::json_parse_file(&path).expect("JSON file should parse");
+        let profiles_from_file =
+            super::json_field(&value_from_file, "profiles").expect("profiles should exist");
+        let file_len =
+            super::json_array_len(&profiles_from_file).expect("file profiles should be an array");
         let profiles = super::json_field(&value, "profiles").expect("profiles field should exist");
         let len = super::json_array_len(&profiles).expect("profiles should be an array");
         let profile = super::json_array_get(&profiles, 0).expect("first profile should exist");
@@ -1537,10 +1565,12 @@ mod tests {
         let age = super::json_field_int(&profile, "age").expect("age should be an integer");
         let active = super::json_field_bool(&profile, "active").expect("active should be a bool");
 
+        assert_eq!(file_len, 1);
         assert_eq!(len, 1);
         assert_eq!(name, "RSScript");
         assert_eq!(age, 1);
         assert!(active);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
