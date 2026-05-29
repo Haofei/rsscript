@@ -200,6 +200,7 @@ impl LocalAnalysis {
                 &self.flow_entry_states_by_span,
                 &mut moved_uses,
             );
+            collect_closure_local_moved_uses_from_block(block, &mut moved_uses);
         }
         moved_uses
     }
@@ -661,9 +662,21 @@ fn collect_ordered_moved_uses_from_expr(
             }
             state.apply_move_events(events);
         }
-        HirExpr::Effect { value, events, .. } | HirExpr::Manage { value, events, .. } => {
+        HirExpr::Effect { value, events, .. } => {
             collect_ordered_moved_uses_from_expr(value, state, moved_uses);
             state.apply_move_events(events);
+        }
+        HirExpr::Manage {
+            value,
+            events,
+            span,
+            ..
+        } => {
+            collect_ordered_moved_uses_from_expr(value, state, moved_uses);
+            state.apply_move_events(events);
+            if let Some((path, _)) = hir_expr_path(value) {
+                state.mark_moved(&path, span.clone());
+            }
         }
         HirExpr::Spawn { value, .. } => {
             collect_ordered_moved_uses_from_expr(value, state, moved_uses);
@@ -707,6 +720,95 @@ fn collect_ordered_moved_uses_from_expr(
             }
         }
         HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn collect_closure_local_moved_uses_from_block(block: &HirBlock, moved_uses: &mut Vec<MovedUse>) {
+    for statement in &block.statements {
+        collect_closure_local_moved_uses_from_stmt(statement, moved_uses);
+    }
+}
+
+fn collect_closure_local_moved_uses_from_stmt(statement: &HirStmt, moved_uses: &mut Vec<MovedUse>) {
+    match statement {
+        HirStmt::Let {
+            value: Some(value), ..
+        }
+        | HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => collect_closure_local_moved_uses_from_expr(value, moved_uses),
+        HirStmt::With { resource, body, .. } => {
+            collect_closure_local_moved_uses_from_expr(resource, moved_uses);
+            collect_closure_local_moved_uses_from_block(body, moved_uses);
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            collect_closure_local_moved_uses_from_expr(condition, moved_uses);
+            collect_closure_local_moved_uses_from_block(then_body, moved_uses);
+            if let Some(else_body) = else_body {
+                collect_closure_local_moved_uses_from_block(else_body, moved_uses);
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                collect_closure_local_moved_uses_from_expr(condition, moved_uses);
+            }
+            collect_closure_local_moved_uses_from_block(body, moved_uses);
+        }
+        HirStmt::Match { value, arms, .. } => {
+            collect_closure_local_moved_uses_from_expr(value, moved_uses);
+            for arm in arms {
+                collect_closure_local_moved_uses_from_block(&arm.body, moved_uses);
+            }
+        }
+        HirStmt::Let { value: None, .. }
+        | HirStmt::Return { value: None, .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn collect_closure_local_moved_uses_from_expr(expr: &HirExpr, moved_uses: &mut Vec<MovedUse>) {
+    match expr {
+        HirExpr::Closure { body, .. } => {
+            let steps = collect_local_flow_steps(body);
+            let entry_states = collect_flow_entry_states(&steps, BodyState::default());
+            collect_ordered_moved_uses_from_block(body, &entry_states, moved_uses);
+            collect_closure_local_moved_uses_from_block(body, moved_uses);
+        }
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                collect_closure_local_moved_uses_from_expr(&arg.value, moved_uses);
+            }
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. }
+        | HirExpr::Field { base: value, .. } => {
+            collect_closure_local_moved_uses_from_expr(value, moved_uses);
+        }
+        HirExpr::Index { base, index, .. } => {
+            collect_closure_local_moved_uses_from_expr(base, moved_uses);
+            collect_closure_local_moved_uses_from_expr(index, moved_uses);
+        }
+        HirExpr::Binary { left, right, .. } => {
+            collect_closure_local_moved_uses_from_expr(left, moved_uses);
+            collect_closure_local_moved_uses_from_expr(right, moved_uses);
+        }
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
     }
 }
 

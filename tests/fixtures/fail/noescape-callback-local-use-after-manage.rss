@@ -1,0 +1,24 @@
+// expect: RS0401
+features: local
+
+struct ImageData {
+    size: Int
+}
+
+fn inspect(image: read ImageData) -> Unit
+
+fn apply(callback: noescape Fn()) -> Unit {
+    callback()
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: || {
+        local image = ImageData(size: 1)
+        let shared = manage image
+        inspect(image: read image)
+        inspect(image: read shared)
+    })
+
+    return Unit
+}
