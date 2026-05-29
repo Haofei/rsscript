@@ -1,0 +1,22 @@
+// expect: RS0013
+
+struct ConfigError {
+    code: Int
+}
+
+struct AppError {
+    code: Int
+}
+
+struct Config {
+    code: Int
+}
+
+fn load_config() -> Result<fresh Config, ConfigError> {
+    return Ok(Config(code: 1))
+}
+
+fn bad() -> Result<fresh Config, AppError> {
+    local config = load_config()?
+    return Ok(config)
+}

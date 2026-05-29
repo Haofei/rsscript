@@ -10,6 +10,11 @@ fn audit_step(callback: noescape Fn()) -> Unit {
     return Unit
 }
 
+fn HttpError.from_config(error: read ConfigError) -> HttpError
+fn HttpError.from_json(error: read JsonError) -> HttpError
+fn HttpError.from_image(error: read ImageError) -> HttpError
+fn HttpError.from_db(error: read DbError) -> HttpError
+
 fn decode_upload(request: read Request) -> Result<fresh UploadPlan, JsonError> {
     let body = Request.path(request: read request)
     let json = Json.parse(text: read body)?
@@ -59,6 +64,50 @@ fn run_query(url: read Url, sql: read String) -> Result<Unit, DbError> {
     return Ok(Unit)
 }
 
+fn reload_settings_http(path: read Path, store: mut ConfigStore) -> Result<Unit, HttpError> {
+    match reload_settings(path: read path, store: mut store) {
+        Ok(unit) => {
+            return Ok(Unit)
+        }
+        Err(error) => {
+            return Err(HttpError.from_config(error: read error))
+        }
+    }
+}
+
+fn decode_upload_http(request: read Request) -> Result<UploadPlan, HttpError> {
+    match decode_upload(request: read request) {
+        Ok(plan) => {
+            return Ok(plan)
+        }
+        Err(error) => {
+            return Err(HttpError.from_json(error: read error))
+        }
+    }
+}
+
+fn transform_image_http(plan: read UploadPlan, cache: mut ImageCache) -> Result<Unit, HttpError> {
+    match transform_image(plan: read plan, cache: mut cache) {
+        Ok(unit) => {
+            return Ok(Unit)
+        }
+        Err(error) => {
+            return Err(HttpError.from_image(error: read error))
+        }
+    }
+}
+
+fn run_query_http(url: read Url, sql: read String) -> Result<Unit, HttpError> {
+    match run_query(url: read url, sql: read sql) {
+        Ok(unit) => {
+            return Ok(Unit)
+        }
+        Err(error) => {
+            return Err(HttpError.from_db(error: read error))
+        }
+    }
+}
+
 fn handle_upload(
     request: read Request,
     cache: mut ImageCache,
@@ -68,11 +117,11 @@ fn handle_upload(
     sql: read String,
 ) -> Result<fresh Response, HttpError> {
     let config_path = Path.from_string(value: read "config.json")
-    reload_settings(path: read config_path, store: mut config_store)?
+    reload_settings_http(path: read config_path, store: mut config_store)?
 
-    let plan = decode_upload(request: read request)?
-    transform_image(plan: read plan, cache: mut cache)?
-    run_query(url: read db_url, sql: read sql)?
+    let plan = decode_upload_http(request: read request)?
+    transform_image_http(plan: read plan, cache: mut cache)?
+    run_query_http(url: read db_url, sql: read sql)?
 
     Counter.add(counter: mut counter, amount: 1)
 

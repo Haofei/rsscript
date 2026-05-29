@@ -1491,6 +1491,7 @@ fn infer_signature_return_type(
     let mut substitutions = HashMap::new();
     collect_namespace_type_substitutions(hir, callee, &generic_params, &mut substitutions);
     collect_arg_type_substitutions(
+        hir,
         signature,
         args,
         value_types,
@@ -1531,6 +1532,7 @@ fn collect_namespace_type_substitutions(
 }
 
 fn collect_arg_type_substitutions(
+    hir: &Hir,
     signature: &FunctionSig,
     args: &[CallArg],
     value_types: &HashMap<String, String>,
@@ -1546,31 +1548,76 @@ fn collect_arg_type_substitutions(
         else {
             continue;
         };
-        let Some(actual_type) = infer_arg_expr_type(&arg.value, value_types) else {
-            continue;
+        let (pattern_type, actual_type) = if let Some(expected_return_type) =
+            noescape_return_type(&param.type_name)
+            && let Expr::Closure { body, .. } = &arg.value
+            && let Some(actual_return_type) = infer_closure_return_type(hir, body, value_types)
+        {
+            (expected_return_type.to_string(), actual_return_type)
+        } else {
+            let Some(actual_type) = infer_arg_expr_type(hir, &arg.value, value_types) else {
+                continue;
+            };
+            (param.type_name.clone(), actual_type)
         };
-        collect_type_substitutions(
-            &param.type_name,
-            &actual_type,
-            generic_params,
-            substitutions,
-        );
+        collect_type_substitutions(&pattern_type, &actual_type, generic_params, substitutions);
     }
 }
 
-fn infer_arg_expr_type(expr: &Expr, value_types: &HashMap<String, String>) -> Option<String> {
+fn noescape_return_type(type_name: &str) -> Option<&str> {
+    type_name.strip_prefix("noescape Fn() -> ")
+}
+
+fn infer_closure_return_type(
+    hir: &Hir,
+    body: &Block,
+    value_types: &HashMap<String, String>,
+) -> Option<String> {
+    if let Some(statement) = body.statements.iter().next_back() {
+        match statement {
+            Stmt::Return(stmt) => {
+                return stmt
+                    .value
+                    .as_ref()
+                    .and_then(|value| infer_hir_expr_type(hir, value, value_types))
+                    .or_else(|| Some("Unit".to_string()));
+            }
+            Stmt::Expr(value) => return infer_hir_expr_type(hir, value, value_types),
+            Stmt::Let(_) => return Some("Unit".to_string()),
+            Stmt::With { .. }
+            | Stmt::If { .. }
+            | Stmt::Loop { .. }
+            | Stmt::Match { .. }
+            | Stmt::Break(_)
+            | Stmt::Continue(_)
+            | Stmt::MalformedWith(_)
+            | Stmt::MalformedIf(_)
+            | Stmt::MalformedLoop(_)
+            | Stmt::MalformedMatch(_)
+            | Stmt::Unknown(_) => return None,
+        }
+    }
+    Some("Unit".to_string())
+}
+
+fn infer_arg_expr_type(
+    hir: &Hir,
+    expr: &Expr,
+    value_types: &HashMap<String, String>,
+) -> Option<String> {
     match expr {
         Expr::Effect { value, .. }
         | Expr::Manage { value, .. }
         | Expr::Spawn { value, .. }
         | Expr::Await { value, .. }
-        | Expr::Try { value, .. } => infer_arg_expr_type(value, value_types),
+        | Expr::Try { value, .. } => infer_arg_expr_type(hir, value, value_types),
         Expr::Ident(name, _) => value_types.get(name).cloned(),
-        Expr::Call { callee, .. } => type_namespace_type(callee).map(str::to_string),
+        Expr::Call { .. } => infer_hir_expr_type(hir, expr, value_types),
+        Expr::Closure { body, .. } => infer_closure_return_type(hir, body, value_types)
+            .map(|return_type| format!("noescape Fn() -> {return_type}")),
         Expr::Field { .. }
         | Expr::Index { .. }
         | Expr::Binary { .. }
-        | Expr::Closure { .. }
         | Expr::Number(_, _)
         | Expr::String(_, _)
         | Expr::Unknown(_) => None,
@@ -1625,13 +1672,6 @@ fn substitute_type_params(type_name: &str, substitutions: &HashMap<String, Strin
         .collect::<Vec<_>>()
         .join(", ");
     format!("{root}<{args}>")
-}
-
-fn type_namespace_type(callee: &Callee) -> Option<&str> {
-    match callee {
-        Callee::Qualified { namespace, .. } => Some(namespace),
-        Callee::Name(_) => None,
-    }
 }
 
 fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {

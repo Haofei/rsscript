@@ -632,8 +632,7 @@ the MVP is sound:
    (The current lowering already emits no such impls; this must stay true.)
 2. The frontend must reject a mismatched operand/return error type directly, so
    the rule is enforced at the source level, not left to a backend rustc error.
-   This is part of the broader v0.5 type-checking surface, which is incomplete;
-   until it lands, error-type matching for `?` is not yet frontend-enforced.
+   The frontend reports this as `RS0013`.
 ```
 
 The residual silent-conversion risk is a **native-provided `From`** at a native

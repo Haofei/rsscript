@@ -10,7 +10,7 @@ fn reload_config(path: read String, store: mut ConfigStore) -> Result<Unit, Conf
     return Ok(Unit)
 }
 
-fn main() -> Result<Unit, ConfigError> {
+fn main() -> Result<Unit, FileError> {
     let first = "rsscript-config-first.txt"
     let second = "rsscript-config-second.txt"
 
@@ -21,12 +21,23 @@ fn main() -> Result<Unit, ConfigError> {
         File.write(file: mut file, data: read "reloaded\n")?
     }
 
-    let initial = load_config(path: read first)?
-    local store = ConfigStore.new(value: read initial)
-    reload_config(path: read second, store: mut store)?
-
-    let name = ConfigStore.name(store: read store)
-    Assert.equal(left: read name, right: read "reloaded")
-    Log.write(message: read name)
+    match load_config(path: read first) {
+        Ok(initial) => {
+            local store = ConfigStore.new(value: read initial)
+            match reload_config(path: read second, store: mut store) {
+                Ok(unit) => {
+                    let name = ConfigStore.name(store: read store)
+                    Assert.equal(left: read name, right: read "reloaded")
+                    Log.write(message: read name)
+                }
+                Err(error) => {
+                    Log.write(message: read "config reload failed")
+                }
+            }
+        }
+        Err(error) => {
+            Log.write(message: read "config load failed")
+        }
+    }
     return Ok(Unit)
 }

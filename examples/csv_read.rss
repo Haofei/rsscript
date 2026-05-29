@@ -1,12 +1,6 @@
 features: local
 
-fn main() -> Result<Unit, CsvError> {
-    let path = "rsscript-csv-example.csv"
-
-    with File.open_write(path: read path) as file {
-        File.write(file: mut file, data: read "name,amount\nRSScript,42\n")?
-    }
-
+fn read_csv(path: read String) -> Result<Unit, CsvError> {
     local buffer = RowBuffer.new(size: 4096)
     with File.open_read(path: read path) as file {
         Csv.read_into(file: mut file, buffer: mut buffer)?
@@ -17,4 +11,22 @@ fn main() -> Result<Unit, CsvError> {
     }
 
     return Ok(Unit)
+}
+
+fn main() -> Result<Unit, FileError> {
+    let path = "rsscript-csv-example.csv"
+
+    with File.open_write(path: read path) as file {
+        File.write(file: mut file, data: read "name,amount\nRSScript,42\n")?
+    }
+
+    match read_csv(path: read path) {
+        Ok(unit) => {
+            return Ok(Unit)
+        }
+        Err(error) => {
+            Log.write(message: read "csv read failed")
+            return Ok(Unit)
+        }
+    }
 }

@@ -1,13 +1,6 @@
 features: local
 
-fn main() -> Result<Unit, ImageError> {
-    let input = "rsscript-cache-image-input.bin"
-    let output = "rsscript-cache-image-output.bin"
-
-    with File.open_write(path: read input) as file {
-        File.write(file: mut file, data: read "cached image bytes")?
-    }
-
+fn cache_image(input: read String, output: read String) -> Result<Unit, ImageError> {
     local cache = ImageCache.new(capacity: 1)
     local image = Image.load(path: read input)?
     Image.resize(image: mut image, width: 128, height: 128)
@@ -22,4 +15,23 @@ fn main() -> Result<Unit, ImageError> {
     }
 
     return Ok(Unit)
+}
+
+fn main() -> Result<Unit, FileError> {
+    let input = "rsscript-cache-image-input.bin"
+    let output = "rsscript-cache-image-output.bin"
+
+    with File.open_write(path: read input) as file {
+        File.write(file: mut file, data: read "cached image bytes")?
+    }
+
+    match cache_image(input: read input, output: read output) {
+        Ok(unit) => {
+            return Ok(Unit)
+        }
+        Err(error) => {
+            Log.write(message: read "image cache failed")
+            return Ok(Unit)
+        }
+    }
 }

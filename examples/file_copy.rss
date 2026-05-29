@@ -1,4 +1,4 @@
-pub fn copy_file(input: read Path, output: read Path) -> Result<Unit, IOError> {
+pub fn copy_file(input: read Path, output: read Path) -> Result<Unit, FileError> {
     with File.open_read(path: read input) as reader {
         with File.open_write(path: read output) as writer {
             let bytes = File.read_all(file: mut reader)?
@@ -8,7 +8,7 @@ pub fn copy_file(input: read Path, output: read Path) -> Result<Unit, IOError> {
     return Ok(Unit)
 }
 
-fn main() -> Result<Unit, IOError> {
+fn main() -> Result<Unit, FileError> {
     let input = Path.from_string(value: read "rsscript-file-copy-input.txt")
     let output = Path.from_string(value: read "rsscript-file-copy-output.txt")
 

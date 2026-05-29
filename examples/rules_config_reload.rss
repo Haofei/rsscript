@@ -9,7 +9,7 @@ fn reload_rules_config(path: read String, global: mut GlobalConfig) -> Result<Un
     return Ok(Unit)
 }
 
-fn main() -> Result<Unit, ConfigError> {
+fn main() -> Result<Unit, FileError> {
     let first = "rsscript-rules-first.txt"
     let second = "rsscript-rules-second.txt"
 
@@ -20,13 +20,24 @@ fn main() -> Result<Unit, ConfigError> {
         File.write(file: mut file, data: read "gamma\n")?
     }
 
-    let initial = load_rules_config(path: read first)?
-    let global = GlobalConfig.new(value: read initial)
-    reload_rules_config(path: read second, global: mut global)?
-
-    let count = GlobalConfig.rule_count(global: read global)
-    if count == 1 {
-        Log.write(message: read "rules config reloaded")
+    match load_rules_config(path: read first) {
+        Ok(initial) => {
+            let global = GlobalConfig.new(value: read initial)
+            match reload_rules_config(path: read second, global: mut global) {
+                Ok(unit) => {
+                    let count = GlobalConfig.rule_count(global: read global)
+                    if count == 1 {
+                        Log.write(message: read "rules config reloaded")
+                    }
+                }
+                Err(error) => {
+                    Log.write(message: read "rules config reload failed")
+                }
+            }
+        }
+        Err(error) => {
+            Log.write(message: read "rules config load failed")
+        }
     }
 
     return Ok(Unit)

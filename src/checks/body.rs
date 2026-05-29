@@ -40,6 +40,11 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
         }
         let mut state = local_analysis.initial_state();
         if let Some(block) = hir_body.as_ref().and_then(|body| body.block.as_ref()) {
+            let return_error_type = function
+                .return_ty
+                .as_ref()
+                .and_then(result_error_type_ref_name);
+            check_try_error_types(analyzer, block, return_error_type.as_deref());
             check_block(analyzer, &local_analysis, block, &mut state);
         }
     }
@@ -1254,6 +1259,120 @@ fn check_try_value_is_result(analyzer: &mut Analyzer<'_>, value: &HirExpr, span:
     );
 }
 
+fn check_try_error_types(
+    analyzer: &mut Analyzer<'_>,
+    block: &HirBlock,
+    function_error_type: Option<&str>,
+) {
+    for statement in &block.statements {
+        check_try_error_types_stmt(analyzer, statement, function_error_type);
+    }
+}
+
+fn check_try_error_types_stmt(
+    analyzer: &mut Analyzer<'_>,
+    statement: &HirStmt,
+    function_error_type: Option<&str>,
+) {
+    match statement {
+        HirStmt::Let {
+            value: Some(value), ..
+        }
+        | HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => check_try_error_types_expr(analyzer, value, function_error_type),
+        HirStmt::With { resource, body, .. } => {
+            check_try_error_types_expr(analyzer, resource, function_error_type);
+            check_try_error_types(analyzer, body, function_error_type);
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            check_try_error_types_expr(analyzer, condition, function_error_type);
+            check_try_error_types(analyzer, then_body, function_error_type);
+            if let Some(else_body) = else_body {
+                check_try_error_types(analyzer, else_body, function_error_type);
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                check_try_error_types_expr(analyzer, condition, function_error_type);
+            }
+            check_try_error_types(analyzer, body, function_error_type);
+        }
+        HirStmt::Match { value, arms, .. } => {
+            check_try_error_types_expr(analyzer, value, function_error_type);
+            for arm in arms {
+                check_try_error_types(analyzer, &arm.body, function_error_type);
+            }
+        }
+        HirStmt::Let { value: None, .. }
+        | HirStmt::Return { value: None, .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn check_try_error_types_expr(
+    analyzer: &mut Analyzer<'_>,
+    expr: &HirExpr,
+    function_error_type: Option<&str>,
+) {
+    match expr {
+        HirExpr::Try { value, span, .. } => {
+            if let (Some(function_error_type), Some(operand_type)) =
+                (function_error_type, hir_expr_type_name(value))
+                && let Some(operand_error_type) = result_error_type_name(operand_type)
+                && operand_error_type != function_error_type
+            {
+                try_error_type_mismatch_diagnostic(
+                    analyzer,
+                    span,
+                    operand_error_type,
+                    function_error_type,
+                );
+            }
+            check_try_error_types_expr(analyzer, value, function_error_type);
+        }
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                check_try_error_types_expr(analyzer, &arg.value, function_error_type);
+            }
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. } => {
+            check_try_error_types_expr(analyzer, value, function_error_type);
+        }
+        HirExpr::Binary { left, right, .. } => {
+            check_try_error_types_expr(analyzer, left, function_error_type);
+            check_try_error_types_expr(analyzer, right, function_error_type);
+        }
+        HirExpr::Field { base, .. } => {
+            check_try_error_types_expr(analyzer, base, function_error_type);
+        }
+        HirExpr::Index { base, index, .. } => {
+            check_try_error_types_expr(analyzer, base, function_error_type);
+            check_try_error_types_expr(analyzer, index, function_error_type);
+        }
+        HirExpr::Closure { body, .. } => {
+            check_try_error_types(analyzer, body, function_error_type);
+        }
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
 fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
     match expr {
         HirExpr::Ident { type_name, .. }
@@ -1293,6 +1412,40 @@ fn hir_expr_span(expr: &HirExpr) -> &Span {
 
 fn is_result_type(type_name: &str) -> bool {
     type_name == "Result" || type_name.starts_with("Result<")
+}
+
+fn result_error_type_ref_name(return_ty: &TypeRef) -> Option<String> {
+    if return_ty.name != "Result" || return_ty.args.len() != 2 {
+        return None;
+    }
+    return_ty.args.get(1).map(type_ref_name)
+}
+
+fn type_ref_name(ty: &TypeRef) -> String {
+    let name = if ty.args.is_empty() {
+        ty.name.clone()
+    } else {
+        let args = ty
+            .args
+            .iter()
+            .map(type_ref_name)
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{}<{args}>", ty.name)
+    };
+    if ty.is_noescape {
+        if ty.name == "Fn" {
+            let return_ty = ty
+                .fn_return
+                .as_ref()
+                .map(|return_ty| format!(" -> {}", type_ref_name(return_ty)))
+                .unwrap_or_default();
+            return format!("noescape Fn(){return_ty}");
+        }
+        format!("noescape {name}")
+    } else {
+        name
+    }
 }
 
 fn place_path(expr: &HirExpr) -> Option<PlacePath> {
@@ -1874,6 +2027,31 @@ fn noescape_consumes_capture_diagnostic(analyzer: &mut Analyzer<'_>, access: &Ca
     );
 }
 
+fn try_error_type_mismatch_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    span: &Span,
+    operand_error_type: &str,
+    function_error_type: &str,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::INVALID_TRY_OPERATOR,
+            "`?` error type must exactly match the function error type.",
+            span.clone(),
+            "mismatched try error type",
+        )
+        .with_cause(format!(
+            "The operand returns `Result<_, {operand_error_type}>`, but the function returns `Result<_, {function_error_type}>`."
+        ))
+        .with_cause("RSScript does not perform implicit error conversion for `?`.")
+        .with_fix(
+            "map_error_explicitly",
+            "Handle the error explicitly and return the function's error type.",
+            "manual",
+        ),
+    );
+}
+
 fn moved_use_diagnostic(analyzer: &mut Analyzer<'_>, moved_use: MovedUse) {
     analyzer.diagnostics.push(
         Diagnostic::error(
@@ -2403,6 +2581,13 @@ fn result_ok_type_name(type_name: &str) -> Option<&str> {
         .strip_prefix("Result<")
         .and_then(|type_name| type_name.strip_suffix('>'))?;
     split_top_level_type_args(inner).into_iter().next()
+}
+
+fn result_error_type_name(type_name: &str) -> Option<&str> {
+    let inner = type_name
+        .strip_prefix("Result<")
+        .and_then(|type_name| type_name.strip_suffix('>'))?;
+    split_top_level_type_args(inner).get(1).copied()
 }
 
 fn split_top_level_type_args(args: &str) -> Vec<&str> {
