@@ -1477,15 +1477,26 @@ Compatibility tooling may warn on older `with File.open(...) as file` when the p
 
 ### 12.2 Drop points
 
-A `with` resource is dropped on:
+Resource cleanup has two layers, and the deterministic guarantee does not depend
+on the backend's panic strategy.
+
+On every ordinary RSScript control-flow exit, a `with` resource is dropped
+deterministically, in reverse order of acquisition:
 
 ```text
 normal block exit
 return
 break
 continue
-panic unwind if implementation supports unwinding
+? early return (Err propagation)
 ```
+
+Abnormal termination is the second layer and carries no cleanup guarantee. If the
+isolate aborts, the backend process aborts, or a runtime diagnostic terminates
+execution, resource cleanup may or may not run depending on the runtime's
+termination strategy; RSScript does not promise it. The deterministic-cleanup
+guarantee is therefore scoped to ordinary control flow and is independent of
+whether the backend unwinds or aborts on panic.
 
 Inside a `with` block, the resource cannot be:
 
