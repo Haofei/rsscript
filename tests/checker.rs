@@ -2743,6 +2743,57 @@ fn missing_binding(path: read Path) -> Unit {
 }
 
 #[test]
+fn checker_reports_malformed_control_statements_as_unsupported() {
+    let source = r#"
+fn bad_if(value: read Bool) -> Unit {
+    if value {
+        return Unit
+    } else return Unit
+}
+
+fn bad_loop() -> Unit {
+    loop true {
+        return Unit
+    }
+}
+
+fn bad_while() -> Unit {
+    while {
+        return Unit
+    }
+}
+
+fn bad_match() -> Unit {
+    match {
+        _ => return Unit
+    }
+}
+"#;
+    let diagnostics = analyze_source("malformed-control.rss", source);
+
+    for label in [
+        "malformed if statement",
+        "malformed loop statement",
+        "malformed match statement",
+    ] {
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "RS0015" && diagnostic.label == label),
+            "{label}: {diagnostics:?}",
+        );
+    }
+
+    let loop_count = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == "RS0015" && diagnostic.label == "malformed loop statement"
+        })
+        .count();
+    assert_eq!(loop_count, 2, "{diagnostics:?}");
+}
+
+#[test]
 fn checker_reports_malformed_bindings_and_arguments_as_unsupported() {
     let source = r#"
 fn main() -> Unit {

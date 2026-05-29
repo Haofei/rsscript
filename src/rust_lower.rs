@@ -725,9 +725,11 @@ impl<'a> RustLowerer<'a> {
             Stmt::Break(_) => out.push_str(&format!("{pad}break;\n")),
             Stmt::Continue(_) => out.push_str(&format!("{pad}continue;\n")),
             Stmt::Expr(expr) => out.push_str(&format!("{pad}{};\n", self.lower_expr(expr))),
-            Stmt::MalformedWith(span) | Stmt::Unknown(span) => {
-                unreachable_lowering("statement", span)
-            }
+            Stmt::MalformedWith(span)
+            | Stmt::MalformedIf(span)
+            | Stmt::MalformedLoop(span)
+            | Stmt::MalformedMatch(span)
+            | Stmt::Unknown(span) => unreachable_lowering("statement", span),
         }
     }
 
@@ -784,7 +786,13 @@ impl<'a> RustLowerer<'a> {
                 }
             }
             Stmt::Expr(expr) => self.record_expr_source_map(expr, generated),
-            Stmt::Break(_) | Stmt::Continue(_) | Stmt::MalformedWith(_) | Stmt::Unknown(_) => {}
+            Stmt::Break(_)
+            | Stmt::Continue(_)
+            | Stmt::MalformedWith(_)
+            | Stmt::MalformedIf(_)
+            | Stmt::MalformedLoop(_)
+            | Stmt::MalformedMatch(_)
+            | Stmt::Unknown(_) => {}
         }
     }
 
@@ -1343,7 +1351,13 @@ fn collect_mutated_bindings_from_stmt(statement: &Stmt, names: &mut BTreeSet<Str
             }
         }
         Stmt::Expr(expr) => collect_mutated_bindings_from_expr(expr, names),
-        Stmt::Break(_) | Stmt::Continue(_) | Stmt::MalformedWith(_) | Stmt::Unknown(_) => {}
+        Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::MalformedWith(_)
+        | Stmt::MalformedIf(_)
+        | Stmt::MalformedLoop(_)
+        | Stmt::MalformedMatch(_)
+        | Stmt::Unknown(_) => {}
     }
 }
 
@@ -1401,6 +1415,9 @@ fn stmt_span(statement: &Stmt) -> &Span {
         Stmt::Break(span)
         | Stmt::Continue(span)
         | Stmt::MalformedWith(span)
+        | Stmt::MalformedIf(span)
+        | Stmt::MalformedLoop(span)
+        | Stmt::MalformedMatch(span)
         | Stmt::Unknown(span) => span,
         Stmt::Expr(expr) => expr.span(),
     }

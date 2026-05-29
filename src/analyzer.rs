@@ -373,12 +373,22 @@ impl Analyzer<'_> {
                     self.check_unsupported_syntax_block(else_body);
                 }
             }
+            Stmt::MalformedIf(span) => self.unsupported_syntax(
+                span.clone(),
+                "malformed if statement",
+                "`if` statements must use `if condition { ... }` with optional `else { ... }` or `else if ...`.",
+            ),
             Stmt::Loop(stmt) => {
                 if let Some(condition) = &stmt.condition {
                     self.check_unsupported_syntax_expr(condition);
                 }
                 self.check_unsupported_syntax_block(&stmt.body);
             }
+            Stmt::MalformedLoop(span) => self.unsupported_syntax(
+                span.clone(),
+                "malformed loop statement",
+                "`loop` statements must use `loop { ... }`; `while` statements must use `while condition { ... }`.",
+            ),
             Stmt::Match(stmt) => {
                 self.check_unsupported_syntax_expr(&stmt.value);
                 for span in &stmt.malformed_arm_spans {
@@ -392,6 +402,11 @@ impl Analyzer<'_> {
                     self.check_unsupported_syntax_block(&arm.body);
                 }
             }
+            Stmt::MalformedMatch(span) => self.unsupported_syntax(
+                span.clone(),
+                "malformed match statement",
+                "`match` statements must use `match value { pattern => ... }`.",
+            ),
             Stmt::Expr(expr) => self.check_unsupported_syntax_expr(expr),
             Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Unknown(span) => self.unsupported_syntax(
@@ -542,7 +557,13 @@ impl Analyzer<'_> {
                 }
             }
             Stmt::Expr(expr) => self.check_match_exhaustiveness_expr(expr),
-            Stmt::Break(_) | Stmt::Continue(_) | Stmt::MalformedWith(_) | Stmt::Unknown(_) => {}
+            Stmt::Break(_)
+            | Stmt::Continue(_)
+            | Stmt::MalformedWith(_)
+            | Stmt::MalformedIf(_)
+            | Stmt::MalformedLoop(_)
+            | Stmt::MalformedMatch(_)
+            | Stmt::Unknown(_) => {}
         }
     }
 
@@ -1044,7 +1065,13 @@ impl Analyzer<'_> {
                     self.check_runtime_guarantee_block(guarantee, function_name, &arm.body);
                 }
             }
-            Stmt::Break(_) | Stmt::Continue(_) | Stmt::MalformedWith(_) | Stmt::Unknown(_) => {}
+            Stmt::Break(_)
+            | Stmt::Continue(_)
+            | Stmt::MalformedWith(_)
+            | Stmt::MalformedIf(_)
+            | Stmt::MalformedLoop(_)
+            | Stmt::MalformedMatch(_)
+            | Stmt::Unknown(_) => {}
         }
     }
 
@@ -1337,7 +1364,13 @@ impl Analyzer<'_> {
                     self.check_resource_pool_calls_in_block(&arm.body);
                 }
             }
-            Stmt::Break(_) | Stmt::Continue(_) | Stmt::MalformedWith(_) | Stmt::Unknown(_) => {}
+            Stmt::Break(_)
+            | Stmt::Continue(_)
+            | Stmt::MalformedWith(_)
+            | Stmt::MalformedIf(_)
+            | Stmt::MalformedLoop(_)
+            | Stmt::MalformedMatch(_)
+            | Stmt::Unknown(_) => {}
         }
     }
 
@@ -1424,7 +1457,13 @@ impl Analyzer<'_> {
                     self.check_resource_generic_calls_in_block(&arm.body);
                 }
             }
-            Stmt::Break(_) | Stmt::Continue(_) | Stmt::MalformedWith(_) | Stmt::Unknown(_) => {}
+            Stmt::Break(_)
+            | Stmt::Continue(_)
+            | Stmt::MalformedWith(_)
+            | Stmt::MalformedIf(_)
+            | Stmt::MalformedLoop(_)
+            | Stmt::MalformedMatch(_)
+            | Stmt::Unknown(_) => {}
         }
     }
 

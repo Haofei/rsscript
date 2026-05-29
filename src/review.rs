@@ -701,7 +701,13 @@ fn collect_review_map_facts_stmt(
             }
         }
         Stmt::Expr(expr) => collect_review_map_facts_expr(expr, hir, callback_params, facts),
-        Stmt::Break(_) | Stmt::Continue(_) | Stmt::MalformedWith(_) | Stmt::Unknown(_) => {}
+        Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::MalformedWith(_)
+        | Stmt::MalformedIf(_)
+        | Stmt::MalformedLoop(_)
+        | Stmt::MalformedMatch(_)
+        | Stmt::Unknown(_) => {}
     }
 }
 
@@ -874,7 +880,13 @@ fn collect_spawn_capture_names_from_stmt(stmt: &Stmt, captures: &mut BTreeSet<St
                 }
             }
         }
-        Stmt::Break(_) | Stmt::Continue(_) | Stmt::MalformedWith(_) | Stmt::Unknown(_) => {}
+        Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::MalformedWith(_)
+        | Stmt::MalformedIf(_)
+        | Stmt::MalformedLoop(_)
+        | Stmt::MalformedMatch(_)
+        | Stmt::Unknown(_) => {}
     }
 }
 
@@ -1772,7 +1784,13 @@ fn collect_boundary_stmt(statement: &Stmt, path: &str, boundary: &mut BoundarySi
             }
         }
         Stmt::Expr(expr) => collect_boundary_expr(expr, path, boundary),
-        Stmt::Break(_) | Stmt::Continue(_) | Stmt::MalformedWith(_) | Stmt::Unknown(_) => {}
+        Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::MalformedWith(_)
+        | Stmt::MalformedIf(_)
+        | Stmt::MalformedLoop(_)
+        | Stmt::MalformedMatch(_)
+        | Stmt::Unknown(_) => {}
     }
 }
 

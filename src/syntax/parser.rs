@@ -825,12 +825,12 @@ fn parse_with_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize
 fn parse_if_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
     let Some(open) = find_control_body_open(tokens, start, limit) else {
         return (
-            Stmt::Unknown(tokens[start].span.clone()),
+            Stmt::MalformedIf(tokens[start].span.clone()),
             statement_end(tokens, start, limit),
         );
     };
     let Some(close) = find_matching(tokens, open, "{", "}") else {
-        return (Stmt::Unknown(tokens[start].span.clone()), limit);
+        return (Stmt::MalformedIf(tokens[start].span.clone()), limit);
     };
     let condition = parse_expr(tokens, start + 1, open)
         .unwrap_or_else(|| Expr::Unknown(tokens[start].span.clone()));
@@ -843,7 +843,7 @@ fn parse_if_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) 
         if tokens.get(next + 1).is_some_and(|token| token.symbol("{")) {
             let else_open = next + 1;
             let Some(else_close) = find_matching(tokens, else_open, "{", "}") else {
-                return (Stmt::Unknown(tokens[start].span.clone()), limit);
+                return (Stmt::MalformedIf(tokens[start].span.clone()), limit);
             };
             next = else_close + 1;
             Some(parse_block(tokens, else_open, else_close))
@@ -859,7 +859,10 @@ fn parse_if_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) 
                 span,
             })
         } else {
-            None
+            return (
+                Stmt::MalformedIf(tokens[start].span.clone()),
+                statement_end(tokens, next, limit),
+            );
         }
     } else {
         None
@@ -886,16 +889,22 @@ fn parse_unsupported_control_stmt(tokens: &[Token], start: usize, limit: usize) 
 fn parse_loop_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
     let Some(open) = find_control_body_open(tokens, start, limit) else {
         return (
-            Stmt::Unknown(tokens[start].span.clone()),
+            Stmt::MalformedLoop(tokens[start].span.clone()),
             statement_end(tokens, start, limit),
         );
     };
     let Some(close) = find_matching(tokens, open, "{", "}") else {
-        return (Stmt::Unknown(tokens[start].span.clone()), limit);
+        return (Stmt::MalformedLoop(tokens[start].span.clone()), limit);
     };
     let condition = if tokens[start].is_ident_text("while") {
-        parse_expr(tokens, start + 1, open)
+        let Some(condition) = parse_expr(tokens, start + 1, open) else {
+            return (Stmt::MalformedLoop(tokens[start].span.clone()), close + 1);
+        };
+        Some(condition)
     } else {
+        if open != start + 1 {
+            return (Stmt::MalformedLoop(tokens[start].span.clone()), close + 1);
+        }
         None
     };
 
@@ -912,15 +921,16 @@ fn parse_loop_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize
 fn parse_match_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
     let Some(open) = find_control_body_open(tokens, start, limit) else {
         return (
-            Stmt::Unknown(tokens[start].span.clone()),
+            Stmt::MalformedMatch(tokens[start].span.clone()),
             statement_end(tokens, start, limit),
         );
     };
     let Some(close) = find_matching(tokens, open, "{", "}") else {
-        return (Stmt::Unknown(tokens[start].span.clone()), limit);
+        return (Stmt::MalformedMatch(tokens[start].span.clone()), limit);
     };
-    let value = parse_expr(tokens, start + 1, open)
-        .unwrap_or_else(|| Expr::Unknown(tokens[start].span.clone()));
+    let Some(value) = parse_expr(tokens, start + 1, open) else {
+        return (Stmt::MalformedMatch(tokens[start].span.clone()), close + 1);
+    };
 
     let parsed_arms = parse_match_arms(tokens, open + 1, close);
     (
