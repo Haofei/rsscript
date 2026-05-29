@@ -8,6 +8,67 @@ Architecture note: v0.5 uses **RSScript frontend -> Rust source lowering -> rust
 
 ---
 
+## Constitution
+
+These articles are the highest authority in this document. They state what
+RSScript is for and what governs every present and future design decision. They
+are binding: where any chapter, example, feature, or convenience conflicts with
+an article, the article wins. The numbered chapters are the detailed law; this
+section is the constitution they answer to.
+
+**Article I — Purpose: review is the bottleneck.**
+RSScript exists for the AI-era cost inversion. Generating code is now cheap;
+reviewing generated code is the bottleneck. Every design decision is justified
+by whether it makes generated code cheaper and safer to review, not by
+expressiveness, cleverness, or familiarity. (Detail: Chapter 1.)
+
+**Article II — Constraint is the product.**
+RSScript's value is in what it refuses to express as much as in what it
+expresses. A smaller surface lowers two costs at once: the reviewer's first-read
+cost, and the AI generator's option space. Removing a capability is a legitimate
+and often preferred design act. Features are admitted by subtraction-bias, not
+addition-bias.
+
+**Article III — Review-critical behavior is explicit and in the signature.**
+What mutates, what is retained, who owns a resource, what is fresh, and where
+code crosses local/managed/native/unsafe must be visible in the signature and
+machine-checked — never carried by comments, convention, or inference. If it
+matters to a reviewer, it is in the type, and the compiler enforces it both at
+the definition and at every call site. (Detail: sections 2.4, 2.5, Chapter 10.)
+
+**Article IV — Feature admission rule: aggregate, do not interact.**
+A candidate feature is admissible only if (1) it can be phrased as a reviewer
+question and (2) it can be expressed with explicit, named, single-canonical
+syntax with no implicit rule added to make it ergonomic. Features must be
+coordinated projections of the one review model, so they compose instead of
+producing combinations no one designed. Convenience bought with implicitness is
+rejected even when convenient. (Detail: section 2.8.)
+
+**Article V — Restraint is anchored to a product property, not an aesthetic.**
+Features are rejected because they raise review cost or break the review model —
+a measurable property (effect visibility, review-map unknown ratio) — not because
+they are judged "inelegant" or "not simple." Aesthetic restraint loses to "but I
+need X"; restraint anchored to reviewability does not. This article is the
+deliberate antibody against feature accretion: the discipline is written down so
+it can be enforced by rule under future pressure, not by mood or by a single
+gatekeeper's taste.
+
+**Article VI — Say no without welding the door shut: deferred, not excluded.**
+When a capability is not admitted now, the spec records the binding constraints
+that any future form must satisfy, rather than declaring a permanent non-goal —
+unless the capability fails Article IV in principle, in which case it is excluded
+outright. A deferral preserves an option; an exclusion closes one; the spec must
+say which it means and never silently conflate them. (Detail: sections 14.6,
+20.1, 21.1.)
+
+**Article VII — Rust is a backend, not the language model.**
+RSScript lowers to Rust and reuses its ecosystem, but Rust's lifetimes, trait
+machinery, and backend representation never define RSScript semantics or leak
+into the user surface. Valid RSScript code must not require understanding the
+generated Rust. (Detail: sections 2.7, 4.)
+
+---
+
 ## 0. Reading Guide and Normative Hierarchy
 
 This document reorganizes the v0.5 draft around the semantic boundaries that the compiler must enforce before Rust lowering. The previous draft had many correct rules, but several were scattered across runtime, data-effect, resource, closure, review, and example chapters. This edition treats the following chapters as the primary semantic authority:
@@ -21,7 +82,11 @@ Chapter 12  Resources, with, and ResourcePool
 Chapter 17  Diagnostics and source mapping
 ```
 
-If an example or later explanatory section conflicts with these chapters, the semantic boundary chapter wins.
+The normative hierarchy is: the Constitution governs every chapter; among the
+chapters, the semantic boundary chapters above are the primary authority; and if
+an example or later explanatory section conflicts with those chapters, the
+semantic boundary chapter wins. A chapter rule that conflicts with a
+constitutional article is itself in error.
 
 RSScript package management is specified separately. Package tooling consumes `.rssi` semantic contracts; it must not redefine or weaken language semantics.
 
