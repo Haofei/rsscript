@@ -1368,7 +1368,9 @@ fn base_allows_field_split(analyzer: &Analyzer<'_>, state: &BodyState, base: &st
     }
     match state.value_type(base) {
         Some(type_name) => {
-            let root = type_name.split_once('<').map_or(type_name, |(root, _)| root);
+            let root = type_name
+                .split_once('<')
+                .map_or(type_name, |(root, _)| root);
             let is_container = matches!(root, "List" | "Map" | "Set");
             let is_class = analyzer.hir.type_kind(root) == Some(HirTypeKind::Class);
             !is_container && !is_class

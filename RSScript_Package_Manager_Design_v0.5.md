@@ -1,7 +1,7 @@
 # RSScript Package Manager Design — Revised Draft
 
 Status: Draft / ecosystem design consolidation candidate  
-Version: 0.4-editorial-revised  
+Version: 0.5-sync-revised  
 Based on: Package Manager Design v0.3-editorial and RSScript v0.5 language model  
 Audience: RSScript compiler implementers, package authors, native binding authors, registry implementers, review-tool authors  
 Scope: package model, dependency resolution, Cargo integration, semantic package review, native wrappers, registry protocol direction  
@@ -260,9 +260,13 @@ library package
 binary/tool package
 interface-only package
 native wrapper package
-core/trusted package
-workspace package
+workspace member package
 ```
+
+`core` and `trusted` are not package kinds. They are registry, distribution, or
+project-policy trust tiers attached to a package version after review. Authors
+must not be able to self-declare a package as trusted merely by choosing a
+manifest kind.
 
 ### 4.2 Semantic contract
 
@@ -368,6 +372,7 @@ retaining APIs
 closure-capture retaining APIs
 resource APIs
 fresh-returning APIs
+async APIs
 native APIs
 unsafe RSScript APIs
 unknown APIs
@@ -489,7 +494,9 @@ Rules:
    explicitly marked compile_only, test_only, or platform_provided.
 3. rsspkg.lock records provider resolution for executable builds.
 4. A dependency on an interface-only package without an implementation provider
-   is a diagnostic for rss run, rss build, and rss verify-rust.
+   is a diagnostic for executable build commands such as `rss run` and
+   `rss verify-rust`. Pure frontend checks may use interface-only packages for
+   type checking and review.
 5. Interface-only packages may be published only if their manifest declares the
    provider expectation.
 ```
@@ -544,10 +551,14 @@ rss-test = "0.5"
 default = []
 streaming = []
 
+[interfaces.features.streaming]
+paths = ["interface/streaming"]
+exports = ["JsonStream"]
+
 [review.policy]
 deny_unknown = false
-allow_native = true
-allow_unsafe_apis = false
+deny_native = false
+deny_unsafe_apis = true
 max_public_params = 8
 max_nested_type_depth = 4
 native_api_risk = "elevated"       # elevated | high
@@ -561,6 +572,9 @@ enabled = true
 path = "native/rust"
 crate = "rss_json_native"
 cargo_features = []
+
+[native.rust.feature_map]
+streaming = ["streaming"]
 
 [native.rust.policy]
 build_scripts = "forbid"             # forbid | review | allow
@@ -602,10 +616,21 @@ Declares where public `.rssi` files live.
 [interfaces]
 paths = ["interface"]
 exports = ["Json", "JsonValue", "JsonError"]
+
+[interfaces.features.streaming]
+paths = ["interface/streaming"]
+exports = ["JsonStream"]
 ```
 
-The package manager loads these interfaces for dependents. The compiler frontend
-parses and normalizes them.
+`[interfaces]` describes the base public interface. Each
+`[interfaces.features.<feature>]` table adds public interface roots only when
+that package feature is selected. This is the MVP feature-gating mechanism for
+package public contracts; a future compiler-defined conditional `.rssi` syntax
+may be added only if it preserves a single normalized effective interface.
+
+The package manager selects the relevant interface paths, then asks the compiler
+frontend to parse and normalize them. The compiler frontend, not the package
+manager, owns interface syntax and semantic normalization.
 
 ### 6.4 `[sources]`
 
@@ -671,12 +696,18 @@ Rules:
 1. Package features resolve deterministically.
 2. Cargo-like additive feature unification is the default unless a package marks
    a feature as mutually exclusive through a future explicit mechanism.
-3. A package feature must not silently introduce native or unsafe boundaries.
-4. If a package feature enables native, unsafe, build scripts, proc macros,
-   linked libraries, FFI, or additional resource/retention APIs, review metadata
-   must report it.
-5. A feature-conditioned public contract produces a different effective
-   interface hash.
+3. A package feature must not silently introduce async, native, or unsafe
+   boundaries.
+4. If a package feature enables async APIs, native APIs, unsafe APIs, build
+   scripts, proc macros, linked libraries, FFI, or additional resource/retention
+   APIs, review metadata must report it.
+5. A feature-conditioned public contract is expressed by selected interface
+   paths such as `[interfaces.features.<feature>]` or a future compiler-owned
+   conditional interface syntax, and it produces a different effective interface
+   hash.
+6. Package feature names are allowed to map to Cargo feature names for native
+   wrapper builds, but Cargo feature selection does not define RSScript public
+   semantics by itself.
 ```
 
 ### 6.7 `[review.policy]`
@@ -686,12 +717,26 @@ Package-level declared review policy.
 ```toml
 [review.policy]
 deny_unknown = true
-allow_native = false
-allow_unsafe_apis = false
+deny_native = true
+deny_unsafe_apis = true
 max_public_params = 8
 max_nested_type_depth = 4
 native_api_risk = "high"          # elevated | high
 build_execution_default = "forbid" # forbid | review | allow
+```
+
+The canonical policy style is `deny_*`. `allow_*` aliases are not normative in
+v0.5 because mixed allow/deny spelling makes policy precedence ambiguous. A
+prototype may accept legacy aliases with warnings, but published package policy
+should use the canonical keys above.
+
+Canonical policy keys:
+
+```text
+deny_unknown       fail when computed package risk is unknown or required facts are unknown
+deny_native        fail when selected public APIs or implementation facts require native boundaries
+deny_unsafe_apis   fail when selected public APIs expose effects(unsafe)
+native_api_risk    when native is not denied, map public native APIs to elevated or high
 ```
 
 This section is a policy, not a self-declared risk result. Computed metadata
@@ -727,7 +772,18 @@ enabled = true
 path = "native/rust"
 crate = "rss_json_native"
 cargo_features = []
+
+[native.rust.feature_map]
+streaming = ["streaming"]
+native-tls = ["native-tls"]
 ```
+
+`cargo_features` are always enabled for this wrapper. The optional
+`[native.rust.feature_map]` table maps selected RSScript package features to
+Cargo features. This mapping affects the Rust implementation graph, but it does
+not by itself add or remove RSScript public contracts; public contract changes
+must still be visible through selected `.rssi` interface paths and the effective
+interface hash.
 
 The package manager does not resolve Rust crates here. Cargo does.
 
@@ -788,8 +844,15 @@ Workspace support should be implemented after local path dependencies.
 Every RSScript-facing public API must be declared in `.rssi`.
 
 Provisional v0.5 package-interface syntax admits explicit namespaces and opaque
-interface types. If the core language later chooses different keywords, package
-tooling follows the compiler frontend's normalizer.
+interface types. The compiler frontend owns the exact grammar and normalized
+symbol form. Package tooling follows the frontend normalizer and must not accept
+a second, package-manager-only interface syntax.
+
+Canonical namespace form is namespace-relative: once inside `namespace Json`,
+public declarations do not repeat the `Json.` prefix. The normalized exported
+symbols are still `Json.parse` and `Json.field_string`. Method-like names such as
+`HttpClient.get` are relative to the active namespace; authors write
+`HttpClient.get`, not `Http.HttpClient.get`.
 
 ```rust
 // interface/json.rssi
@@ -801,12 +864,12 @@ namespace Json
 opaque struct JsonValue
 opaque struct JsonError
 
-native fn Json.parse(
+native fn parse(
     text: read String,
 ) -> Result<fresh JsonValue, JsonError>
     effects(native)
 
-native fn Json.field_string(
+native fn field_string(
     value: read JsonValue,
     name: read String,
 ) -> Result<String, JsonError>
@@ -1269,8 +1332,8 @@ RSScript Bytes        <-> Vec<u8> / &[u8]
 RSScript Buffer       <-> Vec<u8> / wrapper buffer
 RSScript Result       <-> Rust Result through adapter mapping
 RSScript Option       <-> Rust Option
-RSScript resource     <-> Rust type implementing rsscript_runtime::Resource
-RSScript class/managed <-> rsscript_runtime::Managed<T>
+RSScript resource     <-> Rust type implementing rss_rt::Resource
+RSScript class/managed <-> rss_rt::Managed<T>
 RSScript read/mut views <-> adapter-managed read/write views
 ```
 
@@ -1467,10 +1530,15 @@ elevated
 low
 ```
 
-The two are related but not identical. For example, a native `.rssi` function is
-a `must_review` export because it crosses a native boundary. At package level,
-that native boundary may make the package `elevated` or `high` depending on
-policy, build-time execution facts, unsafe facts, and audit status.
+The two are related but not identical. A public API is language-level
+`must_review` because it is a public contract, but that baseline public-contract
+fact does not automatically make the package elevated or high. At package level,
+risk is aggregated from the kind of public facts that appear: native, unsafe,
+resource, retention, mutation, async review boundaries, unknown facts, build-time
+execution, implementation changes, and policy. For example, a native `.rssi`
+function is a `must_review` export because it crosses a native boundary; at
+package level, that native boundary may make the package `elevated` or `high`
+depending on policy, build-time execution facts, unsafe facts, and audit status.
 
 ### 10.2 Risk precedence
 
@@ -1501,7 +1569,9 @@ a registry checksum or lockfile hash is missing or mismatched
 a semantic diff cannot be computed for an updated dependency
 ```
 
-Unknown must not be treated as safe.
+Unknown must not be treated as safe. If policy rejects unknown risk, the
+operation fails with computed risk still displayed as `unknown`; policy failure
+status is separate from the computed package risk tier.
 
 ### 10.4 High risk
 
@@ -1514,8 +1584,6 @@ build scripts, proc macros, FFI, or native links are present under a policy that
   treats them as high-risk
 wrapper unsafe blocks are detected under high-risk policy
 critical guarantees are removed from public APIs in an update
-unknown classification is introduced but policy chooses to fail rather than
-  classify as unknown for display
 ```
 
 ### 10.5 Elevated risk
@@ -1524,11 +1592,12 @@ A package risk is at least `elevated` if:
 
 ```text
 any exported API has effects(native) and policy does not map it to high
+any exported async API or selected feature exposes review-visible async contracts
 any exported API uses local/resource/ResourcePool/retains/mut/take behavior that
   requires review but is bounded by visible contracts
 native implementation changed while .rssi is unchanged
 Cargo.lock changed for a native wrapper dependency
-package features add native/build/proc-macro/resource/retention risk
+package features add async/native/build/proc-macro/resource/retention risk
 managed closure capture retention appears in exported behavior
 ```
 
@@ -1537,7 +1606,11 @@ managed closure capture retention appears in exported behavior
 A package risk may be `low` only if all of the following hold:
 
 ```text
-all exports classify as low_semantic_risk or review_if_changed under accepted policy
+all exported contracts parse and classify successfully
+language-level must_review reasons are limited to baseline public-contract
+  review facts accepted by policy
+no async APIs unless project policy explicitly permits review-visible async
+  signatures as low before executable async exists
 no native APIs
 no unsafe APIs
 no ResourcePool/resource APIs
@@ -1546,6 +1619,12 @@ no mut/take public APIs unless policy explicitly permits them as low for the pro
 no unknown APIs or unknown required facts
 no build scripts/proc macros/native links/FFI in the package graph under the selected features
 ```
+
+A language-level `must_review` classification caused only by `public_api` does
+not by itself block package-level `low`. Elevated or high package risk begins
+when the public contract exposes additional review facts such as async, native,
+unsafe, resource ownership, retention, mutation/take, unknown metadata, or
+build-time native execution.
 
 ### 10.7 Computed risk and declared expectation
 
@@ -1599,9 +1678,14 @@ no frontend errors.
 
 ### 11.2 Pure RSScript application
 
+`rss check` is the compiler/frontend check command defined by the language spec.
+For a package directory or source file inside a package, it may load
+`rsspkg.toml` and dependency interfaces, but it does not run Cargo or execute
+native build code.
+
 ```text
 rss check
-  -> load rsspkg.toml
+  -> load rsspkg.toml when present
   -> load dependency .rssi
   -> normalize effective interfaces
   -> check .rss source
@@ -1713,6 +1797,7 @@ retains effect added
 managed closure capture retention introduced
 ResourcePool factory contract changed
 ResourcePool factory changed from eager/noescape to retained/lazy
+async signature added or changed
 native effect added
 unsafe effect added
 resource return introduced
@@ -1737,7 +1822,7 @@ native implementation changed with unchanged .rssi
 native binding manifest changed
 Cargo.lock changed for native wrapper package
 package risk increased from low to elevated/high/unknown
-new package feature changes native/build/proc-macro/resource/retention risk
+new package feature changes async/native/build/proc-macro/resource/retention risk
 review metadata changed because risk algorithm/schema changed
 ```
 
@@ -1856,6 +1941,7 @@ Schema example:
     "closure_capture_retaining_apis": 0,
     "resource_apis": 0,
     "fresh_returning_apis": 1,
+    "async_apis": 0,
     "native_apis": 2,
     "unsafe_apis": 0,
     "unknown_apis": 0
@@ -2040,6 +2126,7 @@ mutating APIs
 retaining APIs
 closure-capture retention APIs
 resource APIs
+async APIs
 native APIs
 unsafe APIs
 fresh-returning APIs
@@ -2239,6 +2326,7 @@ A project may define dependency review policy.
 ```toml
 [review.policy]
 deny_unknown = true
+deny_native = false
 deny_unsafe_apis = true
 max_high_risk_dependencies = 0
 max_native_dependencies = 5
@@ -2274,6 +2362,7 @@ number of native dependencies
 number of retaining APIs imported
 number of closure-capture-retaining APIs imported
 number of resource APIs imported
+number of async APIs imported
 number of unsafe APIs imported
 number of unknown APIs
 number of dependencies with build-time execution risk
@@ -2324,6 +2413,18 @@ PKG08xx  registry/publish
 PKG09xx  provider/interface-only package resolution
 ```
 
+Boundary with language diagnostics:
+
+```text
+RSxxxx diagnostics are compiler/frontend diagnostics over RSScript source and
+.rssi semantic contracts.
+PKGxxxx diagnostics are package-manager diagnostics over manifests, dependency
+resolution, selected package features, lockfiles, registries, native binding
+metadata, native conformance, and Cargo integration.
+When package tooling invokes the compiler frontend and receives an RS diagnostic,
+it surfaces that RS diagnostic rather than translating it into PKG.
+```
+
 Example:
 
 ```text
@@ -2365,12 +2466,12 @@ namespace Json
 opaque struct JsonValue
 opaque struct JsonError
 
-native fn Json.parse(
+native fn parse(
     text: read String,
 ) -> Result<fresh JsonValue, JsonError>
     effects(native)
 
-native fn Json.field_string(
+native fn field_string(
     value: read JsonValue,
     name: read String,
 ) -> Result<String, JsonError>
@@ -2478,17 +2579,18 @@ native fn HttpClient.get(
 ) -> Result<Response, HttpError>
     effects(native)
 
-pub fn Response.body_text(
+native fn Response.body_text(
     response: read Response,
 ) -> Result<String, HttpError>
+    effects(native)
 ```
 
 Review metadata:
 
 ```text
 risk: high under strict native policy, elevated under bounded-native policy
-native APIs: 1
-blocking/network APIs: 1, source=author_declaration or audit
+native APIs: 2
+blocking/network APIs: 2, source=author_declaration or audit
 resource APIs: 0
 retaining APIs: 0
 ```
@@ -2516,7 +2618,7 @@ namespace Env
 
 opaque struct EnvError
 
-native fn Env.get(name: read String) -> Result<String, EnvError>
+native fn get(name: read String) -> Result<String, EnvError>
     effects(native)
 ```
 

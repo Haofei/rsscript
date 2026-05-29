@@ -51,6 +51,9 @@ impl Formatter {
     }
 
     fn type_decl(&mut self, ty: &TypeDecl) {
+        if ty.is_opaque {
+            self.out.push_str("opaque ");
+        }
         self.out.push_str(type_kind_name(ty.kind));
         self.out.push(' ');
         self.out.push_str(&ty.name);

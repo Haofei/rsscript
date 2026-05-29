@@ -12,7 +12,7 @@ use crate::analyzer::{
     analyze_source_with_interfaces, analyze_sources_with_interfaces, core_interfaces,
 };
 use crate::diagnostic::{Diagnostic, code};
-use crate::formatter::format_program;
+use crate::formatter::{format_program, format_source};
 use crate::lint::lint_source;
 use crate::review::{
     ReviewFinding, ReviewMap, ReviewMapClassification, ReviewRisk, format_review_human,
@@ -533,6 +533,7 @@ struct PackageParamContract {
 struct PackageTypeContract {
     name: String,
     kind: TypeKind,
+    is_opaque: bool,
     type_params: Vec<PackageGenericContract>,
     fields: Vec<PackageFieldContract>,
     span: crate::diagnostic::Span,
@@ -2298,7 +2299,7 @@ fn package_type_contracts_match(
     interface.name == source.name
         && interface.kind == source.kind
         && interface.type_params == source.type_params
-        && interface.fields == source.fields
+        && (interface.is_opaque || interface.fields == source.fields)
 }
 
 fn package_function_contracts_match(
@@ -2663,6 +2664,7 @@ fn package_type_contract(type_decl: &TypeDecl) -> PackageTypeContract {
     PackageTypeContract {
         name: type_decl.name.clone(),
         kind: type_decl.kind,
+        is_opaque: type_decl.is_opaque,
         type_params: type_decl
             .type_params
             .iter()
@@ -2783,7 +2785,11 @@ fn package_type_contract_label(contract: &PackageTypeContract) -> String {
         )
     };
     let fields = if contract.fields.is_empty() {
-        "<none>".to_string()
+        if contract.is_opaque {
+            "<opaque>".to_string()
+        } else {
+            "<none>".to_string()
+        }
     } else {
         contract
             .fields
@@ -2801,7 +2807,8 @@ fn package_type_contract_label(contract: &PackageTypeContract) -> String {
             .join(", ")
     };
     format!(
-        "{} {}{type_params} {{ {fields} }}",
+        "{}{} {}{type_params} {{ {fields} }}",
+        if contract.is_opaque { "opaque " } else { "" },
         package_type_kind_label(contract.kind),
         contract.name
     )
@@ -3896,7 +3903,11 @@ fn append_sources_hash_input(input: &mut String, sources: &[PackageSource]) {
     for source in sources {
         input.push_str(&source.relative_path);
         input.push('\n');
-        input.push_str(&source.contents);
+        if source.kind == PackageReviewFileKind::Interface {
+            input.push_str(&format_source(&source.path, &source.contents));
+        } else {
+            input.push_str(&source.contents);
+        }
         input.push('\n');
     }
 }

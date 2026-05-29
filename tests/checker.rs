@@ -5436,6 +5436,51 @@ pub fn field_string(
 }
 
 #[test]
+fn parser_normalizes_namespace_and_opaque_interface_declarations() {
+    let source = r#"
+features: native
+namespace Json
+
+opaque struct JsonValue
+opaque struct JsonError
+
+native fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
+    effects(native)
+"#;
+    let program = parse_source("json.rssi", source);
+
+    assert_eq!(program.unknown_top_level_spans, Vec::new());
+    let type_names = program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Type(ty) => Some((ty.name.as_str(), ty.is_opaque)),
+            Item::Function(_) => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        type_names,
+        vec![("Json.JsonValue", true), ("Json.JsonError", true)]
+    );
+    let function = program
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Function(function) => Some(function),
+            Item::Type(_) => None,
+        })
+        .expect("expected namespace-normalized function");
+
+    assert_eq!(function.name, "Json.parse");
+    assert_eq!(function.params[0].ty.name, "String");
+    let return_ty = function.return_ty.as_ref().expect("return type");
+    assert_eq!(return_ty.name, "Result");
+    assert_eq!(return_ty.args[0].name, "Json.JsonValue");
+    assert_eq!(return_ty.args[1].name, "Json.JsonError");
+    assert!(analyze_source("json.rssi", source).is_empty());
+}
+
+#[test]
 fn parser_preserves_async_function_kind() {
     let source = r#"
 features: async
@@ -6746,6 +6791,80 @@ fn package_review_reports_interface_type_contract_mismatch() {
 }
 
 #[test]
+fn package_review_accepts_namespace_opaque_interface_contract() {
+    let temp_dir = unique_temp_dir("rsscript-package-namespace-opaque-interface");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-namespace-opaque",
+        "0.1.0",
+        r#"[sources]
+paths = ["src"]
+"#,
+        r#"namespace Json
+
+opaque struct JsonValue
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("src/lib.rss"),
+        r#"struct Json.JsonValue {
+    text: String
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    let codes = review
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect::<Vec<_>>();
+    assert!(!codes.contains(&"RS1301"), "{:?}", review.diagnostics);
+}
+
+#[test]
+fn package_lock_hashes_compiler_normalized_interface_contracts() {
+    let namespace_dir = unique_temp_dir("rsscript-package-namespace-interface-hash");
+    let canonical_dir = unique_temp_dir("rsscript-package-canonical-interface-hash");
+    write_named_package_fixture(
+        &namespace_dir,
+        "rss-interface-hash",
+        "0.1.0",
+        "",
+        r#"namespace Json
+
+opaque struct JsonValue
+
+pub fn parse(text: read String) -> fresh JsonValue
+"#,
+    );
+    write_named_package_fixture(
+        &canonical_dir,
+        "rss-interface-hash",
+        "0.1.0",
+        "",
+        r#"opaque struct Json.JsonValue
+
+pub fn Json.parse(text: read String) -> fresh Json.JsonValue
+"#,
+    );
+
+    let namespace_lock = lock_package_dir(&namespace_dir).expect("namespace package lock");
+    let canonical_lock = lock_package_dir(&canonical_dir).expect("canonical package lock");
+    let _ = fs::remove_dir_all(&namespace_dir);
+    let _ = fs::remove_dir_all(&canonical_dir);
+
+    assert_eq!(
+        namespace_lock.packages[0].interface_hash,
+        canonical_lock.packages[0].interface_hash
+    );
+}
+
+#[test]
 fn package_review_reports_path_dependency_interface_call_violations() {
     let root_dir = unique_temp_dir("rsscript-package-dep-interface-violation-root");
     let dep_dir = unique_temp_dir("rsscript-package-dep-interface-violation-dep");
@@ -7294,8 +7413,8 @@ fn docs_do_not_reintroduce_legacy_gc_runtime_surface() {
 
     for relative_path in [
         "README.md",
-        "RSScript_v0.5_Spec_reorganized.md",
-        "RSScript_Package_Manager_Design_reorganized.md",
+        "RSScript_v0.5_Spec.md",
+        "RSScript_Package_Manager_Design_v0.5.md",
     ] {
         let source = fs::read_to_string(root.join(relative_path))
             .unwrap_or_else(|error| panic!("{relative_path} should read: {error}"));

@@ -347,6 +347,13 @@ RSScript source
   -> executable / library
 ```
 
+`rss check <file.rss>` performs frontend parsing, name/type/effect checking,
+freshness/local/resource checks, and review metadata generation without Rust
+lowering, Cargo invocation, or native build execution. `rss check
+<package-directory>` uses the package manifest, package source set, and interface
+environment; for packages with multiple source files, `src/main.rss` is the
+runnable entry source but `rss check` may check the package source set.
+
 `rss run <file.rss>` lowers the file to a Rust package and invokes Cargo on that package. `rss run <package-directory>` uses the package manifest, package source set, and interface environment. For packages with multiple source files, `src/main.rss` is the runnable entry source.
 
 `rss verify-rust <file.rss>` performs the same lowering and asks rustc to check the generated package. With `--out-dir`, the generated package and `rsscript-source-map.json` are retained for inspection.
@@ -2261,6 +2268,53 @@ coercion and call stay explicit. Review-first does not require knowing the
 concrete callee; it requires knowing the effects, and an effect-carrying protocol
 provides exactly that.
 
+### 14.7 `.rssi` interface files
+
+`.rssi` files are compiler-frontend inputs that contain public semantic
+contracts. They are not package-manager syntax, not generated Rust headers, and
+not implementation files. A `.rssi` declaration uses the same review-critical
+signature vocabulary as RSScript source: parameter names, `read`/`mut`/`take`,
+return freshness, `effects(retains(...))`, guarantees, `native`, `unsafe`, and
+resource contracts.
+
+The compiler frontend owns `.rssi` parsing and canonical normalization. Package
+tooling may select which interface files are active for a package feature set,
+but it must then ask the frontend to normalize the effective interface. Package
+tooling must not implement an independent semantic normalizer and must not infer
+RSScript effects from Rust signatures.
+
+Provisional v0.5 interface-only surface:
+
+```text
+features: <file features>       # same file-feature gate as source files
+namespace <Name>                # optional exported root namespace
+opaque struct <Name>            # representation hidden from dependents
+opaque class <Name>             # representation hidden, managed identity kind
+opaque resource <Name>          # representation hidden, resource kind
+pub fn ...                      # bodyless public RSScript contract
+native fn ... effects(native)   # bodyless native boundary contract
+```
+
+Canonical namespace form is relative to the namespace. Inside
+`namespace Json`, the declaration `native fn parse(...)` normalizes to the public
+symbol `Json.parse`. Method-like names such as `HttpClient.get` are relative to
+the active namespace; authors write `HttpClient.get`, not `Http.HttpClient.get`.
+Repeating the namespace prefix inside the namespace, such as
+`native fn Json.parse(...)`, is non-canonical and should be rejected or normalized
+by the compiler frontend in one deterministic way; package tooling must consume
+only the normalized symbol form.
+
+Opaque interface types are distinct from empty ordinary declarations. Their kind
+is explicit (`struct`, `class`, or `resource`) and the ordinary kind rules still
+apply: classes are managed identity objects, structs are value objects eligible
+for freshness/local handling, and resources obey `with`/`ResourcePool` escape
+rules. Opaque resource types must use `opaque resource`, not `opaque struct`.
+
+Package features declared in `rsspkg.toml` are package-selection features, not
+RSScript file features. A package feature may cause additional `.rssi` files to
+be selected by package tooling, but the resulting effective interface is still a
+compiler-normalized `.rssi` contract.
+
 ---
 
 ## 15. Native and Unsafe Boundaries
@@ -2575,6 +2629,14 @@ RS12xx  runtime diagnostics
 RS13xx  package / interface contract
 ```
 
+`RS13xx` covers compiler/frontend diagnostics over `.rssi` interface contracts
+and source/interface semantic checking. Package-manager diagnostics use the
+separate `PKGxxxx` namespace: manifests, dependency resolution, selected package
+features, lockfiles, registry checksums, native binding metadata, native
+conformance, and Cargo integration are PKG diagnostics. When a package tool calls
+the compiler frontend, it surfaces frontend `RSxxxx` diagnostics unchanged rather
+than translating them into PKG diagnostics.
+
 There is no dedicated native/unsafe range: native and unsafe boundaries are gated
 through RS01xx (feature) and reported as forbidden/native-binding issues in the
 ranges above. A future per-call `unsafe` marker diagnostic (§15.4.2) would also
@@ -2715,7 +2777,7 @@ invokes Cargo for Rust native wrapper implementation builds
 
 It must not infer RSScript semantic contracts from Rust signatures and must not weaken language checks such as conflict roots, constructor/variant call-like checking, ResourcePool factory contracts, or managed closure capture retention.
 
-Package features declared in `rsspkg.toml` are package selection features. They are not the same as RSScript file features declared with `features:`.
+Package features declared in `rsspkg.toml` are package selection features. They are not the same as RSScript file features declared with `features:`. If a package feature changes the public surface, package tooling selects a different effective `.rssi` interface and the compiler frontend normalizes that interface; the package manager still does not define language semantics.
 
 ---
 
