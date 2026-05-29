@@ -1067,6 +1067,63 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_reports_option_match_result_variants_before_backend_lowering() {
+    let source = r#"
+fn maybe() -> Option<String> {
+    return Some("x")
+}
+
+fn main() -> Unit {
+    let value = maybe()
+    match value {
+        Ok(result) => return Unit
+        Err(error) => return Unit
+    }
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("match-variant-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0209"
+                && diagnostic.summary
+                    == "match pattern `Ok` cannot match scrutinee type `Option<String>`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn rust_lowering_rejects_match_variant_mismatch_before_rustc() {
+    let source = r#"
+fn maybe() -> Result<String, BuildError> {
+    return Ok("x")
+}
+
+fn main() -> Unit {
+    let value = maybe()
+    match value {
+        Some(result) => return Unit
+        None => return Unit
+    }
+    return Unit
+}
+"#;
+    let diagnostics = lower_source_to_rust("match-variant-type.rss", source)
+        .expect_err("match variant mismatch should fail before Rust generation");
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0209"
+                && diagnostic.summary
+                    == "match pattern `Some` cannot match scrutinee type `Result<String, BuildError>`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn checker_reports_mixed_equality_operand_types_before_backend_lowering() {
     let source = r#"
 fn main() -> Unit {

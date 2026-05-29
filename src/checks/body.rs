@@ -3,10 +3,10 @@ use std::collections::HashSet;
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::{
-    CallResolution, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirStmt, HirTypeKind,
-    ParamEffect, ResolvedCalleeKind,
+    CallResolution, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirMatchArm, HirStmt,
+    HirTypeKind, ParamEffect, ResolvedCalleeKind,
 };
-use crate::syntax::ast::{Callee, FunctionDecl, Item, TypeRef};
+use crate::syntax::ast::{Callee, FunctionDecl, Item, MatchPattern, TypeRef};
 
 use super::local::{
     BodyState, FreshReturnIssue, FreshReturnIssueKind, LocalAnalysis, ManagedToLocalUse, MovedUse,
@@ -219,6 +219,7 @@ fn check_stmt_semantics(
         }
         HirStmt::Match { value, arms, .. } => {
             check_match_scrutinee_type(analyzer, value);
+            check_match_patterns_match_scrutinee(analyzer, value, arms);
             check_expr_semantics(analyzer, value, state);
             check_resource_pool_lease_expr(analyzer, value, false);
             check_resource_producer_expr(analyzer, value, false);
@@ -335,6 +336,50 @@ fn check_match_scrutinee_type(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
             "manual",
         ),
     );
+}
+
+fn check_match_patterns_match_scrutinee(
+    analyzer: &mut Analyzer<'_>,
+    expr: &HirExpr,
+    arms: &[HirMatchArm],
+) {
+    let Some(type_name) = hir_expr_type_name(expr) else {
+        return;
+    };
+    let allowed_variants: &[&str] = match type_root_name(type_name) {
+        "Option" => &["Some", "None"],
+        "Result" => &["Ok", "Err"],
+        _ => return,
+    };
+
+    for arm in arms {
+        let MatchPattern::Variant { name, span, .. } = &arm.pattern else {
+            continue;
+        };
+        if allowed_variants.contains(&name.as_str()) {
+            continue;
+        }
+        analyzer.diagnostics.push(
+            Diagnostic::error(
+                code::CONTROL_FLOW_TYPE_MISMATCH,
+                format!("match pattern `{name}` cannot match scrutinee type `{type_name}`."),
+                span.clone(),
+                "match variant type mismatch",
+            )
+            .with_cause(
+                "RSScript v0.5 `match` does not coerce between `Option` and `Result` variant families.",
+            )
+            .with_fix(
+                "match_matching_variant_family",
+                format!(
+                    "Use `{}` variants for `{}`.",
+                    allowed_variants.join("`/`"),
+                    type_root_name(type_name)
+                ),
+                "manual",
+            ),
+        );
+    }
 }
 
 fn check_expr_semantics_with_context(

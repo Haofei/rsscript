@@ -1,0 +1,16 @@
+// expect: RS0209
+
+fn maybe() -> Option<String> {
+    return Some("x")
+}
+
+fn main() -> Unit {
+    let value = maybe()
+
+    match value {
+        Ok(result) => return Unit
+        Err(error) => return Unit
+    }
+
+    return Unit
+}

@@ -433,7 +433,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::CONTROL_FLOW_TYPE_MISMATCH,
         title: "control-flow type mismatch",
-        explanation: "`if` and `while` conditions must be `Bool`, and v0.5 `match` scrutinees must be `Option<T>` or `Result<T, E>` before Rust lowering.",
+        explanation: "`if` and `while` conditions must be `Bool`, and v0.5 `match` scrutinees must be `Option<T>` or `Result<T, E>` with matching `Some`/`None` or `Ok`/`Err` arm variants before Rust lowering.",
     },
     DiagnosticExplanation {
         code: code::OPERATOR_TYPE_MISMATCH,

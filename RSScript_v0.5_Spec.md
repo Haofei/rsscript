@@ -699,8 +699,11 @@ match <value> { <arm> => { ... } ... }
 
 In v0.5, `match` is over the standard `Option<T>` and `Result<T, E>` variant
 shapes only. The scrutinee must have type `Option<T>` or `Result<T, E>`.
-It must be exhaustive: it covers `Some`/`None`, `Ok`/`Err`, or includes `_`;
-a non-exhaustive match is a diagnostic before lowering. Arm rules:
+Arm variants must match the scrutinee family: `Option<T>` arms may use
+`Some`/`None`, and `Result<T, E>` arms may use `Ok`/`Err`. Mixing those variant
+families is a diagnostic before lowering, not a Rust backend error. It must be
+exhaustive: it covers `Some`/`None`, `Ok`/`Err`, or includes `_`; a
+non-exhaustive match is a diagnostic before lowering. Arm rules:
 
 ```text
 - a variant payload binding obeys the same data-effect, move, and resource rules
@@ -2596,6 +2599,7 @@ missing read/mut/take effect
 call argument type mismatch
 return type mismatch
 control-flow type mismatch
+match variant family mismatch
 operator type mismatch
 same-call place conflict
 constructor/variant call-like conflict
