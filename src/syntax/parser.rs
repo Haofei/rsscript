@@ -249,20 +249,23 @@ impl Parser<'_> {
             malformed_effect_spans = parsed_effects.malformed_spans;
             self.index = close + 1;
         }
-        let body = if self.at_symbol("{") {
+        let (has_body, body) = if self.at_symbol("{") {
             let open = self.index;
             let close = find_matching(self.tokens, open, "{", "}")?;
             self.index = close + 1;
-            parse_block(self.tokens, open, close)
+            (true, parse_block(self.tokens, open, close))
         } else {
             self.index = signature_end;
-            Block {
-                statements: Vec::new(),
-                span: self
-                    .tokens
-                    .get(self.index)
-                    .map_or(span.clone(), |token| token.span.clone()),
-            }
+            (
+                false,
+                Block {
+                    statements: Vec::new(),
+                    span: self
+                        .tokens
+                        .get(self.index)
+                        .map_or(span.clone(), |token| token.span.clone()),
+                },
+            )
         };
 
         Some(FunctionDecl {
@@ -270,6 +273,7 @@ impl Parser<'_> {
             is_public,
             is_async,
             is_native,
+            has_body,
             type_params,
             malformed_generic_param_spans,
             params,

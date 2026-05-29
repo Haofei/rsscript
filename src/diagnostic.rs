@@ -428,7 +428,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::RETURN_TYPE_MISMATCH,
         title: "return type mismatch",
-        explanation: "When both sides are known, a returned expression must match the function's declared return type before Rust lowering. Result and Option constructors are checked against their success, error, or Some payload types.",
+        explanation: "When both sides are known, a returned expression must match the function's declared return type before Rust lowering. Falling through a non-Unit function is a Unit return mismatch. Result and Option constructors are checked against their success, error, or Some payload types.",
     },
     DiagnosticExplanation {
         code: code::CONTROL_FLOW_TYPE_MISMATCH,

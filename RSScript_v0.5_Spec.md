@@ -2118,6 +2118,11 @@ Result<R, E> where R: Resource
 
 A resource return mode is valid only for resource-producing functions and must be consumed immediately by an approved resource context.
 
+A function whose declared return type is not `Unit` must return explicitly on
+every fallthrough path. A bare expression statement at the end of a function
+body is still a statement, not an implicit function return. Falling through a
+non-`Unit` function is a return type mismatch before Rust lowering.
+
 ### 14.3 Failure and async
 
 `may_fail` is not an effect. Failure is represented by return type.
@@ -2632,6 +2637,7 @@ missing named argument
 missing read/mut/take effect
 call argument type mismatch
 return type mismatch
+function fallthrough return type mismatch
 control-flow type mismatch
 match variant family mismatch
 operator type mismatch

@@ -20,6 +20,9 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
             let Some(body) = analyzer.hir.function_body(&function.name).cloned() else {
                 continue;
             };
+            if !function.has_body {
+                continue;
+            }
             let noescape_bindings = body
                 .bindings
                 .iter()
@@ -38,6 +41,7 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
             if let Some(block) = &body.block {
                 let mut local_closure_bindings = HashMap::new();
                 collect_local_closure_bindings(block, &mut local_closure_bindings);
+                check_function_fallthrough(analyzer, function, block);
                 check_block(
                     analyzer,
                     function,
@@ -47,6 +51,69 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
                 );
             }
         }
+    }
+}
+
+fn check_function_fallthrough(
+    analyzer: &mut Analyzer<'_>,
+    function: &FunctionDecl,
+    block: &HirBlock,
+) {
+    let Some(return_ty) = &function.return_ty else {
+        return;
+    };
+    if return_ty.name == "Unit" && return_ty.args.is_empty() {
+        return;
+    }
+    let function_type_params = function
+        .type_params
+        .iter()
+        .map(|param| param.name.clone())
+        .collect::<Vec<_>>();
+    let expected = type_ref_name(return_ty);
+    if type_contains_unresolved_generic(&expected, &function_type_params) {
+        return;
+    }
+    if block_may_fall_through(block) {
+        return_type_mismatch_diagnostic(
+            analyzer,
+            &function.name,
+            "Unit",
+            &expected,
+            &function.span,
+        );
+    }
+}
+
+fn block_may_fall_through(block: &HirBlock) -> bool {
+    for statement in &block.statements {
+        if !statement_may_fall_through(statement) {
+            return false;
+        }
+    }
+    true
+}
+
+fn statement_may_fall_through(statement: &HirStmt) -> bool {
+    match statement {
+        HirStmt::Return { .. } | HirStmt::Break(_) | HirStmt::Continue(_) => false,
+        HirStmt::If {
+            then_body,
+            else_body: Some(else_body),
+            ..
+        } => block_may_fall_through(then_body) || block_may_fall_through(else_body),
+        HirStmt::Match { arms, .. } if !arms.is_empty() => {
+            arms.iter().any(|arm| block_may_fall_through(&arm.body))
+        }
+        HirStmt::With { body, .. } => block_may_fall_through(body),
+        HirStmt::Let { .. }
+        | HirStmt::Expr(_)
+        | HirStmt::If {
+            else_body: None, ..
+        }
+        | HirStmt::Loop { .. }
+        | HirStmt::Match { .. }
+        | HirStmt::Unknown(_) => true,
     }
 }
 

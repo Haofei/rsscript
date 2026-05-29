@@ -151,6 +151,7 @@ pub struct FunctionDecl {
     pub is_public: bool,
     pub is_async: bool,
     pub is_native: bool,
+    pub has_body: bool,
     pub type_params: Vec<GenericParam>,
     pub malformed_generic_param_spans: Vec<Span>,
     pub params: Vec<Param>,

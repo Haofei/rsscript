@@ -895,6 +895,42 @@ fn build() -> String {
 }
 
 #[test]
+fn checker_reports_function_fallthrough_return_type_mismatch() {
+    let source = r#"
+fn build() -> String {
+    42
+}
+"#;
+    let diagnostics = analyze_source("fallthrough-return-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0208"
+                && diagnostic.summary == "return in `build` has type `Unit`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn rust_lowering_rejects_function_fallthrough_before_rustc() {
+    let source = r#"
+fn build() -> String {
+    42
+}
+"#;
+    let diagnostics = lower_source_to_rust("fallthrough-return-type.rss", source)
+        .expect_err("function fallthrough should fail before Rust generation");
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0208"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn checker_reports_result_ok_payload_type_mismatch() {
     let source = r#"
 class BuildError {
