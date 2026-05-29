@@ -1022,10 +1022,6 @@ pub struct Managed<T> {
     origin_span: Option<SourceSpan>,
 }
 
-// Compatibility alias for generated packages produced before the v0.5 runtime
-// surface settled on `Managed<T>`.
-pub type Gc<T> = Managed<T>;
-
 impl<T> Managed<T> {
     pub fn new(value: T) -> Self {
         Self {
@@ -1182,8 +1178,6 @@ pub fn assert_equal_bool(left: bool, right: bool) {
 
 pub struct ManagedRead<'a, T>(Ref<'a, T>);
 
-pub type GcRead<'a, T> = ManagedRead<'a, T>;
-
 impl<T> Deref for ManagedRead<'_, T> {
     type Target = T;
 
@@ -1199,8 +1193,6 @@ impl<T: fmt::Debug> fmt::Debug for ManagedRead<'_, T> {
 }
 
 pub struct ManagedWrite<'a, T>(RefMut<'a, T>);
-
-pub type GcWrite<'a, T> = ManagedWrite<'a, T>;
 
 impl<T> Deref for ManagedWrite<'_, T> {
     type Target = T;
@@ -1458,6 +1450,18 @@ mod tests {
     fn managed_handles_are_single_isolate_values() {
         static_assertions::assert_not_impl_any!(super::Managed<String>: Send, Sync);
         static_assertions::assert_not_impl_any!(super::WeakManaged<String>: Send, Sync);
+    }
+
+    #[test]
+    fn runtime_surface_has_no_legacy_gc_aliases() {
+        let source = include_str!("lib.rs");
+        let managed_alias = ["pub type ", "Gc"].concat();
+        let read_alias = ["pub type ", "G", "c", "Read"].concat();
+        let write_alias = ["pub type ", "G", "c", "Write"].concat();
+
+        assert!(!source.contains(&managed_alias));
+        assert!(!source.contains(&read_alias));
+        assert!(!source.contains(&write_alias));
     }
 
     #[test]
