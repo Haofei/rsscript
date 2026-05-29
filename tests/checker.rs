@@ -6786,7 +6786,7 @@ fn rss_run_accepts_checked_in_dogfood_scripts_directly() {
         ),
         (
             "tests/fixtures/pass/dogfood-package-diff.rss",
-            "dogfood package diff manifest=8 interface=2 high_manifest=5 high_interface=2",
+            "dogfood package diff manifest=8 interface=3 high_manifest=5 high_interface=2",
         ),
         (
             "tests/fixtures/pass/dogfood-package-lock-diff.rss",
@@ -6975,7 +6975,7 @@ fn rss_run_accepts_dogfood_package_diff_classifier() {
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
     assert_eq!(
         stdout.trim(),
-        "dogfood package diff manifest=8 interface=2 high_manifest=5 high_interface=2 mismatches=0 unmodeled_reasons=0"
+        "dogfood package diff manifest=8 interface=3 high_manifest=5 high_interface=2 mismatches=0 unmodeled_reasons=0"
     );
     assert!(stderr.trim().is_empty(), "{stderr}");
 }
@@ -7007,7 +7007,7 @@ fn rss_run_reports_dogfood_package_diff_mismatch() {
 
     assert!(!output.status.success(), "{stdout}");
     assert!(
-        stdout.contains("dogfood package diff manifest=8 interface=2 high_manifest=5 high_interface=2 mismatches=1 unmodeled_reasons=0"),
+        stdout.contains("dogfood package diff manifest=8 interface=3 high_manifest=5 high_interface=2 mismatches=1 unmodeled_reasons=0"),
         "{stdout}"
     );
 }
@@ -7340,6 +7340,24 @@ pub fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
 "#,
     )
     .expect("added high-risk interface should be written");
+    fs::write(
+        old_dir.join("interface/scheduler.rssi"),
+        r#"struct Scheduler
+struct BuildError
+
+pub fn Scheduler.run(callback: read Fn(Int) -> Result<String, BuildError>) -> Unit
+"#,
+    )
+    .expect("old callback interface should be written");
+    fs::write(
+        new_dir.join("interface/scheduler.rssi"),
+        r#"struct Scheduler
+struct BuildError
+
+pub fn Scheduler.run(callback: read Fn(Int) -> Result<Int, BuildError>) -> Unit
+"#,
+    )
+    .expect("new callback interface should be written");
     let diff = diff_package_dirs(&old_dir, &new_dir).expect("package diff should succeed");
     serde_json::from_str(&rsscript::format_package_diff_json(&diff))
         .expect("package diff JSON should parse")

@@ -350,6 +350,7 @@ pub fn main() -> Result<Unit, JsonError> {
     Assert.equal_int(left: decision.risk, right: facts.declared_risk)
     Assert.equal_int(left: decision.mismatches, right: 0)
     Assert.equal_int(left: facts.unmodeled_reasons, right: 0)
+    Assert.equal_int(left: facts.interface_changes, right: 3)
     Assert.equal_int(left: facts.high_manifest_changes, right: 5)
     Assert.equal_int(left: facts.high_interface_changes, right: 2)
 

@@ -2281,6 +2281,12 @@ struct RuntimeIntrinsic {
     rust_target: &'static str,
 }
 
+struct RuntimeIntrinsicArgAbi {
+    namespace: &'static str,
+    name: &'static str,
+    managed_handle_args: &'static [&'static str],
+}
+
 fn runtime_intrinsic_target(callee: &Callee) -> Option<&'static str> {
     let Callee::Qualified { namespace, name } = callee else {
         return None;
@@ -2300,16 +2306,55 @@ fn runtime_intrinsic_wants_managed_handle_arg(callee: &Callee, arg_name: Option<
         return false;
     };
     let namespace = type_root_name(namespace);
-    matches!(
-        (namespace, name.as_str(), arg_name),
-        ("Image", "save" | "inspect", "image")
-            | ("Environment", "child", "parent")
-            | ("Environment", "bind_function", "env" | "function")
-            | ("Environment", "has_parent" | "has_function", "env")
-            | ("FunctionObject", "new", "closure")
-            | ("FunctionObject", "has_closure", "function")
-    )
+    RUNTIME_INTRINSIC_ARG_ABI.iter().any(|abi| {
+        abi.namespace == namespace
+            && abi.name == name
+            && abi.managed_handle_args.contains(&arg_name)
+    })
 }
+
+const RUNTIME_INTRINSIC_ARG_ABI: &[RuntimeIntrinsicArgAbi] = &[
+    RuntimeIntrinsicArgAbi {
+        namespace: "Environment",
+        name: "bind_function",
+        managed_handle_args: &["env", "function"],
+    },
+    RuntimeIntrinsicArgAbi {
+        namespace: "Environment",
+        name: "child",
+        managed_handle_args: &["parent"],
+    },
+    RuntimeIntrinsicArgAbi {
+        namespace: "Environment",
+        name: "has_function",
+        managed_handle_args: &["env"],
+    },
+    RuntimeIntrinsicArgAbi {
+        namespace: "Environment",
+        name: "has_parent",
+        managed_handle_args: &["env"],
+    },
+    RuntimeIntrinsicArgAbi {
+        namespace: "FunctionObject",
+        name: "has_closure",
+        managed_handle_args: &["function"],
+    },
+    RuntimeIntrinsicArgAbi {
+        namespace: "FunctionObject",
+        name: "new",
+        managed_handle_args: &["closure"],
+    },
+    RuntimeIntrinsicArgAbi {
+        namespace: "Image",
+        name: "inspect",
+        managed_handle_args: &["image"],
+    },
+    RuntimeIntrinsicArgAbi {
+        namespace: "Image",
+        name: "save",
+        managed_handle_args: &["image"],
+    },
+];
 
 const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     RuntimeIntrinsic {
