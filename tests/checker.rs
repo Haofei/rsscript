@@ -4122,6 +4122,27 @@ fn review_map_app_benchmark_has_no_unknown_regions() {
 }
 
 #[test]
+fn review_map_dogfood_classifier_has_no_unknown_regions() {
+    let path = Path::new("tests/fixtures/pass/dogfood-review-classifier.rss");
+    let source = read_fixture(path);
+    let map = review_map_sources(vec![(path.to_str().unwrap(), source.as_str())]);
+
+    assert_eq!(map.summary.total_functions, 27);
+    assert!(map.summary.total_lines >= 350, "{map:?}");
+    assert_eq!(map.files[0].risk, ReviewMapFileRisk::Low);
+    assert_eq!(map.summary.unknown.functions, 0, "{map:?}");
+    assert_eq!(map.summary.unknown.lines, 0, "{map:?}");
+    assert!(map.summary.review_required.functions >= 15, "{map:?}");
+
+    let json: Value =
+        serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
+    assert_eq!(json["summary"]["unknown_ratio"], 0.0);
+    assert_eq!(json["summary"]["unknown_function_ratio"], 0.0);
+    assert_eq!(json["summary"]["must_review"]["functions"], 15);
+    assert_eq!(json["summary"]["low_semantic_risk"]["functions"], 12);
+}
+
+#[test]
 fn rss_review_map_json_reports_app_benchmark_unknown_zero() {
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("review")
@@ -4142,6 +4163,32 @@ fn rss_review_map_json_reports_app_benchmark_unknown_zero() {
     assert_eq!(json["summary"]["unknown"]["lines"], 0);
     assert_eq!(json["summary"]["unknown_ratio"], 0.0);
     assert_eq!(json["summary"]["unknown_function_ratio"], 0.0);
+}
+
+#[test]
+fn rss_verify_rust_json_accepts_dogfood_classifier() {
+    let temp_dir = unique_temp_dir("rsscript-dogfood-review-classifier");
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("verify-rust")
+        .arg("--json")
+        .arg("tests/fixtures/pass/dogfood-review-classifier.rss")
+        .arg("--out-dir")
+        .arg(&temp_dir)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss verify-rust --json should execute");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: Value = serde_json::from_str(&stdout).expect("stdout should be diagnostics JSON");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert!(json.as_array().is_some_and(|diagnostics| {
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic["severity"] != "error")
+    }));
 }
 
 #[test]

@@ -1,0 +1,410 @@
+struct ReviewFacts {
+    public_api: Bool
+    has_unknown_call: Bool
+    has_native_boundary: Bool
+    has_unsafe_boundary: Bool
+    has_resource_boundary: Bool
+    has_retains: Bool
+    has_mut: Bool
+    has_local: Bool
+    has_fresh_return: Bool
+    has_noescape: Bool
+    has_error_boundary: Bool
+    callee_risk: Int
+    line_count: Int
+}
+
+struct ReviewDecision {
+    classification: Int
+    reason: String
+    suggested_lines: Int
+}
+
+struct ReviewSummary {
+    total_functions: Int
+    must_review_functions: Int
+    low_risk_functions: Int
+    unknown_functions: Int
+    suggested_lines: Int
+}
+
+fn ReviewClass.unknown() -> Int {
+    return 3
+}
+
+fn ReviewClass.must_review() -> Int {
+    return 2
+}
+
+fn ReviewClass.low_semantic_risk() -> Int {
+    return 1
+}
+
+fn risk_line_budget(facts: read ReviewFacts) -> Int {
+    if facts.line_count > 0 {
+        return facts.line_count
+    }
+
+    return 1
+}
+
+fn reason_unknown() -> String {
+    return "unknown call or unsupported construct"
+}
+
+fn reason_native() -> String {
+    return "native or unsafe boundary"
+}
+
+fn reason_resource() -> String {
+    return "resource lifetime boundary"
+}
+
+fn reason_retention() -> String {
+    return "retention or mutation boundary"
+}
+
+fn reason_fresh() -> String {
+    return "fresh/local ownership boundary"
+}
+
+fn reason_public() -> String {
+    return "public semantic contract"
+}
+
+fn reason_low() -> String {
+    return "private pure helper"
+}
+
+fn decision(
+    classification: Int,
+    reason: read String,
+    lines: Int,
+) -> fresh ReviewDecision {
+    return ReviewDecision(
+        classification: classification,
+        reason: read reason,
+        suggested_lines: lines,
+    )
+}
+
+fn classify_boundary(facts: read ReviewFacts) -> fresh ReviewDecision {
+    let lines = risk_line_budget(facts: read facts)
+
+    if facts.has_unknown_call {
+        return decision(
+            classification: ReviewClass.unknown(),
+            reason: read reason_unknown(),
+            lines: lines,
+        )
+    }
+
+    if facts.callee_risk == ReviewClass.unknown() {
+        return decision(
+            classification: ReviewClass.unknown(),
+            reason: read reason_unknown(),
+            lines: lines,
+        )
+    }
+
+    if facts.has_unsafe_boundary || facts.has_native_boundary {
+        return decision(
+            classification: ReviewClass.must_review(),
+            reason: read reason_native(),
+            lines: lines,
+        )
+    }
+
+    if facts.has_resource_boundary {
+        return decision(
+            classification: ReviewClass.must_review(),
+            reason: read reason_resource(),
+            lines: lines,
+        )
+    }
+
+    return decision(
+        classification: ReviewClass.low_semantic_risk(),
+        reason: read reason_low(),
+        lines: 0,
+    )
+}
+
+fn classify_semantics(facts: read ReviewFacts) -> fresh ReviewDecision {
+    let lines = risk_line_budget(facts: read facts)
+
+    if facts.has_retains || facts.has_mut || facts.has_noescape {
+        return decision(
+            classification: ReviewClass.must_review(),
+            reason: read reason_retention(),
+            lines: lines,
+        )
+    }
+
+    if facts.has_local || facts.has_fresh_return || facts.has_error_boundary {
+        return decision(
+            classification: ReviewClass.must_review(),
+            reason: read reason_fresh(),
+            lines: lines,
+        )
+    }
+
+    if facts.public_api {
+        return decision(
+            classification: ReviewClass.must_review(),
+            reason: read reason_public(),
+            lines: lines,
+        )
+    }
+
+    return decision(
+        classification: ReviewClass.low_semantic_risk(),
+        reason: read reason_low(),
+        lines: 0,
+    )
+}
+
+fn stronger_decision(
+    left: read ReviewDecision,
+    right: read ReviewDecision,
+) -> fresh ReviewDecision {
+    if left.classification > right.classification {
+        return ReviewDecision(
+            classification: left.classification,
+            reason: read left.reason,
+            suggested_lines: left.suggested_lines,
+        )
+    }
+
+    if right.classification > left.classification {
+        return ReviewDecision(
+            classification: right.classification,
+            reason: read right.reason,
+            suggested_lines: right.suggested_lines,
+        )
+    }
+
+    if left.suggested_lines > right.suggested_lines {
+        return ReviewDecision(
+            classification: left.classification,
+            reason: read left.reason,
+            suggested_lines: left.suggested_lines,
+        )
+    }
+
+    return ReviewDecision(
+        classification: right.classification,
+        reason: read right.reason,
+        suggested_lines: right.suggested_lines,
+    )
+}
+
+fn classify_function(facts: read ReviewFacts) -> fresh ReviewDecision {
+    let boundary = classify_boundary(facts: read facts)
+    let semantic = classify_semantics(facts: read facts)
+
+    return stronger_decision(left: read boundary, right: read semantic)
+}
+
+fn make_low_helper(lines: Int) -> fresh ReviewFacts {
+    return ReviewFacts(
+        public_api: false,
+        has_unknown_call: false,
+        has_native_boundary: false,
+        has_unsafe_boundary: false,
+        has_resource_boundary: false,
+        has_retains: false,
+        has_mut: false,
+        has_local: false,
+        has_fresh_return: false,
+        has_noescape: false,
+        has_error_boundary: false,
+        callee_risk: ReviewClass.low_semantic_risk(),
+        line_count: lines,
+    )
+}
+
+fn make_native_entry(lines: Int) -> fresh ReviewFacts {
+    return ReviewFacts(
+        public_api: true,
+        has_unknown_call: false,
+        has_native_boundary: true,
+        has_unsafe_boundary: false,
+        has_resource_boundary: false,
+        has_retains: false,
+        has_mut: false,
+        has_local: false,
+        has_fresh_return: true,
+        has_noescape: false,
+        has_error_boundary: true,
+        callee_risk: ReviewClass.low_semantic_risk(),
+        line_count: lines,
+    )
+}
+
+fn make_resource_worker(lines: Int) -> fresh ReviewFacts {
+    return ReviewFacts(
+        public_api: false,
+        has_unknown_call: false,
+        has_native_boundary: false,
+        has_unsafe_boundary: false,
+        has_resource_boundary: true,
+        has_retains: false,
+        has_mut: true,
+        has_local: true,
+        has_fresh_return: false,
+        has_noescape: false,
+        has_error_boundary: true,
+        callee_risk: ReviewClass.low_semantic_risk(),
+        line_count: lines,
+    )
+}
+
+fn make_retaining_cache(lines: Int) -> fresh ReviewFacts {
+    return ReviewFacts(
+        public_api: false,
+        has_unknown_call: false,
+        has_native_boundary: false,
+        has_unsafe_boundary: false,
+        has_resource_boundary: false,
+        has_retains: true,
+        has_mut: true,
+        has_local: false,
+        has_fresh_return: false,
+        has_noescape: false,
+        has_error_boundary: false,
+        callee_risk: ReviewClass.low_semantic_risk(),
+        line_count: lines,
+    )
+}
+
+fn make_unknown_region(lines: Int) -> fresh ReviewFacts {
+    return ReviewFacts(
+        public_api: false,
+        has_unknown_call: true,
+        has_native_boundary: false,
+        has_unsafe_boundary: false,
+        has_resource_boundary: false,
+        has_retains: false,
+        has_mut: false,
+        has_local: false,
+        has_fresh_return: false,
+        has_noescape: false,
+        has_error_boundary: false,
+        callee_risk: ReviewClass.low_semantic_risk(),
+        line_count: lines,
+    )
+}
+
+fn empty_summary() -> fresh ReviewSummary {
+    return ReviewSummary(
+        total_functions: 0,
+        must_review_functions: 0,
+        low_risk_functions: 0,
+        unknown_functions: 0,
+        suggested_lines: 0,
+    )
+}
+
+fn add_decision(
+    summary: read ReviewSummary,
+    decision_value: read ReviewDecision,
+) -> fresh ReviewSummary {
+    if decision_value.classification == ReviewClass.unknown() {
+        return ReviewSummary(
+            total_functions: summary.total_functions + 1,
+            must_review_functions: summary.must_review_functions,
+            low_risk_functions: summary.low_risk_functions,
+            unknown_functions: summary.unknown_functions + 1,
+            suggested_lines: summary.suggested_lines + decision_value.suggested_lines,
+        )
+    }
+
+    if decision_value.classification == ReviewClass.must_review() {
+        return ReviewSummary(
+            total_functions: summary.total_functions + 1,
+            must_review_functions: summary.must_review_functions + 1,
+            low_risk_functions: summary.low_risk_functions,
+            unknown_functions: summary.unknown_functions,
+            suggested_lines: summary.suggested_lines + decision_value.suggested_lines,
+        )
+    }
+
+    return ReviewSummary(
+        total_functions: summary.total_functions + 1,
+        must_review_functions: summary.must_review_functions,
+        low_risk_functions: summary.low_risk_functions + 1,
+        unknown_functions: summary.unknown_functions,
+        suggested_lines: summary.suggested_lines,
+    )
+}
+
+fn summarize_four(
+    a: read ReviewFacts,
+    b: read ReviewFacts,
+    c: read ReviewFacts,
+    d: read ReviewFacts,
+) -> fresh ReviewSummary {
+    let first = add_decision(
+        summary: read empty_summary(),
+        decision_value: read classify_function(facts: read a),
+    )
+    let second = add_decision(
+        summary: read first,
+        decision_value: read classify_function(facts: read b),
+    )
+    let third = add_decision(
+        summary: read second,
+        decision_value: read classify_function(facts: read c),
+    )
+
+    return add_decision(
+        summary: read third,
+        decision_value: read classify_function(facts: read d),
+    )
+}
+
+fn unknown_ratio_percent(summary: read ReviewSummary) -> Int {
+    if summary.total_functions == 0 {
+        return 0
+    }
+
+    return summary.unknown_functions * 100 / summary.total_functions
+}
+
+fn dogfood_sample_summary() -> fresh ReviewSummary {
+    let helper = make_low_helper(lines: 4)
+    let native_entry = make_native_entry(lines: 20)
+    let resource_worker = make_resource_worker(lines: 18)
+    let cache_worker = make_retaining_cache(lines: 12)
+
+    return summarize_four(
+        a: read helper,
+        b: read native_entry,
+        c: read resource_worker,
+        d: read cache_worker,
+    )
+}
+
+fn dogfood_shape_is_expected() -> Bool {
+    let summary = dogfood_sample_summary()
+    let unknown_percent = unknown_ratio_percent(summary: read summary)
+
+    if summary.total_functions != 4 {
+        return false
+    }
+
+    if summary.must_review_functions != 3 {
+        return false
+    }
+
+    if summary.low_risk_functions != 1 {
+        return false
+    }
+
+    if summary.unknown_functions != 0 {
+        return false
+    }
+
+    return unknown_percent == 0
+}
