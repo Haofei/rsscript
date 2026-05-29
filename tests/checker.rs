@@ -52,7 +52,6 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
         "invalid resource type in ordinary Result/Option/container context",
         "RS0704",
     ),
-    ("ResourcePool.new used with fallible factory", "RS0707"),
     ("ResourcePool factory contract violation", "RS0707"),
     ("ResourcePool max_size not a positive Int literal", "RS0708"),
     ("ResourcePool active lease conflict", "RS0709"),
@@ -679,11 +678,17 @@ fn diagnostic_explanations_are_available_by_code() {
     let explanation = explain_diagnostic_code("RS0401").expect("RS0401 should be registered");
     let formatted = format_diagnostic_explanation(explanation);
     let fresh_unknown = explain_diagnostic_code("RS0602").expect("RS0602 should be registered");
+    let pool_contract = explain_diagnostic_code("RS0707").expect("RS0707 should be registered");
 
     assert_eq!(explanation.title, "use after manage");
     assert!(formatted.contains("RS0401"));
     assert!(formatted.contains("manage"));
     assert!(fresh_unknown.explanation.contains("clean inline fields"));
+    assert_eq!(
+        pool_contract.title,
+        "ResourcePool factory contract violation"
+    );
+    assert!(pool_contract.explanation.contains("ResourcePool.try_new"));
     assert!(explain_diagnostic_code("RS9999").is_none());
 }
 

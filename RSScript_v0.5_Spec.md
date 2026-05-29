@@ -1765,7 +1765,10 @@ with File.open(path: read path)? as file {
 }
 ```
 
-Compatibility tooling may warn on older `with File.open(...) as file` when the producer returns `Result<R, E>`. v0.6 should require explicit `?` for Result-returning resource producers.
+`with File.open(...) as file` is valid only when the producer returns a bare
+resource `R`. When the producer returns `Result<R, E>`, omitting `?` is a v0.5
+diagnostic, not a compatibility warning. RSScript has no legacy source corpus, so
+the checker keeps one canonical resource-producer spelling.
 
 ### 12.2 Drop points
 
@@ -1863,7 +1866,7 @@ fn ResourcePool<T: Resource>.try_new<E>(
 ) -> Result<fresh ResourcePool<T>, E>
 ```
 
-`try_new` is eager like `new`, but because `create` can fail, construction can fail, so it returns a `Result` and the caller writes `?`. Binding semantics for the eventual implementation:
+`try_new` is eager like `new`, but because `create` can fail, construction can fail, so it returns a `Result` and the caller writes `?`. Binding semantics for v0.5 lowering and the reference runtime:
 
 ```text
 1. eager: create is called up to max_size times at construction.
@@ -2590,7 +2593,6 @@ resource wrapped in Ok/Some and escaping
 resource-producing expression used outside resource context
 Result-returning resource producer missing explicit ?
 invalid resource type in ordinary Result/Option/container context
-ResourcePool.new used with fallible factory
 ResourcePool factory contract violation
 ResourcePool max_size not a positive Int literal
 ResourcePool active lease conflict

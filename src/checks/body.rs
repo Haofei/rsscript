@@ -2934,8 +2934,8 @@ fn resource_pool_fallible_factory_diagnostic(
         ))
         .with_cause("v0.5 `ResourcePool.new` eagerly constructs the pool and does not hide `Result` handling inside the pool constructor.")
         .with_fix(
-            "use_infallible_factory",
-            "Handle failure before constructing the pool, or use a future explicitly fallible ResourcePool API.",
+            "use_matching_pool_constructor",
+            "Handle failure before constructing the pool, or use `ResourcePool.try_new` with a fallible factory.",
             "manual",
         ),
     );

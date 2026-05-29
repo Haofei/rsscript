@@ -494,8 +494,8 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     },
     DiagnosticExplanation {
         code: code::RESOURCE_POOL_FALLIBLE_FACTORY,
-        title: "ResourcePool.new used with fallible factory",
-        explanation: "`ResourcePool.new` is the v0.5 eager noescape pool constructor and requires an infallible factory. Use an infallible factory, or introduce a distinct fallible pool API instead of hiding failure inside `new`.",
+        title: "ResourcePool factory contract violation",
+        explanation: "`ResourcePool.new` is the v0.5 eager noescape infallible constructor and requires a factory returning a bare resource. `ResourcePool.try_new` is the matching fallible constructor and requires a factory returning `Result<Resource, E>`.",
     },
     DiagnosticExplanation {
         code: code::RESOURCE_POOL_INVALID_MAX_SIZE,
