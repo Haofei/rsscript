@@ -4852,6 +4852,7 @@ fn package_function_contract_boundary_changed(
     resource_types: &BTreeSet<&str>,
 ) -> bool {
     function_contract_adds_mut_or_take_effect(old, new)
+        || function_contract_noescape_boundary_changed(old, new)
         || function_contract_resource_boundary_changed(old, new, resource_types)
 }
 
@@ -4869,6 +4870,28 @@ fn function_contract_adds_mut_or_take_effect(
                 .iter()
                 .skip(old.params.len())
                 .any(|param| matches!(param.effect, Some("mut" | "take")))
+}
+
+fn function_contract_noescape_boundary_changed(
+    old: &PackageFunctionContract,
+    new: &PackageFunctionContract,
+) -> bool {
+    old.params.iter().zip(new.params.iter()).any(|(old, new)| {
+        old.type_name != new.type_name && param_noescape_boundary_changed(old, new)
+    }) || old.params.len() != new.params.len()
+        && old
+            .params
+            .iter()
+            .chain(new.params.iter())
+            .any(param_is_noescape_boundary)
+}
+
+fn param_noescape_boundary_changed(old: &PackageParamContract, new: &PackageParamContract) -> bool {
+    param_is_noescape_boundary(old) != param_is_noescape_boundary(new)
+}
+
+fn param_is_noescape_boundary(param: &PackageParamContract) -> bool {
+    param.type_name.starts_with("noescape ")
 }
 
 fn function_contract_resource_boundary_changed(
