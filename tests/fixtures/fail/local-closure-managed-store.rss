@@ -1,0 +1,11 @@
+// expect: RS0803
+features: local
+
+fn bad() -> Unit {
+    local callback = || {
+        return Unit
+    }
+
+    let stored = callback
+    return Unit
+}

@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, Span, code};
-use crate::hir::{CallResolution, HirBlock, HirCallArg, HirExpr, HirStmt};
+use crate::hir::{CallResolution, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirStmt};
 use crate::syntax::ast::{Callee, Item};
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
@@ -21,8 +21,50 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
                 })
                 .collect::<HashMap<_, _>>();
             if let Some(block) = &body.block {
-                check_block(analyzer, block, &noescape_bindings);
+                let mut local_closure_bindings = HashMap::new();
+                collect_local_closure_bindings(block, &mut local_closure_bindings);
+                check_block(analyzer, block, &noescape_bindings, &local_closure_bindings);
             }
+        }
+    }
+}
+
+fn collect_local_closure_bindings(block: &HirBlock, bindings: &mut HashMap<String, Span>) {
+    for statement in &block.statements {
+        match statement {
+            HirStmt::Let {
+                kind: HirBindingKind::LocalLet,
+                name,
+                value: Some(HirExpr::Closure { body, .. }),
+                span,
+                ..
+            } => {
+                bindings.insert(name.clone(), span.clone());
+                collect_local_closure_bindings(body, bindings);
+            }
+            HirStmt::Let {
+                value: Some(HirExpr::Closure { body, .. }),
+                ..
+            } => collect_local_closure_bindings(body, bindings),
+            HirStmt::Let { .. } | HirStmt::Return { .. } | HirStmt::Expr(_) => {}
+            HirStmt::With { body, .. } => collect_local_closure_bindings(body, bindings),
+            HirStmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_local_closure_bindings(then_body, bindings);
+                if let Some(else_body) = else_body {
+                    collect_local_closure_bindings(else_body, bindings);
+                }
+            }
+            HirStmt::Loop { body, .. } => collect_local_closure_bindings(body, bindings),
+            HirStmt::Match { arms, .. } => {
+                for arm in arms {
+                    collect_local_closure_bindings(&arm.body, bindings);
+                }
+            }
+            HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
         }
     }
 }
@@ -31,6 +73,7 @@ fn check_block(
     analyzer: &mut Analyzer<'_>,
     block: &HirBlock,
     noescape_bindings: &HashMap<String, Span>,
+    local_closure_bindings: &HashMap<String, Span>,
 ) {
     for statement in &block.statements {
         match statement {
@@ -46,7 +89,14 @@ fn check_block(
                     noescape_bindings,
                     NoescapeEscapeContext::Store,
                 );
-                check_expr(analyzer, value, noescape_bindings);
+                check_local_closure_escape(
+                    analyzer,
+                    value,
+                    span,
+                    local_closure_bindings,
+                    LocalClosureEscapeContext::Store,
+                );
+                check_expr(analyzer, value, noescape_bindings, local_closure_bindings);
             }
             HirStmt::Return {
                 value: Some(value), ..
@@ -58,7 +108,14 @@ fn check_block(
                     noescape_bindings,
                     NoescapeEscapeContext::Return,
                 );
-                check_expr(analyzer, value, noescape_bindings);
+                check_local_closure_escape(
+                    analyzer,
+                    value,
+                    hir_expr_span(value),
+                    local_closure_bindings,
+                    LocalClosureEscapeContext::Return,
+                );
+                check_expr(analyzer, value, noescape_bindings, local_closure_bindings);
             }
             HirStmt::Expr(value) => {
                 check_noescape_escape(
@@ -68,11 +125,23 @@ fn check_block(
                     noescape_bindings,
                     NoescapeEscapeContext::UseAsValue,
                 );
-                check_expr(analyzer, value, noescape_bindings);
+                check_local_closure_escape(
+                    analyzer,
+                    value,
+                    hir_expr_span(value),
+                    local_closure_bindings,
+                    LocalClosureEscapeContext::UseAsValue,
+                );
+                check_expr(analyzer, value, noescape_bindings, local_closure_bindings);
             }
             HirStmt::With { resource, body, .. } => {
-                check_expr(analyzer, resource, noescape_bindings);
-                check_block(analyzer, body, noescape_bindings);
+                check_expr(
+                    analyzer,
+                    resource,
+                    noescape_bindings,
+                    local_closure_bindings,
+                );
+                check_block(analyzer, body, noescape_bindings, local_closure_bindings);
             }
             HirStmt::If {
                 condition,
@@ -80,24 +149,49 @@ fn check_block(
                 else_body,
                 ..
             } => {
-                check_expr(analyzer, condition, noescape_bindings);
-                check_block(analyzer, then_body, noescape_bindings);
+                check_expr(
+                    analyzer,
+                    condition,
+                    noescape_bindings,
+                    local_closure_bindings,
+                );
+                check_block(
+                    analyzer,
+                    then_body,
+                    noescape_bindings,
+                    local_closure_bindings,
+                );
                 if let Some(else_body) = else_body {
-                    check_block(analyzer, else_body, noescape_bindings);
+                    check_block(
+                        analyzer,
+                        else_body,
+                        noescape_bindings,
+                        local_closure_bindings,
+                    );
                 }
             }
             HirStmt::Loop {
                 condition, body, ..
             } => {
                 if let Some(condition) = condition {
-                    check_expr(analyzer, condition, noescape_bindings);
+                    check_expr(
+                        analyzer,
+                        condition,
+                        noescape_bindings,
+                        local_closure_bindings,
+                    );
                 }
-                check_block(analyzer, body, noescape_bindings);
+                check_block(analyzer, body, noescape_bindings, local_closure_bindings);
             }
             HirStmt::Match { value, arms, .. } => {
-                check_expr(analyzer, value, noescape_bindings);
+                check_expr(analyzer, value, noescape_bindings, local_closure_bindings);
                 for arm in arms {
-                    check_block(analyzer, &arm.body, noescape_bindings);
+                    check_block(
+                        analyzer,
+                        &arm.body,
+                        noescape_bindings,
+                        local_closure_bindings,
+                    );
                 }
             }
             HirStmt::Let { value: None, .. }
@@ -113,6 +207,7 @@ fn check_expr(
     analyzer: &mut Analyzer<'_>,
     expr: &HirExpr,
     noescape_bindings: &HashMap<String, Span>,
+    local_closure_bindings: &HashMap<String, Span>,
 ) {
     match expr {
         HirExpr::Call {
@@ -122,9 +217,22 @@ fn check_expr(
             resolution,
             ..
         } => {
-            check_call_args(analyzer, callee, args, span, resolution, noescape_bindings);
+            check_call_args(
+                analyzer,
+                callee,
+                args,
+                span,
+                resolution,
+                noescape_bindings,
+                local_closure_bindings,
+            );
             for arg in args {
-                check_expr(analyzer, &arg.value, noescape_bindings);
+                check_expr(
+                    analyzer,
+                    &arg.value,
+                    noescape_bindings,
+                    local_closure_bindings,
+                );
             }
         }
         HirExpr::Effect { value, .. }
@@ -132,18 +240,22 @@ fn check_expr(
         | HirExpr::Spawn { value, .. }
         | HirExpr::Await { value, .. }
         | HirExpr::Try { value, .. } => {
-            check_expr(analyzer, value, noescape_bindings);
+            check_expr(analyzer, value, noescape_bindings, local_closure_bindings);
         }
         HirExpr::Binary { left, right, .. } => {
-            check_expr(analyzer, left, noescape_bindings);
-            check_expr(analyzer, right, noescape_bindings);
+            check_expr(analyzer, left, noescape_bindings, local_closure_bindings);
+            check_expr(analyzer, right, noescape_bindings, local_closure_bindings);
         }
-        HirExpr::Field { base, .. } => check_expr(analyzer, base, noescape_bindings),
+        HirExpr::Field { base, .. } => {
+            check_expr(analyzer, base, noescape_bindings, local_closure_bindings)
+        }
         HirExpr::Index { base, index, .. } => {
-            check_expr(analyzer, base, noescape_bindings);
-            check_expr(analyzer, index, noescape_bindings);
+            check_expr(analyzer, base, noescape_bindings, local_closure_bindings);
+            check_expr(analyzer, index, noescape_bindings, local_closure_bindings);
         }
-        HirExpr::Closure { body, .. } => check_block(analyzer, body, noescape_bindings),
+        HirExpr::Closure { body, .. } => {
+            check_block(analyzer, body, noescape_bindings, local_closure_bindings)
+        }
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -158,9 +270,16 @@ fn check_call_args(
     call_span: &Span,
     resolution: &CallResolution,
     noescape_bindings: &HashMap<String, Span>,
+    local_closure_bindings: &HashMap<String, Span>,
 ) {
     let call_name = callee_name(callee);
-    if is_noescape_callback_call(callee, args, resolution, noescape_bindings) {
+    if is_closure_binding_call(
+        callee,
+        args,
+        resolution,
+        noescape_bindings,
+        local_closure_bindings,
+    ) {
         return;
     }
     if matches!(resolution, CallResolution::EnumVariant) {
@@ -334,7 +453,26 @@ fn check_call_args(
             noescape_bindings,
             NoescapeEscapeContext::Pass { callee: &call_name },
         );
+        check_local_closure_escape(
+            analyzer,
+            &arg.value,
+            &arg.span,
+            local_closure_bindings,
+            LocalClosureEscapeContext::Pass { callee: &call_name },
+        );
     }
+}
+
+fn is_closure_binding_call(
+    callee: &Callee,
+    args: &[HirCallArg],
+    resolution: &CallResolution,
+    noescape_bindings: &HashMap<String, Span>,
+    local_closure_bindings: &HashMap<String, Span>,
+) -> bool {
+    matches!(resolution, CallResolution::Unknown)
+        && args.is_empty()
+        && matches!(callee, Callee::Name(name) if noescape_bindings.contains_key(name) || local_closure_bindings.contains_key(name))
 }
 
 fn is_noescape_callback_call(
@@ -354,6 +492,101 @@ enum NoescapeEscapeContext<'a> {
     Return,
     UseAsValue,
     Pass { callee: &'a str },
+}
+
+#[derive(Debug, Clone, Copy)]
+enum LocalClosureEscapeContext<'a> {
+    Store,
+    Return,
+    UseAsValue,
+    Pass { callee: &'a str },
+}
+
+fn check_local_closure_escape(
+    analyzer: &mut Analyzer<'_>,
+    expr: &HirExpr,
+    context_span: &Span,
+    local_closure_bindings: &HashMap<String, Span>,
+    context: LocalClosureEscapeContext<'_>,
+) {
+    let Some((name, use_span)) = local_closure_escape_use(expr, local_closure_bindings) else {
+        return;
+    };
+    analyzer.diagnostics.push(local_closure_escape_diagnostic(
+        name,
+        use_span,
+        context_span.clone(),
+        context,
+    ));
+}
+
+fn local_closure_escape_use<'a>(
+    expr: &'a HirExpr,
+    local_closure_bindings: &'a HashMap<String, Span>,
+) -> Option<(&'a str, Span)> {
+    match expr {
+        HirExpr::Ident { name, span, .. } if local_closure_bindings.contains_key(name) => {
+            Some((name.as_str(), span.clone()))
+        }
+        HirExpr::Call {
+            callee,
+            args,
+            resolution,
+            ..
+        } if is_local_closure_call(callee, args, resolution, local_closure_bindings) => None,
+        HirExpr::Call {
+            args, resolution, ..
+        } => {
+            for arg in args {
+                if call_arg_targets_noescape_param(arg, resolution) {
+                    continue;
+                }
+                if let Some(found) = local_closure_escape_use(&arg.value, local_closure_bindings) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. } => local_closure_escape_use(value, local_closure_bindings),
+        HirExpr::Binary { left, right, .. } => {
+            local_closure_escape_use(left, local_closure_bindings)
+                .or_else(|| local_closure_escape_use(right, local_closure_bindings))
+        }
+        HirExpr::Field { base, .. } => local_closure_escape_use(base, local_closure_bindings),
+        HirExpr::Index { base, index, .. } => {
+            local_closure_escape_use(base, local_closure_bindings)
+                .or_else(|| local_closure_escape_use(index, local_closure_bindings))
+        }
+        HirExpr::Closure { body, .. } => {
+            for statement in &body.statements {
+                if let Some(found) =
+                    local_closure_any_use_in_stmt(statement, local_closure_bindings)
+                {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => None,
+    }
+}
+
+fn is_local_closure_call(
+    callee: &Callee,
+    args: &[HirCallArg],
+    resolution: &CallResolution,
+    local_closure_bindings: &HashMap<String, Span>,
+) -> bool {
+    matches!(resolution, CallResolution::Unknown)
+        && args.is_empty()
+        && matches!(callee, Callee::Name(name) if local_closure_bindings.contains_key(name))
 }
 
 fn check_noescape_escape(
@@ -530,6 +763,109 @@ fn noescape_any_use<'a>(
     }
 }
 
+fn local_closure_any_use_in_stmt<'a>(
+    statement: &'a HirStmt,
+    local_closure_bindings: &'a HashMap<String, Span>,
+) -> Option<(&'a str, Span)> {
+    match statement {
+        HirStmt::Let {
+            value: Some(value), ..
+        }
+        | HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => local_closure_any_use(value, local_closure_bindings),
+        HirStmt::With { resource, body, .. } => {
+            local_closure_any_use(resource, local_closure_bindings).or_else(|| {
+                body.statements.iter().find_map(|statement| {
+                    local_closure_any_use_in_stmt(statement, local_closure_bindings)
+                })
+            })
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => local_closure_any_use(condition, local_closure_bindings)
+            .or_else(|| {
+                then_body.statements.iter().find_map(|statement| {
+                    local_closure_any_use_in_stmt(statement, local_closure_bindings)
+                })
+            })
+            .or_else(|| {
+                else_body.as_ref().and_then(|body| {
+                    body.statements.iter().find_map(|statement| {
+                        local_closure_any_use_in_stmt(statement, local_closure_bindings)
+                    })
+                })
+            }),
+        HirStmt::Loop {
+            condition, body, ..
+        } => condition
+            .as_ref()
+            .and_then(|condition| local_closure_any_use(condition, local_closure_bindings))
+            .or_else(|| {
+                body.statements.iter().find_map(|statement| {
+                    local_closure_any_use_in_stmt(statement, local_closure_bindings)
+                })
+            }),
+        HirStmt::Match { value, arms, .. } => local_closure_any_use(value, local_closure_bindings)
+            .or_else(|| {
+                arms.iter().find_map(|arm| {
+                    arm.body.statements.iter().find_map(|statement| {
+                        local_closure_any_use_in_stmt(statement, local_closure_bindings)
+                    })
+                })
+            }),
+        HirStmt::Let { value: None, .. }
+        | HirStmt::Return { value: None, .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => None,
+    }
+}
+
+fn local_closure_any_use<'a>(
+    expr: &'a HirExpr,
+    local_closure_bindings: &'a HashMap<String, Span>,
+) -> Option<(&'a str, Span)> {
+    match expr {
+        HirExpr::Ident { name, span, .. } if local_closure_bindings.contains_key(name) => {
+            Some((name.as_str(), span.clone()))
+        }
+        HirExpr::Call {
+            callee, args, span, ..
+        } => {
+            if let Callee::Name(name) = callee
+                && local_closure_bindings.contains_key(name)
+            {
+                return Some((name.as_str(), span.clone()));
+            }
+            args.iter()
+                .find_map(|arg| local_closure_any_use(&arg.value, local_closure_bindings))
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. } => local_closure_any_use(value, local_closure_bindings),
+        HirExpr::Binary { left, right, .. } => local_closure_any_use(left, local_closure_bindings)
+            .or_else(|| local_closure_any_use(right, local_closure_bindings)),
+        HirExpr::Field { base, .. } => local_closure_any_use(base, local_closure_bindings),
+        HirExpr::Index { base, index, .. } => local_closure_any_use(base, local_closure_bindings)
+            .or_else(|| local_closure_any_use(index, local_closure_bindings)),
+        HirExpr::Closure { body, .. } => body
+            .statements
+            .iter()
+            .find_map(|statement| local_closure_any_use_in_stmt(statement, local_closure_bindings)),
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => None,
+    }
+}
+
 fn call_arg_targets_noescape_param(arg: &HirCallArg, resolution: &CallResolution) -> bool {
     let CallResolution::Resolved { signature, .. } = resolution else {
         return false;
@@ -578,6 +914,48 @@ fn noescape_escape_diagnostic(
     .with_fix(
         "keep_noescape_local",
         "Call the callback directly, or change the API to an ordinary managed callback type.",
+        "manual",
+    )
+}
+
+fn local_closure_escape_diagnostic(
+    name: &str,
+    use_span: Span,
+    context_span: Span,
+    context: LocalClosureEscapeContext<'_>,
+) -> Diagnostic {
+    let (summary, cause) = match context {
+        LocalClosureEscapeContext::Store => (
+            format!("local closure `{name}` cannot be stored in a managed binding."),
+            "A closure bound with `local` is an exclusive local capability and cannot become managed data.".to_string(),
+        ),
+        LocalClosureEscapeContext::Return => (
+            format!("local closure `{name}` cannot be returned."),
+            "A local closure cannot escape the function where its local captures are valid.".to_string(),
+        ),
+        LocalClosureEscapeContext::UseAsValue => (
+            format!("local closure `{name}` cannot be used as an ordinary value."),
+            "Call the local closure directly, or pass it to a resolved `noescape Fn()` parameter.".to_string(),
+        ),
+        LocalClosureEscapeContext::Pass { callee } => (
+            format!("local closure `{name}` cannot be passed to `{callee}` as an ordinary value."),
+            "Forwarding a local closure is only allowed when the target parameter is `noescape Fn()`.".to_string(),
+        ),
+    };
+    Diagnostic::error(
+        code::LOCAL_CLOSURE_ESCAPE,
+        summary,
+        use_span,
+        "local closure escapes",
+    )
+    .with_cause(cause)
+    .with_cause(format!(
+        "The escaping context starts at {}:{}.",
+        context_span.line, context_span.column
+    ))
+    .with_fix(
+        "keep_local_closure_noescape",
+        "Call the closure locally, or pass it to a noescape callback parameter.",
         "manual",
     )
 }

@@ -404,7 +404,14 @@ fn review_map_region_draft(
 ) -> ReviewMapRegionDraft {
     let mut facts = ReviewMapFacts::default();
     let callback_params = review_map_callback_params(function);
-    collect_review_map_facts_block(&function.body, hir, &callback_params, &mut facts);
+    let local_closure_bindings = review_map_local_closure_bindings(&function.body);
+    collect_review_map_facts_block(
+        &function.body,
+        hir,
+        &callback_params,
+        &local_closure_bindings,
+        &mut facts,
+    );
     if let Some(hir_body) = hir.function_body(&function.name) {
         let local_bindings = hir_body
             .bindings
@@ -655,14 +662,113 @@ fn review_map_callback_params(function: &FunctionDecl) -> BTreeSet<String> {
         .collect()
 }
 
+fn review_map_local_closure_bindings(block: &Block) -> BTreeSet<String> {
+    let mut bindings = BTreeSet::new();
+    collect_review_map_local_closure_bindings_block(block, &mut bindings);
+    bindings
+}
+
+fn collect_review_map_local_closure_bindings_block(block: &Block, bindings: &mut BTreeSet<String>) {
+    for statement in &block.statements {
+        collect_review_map_local_closure_bindings_stmt(statement, bindings);
+    }
+}
+
+fn collect_review_map_local_closure_bindings_stmt(stmt: &Stmt, bindings: &mut BTreeSet<String>) {
+    match stmt {
+        Stmt::Let(stmt) => {
+            if stmt.kind == LetKind::Local && matches!(stmt.value, Some(Expr::Closure { .. })) {
+                bindings.insert(stmt.name.clone());
+            }
+            if let Some(value) = &stmt.value {
+                collect_review_map_local_closure_bindings_expr(value, bindings);
+            }
+        }
+        Stmt::Return(stmt) => {
+            if let Some(value) = &stmt.value {
+                collect_review_map_local_closure_bindings_expr(value, bindings);
+            }
+        }
+        Stmt::With(stmt) => {
+            collect_review_map_local_closure_bindings_expr(&stmt.resource, bindings);
+            collect_review_map_local_closure_bindings_block(&stmt.body, bindings);
+        }
+        Stmt::If(stmt) => {
+            collect_review_map_local_closure_bindings_expr(&stmt.condition, bindings);
+            collect_review_map_local_closure_bindings_block(&stmt.then_body, bindings);
+            if let Some(else_body) = &stmt.else_body {
+                collect_review_map_local_closure_bindings_block(else_body, bindings);
+            }
+        }
+        Stmt::Loop(stmt) => {
+            if let Some(condition) = &stmt.condition {
+                collect_review_map_local_closure_bindings_expr(condition, bindings);
+            }
+            collect_review_map_local_closure_bindings_block(&stmt.body, bindings);
+        }
+        Stmt::Match(stmt) => {
+            collect_review_map_local_closure_bindings_expr(&stmt.value, bindings);
+            for arm in &stmt.arms {
+                collect_review_map_local_closure_bindings_block(&arm.body, bindings);
+            }
+        }
+        Stmt::Expr(expr) => collect_review_map_local_closure_bindings_expr(expr, bindings),
+        Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::MalformedWith(_)
+        | Stmt::MalformedIf(_)
+        | Stmt::MalformedLoop(_)
+        | Stmt::MalformedMatch(_)
+        | Stmt::Unknown(_) => {}
+    }
+}
+
+fn collect_review_map_local_closure_bindings_expr(expr: &Expr, bindings: &mut BTreeSet<String>) {
+    match expr {
+        Expr::Call { args, .. } => {
+            for arg in args {
+                collect_review_map_local_closure_bindings_expr(&arg.value, bindings);
+            }
+        }
+        Expr::Effect { value, .. }
+        | Expr::Manage { value, .. }
+        | Expr::Spawn { value, .. }
+        | Expr::Await { value, .. }
+        | Expr::Try { value, .. }
+        | Expr::Field { base: value, .. } => {
+            collect_review_map_local_closure_bindings_expr(value, bindings);
+        }
+        Expr::Index { base, index, .. }
+        | Expr::Binary {
+            left: base,
+            right: index,
+            ..
+        } => {
+            collect_review_map_local_closure_bindings_expr(base, bindings);
+            collect_review_map_local_closure_bindings_expr(index, bindings);
+        }
+        Expr::Closure { body, .. } => {
+            collect_review_map_local_closure_bindings_block(body, bindings)
+        }
+        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+    }
+}
+
 fn collect_review_map_facts_block(
     block: &Block,
     hir: &Hir,
     callback_params: &BTreeSet<String>,
+    local_closure_bindings: &BTreeSet<String>,
     facts: &mut ReviewMapFacts,
 ) {
     for statement in &block.statements {
-        collect_review_map_facts_stmt(statement, hir, callback_params, facts);
+        collect_review_map_facts_stmt(
+            statement,
+            hir,
+            callback_params,
+            local_closure_bindings,
+            facts,
+        );
     }
 }
 
@@ -670,6 +776,7 @@ fn collect_review_map_facts_stmt(
     statement: &Stmt,
     hir: &Hir,
     callback_params: &BTreeSet<String>,
+    local_closure_bindings: &BTreeSet<String>,
     facts: &mut ReviewMapFacts,
 ) {
     match statement {
@@ -678,39 +785,107 @@ fn collect_review_map_facts_stmt(
                 facts.has_local = true;
             }
             if let Some(value) = &stmt.value {
-                collect_review_map_facts_expr(value, hir, callback_params, facts);
+                collect_review_map_facts_expr(
+                    value,
+                    hir,
+                    callback_params,
+                    local_closure_bindings,
+                    facts,
+                );
             }
         }
         Stmt::Return(stmt) => {
             if let Some(value) = &stmt.value {
-                collect_review_map_facts_expr(value, hir, callback_params, facts);
+                collect_review_map_facts_expr(
+                    value,
+                    hir,
+                    callback_params,
+                    local_closure_bindings,
+                    facts,
+                );
             }
         }
         Stmt::With(stmt) => {
             facts.has_with = true;
-            collect_review_map_facts_expr(&stmt.resource, hir, callback_params, facts);
-            collect_review_map_facts_block(&stmt.body, hir, callback_params, facts);
+            collect_review_map_facts_expr(
+                &stmt.resource,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
+            collect_review_map_facts_block(
+                &stmt.body,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
         }
         Stmt::If(stmt) => {
-            collect_review_map_facts_expr(&stmt.condition, hir, callback_params, facts);
-            collect_review_map_facts_block(&stmt.then_body, hir, callback_params, facts);
+            collect_review_map_facts_expr(
+                &stmt.condition,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
+            collect_review_map_facts_block(
+                &stmt.then_body,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
             if let Some(else_body) = &stmt.else_body {
-                collect_review_map_facts_block(else_body, hir, callback_params, facts);
+                collect_review_map_facts_block(
+                    else_body,
+                    hir,
+                    callback_params,
+                    local_closure_bindings,
+                    facts,
+                );
             }
         }
         Stmt::Loop(stmt) => {
             if let Some(condition) = &stmt.condition {
-                collect_review_map_facts_expr(condition, hir, callback_params, facts);
+                collect_review_map_facts_expr(
+                    condition,
+                    hir,
+                    callback_params,
+                    local_closure_bindings,
+                    facts,
+                );
             }
-            collect_review_map_facts_block(&stmt.body, hir, callback_params, facts);
+            collect_review_map_facts_block(
+                &stmt.body,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
         }
         Stmt::Match(stmt) => {
-            collect_review_map_facts_expr(&stmt.value, hir, callback_params, facts);
+            collect_review_map_facts_expr(
+                &stmt.value,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
             for arm in &stmt.arms {
-                collect_review_map_facts_block(&arm.body, hir, callback_params, facts);
+                collect_review_map_facts_block(
+                    &arm.body,
+                    hir,
+                    callback_params,
+                    local_closure_bindings,
+                    facts,
+                );
             }
         }
-        Stmt::Expr(expr) => collect_review_map_facts_expr(expr, hir, callback_params, facts),
+        Stmt::Expr(expr) => {
+            collect_review_map_facts_expr(expr, hir, callback_params, local_closure_bindings, facts)
+        }
         Stmt::Break(_)
         | Stmt::Continue(_)
         | Stmt::MalformedWith(_)
@@ -725,6 +900,7 @@ fn collect_review_map_facts_expr(
     expr: &Expr,
     hir: &Hir,
     callback_params: &BTreeSet<String>,
+    local_closure_bindings: &BTreeSet<String>,
     facts: &mut ReviewMapFacts,
 ) {
     match expr {
@@ -734,7 +910,7 @@ fn collect_review_map_facts_expr(
             }
             if let Some(callback) = review_map_callback_call(callee, callback_params) {
                 facts.callback_calls.insert(callback.to_string());
-            } else {
+            } else if review_map_local_closure_call(callee, local_closure_bindings).is_none() {
                 match hir.resolve_call(callee) {
                     CallResolution::Resolved { signature, kind } => {
                         if kind == ResolvedCalleeKind::UserFunction {
@@ -748,7 +924,13 @@ fn collect_review_map_facts_expr(
                 }
             }
             for arg in args {
-                collect_review_map_facts_expr(&arg.value, hir, callback_params, facts);
+                collect_review_map_facts_expr(
+                    &arg.value,
+                    hir,
+                    callback_params,
+                    local_closure_bindings,
+                    facts,
+                );
             }
         }
         Expr::Effect { effect, value, .. } => {
@@ -757,39 +939,97 @@ fn collect_review_map_facts_expr(
                 DataEffect::Take => facts.has_take = true,
                 DataEffect::Read => {}
             }
-            collect_review_map_facts_expr(value, hir, callback_params, facts);
+            collect_review_map_facts_expr(
+                value,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
         }
         Expr::Manage { value, .. } => {
             facts.has_manage = true;
-            collect_review_map_facts_expr(value, hir, callback_params, facts);
+            collect_review_map_facts_expr(
+                value,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
         }
         Expr::Spawn { value, .. } => {
             facts.has_spawn = true;
             collect_spawn_capture_names(value, &mut facts.spawn_captures);
-            collect_review_map_facts_expr(value, hir, callback_params, facts);
+            collect_review_map_facts_expr(
+                value,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
         }
         Expr::Await { value, .. } => {
             facts.has_await = true;
-            collect_review_map_facts_expr(value, hir, callback_params, facts);
+            collect_review_map_facts_expr(
+                value,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
         }
         Expr::Try { value, .. } => {
             facts.has_error_boundary = true;
-            collect_review_map_facts_expr(value, hir, callback_params, facts);
+            collect_review_map_facts_expr(
+                value,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
         }
         Expr::Binary { left, right, .. } => {
-            collect_review_map_facts_expr(left, hir, callback_params, facts);
-            collect_review_map_facts_expr(right, hir, callback_params, facts);
+            collect_review_map_facts_expr(
+                left,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
+            collect_review_map_facts_expr(
+                right,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
         }
         Expr::Field { base, .. } => {
-            collect_review_map_facts_expr(base, hir, callback_params, facts)
+            collect_review_map_facts_expr(base, hir, callback_params, local_closure_bindings, facts)
         }
         Expr::Index { base, index, .. } => {
-            collect_review_map_facts_expr(base, hir, callback_params, facts);
-            collect_review_map_facts_expr(index, hir, callback_params, facts);
+            collect_review_map_facts_expr(
+                base,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
+            collect_review_map_facts_expr(
+                index,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
         }
-        Expr::Closure { body, .. } => {
-            collect_review_map_facts_block(body, hir, callback_params, facts)
-        }
+        Expr::Closure { body, .. } => collect_review_map_facts_block(
+            body,
+            hir,
+            callback_params,
+            local_closure_bindings,
+            facts,
+        ),
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
     }
 }
@@ -800,6 +1040,16 @@ fn review_map_callback_call<'a>(
 ) -> Option<&'a str> {
     match callee {
         Callee::Name(name) => callback_params.get(name).map(String::as_str),
+        Callee::Qualified { .. } => None,
+    }
+}
+
+fn review_map_local_closure_call<'a>(
+    callee: &Callee,
+    local_closure_bindings: &'a BTreeSet<String>,
+) -> Option<&'a str> {
+    match callee {
+        Callee::Name(name) => local_closure_bindings.get(name).map(String::as_str),
         Callee::Qualified { .. } => None,
     }
 }

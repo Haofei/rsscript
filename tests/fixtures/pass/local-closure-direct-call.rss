@@ -1,0 +1,10 @@
+features: local
+
+fn run() -> Unit {
+    local callback = || {
+        return Unit
+    }
+
+    callback()
+    return Unit
+}

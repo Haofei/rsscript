@@ -56,6 +56,7 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
     ("ResourcePool factory contract violation", "RS0707"),
     ("local captured by managed closure", "RS0801"),
     ("noescape callback escape", "RS0802"),
+    ("local closure escape", "RS0803"),
     ("take of handle field", "RS0901"),
     (
         "weak field initialized without explicit weak handle",
@@ -4186,6 +4187,41 @@ fn apply(callback: noescape Fn()) -> Unit {
             .reasons
             .iter()
             .any(|reason| reason == "noescape callback call `callback`"),
+        "{region:?}"
+    );
+    assert_eq!(map.summary.unknown.functions, 0);
+}
+
+#[test]
+fn review_map_marks_local_closure_direct_calls_review_required_not_unknown() {
+    let source = r#"
+features: local
+
+fn run() -> Unit {
+    local callback = || {
+        return Unit
+    }
+
+    callback()
+    return Unit
+}
+"#;
+    let map = review_map_sources(vec![("local-callback.rss", source)]);
+    let region = map.files[0]
+        .regions
+        .iter()
+        .find(|region| region.function == "run")
+        .expect("expected run region");
+
+    assert_eq!(
+        region.classification,
+        ReviewMapClassification::ReviewRequired
+    );
+    assert!(
+        !region
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("unresolved call")),
         "{region:?}"
     );
     assert_eq!(map.summary.unknown.functions, 0);

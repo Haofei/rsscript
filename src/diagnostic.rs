@@ -53,6 +53,7 @@ pub mod code {
     pub const RESOURCE_POOL_FALLIBLE_FACTORY: &str = "RS0707";
     pub const LOCAL_CAPTURED_BY_MANAGED_CLOSURE: &str = "RS0801";
     pub const NOESCAPE_CALLBACK_ESCAPE: &str = "RS0802";
+    pub const LOCAL_CLOSURE_ESCAPE: &str = "RS0803";
     pub const TAKE_HANDLE_FIELD: &str = "RS0901";
     pub const INVALID_WEAK_FIELD: &str = "RS0902";
     pub const WEAK_FIELD_REQUIRES_UPGRADE: &str = "RS0903";
@@ -498,6 +499,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::NOESCAPE_CALLBACK_ESCAPE,
         title: "noescape callback escape",
         explanation: "`noescape Fn()` parameters are temporary callback capabilities. They may be called directly or forwarded only to another resolved noescape parameter, but they cannot be returned, stored, retained, or passed as ordinary managed values.",
+    },
+    DiagnosticExplanation {
+        code: code::LOCAL_CLOSURE_ESCAPE,
+        title: "local closure escape",
+        explanation: "A closure bound with `local` is an exclusive local capability. It may be called directly or passed to `noescape Fn()` parameters, but it cannot be returned, stored in managed bindings, or passed as an ordinary managed callback.",
     },
     DiagnosticExplanation {
         code: code::TAKE_HANDLE_FIELD,

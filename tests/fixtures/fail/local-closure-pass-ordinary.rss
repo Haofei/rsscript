@@ -1,0 +1,15 @@
+// expect: RS0803
+features: local
+
+struct Callback
+
+fn store(callback: read Callback) -> Unit
+
+fn bad() -> Unit {
+    local callback = || {
+        return Unit
+    }
+
+    store(callback: read callback)
+    return Unit
+}
