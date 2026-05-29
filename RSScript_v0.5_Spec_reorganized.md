@@ -2163,7 +2163,7 @@ surface & / &mut
 Rust-style traits as source semantics
 associated types
 blanket impls
-trait objects
+Rust-style trait objects (implicit coercion, auto method resolution)
 Future / Pin / Poll / Waker source model
 general user-defined FFI
 GPU kernel language
@@ -2172,6 +2172,11 @@ managed -> local demotion
 operator-overloaded numeric DSLs
 macro-heavy metaprogramming
 ```
+
+What is excluded is the *Rust-style* trait-object machinery: implicit coercion,
+auto method resolution, object safety rules, and type-erased dispatch with no
+effect contract. Protocol-typed dynamic dispatch in its explicit, effect-carrying
+form is admitted, not excluded (section 14.6).
 
 ### 21.1 Deferred, not excluded: managed memory strategy
 
