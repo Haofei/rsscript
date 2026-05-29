@@ -329,5 +329,15 @@ fn main_handler(
     let function = FunctionObject.new(closure: read child)
     inspect_environment(env: read child, function: read function)
 
-    return complete_request(request: read request, owner_id: read owner_id, image_cache: mut image_cache, config_store: mut config_store, rules_global: mut rules_global, status_cache: mut status_cache, counter: mut counter, db_url: read db_url, csv_path: read csv_path)?
+    return complete_request(
+        request: read request,
+        owner_id: read owner_id,
+        image_cache: mut image_cache,
+        config_store: mut config_store,
+        rules_global: mut rules_global,
+        status_cache: mut status_cache,
+        counter: mut counter,
+        db_url: read db_url,
+        csv_path: read csv_path,
+    )?
 }

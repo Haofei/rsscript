@@ -2841,6 +2841,22 @@ fn main() -> Unit {
 }
 
 #[test]
+fn parser_keeps_multiline_return_call_with_try_as_one_statement() {
+    let source = r#"
+fn make_response(
+    status: read String,
+    trace_id: read String,
+) -> Result<fresh Response, HttpError> {
+    return Response.ok(
+        body: read String.concat(left: read status, right: read trace_id),
+    )?
+}
+"#;
+    let diagnostics = analyze_source("multiline-return-call.rss", source);
+    assert_eq!(diagnostics, Vec::new(), "{diagnostics:?}");
+}
+
+#[test]
 fn checker_reports_unclosed_delimiters_on_own_construct() {
     let unclosed_body = r#"
 fn main() -> Unit {
@@ -4006,6 +4022,29 @@ fn review_map_app_benchmark_has_no_unknown_regions() {
     assert_eq!(json["summary"]["unknown_function_ratio"], 0.0);
     assert_eq!(json["summary"]["must_review"]["functions"], 25);
     assert_eq!(json["summary"]["low_semantic_risk"]["functions"], 5);
+}
+
+#[test]
+fn rss_review_map_json_reports_app_benchmark_unknown_zero() {
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("review")
+        .arg("--map")
+        .arg("--json")
+        .arg("tests/fixtures/pass/app-review-benchmark.rss")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss review --map --json should execute");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: Value = serde_json::from_str(&stdout).expect("stdout should be review map JSON");
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert_eq!(json["summary"]["total_functions"], 30);
+    assert_eq!(json["summary"]["unknown"]["functions"], 0);
+    assert_eq!(json["summary"]["unknown"]["lines"], 0);
+    assert_eq!(json["summary"]["unknown_ratio"], 0.0);
+    assert_eq!(json["summary"]["unknown_function_ratio"], 0.0);
 }
 
 #[test]

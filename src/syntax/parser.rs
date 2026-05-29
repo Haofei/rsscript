@@ -1589,7 +1589,11 @@ fn statement_end(tokens: &[Token], start: usize, limit: usize) -> usize {
     let mut depth = 0usize;
     let mut angle_depth = 0usize;
     for (index, token) in tokens.iter().enumerate().take(limit).skip(start + 1) {
-        if depth == 0 && angle_depth == 0 && token.span.line > line {
+        if depth == 0
+            && angle_depth == 0
+            && token.span.line > line
+            && !is_statement_postfix_token(token)
+        {
             return index;
         }
         if token.symbol("(") || token.symbol("{") || token.symbol("[") {
@@ -1606,6 +1610,10 @@ fn statement_end(tokens: &[Token], start: usize, limit: usize) -> usize {
         }
     }
     limit
+}
+
+fn is_statement_postfix_token(token: &Token) -> bool {
+    token.symbol("?")
 }
 
 fn find_control_body_open(tokens: &[Token], start: usize, limit: usize) -> Option<usize> {
