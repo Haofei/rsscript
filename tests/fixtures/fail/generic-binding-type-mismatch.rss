@@ -1,0 +1,6 @@
+// expect: RS0207
+
+fn main() -> Unit {
+    let values: List<String> = List<Int>.new()
+    return Unit
+}

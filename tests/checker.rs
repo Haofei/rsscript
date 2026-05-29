@@ -957,6 +957,51 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_reports_generic_binding_annotation_mismatch_before_backend_lowering() {
+    let source = r#"
+fn main() -> Unit {
+    let values: List<String> = List<Int>.new()
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("generic-binding-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "binding `values` has initializer type `List<Int>`, expected `List<String>`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_generic_call_argument_mismatch_before_backend_lowering() {
+    let source = r#"
+fn accept(values: read List<String>) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    let values = List<Int>.new()
+    accept(values: read values)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("generic-call-arg-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "argument `values` for `accept` has type `List<Int>`, expected `List<String>`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn checker_reports_option_binding_payload_type_mismatch_before_backend_lowering() {
     let source = r#"
 fn main() -> Unit {
@@ -986,6 +1031,25 @@ fn main() -> Unit {
 "#;
     let diagnostics = lower_source_to_rust("let-annotation-type.rss", source)
         .expect_err("binding type mismatch should fail before Rust generation");
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0207"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn rust_lowering_rejects_generic_binding_annotation_mismatch_before_rustc() {
+    let source = r#"
+fn main() -> Unit {
+    let values: List<String> = List<Int>.new()
+    return Unit
+}
+"#;
+    let diagnostics = lower_source_to_rust("generic-binding-type.rss", source)
+        .expect_err("generic binding mismatch should fail before Rust generation");
 
     assert!(
         diagnostics

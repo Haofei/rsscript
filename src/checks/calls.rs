@@ -1148,15 +1148,24 @@ fn call_type_param_substitutions(
         return substitutions;
     };
     let root = type_root_name(namespace);
-    let Some(type_info) = analyzer.hir.type_info(root) else {
-        return substitutions;
-    };
     let Some(namespace_args) = type_arg_names(namespace) else {
         return substitutions;
     };
-    for (param, actual) in type_info.type_params.iter().zip(namespace_args) {
-        if generic_params.contains(param.as_str()) {
-            substitutions.insert(param.clone(), actual.to_string());
+    let params = analyzer
+        .hir
+        .type_info(root)
+        .map(|type_info| {
+            type_info
+                .type_params
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+        })
+        .or_else(|| builtin_generic_type_params(root))
+        .unwrap_or_default();
+    for (param, actual) in params.into_iter().zip(namespace_args) {
+        if generic_params.contains(param) {
+            substitutions.insert(param.to_string(), actual.to_string());
         }
     }
     substitutions
@@ -2750,6 +2759,14 @@ fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
         .split_once('<')
         .and_then(|(_, rest)| rest.strip_suffix('>'))?;
     Some(split_top_level_type_args(inner))
+}
+
+fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str>> {
+    match root {
+        "List" | "Set" | "Option" | "ResourcePool" => Some(vec!["T"]),
+        "Map" | "Result" => Some(vec!["K", "V"]),
+        _ => None,
+    }
 }
 
 fn split_top_level_type_args(args: &str) -> Vec<&str> {

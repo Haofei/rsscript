@@ -225,6 +225,8 @@ makes the binding valid.
 Wrapper payloads are checked as part of the same contract:
 `let r: Result<String, E> = Ok(42)` is rejected because the `Ok` payload is
 `Int`, not `String`.
+Generic arguments are also part of the contract: `let xs: List<String> =
+List<Int>.new()` is rejected because the initializer has type `List<Int>`.
 
 ### 2.5 Public APIs are review contracts
 

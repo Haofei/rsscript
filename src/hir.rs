@@ -1530,16 +1530,24 @@ fn collect_namespace_type_substitutions(
         return;
     };
     let root = type_root_name(namespace);
-    let Some(type_info) = hir.type_info(root) else {
-        return;
-    };
     let Some(namespace_args) = type_arg_names(namespace) else {
         return;
     };
-    for (param, actual) in type_info.type_params.iter().zip(namespace_args) {
-        if generic_params.contains(param.as_str()) {
+    let params = hir
+        .type_info(root)
+        .map(|type_info| {
+            type_info
+                .type_params
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+        })
+        .or_else(|| builtin_generic_type_params(root))
+        .unwrap_or_default();
+    for (param, actual) in params.into_iter().zip(namespace_args) {
+        if generic_params.contains(param) {
             substitutions
-                .entry(param.clone())
+                .entry(param.to_string())
                 .or_insert_with(|| actual.to_string());
         }
     }
@@ -1720,6 +1728,14 @@ fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
         .split_once('<')
         .and_then(|(_, rest)| rest.strip_suffix('>'))?;
     Some(split_top_level_type_args(inner))
+}
+
+fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str>> {
+    match root {
+        "List" | "Set" | "Option" | "ResourcePool" => Some(vec!["T"]),
+        "Map" | "Result" => Some(vec!["K", "V"]),
+        _ => None,
+    }
 }
 
 fn noescape_return_type(type_name: &str) -> Option<&str> {
