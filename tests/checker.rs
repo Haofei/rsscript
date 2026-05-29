@@ -4748,6 +4748,73 @@ fn rss_run_reports_dogfood_package_diff_mismatch() {
 }
 
 #[test]
+fn rss_run_accepts_dogfood_package_lock_diff_classifier() {
+    let temp_dir = unique_temp_dir("rsscript-dogfood-package-lock-diff");
+    let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-lock-diff.rss")
+    else {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return;
+    };
+    let package_lock_diff_json = generated_dogfood_package_lock_diff_json(&temp_dir);
+    fs::write(
+        fixture_dir.join("dogfood-package-lock-diff.json"),
+        serde_json::to_vec(&package_lock_diff_json)
+            .expect("package lock diff JSON should serialize"),
+    )
+    .expect("generated package lock diff should write");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("tests/fixtures/pass/dogfood-package-lock-diff.rss")
+        .current_dir(&temp_dir)
+        .output()
+        .expect("rss run should execute dogfood package lock diff classifier");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "dogfood package lock diff packages=1 high_packages=1 high_features=1 mismatches=0 unmodeled_reasons=0"
+    );
+    assert!(stderr.trim().is_empty(), "{stderr}");
+}
+
+#[test]
+fn rss_run_reports_dogfood_package_lock_diff_mismatch() {
+    let temp_dir = unique_temp_dir("rsscript-dogfood-package-lock-diff-mismatch");
+    let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-lock-diff.rss")
+    else {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return;
+    };
+    let mut package_lock_diff_json = generated_dogfood_package_lock_diff_json(&temp_dir);
+    package_lock_diff_json["risk"] = Value::String("elevated".to_string());
+    fs::write(
+        fixture_dir.join("dogfood-package-lock-diff.json"),
+        serde_json::to_vec(&package_lock_diff_json)
+            .expect("package lock diff JSON should serialize"),
+    )
+    .expect("mutated package lock diff should write");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("tests/fixtures/pass/dogfood-package-lock-diff.rss")
+        .current_dir(&temp_dir)
+        .output()
+        .expect("rss run should execute dogfood package lock diff classifier");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!output.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("dogfood package lock diff packages=1 high_packages=1 high_features=1 mismatches=1 unmodeled_reasons=0"),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn rss_run_accepts_dogfood_rustc_remap_classifier() {
     let temp_dir = unique_temp_dir("rsscript-dogfood-rustc-remap");
     let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-rustc-remap.rss")
@@ -5010,6 +5077,41 @@ pub fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
     let diff = diff_package_dirs(&old_dir, &new_dir).expect("package diff should succeed");
     serde_json::from_str(&rsscript::format_package_diff_json(&diff))
         .expect("package diff JSON should parse")
+}
+
+fn generated_dogfood_package_lock_diff_json(temp_dir: &Path) -> Value {
+    let lock_dir = temp_dir.join("package-lock-diff");
+    fs::create_dir_all(&lock_dir).expect("lock diff dir should be created");
+    let old_lock_path = lock_dir.join("old.rsspkg.lock");
+    let new_lock_path = lock_dir.join("new.rsspkg.lock");
+    let old_lock = rsscript::PackageLock {
+        version: 1,
+        packages: vec![rsscript::PackageLockPackage {
+            name: "rss-net".to_string(),
+            version: "0.1.0".to_string(),
+            source: "path:.".to_string(),
+            checksum: "sha256:old".to_string(),
+            interface_hash: "sha256:interface".to_string(),
+            review_hash: "sha256:review".to_string(),
+            native_hash: None,
+            features: Vec::new(),
+        }],
+        metadata: rsscript::PackageLockMetadata {
+            rsscript_version: "0.5".to_string(),
+            created_by: "dogfood".to_string(),
+        },
+    };
+    let mut new_lock = old_lock.clone();
+    new_lock.packages[0].features = vec!["native-tls".to_string()];
+    fs::write(&old_lock_path, format_package_lock_toml(&old_lock))
+        .expect("old lock should be written");
+    fs::write(&new_lock_path, format_package_lock_toml(&new_lock))
+        .expect("new lock should be written");
+
+    let diff =
+        diff_package_locks(&old_lock_path, &new_lock_path).expect("lock diff should succeed");
+    serde_json::from_str(&rsscript::format_package_lock_diff_json(&diff))
+        .expect("package lock diff JSON should parse")
 }
 
 fn generated_dogfood_rustc_remap_json(temp_dir: &Path) -> Value {
