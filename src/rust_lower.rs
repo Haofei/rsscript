@@ -412,10 +412,12 @@ struct RustLowerer<'a> {
     type_kinds: BTreeMap<String, TypeKind>,
     native_boundary_callees: BTreeSet<String>,
     native_bindings: BTreeMap<String, String>,
+    function_return_types: BTreeMap<String, TypeRef>,
     param_effects: BTreeMap<String, DataEffect>,
     value_types: BTreeMap<String, TypeRef>,
     mutated_bindings: BTreeSet<String>,
     drop_field_names: BTreeSet<String>,
+    current_return_type: Option<TypeRef>,
     source_map: Vec<RustSourceMapEntry>,
 }
 
@@ -430,16 +432,19 @@ impl<'a> RustLowerer<'a> {
             })
             .collect();
         let native_boundary_callees = collect_native_boundary_callees(program);
+        let function_return_types = collect_function_return_types(program);
 
         Self {
             program,
             type_kinds,
             native_boundary_callees,
             native_bindings,
+            function_return_types,
             param_effects: BTreeMap::new(),
             value_types: BTreeMap::new(),
             mutated_bindings: BTreeSet::new(),
             drop_field_names: BTreeSet::new(),
+            current_return_type: None,
             source_map: Vec::new(),
         }
     }
@@ -482,7 +487,11 @@ impl<'a> RustLowerer<'a> {
         if ty.kind == TypeKind::Resource {
             out.push_str("#[must_use]\n");
         }
-        out.push_str("#[derive(Debug)]\n");
+        if ty.kind == TypeKind::Resource {
+            out.push_str("#[derive(Debug)]\n");
+        } else {
+            out.push_str("#[derive(Debug, Clone)]\n");
+        }
         out.push_str(&format!(
             "{}struct {}{} {{\n",
             visibility(true),
@@ -555,6 +564,7 @@ impl<'a> RustLowerer<'a> {
         let previous_param_effects = std::mem::take(&mut self.param_effects);
         let previous_value_types = std::mem::take(&mut self.value_types);
         let previous_mutated_bindings = std::mem::take(&mut self.mutated_bindings);
+        let previous_return_type = self.current_return_type.take();
         self.param_effects = function
             .params
             .iter()
@@ -566,6 +576,7 @@ impl<'a> RustLowerer<'a> {
             .map(|param| (param.name.clone(), param.ty.clone()))
             .collect();
         self.mutated_bindings = collect_mutated_bindings(&function.body);
+        self.current_return_type = function.return_ty.clone();
         self.record_source_marker(out, 0, "function", &function.span);
         let async_prefix = if function.is_async { "async " } else { "" };
         let is_public = function.is_public || is_runnable_main(function);
@@ -607,6 +618,7 @@ impl<'a> RustLowerer<'a> {
         self.param_effects = previous_param_effects;
         self.value_types = previous_value_types;
         self.mutated_bindings = previous_mutated_bindings;
+        self.current_return_type = previous_return_type;
     }
 
     fn lower_param(&self, param: &Param) -> String {
@@ -663,7 +675,8 @@ impl<'a> RustLowerer<'a> {
             }
             Stmt::Return(stmt) => {
                 if let Some(value) = &stmt.value {
-                    out.push_str(&format!("{pad}return {};\n", self.lower_expr(value)));
+                    let lowered = self.lower_return_expr(value);
+                    out.push_str(&format!("{pad}return {lowered};\n"));
                 } else {
                     out.push_str(&format!("{pad}return;\n"));
                 }
@@ -960,7 +973,7 @@ impl<'a> RustLowerer<'a> {
                                     self.lower_explicit_weak_field_value(&arg.value)
                                 ));
                             } else {
-                                let value = self.lower_expr(&arg.value);
+                                let value = self.lower_owned_expr(&arg.value);
                                 fields.push(format!("{field}: {value}"));
                             }
                         }
@@ -986,6 +999,9 @@ impl<'a> RustLowerer<'a> {
                 }
                 if is_string_concat_callee(callee) {
                     return lower_string_concat_call(self, args);
+                }
+                if is_weak_upgrade_callee(callee) {
+                    return lower_weak_upgrade_call(self, args);
                 }
                 if let Some(native_target) = self
                     .native_bindings
@@ -1057,6 +1073,55 @@ impl<'a> RustLowerer<'a> {
                 out
             }
             Expr::Unknown(span) => unreachable_lowering("expression", span),
+        }
+    }
+
+    fn lower_owned_expr(&mut self, expr: &Expr) -> String {
+        match expr {
+            Expr::Effect {
+                effect: DataEffect::Read,
+                value,
+                ..
+            }
+            | Expr::Effect {
+                effect: DataEffect::Mut,
+                value,
+                ..
+            } => format!("{}.clone()", self.lower_expr(value)),
+            Expr::Effect {
+                effect: DataEffect::Take,
+                value,
+                ..
+            } => self.lower_expr(value),
+            _ => self.lower_expr(expr),
+        }
+    }
+
+    fn lower_return_expr(&mut self, expr: &Expr) -> String {
+        let lowered = self.lower_expr(expr);
+        if self
+            .current_return_type
+            .as_ref()
+            .is_some_and(is_result_type)
+            && !is_result_constructor_expr(expr)
+            && !self.expr_returns_result(expr)
+        {
+            format!("Ok({lowered})")
+        } else {
+            lowered
+        }
+    }
+
+    fn expr_returns_result(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Call { callee, .. } => self
+                .function_return_types
+                .get(&native_boundary_callee_key(callee))
+                .is_some_and(is_result_type),
+            Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
+                self.expr_returns_result(value)
+            }
+            _ => false,
         }
     }
 
@@ -1264,6 +1329,69 @@ fn explicit_weak_handle_source(expr: &Expr) -> Option<&Expr> {
     match args.as_slice() {
         [arg] if arg.name.as_deref() == Some("value") => Some(&arg.value),
         _ => None,
+    }
+}
+
+fn is_weak_upgrade_callee(callee: &Callee) -> bool {
+    matches!(
+        callee,
+        Callee::Qualified { namespace, name } if namespace == "Weak" && name == "upgrade"
+    )
+}
+
+fn lower_weak_upgrade_call(lowerer: &mut RustLowerer<'_>, args: &[CallArg]) -> String {
+    let Some(arg) = args
+        .iter()
+        .find(|arg| arg.name.as_deref() == Some("value"))
+        .or_else(|| args.first())
+    else {
+        return "None".to_string();
+    };
+    let target = match &arg.value {
+        Expr::Effect {
+            effect: DataEffect::Read,
+            value,
+            ..
+        } => lowerer.lower_expr(value),
+        _ => lowerer.lower_expr(&arg.value),
+    };
+    format!("{target}.upgrade()")
+}
+
+fn is_result_type(ty: &TypeRef) -> bool {
+    ty.name == "Result" && ty.args.len() == 2
+}
+
+fn is_result_constructor_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call {
+            callee: Callee::Name(name),
+            ..
+        } => matches!(name.as_str(), "Ok" | "Err"),
+        _ => false,
+    }
+}
+
+fn collect_function_return_types(program: &Program) -> BTreeMap<String, TypeRef> {
+    let mut return_types = BTreeMap::new();
+    collect_program_function_return_types(program, &mut return_types);
+    for (file, source) in builtin_interfaces() {
+        let interface_program = parse_source(file, source);
+        collect_program_function_return_types(&interface_program, &mut return_types);
+    }
+    return_types
+}
+
+fn collect_program_function_return_types(
+    program: &Program,
+    return_types: &mut BTreeMap<String, TypeRef>,
+) {
+    for item in &program.items {
+        if let Item::Function(function) = item
+            && let Some(return_ty) = &function.return_ty
+        {
+            return_types.insert(function.name.clone(), return_ty.clone());
+        }
     }
 }
 

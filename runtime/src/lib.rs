@@ -188,6 +188,46 @@ impl fmt::Display for HttpError {
 
 impl std::error::Error for HttpError {}
 
+impl From<ConfigError> for HttpError {
+    fn from(error: ConfigError) -> Self {
+        Self {
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<CsvError> for HttpError {
+    fn from(error: CsvError) -> Self {
+        Self {
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<DbError> for HttpError {
+    fn from(error: DbError) -> Self {
+        Self {
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<ImageError> for HttpError {
+    fn from(error: ImageError) -> Self {
+        Self {
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<JsonError> for HttpError {
+    fn from(error: JsonError) -> Self {
+        Self {
+            message: error.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Image {
     bytes: Vec<u8>,
@@ -569,36 +609,135 @@ pub fn environment_root() -> Environment {
     }
 }
 
-pub fn environment_child(parent: &Managed<Environment>) -> Environment {
+pub trait RuntimeEnvironmentHandle {
+    fn managed_environment(&self) -> Managed<Environment>;
+    fn environment_has_parent(&self) -> bool;
+    fn environment_has_function(&self) -> bool;
+}
+
+impl RuntimeEnvironmentHandle for Environment {
+    fn managed_environment(&self) -> Managed<Environment> {
+        manage(self.clone())
+    }
+
+    fn environment_has_parent(&self) -> bool {
+        self.parent.is_some()
+    }
+
+    fn environment_has_function(&self) -> bool {
+        self.function.is_some()
+    }
+}
+
+impl RuntimeEnvironmentHandle for Managed<Environment> {
+    fn managed_environment(&self) -> Managed<Environment> {
+        self.clone()
+    }
+
+    fn environment_has_parent(&self) -> bool {
+        self.read().parent.is_some()
+    }
+
+    fn environment_has_function(&self) -> bool {
+        self.read().function.is_some()
+    }
+}
+
+impl<T: RuntimeEnvironmentHandle + ?Sized> RuntimeEnvironmentHandle for &T {
+    fn managed_environment(&self) -> Managed<Environment> {
+        (*self).managed_environment()
+    }
+
+    fn environment_has_parent(&self) -> bool {
+        (*self).environment_has_parent()
+    }
+
+    fn environment_has_function(&self) -> bool {
+        (*self).environment_has_function()
+    }
+}
+
+pub trait RuntimeEnvironmentMut {
+    fn bind_function_handle(&mut self, function: Managed<FunctionObject>);
+}
+
+impl RuntimeEnvironmentMut for Environment {
+    fn bind_function_handle(&mut self, function: Managed<FunctionObject>) {
+        self.function = Some(function);
+    }
+}
+
+impl RuntimeEnvironmentMut for Managed<Environment> {
+    fn bind_function_handle(&mut self, function: Managed<FunctionObject>) {
+        self.write().function = Some(function);
+    }
+}
+
+pub trait RuntimeFunctionHandle {
+    fn managed_function(&self) -> Managed<FunctionObject>;
+    fn function_has_closure(&self) -> bool;
+}
+
+impl RuntimeFunctionHandle for FunctionObject {
+    fn managed_function(&self) -> Managed<FunctionObject> {
+        manage(self.clone())
+    }
+
+    fn function_has_closure(&self) -> bool {
+        self.closure.upgrade().is_some()
+    }
+}
+
+impl RuntimeFunctionHandle for Managed<FunctionObject> {
+    fn managed_function(&self) -> Managed<FunctionObject> {
+        self.clone()
+    }
+
+    fn function_has_closure(&self) -> bool {
+        self.read().closure.upgrade().is_some()
+    }
+}
+
+impl<T: RuntimeFunctionHandle + ?Sized> RuntimeFunctionHandle for &T {
+    fn managed_function(&self) -> Managed<FunctionObject> {
+        (*self).managed_function()
+    }
+
+    fn function_has_closure(&self) -> bool {
+        (*self).function_has_closure()
+    }
+}
+
+pub fn environment_child(parent: &impl RuntimeEnvironmentHandle) -> Environment {
     Environment {
-        parent: Some(parent.clone()),
+        parent: Some(parent.managed_environment()),
         function: None,
     }
 }
 
 pub fn environment_bind_function(
-    env: &mut Managed<Environment>,
-    function: &Managed<FunctionObject>,
+    env: &mut impl RuntimeEnvironmentMut,
+    function: &impl RuntimeFunctionHandle,
 ) {
-    env.write().function = Some(function.clone());
+    env.bind_function_handle(function.managed_function());
 }
 
-pub fn environment_has_parent(env: &Managed<Environment>) -> bool {
-    env.read().parent.is_some()
+pub fn environment_has_parent(env: &impl RuntimeEnvironmentHandle) -> bool {
+    env.environment_has_parent()
 }
 
-pub fn environment_has_function(env: &Managed<Environment>) -> bool {
-    env.read().function.is_some()
+pub fn environment_has_function(env: &impl RuntimeEnvironmentHandle) -> bool {
+    env.environment_has_function()
 }
 
-pub fn function_object_new(closure: &Managed<Environment>) -> FunctionObject {
+pub fn function_object_new(closure: &impl RuntimeEnvironmentHandle) -> FunctionObject {
     FunctionObject {
-        closure: weak(closure),
+        closure: weak(&closure.managed_environment()),
     }
 }
 
-pub fn function_object_has_closure(function: &Managed<FunctionObject>) -> bool {
-    function.read().closure.upgrade().is_some()
+pub fn function_object_has_closure(function: &impl RuntimeFunctionHandle) -> bool {
+    function.function_has_closure()
 }
 
 pub fn db_connection_open(url: &str) -> DbConnection {

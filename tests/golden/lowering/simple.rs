@@ -3,7 +3,7 @@
 // RSScript features: <none>
 
 // rss:span kind=type file=simple.rss line=1 column=1 length=6
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Point {
     pub x: i64,
     pub y: i64,

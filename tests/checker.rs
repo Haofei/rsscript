@@ -1421,6 +1421,32 @@ pub fn use_try(x: Int, y: Int) -> Result<fresh Point, BuildError> {
 }
 
 #[test]
+fn rust_lowering_wraps_direct_result_success_returns() {
+    let source = r#"
+struct BuildError {
+    code: Int
+}
+
+struct Point {
+    x: Int
+    y: Int
+}
+
+fn maybe_point(x: Int, y: Int) -> Result<fresh Point, BuildError> {
+    return Point(x: x, y: y)
+}
+
+fn already_wrapped(x: Int, y: Int) -> Result<fresh Point, BuildError> {
+    return Ok(Point(x: x, y: y))
+}
+"#;
+    let rust = lower_source_to_rust("result-success.rss", source).expect("source should lower");
+
+    assert!(rust.contains("return Ok(Point { x: x, y: y });"));
+    assert!(!rust.contains("return Ok(Ok("));
+}
+
+#[test]
 fn rust_lowering_matches_golden_fixture() {
     let source = read_fixture(Path::new("tests/golden/lowering/simple.rss"));
     let expected_rust = read_fixture(Path::new("tests/golden/lowering/simple.rs"));
@@ -2210,6 +2236,53 @@ fn make_session_from_param(user: read User) -> Session {
         "diagnostics={:?}\nstderr={}",
         check.diagnostics, check.stderr
     );
+}
+
+#[test]
+fn rust_lowering_materializes_constructor_read_fields_as_owned_values() {
+    let source = r#"
+struct Inner {
+    name: String
+}
+
+struct Outer {
+    inner: Inner
+    label: String
+}
+
+fn make_outer(name: read String, label: read String) -> fresh Outer {
+    let inner = Inner(name: read name)
+    return Outer(inner: read inner, label: read label)
+}
+"#;
+    let rust = lower_source_to_rust("owned-constructor.rss", source).expect("source should lower");
+
+    assert!(rust.contains("#[derive(Debug, Clone)]"));
+    assert!(rust.contains("Inner { name: name.clone() }"));
+    assert!(rust.contains("Outer { inner: inner.clone(), label: label.clone() }"));
+    assert!(!rust.contains("name: &name"));
+    assert!(!rust.contains("inner: &inner"));
+}
+
+#[test]
+fn rust_lowering_maps_weak_upgrade_to_runtime_handle_upgrade() {
+    let source = r#"
+class User {
+    id: Int
+}
+
+struct Session {
+    owner: weak User
+}
+
+fn read_owner(session: read Session) -> Option<User> {
+    return Weak.upgrade(value: read session.owner)
+}
+"#;
+    let rust = lower_source_to_rust("weak-upgrade.rss", source).expect("source should lower");
+
+    assert!(rust.contains("return session.owner.upgrade();"));
+    assert!(!rust.contains("Weak_upgrade"));
 }
 
 #[test]
