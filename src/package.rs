@@ -442,6 +442,18 @@ struct ManifestPackage {
 struct ManifestPathSection {
     #[serde(default)]
     paths: Vec<String>,
+    #[serde(default)]
+    exports: Vec<String>,
+    #[serde(default)]
+    features: BTreeMap<String, ManifestFeaturePathSection>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ManifestFeaturePathSection {
+    #[serde(default)]
+    paths: Vec<String>,
+    #[serde(default)]
+    exports: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1091,7 +1103,12 @@ pub fn check_package_dir(package_dir: &Path) -> Result<PackageCheck, String> {
 
 pub fn package_tree(package_dir: &Path) -> Result<PackageTree, String> {
     let mut visiting = BTreeSet::new();
-    let root = package_tree_node(package_dir, PackageDependencyKind::Root, &mut visiting)?;
+    let root = package_tree_node(
+        package_dir,
+        PackageDependencyKind::Root,
+        None,
+        &mut visiting,
+    )?;
     let mut summary = PackageTreeSummary::default();
     collect_package_tree_summary(&root, &mut summary);
     Ok(PackageTree { root, summary })
@@ -1111,12 +1128,7 @@ pub fn publish_package_dry_run_with_registry(
     let tree = package_tree(package_dir)?;
     let archive_files = package_archive_files(package_dir)?;
     let archive_hash = package_archive_hash(&archive_files);
-    let root_features = package
-        .manifest
-        .features
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>();
+    let root_features = selected_root_package_features(&package.manifest);
     let root_lock_entry = lock_package_entry(package_dir, &package, root_features)?;
 
     let version_ok = is_semver_like(&package.manifest.package.version);
@@ -1324,12 +1336,7 @@ pub fn vendor_package_dir(
 
 pub fn lock_package_dir(package_dir: &Path) -> Result<PackageLock, String> {
     let package = load_package(package_dir)?;
-    let root_features = package
-        .manifest
-        .features
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>();
+    let root_features = selected_root_package_features(&package.manifest);
     let mut packages = vec![lock_package_entry(package_dir, &package, root_features)?];
     let mut visiting = BTreeSet::new();
     let root_key = canonical_path_label(package_dir);
@@ -1376,7 +1383,7 @@ fn lock_package_entry(
         version: package.manifest.package.version.clone(),
         source: format!("path+{}", package_dir.display()),
         checksum: package_checksum(package, native_hash.as_deref()),
-        interface_hash: hash_sources(&package.sources, PackageReviewFileKind::Interface),
+        interface_hash: effective_interface_hash(&package.sources, &features),
         review_hash: package_review_hash(&review),
         native_hash,
         features,
@@ -1806,18 +1813,37 @@ struct LoadedPackage {
 }
 
 fn load_package(package_dir: &Path) -> Result<LoadedPackage, String> {
+    load_package_with_features(package_dir, None)
+}
+
+fn load_package_with_features(
+    package_dir: &Path,
+    selected_features: Option<&[String]>,
+) -> Result<LoadedPackage, String> {
     let manifest_path = package_dir.join("rsspkg.toml");
     let manifest_source = fs::read_to_string(&manifest_path)
         .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
     let manifest: Manifest = toml::from_str(&manifest_source)
         .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
 
-    let interface_roots = default_paths(&manifest.interfaces.paths, "interface");
+    let selected_features = selected_features
+        .map(|features| features.to_vec())
+        .unwrap_or_else(|| selected_root_package_features(&manifest));
+    let base_interface_roots = default_paths(&manifest.interfaces.paths, "interface");
+    let selected_feature_interface_roots =
+        selected_interface_feature_paths(&manifest, &selected_features);
+    let excluded_feature_interface_roots = all_interface_feature_paths(&manifest);
     let source_roots = default_paths(&manifest.sources.paths, "src");
     let mut sources = Vec::new();
+    sources.extend(read_package_sources_excluding(
+        package_dir,
+        &base_interface_roots,
+        &excluded_feature_interface_roots,
+        PackageReviewFileKind::Interface,
+    )?);
     sources.extend(read_package_sources(
         package_dir,
-        &interface_roots,
+        &selected_feature_interface_roots,
         PackageReviewFileKind::Interface,
     )?);
     sources.extend(read_package_sources(
@@ -1834,6 +1860,43 @@ fn load_package(package_dir: &Path) -> Result<LoadedPackage, String> {
     })
 }
 
+fn selected_root_package_features(manifest: &Manifest) -> Vec<String> {
+    manifest.features.keys().cloned().collect()
+}
+
+fn selected_interface_feature_paths(
+    manifest: &Manifest,
+    selected_features: &[String],
+) -> Vec<String> {
+    let mut roots = Vec::new();
+    let _ = &manifest.interfaces.exports;
+    for feature in selected_features {
+        let Some(section) = manifest.interfaces.features.get(feature) else {
+            continue;
+        };
+        roots.extend(section.paths.iter().cloned());
+        let _ = &section.exports;
+    }
+    dedup_strings(&mut roots);
+    roots
+}
+
+fn all_interface_feature_paths(manifest: &Manifest) -> Vec<String> {
+    let mut roots = manifest
+        .interfaces
+        .features
+        .values()
+        .flat_map(|section| section.paths.iter().cloned())
+        .collect::<Vec<_>>();
+    dedup_strings(&mut roots);
+    roots
+}
+
+fn dedup_strings(values: &mut Vec<String>) {
+    let mut seen = BTreeSet::new();
+    values.retain(|value| seen.insert(value.clone()));
+}
+
 fn default_paths(paths: &[String], default: &str) -> Vec<String> {
     if paths.is_empty() {
         vec![default.to_string()]
@@ -1847,14 +1910,27 @@ fn read_package_sources(
     roots: &[String],
     kind: PackageReviewFileKind,
 ) -> Result<Vec<PackageSource>, String> {
+    read_package_sources_excluding(package_dir, roots, &[], kind)
+}
+
+fn read_package_sources_excluding(
+    package_dir: &Path,
+    roots: &[String],
+    excluded_roots: &[String],
+    kind: PackageReviewFileKind,
+) -> Result<Vec<PackageSource>, String> {
     let mut sources = Vec::new();
+    let excluded_roots = excluded_roots
+        .iter()
+        .map(|root| package_dir.join(root))
+        .collect::<Vec<_>>();
     for root in roots {
         let root_path = package_dir.join(root);
         if !root_path.exists() {
             continue;
         }
         let mut files = Vec::new();
-        collect_rsscript_files(&root_path, &mut files)?;
+        collect_rsscript_files_excluding(&root_path, &excluded_roots, &mut files)?;
         files.sort();
         for file in files {
             let contents = fs::read_to_string(&file)
@@ -1930,7 +2006,7 @@ fn collect_dependency_interface_sources_from_map(
         if !visiting.insert(canonical.clone()) {
             continue;
         }
-        let dependency_package = load_package(&dependency_dir)?;
+        let dependency_package = load_package_with_features(&dependency_dir, Some(&spec.features))?;
         sources.extend(
             dependency_package
                 .sources
@@ -1956,7 +2032,14 @@ fn relative_path(base: &Path, path: &Path) -> String {
         .to_string()
 }
 
-fn collect_rsscript_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+fn collect_rsscript_files_excluding(
+    path: &Path,
+    excluded_roots: &[PathBuf],
+    files: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    if excluded_roots.iter().any(|root| path == root) {
+        return Ok(());
+    }
     if path.is_file() {
         if is_rsscript_source_path(path) {
             files.push(path.to_path_buf());
@@ -1970,7 +2053,7 @@ fn collect_rsscript_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), S
             .map_err(|error| format!("failed to read entry in {}: {error}", path.display()))?;
         let path = entry.path();
         if path.is_dir() {
-            collect_rsscript_files(&path, files)?;
+            collect_rsscript_files_excluding(&path, excluded_roots, files)?;
         } else if is_rsscript_source_path(&path) {
             files.push(path);
         }
@@ -3353,10 +3436,14 @@ fn is_rust_ident_continue(byte: u8) -> bool {
 fn package_tree_node(
     package_dir: &Path,
     dependency_kind: PackageDependencyKind,
+    selected_features: Option<&[String]>,
     visiting: &mut BTreeSet<String>,
 ) -> Result<PackageTreeNode, String> {
-    let package = load_package(package_dir)?;
+    let package = load_package_with_features(package_dir, selected_features)?;
     let review = review_package_dir(package_dir)?;
+    let features = selected_features
+        .map(|features| features.to_vec())
+        .unwrap_or_else(|| selected_root_package_features(&package.manifest));
     let identity = package_identity(&package.manifest);
     let visit_key = canonical_path_label(package_dir);
     if !visiting.insert(visit_key.clone()) {
@@ -3366,7 +3453,7 @@ fn package_tree_node(
             requirement: None,
             source: format!("path+{}", package_dir.display()),
             risk: PackageRisk::Elevated,
-            features: package.manifest.features.keys().cloned().collect(),
+            features,
             native: review.native_rust.is_some(),
             dependency_kind,
             reasons: vec!["dependency cycle truncated".to_string()],
@@ -3395,7 +3482,7 @@ fn package_tree_node(
         requirement: None,
         source: format!("path+{}", package_dir.display()),
         risk: review.risk,
-        features: package.manifest.features.keys().cloned().collect(),
+        features,
         native: review.native_rust.is_some(),
         dependency_kind,
         reasons: review.reasons,
@@ -3415,7 +3502,12 @@ fn package_tree_dependencies(
         if let Some(path) = &spec.path {
             let dependency_dir = package_dir.join(path);
             if dependency_dir.join("rsspkg.toml").exists() {
-                let mut node = package_tree_node(&dependency_dir, dependency_kind, visiting)?;
+                let mut node = package_tree_node(
+                    &dependency_dir,
+                    dependency_kind,
+                    Some(&spec.features),
+                    visiting,
+                )?;
                 node.requirement = spec.requirement.clone();
                 node.features = spec.features.clone();
                 node.source = format!("path+{}", dependency_dir.display());
@@ -3457,7 +3549,7 @@ fn collect_lock_dependency_packages(
         if !visiting.insert(canonical.clone()) {
             continue;
         }
-        let dependency_package = load_package(&dependency_dir)?;
+        let dependency_package = load_package_with_features(&dependency_dir, Some(&spec.features))?;
         packages.push(lock_package_entry(
             &dependency_dir,
             &dependency_package,
@@ -3918,13 +4010,22 @@ fn package_archive_hash(files: &[PackageArchiveFile]) -> String {
     sha256_label(input.as_bytes())
 }
 
-fn hash_sources(sources: &[PackageSource], kind: PackageReviewFileKind) -> String {
+fn effective_interface_hash(sources: &[PackageSource], features: &[String]) -> String {
     let filtered = sources
         .iter()
-        .filter(|source| source.kind == kind)
+        .filter(|source| source.kind == PackageReviewFileKind::Interface)
         .cloned()
         .collect::<Vec<_>>();
+    let mut features = features.to_vec();
+    features.sort();
+    features.dedup();
     let mut input = String::new();
+    input.push_str("features\n");
+    for feature in features {
+        input.push_str(&feature);
+        input.push('\n');
+    }
+    input.push_str("interfaces\n");
     append_sources_hash_input(&mut input, &filtered);
     sha256_label(input.as_bytes())
 }

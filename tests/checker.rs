@@ -6576,6 +6576,45 @@ native-tls = ["native"]
 }
 
 #[test]
+fn package_review_selects_feature_conditioned_interface_paths() {
+    let temp_dir = unique_temp_dir("rsscript-package-feature-interface");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-feature-interface",
+        "0.1.0",
+        r#"[features]
+streaming = []
+
+[interfaces.features.streaming]
+paths = ["interface/streaming"]
+"#,
+        r#"pub fn Json.parse(text: read String) -> String
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("interface/streaming"))
+        .expect("feature interface dir should be created");
+    fs::write(
+        temp_dir.join("interface/streaming/lib.rssi"),
+        r#"pub fn Json.stream(text: read String) -> String
+"#,
+    )
+    .expect("feature interface should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(json["summary"]["interface_files"], 2);
+    assert_eq!(json["summary"]["public_functions"], 2);
+    assert!(
+        json["exports"].as_array().is_some_and(|exports| {
+            exports.iter().any(|export| export["name"] == "Json.stream")
+        })
+    );
+}
+
+#[test]
 fn package_review_loads_path_dependency_interfaces_for_source_checks() {
     let root_dir = unique_temp_dir("rsscript-package-dep-interface-root");
     let dep_dir = unique_temp_dir("rsscript-package-dep-interface-dep");
@@ -6614,6 +6653,60 @@ rss-dep = {{ path = "{}" }}
     let _ = fs::remove_dir_all(&dep_dir);
 
     assert_eq!(review.summary.source_files, 1);
+    assert_eq!(review.diagnostics, Vec::new());
+}
+
+#[test]
+fn package_review_uses_selected_dependency_feature_interfaces_for_source_checks() {
+    let root_dir = unique_temp_dir("rsscript-package-dep-feature-interface-root");
+    let dep_dir = unique_temp_dir("rsscript-package-dep-feature-interface-dep");
+    write_named_package_fixture(
+        &dep_dir,
+        "rss-dep",
+        "0.2.0",
+        r#"[features]
+fast = []
+
+[interfaces.features.fast]
+paths = ["interface/fast"]
+"#,
+        r#"pub fn Dep.parse(text: read String) -> String
+"#,
+    );
+    fs::create_dir_all(dep_dir.join("interface/fast"))
+        .expect("feature interface dir should be created");
+    fs::write(
+        dep_dir.join("interface/fast/lib.rssi"),
+        r#"pub fn Dep.fast(text: read String) -> String
+"#,
+    )
+    .expect("feature interface should be written");
+    write_named_package_fixture(
+        &root_dir,
+        "rss-app",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-dep = {{ path = "{}", features = ["fast"] }}
+"#,
+            dep_dir.display()
+        ),
+        "",
+    );
+    fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        root_dir.join("src/lib.rss"),
+        r#"fn render(body: read String) -> String {
+    return Dep.fast(text: read body)
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&root_dir).expect("package review should succeed");
+    let _ = fs::remove_dir_all(&root_dir);
+    let _ = fs::remove_dir_all(&dep_dir);
+
     assert_eq!(review.diagnostics, Vec::new());
 }
 
@@ -8076,6 +8169,80 @@ rss-dep = {{ path = "{}", features = ["fast"] }}
             .as_str()
             .is_some_and(|hash| hash.starts_with("sha256:"))
     );
+}
+
+#[test]
+fn package_lock_hashes_dependency_effective_interface_for_selected_features() {
+    let root_base_dir = unique_temp_dir("rsscript-package-lock-feature-root-base");
+    let root_fast_dir = unique_temp_dir("rsscript-package-lock-feature-root-fast");
+    let dep_dir = unique_temp_dir("rsscript-package-lock-feature-dep");
+    write_named_package_fixture(
+        &dep_dir,
+        "rss-dep",
+        "0.2.0",
+        r#"[features]
+fast = []
+
+[interfaces.features.fast]
+paths = ["interface/fast"]
+"#,
+        r#"pub fn Dep.parse(text: read String) -> String
+"#,
+    );
+    fs::create_dir_all(dep_dir.join("interface/fast"))
+        .expect("feature interface dir should be created");
+    fs::write(
+        dep_dir.join("interface/fast/lib.rssi"),
+        r#"pub fn Dep.fast(text: read String) -> String
+"#,
+    )
+    .expect("feature interface should be written");
+    write_named_package_fixture(
+        &root_base_dir,
+        "rss-app",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-dep = {{ path = "{}" }}
+"#,
+            dep_dir.display()
+        ),
+        r#"pub fn App.run() -> Unit
+"#,
+    );
+    write_named_package_fixture(
+        &root_fast_dir,
+        "rss-app",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-dep = {{ path = "{}", features = ["fast"] }}
+"#,
+            dep_dir.display()
+        ),
+        r#"pub fn App.run() -> Unit
+"#,
+    );
+
+    let base_lock = lock_package_dir(&root_base_dir).expect("base lock should succeed");
+    let fast_lock = lock_package_dir(&root_fast_dir).expect("fast lock should succeed");
+    let _ = fs::remove_dir_all(&root_base_dir);
+    let _ = fs::remove_dir_all(&root_fast_dir);
+    let _ = fs::remove_dir_all(&dep_dir);
+
+    let base_dep = base_lock
+        .packages
+        .iter()
+        .find(|package| package.name == "rss-dep")
+        .expect("base dependency should be locked");
+    let fast_dep = fast_lock
+        .packages
+        .iter()
+        .find(|package| package.name == "rss-dep")
+        .expect("fast dependency should be locked");
+    assert_eq!(base_dep.features, Vec::<String>::new());
+    assert_eq!(fast_dep.features, vec!["fast".to_string()]);
+    assert_ne!(base_dep.interface_hash, fast_dep.interface_hash);
 }
 
 #[test]
