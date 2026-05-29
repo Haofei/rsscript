@@ -298,6 +298,52 @@ fn make_unknown_region(lines: Int) -> fresh ReviewFacts {
     )
 }
 
+fn parse_review_fact(value: read JsonValue) -> Result<fresh ReviewFacts, JsonError> {
+    return ReviewFacts(
+        public_api: Json.field_bool(value: read value, name: read "public_api")?,
+        has_unknown_call: Json.field_bool(value: read value, name: read "has_unknown_call")?,
+        has_native_boundary: Json.field_bool(value: read value, name: read "has_native_boundary")?,
+        has_unsafe_boundary: Json.field_bool(value: read value, name: read "has_unsafe_boundary")?,
+        has_resource_boundary: Json.field_bool(value: read value, name: read "has_resource_boundary")?,
+        has_retains: Json.field_bool(value: read value, name: read "has_retains")?,
+        has_mut: Json.field_bool(value: read value, name: read "has_mut")?,
+        has_local: Json.field_bool(value: read value, name: read "has_local")?,
+        has_fresh_return: Json.field_bool(value: read value, name: read "has_fresh_return")?,
+        has_noescape: Json.field_bool(value: read value, name: read "has_noescape")?,
+        has_error_boundary: Json.field_bool(value: read value, name: read "has_error_boundary")?,
+        callee_risk: Json.field_int(value: read value, name: read "callee_risk")?,
+        line_count: Json.field_int(value: read value, name: read "line_count")?,
+    )
+}
+
+fn parse_fact_list_from(
+    json: read JsonValue,
+    index: Int,
+    limit: Int,
+    items: mut List<ReviewFacts>,
+) -> Result<Unit, JsonError> {
+    if index >= limit {
+        return Ok(Unit)
+    }
+
+    let item = Json.array_get(value: read json, index: index)?
+    let facts = parse_review_fact(value: read item)?
+    List.push(list: mut items, value: read facts)
+
+    parse_fact_list_from(
+        json: read json,
+        index: index + 1,
+        limit: limit,
+        items: mut items,
+    )?
+
+    return Ok(Unit)
+}
+
+fn dogfood_facts_json() -> String {
+    return "[{\"public_api\":false,\"has_unknown_call\":false,\"has_native_boundary\":false,\"has_unsafe_boundary\":false,\"has_resource_boundary\":false,\"has_retains\":false,\"has_mut\":false,\"has_local\":false,\"has_fresh_return\":false,\"has_noescape\":false,\"has_error_boundary\":false,\"callee_risk\":1,\"line_count\":4},{\"public_api\":true,\"has_unknown_call\":false,\"has_native_boundary\":true,\"has_unsafe_boundary\":false,\"has_resource_boundary\":false,\"has_retains\":false,\"has_mut\":false,\"has_local\":false,\"has_fresh_return\":true,\"has_noescape\":false,\"has_error_boundary\":true,\"callee_risk\":1,\"line_count\":20},{\"public_api\":false,\"has_unknown_call\":false,\"has_native_boundary\":false,\"has_unsafe_boundary\":false,\"has_resource_boundary\":true,\"has_retains\":false,\"has_mut\":true,\"has_local\":true,\"has_fresh_return\":false,\"has_noescape\":false,\"has_error_boundary\":true,\"callee_risk\":1,\"line_count\":18},{\"public_api\":false,\"has_unknown_call\":false,\"has_native_boundary\":false,\"has_unsafe_boundary\":false,\"has_resource_boundary\":false,\"has_retains\":true,\"has_mut\":true,\"has_local\":false,\"has_fresh_return\":false,\"has_noescape\":false,\"has_error_boundary\":false,\"callee_risk\":1,\"line_count\":12}]"
+}
+
 fn empty_summary() -> fresh ReviewSummary {
     return ReviewSummary(
         total_functions: 0,
@@ -375,17 +421,18 @@ fn summarize_list(items: read List<ReviewFacts>) -> fresh ReviewSummary {
     )
 }
 
-fn dogfood_fact_list() -> fresh List<ReviewFacts> {
+fn dogfood_fact_list() -> Result<fresh List<ReviewFacts>, JsonError> {
+    let text = dogfood_facts_json()
+    let json = Json.parse(text: read text)?
+    let limit = Json.array_len(value: read json)?
     local items = List<ReviewFacts>.new()
-    let helper = make_low_helper(lines: 4)
-    let native_entry = make_native_entry(lines: 20)
-    let resource_worker = make_resource_worker(lines: 18)
-    let cache_worker = make_retaining_cache(lines: 12)
 
-    List.push(list: mut items, value: read helper)
-    List.push(list: mut items, value: read native_entry)
-    List.push(list: mut items, value: read resource_worker)
-    List.push(list: mut items, value: read cache_worker)
+    parse_fact_list_from(
+        json: read json,
+        index: 0,
+        limit: limit,
+        items: mut items,
+    )?
 
     return items
 }
@@ -398,33 +445,33 @@ fn unknown_ratio_percent(summary: read ReviewSummary) -> Int {
     return summary.unknown_functions * 100 / summary.total_functions
 }
 
-fn dogfood_sample_summary() -> fresh ReviewSummary {
-    let items = dogfood_fact_list()
+fn dogfood_sample_summary() -> Result<fresh ReviewSummary, JsonError> {
+    let items = dogfood_fact_list()?
 
     return summarize_list(items: read items)
 }
 
-fn dogfood_shape_is_expected() -> Bool {
-    let summary = dogfood_sample_summary()
+fn dogfood_shape_is_expected() -> Result<Bool, JsonError> {
+    let summary = dogfood_sample_summary()?
     let unknown_percent = unknown_ratio_percent(summary: read summary)
 
     if summary.total_functions != 4 {
-        return false
+        return Ok(false)
     }
 
     if summary.must_review_functions != 3 {
-        return false
+        return Ok(false)
     }
 
     if summary.low_risk_functions != 1 {
-        return false
+        return Ok(false)
     }
 
     if summary.unknown_functions != 0 {
-        return false
+        return Ok(false)
     }
 
-    return unknown_percent == 0
+    return Ok(unknown_percent == 0)
 }
 
 fn dogfood_summary_line(summary: read ReviewSummary) -> fresh String {
@@ -445,11 +492,12 @@ fn dogfood_summary_line(summary: read ReviewSummary) -> fresh String {
     return String.concat(left: read eighth, right: read lines)
 }
 
-pub fn main() -> Unit {
-    let summary = dogfood_sample_summary()
+pub fn main() -> Result<Unit, JsonError> {
+    let summary = dogfood_sample_summary()?
     let unknown_region = make_unknown_region(lines: 7)
     let unknown_decision = classify_function(facts: read unknown_region)
     let summary_line = dogfood_summary_line(summary: read summary)
+    let shape_ok = dogfood_shape_is_expected()?
 
     Assert.equal_int(left: summary.total_functions, right: 4)
     Assert.equal_int(left: summary.must_review_functions, right: 3)
@@ -461,8 +509,8 @@ pub fn main() -> Unit {
         left: read summary_line,
         right: read "dogfood review summary total=4 must=3 low=1 unknown=0 lines=50",
     )
-    Assert.equal_bool(left: dogfood_shape_is_expected(), right: true)
+    Assert.equal_bool(left: shape_ok, right: true)
     Log.write(message: read summary_line)
 
-    return Unit
+    return Ok(Unit)
 }

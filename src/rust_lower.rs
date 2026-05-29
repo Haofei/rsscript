@@ -1876,6 +1876,18 @@ fn lower_callee(callee: &Callee) -> String {
         callee if is_json_field_string_callee(callee) => {
             "rsscript_runtime::json_field_string".to_string()
         }
+        callee if is_json_field_int_callee(callee) => {
+            "rsscript_runtime::json_field_int".to_string()
+        }
+        callee if is_json_field_bool_callee(callee) => {
+            "rsscript_runtime::json_field_bool".to_string()
+        }
+        callee if is_json_array_len_callee(callee) => {
+            "rsscript_runtime::json_array_len".to_string()
+        }
+        callee if is_json_array_get_callee(callee) => {
+            "rsscript_runtime::json_array_get".to_string()
+        }
         callee if is_row_buffer_new_callee(callee) => {
             "rsscript_runtime::row_buffer_new".to_string()
         }
@@ -2162,6 +2174,22 @@ fn is_json_field_callee(callee: &Callee) -> bool {
 
 fn is_json_field_string_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "field_string")
+}
+
+fn is_json_field_int_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "field_int")
+}
+
+fn is_json_field_bool_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "field_bool")
+}
+
+fn is_json_array_len_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "array_len")
+}
+
+fn is_json_array_get_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "array_get")
 }
 
 fn is_row_buffer_new_callee(callee: &Callee) -> bool {

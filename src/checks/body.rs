@@ -1145,10 +1145,20 @@ fn check_place_pair_conflict(
 }
 
 fn move_base_field_conflict(left: &CallPlaceAccess, right: &CallPlaceAccess) -> bool {
-    (left.moves_path && !right.path.components.is_empty())
-        || (right.moves_path && !left.path.components.is_empty())
-        || (left.moves_path && right.path.has_index)
-        || (right.moves_path && left.path.has_index)
+    (left.moves_path && move_path_conflicts_with_access(&left.path, &right.path))
+        || (right.moves_path && move_path_conflicts_with_access(&right.path, &left.path))
+}
+
+fn move_path_conflicts_with_access(moved: &PlacePath, accessed: &PlacePath) -> bool {
+    if moved.components.is_empty() || accessed.components.is_empty() {
+        return true;
+    }
+
+    moved.has_index
+        || accessed.has_index
+        || moved.crosses_handle
+        || accessed.crosses_handle
+        || path_prefix_or_equal(&moved.components, &accessed.components)
 }
 
 fn pair_mutates(left: &CallPlaceAccess, right: &CallPlaceAccess) -> bool {

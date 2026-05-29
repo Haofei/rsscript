@@ -1035,7 +1035,11 @@ fn rust_lowering_maps_json_core_calls_to_runtime_hooks() {
     let source = r#"
 fn read_name(text: read String) -> Result<String, JsonError> {
     let value = Json.parse(text: read text)?
+    let count = Json.array_len(value: read value)?
+    let first = Json.array_get(value: read value, index: 0)?
     let profile = Json.field(value: read value, name: read "profile")?
+    let active = Json.field_bool(value: read profile, name: read "active")?
+    let age = Json.field_int(value: read profile, name: read "age")?
     return Json.field_string(value: read profile, name: read "name")
 }
 "#;
@@ -1046,6 +1050,16 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     assert!(rust.contains(
         "let profile = rsscript_runtime::json_field(&value, &\"profile\".to_string())?;"
     ));
+    assert!(rust.contains("let count = rsscript_runtime::json_array_len(&value)?;"));
+    assert!(rust.contains("let first = rsscript_runtime::json_array_get(&value, 0)?;"));
+    assert!(rust.contains(
+        "let active = rsscript_runtime::json_field_bool(&profile, &\"active\".to_string())?;"
+    ));
+    assert!(
+        rust.contains(
+            "let age = rsscript_runtime::json_field_int(&profile, &\"age\".to_string())?;"
+        )
+    );
     assert!(
         rust.contains(
             "return rsscript_runtime::json_field_string(&profile, &\"name\".to_string());"
@@ -3372,6 +3386,37 @@ fn bad() -> Unit {
 }
 
 #[test]
+fn checker_rejects_same_call_manage_conflict_independent_of_argument_order() {
+    let source = r#"
+features: local
+
+struct Image {
+    width: Int
+}
+
+fn Image.new() -> fresh Image
+fn sink(left: read Image, right: read Image) -> Unit
+
+fn bad_read_then_manage() -> Unit {
+    local image = Image.new()
+    sink(left: read image, right: read (manage image))
+}
+
+fn bad_manage_then_read() -> Unit {
+    local image = Image.new()
+    sink(left: read (manage image), right: read image)
+}
+"#;
+    let diagnostics = analyze_source("same-call-manage-order.rss", source);
+    let move_conflicts = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "RS0305")
+        .count();
+
+    assert_eq!(move_conflicts, 2, "{diagnostics:?}");
+}
+
+#[test]
 fn checker_allows_result_resource_only_as_return_producer_contract() {
     let source = r#"
 resource File {
@@ -4158,19 +4203,19 @@ fn review_map_dogfood_classifier_has_no_unknown_regions() {
     let source = read_fixture(path);
     let map = review_map_sources(vec![(path.to_str().unwrap(), source.as_str())]);
 
-    assert_eq!(map.summary.total_functions, 31);
-    assert!(map.summary.total_lines >= 430, "{map:?}");
+    assert_eq!(map.summary.total_functions, 34);
+    assert!(map.summary.total_lines >= 480, "{map:?}");
     assert_eq!(map.files[0].risk, ReviewMapFileRisk::Elevated);
     assert_eq!(map.summary.unknown.functions, 0, "{map:?}");
     assert_eq!(map.summary.unknown.lines, 0, "{map:?}");
-    assert!(map.summary.review_required.functions >= 19, "{map:?}");
+    assert!(map.summary.review_required.functions >= 21, "{map:?}");
 
     let json: Value =
         serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
     assert_eq!(json["summary"]["unknown_ratio"], 0.0);
     assert_eq!(json["summary"]["unknown_function_ratio"], 0.0);
-    assert_eq!(json["summary"]["must_review"]["functions"], 19);
-    assert_eq!(json["summary"]["low_semantic_risk"]["functions"], 12);
+    assert_eq!(json["summary"]["must_review"]["functions"], 21);
+    assert_eq!(json["summary"]["low_semantic_risk"]["functions"], 13);
 }
 
 #[test]

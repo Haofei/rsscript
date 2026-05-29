@@ -880,6 +880,52 @@ pub fn json_field_string(value: &JsonValue, name: &str) -> Result<String, JsonEr
     Ok(text.to_string())
 }
 
+pub fn json_field_int(value: &JsonValue, name: &str) -> Result<i64, JsonError> {
+    let field = json_field(value, name)?;
+    let Some(number) = field.inner.as_i64() else {
+        return Err(JsonError::new(format!(
+            "JSON field `{name}` is not an integer"
+        )));
+    };
+    Ok(number)
+}
+
+pub fn json_field_bool(value: &JsonValue, name: &str) -> Result<bool, JsonError> {
+    let field = json_field(value, name)?;
+    let Some(flag) = field.inner.as_bool() else {
+        return Err(JsonError::new(format!(
+            "JSON field `{name}` is not a boolean"
+        )));
+    };
+    Ok(flag)
+}
+
+pub fn json_array_len(value: &JsonValue) -> Result<i64, JsonError> {
+    let Some(items) = value.inner.as_array() else {
+        return Err(JsonError::new("JSON value is not an array"));
+    };
+    Ok(items.len() as i64)
+}
+
+pub fn json_array_get(value: &JsonValue, index: i64) -> Result<JsonValue, JsonError> {
+    let Some(items) = value.inner.as_array() else {
+        return Err(JsonError::new("JSON value is not an array"));
+    };
+    if index < 0 {
+        return Err(JsonError::new(format!(
+            "JSON array index `{index}` is negative"
+        )));
+    }
+    let Some(item) = items.get(index as usize) else {
+        return Err(JsonError::new(format!(
+            "JSON array index `{index}` is out of bounds"
+        )));
+    };
+    Ok(JsonValue {
+        inner: item.clone(),
+    })
+}
+
 pub fn row_buffer_new(size: i64) -> RowBuffer {
     RowBuffer {
         bytes: Vec::with_capacity(size.max(0) as usize),
@@ -1481,12 +1527,20 @@ mod tests {
     #[test]
     fn json_runtime_hooks_parse_nested_fields() {
         let value =
-            super::json_parse(r#"{"profile":{"name":"RSScript"}}"#).expect("JSON should parse");
-        let profile = super::json_field(&value, "profile").expect("profile field should exist");
+            super::json_parse(r#"{"profiles":[{"name":"RSScript","age":1,"active":true}]}"#)
+                .expect("JSON should parse");
+        let profiles = super::json_field(&value, "profiles").expect("profiles field should exist");
+        let len = super::json_array_len(&profiles).expect("profiles should be an array");
+        let profile = super::json_array_get(&profiles, 0).expect("first profile should exist");
         let name =
             super::json_field_string(&profile, "name").expect("name field should be a string");
+        let age = super::json_field_int(&profile, "age").expect("age should be an integer");
+        let active = super::json_field_bool(&profile, "active").expect("active should be a bool");
 
+        assert_eq!(len, 1);
         assert_eq!(name, "RSScript");
+        assert_eq!(age, 1);
+        assert!(active);
     }
 
     #[test]

@@ -11,3 +11,20 @@ pub fn Json.field_string(
     value: read JsonValue,
     name: read String,
 ) -> Result<String, JsonError>
+
+pub fn Json.field_int(
+    value: read JsonValue,
+    name: read String,
+) -> Result<Int, JsonError>
+
+pub fn Json.field_bool(
+    value: read JsonValue,
+    name: read String,
+) -> Result<Bool, JsonError>
+
+pub fn Json.array_len(value: read JsonValue) -> Result<Int, JsonError>
+
+pub fn Json.array_get(
+    value: read JsonValue,
+    index: Int,
+) -> Result<fresh JsonValue, JsonError>
