@@ -7729,6 +7729,61 @@ fast = []
 }
 
 #[test]
+fn package_lock_diff_marks_boundary_feature_selection_high_risk() {
+    let lock_dir = unique_temp_dir("rsscript-package-lock-boundary-feature");
+    fs::create_dir_all(&lock_dir).expect("lock dir should be created");
+    let old_lock_path = lock_dir.join("old.rsspkg.lock");
+    let new_lock_path = lock_dir.join("new.rsspkg.lock");
+    let old_lock = rsscript::PackageLock {
+        version: 1,
+        packages: vec![rsscript::PackageLockPackage {
+            name: "rss-net".to_string(),
+            version: "0.1.0".to_string(),
+            source: "path:.".to_string(),
+            checksum: "sha256:old".to_string(),
+            interface_hash: "sha256:interface".to_string(),
+            review_hash: "sha256:review".to_string(),
+            native_hash: None,
+            features: Vec::new(),
+        }],
+        metadata: rsscript::PackageLockMetadata {
+            rsscript_version: "0.5".to_string(),
+            created_by: "test".to_string(),
+        },
+    };
+    let mut new_lock = old_lock.clone();
+    new_lock.packages[0].features = vec!["native-tls".to_string()];
+    fs::write(&old_lock_path, format_package_lock_toml(&old_lock))
+        .expect("old lock should be written");
+    fs::write(&new_lock_path, format_package_lock_toml(&new_lock))
+        .expect("new lock should be written");
+
+    let diff =
+        diff_package_locks(&old_lock_path, &new_lock_path).expect("lock diff should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_lock_diff_json(&diff))
+        .expect("lock diff JSON should parse");
+    let _ = fs::remove_dir_all(&lock_dir);
+
+    assert_eq!(json["risk"], "high");
+    assert!(json["reasons"].as_array().is_some_and(|reasons| {
+        reasons
+            .iter()
+            .any(|reason| reason == "package feature selection changed")
+    }));
+    assert!(json["package_changes"].as_array().is_some_and(|changes| {
+        changes.iter().any(|change| {
+            change["name"] == "rss-net"
+                && change["risk"] == "high"
+                && change["changes"].as_array().is_some_and(|fields| {
+                    fields
+                        .iter()
+                        .any(|field| field["field"] == "features" && field["risk"] == "high")
+                })
+        })
+    }));
+}
+
+#[test]
 fn rss_pkg_review_update_json_reports_lock_changes() {
     let old_dir = unique_temp_dir("rsscript-package-update-cli-old");
     let new_dir = unique_temp_dir("rsscript-package-update-cli-new");

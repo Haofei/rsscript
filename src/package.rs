@@ -4474,9 +4474,25 @@ fn compare_locked_package_fields(
         "features",
         Some(old_features.as_str()),
         Some(new_features.as_str()),
-        PackageRisk::Elevated,
+        package_lock_feature_selection_risk(&old.features, &new.features),
     );
     changes
+}
+
+fn package_lock_feature_selection_risk(old: &[String], new: &[String]) -> PackageRisk {
+    if old == new {
+        return PackageRisk::Low;
+    }
+
+    if old
+        .iter()
+        .chain(new.iter())
+        .any(|feature| package_feature_may_change_boundary_risk(feature, &[]))
+    {
+        PackageRisk::High
+    } else {
+        PackageRisk::Elevated
+    }
 }
 
 fn push_lock_field_change(
