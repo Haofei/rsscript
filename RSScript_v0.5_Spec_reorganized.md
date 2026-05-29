@@ -192,6 +192,8 @@ The same operation must not have multiple equivalent spellings.
 
 ### 2.4 No hidden behavior
 
+*Elaborates Constitution Article III. The article is the governing statement; this section adds the concrete forbidden list.*
+
 RSScript forbids hidden conversions and hidden calls.
 
 Forbidden:
@@ -214,6 +216,8 @@ let y: Int64 = Int64.from(value: x)
 ```
 
 ### 2.5 Public APIs are review contracts
+
+*Elaborates Constitution Article III. The article is the governing statement; this section lists exactly what a public API must expose.*
 
 A public API must expose:
 
@@ -247,18 +251,15 @@ machine-readable JSON form
 
 ### 2.7 Rust is a backend, not the language model
 
+*Elaborates Constitution Article VII.*
+
 RSScript lowers to Rust source while keeping Rust lifetimes, trait-bound complexity, borrow-checker diagnostics, and backend representation details behind the RSScript review protocol.
 
 Valid RSScript code should not require the user to understand generated Rust.
 
 ### 2.8 Feature admission rule
 
-RSScript features must aggregate rather than interact. Most feature-interaction
-complexity in other languages comes from independently designed mechanisms that
-meet in an implicit resolution layer, producing combinations no one designed.
-RSScript avoids this by construction: its features are coordinated projections
-of one model — the review protocol — and they are surfaced only through
-explicit, named syntax.
+*Elaborates Constitution Articles IV and V. The articles are the governing statement; this section is the operative test and its first applications.*
 
 A candidate feature is admissible only if both hold:
 
