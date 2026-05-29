@@ -1782,185 +1782,11 @@ fn is_native_boundary(effect: &EffectDecl) -> bool {
 }
 
 fn lower_callee(callee: &Callee) -> String {
+    if let Some(target) = runtime_intrinsic_target(callee) {
+        return target.to_string();
+    }
+
     match callee {
-        callee if is_log_write_callee(callee) => "rsscript_runtime::log_write".to_string(),
-        callee if is_assert_equal_callee(callee) => "rsscript_runtime::assert_equal".to_string(),
-        callee if is_assert_equal_int_callee(callee) => {
-            "rsscript_runtime::assert_equal_int".to_string()
-        }
-        callee if is_assert_equal_bool_callee(callee) => {
-            "rsscript_runtime::assert_equal_bool".to_string()
-        }
-        callee if is_os_close_callee(callee) => "rsscript_runtime::os_close".to_string(),
-        callee if is_list_new_callee(callee) => "rsscript_runtime::list_new".to_string(),
-        callee if is_list_push_callee(callee) => "rsscript_runtime::list_push".to_string(),
-        callee if is_list_len_callee(callee) => "rsscript_runtime::list_len".to_string(),
-        callee if is_list_get_callee(callee) => "rsscript_runtime::list_get".to_string(),
-        callee if is_list_consume_callee(callee) => "rsscript_runtime::list_consume".to_string(),
-        callee if is_string_from_int_callee(callee) => {
-            "rsscript_runtime::string_from_int".to_string()
-        }
-        callee if is_string_from_bool_callee(callee) => {
-            "rsscript_runtime::string_from_bool".to_string()
-        }
-        callee if is_string_starts_with_callee(callee) => {
-            "rsscript_runtime::string_starts_with".to_string()
-        }
-        callee if is_string_ends_with_callee(callee) => {
-            "rsscript_runtime::string_ends_with".to_string()
-        }
-        callee if is_buffer_new_callee(callee) => "rsscript_runtime::buffer_new".to_string(),
-        callee if is_buffer_clear_callee(callee) => "rsscript_runtime::buffer_clear".to_string(),
-        callee if is_buffer_consume_callee(callee) => {
-            "rsscript_runtime::buffer_consume".to_string()
-        }
-        callee if is_cache_new_callee(callee) => "rsscript_runtime::cache_new".to_string(),
-        callee if is_cache_insert_callee(callee) => "rsscript_runtime::cache_insert".to_string(),
-        callee if is_cache_lookup_callee(callee) => "rsscript_runtime::cache_lookup".to_string(),
-        callee if is_cache_get_callee(callee) => "rsscript_runtime::cache_get".to_string(),
-        callee if is_file_open_callee(callee) => "rsscript_runtime::file_open".to_string(),
-        callee if is_file_open_read_callee(callee) => {
-            "rsscript_runtime::file_open_read".to_string()
-        }
-        callee if is_file_open_write_callee(callee) => {
-            "rsscript_runtime::file_open_write".to_string()
-        }
-        callee if is_file_read_all_callee(callee) => "rsscript_runtime::file_read_all".to_string(),
-        callee if is_file_read_all_string_callee(callee) => {
-            "rsscript_runtime::file_read_all_string".to_string()
-        }
-        callee if is_file_read_into_callee(callee) => {
-            "rsscript_runtime::file_read_into".to_string()
-        }
-        callee if is_file_write_callee(callee) => "rsscript_runtime::file_write".to_string(),
-        callee if is_path_from_string_callee(callee) => {
-            "rsscript_runtime::path_from_string".to_string()
-        }
-        callee if is_request_new_callee(callee) => "rsscript_runtime::request_new".to_string(),
-        callee if is_request_path_callee(callee) => "rsscript_runtime::request_path".to_string(),
-        callee if is_response_ok_callee(callee) => "rsscript_runtime::response_ok".to_string(),
-        callee if is_response_status_callee(callee) => {
-            "rsscript_runtime::response_status".to_string()
-        }
-        callee if is_response_body_callee(callee) => "rsscript_runtime::response_body".to_string(),
-        callee if is_config_load_callee(callee) => "rsscript_runtime::config_load".to_string(),
-        callee if is_config_name_callee(callee) => "rsscript_runtime::config_name".to_string(),
-        callee if is_config_store_new_callee(callee) => {
-            "rsscript_runtime::config_store_new".to_string()
-        }
-        callee if is_config_store_replace_callee(callee) => {
-            "rsscript_runtime::config_store_replace".to_string()
-        }
-        callee if is_config_store_name_callee(callee) => {
-            "rsscript_runtime::config_store_name".to_string()
-        }
-        callee if is_rule_loader_load_rules_callee(callee) => {
-            "rsscript_runtime::rule_loader_load_rules".to_string()
-        }
-        callee if is_rules_config_new_callee(callee) => "rsscript_runtime::config_new".to_string(),
-        callee if is_rules_config_rule_count_callee(callee) => {
-            "rsscript_runtime::config_rule_count".to_string()
-        }
-        callee if is_global_config_new_callee(callee) => {
-            "rsscript_runtime::global_config_new".to_string()
-        }
-        callee if is_global_config_replace_callee(callee) => {
-            "rsscript_runtime::global_config_replace".to_string()
-        }
-        callee if is_global_config_rule_count_callee(callee) => {
-            "rsscript_runtime::global_config_rule_count".to_string()
-        }
-        callee if is_counter_new_callee(callee) => "rsscript_runtime::counter_new".to_string(),
-        callee if is_counter_add_callee(callee) => "rsscript_runtime::counter_add".to_string(),
-        callee if is_counter_value_callee(callee) => "rsscript_runtime::counter_value".to_string(),
-        callee if is_environment_root_callee(callee) => {
-            "rsscript_runtime::environment_root".to_string()
-        }
-        callee if is_environment_child_callee(callee) => {
-            "rsscript_runtime::environment_child".to_string()
-        }
-        callee if is_environment_bind_function_callee(callee) => {
-            "rsscript_runtime::environment_bind_function".to_string()
-        }
-        callee if is_environment_has_parent_callee(callee) => {
-            "rsscript_runtime::environment_has_parent".to_string()
-        }
-        callee if is_environment_has_function_callee(callee) => {
-            "rsscript_runtime::environment_has_function".to_string()
-        }
-        callee if is_function_object_new_callee(callee) => {
-            "rsscript_runtime::function_object_new".to_string()
-        }
-        callee if is_function_object_has_closure_callee(callee) => {
-            "rsscript_runtime::function_object_has_closure".to_string()
-        }
-        callee if is_db_connection_open_callee(callee) => {
-            "rsscript_runtime::db_connection_open".to_string()
-        }
-        callee if is_db_connection_try_open_callee(callee) => {
-            "rsscript_runtime::db_connection_try_open".to_string()
-        }
-        callee if is_db_connection_query_callee(callee) => {
-            "rsscript_runtime::db_connection_query".to_string()
-        }
-        callee if is_db_close_callee(callee) => "rsscript_runtime::db_close".to_string(),
-        callee if is_image_load_callee(callee) => "rsscript_runtime::image_load".to_string(),
-        callee if is_image_resize_callee(callee) => "rsscript_runtime::image_resize".to_string(),
-        callee if is_image_normalize_callee(callee) => {
-            "rsscript_runtime::image_normalize".to_string()
-        }
-        callee if is_image_sharpen_callee(callee) => "rsscript_runtime::image_sharpen".to_string(),
-        callee if is_image_save_callee(callee) => "rsscript_runtime::image_save".to_string(),
-        callee if is_image_inspect_callee(callee) => "rsscript_runtime::image_inspect".to_string(),
-        callee if is_image_cache_new_callee(callee) => {
-            "rsscript_runtime::image_cache_new".to_string()
-        }
-        callee if is_image_cache_store_callee(callee) => {
-            "rsscript_runtime::image_cache_store".to_string()
-        }
-        callee if is_image_cache_len_callee(callee) => {
-            "rsscript_runtime::image_cache_len".to_string()
-        }
-        callee if is_json_parse_callee(callee) => "rsscript_runtime::json_parse".to_string(),
-        callee if is_json_parse_file_callee(callee) => {
-            "rsscript_runtime::json_parse_file".to_string()
-        }
-        callee if is_json_field_callee(callee) => "rsscript_runtime::json_field".to_string(),
-        callee if is_json_field_string_callee(callee) => {
-            "rsscript_runtime::json_field_string".to_string()
-        }
-        callee if is_json_field_int_callee(callee) => {
-            "rsscript_runtime::json_field_int".to_string()
-        }
-        callee if is_json_field_bool_callee(callee) => {
-            "rsscript_runtime::json_field_bool".to_string()
-        }
-        callee if is_json_as_string_callee(callee) => {
-            "rsscript_runtime::json_as_string".to_string()
-        }
-        callee if is_json_array_len_callee(callee) => {
-            "rsscript_runtime::json_array_len".to_string()
-        }
-        callee if is_json_array_get_callee(callee) => {
-            "rsscript_runtime::json_array_get".to_string()
-        }
-        callee if is_json_array_contains_string_callee(callee) => {
-            "rsscript_runtime::json_array_contains_string".to_string()
-        }
-        callee if is_json_array_contains_substring_callee(callee) => {
-            "rsscript_runtime::json_array_contains_substring".to_string()
-        }
-        callee if is_json_array_contains_prefix_callee(callee) => {
-            "rsscript_runtime::json_array_contains_prefix".to_string()
-        }
-        callee if is_row_buffer_new_callee(callee) => {
-            "rsscript_runtime::row_buffer_new".to_string()
-        }
-        callee if is_csv_read_into_callee(callee) => "rsscript_runtime::csv_read_into".to_string(),
-        callee if is_csv_parse_row_callee(callee) => "rsscript_runtime::csv_parse_row".to_string(),
-        callee if is_row_field_string_callee(callee) => {
-            "rsscript_runtime::row_field_string".to_string()
-        }
         Callee::Name(name) => rust_ident(name),
         Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" => {
             format!("rsscript_runtime::ResourcePool::{}", rust_ident(name))
@@ -1969,92 +1795,448 @@ fn lower_callee(callee: &Callee) -> String {
     }
 }
 
-fn is_log_write_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Log" && name == "write")
+struct RuntimeIntrinsic {
+    namespace: &'static str,
+    name: &'static str,
+    rust_target: &'static str,
 }
 
-fn is_assert_equal_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Assert" && name == "equal")
+fn runtime_intrinsic_target(callee: &Callee) -> Option<&'static str> {
+    let Callee::Qualified { namespace, name } = callee else {
+        return None;
+    };
+    let namespace = type_root_name(namespace);
+    RUNTIME_INTRINSICS
+        .iter()
+        .find(|intrinsic| intrinsic.namespace == namespace && intrinsic.name == name)
+        .map(|intrinsic| intrinsic.rust_target)
 }
 
-fn is_assert_equal_int_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Assert" && name == "equal_int")
-}
-
-fn is_assert_equal_bool_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Assert" && name == "equal_bool")
-}
-
-fn is_os_close_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "OS" && name == "close")
-}
-
-fn is_list_new_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "List" && name == "new")
-}
-
-fn is_list_push_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "List" && name == "push")
-}
-
-fn is_list_len_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "List" && name == "len")
-}
-
-fn is_list_get_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "List" && name == "get")
-}
-
-fn is_list_consume_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "List" && name == "consume")
-}
-
-fn is_buffer_consume_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Buffer" && name == "consume")
-}
-
-fn is_buffer_new_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Buffer" && name == "new")
-}
-
-fn is_buffer_clear_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Buffer" && name == "clear")
-}
-
-fn is_cache_new_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Cache" && name == "new")
-}
-
-fn is_cache_insert_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Cache" && name == "insert")
-}
-
-fn is_cache_lookup_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Cache" && name == "lookup")
-}
-
-fn is_cache_get_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Cache" && name == "get")
-}
+const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
+    RuntimeIntrinsic {
+        namespace: "Assert",
+        name: "equal",
+        rust_target: "rsscript_runtime::assert_equal",
+    },
+    RuntimeIntrinsic {
+        namespace: "Assert",
+        name: "equal_bool",
+        rust_target: "rsscript_runtime::assert_equal_bool",
+    },
+    RuntimeIntrinsic {
+        namespace: "Assert",
+        name: "equal_int",
+        rust_target: "rsscript_runtime::assert_equal_int",
+    },
+    RuntimeIntrinsic {
+        namespace: "Buffer",
+        name: "clear",
+        rust_target: "rsscript_runtime::buffer_clear",
+    },
+    RuntimeIntrinsic {
+        namespace: "Buffer",
+        name: "consume",
+        rust_target: "rsscript_runtime::buffer_consume",
+    },
+    RuntimeIntrinsic {
+        namespace: "Buffer",
+        name: "new",
+        rust_target: "rsscript_runtime::buffer_new",
+    },
+    RuntimeIntrinsic {
+        namespace: "Cache",
+        name: "get",
+        rust_target: "rsscript_runtime::cache_get",
+    },
+    RuntimeIntrinsic {
+        namespace: "Cache",
+        name: "insert",
+        rust_target: "rsscript_runtime::cache_insert",
+    },
+    RuntimeIntrinsic {
+        namespace: "Cache",
+        name: "lookup",
+        rust_target: "rsscript_runtime::cache_lookup",
+    },
+    RuntimeIntrinsic {
+        namespace: "Cache",
+        name: "new",
+        rust_target: "rsscript_runtime::cache_new",
+    },
+    RuntimeIntrinsic {
+        namespace: "Config",
+        name: "load",
+        rust_target: "rsscript_runtime::config_load",
+    },
+    RuntimeIntrinsic {
+        namespace: "Config",
+        name: "name",
+        rust_target: "rsscript_runtime::config_name",
+    },
+    RuntimeIntrinsic {
+        namespace: "Config",
+        name: "new",
+        rust_target: "rsscript_runtime::config_new",
+    },
+    RuntimeIntrinsic {
+        namespace: "Config",
+        name: "rule_count",
+        rust_target: "rsscript_runtime::config_rule_count",
+    },
+    RuntimeIntrinsic {
+        namespace: "ConfigStore",
+        name: "name",
+        rust_target: "rsscript_runtime::config_store_name",
+    },
+    RuntimeIntrinsic {
+        namespace: "ConfigStore",
+        name: "new",
+        rust_target: "rsscript_runtime::config_store_new",
+    },
+    RuntimeIntrinsic {
+        namespace: "ConfigStore",
+        name: "replace",
+        rust_target: "rsscript_runtime::config_store_replace",
+    },
+    RuntimeIntrinsic {
+        namespace: "Counter",
+        name: "add",
+        rust_target: "rsscript_runtime::counter_add",
+    },
+    RuntimeIntrinsic {
+        namespace: "Counter",
+        name: "new",
+        rust_target: "rsscript_runtime::counter_new",
+    },
+    RuntimeIntrinsic {
+        namespace: "Counter",
+        name: "value",
+        rust_target: "rsscript_runtime::counter_value",
+    },
+    RuntimeIntrinsic {
+        namespace: "Csv",
+        name: "parse_row",
+        rust_target: "rsscript_runtime::csv_parse_row",
+    },
+    RuntimeIntrinsic {
+        namespace: "Csv",
+        name: "read_into",
+        rust_target: "rsscript_runtime::csv_read_into",
+    },
+    RuntimeIntrinsic {
+        namespace: "Db",
+        name: "close",
+        rust_target: "rsscript_runtime::db_close",
+    },
+    RuntimeIntrinsic {
+        namespace: "DbConnection",
+        name: "open",
+        rust_target: "rsscript_runtime::db_connection_open",
+    },
+    RuntimeIntrinsic {
+        namespace: "DbConnection",
+        name: "query",
+        rust_target: "rsscript_runtime::db_connection_query",
+    },
+    RuntimeIntrinsic {
+        namespace: "DbConnection",
+        name: "try_open",
+        rust_target: "rsscript_runtime::db_connection_try_open",
+    },
+    RuntimeIntrinsic {
+        namespace: "Environment",
+        name: "bind_function",
+        rust_target: "rsscript_runtime::environment_bind_function",
+    },
+    RuntimeIntrinsic {
+        namespace: "Environment",
+        name: "child",
+        rust_target: "rsscript_runtime::environment_child",
+    },
+    RuntimeIntrinsic {
+        namespace: "Environment",
+        name: "has_function",
+        rust_target: "rsscript_runtime::environment_has_function",
+    },
+    RuntimeIntrinsic {
+        namespace: "Environment",
+        name: "has_parent",
+        rust_target: "rsscript_runtime::environment_has_parent",
+    },
+    RuntimeIntrinsic {
+        namespace: "Environment",
+        name: "root",
+        rust_target: "rsscript_runtime::environment_root",
+    },
+    RuntimeIntrinsic {
+        namespace: "File",
+        name: "open",
+        rust_target: "rsscript_runtime::file_open",
+    },
+    RuntimeIntrinsic {
+        namespace: "File",
+        name: "open_read",
+        rust_target: "rsscript_runtime::file_open_read",
+    },
+    RuntimeIntrinsic {
+        namespace: "File",
+        name: "open_write",
+        rust_target: "rsscript_runtime::file_open_write",
+    },
+    RuntimeIntrinsic {
+        namespace: "File",
+        name: "read_all",
+        rust_target: "rsscript_runtime::file_read_all",
+    },
+    RuntimeIntrinsic {
+        namespace: "File",
+        name: "read_all_string",
+        rust_target: "rsscript_runtime::file_read_all_string",
+    },
+    RuntimeIntrinsic {
+        namespace: "File",
+        name: "read_into",
+        rust_target: "rsscript_runtime::file_read_into",
+    },
+    RuntimeIntrinsic {
+        namespace: "File",
+        name: "write",
+        rust_target: "rsscript_runtime::file_write",
+    },
+    RuntimeIntrinsic {
+        namespace: "FunctionObject",
+        name: "has_closure",
+        rust_target: "rsscript_runtime::function_object_has_closure",
+    },
+    RuntimeIntrinsic {
+        namespace: "FunctionObject",
+        name: "new",
+        rust_target: "rsscript_runtime::function_object_new",
+    },
+    RuntimeIntrinsic {
+        namespace: "GlobalConfig",
+        name: "new",
+        rust_target: "rsscript_runtime::global_config_new",
+    },
+    RuntimeIntrinsic {
+        namespace: "GlobalConfig",
+        name: "replace",
+        rust_target: "rsscript_runtime::global_config_replace",
+    },
+    RuntimeIntrinsic {
+        namespace: "GlobalConfig",
+        name: "rule_count",
+        rust_target: "rsscript_runtime::global_config_rule_count",
+    },
+    RuntimeIntrinsic {
+        namespace: "Image",
+        name: "inspect",
+        rust_target: "rsscript_runtime::image_inspect",
+    },
+    RuntimeIntrinsic {
+        namespace: "Image",
+        name: "load",
+        rust_target: "rsscript_runtime::image_load",
+    },
+    RuntimeIntrinsic {
+        namespace: "Image",
+        name: "normalize",
+        rust_target: "rsscript_runtime::image_normalize",
+    },
+    RuntimeIntrinsic {
+        namespace: "Image",
+        name: "resize",
+        rust_target: "rsscript_runtime::image_resize",
+    },
+    RuntimeIntrinsic {
+        namespace: "Image",
+        name: "save",
+        rust_target: "rsscript_runtime::image_save",
+    },
+    RuntimeIntrinsic {
+        namespace: "Image",
+        name: "sharpen",
+        rust_target: "rsscript_runtime::image_sharpen",
+    },
+    RuntimeIntrinsic {
+        namespace: "ImageCache",
+        name: "len",
+        rust_target: "rsscript_runtime::image_cache_len",
+    },
+    RuntimeIntrinsic {
+        namespace: "ImageCache",
+        name: "new",
+        rust_target: "rsscript_runtime::image_cache_new",
+    },
+    RuntimeIntrinsic {
+        namespace: "ImageCache",
+        name: "store",
+        rust_target: "rsscript_runtime::image_cache_store",
+    },
+    RuntimeIntrinsic {
+        namespace: "Json",
+        name: "array_contains_prefix",
+        rust_target: "rsscript_runtime::json_array_contains_prefix",
+    },
+    RuntimeIntrinsic {
+        namespace: "Json",
+        name: "array_contains_string",
+        rust_target: "rsscript_runtime::json_array_contains_string",
+    },
+    RuntimeIntrinsic {
+        namespace: "Json",
+        name: "array_contains_substring",
+        rust_target: "rsscript_runtime::json_array_contains_substring",
+    },
+    RuntimeIntrinsic {
+        namespace: "Json",
+        name: "array_get",
+        rust_target: "rsscript_runtime::json_array_get",
+    },
+    RuntimeIntrinsic {
+        namespace: "Json",
+        name: "array_len",
+        rust_target: "rsscript_runtime::json_array_len",
+    },
+    RuntimeIntrinsic {
+        namespace: "Json",
+        name: "as_string",
+        rust_target: "rsscript_runtime::json_as_string",
+    },
+    RuntimeIntrinsic {
+        namespace: "Json",
+        name: "field",
+        rust_target: "rsscript_runtime::json_field",
+    },
+    RuntimeIntrinsic {
+        namespace: "Json",
+        name: "field_bool",
+        rust_target: "rsscript_runtime::json_field_bool",
+    },
+    RuntimeIntrinsic {
+        namespace: "Json",
+        name: "field_int",
+        rust_target: "rsscript_runtime::json_field_int",
+    },
+    RuntimeIntrinsic {
+        namespace: "Json",
+        name: "field_string",
+        rust_target: "rsscript_runtime::json_field_string",
+    },
+    RuntimeIntrinsic {
+        namespace: "Json",
+        name: "parse",
+        rust_target: "rsscript_runtime::json_parse",
+    },
+    RuntimeIntrinsic {
+        namespace: "Json",
+        name: "parse_file",
+        rust_target: "rsscript_runtime::json_parse_file",
+    },
+    RuntimeIntrinsic {
+        namespace: "List",
+        name: "consume",
+        rust_target: "rsscript_runtime::list_consume",
+    },
+    RuntimeIntrinsic {
+        namespace: "List",
+        name: "get",
+        rust_target: "rsscript_runtime::list_get",
+    },
+    RuntimeIntrinsic {
+        namespace: "List",
+        name: "len",
+        rust_target: "rsscript_runtime::list_len",
+    },
+    RuntimeIntrinsic {
+        namespace: "List",
+        name: "new",
+        rust_target: "rsscript_runtime::list_new",
+    },
+    RuntimeIntrinsic {
+        namespace: "List",
+        name: "push",
+        rust_target: "rsscript_runtime::list_push",
+    },
+    RuntimeIntrinsic {
+        namespace: "Log",
+        name: "write",
+        rust_target: "rsscript_runtime::log_write",
+    },
+    RuntimeIntrinsic {
+        namespace: "OS",
+        name: "close",
+        rust_target: "rsscript_runtime::os_close",
+    },
+    RuntimeIntrinsic {
+        namespace: "Path",
+        name: "from_string",
+        rust_target: "rsscript_runtime::path_from_string",
+    },
+    RuntimeIntrinsic {
+        namespace: "Request",
+        name: "new",
+        rust_target: "rsscript_runtime::request_new",
+    },
+    RuntimeIntrinsic {
+        namespace: "Request",
+        name: "path",
+        rust_target: "rsscript_runtime::request_path",
+    },
+    RuntimeIntrinsic {
+        namespace: "Response",
+        name: "body",
+        rust_target: "rsscript_runtime::response_body",
+    },
+    RuntimeIntrinsic {
+        namespace: "Response",
+        name: "ok",
+        rust_target: "rsscript_runtime::response_ok",
+    },
+    RuntimeIntrinsic {
+        namespace: "Response",
+        name: "status",
+        rust_target: "rsscript_runtime::response_status",
+    },
+    RuntimeIntrinsic {
+        namespace: "Row",
+        name: "field_string",
+        rust_target: "rsscript_runtime::row_field_string",
+    },
+    RuntimeIntrinsic {
+        namespace: "RowBuffer",
+        name: "new",
+        rust_target: "rsscript_runtime::row_buffer_new",
+    },
+    RuntimeIntrinsic {
+        namespace: "RuleLoader",
+        name: "load_rules",
+        rust_target: "rsscript_runtime::rule_loader_load_rules",
+    },
+    RuntimeIntrinsic {
+        namespace: "String",
+        name: "ends_with",
+        rust_target: "rsscript_runtime::string_ends_with",
+    },
+    RuntimeIntrinsic {
+        namespace: "String",
+        name: "from_bool",
+        rust_target: "rsscript_runtime::string_from_bool",
+    },
+    RuntimeIntrinsic {
+        namespace: "String",
+        name: "from_int",
+        rust_target: "rsscript_runtime::string_from_int",
+    },
+    RuntimeIntrinsic {
+        namespace: "String",
+        name: "starts_with",
+        rust_target: "rsscript_runtime::string_starts_with",
+    },
+];
 
 fn is_string_concat_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "String" && name == "concat")
-}
-
-fn is_string_from_int_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "String" && name == "from_int")
-}
-
-fn is_string_from_bool_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "String" && name == "from_bool")
-}
-
-fn is_string_starts_with_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "String" && name == "starts_with")
-}
-
-fn is_string_ends_with_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "String" && name == "ends_with")
 }
 
 fn is_file_open_callee(callee: &Callee) -> bool {
@@ -2067,246 +2249,6 @@ fn is_file_open_read_callee(callee: &Callee) -> bool {
 
 fn is_file_open_write_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && name == "open_write")
-}
-
-fn is_file_read_all_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && name == "read_all")
-}
-
-fn is_file_read_all_string_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && name == "read_all_string")
-}
-
-fn is_file_read_into_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && name == "read_into")
-}
-
-fn is_file_write_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && name == "write")
-}
-
-fn is_path_from_string_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Path" && name == "from_string")
-}
-
-fn is_request_new_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Request" && name == "new")
-}
-
-fn is_request_path_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Request" && name == "path")
-}
-
-fn is_response_ok_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Response" && name == "ok")
-}
-
-fn is_response_status_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Response" && name == "status")
-}
-
-fn is_response_body_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Response" && name == "body")
-}
-
-fn is_config_load_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Config" && name == "load")
-}
-
-fn is_config_name_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Config" && name == "name")
-}
-
-fn is_config_store_new_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ConfigStore" && name == "new")
-}
-
-fn is_config_store_replace_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ConfigStore" && name == "replace")
-}
-
-fn is_config_store_name_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ConfigStore" && name == "name")
-}
-
-fn is_rule_loader_load_rules_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "RuleLoader" && name == "load_rules")
-}
-
-fn is_rules_config_new_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Config" && name == "new")
-}
-
-fn is_rules_config_rule_count_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Config" && name == "rule_count")
-}
-
-fn is_global_config_new_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "GlobalConfig" && name == "new")
-}
-
-fn is_global_config_replace_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "GlobalConfig" && name == "replace")
-}
-
-fn is_global_config_rule_count_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "GlobalConfig" && name == "rule_count")
-}
-
-fn is_counter_new_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Counter" && name == "new")
-}
-
-fn is_counter_add_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Counter" && name == "add")
-}
-
-fn is_counter_value_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Counter" && name == "value")
-}
-
-fn is_environment_root_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Environment" && name == "root")
-}
-
-fn is_environment_child_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Environment" && name == "child")
-}
-
-fn is_environment_bind_function_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Environment" && name == "bind_function")
-}
-
-fn is_environment_has_parent_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Environment" && name == "has_parent")
-}
-
-fn is_environment_has_function_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Environment" && name == "has_function")
-}
-
-fn is_function_object_new_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "FunctionObject" && name == "new")
-}
-
-fn is_function_object_has_closure_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "FunctionObject" && name == "has_closure")
-}
-
-fn is_db_connection_open_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "DbConnection" && name == "open")
-}
-
-fn is_db_connection_try_open_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "DbConnection" && name == "try_open")
-}
-
-fn is_db_connection_query_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "DbConnection" && name == "query")
-}
-
-fn is_db_close_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Db" && name == "close")
-}
-
-fn is_image_load_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Image" && name == "load")
-}
-
-fn is_image_resize_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Image" && name == "resize")
-}
-
-fn is_image_normalize_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Image" && name == "normalize")
-}
-
-fn is_image_sharpen_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Image" && name == "sharpen")
-}
-
-fn is_image_save_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Image" && name == "save")
-}
-
-fn is_image_inspect_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Image" && name == "inspect")
-}
-
-fn is_image_cache_new_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ImageCache" && name == "new")
-}
-
-fn is_image_cache_store_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ImageCache" && name == "store")
-}
-
-fn is_image_cache_len_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ImageCache" && name == "len")
-}
-
-fn is_json_parse_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "parse")
-}
-
-fn is_json_parse_file_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "parse_file")
-}
-
-fn is_json_field_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "field")
-}
-
-fn is_json_field_string_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "field_string")
-}
-
-fn is_json_field_int_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "field_int")
-}
-
-fn is_json_field_bool_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "field_bool")
-}
-
-fn is_json_as_string_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "as_string")
-}
-
-fn is_json_array_len_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "array_len")
-}
-
-fn is_json_array_get_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "array_get")
-}
-
-fn is_json_array_contains_string_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "array_contains_string")
-}
-
-fn is_json_array_contains_substring_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "array_contains_substring")
-}
-
-fn is_json_array_contains_prefix_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "array_contains_prefix")
-}
-
-fn is_row_buffer_new_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "RowBuffer" && name == "new")
-}
-
-fn is_csv_read_into_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Csv" && name == "read_into")
-}
-
-fn is_csv_parse_row_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Csv" && name == "parse_row")
-}
-
-fn is_row_field_string_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Row" && name == "field_string")
 }
 
 fn is_file_open_expr(expr: &Expr) -> bool {
