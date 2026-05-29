@@ -826,7 +826,12 @@ impl<'a> RustLowerer<'a> {
         self.record_statement_source_map(statement, &marker.generated);
         match statement {
             Stmt::Let(stmt) => {
-                let mutable = if self.mutated_bindings.contains(&stmt.name) {
+                let mutable = if self.mutated_bindings.contains(&stmt.name)
+                    || stmt
+                        .value
+                        .as_ref()
+                        .is_some_and(closure_value_mutates_capture)
+                {
                     "mut "
                 } else {
                     ""
@@ -1731,6 +1736,135 @@ fn collect_mutated_bindings_from_expr(expr: &Expr, names: &mut BTreeSet<String>)
         }
         Expr::Closure { body, .. } => collect_mutated_bindings_from_block(body, names),
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+    }
+}
+
+fn closure_value_mutates_capture(expr: &Expr) -> bool {
+    let Expr::Closure { body, .. } = expr else {
+        return false;
+    };
+    let mut bound = BTreeSet::new();
+    collect_closure_bound_names_from_block(body, &mut bound);
+    closure_block_mutates_unbound_name(body, &bound)
+}
+
+fn collect_closure_bound_names_from_block(block: &Block, names: &mut BTreeSet<String>) {
+    for statement in &block.statements {
+        match statement {
+            Stmt::Let(stmt) => {
+                names.insert(stmt.name.clone());
+            }
+            Stmt::With(stmt) => {
+                names.insert(stmt.binding.clone());
+                collect_closure_bound_names_from_block(&stmt.body, names);
+            }
+            Stmt::If(stmt) => {
+                collect_closure_bound_names_from_block(&stmt.then_body, names);
+                if let Some(else_body) = &stmt.else_body {
+                    collect_closure_bound_names_from_block(else_body, names);
+                }
+            }
+            Stmt::Loop(stmt) => collect_closure_bound_names_from_block(&stmt.body, names),
+            Stmt::Match(stmt) => {
+                for arm in &stmt.arms {
+                    collect_closure_bound_names_from_block(&arm.body, names);
+                }
+            }
+            Stmt::Return(_)
+            | Stmt::Break(_)
+            | Stmt::Continue(_)
+            | Stmt::Expr(_)
+            | Stmt::MalformedWith(_)
+            | Stmt::MalformedIf(_)
+            | Stmt::MalformedLoop(_)
+            | Stmt::MalformedMatch(_)
+            | Stmt::Unknown(_) => {}
+        }
+    }
+}
+
+fn closure_block_mutates_unbound_name(block: &Block, bound: &BTreeSet<String>) -> bool {
+    block
+        .statements
+        .iter()
+        .any(|statement| closure_stmt_mutates_unbound_name(statement, bound))
+}
+
+fn closure_stmt_mutates_unbound_name(statement: &Stmt, bound: &BTreeSet<String>) -> bool {
+    match statement {
+        Stmt::Let(stmt) => stmt
+            .value
+            .as_ref()
+            .is_some_and(|value| closure_expr_mutates_unbound_name(value, bound)),
+        Stmt::Return(stmt) => stmt
+            .value
+            .as_ref()
+            .is_some_and(|value| closure_expr_mutates_unbound_name(value, bound)),
+        Stmt::With(stmt) => {
+            closure_expr_mutates_unbound_name(&stmt.resource, bound)
+                || closure_block_mutates_unbound_name(&stmt.body, bound)
+        }
+        Stmt::If(stmt) => {
+            closure_expr_mutates_unbound_name(&stmt.condition, bound)
+                || closure_block_mutates_unbound_name(&stmt.then_body, bound)
+                || stmt
+                    .else_body
+                    .as_ref()
+                    .is_some_and(|body| closure_block_mutates_unbound_name(body, bound))
+        }
+        Stmt::Loop(stmt) => {
+            stmt.condition
+                .as_ref()
+                .is_some_and(|condition| closure_expr_mutates_unbound_name(condition, bound))
+                || closure_block_mutates_unbound_name(&stmt.body, bound)
+        }
+        Stmt::Match(stmt) => {
+            closure_expr_mutates_unbound_name(&stmt.value, bound)
+                || stmt
+                    .arms
+                    .iter()
+                    .any(|arm| closure_block_mutates_unbound_name(&arm.body, bound))
+        }
+        Stmt::Expr(expr) => closure_expr_mutates_unbound_name(expr, bound),
+        Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::MalformedWith(_)
+        | Stmt::MalformedIf(_)
+        | Stmt::MalformedLoop(_)
+        | Stmt::MalformedMatch(_)
+        | Stmt::Unknown(_) => false,
+    }
+}
+
+fn closure_expr_mutates_unbound_name(expr: &Expr, bound: &BTreeSet<String>) -> bool {
+    match expr {
+        Expr::Effect {
+            effect: DataEffect::Mut,
+            value,
+            ..
+        } => {
+            mutable_root_ident(value).is_some_and(|name| !bound.contains(name))
+                || closure_expr_mutates_unbound_name(value, bound)
+        }
+        Expr::Binary { left, right, .. } => {
+            closure_expr_mutates_unbound_name(left, bound)
+                || closure_expr_mutates_unbound_name(right, bound)
+        }
+        Expr::Field { base, .. } => closure_expr_mutates_unbound_name(base, bound),
+        Expr::Index { base, index, .. } => {
+            closure_expr_mutates_unbound_name(base, bound)
+                || closure_expr_mutates_unbound_name(index, bound)
+        }
+        Expr::Call { args, .. } => args
+            .iter()
+            .any(|arg| closure_expr_mutates_unbound_name(&arg.value, bound)),
+        Expr::Effect { value, .. }
+        | Expr::Manage { value, .. }
+        | Expr::Spawn { value, .. }
+        | Expr::Await { value, .. }
+        | Expr::Try { value, .. } => closure_expr_mutates_unbound_name(value, bound),
+        Expr::Closure { body, .. } => closure_block_mutates_unbound_name(body, bound),
+        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => false,
     }
 }
 
