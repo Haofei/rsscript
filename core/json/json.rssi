@@ -40,3 +40,8 @@ pub fn Json.array_contains_substring(
     value: read JsonValue,
     text: read String,
 ) -> Result<Bool, JsonError>
+
+pub fn Json.array_contains_prefix(
+    value: read JsonValue,
+    prefix: read String,
+) -> Result<Bool, JsonError>

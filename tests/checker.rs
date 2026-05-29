@@ -1043,6 +1043,7 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     let first = Json.array_get(value: read value, index: 0)?
     let has_profile = Json.array_contains_string(value: read value, item: read "profile")?
     let has_profile_prefix = Json.array_contains_substring(value: read value, text: read "prof")?
+    let has_profile_named_prefix = Json.array_contains_prefix(value: read value, prefix: read "pro")?
     let profile = Json.field(value: read value, name: read "profile")?
     let active = Json.field_bool(value: read profile, name: read "active")?
     let age = Json.field_int(value: read profile, name: read "age")?
@@ -1064,6 +1065,9 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     ));
     assert!(rust.contains(
         "let has_profile_prefix = rsscript_runtime::json_array_contains_substring(&value, &\"prof\".to_string())?;"
+    ));
+    assert!(rust.contains(
+        "let has_profile_named_prefix = rsscript_runtime::json_array_contains_prefix(&value, &\"pro\".to_string())?;"
     ));
     assert!(rust.contains(
         "let active = rsscript_runtime::json_field_bool(&profile, &\"active\".to_string())?;"
@@ -4254,18 +4258,18 @@ fn review_map_dogfood_classifier_has_no_unknown_regions() {
     let source = read_fixture(path);
     let map = review_map_sources(vec![(path.to_str().unwrap(), source.as_str())]);
 
-    assert_eq!(map.summary.total_functions, 34);
-    assert!(map.summary.total_lines >= 515, "{map:?}");
+    assert_eq!(map.summary.total_functions, 36);
+    assert!(map.summary.total_lines >= 543, "{map:?}");
     assert_eq!(map.files[0].risk, ReviewMapFileRisk::Elevated);
     assert_eq!(map.summary.unknown.functions, 0, "{map:?}");
     assert_eq!(map.summary.unknown.lines, 0, "{map:?}");
-    assert!(map.summary.review_required.functions >= 22, "{map:?}");
+    assert!(map.summary.review_required.functions >= 24, "{map:?}");
 
     let json: Value =
         serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
     assert_eq!(json["summary"]["unknown_ratio"], 0.0);
     assert_eq!(json["summary"]["unknown_function_ratio"], 0.0);
-    assert_eq!(json["summary"]["must_review"]["functions"], 22);
+    assert_eq!(json["summary"]["must_review"]["functions"], 24);
     assert_eq!(json["summary"]["low_semantic_risk"]["functions"], 12);
 }
 
@@ -4368,7 +4372,7 @@ fn rss_run_accepts_dogfood_classifier() {
         .arg("review")
         .arg("--map")
         .arg("--json")
-        .arg("tests/fixtures/pass/complex-supported-review-map.rss")
+        .arg("tests/fixtures/pass/dogfood-review-classifier.rss")
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
         .expect("rss review --map --json should execute");
@@ -4397,7 +4401,7 @@ fn rss_run_accepts_dogfood_classifier() {
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
     assert_eq!(
         stdout.trim(),
-        "dogfood review summary total=6 must=6 low=0 unknown=0 lines=74"
+        "dogfood review summary total=36 must=24 low=12 unknown=0 lines=487"
     );
     assert!(stderr.trim().is_empty(), "{stderr}");
 }

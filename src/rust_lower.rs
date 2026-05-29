@@ -455,6 +455,7 @@ impl<'a> RustLowerer<'a> {
         out.push_str(
             "// Runtime hooks are intentionally explicit while Rust lowering is stabilizing.\n",
         );
+        out.push_str("#![allow(dead_code, non_snake_case)]\n");
         let feature_names = lowered_feature_names(&self.program.features);
         if feature_names.is_empty() {
             out.push_str("// RSScript features: <none>\n");
@@ -1900,6 +1901,9 @@ fn lower_callee(callee: &Callee) -> String {
         callee if is_json_array_contains_substring_callee(callee) => {
             "rsscript_runtime::json_array_contains_substring".to_string()
         }
+        callee if is_json_array_contains_prefix_callee(callee) => {
+            "rsscript_runtime::json_array_contains_prefix".to_string()
+        }
         callee if is_row_buffer_new_callee(callee) => {
             "rsscript_runtime::row_buffer_new".to_string()
         }
@@ -2218,6 +2222,10 @@ fn is_json_array_contains_string_callee(callee: &Callee) -> bool {
 
 fn is_json_array_contains_substring_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "array_contains_substring")
+}
+
+fn is_json_array_contains_prefix_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "array_contains_prefix")
 }
 
 fn is_row_buffer_new_callee(callee: &Callee) -> bool {

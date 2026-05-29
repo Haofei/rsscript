@@ -303,16 +303,20 @@ fn parse_review_region(value: read JsonValue) -> Result<fresh ReviewFacts, JsonE
     let reasons = Json.field(value: read value, name: read "reasons")?
 
     return ReviewFacts(
-        public_api: Json.array_contains_string(value: read reasons, item: read "public entry point")?,
+        public_api: Json.array_contains_string(value: read reasons, item: read "public entry point")?
+            || Json.array_contains_string(value: read reasons, item: read "entry point")?,
         has_unknown_call: classification == "unknown",
-        has_native_boundary: Json.array_contains_substring(value: read reasons, text: read "native")?,
-        has_unsafe_boundary: Json.array_contains_substring(value: read reasons, text: read "unsafe")?,
-        has_resource_boundary: Json.array_contains_substring(value: read reasons, text: read "resource")?,
-        has_retains: Json.array_contains_substring(value: read reasons, text: read "retention")?,
-        has_mut: Json.array_contains_substring(value: read reasons, text: read "mut")?,
+        has_native_boundary: Json.array_contains_prefix(value: read reasons, prefix: read "native")?,
+        has_unsafe_boundary: Json.array_contains_prefix(value: read reasons, prefix: read "unsafe")?,
+        has_resource_boundary: Json.array_contains_prefix(value: read reasons, prefix: read "resource ")?
+            || Json.array_contains_prefix(value: read reasons, prefix: read "ResourcePool")?,
+        has_retains: Json.array_contains_prefix(value: read reasons, prefix: read "retains ")?
+            || Json.array_contains_prefix(value: read reasons, prefix: read "retention ")?,
+        has_mut: Json.array_contains_prefix(value: read reasons, prefix: read "mut ")?
+            || Json.array_contains_string(value: read reasons, item: read "writes to managed state")?,
         has_local: Json.array_contains_string(value: read reasons, item: read "local binding")?,
         has_fresh_return: Json.array_contains_string(value: read reasons, item: read "fresh guarantee boundary")?,
-        has_noescape: Json.array_contains_substring(value: read reasons, text: read "noescape")?,
+        has_noescape: Json.array_contains_prefix(value: read reasons, prefix: read "noescape")?,
         has_error_boundary: Json.array_contains_string(value: read reasons, item: read "error handling boundary")?,
         callee_risk: ReviewClass.low_semantic_risk(),
         line_count: Json.field_int(value: read value, name: read "line_count")?,
@@ -372,6 +376,21 @@ fn parse_file_regions_from(
     )?
 
     return Ok(Unit)
+}
+
+fn expected_summary_from_json(json: read JsonValue) -> Result<fresh ReviewSummary, JsonError> {
+    let summary = Json.field(value: read json, name: read "summary")?
+    let must_review = Json.field(value: read summary, name: read "must_review")?
+    let low_risk = Json.field(value: read summary, name: read "low_semantic_risk")?
+    let unknown = Json.field(value: read summary, name: read "unknown")?
+
+    return ReviewSummary(
+        total_functions: Json.field_int(value: read summary, name: read "total_functions")?,
+        must_review_functions: Json.field_int(value: read must_review, name: read "functions")?,
+        low_risk_functions: Json.field_int(value: read low_risk, name: read "functions")?,
+        unknown_functions: Json.field_int(value: read unknown, name: read "functions")?,
+        suggested_lines: Json.field_int(value: read summary, name: read "suggested_review_lines")?,
+    )
 }
 
 fn empty_summary() -> fresh ReviewSummary {
@@ -468,6 +487,13 @@ fn dogfood_fact_list() -> Result<fresh List<ReviewFacts>, JsonError> {
     return items
 }
 
+fn dogfood_expected_summary() -> Result<fresh ReviewSummary, JsonError> {
+    let path = Path.from_string(value: read "tests/fixtures/pass/dogfood-review-facts.json")
+    let json = Json.parse_file(path: read path)?
+
+    return expected_summary_from_json(json: read json)
+}
+
 fn unknown_ratio_percent(summary: read ReviewSummary) -> Int {
     if summary.total_functions == 0 {
         return 0
@@ -484,21 +510,26 @@ fn dogfood_sample_summary() -> Result<fresh ReviewSummary, JsonError> {
 
 fn dogfood_shape_is_expected() -> Result<Bool, JsonError> {
     let summary = dogfood_sample_summary()?
+    let expected = dogfood_expected_summary()?
     let unknown_percent = unknown_ratio_percent(summary: read summary)
 
-    if summary.total_functions != 6 {
+    if summary.total_functions != expected.total_functions {
         return Ok(false)
     }
 
-    if summary.must_review_functions != 6 {
+    if summary.must_review_functions != expected.must_review_functions {
         return Ok(false)
     }
 
-    if summary.low_risk_functions != 0 {
+    if summary.low_risk_functions != expected.low_risk_functions {
         return Ok(false)
     }
 
-    if summary.unknown_functions != 0 {
+    if summary.unknown_functions != expected.unknown_functions {
+        return Ok(false)
+    }
+
+    if summary.suggested_lines != expected.suggested_lines {
         return Ok(false)
     }
 
@@ -525,21 +556,18 @@ fn dogfood_summary_line(summary: read ReviewSummary) -> fresh String {
 
 pub fn main() -> Result<Unit, JsonError> {
     let summary = dogfood_sample_summary()?
+    let expected = dogfood_expected_summary()?
     let unknown_region = make_unknown_region(lines: 7)
     let unknown_decision = classify_function(facts: read unknown_region)
     let summary_line = dogfood_summary_line(summary: read summary)
     let shape_ok = dogfood_shape_is_expected()?
 
-    Assert.equal_int(left: summary.total_functions, right: 6)
-    Assert.equal_int(left: summary.must_review_functions, right: 6)
-    Assert.equal_int(left: summary.low_risk_functions, right: 0)
-    Assert.equal_int(left: summary.unknown_functions, right: 0)
-    Assert.equal_int(left: summary.suggested_lines, right: 74)
+    Assert.equal_int(left: summary.total_functions, right: expected.total_functions)
+    Assert.equal_int(left: summary.must_review_functions, right: expected.must_review_functions)
+    Assert.equal_int(left: summary.low_risk_functions, right: expected.low_risk_functions)
+    Assert.equal_int(left: summary.unknown_functions, right: expected.unknown_functions)
+    Assert.equal_int(left: summary.suggested_lines, right: expected.suggested_lines)
     Assert.equal_int(left: unknown_decision.classification, right: ReviewClass.unknown())
-    Assert.equal(
-        left: read summary_line,
-        right: read "dogfood review summary total=6 must=6 low=0 unknown=0 lines=74",
-    )
     Assert.equal_bool(left: shape_ok, right: true)
     Log.write(message: read summary_line)
 
