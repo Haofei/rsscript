@@ -38,6 +38,7 @@ pub mod code {
     pub const LOCAL_CLASS_BINDING: &str = "RS0306";
     pub const INVALID_MANAGE_OPERAND: &str = "RS0307";
     pub const INVALID_TAKE_OPERAND: &str = "RS0308";
+    pub const MANAGED_FIELD_SPLIT_CONFLICT: &str = "RS0309";
     pub const USE_AFTER_MANAGE: &str = "RS0401";
     pub const LOCAL_VALUE_RETAINED: &str = "RS0501";
     pub const FRESH_RETURN_NOT_CLEAN: &str = "RS0601";

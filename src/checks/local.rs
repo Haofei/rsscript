@@ -2352,7 +2352,6 @@ impl BodyState {
             .map(|(path, span)| (path.clone(), span))
     }
 
-    #[cfg(test)]
     pub(crate) fn value_type(&self, name: &str) -> Option<&str> {
         self.value_types.get(name).map(String::as_str)
     }

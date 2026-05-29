@@ -88,6 +88,7 @@ struct CallPlaceAccess {
     effect: ParamEffect,
     path: PlacePath,
     moves_path: bool,
+    base_is_local: bool,
     span: crate::diagnostic::Span,
 }
 
@@ -946,7 +947,7 @@ fn check_call_place_conflicts(
     analyzer: &mut Analyzer<'_>,
     args: &[HirCallArg],
     resolution: &CallResolution,
-    _state: &BodyState,
+    state: &BodyState,
 ) {
     let mut accesses = args
         .iter()
@@ -979,6 +980,17 @@ fn check_call_place_conflicts(
                 collect_closure_capture_accesses(body, &mut accesses);
             }
         }
+    }
+
+    // Field splitting (treating distinct inline fields of one base as disjoint)
+    // is a local-only capability: a local exclusive value is provably one owner,
+    // so two inline fields are separate. A managed object (a class, a container,
+    // or a managed binding) is a single runtime value behind one write guard, so
+    // two mutable accesses to its inline fields conflict even when the field
+    // paths differ. Note a `mut`/`take` parameter is locally exclusive only when
+    // its type is a value type, not a managed object type.
+    for access in &mut accesses {
+        access.base_is_local = base_allows_field_split(analyzer, state, &access.path.base);
     }
 
     for left_index in 0..accesses.len() {
@@ -1099,13 +1111,29 @@ fn collect_closure_effect_accesses_expr(
                     effect: effect_of(expr),
                     moves_path: expr_moves_path(expr),
                     path,
+                    base_is_local: false,
                     span: span.clone(),
                 });
             }
             collect_closure_effect_accesses_expr(value, bound, out);
         }
-        HirExpr::Manage { value, .. }
-        | HirExpr::Spawn { value, .. }
+        HirExpr::Manage { value, span, .. } => {
+            // `manage x` is a move of the captured place; it conflicts with any
+            // other same-call use of that place (§8.4 manage rule).
+            if let Some(path) = place_path(value)
+                && !bound.contains(&path.base)
+            {
+                out.push(CallPlaceAccess {
+                    effect: ParamEffect::Read,
+                    moves_path: true,
+                    path,
+                    base_is_local: false,
+                    span: span.clone(),
+                });
+            }
+            collect_closure_effect_accesses_expr(value, bound, out);
+        }
+        HirExpr::Spawn { value, .. }
         | HirExpr::Await { value, .. }
         | HirExpr::Try { value, .. } => collect_closure_effect_accesses_expr(value, bound, out),
         HirExpr::Binary { left, right, .. } => {
@@ -1152,6 +1180,7 @@ fn call_place_access(arg: &HirCallArg) -> Option<CallPlaceAccess> {
         effect: *effect,
         moves_path: expr_moves_path(&arg.value),
         path,
+        base_is_local: false,
         span: span.clone(),
     })
 }
@@ -1321,7 +1350,58 @@ fn check_place_pair_conflict(
             right,
             "one local field path is the same as, or a prefix of, the other.",
         );
+        return;
     }
+
+    if !left.base_is_local {
+        managed_field_split_conflict_diagnostic(analyzer, left, right);
+    }
+}
+
+/// A base supports field splitting (distinct inline fields treated as disjoint)
+/// only when it is a locally exclusive value. A managed binding, or a `mut`/`take`
+/// parameter whose type is a class or container, is a single managed object and
+/// does not support splitting.
+fn base_allows_field_split(analyzer: &Analyzer<'_>, state: &BodyState, base: &str) -> bool {
+    if !state.is_local(base) {
+        return false;
+    }
+    match state.value_type(base) {
+        Some(type_name) => {
+            let root = type_name.split_once('<').map_or(type_name, |(root, _)| root);
+            let is_container = matches!(root, "List" | "Map" | "Set");
+            let is_class = analyzer.hir.type_kind(root) == Some(HirTypeKind::Class);
+            !is_container && !is_class
+        }
+        None => true,
+    }
+}
+
+fn managed_field_split_conflict_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    left: &CallPlaceAccess,
+    right: &CallPlaceAccess,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::MANAGED_FIELD_SPLIT_CONFLICT,
+            format!(
+                "managed object fields `{}` and `{}` cannot be split in one call.",
+                place_path_display(&left.path),
+                place_path_display(&right.path)
+            ),
+            right.span.clone(),
+            "managed field split conflict",
+        )
+        .with_cause(
+            "Field splitting into disjoint inline paths is a local-only capability. A managed object is a single runtime value behind one write guard, so two mutable accesses to its inline fields conflict; the conflict root is the managed object base.",
+        )
+        .with_fix(
+            "split_managed_field_accesses",
+            "Split the accesses into separate statements, or move the fields behind explicit `handle` fields so they become distinct managed objects.",
+            "manual",
+        ),
+    );
 }
 
 fn move_base_field_conflict(left: &CallPlaceAccess, right: &CallPlaceAccess) -> bool {

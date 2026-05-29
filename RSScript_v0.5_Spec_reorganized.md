@@ -75,6 +75,7 @@ This document reorganizes the v0.5 draft around the semantic boundaries that the
 
 ```text
 Chapter 5   Expression modes and materialization
+Chapter 5A  Statements and control flow
 Chapter 8   Places, conflict roots, and same-call conflicts
 Chapter 9   Call-like expressions, constructors, and variants
 Chapter 10  Data effects, retention, and managed closure capture
@@ -538,9 +539,14 @@ This avoids ambiguity around `?`, field access, and indexing in review.
 
 ---
 
-## Statements and Control Flow
+## 5A. Statements and Control Flow
 
-This section defines the v0.5 executable statement and control-flow surface. It
+This chapter is numbered `5A` so it sits next to expression modes (Chapter 5)
+without renumbering later chapters. It is a primary semantic-boundary chapter: it
+defines where resources drop, where local-move and freshness state change, and
+where source maps mark boundaries.
+
+This chapter defines the v0.5 executable statement and control-flow surface. It
 is normative for where resources drop, where freshness and local-move state
 change, and where source maps mark boundaries; the Rust lowering must preserve
 these semantics.
@@ -597,16 +603,54 @@ source as the `?` token.
 for <var> in <iterable> { ... }
 ```
 
-The iterable is consumed by an iteration that does not expose a managed alias or
-a resource lease beyond the loop body. The loop variable is bound per iteration;
-it is a Copy value or a managed read view of the element, never a local exclusive
-value extracted from a managed container and never a resource taken out of a
-pool. A loop body may open its own `with` resources, which drop at the end of
-each iteration.
+The iterable is read-iterated by the loop. The loop does not consume, mutate, or
+retain the iterable unless an explicit iterator API says so ("consume" in
+RSScript means a `take`, which `for` does not do). The loop variable is bound per
+iteration; it is a Copy value or a managed read view of the element, never a
+local exclusive value extracted from a managed container and never a resource
+taken out of a pool. A loop body may open its own `with` resources, which drop at
+the end of each iteration.
 
 Resources, freshness, and local-move state observe loop back-edges: a value moved
 inside the loop body is not usable on a later iteration, and a `with` resource
 opened in the body is dropped before the next iteration.
+
+### `while` and `loop`
+
+```text
+while <condition> { ... }
+loop { ... }            // exited by break
+```
+
+`while` and `loop` follow the same back-edge rules as `for`: local-move and
+freshness state are computed as a fixpoint over the loop body, so a value moved
+(`take`/`manage`) inside the body is not live on any later iteration, and a value
+the body depends on being unmoved must be unmoved on every back-edge. A `with`
+resource opened in the body drops at the end of each iteration. `break` and
+`continue` drop the `with` resources whose scope they leave.
+
+### `match` (statement form)
+
+```text
+match <value> { <arm> => { ... } ... }
+```
+
+In v0.5, `match` is over the standard `Option<T>` and `Result<T, E>` variant
+shapes and must be exhaustive: it covers `Some`/`None`, `Ok`/`Err`, or includes
+`_`; a non-exhaustive match is a diagnostic before lowering. Arm rules:
+
+```text
+- a variant payload binding obeys the same data-effect, move, and resource rules
+  as any other binding; a payload that is a resource cannot escape its arm.
+- local-move and freshness facts from all arms are joined path-sensitively at the
+  match exit, so a value moved in one arm is treated as moved after the match
+  only if it is moved on every arm.
+- a `with` resource opened inside an arm drops at that arm's exit.
+```
+
+---
+
+## 6. Type and Field Model
 
 ### 6.1 User-facing type declaration kinds
 
@@ -638,12 +682,18 @@ always managed
 has reference identity
 may be shared
 may be cyclic
-fields are managed or Copy
+the class value itself is always a managed identity object
+fields may be inline, handle, or weak handle under the §6.5 rule
 weak fields may break managed cycles
 cannot be local
 cannot be fresh
 cannot be resource
 ```
+
+"Always managed" describes the class value, not each field: a class is a managed
+identity object, and its fields follow §6.5 (handle if marked `handle`/`weak` or
+class-typed, otherwise inline within the managed class). A class may hold inline
+non-Copy fields such as `entries: Map<String, Image>`.
 
 ### 6.3 `struct`
 
@@ -802,10 +852,20 @@ Float Float32 Float64
 Unit
 ```
 
-Two further types are exempt from call-site data effects and are treated as Copy
-for that purpose: `Fd` (a descriptor handle) and closure-typed parameters. This
-exemption is only about not requiring `read`/`mut`/`take`; it does not change
-managed-closure retention rules (§10.8).
+Two further types are **exempt from data-effect syntax** but are **not Copy** —
+do not read this as "freely copyable":
+
+```text
+Fd       a descriptor handle. Fd is not a user-facing ordinary value in v0.5: it
+         appears only inside native/resource implementations such as File, and is
+         exempt from data effects only in trusted native/resource internals, not
+         as a general public API type. Copying an Fd value is not a sanctioned
+         operation; ownership of the underlying descriptor lives in the resource.
+closure  closure-typed parameters do not use read/mut/take syntax, but closures
+         are not Copy. Their escape and retention behavior is expressed by
+         `noescape` or `effects(retains(callback))`, and managed-closure capture
+         retention (§10.8) is unchanged.
+```
 
 Everything else is non-Copy: managed handles, weak handles, resources,
 containers (`List`, `Map`, `Set`), `String`, `Bytes`, `Buffer`, generic type
@@ -1065,10 +1125,13 @@ The static rule catches syntactic conflicts. If two different managed variables 
 ### 8.6 Noescape closure captures participate in same-call conflicts
 
 A closure literal passed as a `noescape` argument is invoked during the call (it
-cannot escape it, §10.9). Its captured `read`/`mut`/`take` uses of places are
-therefore synthetic accesses of the enclosing call-like expression and take part
-in the same-call conflict check of section 8.4, exactly as if they were written
-as direct arguments.
+cannot escape it, §10.9). Its captured `read`/`mut`/`take`/`manage` uses of
+places are therefore synthetic accesses of the enclosing call-like expression and
+take part in the same-call conflict check of section 8.4, exactly as if they were
+written as direct arguments. This includes a `manage` of a captured place (a
+move, conflicting with any other use of that place) and a `mut` access such as
+`ResourcePool.borrow(pool: mut pool)` inside the closure body (a synthetic `mut`
+on `pool`).
 
 ```rust
 apply(
@@ -1086,6 +1149,32 @@ Capture roots are computed from the closure body; names bound inside the closure
 (`let`/`local`/`with`) are not captures and do not participate. This applies to
 `noescape` closures, whose body runs synchronously within the call; an escaping
 managed closure is governed by retention analysis (section 10.8) instead.
+
+### 8.7 Field splitting is a local-only capability
+
+Treating two distinct inline field paths of the same base as disjoint (so they
+may both be `mut`/`take` in one call) is sound only when the base is a locally
+exclusive value. A managed object — a class, a managed container, or a managed
+binding — is a single runtime value behind one write guard, so two mutable
+accesses to its inline fields conflict even when the field paths differ.
+
+```text
+For a managed base, any mut/take access to an inline field has the managed object
+base as its conflict root, unless the path first crosses an explicit handle/weak
+boundary (which reaches a distinct managed object). For a local base, distinct
+inline field paths may be disjoint per §8.3.
+```
+
+```rust
+Foo.run(a: mut cache.entries, b: mut cache.stats)   // cache is a managed class
+```
+
+This is rejected (diagnostic RS0309): `entries` and `stats` are inline fields of
+one managed object and share its write guard. If `entries` were a `handle Map`,
+the root would stop at `cache.entries` (a distinct managed object) and the two
+accesses could be disjoint. A `mut`/`take` parameter is locally exclusive only
+when its type is a value type; a `mut` parameter of a class or container type is
+a managed object base.
 
 ---
 
@@ -1151,15 +1240,37 @@ The payload position is still a call-like argument slot for checker purposes.
 
 ### 9.3 Constructor field effects
 
-For struct/class constructors:
+For struct/class constructors, the required form depends on both the field kind
+and the initializer source. The full matrix:
 
 ```text
-inline non-Copy local field initialization requires take
-handle field initialization from a managed value requires read
-weak field initialization requires a weak-handle-producing expression
-Copy field initialization copies normally
-resource fields are forbidden outside approved resource containers
+Copy field:
+  any matching expression copies normally; no data effect.
+
+inline non-Copy field:
+  from a local place        requires take (moves the value into the shell)
+  from a fresh expression   allowed; the fresh shell is moved into the shell
+  from a literal            allowed when the literal is a fresh value of the
+                            field type (a String literal initializes a String
+                            field directly); otherwise use an explicit constructor
+  from a managed value      rejected; there is no implicit clone. Use an explicit
+                            clone/copy API, or store a handle field instead.
+
+handle field:
+  from a managed value      requires read
+  from a local value        requires read (manage local) — manage first
+  from a fresh expression   materializes managed and stores the handle
+
+weak field:
+  requires a weak-handle-producing expression (e.g. Weak.from)
 ```
+
+`resource` fields are forbidden outside approved resource containers.
+
+In the example below, `name: "default"` initializes an inline `String` field from
+a String literal (a fresh value of the field type), `rules: read rules` is a
+handle field from a managed value, and `workspace: take workspace` is an inline
+non-Copy field from a local place.
 
 Example:
 
@@ -1273,10 +1384,12 @@ Guarantees are checked only over RSScript-known constructs and trusted signature
 
 ```rust
 fn cache_put(cache: mut Cache, key: read String, value: read Image) -> Unit
-    effects(retains(value))
+    effects(retains(key), retains(value))
 ```
 
-`retains(x)` may retain a managed handle or managed value derived from `x`. It must not retain an active runtime read/write guard.
+A function that stores both `key` and `value` declares both: `retains` names
+every parameter the function keeps after returning. `retains(x)` may retain a
+managed handle or managed value derived from `x`. It must not retain an active runtime read/write guard.
 
 A local value cannot be passed directly to a retaining parameter. This includes local-inline fields reached without crossing a handle or weak field.
 
@@ -1548,9 +1661,11 @@ fn ResourcePool<T: Resource>.new(
 ) -> fresh ResourcePool<T>
 ```
 
-`new` is the v0.5 constructor and requires an **infallible** factory: `create` must return a resource `T`, never `Result<T, E>`. Construction is eager and exact: the runtime calls `create` exactly `max_size` times, stores the `max_size` resources in the local pool, then discards the factory closure. `max_size` must be positive; a non-positive `max_size` yields an empty pool whose first borrow fails. Because construction cannot fail, `new` returns the pool directly, not a `Result`. "Eager" and "exactly `max_size`" together remove any ambiguity with lazy replenishment: the pool never creates a resource after construction.
+`new` is the v0.5 constructor and requires an **infallible** factory: `create` must return a resource `T`, never `Result<T, E>`. Construction is eager and exact: the runtime calls `create` exactly `max_size` times, stores the `max_size` resources in the local pool, then discards the factory closure. In v0.5, `max_size` must be a positive `Int` literal; a non-positive literal is a diagnostic (RS0708), not a runtime condition — this keeps `new` infallible without needing a `Result` for a degenerate pool size. Because construction cannot fail, `new` returns the pool directly, not a `Result`. "Eager" and "exactly `max_size`" together remove any ambiguity with lazy replenishment: the pool never creates a resource after construction.
 
-A fallible factory passed to `new` is rejected (diagnostic RS0707): hiding a creation failure inside `new` would violate no-hidden-behavior, since failure is represented by a return type (section 14.3). Note that in v0.5 the closure type does not model its return type in the type system; the `-> T` above documents intent for the reader, but infallibility is enforced structurally from the closure body, not from a declared closure return type.
+*v0.5 enforcement status: the runtime constructs exactly `max_size` resources and clamps a non-positive `max_size` to an empty pool; the RS0708 positive-literal check is a specified frontend obligation being added.*
+
+A fallible factory passed to `new` is rejected (diagnostic RS0707): hiding a creation failure inside `new` would violate no-hidden-behavior, since failure is represented by a return type (section 14.3). The closure literal is checked against the expected `noescape Fn() -> T` parameter contract, including its result type: the user need not annotate the closure's return type, but the checker takes the expected result `T` from the parameter and rejects a factory whose result is `Result<T, E>` (that is the RS0707 case). The `-> T` in the contract is the expected result the checker enforces, not mere documentation.
 
 The canonical example below uses `DbConnection.open` as an *infallible* factory — it returns `DbConnection`, not `Result`, which is what makes it valid with `new`. This is a deliberate simplification: most real poolable resources (database connections, sockets, file handles) fail to create and need the fallible constructor below.
 
@@ -1622,19 +1737,55 @@ with ResourcePool.borrow(pool: mut pool) as conn {
 
 The lease cannot escape the `with` body, be returned through `Ok`/`Some`, be captured by a managed closure, or be stored in managed data.
 
----
+Exhaustion and nesting, made precise for v0.5:
 
-## 13. Containers
+```text
+- borrow does not return Result and must not block. Borrowing from an exhausted
+  pool (every resource currently leased out) is a runtime diagnostic with a
+  source span, not a block and not a silent failure.
+- a lease is tied to the pool that produced it. While a lease from a pool is
+  active, the same pool is held `mut` for the lease's `with` scope.
+- nested borrow from the same pool inside an active lease's scope is rejected in
+  v0.5. A multi-borrow API is reserved for a future version; until then, borrow
+  one resource at a time per pool.
+```
+
+```rust
+with ResourcePool.borrow(pool: mut pool) as a {
+    with ResourcePool.borrow(pool: mut pool) as b {   // rejected in v0.5
+        ...
+    }
+}
+```
+
+*v0.5 enforcement status: exhausted borrow is enforced at runtime (an empty pool
+produces a resource-pool-empty diagnostic with a source span). The static
+nested-borrow rejection is the specified frontend obligation; if the checker does
+not yet reject it, that is a known gap to close, not a different rule.*
 
 ### 13.1 Managed containers
 
-Ordinary containers are managed.
+`List`, `Map`, and `Set` are struct-like container values, not class handles. The
+distinction is between binding and field, following the materialization rules
+(Chapter 5) and the field rule (§6.5):
+
+```text
+- an ordinary container BINDING created by `let` materializes as managed, like
+  any non-Copy struct: `let images = List<Image>.new()` is a managed binding.
+- a container FIELD is inline by default (stored within its containing value),
+  unless the field is marked `handle`. A class may therefore hold an inline
+  container field such as `entries: Map<String, Image>`; it is not a separate
+  managed handle, it lives within the managed class object.
+```
+
+So "managed" describes the default materialization of a container *binding*, not
+an intrinsic class-like identity. A `let` container binding is managed:
 
 ```rust
 let images = List<Image>.new()
 ```
 
-Managed containers may store:
+Managed container bindings may store:
 
 ```text
 Copy values
@@ -1999,41 +2150,44 @@ must preserve source location hooks where applicable
 
 The safe RSScript surface has no specified undefined behavior. Managed aliasing conflicts, resource-pool borrow conflicts, and runtime ownership conflicts must become diagnostics or runtime errors, not unchecked memory behavior.
 
-#### 15.4.1 Calling an unsafe function
+#### 15.4.1 v0.5 unsafe enforcement
 
-Crossing into unsafe must be visible at the call site, not only at the
-definition. The rules:
+This is what the v0.5 checker enforces, with no contradiction:
 
 ```text
-1. A call to a function declared `effects(unsafe)` must be written with an
-   explicit `unsafe` call marker:  unsafe Crypto.raw_copy(dst: mut d, src: read s)
-2. The `unsafe` marker requires `features: unsafe` in the calling file, the same
-   gate that declaring `effects(unsafe)` requires.
-3. Marking a call that is not unsafe with `unsafe` is a diagnostic; the marker
-   must be load-bearing, not decorative.
-4. A call to an unsafe function without the marker is a diagnostic.
+- Declaring an effects(unsafe) function requires features: unsafe.
+- CALLING an effects(unsafe) function requires features: unsafe in the calling
+  file, so a file cannot touch unsafe while looking feature-clean.
+- A function that contains an unsafe call is classified must-review (§16.3), and
+  so is the file (file-level unsafe feature is high risk).
+- No per-call `unsafe` marker is accepted or required in v0.5. There is no
+  "missing unsafe marker" diagnostic in v0.5.
 ```
 
 A function that contains an unsafe call is **not** forced to declare
 `effects(unsafe)` itself: establishing a safe, reviewed abstraction over unsafe
 operations is the purpose of `unsafe`, the same way a safe function may contain a
-Rust `unsafe` block. What prevents unsafe from hiding is the combination of the
-mandatory per-call `unsafe` marker, the file-level `features: unsafe` gate, and
-the review map classifying any region containing an unsafe call as must-review
-(§16.3). A function may also choose to propagate `effects(unsafe)` when its own
-contract is unsafe.
+Rust `unsafe` block. In v0.5 what keeps unsafe from hiding is the `features:
+unsafe` file gate plus must-review classification; a function may still propagate
+`effects(unsafe)` when its own contract is unsafe.
 
-The `unsafe` marker is review metadata. It does not change the lowered call; it
-makes the boundary visible and reviewable, consistent with Article III.
+#### 15.4.2 Future per-call unsafe marker contract
 
-*v0.5 enforcement status: rule 2 is enforced — declaring `effects(unsafe)` and
-**calling** an `effects(unsafe)` function both require `features: unsafe` in the
-file, so a file cannot touch unsafe while looking feature-clean, and unsafe
-functions and their callers are classified must-review. The per-call `unsafe`
-marker (rules 1, 3, 4) is deferred, not excluded: it adds call-site-line locality
-on top of the file- and function-level signals that already exist. v0.5 ships no
-unsafe code, so the marker is scheduled for when unsafe usage makes line-level
-review locality worth its cost; the design above is its fixed contract.*
+A future version may add a per-call `unsafe` marker for call-site-line locality
+(every unsafe crossing visible where it is read, like `read`/`mut`). It is
+deferred, not excluded; v0.5 ships no unsafe code, so it is scheduled for when
+unsafe usage makes line-level locality worth its cost. Its fixed contract:
+
+```text
+- A call to an effects(unsafe) function is written `unsafe Crypto.raw_copy(...)`.
+- The marker requires features: unsafe.
+- Marking a non-unsafe call is a diagnostic (the marker must be load-bearing).
+- An unsafe call without the marker is a diagnostic.
+- The marker is review metadata; it does not change the lowered call.
+```
+
+When this lands, §15.4.1 gains the marker rules; until then those rules are not
+enforced and must not be, so v0.5 code never writes `unsafe` at a call site.
 
 ---
 
@@ -2106,7 +2260,6 @@ ResourcePool
 file features local/native/unsafe/async/device/ffi/reflection
 native boundary
 unsafe boundary
-unknown external call
 writes to managed state
 writes through handle fields
 fresh guarantee boundary
@@ -2114,6 +2267,12 @@ runtime guarantee boundary: no_panic/noalloc/no_block/pure
 error handling boundary
 removed guarantee
 ```
+
+An unknown or unresolved external call is **not** a must-review fact. It is the
+`unknown` classification itself (it wins the §16.2 precedence over `must_review`),
+represented as `classification: unknown` with a reason such as
+`["unresolved_external_call"]` — never as a `must_review` fact, so the two
+categories do not collide.
 
 File-level features add file-level risk:
 
@@ -2231,7 +2390,7 @@ RS13xx  package / interface contract
 
 There is no dedicated native/unsafe range: native and unsafe boundaries are gated
 through RS01xx (feature) and reported as forbidden/native-binding issues in the
-ranges above. A future per-call `unsafe` marker diagnostic (§15.4.1) would also
+ranges above. A future per-call `unsafe` marker diagnostic (§15.4.2) would also
 sit in RS01xx with the other feature/boundary codes.
 
 ### 17.2 JSON form
@@ -2407,7 +2566,7 @@ class ImageCache {
 }
 
 fn cache_put(cache: mut ImageCache, key: read String, value: read Image) -> Unit
-    effects(retains(value))
+    effects(retains(key), retains(value))
 {
     Map.insert(map: mut cache.entries, key: read key, value: read value)
 }
