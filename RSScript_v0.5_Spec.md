@@ -620,26 +620,22 @@ v0.5 surface.
 `?` is the only implicit control transfer in RSScript, and it is visible in the
 source as the `?` token.
 
-**Pre-MVP blocker (not just a note).** This is the one implicit control transfer
-RSScript allows, and it lowers to Rust's `?`, whose default behavior is exactly
-the `From` conversion Article III forbids. Two obligations, both required before
-the MVP is sound:
+This is the one implicit control transfer RSScript allows, and it lowers to
+Rust's `?`, whose default behavior is exactly the `From` conversion Article III
+forbids. The sound v0.5 rule has two obligations:
 
 ```text
-1. The RSScript lowering emits no `From`/`Into` conversions for error types. With
-   that invariant, a mismatched error type has no `From` impl to convert through,
-   so it fails at rustc and is remapped to a diagnostic — not silently converted.
-   (The current lowering already emits no such impls; this must stay true.)
-2. The frontend must reject a mismatched operand/return error type directly, so
-   the rule is enforced at the source level, not left to a backend rustc error.
-   The frontend reports this as `RS0013`.
+1. RSScript lowering emits no `From`/`Into` conversions for error types. With
+   that invariant, a mismatched error type has no RSScript-generated conversion
+   path to silently pass through.
+2. The frontend rejects a mismatched operand/return error type directly, so the
+   rule is enforced at the source level, not left to backend rustc failure. The
+   frontend reports this as `RS0013`.
 ```
 
 The residual silent-conversion risk is a **native-provided `From`** at a native
 boundary; that is a native-boundary review item, not ordinary safe-surface
-behavior. Frontend enforcement of exact error-type match on `?` is a tracked
-pre-MVP blocker, because an unenforced rule here violates a constitutional
-article rather than merely lagging.
+behavior.
 
 ### `return`, `break`, `continue`
 
