@@ -217,7 +217,7 @@ impl Formatter {
             Stmt::Break(_) => self.out.push_str("break"),
             Stmt::Continue(_) => self.out.push_str("continue"),
             Stmt::Expr(expr) => self.expr(expr, 0),
-            Stmt::Unknown(_) => self.out.push_str("/* unsupported */"),
+            Stmt::MalformedWith(_) | Stmt::Unknown(_) => self.out.push_str("/* unsupported */"),
         }
     }
 

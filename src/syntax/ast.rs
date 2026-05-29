@@ -191,6 +191,7 @@ pub enum Stmt {
     Let(LetStmt),
     Return(ReturnStmt),
     With(WithStmt),
+    MalformedWith(Span),
     If(IfStmt),
     Loop(LoopStmt),
     Match(MatchStmt),

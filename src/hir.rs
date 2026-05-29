@@ -837,7 +837,7 @@ fn lower_hir_stmt(
         Stmt::Expr(expr) => HirStmt::Expr(lower_hir_expr(hir, function_name, expr, value_types)),
         Stmt::Break(span) => HirStmt::Break(span.clone()),
         Stmt::Continue(span) => HirStmt::Continue(span.clone()),
-        Stmt::Unknown(span) => HirStmt::Unknown(span.clone()),
+        Stmt::MalformedWith(span) | Stmt::Unknown(span) => HirStmt::Unknown(span.clone()),
     }
 }
 
@@ -1156,7 +1156,7 @@ fn collect_body_facts_in_stmt(
         Stmt::Expr(expr) => {
             collect_body_facts_in_expr(hir, function_name, expr, value_types, facts);
         }
-        Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
+        Stmt::Break(_) | Stmt::Continue(_) | Stmt::MalformedWith(_) | Stmt::Unknown(_) => {}
     }
 }
 

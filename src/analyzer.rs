@@ -361,6 +361,11 @@ impl Analyzer<'_> {
                 self.check_unsupported_syntax_expr(&stmt.resource);
                 self.check_unsupported_syntax_block(&stmt.body);
             }
+            Stmt::MalformedWith(span) => self.unsupported_syntax(
+                span.clone(),
+                "malformed with statement",
+                "`with` statements must use `with resource as name { ... }`.",
+            ),
             Stmt::If(stmt) => {
                 self.check_unsupported_syntax_expr(&stmt.condition);
                 self.check_unsupported_syntax_block(&stmt.then_body);
@@ -537,7 +542,7 @@ impl Analyzer<'_> {
                 }
             }
             Stmt::Expr(expr) => self.check_match_exhaustiveness_expr(expr),
-            Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
+            Stmt::Break(_) | Stmt::Continue(_) | Stmt::MalformedWith(_) | Stmt::Unknown(_) => {}
         }
     }
 
@@ -1039,7 +1044,7 @@ impl Analyzer<'_> {
                     self.check_runtime_guarantee_block(guarantee, function_name, &arm.body);
                 }
             }
-            Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
+            Stmt::Break(_) | Stmt::Continue(_) | Stmt::MalformedWith(_) | Stmt::Unknown(_) => {}
         }
     }
 
@@ -1332,7 +1337,7 @@ impl Analyzer<'_> {
                     self.check_resource_pool_calls_in_block(&arm.body);
                 }
             }
-            Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
+            Stmt::Break(_) | Stmt::Continue(_) | Stmt::MalformedWith(_) | Stmt::Unknown(_) => {}
         }
     }
 
@@ -1419,7 +1424,7 @@ impl Analyzer<'_> {
                     self.check_resource_generic_calls_in_block(&arm.body);
                 }
             }
-            Stmt::Break(_) | Stmt::Continue(_) | Stmt::Unknown(_) => {}
+            Stmt::Break(_) | Stmt::Continue(_) | Stmt::MalformedWith(_) | Stmt::Unknown(_) => {}
         }
     }
 

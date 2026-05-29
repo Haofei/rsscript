@@ -788,32 +788,33 @@ fn parse_return_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usi
 fn parse_with_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
     let Some(as_index) = (start + 1..limit).find(|index| tokens[*index].is_ident_text("as")) else {
         return (
-            Stmt::Unknown(tokens[start].span.clone()),
+            Stmt::MalformedWith(tokens[start].span.clone()),
             statement_end(tokens, start, limit),
         );
     };
     let Some(open) = (as_index + 1..limit).find(|index| tokens[*index].symbol("{")) else {
         return (
-            Stmt::Unknown(tokens[start].span.clone()),
+            Stmt::MalformedWith(tokens[start].span.clone()),
             statement_end(tokens, start, limit),
         );
     };
     let Some(close) = find_matching(tokens, open, "{", "}") else {
-        return (Stmt::Unknown(tokens[start].span.clone()), limit);
+        return (Stmt::MalformedWith(tokens[start].span.clone()), limit);
     };
     let resource = parse_expr(tokens, start + 1, as_index)
         .unwrap_or_else(|| Expr::Unknown(tokens[start].span.clone()));
-    let binding = tokens
-        .get(as_index + 1)
-        .and_then(ident_name)
-        .unwrap_or("")
-        .to_string();
+    let Some(binding) = tokens.get(as_index + 1).and_then(ident_name) else {
+        return (Stmt::MalformedWith(tokens[start].span.clone()), close + 1);
+    };
+    if as_index + 2 != open {
+        return (Stmt::MalformedWith(tokens[start].span.clone()), close + 1);
+    }
     let body = parse_block(tokens, open, close);
 
     (
         Stmt::With(WithStmt {
             resource,
-            binding,
+            binding: binding.to_string(),
             body,
             span: tokens[start].span.clone(),
         }),
