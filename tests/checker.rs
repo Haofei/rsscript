@@ -4217,6 +4217,34 @@ fn review_map_pass_fixture_unknown_rate_stays_low() {
 }
 
 #[test]
+fn readme_review_map_confidence_corpus_count_matches_fixtures() {
+    let owned_sources = fixture_paths("tests/fixtures/pass")
+        .into_iter()
+        .map(|path| {
+            let file = path.display().to_string();
+            let source = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+            (file, source)
+        })
+        .collect::<Vec<_>>();
+    let sources = owned_sources
+        .iter()
+        .map(|(file, source)| (file.as_str(), source.as_str()))
+        .collect::<Vec<_>>();
+    let map = review_map_sources(sources);
+    let readme = fs::read_to_string("README.md").expect("README should be readable");
+    let expected = format!(
+        "reports {} functions / {} lines with 0 unknown functions and 0 unknown lines",
+        map.summary.total_functions, map.summary.total_lines
+    );
+
+    assert!(
+        readme.contains(&expected),
+        "README confidence corpus count is stale; expected phrase `{expected}`"
+    );
+}
+
+#[test]
 fn review_map_complex_supported_script_has_no_unknown_regions() {
     let path = Path::new("tests/fixtures/pass/complex-supported-review-map.rss");
     let source = read_fixture(path);
