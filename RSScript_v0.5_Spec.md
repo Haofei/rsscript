@@ -1660,6 +1660,9 @@ A closure passed to this parameter must have the same arity, for example
 `callback: |value| String.from_int(value: value)`. The callback parameter names
 are local to the closure; the contract supplies their positional types. A
 callback with the wrong parameter count is a diagnostic before lowering.
+Calls to a noescape callback must also match the same positional parameter
+contract: inside `fn run(callback: noescape Fn(Int) -> Int)`, `callback("x")`
+is rejected before lowering because the first argument is `String`, not `Int`.
 
 v0.5 `noescape Fn` closures are **non-consuming**: a callee may call the closure
 any number of times (for example `ResourcePool.new` calls its factory `max_size`
@@ -2645,6 +2648,7 @@ ResourcePool active lease conflict
 managed object field-split conflict
 noescape callback return type mismatch
 noescape callback parameter count mismatch
+noescape callback call argument mismatch
 noescape closure consuming a captured local
 `?` operand error type does not match the function error type
 Fd used outside native/resource internals

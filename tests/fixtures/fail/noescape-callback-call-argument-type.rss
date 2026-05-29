@@ -1,0 +1,10 @@
+// expect: RS0207
+
+fn apply(callback: noescape Fn(Int) -> Int) -> Int {
+    return callback("x")
+}
+
+fn main() -> Unit {
+    let value = apply(callback: |item| item)
+    return Unit
+}

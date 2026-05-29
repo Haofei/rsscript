@@ -1298,6 +1298,54 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_reports_noescape_callback_call_argument_type_mismatch() {
+    let source = r#"
+fn apply(callback: noescape Fn(Int) -> Int) -> Int {
+    return callback("x")
+}
+
+fn main() -> Unit {
+    let value = apply(callback: |item| item)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-call-arg-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "argument 1 for callback `callback` has type `String`, expected `Int`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_noescape_callback_call_arity_mismatch() {
+    let source = r#"
+fn apply(callback: noescape Fn(Int, Int) -> Int) -> Int {
+    return callback(1)
+}
+
+fn main() -> Unit {
+    let value = apply(callback: |left, right| left)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-call-arity.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "callback `callback` called with 1 argument(s), expected 2."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn checker_reports_mixed_equality_operand_types_before_backend_lowering() {
     let source = r#"
 fn main() -> Unit {

@@ -7,6 +7,12 @@ use crate::hir::{
 };
 use crate::syntax::ast::{Callee, FunctionDecl, Item, TypeRef};
 
+#[derive(Debug, Clone)]
+struct NoescapeBinding {
+    type_name: String,
+    span: Span,
+}
+
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
     let items = analyzer.syntax_program.items.clone();
     for item in &items {
@@ -18,11 +24,15 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
                 .bindings
                 .iter()
                 .filter_map(|binding| {
-                    binding
-                        .type_name
-                        .as_deref()
-                        .is_some_and(is_noescape_fn_type)
-                        .then_some((binding.name.clone(), binding.span.clone()))
+                    binding.type_name.as_deref().and_then(|type_name| {
+                        is_noescape_fn_type(type_name).then_some((
+                            binding.name.clone(),
+                            NoescapeBinding {
+                                type_name: type_name.to_string(),
+                                span: binding.span.clone(),
+                            },
+                        ))
+                    })
                 })
                 .collect::<HashMap<_, _>>();
             if let Some(block) = &body.block {
@@ -84,7 +94,7 @@ fn check_block(
     analyzer: &mut Analyzer<'_>,
     function: &FunctionDecl,
     block: &HirBlock,
-    noescape_bindings: &HashMap<String, Span>,
+    noescape_bindings: &HashMap<String, NoescapeBinding>,
     local_closure_bindings: &HashMap<String, Span>,
 ) {
     for statement in &block.statements {
@@ -238,7 +248,7 @@ fn check_block(
 fn check_expr(
     analyzer: &mut Analyzer<'_>,
     expr: &HirExpr,
-    noescape_bindings: &HashMap<String, Span>,
+    noescape_bindings: &HashMap<String, NoescapeBinding>,
     local_closure_bindings: &HashMap<String, Span>,
 ) {
     match expr {
@@ -306,7 +316,7 @@ fn check_expr(
 fn check_expr_block_without_return_contract(
     analyzer: &mut Analyzer<'_>,
     block: &HirBlock,
-    noescape_bindings: &HashMap<String, Span>,
+    noescape_bindings: &HashMap<String, NoescapeBinding>,
     local_closure_bindings: &HashMap<String, Span>,
 ) {
     for statement in &block.statements {
@@ -646,7 +656,7 @@ fn check_call_args(
     args: &[HirCallArg],
     call_span: &Span,
     resolution: &CallResolution,
-    noescape_bindings: &HashMap<String, Span>,
+    noescape_bindings: &HashMap<String, NoescapeBinding>,
     local_closure_bindings: &HashMap<String, Span>,
 ) {
     let call_name = callee_display(callee);
@@ -657,6 +667,7 @@ fn check_call_args(
         noescape_bindings,
         local_closure_bindings,
     ) {
+        check_noescape_callback_call_args(analyzer, callee, args, noescape_bindings);
         return;
     }
     if matches!(resolution, CallResolution::EnumVariant) {
@@ -1029,6 +1040,50 @@ fn check_noescape_closure_return_type(
     true
 }
 
+fn check_noescape_callback_call_args(
+    analyzer: &mut Analyzer<'_>,
+    callee: &Callee,
+    args: &[HirCallArg],
+    noescape_bindings: &HashMap<String, NoescapeBinding>,
+) {
+    let Callee::Name(name) = callee else {
+        return;
+    };
+    let Some(binding) = noescape_bindings.get(name) else {
+        return;
+    };
+    let expected_params = noescape_param_types(&binding.type_name);
+    if args.len() != expected_params.len() {
+        callback_call_arity_mismatch_diagnostic(
+            analyzer,
+            name,
+            args.len(),
+            expected_params.len(),
+            args.first()
+                .map_or_else(|| binding.span.clone(), |arg| arg.span.clone()),
+        );
+        return;
+    }
+    for (index, (arg, expected)) in args.iter().zip(expected_params).enumerate() {
+        let Some(actual) = hir_expr_type_name(&arg.value) else {
+            continue;
+        };
+        if unresolved_generic_type(actual) {
+            continue;
+        }
+        if !argument_type_matches(expected, actual) {
+            callback_call_argument_type_mismatch_diagnostic(
+                analyzer,
+                name,
+                index,
+                actual,
+                expected,
+                hir_expr_span(&arg.value),
+            );
+        }
+    }
+}
+
 enum ClosureReturn<'a> {
     Expr(&'a HirExpr),
     Unit(&'a Span),
@@ -1311,6 +1366,62 @@ fn callback_arity_mismatch_diagnostic(
     );
 }
 
+fn callback_call_arity_mismatch_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    callback_name: &str,
+    actual: usize,
+    expected: usize,
+    span: Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::ARGUMENT_TYPE_MISMATCH,
+            format!(
+                "callback `{callback_name}` called with {actual} argument(s), expected {expected}."
+            ),
+            span,
+            "argument type mismatch",
+        )
+        .with_cause(
+            "`noescape Fn(...)` callback calls must match the callback parameter contract before Rust lowering.",
+        )
+        .with_fix(
+            "match_callback_call_arity",
+            format!("Call `{callback_name}` with {expected} argument(s)."),
+            "manual",
+        ),
+    );
+}
+
+fn callback_call_argument_type_mismatch_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    callback_name: &str,
+    index: usize,
+    actual: &str,
+    expected: &str,
+    span: &Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::ARGUMENT_TYPE_MISMATCH,
+            format!(
+                "argument {} for callback `{callback_name}` has type `{actual}`, expected `{expected}`.",
+                index + 1
+            ),
+            span.clone(),
+            "argument type mismatch",
+        )
+        .with_cause(
+            "`noescape Fn(...)` callback argument types are part of the callback contract and must be checked before Rust lowering.",
+        )
+        .with_fix(
+            "match_callback_call_argument_type",
+            format!("Pass a `{expected}` value for argument {}.", index + 1),
+            "manual",
+        ),
+    );
+}
+
 fn type_pattern_matches(expected: &str, actual: &str, generic_params: &[String]) -> bool {
     if argument_type_matches(expected, actual) {
         return true;
@@ -1452,7 +1563,7 @@ fn is_closure_binding_call(
     callee: &Callee,
     _args: &[HirCallArg],
     resolution: &CallResolution,
-    noescape_bindings: &HashMap<String, Span>,
+    noescape_bindings: &HashMap<String, NoescapeBinding>,
     local_closure_bindings: &HashMap<String, Span>,
 ) -> bool {
     matches!(resolution, CallResolution::Unknown)
@@ -1463,7 +1574,7 @@ fn is_noescape_callback_call(
     callee: &Callee,
     _args: &[HirCallArg],
     resolution: &CallResolution,
-    noescape_bindings: &HashMap<String, Span>,
+    noescape_bindings: &HashMap<String, NoescapeBinding>,
 ) -> bool {
     matches!(resolution, CallResolution::Unknown)
         && matches!(callee, Callee::Name(name) if noescape_bindings.contains_key(name))
@@ -1576,7 +1687,7 @@ fn check_noescape_escape(
     analyzer: &mut Analyzer<'_>,
     expr: &HirExpr,
     context_span: &Span,
-    noescape_bindings: &HashMap<String, Span>,
+    noescape_bindings: &HashMap<String, NoescapeBinding>,
     context: NoescapeEscapeContext<'_>,
 ) {
     let Some((name, use_span)) = noescape_escape_use(expr, noescape_bindings) else {
@@ -1592,7 +1703,7 @@ fn check_noescape_escape(
 
 fn noescape_escape_use<'a>(
     expr: &'a HirExpr,
-    noescape_bindings: &'a HashMap<String, Span>,
+    noescape_bindings: &'a HashMap<String, NoescapeBinding>,
 ) -> Option<(&'a str, Span)> {
     match expr {
         HirExpr::Ident { name, span, .. } if noescape_bindings.contains_key(name) => {
@@ -1644,7 +1755,7 @@ fn noescape_escape_use<'a>(
 
 fn noescape_any_use_in_stmt<'a>(
     statement: &'a HirStmt,
-    noescape_bindings: &'a HashMap<String, Span>,
+    noescape_bindings: &'a HashMap<String, NoescapeBinding>,
 ) -> Option<(&'a str, Span)> {
     match statement {
         HirStmt::Let {
@@ -1708,7 +1819,7 @@ fn noescape_any_use_in_stmt<'a>(
 
 fn noescape_any_use<'a>(
     expr: &'a HirExpr,
-    noescape_bindings: &'a HashMap<String, Span>,
+    noescape_bindings: &'a HashMap<String, NoescapeBinding>,
 ) -> Option<(&'a str, Span)> {
     match expr {
         HirExpr::Ident { name, span, .. } if noescape_bindings.contains_key(name) => {
