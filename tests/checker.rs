@@ -477,6 +477,8 @@ struct Image {
     pixels: Buffer
 }
 
+struct Metadata
+
 struct DecodeResult {
     image: Image
     metadata: Metadata
@@ -501,6 +503,8 @@ features: local
 struct Image {
     pixels: Buffer
 }
+
+struct Metadata
 
 struct DecodeResult {
     image: Image
@@ -680,17 +684,62 @@ fn diagnostic_explanations_are_available_by_code() {
     let formatted = format_diagnostic_explanation(explanation);
     let fresh_unknown = explain_diagnostic_code("RS0602").expect("RS0602 should be registered");
     let pool_contract = explain_diagnostic_code("RS0707").expect("RS0707 should be registered");
+    let unknown_type = explain_diagnostic_code("RS0024").expect("RS0024 should be registered");
 
     assert_eq!(explanation.title, "use after manage");
     assert!(formatted.contains("RS0401"));
     assert!(formatted.contains("manage"));
     assert!(fresh_unknown.explanation.contains("clean inline fields"));
+    assert_eq!(unknown_type.title, "unknown type");
+    assert!(unknown_type.explanation.contains("before Rust lowering"));
     assert_eq!(
         pool_contract.title,
         "ResourcePool factory contract violation"
     );
     assert!(pool_contract.explanation.contains("ResourcePool.try_new"));
     assert!(explain_diagnostic_code("RS9999").is_none());
+}
+
+#[test]
+fn checker_reports_unknown_types_before_backend_lowering() {
+    let source = r#"
+fn bad(value: read MissingType) -> Result<Unit, MissingError> {
+    return Ok(Unit)
+}
+"#;
+    let diagnostics = analyze_source("unknown-type.rss", source);
+    let unknown_types = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "RS0024")
+        .map(|diagnostic| diagnostic.summary.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        unknown_types,
+        vec![
+            "unknown type `MissingType`.",
+            "unknown type `MissingError`."
+        ],
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn rust_lowering_rejects_unknown_types_before_rustc() {
+    let source = r#"
+fn bad(value: read MissingType) -> Unit {
+    return Unit
+}
+"#;
+    let diagnostics = lower_source_to_rust("unknown-type.rss", source)
+        .expect_err("unknown type should fail before Rust generation");
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0024"),
+        "{diagnostics:?}"
+    );
 }
 
 #[test]
@@ -7635,6 +7684,8 @@ fn package_review_includes_lint_warnings_for_public_contracts() {
         "",
         r#"features: native
 
+struct Error
+
 pub fn Api.overloaded<A, B, C, D>(
     first: read Result<Option<List<Map<String, Image>>>, Error>,
     second: read String,
@@ -9466,7 +9517,9 @@ fn package_check_reports_stale_semantic_lock() {
     .expect("lock should be written");
     fs::write(
         temp_dir.join("interface/lib.rssi"),
-        r#"pub fn add(left: Int, right: Int) -> Result<Int, MathError>
+        r#"struct MathError
+
+pub fn add(left: Int, right: Int) -> Result<Int, MathError>
 "#,
     )
     .expect("interface should be changed");

@@ -4,6 +4,8 @@ struct Image {
     pixels: Buffer
 }
 
+struct Metadata
+
 struct DecodeResult {
     image: Image
     metadata: Metadata

@@ -130,6 +130,7 @@ impl Analyzer<'_> {
         self.check_match_exhaustiveness();
         self.check_duplicate_declarations();
         self.check_signature_explicitness();
+        self.check_unknown_types();
         self.check_fd_surface();
         self.check_generic_constraints();
         self.check_runtime_guarantee_bodies();
@@ -951,6 +952,49 @@ impl Analyzer<'_> {
         }
     }
 
+    fn check_unknown_types(&mut self) {
+        let items = self.syntax_program.items.clone();
+        for item in &items {
+            match item {
+                Item::Type(decl) => {
+                    let generic_params = decl
+                        .type_params
+                        .iter()
+                        .map(|param| param.name.as_str())
+                        .collect::<HashSet<_>>();
+                    for field in &decl.fields {
+                        self.check_unknown_type_ref(&field.ty, &generic_params);
+                    }
+                }
+                Item::Function(function) => {
+                    let generic_params = function
+                        .type_params
+                        .iter()
+                        .map(|param| param.name.as_str())
+                        .collect::<HashSet<_>>();
+                    for param in &function.params {
+                        self.check_unknown_type_ref(&param.ty, &generic_params);
+                    }
+                    if let Some(return_ty) = &function.return_ty {
+                        self.check_unknown_type_ref(return_ty, &generic_params);
+                    }
+                }
+            }
+        }
+    }
+
+    fn check_unknown_type_ref(&mut self, ty: &TypeRef, generic_params: &HashSet<&str>) {
+        if !known_type_ref(ty, generic_params, &self.hir) {
+            self.unknown_type_diagnostic(ty);
+        }
+        for arg in &ty.args {
+            self.check_unknown_type_ref(arg, generic_params);
+        }
+        if let Some(return_ty) = &ty.fn_return {
+            self.check_unknown_type_ref(return_ty, generic_params);
+        }
+    }
+
     fn check_fresh_generic_return_bound(
         &mut self,
         function_name: &str,
@@ -1689,6 +1733,26 @@ impl Analyzer<'_> {
         );
     }
 
+    fn unknown_type_diagnostic(&mut self, ty: &TypeRef) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::UNKNOWN_TYPE,
+                format!("unknown type `{}`.", type_ref_name(ty)),
+                ty.span.clone(),
+                "unknown type",
+            )
+            .with_cause("RSScript type checking must resolve source-level types before Rust lowering.")
+            .with_fix(
+                "declare_or_import_type",
+                format!(
+                    "Declare `{}`, import an `.rssi` contract that declares it, or use a known core/runtime type.",
+                    ty.name
+                ),
+                "manual",
+            ),
+        );
+    }
+
     fn resource_generic_argument_diagnostic(
         &mut self,
         generic_name: &str,
@@ -2123,6 +2187,63 @@ fn is_copy_type(ty: &TypeRef) -> bool {
                 | "Closure"
                 | "Unit"
         )
+}
+
+fn known_type_ref(ty: &TypeRef, generic_params: &HashSet<&str>, hir: &Hir) -> bool {
+    if ty.name.is_empty() {
+        return true;
+    }
+    if ty.is_noescape {
+        return ty.name == "Fn";
+    }
+    generic_params.contains(ty.name.as_str())
+        || is_builtin_type_name(&ty.name)
+        || hir.type_info(&ty.name).is_some()
+}
+
+fn is_builtin_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Unit"
+            | "Bool"
+            | "Byte"
+            | "Char"
+            | "Int"
+            | "Int8"
+            | "Int16"
+            | "Int32"
+            | "Int64"
+            | "UInt"
+            | "UInt8"
+            | "UInt16"
+            | "UInt32"
+            | "UInt64"
+            | "Float"
+            | "Float32"
+            | "Float64"
+            | "String"
+            | "Url"
+            | "Fd"
+            | "Bytes"
+            | "Buffer"
+            | "Path"
+            | "Result"
+            | "Option"
+            | "List"
+            | "Map"
+            | "Set"
+            | "Closure"
+            | "Cache"
+            | "FileError"
+            | "IOError"
+            | "HttpError"
+            | "ConfigError"
+            | "DbError"
+            | "ImageError"
+            | "JsonError"
+            | "CsvError"
+            | "NetworkError"
+    )
 }
 
 fn type_ref_contains_name(ty: &TypeRef, name: &str) -> bool {

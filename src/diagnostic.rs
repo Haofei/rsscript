@@ -24,6 +24,7 @@ pub mod code {
     pub const NON_EXHAUSTIVE_MATCH: &str = "RS0021";
     pub const ASYNC_CALL_NOT_CONSUMED: &str = "RS0022";
     pub const FD_OUTSIDE_INTERNAL_BOUNDARY: &str = "RS0023";
+    pub const UNKNOWN_TYPE: &str = "RS0024";
     pub const FEATURE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
@@ -362,6 +363,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::FD_OUTSIDE_INTERNAL_BOUNDARY,
         title: "Fd outside native/resource internals",
         explanation: "`Fd` is not an ordinary user-facing value type in v0.5. It may appear only in native function signatures or resource internals such as resource fields.",
+    },
+    DiagnosticExplanation {
+        code: code::UNKNOWN_TYPE,
+        title: "unknown type",
+        explanation: "Every type used in a signature or field must be a built-in type, a core/runtime type known to the frontend, a generic parameter in scope, or a declared source/interface type. Unknown types are rejected before Rust lowering.",
     },
     DiagnosticExplanation {
         code: code::FEATURE_VIOLATION,
