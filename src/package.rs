@@ -539,6 +539,12 @@ struct PackageDependencySpec {
     features: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ResolvedPackageFeatures {
+    selected: Vec<String>,
+    unknown: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PackageFunctionContract {
     name: String,
@@ -623,6 +629,10 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
     let interface_diagnostic_exports =
         package_interface_diagnostic_exports(sources, &interface_frontend_diagnostics);
     let mut diagnostics = package_interface_environment_diagnostics(&combined_interfaces);
+    diagnostics.extend(package_feature_resolution_diagnostics(
+        package_dir,
+        manifest,
+    )?);
     diagnostics.extend(interface_frontend_diagnostics);
     diagnostics.extend(analyze_sources_with_interfaces(
         &source_refs,
@@ -1827,7 +1837,7 @@ fn load_package_with_features(
         .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
 
     let selected_features = selected_features
-        .map(|features| features.to_vec())
+        .map(|features| resolve_package_features(&manifest, features).selected)
         .unwrap_or_else(|| selected_root_package_features(&manifest));
     let base_interface_roots = default_paths(&manifest.interfaces.paths, "interface");
     let selected_feature_interface_roots =
@@ -1860,8 +1870,50 @@ fn load_package_with_features(
     })
 }
 
+fn load_package_manifest(package_dir: &Path) -> Result<Manifest, String> {
+    let manifest_path = package_dir.join("rsspkg.toml");
+    let manifest_source = fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
+    toml::from_str(&manifest_source)
+        .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))
+}
+
 fn selected_root_package_features(manifest: &Manifest) -> Vec<String> {
-    manifest.features.keys().cloned().collect()
+    let requested = manifest.features.keys().cloned().collect::<Vec<_>>();
+    resolve_package_features(manifest, &requested).selected
+}
+
+fn resolve_package_features(
+    manifest: &Manifest,
+    requested_features: &[String],
+) -> ResolvedPackageFeatures {
+    let mut selected = BTreeSet::new();
+    let mut unknown = BTreeSet::new();
+    for feature in requested_features {
+        if manifest.features.contains_key(feature) {
+            resolve_package_feature(manifest, feature, &mut selected);
+        } else {
+            unknown.insert(feature.clone());
+        }
+    }
+    ResolvedPackageFeatures {
+        selected: selected.into_iter().collect(),
+        unknown: unknown.into_iter().collect(),
+    }
+}
+
+fn resolve_package_feature(manifest: &Manifest, feature: &str, selected: &mut BTreeSet<String>) {
+    if !selected.insert(feature.to_string()) {
+        return;
+    }
+    let Some(dependencies) = manifest.features.get(feature) else {
+        return;
+    };
+    for dependency in dependencies {
+        if manifest.features.contains_key(dependency) {
+            resolve_package_feature(manifest, dependency, selected);
+        }
+    }
 }
 
 fn selected_interface_feature_paths(
@@ -1987,6 +2039,90 @@ fn collect_dependency_interface_sources(
     Ok(sources)
 }
 
+fn package_feature_resolution_diagnostics(
+    package_dir: &Path,
+    manifest: &Manifest,
+) -> Result<Vec<Diagnostic>, String> {
+    let mut diagnostics = Vec::new();
+    collect_dependency_feature_resolution_diagnostics_from_map(
+        package_dir,
+        &manifest.dependencies,
+        &mut BTreeSet::new(),
+        &mut diagnostics,
+    )?;
+    collect_dependency_feature_resolution_diagnostics_from_map(
+        package_dir,
+        &manifest.dev_dependencies,
+        &mut BTreeSet::new(),
+        &mut diagnostics,
+    )?;
+    Ok(diagnostics)
+}
+
+fn collect_dependency_feature_resolution_diagnostics_from_map(
+    package_dir: &Path,
+    dependencies: &BTreeMap<String, toml::Value>,
+    visiting: &mut BTreeSet<String>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<(), String> {
+    for (name, value) in dependencies {
+        let spec = package_dependency_spec(name, value);
+        let Some(path) = &spec.path else {
+            continue;
+        };
+        let dependency_dir = package_dir.join(path);
+        if !dependency_dir.join("rsspkg.toml").exists() {
+            continue;
+        }
+        let canonical = canonical_path_label(&dependency_dir);
+        if !visiting.insert(canonical.clone()) {
+            continue;
+        }
+        let dependency_manifest = load_package_manifest(&dependency_dir)?;
+        let resolved = resolve_package_features(&dependency_manifest, &spec.features);
+        for feature in resolved.unknown {
+            diagnostics.push(package_unknown_feature_diagnostic(
+                package_dir,
+                name,
+                &feature,
+            ));
+        }
+        collect_dependency_feature_resolution_diagnostics_from_map(
+            &dependency_dir,
+            &dependency_manifest.dependencies,
+            visiting,
+            diagnostics,
+        )?;
+        collect_dependency_feature_resolution_diagnostics_from_map(
+            &dependency_dir,
+            &dependency_manifest.dev_dependencies,
+            visiting,
+            diagnostics,
+        )?;
+        visiting.remove(&canonical);
+    }
+    Ok(())
+}
+
+fn package_unknown_feature_diagnostic(
+    package_dir: &Path,
+    dependency: &str,
+    feature: &str,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::PACKAGE_FEATURE_RESOLUTION,
+        format!("dependency `{dependency}` selects unknown package feature `{feature}`."),
+        package_dependency_span(package_dir, dependency),
+        "unknown package feature",
+    )
+    .with_cause("Selected dependency features must be declared by the dependency package.")
+    .with_fix(
+        "fix_dependency_features",
+        format!("Remove `{feature}` from the dependency feature list, or declare it in the dependency package."),
+        "manual",
+    )
+}
+
 fn collect_dependency_interface_sources_from_map(
     package_dir: &Path,
     dependencies: &BTreeMap<String, toml::Value>,
@@ -2006,7 +2142,10 @@ fn collect_dependency_interface_sources_from_map(
         if !visiting.insert(canonical.clone()) {
             continue;
         }
-        let dependency_package = load_package_with_features(&dependency_dir, Some(&spec.features))?;
+        let dependency_manifest = load_package_manifest(&dependency_dir)?;
+        let selected_features = resolve_package_features(&dependency_manifest, &spec.features);
+        let dependency_package =
+            load_package_with_features(&dependency_dir, Some(&selected_features.selected))?;
         sources.extend(
             dependency_package
                 .sources
@@ -3502,14 +3641,17 @@ fn package_tree_dependencies(
         if let Some(path) = &spec.path {
             let dependency_dir = package_dir.join(path);
             if dependency_dir.join("rsspkg.toml").exists() {
+                let dependency_manifest = load_package_manifest(&dependency_dir)?;
+                let selected_features =
+                    resolve_package_features(&dependency_manifest, &spec.features);
                 let mut node = package_tree_node(
                     &dependency_dir,
                     dependency_kind,
-                    Some(&spec.features),
+                    Some(&selected_features.selected),
                     visiting,
                 )?;
                 node.requirement = spec.requirement.clone();
-                node.features = spec.features.clone();
+                node.features = selected_features.selected;
                 node.source = format!("path+{}", dependency_dir.display());
                 nodes.push(node);
             } else {
@@ -3549,11 +3691,14 @@ fn collect_lock_dependency_packages(
         if !visiting.insert(canonical.clone()) {
             continue;
         }
-        let dependency_package = load_package_with_features(&dependency_dir, Some(&spec.features))?;
+        let dependency_manifest = load_package_manifest(&dependency_dir)?;
+        let selected_features = resolve_package_features(&dependency_manifest, &spec.features);
+        let dependency_package =
+            load_package_with_features(&dependency_dir, Some(&selected_features.selected))?;
         packages.push(lock_package_entry(
             &dependency_dir,
             &dependency_package,
-            spec.features,
+            selected_features.selected,
         )?);
         collect_lock_dependency_packages(
             &dependency_dir,
@@ -4370,6 +4515,10 @@ fn package_manifest_key_span(package_dir: &Path, key: &str) -> crate::diagnostic
         column: 1,
         length: key.len().max(1),
     }
+}
+
+fn package_dependency_span(package_dir: &Path, dependency: &str) -> crate::diagnostic::Span {
+    package_manifest_key_span(package_dir, dependency)
 }
 
 fn collect_manifest_review_policy_violations(

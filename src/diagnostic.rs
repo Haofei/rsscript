@@ -70,6 +70,7 @@ pub mod code {
     pub const LINT_SIGNATURE_COMPLEXITY: &str = "RSL001";
     pub const LINT_DUPLICATE_EFFECT: &str = "RSL002";
 
+    pub const PACKAGE_FEATURE_RESOLUTION: &str = "PKG0101";
     pub const PACKAGE_REVIEW_POLICY_VIOLATION: &str = "PKG0501";
     pub const PACKAGE_NATIVE_BINDING: &str = "PKG0601";
 
@@ -567,6 +568,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::PACKAGE_INTERFACE_MISMATCH,
         title: "package interface mismatch",
         explanation: "A package `.rssi` public contract must be implemented by the package source with the same type declarations, function signatures, return freshness, and declared effects.",
+    },
+    DiagnosticExplanation {
+        code: code::PACKAGE_FEATURE_RESOLUTION,
+        title: "package feature resolution",
+        explanation: "Selected package features must be declared by the target package. Declared features may depend on other declared features; feature resolution is additive and deterministic.",
     },
     DiagnosticExplanation {
         code: code::PACKAGE_REVIEW_POLICY_VIOLATION,

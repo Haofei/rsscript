@@ -73,6 +73,7 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
     ),
     ("async call not consumed by await or spawn", "RS0022"),
     ("unmappable rustc diagnostic", "RS1102"),
+    ("package feature resolution violation", "PKG0101"),
     ("package review policy violation", "PKG0501"),
     ("package native binding metadata violation", "PKG0601"),
 ];
@@ -114,6 +115,7 @@ fn required_spec_diagnostics_have_regression_coverage() {
     let dedicated_test_codes = BTreeSet::from([
         "RS1102",  // rustc_diagnostics_report_unmappable_generated_spans
         "RS1201",  // runtime_diagnostic_lines_parse_to_rsscript_diagnostics
+        "PKG0101", // package feature resolution diagnostics
         "PKG0501", // package review policy diagnostics
         "PKG0601", // package native binding diagnostics
     ]);
@@ -1969,7 +1971,10 @@ fn rss_run_json_remaps_rustc_compile_errors() {
         &temp_dir,
         "rss-run-rustc-remap",
         "0.1.0",
-        r#"[native.rust]
+        r#"[features]
+streaming = []
+
+[native.rust]
 enabled = true
 path = "native/rust"
 crate = "rss_json_native"
@@ -2084,7 +2089,10 @@ fn rss_verify_rust_accepts_package_native_wrapper_dependency() {
         &temp_dir,
         "rss-verify-native-package",
         "0.1.0",
-        r#"[native.rust]
+        r#"[features]
+streaming = []
+
+[native.rust]
 enabled = true
 path = "native/rust"
 crate = "rss_json_native"
@@ -6622,7 +6630,9 @@ fn package_review_loads_path_dependency_interfaces_for_source_checks() {
         &dep_dir,
         "rss-dep",
         "0.2.0",
-        "",
+        r#"[features]
+fast = []
+"#,
         r#"pub fn Dep.parse(text: read String) -> String
 "#,
     );
@@ -6665,10 +6675,14 @@ fn package_review_uses_selected_dependency_feature_interfaces_for_source_checks(
         "rss-dep",
         "0.2.0",
         r#"[features]
-fast = []
+fast = ["simd"]
+simd = []
 
 [interfaces.features.fast]
 paths = ["interface/fast"]
+
+[interfaces.features.simd]
+paths = ["interface/simd"]
 "#,
         r#"pub fn Dep.parse(text: read String) -> String
 "#,
@@ -6678,6 +6692,14 @@ paths = ["interface/fast"]
     fs::write(
         dep_dir.join("interface/fast/lib.rssi"),
         r#"pub fn Dep.fast(text: read String) -> String
+"#,
+    )
+    .expect("feature interface should be written");
+    fs::create_dir_all(dep_dir.join("interface/simd"))
+        .expect("transitive feature interface dir should be created");
+    fs::write(
+        dep_dir.join("interface/simd/lib.rssi"),
+        r#"pub fn Dep.simd(text: read String) -> String
 "#,
     )
     .expect("feature interface should be written");
@@ -6697,7 +6719,7 @@ rss-dep = {{ path = "{}", features = ["fast"] }}
     fs::write(
         root_dir.join("src/lib.rss"),
         r#"fn render(body: read String) -> String {
-    return Dep.fast(text: read body)
+    return Dep.simd(text: read body)
 }
 "#,
     )
@@ -6708,6 +6730,55 @@ rss-dep = {{ path = "{}", features = ["fast"] }}
     let _ = fs::remove_dir_all(&dep_dir);
 
     assert_eq!(review.diagnostics, Vec::new());
+}
+
+#[test]
+fn package_check_reports_unknown_selected_dependency_feature() {
+    let root_dir = unique_temp_dir("rsscript-package-dep-unknown-feature-root");
+    let dep_dir = unique_temp_dir("rsscript-package-dep-unknown-feature-dep");
+    write_named_package_fixture(
+        &dep_dir,
+        "rss-dep",
+        "0.2.0",
+        r#"[features]
+fast = []
+"#,
+        r#"pub fn Dep.parse(text: read String) -> String
+"#,
+    );
+    write_named_package_fixture(
+        &root_dir,
+        "rss-app",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-dep = {{ path = "{}", features = ["turbo"] }}
+"#,
+            dep_dir.display()
+        ),
+        r#"pub fn App.run() -> Unit
+"#,
+    );
+    fs::write(
+        root_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&root_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&root_dir).expect("package check should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&root_dir);
+    let _ = fs::remove_dir_all(&dep_dir);
+
+    assert!(!check.ok);
+    assert!(json["diagnostics"].as_array().is_some_and(|diagnostics| {
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == "PKG0101" && diagnostic["label"] == "unknown package feature"
+        })
+    }));
 }
 
 #[test]
@@ -8136,7 +8207,9 @@ fn package_lock_records_local_path_dependency_graph() {
         &dep_dir,
         "rss-dep",
         "0.2.0",
-        "",
+        r#"[features]
+fast = []
+"#,
         r#"pub fn Dep.parse(text: read String) -> String
 "#,
     );
@@ -8181,10 +8254,14 @@ fn package_lock_hashes_dependency_effective_interface_for_selected_features() {
         "rss-dep",
         "0.2.0",
         r#"[features]
-fast = []
+fast = ["simd"]
+simd = []
 
 [interfaces.features.fast]
 paths = ["interface/fast"]
+
+[interfaces.features.simd]
+paths = ["interface/simd"]
 "#,
         r#"pub fn Dep.parse(text: read String) -> String
 "#,
@@ -8197,6 +8274,14 @@ paths = ["interface/fast"]
 "#,
     )
     .expect("feature interface should be written");
+    fs::create_dir_all(dep_dir.join("interface/simd"))
+        .expect("transitive feature interface dir should be created");
+    fs::write(
+        dep_dir.join("interface/simd/lib.rssi"),
+        r#"pub fn Dep.simd(text: read String) -> String
+"#,
+    )
+    .expect("transitive feature interface should be written");
     write_named_package_fixture(
         &root_base_dir,
         "rss-app",
@@ -8241,7 +8326,10 @@ rss-dep = {{ path = "{}", features = ["fast"] }}
         .find(|package| package.name == "rss-dep")
         .expect("fast dependency should be locked");
     assert_eq!(base_dep.features, Vec::<String>::new());
-    assert_eq!(fast_dep.features, vec!["fast".to_string()]);
+    assert_eq!(
+        fast_dep.features,
+        vec!["fast".to_string(), "simd".to_string()]
+    );
     assert_ne!(base_dep.interface_hash, fast_dep.interface_hash);
 }
 
@@ -9555,7 +9643,10 @@ fn package_tree_expands_path_dependencies_and_marks_unresolved() {
         &dep_dir,
         "rss-dep",
         "0.2.0",
-        r#"[native.rust]
+        r#"[features]
+streaming = []
+
+[native.rust]
 enabled = true
 path = "native/rust"
 crate = "rss_dep_native"

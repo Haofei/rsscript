@@ -2416,6 +2416,7 @@ PKG09xx  provider/interface-only package resolution
 Current package-manager diagnostic allocations:
 
 ```text
+PKG0101  dependency feature resolution failure
 PKG0501  review policy violation
 PKG0601  native binding metadata or conformance mismatch
 ```
