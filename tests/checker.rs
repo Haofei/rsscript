@@ -4422,7 +4422,7 @@ fn rss_run_accepts_dogfood_classifier() {
 
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
     let expected_stdout = format!(
-        "dogfood review summary total={} must={} low={} unknown={} lines={} mismatches=0",
+        "dogfood review summary total={} must={} low={} unknown={} lines={} mismatches=0 first_mismatch=none",
         review_json["summary"]["total_functions"],
         review_json["summary"]["must_review"]["functions"],
         review_json["summary"]["low_semantic_risk"]["functions"],

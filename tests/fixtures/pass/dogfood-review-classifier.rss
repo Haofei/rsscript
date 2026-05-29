@@ -1,6 +1,7 @@
 features: local
 
 struct ReviewFacts {
+    function_name: String
     expected_classification: Int
     public_api: Bool
     has_unknown_call: Bool
@@ -53,6 +54,18 @@ fn review_class_from_string(value: read String) -> Int {
     }
 
     return ReviewClass.low_semantic_risk()
+}
+
+fn review_class_to_string(value: Int) -> String {
+    if value == ReviewClass.unknown() {
+        return "unknown"
+    }
+
+    if value == ReviewClass.must_review() {
+        return "must_review"
+    }
+
+    return "low_semantic_risk"
 }
 
 fn risk_line_budget(facts: read ReviewFacts) -> Int {
@@ -231,6 +244,7 @@ fn classify_function(facts: read ReviewFacts) -> fresh ReviewDecision {
 
 fn make_low_helper(lines: Int) -> fresh ReviewFacts {
     return ReviewFacts(
+        function_name: read "low_helper",
         expected_classification: ReviewClass.low_semantic_risk(),
         public_api: false,
         has_unknown_call: false,
@@ -250,6 +264,7 @@ fn make_low_helper(lines: Int) -> fresh ReviewFacts {
 
 fn make_native_entry(lines: Int) -> fresh ReviewFacts {
     return ReviewFacts(
+        function_name: read "native_entry",
         expected_classification: ReviewClass.must_review(),
         public_api: true,
         has_unknown_call: false,
@@ -269,6 +284,7 @@ fn make_native_entry(lines: Int) -> fresh ReviewFacts {
 
 fn make_resource_worker(lines: Int) -> fresh ReviewFacts {
     return ReviewFacts(
+        function_name: read "resource_worker",
         expected_classification: ReviewClass.must_review(),
         public_api: false,
         has_unknown_call: false,
@@ -288,6 +304,7 @@ fn make_resource_worker(lines: Int) -> fresh ReviewFacts {
 
 fn make_retaining_cache(lines: Int) -> fresh ReviewFacts {
     return ReviewFacts(
+        function_name: read "retaining_cache",
         expected_classification: ReviewClass.must_review(),
         public_api: false,
         has_unknown_call: false,
@@ -307,6 +324,7 @@ fn make_retaining_cache(lines: Int) -> fresh ReviewFacts {
 
 fn make_unknown_region(lines: Int) -> fresh ReviewFacts {
     return ReviewFacts(
+        function_name: read "unknown_region",
         expected_classification: ReviewClass.unknown(),
         public_api: false,
         has_unknown_call: true,
@@ -325,10 +343,12 @@ fn make_unknown_region(lines: Int) -> fresh ReviewFacts {
 }
 
 fn parse_review_region(value: read JsonValue) -> Result<fresh ReviewFacts, JsonError> {
+    let function_name = Json.field_string(value: read value, name: read "function")?
     let classification = Json.field_string(value: read value, name: read "classification")?
     let reasons = Json.field(value: read value, name: read "reasons")?
 
     return ReviewFacts(
+        function_name: read function_name,
         expected_classification: review_class_from_string(value: read classification),
         public_api: Json.array_contains_string(value: read reasons, item: read "public entry point")?
             || Json.array_contains_string(value: read reasons, item: read "entry point")?,
@@ -568,6 +588,41 @@ fn classification_mismatch_count(items: read List<ReviewFacts>) -> Int {
     return classification_mismatch_count_from(items: read items, index: 0)
 }
 
+fn mismatch_detail(facts: read ReviewFacts) -> fresh String {
+    let decision_value = classify_function(facts: read facts)
+    let expected = review_class_to_string(value: facts.expected_classification)
+    let actual = review_class_to_string(value: decision_value.classification)
+    let first = String.concat(left: read facts.function_name, right: read " expected=")
+    let second = String.concat(left: read first, right: read expected)
+    let third = String.concat(left: read second, right: read " actual=")
+
+    return String.concat(left: read third, right: read actual)
+}
+
+fn first_classification_mismatch_from(
+    items: read List<ReviewFacts>,
+    index: Int,
+) -> String {
+    if index >= List.len(list: read items) {
+        return "none"
+    }
+
+    let facts = List.get(list: read items, index: index)
+
+    if classification_matches_region(facts: read facts) == false {
+        return mismatch_detail(facts: read facts)
+    }
+
+    return first_classification_mismatch_from(
+        items: read items,
+        index: index + 1,
+    )
+}
+
+fn first_classification_mismatch(items: read List<ReviewFacts>) -> String {
+    return first_classification_mismatch_from(items: read items, index: 0)
+}
+
 fn dogfood_fact_list() -> Result<fresh List<ReviewFacts>, JsonError> {
     let path = Path.from_string(value: read "tests/fixtures/pass/dogfood-review-facts.json")
     let json = Json.parse_file(path: read path)?
@@ -640,7 +695,11 @@ fn dogfood_shape_is_expected() -> Result<Bool, JsonError> {
     return Ok(unknown_percent == 0)
 }
 
-fn dogfood_summary_line(summary: read ReviewSummary, mismatches: Int) -> fresh String {
+fn dogfood_summary_line(
+    summary: read ReviewSummary,
+    mismatches: Int,
+    first_mismatch: read String,
+) -> fresh String {
     let total = String.from_int(value: summary.total_functions)
     let must = String.from_int(value: summary.must_review_functions)
     let low = String.from_int(value: summary.low_risk_functions)
@@ -657,8 +716,10 @@ fn dogfood_summary_line(summary: read ReviewSummary, mismatches: Int) -> fresh S
     let eighth = String.concat(left: read seventh, right: read " lines=")
     let ninth = String.concat(left: read eighth, right: read lines)
     let tenth = String.concat(left: read ninth, right: read " mismatches=")
+    let eleventh = String.concat(left: read tenth, right: read mismatch_count)
+    let twelfth = String.concat(left: read eleventh, right: read " first_mismatch=")
 
-    return String.concat(left: read tenth, right: read mismatch_count)
+    return String.concat(left: read twelfth, right: read first_mismatch)
 }
 
 pub fn main() -> Result<Unit, JsonError> {
@@ -668,7 +729,12 @@ pub fn main() -> Result<Unit, JsonError> {
     let unknown_region = make_unknown_region(lines: 7)
     let unknown_decision = classify_function(facts: read unknown_region)
     let mismatches = classification_mismatch_count(items: read items)
-    let summary_line = dogfood_summary_line(summary: read summary, mismatches: mismatches)
+    let first_mismatch = first_classification_mismatch(items: read items)
+    let summary_line = dogfood_summary_line(
+        summary: read summary,
+        mismatches: mismatches,
+        first_mismatch: read first_mismatch,
+    )
     let shape_ok = dogfood_shape_is_expected()?
 
     Assert.equal_int(left: summary.total_functions, right: expected.total_functions)
@@ -677,6 +743,7 @@ pub fn main() -> Result<Unit, JsonError> {
     Assert.equal_int(left: summary.unknown_functions, right: expected.unknown_functions)
     Assert.equal_int(left: summary.suggested_lines, right: expected.suggested_lines)
     Assert.equal_int(left: mismatches, right: 0)
+    Assert.equal(left: read first_mismatch, right: read "none")
     Assert.equal_int(left: unknown_decision.classification, right: ReviewClass.unknown())
     Assert.equal_bool(left: shape_ok, right: true)
     Assert.equal_bool(left: every_region_classification_matches(items: read items, index: 0), right: true)
