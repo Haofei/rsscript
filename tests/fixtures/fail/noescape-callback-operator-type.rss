@@ -1,0 +1,10 @@
+// expect: RS0210
+
+fn apply(callback: noescape Fn(Int) -> Bool) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: |value| value == "x")
+    return Unit
+}

@@ -5,7 +5,7 @@ use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::{
     CallResolution, FunctionSig, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirStmt,
 };
-use crate::syntax::ast::{Callee, FunctionDecl, Item, TypeRef};
+use crate::syntax::ast::{BinaryOp, Callee, FunctionDecl, Item, TypeRef};
 
 #[derive(Debug, Clone)]
 struct NoescapeBinding {
@@ -1192,6 +1192,7 @@ fn check_callback_return_expr_type(
     expr: &HirExpr,
     contract: &CallbackContract<'_>,
 ) {
+    check_callback_operator_operand_types(analyzer, expr, contract);
     if check_callback_variant_return_type(analyzer, expr, contract) {
         return;
     }
@@ -1279,6 +1280,7 @@ fn check_callback_payload_return_type(
         }
         return;
     };
+    check_callback_operator_operand_types(analyzer, payload, contract);
     let Some(actual) = callback_expr_type_name(payload, contract.params, contract.param_types)
     else {
         return;
@@ -1307,7 +1309,160 @@ fn callback_expr_type_name(
             .get(index)
             .map(|type_name| type_name.to_string());
     }
+    if let HirExpr::Binary { op, .. } = expr {
+        return match op {
+            BinaryOp::Equal
+            | BinaryOp::NotEqual
+            | BinaryOp::Less
+            | BinaryOp::LessEqual
+            | BinaryOp::Greater
+            | BinaryOp::GreaterEqual
+            | BinaryOp::LogicalAnd
+            | BinaryOp::LogicalOr => Some("Bool".to_string()),
+            BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide => None,
+        };
+    }
     hir_expr_type_name(expr).map(str::to_string)
+}
+
+fn check_callback_operator_operand_types(
+    analyzer: &mut Analyzer<'_>,
+    expr: &HirExpr,
+    contract: &CallbackContract<'_>,
+) {
+    match expr {
+        HirExpr::Binary {
+            op,
+            left,
+            right,
+            span,
+        } => {
+            check_callback_operator_operand_types(analyzer, left, contract);
+            check_callback_operator_operand_types(analyzer, right, contract);
+            let (Some(left_type), Some(right_type)) = (
+                callback_expr_type_name(left, contract.params, contract.param_types),
+                callback_expr_type_name(right, contract.params, contract.param_types),
+            ) else {
+                return;
+            };
+            match op {
+                BinaryOp::Equal | BinaryOp::NotEqual => {
+                    if type_root_name(&left_type) != type_root_name(&right_type) {
+                        callback_operator_type_mismatch_diagnostic(
+                            analyzer,
+                            span,
+                            callback_operator_label(*op),
+                            &left_type,
+                            &right_type,
+                            "matching operand types",
+                        );
+                    }
+                }
+                BinaryOp::Less
+                | BinaryOp::LessEqual
+                | BinaryOp::Greater
+                | BinaryOp::GreaterEqual => {
+                    if !is_numeric_type_name(&left_type) || !is_numeric_type_name(&right_type) {
+                        callback_operator_type_mismatch_diagnostic(
+                            analyzer,
+                            span,
+                            callback_operator_label(*op),
+                            &left_type,
+                            &right_type,
+                            "numeric operands",
+                        );
+                    }
+                }
+                BinaryOp::LogicalAnd | BinaryOp::LogicalOr => {
+                    if type_root_name(&left_type) != "Bool" || type_root_name(&right_type) != "Bool"
+                    {
+                        callback_operator_type_mismatch_diagnostic(
+                            analyzer,
+                            span,
+                            callback_operator_label(*op),
+                            &left_type,
+                            &right_type,
+                            "Bool operands",
+                        );
+                    }
+                }
+                BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide => {}
+            }
+        }
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                check_callback_operator_operand_types(analyzer, &arg.value, contract);
+            }
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. } => {
+            check_callback_operator_operand_types(analyzer, value, contract);
+        }
+        HirExpr::Field { base, .. } => {
+            check_callback_operator_operand_types(analyzer, base, contract)
+        }
+        HirExpr::Index { base, index, .. } => {
+            check_callback_operator_operand_types(analyzer, base, contract);
+            check_callback_operator_operand_types(analyzer, index, contract);
+        }
+        HirExpr::Closure { .. }
+        | HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn callback_operator_type_mismatch_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    span: &Span,
+    operator: &str,
+    left_type: &str,
+    right_type: &str,
+    expected: &str,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::OPERATOR_TYPE_MISMATCH,
+            format!(
+                "operator `{operator}` has operands `{left_type}` and `{right_type}`, expected {expected}."
+            ),
+            span.clone(),
+            "operator type mismatch",
+        )
+        .with_cause(
+            "`noescape Fn(...)` callback parameter types apply inside callback expressions before Rust lowering.",
+        )
+        .with_fix(
+            "use_typed_operator_operands",
+            "Use operands with matching RSScript types.",
+            "manual",
+        ),
+    );
+}
+
+fn callback_operator_label(op: BinaryOp) -> &'static str {
+    match op {
+        BinaryOp::Add => "+",
+        BinaryOp::Subtract => "-",
+        BinaryOp::Multiply => "*",
+        BinaryOp::Divide => "/",
+        BinaryOp::Equal => "==",
+        BinaryOp::NotEqual => "!=",
+        BinaryOp::Less => "<",
+        BinaryOp::LessEqual => "<=",
+        BinaryOp::Greater => ">",
+        BinaryOp::GreaterEqual => ">=",
+        BinaryOp::LogicalAnd => "&&",
+        BinaryOp::LogicalOr => "||",
+    }
+}
+
+fn is_numeric_type_name(type_name: &str) -> bool {
+    matches!(type_root_name(type_name), "Int" | "Float")
 }
 
 fn callback_return_type_mismatch_diagnostic(

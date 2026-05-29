@@ -1663,6 +1663,9 @@ callback with the wrong parameter count is a diagnostic before lowering.
 Calls to a noescape callback must also match the same positional parameter
 contract: inside `fn run(callback: noescape Fn(Int) -> Int)`, `callback("x")`
 is rejected before lowering because the first argument is `String`, not `Int`.
+The callback body uses the same positional types for expression checking; for
+example `callback: |value| value == "x"` is rejected for `Fn(Int) -> Bool`
+because the equality operands are `Int` and `String`.
 
 v0.5 `noescape Fn` closures are **non-consuming**: a callee may call the closure
 any number of times (for example `ResourcePool.new` calls its factory `max_size`
@@ -2649,6 +2652,7 @@ managed object field-split conflict
 noescape callback return type mismatch
 noescape callback parameter count mismatch
 noescape callback call argument mismatch
+noescape callback body operator type mismatch
 noescape closure consuming a captured local
 `?` operand error type does not match the function error type
 Fd used outside native/resource internals

@@ -1346,6 +1346,30 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_reports_noescape_callback_operator_type_mismatch() {
+    let source = r#"
+fn apply(callback: noescape Fn(Int) -> Bool) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: |value| value == "x")
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-operator-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0210"
+                && diagnostic.summary
+                    == "operator `==` has operands `Int` and `String`, expected matching operand types."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn checker_reports_mixed_equality_operand_types_before_backend_lowering() {
     let source = r#"
 fn main() -> Unit {
