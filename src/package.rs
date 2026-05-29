@@ -3011,7 +3011,20 @@ fn package_effect_name(effect: &EffectDecl) -> String {
 }
 
 fn package_type_name(ty: &TypeRef) -> String {
-    let base = if ty.args.is_empty() {
+    let base = if ty.name == "Fn" {
+        let params = ty
+            .fn_params
+            .iter()
+            .map(package_type_name)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let return_ty = ty
+            .fn_return
+            .as_ref()
+            .map(|return_ty| format!(" -> {}", package_type_name(return_ty)))
+            .unwrap_or_default();
+        format!("Fn({params}){return_ty}")
+    } else if ty.args.is_empty() {
         ty.name.clone()
     } else {
         let args = ty
@@ -3023,22 +3036,7 @@ fn package_type_name(ty: &TypeRef) -> String {
         format!("{}<{args}>", ty.name)
     };
     let name = if ty.is_noescape {
-        if ty.name == "Fn" {
-            let params = ty
-                .fn_params
-                .iter()
-                .map(package_type_name)
-                .collect::<Vec<_>>()
-                .join(", ");
-            let return_ty = ty
-                .fn_return
-                .as_ref()
-                .map(|return_ty| format!(" -> {}", package_type_name(return_ty)))
-                .unwrap_or_default();
-            format!("noescape Fn({params}){return_ty}")
-        } else {
-            format!("noescape {base}")
-        }
+        format!("noescape {base}")
     } else {
         base
     };

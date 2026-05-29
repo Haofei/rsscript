@@ -3171,7 +3171,20 @@ fn is_option_type_name(type_name: &str) -> bool {
 }
 
 fn type_ref_name(ty: &TypeRef) -> String {
-    let base = if ty.args.is_empty() {
+    let base = if ty.name == "Fn" {
+        let params = ty
+            .fn_params
+            .iter()
+            .map(type_ref_name)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let return_ty = ty
+            .fn_return
+            .as_ref()
+            .map(|return_ty| format!(" -> {}", type_ref_name(return_ty)))
+            .unwrap_or_default();
+        format!("Fn({params}){return_ty}")
+    } else if ty.args.is_empty() {
         ty.name.clone()
     } else {
         format!(
@@ -3185,22 +3198,7 @@ fn type_ref_name(ty: &TypeRef) -> String {
         )
     };
     let name = if ty.is_noescape {
-        if ty.name == "Fn" {
-            let params = ty
-                .fn_params
-                .iter()
-                .map(type_ref_name)
-                .collect::<Vec<_>>()
-                .join(", ");
-            let return_ty = ty
-                .fn_return
-                .as_ref()
-                .map(|return_ty| format!(" -> {}", type_ref_name(return_ty)))
-                .unwrap_or_default();
-            format!("noescape Fn({params}){return_ty}")
-        } else {
-            format!("noescape {base}")
-        }
+        format!("noescape {base}")
     } else {
         base
     };

@@ -447,7 +447,20 @@ fn format_effect(effect: &EffectDecl) -> String {
 }
 
 fn type_ref_text(ty: &TypeRef) -> String {
-    let text = if ty.args.is_empty() {
+    let text = if ty.name == "Fn" {
+        let params = ty
+            .fn_params
+            .iter()
+            .map(type_ref_text)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let return_ty = ty
+            .fn_return
+            .as_ref()
+            .map(|return_ty| format!(" -> {}", type_ref_text(return_ty)))
+            .unwrap_or_default();
+        format!("Fn({params}){return_ty}")
+    } else if ty.args.is_empty() {
         ty.name.clone()
     } else {
         format!(
@@ -461,20 +474,6 @@ fn type_ref_text(ty: &TypeRef) -> String {
         )
     };
     if ty.is_noescape {
-        if ty.name == "Fn" {
-            let params = ty
-                .fn_params
-                .iter()
-                .map(type_ref_text)
-                .collect::<Vec<_>>()
-                .join(", ");
-            let return_ty = ty
-                .fn_return
-                .as_ref()
-                .map(|return_ty| format!(" -> {}", type_ref_text(return_ty)))
-                .unwrap_or_default();
-            return format!("noescape Fn({params}){return_ty}");
-        }
         format!("noescape {text}")
     } else {
         text
@@ -614,6 +613,22 @@ return Unit
         assert_eq!(
             format_source("noescape.rss", source),
             r#"fn apply(callback: noescape Fn()) -> Unit {
+    return Unit
+}
+"#
+        );
+    }
+
+    #[test]
+    fn preserves_function_type_parameter_and_return_types() {
+        let source = r#"fn schedule(callback:Fn(Int)->Result<String,BuildError>)->Unit {
+return Unit
+}
+"#;
+
+        assert_eq!(
+            format_source("fn-type.rss", source),
+            r#"fn schedule(callback: Fn(Int) -> Result<String, BuildError>) -> Unit {
     return Unit
 }
 "#

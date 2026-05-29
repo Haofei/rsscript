@@ -10407,6 +10407,50 @@ fn package_diff_marks_noescape_callback_contract_changes_high_risk() {
 }
 
 #[test]
+fn package_diff_preserves_callback_result_contract_types() {
+    let old_dir = unique_temp_dir("rsscript-package-fn-result-interface-old");
+    let new_dir = unique_temp_dir("rsscript-package-fn-result-interface-new");
+    write_named_package_fixture(
+        &old_dir,
+        "rss-fn-result-interface",
+        "0.1.0",
+        "",
+        r#"struct Scheduler
+struct BuildError
+
+pub fn Scheduler.run(callback: read Fn(Int) -> Result<String, BuildError>) -> Unit
+"#,
+    );
+    write_named_package_fixture(
+        &new_dir,
+        "rss-fn-result-interface",
+        "0.1.0",
+        "",
+        r#"struct Scheduler
+struct BuildError
+
+pub fn Scheduler.run(callback: read Fn(Int) -> Result<Int, BuildError>) -> Unit
+"#,
+    );
+
+    let diff = diff_package_dirs(&old_dir, &new_dir).expect("package diff should succeed");
+    let json = rsscript::format_package_diff_json(&diff);
+    let parsed: Value = serde_json::from_str(&json).expect("package diff JSON should parse");
+    let _ = fs::remove_dir_all(&old_dir);
+    let _ = fs::remove_dir_all(&new_dir);
+
+    assert_eq!(parsed["risk"], "elevated");
+    assert!(
+        json.contains("callback: read Fn(Int) -> Result<String, BuildError>"),
+        "{json}"
+    );
+    assert!(
+        json.contains("callback: read Fn(Int) -> Result<Int, BuildError>"),
+        "{json}"
+    );
+}
+
+#[test]
 fn package_diff_marks_boundary_package_feature_changes_high_risk() {
     let old_dir = unique_temp_dir("rsscript-package-feature-diff-old");
     let new_dir = unique_temp_dir("rsscript-package-feature-diff-new");

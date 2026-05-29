@@ -2279,27 +2279,26 @@ fn boundary_contract(boundary: &BoundarySig) -> String {
 }
 
 fn type_name(ty: &TypeRef) -> String {
-    let name = if ty.args.is_empty() {
+    let name = if ty.name == "Fn" {
+        let params = ty
+            .fn_params
+            .iter()
+            .map(type_name)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let return_ty = ty
+            .fn_return
+            .as_ref()
+            .map(|return_ty| format!(" -> {}", type_name(return_ty)))
+            .unwrap_or_default();
+        format!("Fn({params}){return_ty}")
+    } else if ty.args.is_empty() {
         ty.name.clone()
     } else {
         let args = ty.args.iter().map(type_name).collect::<Vec<_>>().join(", ");
         format!("{}<{args}>", ty.name)
     };
     if ty.is_noescape {
-        if ty.name == "Fn" {
-            let params = ty
-                .fn_params
-                .iter()
-                .map(type_name)
-                .collect::<Vec<_>>()
-                .join(", ");
-            let return_ty = ty
-                .fn_return
-                .as_ref()
-                .map(|return_ty| format!(" -> {}", type_name(return_ty)))
-                .unwrap_or_default();
-            return format!("noescape Fn({params}){return_ty}");
-        }
         format!("noescape {name}")
     } else {
         name
