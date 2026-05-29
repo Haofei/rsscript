@@ -6819,6 +6819,31 @@ fn rss_package_command_is_rejected() {
 }
 
 #[test]
+fn docs_do_not_reintroduce_legacy_gc_runtime_surface() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let legacy_runtime_name = ["runtime ", "G", "c"].concat();
+    let legacy_runtime_path = ["rsscript_runtime::", "G", "c"].concat();
+
+    for relative_path in [
+        "README.md",
+        "RSScript_v0.5_Spec_reorganized.md",
+        "RSScript_Package_Manager_Design_reorganized.md",
+    ] {
+        let source = fs::read_to_string(root.join(relative_path))
+            .unwrap_or_else(|error| panic!("{relative_path} should read: {error}"));
+
+        assert!(
+            !source.contains(&legacy_runtime_name),
+            "{relative_path} must describe managed runtime values as Managed<T>, not Gc"
+        );
+        assert!(
+            !source.contains(&legacy_runtime_path),
+            "{relative_path} must not expose legacy managed runtime aliases"
+        );
+    }
+}
+
+#[test]
 fn rss_pkg_metadata_json_writes_review_metadata_file() {
     let temp_dir = unique_temp_dir("rsscript-package-metadata-cli");
     write_named_package_fixture(

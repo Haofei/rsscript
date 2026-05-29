@@ -851,7 +851,7 @@ RSScript Buffer     <-> Vec<u8> / wrapper buffer
 RSScript Result     <-> Rust Result
 RSScript Option     <-> Rust Option
 RSScript resource   <-> Rust type implementing rsscript_runtime::Resource
-RSScript class/managed <-> runtime Gc/handle
+RSScript class/managed <-> rsscript_runtime::Managed<T>
 ```
 
 ### 9.6 Native risk categories
