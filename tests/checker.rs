@@ -933,6 +933,50 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_reports_result_binding_payload_type_mismatch_before_backend_lowering() {
+    let source = r#"
+class BuildError {
+    code: Int
+}
+
+fn main() -> Unit {
+    let value: Result<String, BuildError> = Ok(42)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("result-binding-payload-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "binding `value` has initializer payload type `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_option_binding_payload_type_mismatch_before_backend_lowering() {
+    let source = r#"
+fn main() -> Unit {
+    let value: Option<String> = Some(42)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("option-binding-payload-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "binding `value` has initializer payload type `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn rust_lowering_rejects_let_type_annotation_mismatch_before_rustc() {
     let source = r#"
 fn main() -> Unit {
@@ -942,6 +986,29 @@ fn main() -> Unit {
 "#;
     let diagnostics = lower_source_to_rust("let-annotation-type.rss", source)
         .expect_err("binding type mismatch should fail before Rust generation");
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0207"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn rust_lowering_rejects_result_binding_payload_type_mismatch_before_rustc() {
+    let source = r#"
+class BuildError {
+    code: Int
+}
+
+fn main() -> Unit {
+    let value: Result<String, BuildError> = Ok(42)
+    return Unit
+}
+"#;
+    let diagnostics = lower_source_to_rust("result-binding-payload-type.rss", source)
+        .expect_err("binding payload mismatch should fail before Rust generation");
 
     assert!(
         diagnostics

@@ -1,0 +1,10 @@
+// expect: RS0207
+
+class BuildError {
+    code: Int
+}
+
+fn main() -> Unit {
+    let value: Result<String, BuildError> = Ok(42)
+    return Unit
+}

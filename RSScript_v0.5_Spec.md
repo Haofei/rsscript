@@ -222,6 +222,9 @@ let y: Int64 = Int64.from(value: x)
 The annotation is a checked binding contract. `let y: Int64 = x` is rejected
 unless `x` already has type `Int64`; the explicit conversion call above is what
 makes the binding valid.
+Wrapper payloads are checked as part of the same contract:
+`let r: Result<String, E> = Ok(42)` is rejected because the `Ok` payload is
+`Int`, not `String`.
 
 ### 2.5 Public APIs are review contracts
 

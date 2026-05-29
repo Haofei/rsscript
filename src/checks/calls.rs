@@ -323,10 +323,19 @@ fn check_binding_type(
     actual: &Option<String>,
     value: &HirExpr,
 ) {
-    let (Some(expected), Some(actual)) = (expected.as_deref(), actual.as_deref()) else {
+    let Some(expected) = expected.as_deref() else {
         return;
     };
-    if unresolved_generic_type(expected) || unresolved_generic_type(actual) {
+    if unresolved_generic_type(expected) {
+        return;
+    }
+    if check_binding_variant_payload_type(analyzer, name, expected, value) {
+        return;
+    }
+    let Some(actual) = actual.as_deref() else {
+        return;
+    };
+    if unresolved_generic_type(actual) {
         return;
     }
     if argument_type_matches(expected, actual) {
@@ -343,6 +352,114 @@ fn check_binding_type(
         .with_fix(
             "match_binding_type",
             format!("Initialize `{name}` with a `{expected}` value, or change the binding annotation."),
+            "manual",
+        ),
+    );
+}
+
+fn check_binding_variant_payload_type(
+    analyzer: &mut Analyzer<'_>,
+    name: &str,
+    expected_type: &str,
+    value: &HirExpr,
+) -> bool {
+    let Some((variant, payload)) = enum_variant_payload(value) else {
+        return false;
+    };
+    match (type_root_name(expected_type), variant) {
+        ("Option", "None") => true,
+        ("Option", "Some") => {
+            let Some(expected) = type_arg_names(expected_type)
+                .and_then(|args| args.first().map(|arg| arg.trim().to_string()))
+            else {
+                return false;
+            };
+            if let Some(payload) = payload {
+                check_binding_payload_type(analyzer, name, payload, &expected);
+            } else if expected != "Unit" {
+                binding_payload_type_mismatch_diagnostic(
+                    analyzer,
+                    name,
+                    "Unit",
+                    &expected,
+                    hir_expr_span(value),
+                );
+            }
+            true
+        }
+        ("Result", "Ok" | "Err") => {
+            let Some(args) = type_arg_names(expected_type) else {
+                return false;
+            };
+            let expected = match variant {
+                "Ok" => args.first().copied(),
+                "Err" => args.get(1).copied(),
+                _ => None,
+            };
+            let Some(expected) = expected else {
+                return false;
+            };
+            let expected = expected.trim();
+            if let Some(payload) = payload {
+                check_binding_payload_type(analyzer, name, payload, expected);
+            } else if expected != "Unit" {
+                binding_payload_type_mismatch_diagnostic(
+                    analyzer,
+                    name,
+                    "Unit",
+                    expected,
+                    hir_expr_span(value),
+                );
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn check_binding_payload_type(
+    analyzer: &mut Analyzer<'_>,
+    name: &str,
+    payload: &HirExpr,
+    expected: &str,
+) {
+    let Some(actual) = hir_expr_type_name(payload) else {
+        return;
+    };
+    if unresolved_generic_type(actual) {
+        return;
+    }
+    if !argument_type_matches(expected, actual) {
+        binding_payload_type_mismatch_diagnostic(
+            analyzer,
+            name,
+            actual,
+            expected,
+            hir_expr_span(payload),
+        );
+    }
+}
+
+fn binding_payload_type_mismatch_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    name: &str,
+    actual: &str,
+    expected: &str,
+    span: &Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::ARGUMENT_TYPE_MISMATCH,
+            format!(
+                "binding `{name}` has initializer payload type `{actual}`, expected `{expected}`."
+            ),
+            span.clone(),
+            "binding type mismatch",
+        )
+        .with_cause("Result and Option binding initializers are checked against explicit binding payload types before Rust lowering.")
+        .with_fix(
+            "match_binding_payload_type",
+            format!("Initialize `{name}` with a `{expected}` payload, or change the binding annotation."),
             "manual",
         ),
     );
