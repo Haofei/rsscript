@@ -37,6 +37,7 @@ pub struct FunctionSig {
     pub namespace: Option<String>,
     pub name: String,
     pub is_async: bool,
+    pub type_params: Box<[String]>,
     pub params: Vec<ParamSig>,
     pub return_type: Option<String>,
     pub returns_fresh: bool,
@@ -64,6 +65,7 @@ pub struct FieldInfo {
 pub struct TypeInfo {
     pub name: String,
     pub kind: HirTypeKind,
+    pub type_params: Box<[String]>,
     pub fields: HashMap<String, FieldInfo>,
 }
 
@@ -1452,7 +1454,7 @@ fn infer_hir_expr_type(
         }
         Expr::Call { callee, args, .. } => match hir.resolve_call(callee) {
             CallResolution::Resolved { signature, .. } => {
-                infer_builtin_generic_return_type(callee, args, value_types)
+                infer_signature_return_type(hir, &signature, callee, args, value_types)
                     .or(signature.return_type)
             }
             CallResolution::EnumVariant | CallResolution::Unknown => None,
@@ -1469,75 +1471,174 @@ fn infer_hir_expr_type(
     }
 }
 
-fn infer_builtin_generic_return_type(
+fn infer_signature_return_type(
+    hir: &Hir,
+    signature: &FunctionSig,
     callee: &Callee,
     args: &[CallArg],
     value_types: &HashMap<String, String>,
 ) -> Option<String> {
-    if is_resource_pool_new(callee) {
-        return resource_pool_namespace_arg(callee)
-            .map(|resource| format!("ResourcePool<{resource}>"));
+    let return_type = signature.return_type.as_ref()?;
+    if signature.type_params.is_empty() {
+        return None;
     }
-    if is_resource_pool_borrow(callee) {
-        return resource_pool_borrow_type(callee, args, value_types);
+
+    let generic_params = signature
+        .type_params
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let mut substitutions = HashMap::new();
+    collect_namespace_type_substitutions(hir, callee, &generic_params, &mut substitutions);
+    collect_arg_type_substitutions(
+        signature,
+        args,
+        value_types,
+        &generic_params,
+        &mut substitutions,
+    );
+
+    if substitutions.is_empty() {
+        None
+    } else {
+        Some(substitute_type_params(return_type, &substitutions))
     }
-    None
 }
 
-fn resource_pool_borrow_type(
+fn collect_namespace_type_substitutions(
+    hir: &Hir,
     callee: &Callee,
+    generic_params: &HashSet<&str>,
+    substitutions: &mut HashMap<String, String>,
+) {
+    let Callee::Qualified { namespace, .. } = callee else {
+        return;
+    };
+    let root = type_root_name(namespace);
+    let Some(type_info) = hir.type_info(root) else {
+        return;
+    };
+    let Some(namespace_args) = type_arg_names(namespace) else {
+        return;
+    };
+    for (param, actual) in type_info.type_params.iter().zip(namespace_args) {
+        if generic_params.contains(param.as_str()) {
+            substitutions
+                .entry(param.clone())
+                .or_insert_with(|| actual.to_string());
+        }
+    }
+}
+
+fn collect_arg_type_substitutions(
+    signature: &FunctionSig,
     args: &[CallArg],
     value_types: &HashMap<String, String>,
-) -> Option<String> {
-    args.iter()
-        .find(|arg| arg.name.as_deref() == Some("pool"))
-        .and_then(|arg| resource_pool_arg_type(&arg.value, value_types))
-        .or_else(|| resource_pool_namespace_arg(callee).map(str::to_string))
+    generic_params: &HashSet<&str>,
+    substitutions: &mut HashMap<String, String>,
+) {
+    for (index, arg) in args.iter().enumerate() {
+        let Some(param) = arg
+            .name
+            .as_deref()
+            .and_then(|name| signature.params.iter().find(|param| param.name == name))
+            .or_else(|| signature.params.get(index))
+        else {
+            continue;
+        };
+        let Some(actual_type) = infer_arg_expr_type(&arg.value, value_types) else {
+            continue;
+        };
+        collect_type_substitutions(
+            &param.type_name,
+            &actual_type,
+            generic_params,
+            substitutions,
+        );
+    }
 }
 
-fn resource_pool_arg_type(expr: &Expr, value_types: &HashMap<String, String>) -> Option<String> {
-    let type_name = match expr {
+fn infer_arg_expr_type(expr: &Expr, value_types: &HashMap<String, String>) -> Option<String> {
+    match expr {
         Expr::Effect { value, .. }
         | Expr::Manage { value, .. }
         | Expr::Spawn { value, .. }
         | Expr::Await { value, .. }
-        | Expr::Try { value, .. } => {
-            return resource_pool_arg_type(value, value_types);
-        }
-        Expr::Ident(name, _) => value_types.get(name)?,
-        Expr::Call { callee, .. } => {
-            return resource_pool_namespace_arg(callee).map(|resource| resource.to_string());
-        }
+        | Expr::Try { value, .. } => infer_arg_expr_type(value, value_types),
+        Expr::Ident(name, _) => value_types.get(name).cloned(),
+        Expr::Call { callee, .. } => type_namespace_type(callee).map(str::to_string),
         Expr::Field { .. }
         | Expr::Index { .. }
         | Expr::Binary { .. }
         | Expr::Closure { .. }
         | Expr::Number(_, _)
         | Expr::String(_, _)
-        | Expr::Unknown(_) => return None,
+        | Expr::Unknown(_) => None,
+    }
+}
+
+fn collect_type_substitutions(
+    pattern: &str,
+    actual: &str,
+    generic_params: &HashSet<&str>,
+    substitutions: &mut HashMap<String, String>,
+) {
+    if generic_params.contains(pattern) {
+        substitutions
+            .entry(pattern.to_string())
+            .or_insert_with(|| actual.to_string());
+        return;
+    }
+
+    let Some(pattern_args) = type_arg_names(pattern) else {
+        return;
     };
-    resource_pool_type_arg(type_name).map(str::to_string)
+    let Some(actual_args) = type_arg_names(actual) else {
+        return;
+    };
+    if type_root_name(pattern) != type_root_name(actual) || pattern_args.len() != actual_args.len()
+    {
+        return;
+    }
+    for (pattern_arg, actual_arg) in pattern_args.into_iter().zip(actual_args) {
+        collect_type_substitutions(pattern_arg, actual_arg, generic_params, substitutions);
+    }
 }
 
-fn is_resource_pool_new(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && name == "new")
+fn substitute_type_params(type_name: &str, substitutions: &HashMap<String, String>) -> String {
+    if let Some(replacement) = substitutions.get(type_name) {
+        return replacement.clone();
+    }
+    if let Some(return_ty) = type_name.strip_prefix("noescape Fn() -> ") {
+        return format!(
+            "noescape Fn() -> {}",
+            substitute_type_params(return_ty, substitutions)
+        );
+    }
+    let Some(args) = type_arg_names(type_name) else {
+        return type_name.to_string();
+    };
+    let root = type_root_name(type_name);
+    let args = args
+        .into_iter()
+        .map(|arg| substitute_type_params(arg, substitutions))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{root}<{args}>")
 }
 
-fn is_resource_pool_borrow(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && name == "borrow")
-}
-
-fn resource_pool_namespace_arg(callee: &Callee) -> Option<&str> {
+fn type_namespace_type(callee: &Callee) -> Option<&str> {
     match callee {
-        Callee::Qualified { namespace, .. } => resource_pool_type_arg(namespace),
+        Callee::Qualified { namespace, .. } => Some(namespace),
         Callee::Name(_) => None,
     }
 }
 
-fn resource_pool_type_arg(type_name: &str) -> Option<&str> {
-    type_name
-        .strip_prefix("ResourcePool<")
-        .and_then(|rest| rest.strip_suffix('>'))
+fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
+    let inner = type_name
+        .split_once('<')
+        .and_then(|(_, rest)| rest.strip_suffix('>'))?;
+    Some(split_top_level_type_args(inner))
 }
 
 fn result_ok_type(type_name: &str) -> Option<String> {
@@ -1690,6 +1791,12 @@ fn function_sig_from_decl(function: &FunctionDecl, is_builtin: bool) -> Function
         namespace,
         name,
         is_async: function.is_async,
+        type_params: function
+            .type_params
+            .iter()
+            .map(|param| param.name.clone())
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
         params: function.params.iter().map(param_sig_from_decl).collect(),
         return_type: function.return_ty.as_ref().map(type_ref_name),
         returns_fresh: function.returns_fresh,
@@ -1821,6 +1928,12 @@ fn type_info_from_decl(type_decl: &TypeDecl) -> TypeInfo {
     TypeInfo {
         name: type_decl.name.clone(),
         kind: type_kind_from_decl(type_decl.kind),
+        type_params: type_decl
+            .type_params
+            .iter()
+            .map(|param| param.name.clone())
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
         fields: type_decl
             .fields
             .iter()
@@ -1854,6 +1967,7 @@ fn constructor_sig_from_type(type_info: &TypeInfo, is_builtin: bool) -> Function
         namespace: None,
         name: type_info.name.clone(),
         is_async: false,
+        type_params: type_info.type_params.clone(),
         params: fields
             .into_iter()
             .map(|field| ParamSig {
@@ -2212,6 +2326,44 @@ fn run(pool: mut ResourcePool<DbConnection>) -> Unit {
                             } if name == "conn" && ident_type == "DbConnection"
                         )
                 )
+        ));
+    }
+
+    #[test]
+    fn substitutes_generic_return_types_from_call_arguments() {
+        let source = r#"
+struct Config {
+    name: String
+}
+
+struct Holder<T: Struct>
+
+fn Holder.unwrap<T: Struct>(holder: read Holder<T>) -> T
+
+fn run(holder: read Holder<Config>) -> Unit {
+    let config = Holder.unwrap(holder: read holder)
+}
+"#;
+
+        let program = parse_source("test.rss", source);
+        let hir = Hir::from_syntax(&program);
+        let body = hir.function_body("run").expect("run body exists");
+
+        assert!(matches!(
+            body.block
+                .as_ref()
+                .expect("resolved body block exists")
+                .statements
+                .first(),
+            Some(HirStmt::Let {
+                name,
+                type_name: Some(type_name),
+                value: Some(HirExpr::Call {
+                    type_name: Some(call_type),
+                    ..
+                }),
+                ..
+            }) if name == "config" && type_name == "Config" && call_type == "Config"
         ));
     }
 
