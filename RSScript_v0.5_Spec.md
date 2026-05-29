@@ -1664,6 +1664,10 @@ same callback return contract rather than a ResourcePool-only type shortcut.
 Nested callback wrapper payloads are checked recursively under the same rule:
 `noescape Fn() -> Result<Option<String>, E>` rejects `callback: || Ok(Some(42))`
 before Rust lowering.
+Freshness is also part of the callback return contract. A
+`noescape Fn() -> fresh T` or `noescape Fn() -> Result<fresh T, E>` callback may
+return a constructor, known fresh call, or local value created inside the
+callback; it must not return a captured managed or local value as fresh.
 
 `Fn` may also declare positional parameter types:
 

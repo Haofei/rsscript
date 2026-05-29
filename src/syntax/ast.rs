@@ -139,6 +139,7 @@ pub struct TypeRef {
     pub name: String,
     pub args: Vec<TypeRef>,
     pub malformed_arg_spans: Vec<Span>,
+    pub is_fresh: bool,
     pub is_noescape: bool,
     pub fn_params: Vec<TypeRef>,
     pub fn_return: Option<Box<TypeRef>>,

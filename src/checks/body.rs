@@ -1528,7 +1528,7 @@ fn result_error_type_ref_name(return_ty: &TypeRef) -> Option<String> {
 }
 
 fn type_ref_name(ty: &TypeRef) -> String {
-    let name = if ty.args.is_empty() {
+    let base = if ty.args.is_empty() {
         ty.name.clone()
     } else {
         let args = ty
@@ -1539,7 +1539,7 @@ fn type_ref_name(ty: &TypeRef) -> String {
             .join(", ");
         format!("{}<{args}>", ty.name)
     };
-    if ty.is_noescape {
+    let name = if ty.is_noescape {
         if ty.name == "Fn" {
             let params = ty
                 .fn_params
@@ -1552,9 +1552,15 @@ fn type_ref_name(ty: &TypeRef) -> String {
                 .as_ref()
                 .map(|return_ty| format!(" -> {}", type_ref_name(return_ty)))
                 .unwrap_or_default();
-            return format!("noescape Fn({params}){return_ty}");
+            format!("noescape Fn({params}){return_ty}")
+        } else {
+            format!("noescape {base}")
         }
-        format!("noescape {name}")
+    } else {
+        base
+    };
+    if ty.is_fresh {
+        format!("fresh {name}")
     } else {
         name
     }
@@ -2935,6 +2941,10 @@ fn is_resource_pool_constructor(callee: &Callee) -> bool {
 }
 
 fn type_root_name(type_name: &str) -> &str {
+    let type_name = type_name
+        .trim()
+        .strip_prefix("fresh ")
+        .unwrap_or(type_name.trim());
     type_name
         .split_once('<')
         .map_or(type_name, |(root, _)| root)

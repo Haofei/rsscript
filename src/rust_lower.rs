@@ -1332,6 +1332,7 @@ impl<'a> RustLowerer<'a> {
                 name: name.clone(),
                 args: Vec::new(),
                 malformed_arg_spans: Vec::new(),
+                is_fresh: false,
                 is_noescape: false,
                 fn_params: Vec::new(),
                 fn_return: None,
@@ -2738,6 +2739,7 @@ fn rust_qualified_function_ident(namespace: &str, name: &str) -> String {
 }
 
 fn type_root_name(name: &str) -> &str {
+    let name = name.trim().strip_prefix("fresh ").unwrap_or(name.trim());
     name.split('<').next().unwrap_or(name)
 }
 

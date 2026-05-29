@@ -1670,6 +1670,10 @@ fn type_ref_contains_name(ty: &TypeRef, name: &str) -> bool {
 }
 
 fn type_root_name(type_name: &str) -> &str {
+    let type_name = type_name
+        .trim()
+        .strip_prefix("fresh ")
+        .unwrap_or(type_name.trim());
     type_name
         .split_once('<')
         .map_or(type_name, |(root, _)| root)

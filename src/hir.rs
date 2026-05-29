@@ -1774,6 +1774,7 @@ fn result_ok_type(type_name: &str) -> Option<String> {
     split_top_level_type_args(inner)
         .into_iter()
         .next()
+        .map(strip_fresh_type)
         .map(str::to_string)
 }
 
@@ -1955,7 +1956,7 @@ fn split_function_name(name: &str) -> (Option<String>, String) {
 }
 
 fn type_ref_name(ty: &TypeRef) -> String {
-    let name = if ty.args.is_empty() {
+    let base = if ty.args.is_empty() {
         ty.name.clone()
     } else {
         let args = ty
@@ -1966,7 +1967,7 @@ fn type_ref_name(ty: &TypeRef) -> String {
             .join(", ");
         format!("{}<{args}>", ty.name)
     };
-    if ty.is_noescape {
+    let name = if ty.is_noescape {
         if ty.name == "Fn" {
             let params = ty
                 .fn_params
@@ -1979,18 +1980,31 @@ fn type_ref_name(ty: &TypeRef) -> String {
                 .as_ref()
                 .map(|return_ty| format!(" -> {}", type_ref_name(return_ty)))
                 .unwrap_or_default();
-            return format!("noescape Fn({params}){return_ty}");
+            format!("noescape Fn({params}){return_ty}")
+        } else {
+            format!("noescape {base}")
         }
-        format!("noescape {name}")
+    } else {
+        base
+    };
+    if ty.is_fresh {
+        format!("fresh {name}")
     } else {
         name
     }
 }
 
 fn type_root_name(type_name: &str) -> &str {
-    type_name
+    strip_fresh_type(type_name)
         .split_once('<')
-        .map_or(type_name, |(root, _)| root)
+        .map_or(strip_fresh_type(type_name), |(root, _)| root)
+}
+
+fn strip_fresh_type(type_name: &str) -> &str {
+    type_name
+        .trim()
+        .strip_prefix("fresh ")
+        .unwrap_or(type_name.trim())
 }
 
 fn record_duplicate_symbol(
@@ -2230,7 +2244,7 @@ fn cache_put(cache: mut Cache, value: read Image) -> Unit
             .expect("builtin signature exists");
         assert_eq!(
             load.return_type.as_deref(),
-            Some("Result<Image, ImageError>")
+            Some("Result<fresh Image, ImageError>")
         );
     }
 

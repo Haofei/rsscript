@@ -229,6 +229,10 @@ impl Parser<'_> {
         let mut returns_fresh = false;
         if self.index < signature_end && self.at_symbol("->") {
             self.index += 1;
+            if self.index < signature_end && self.at_ident("fresh") {
+                returns_fresh = true;
+                self.index += 1;
+            }
             let return_start = self.index;
             while self.index < signature_end && !self.at_ident("effects") && !self.at_symbol("{") {
                 if self.at_ident("fresh") {
@@ -525,6 +529,7 @@ fn parse_params(tokens: &[Token], start: usize, end: usize) -> ParsedParams {
                     name: String::new(),
                     args: Vec::new(),
                     malformed_arg_spans: Vec::new(),
+                    is_fresh: false,
                     is_noescape: false,
                     fn_params: Vec::new(),
                     fn_return: None,
@@ -543,6 +548,7 @@ fn parse_params(tokens: &[Token], start: usize, end: usize) -> ParsedParams {
             name: String::new(),
             args: Vec::new(),
             malformed_arg_spans: Vec::new(),
+            is_fresh: false,
             is_noescape: false,
             fn_params: Vec::new(),
             fn_return: None,
@@ -1513,6 +1519,10 @@ fn parse_call_args(tokens: &[Token], start: usize, end: usize) -> Vec<CallArg> {
 }
 
 fn parse_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<TypeRef> {
+    let is_fresh = tokens
+        .get(start)
+        .and_then(ident_name)
+        .is_some_and(|name| name == "fresh");
     let is_noescape = tokens
         .get(start)
         .and_then(ident_name)
@@ -1578,6 +1588,7 @@ fn parse_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<TypeRef>
         name,
         args,
         malformed_arg_spans,
+        is_fresh,
         is_noescape,
         fn_params,
         fn_return,
@@ -1601,7 +1612,7 @@ fn parse_type_name(tokens: &[Token], start: usize, end: usize) -> Option<(String
 }
 
 fn type_ref_name(ty: &TypeRef) -> String {
-    let name = if ty.args.is_empty() {
+    let base = if ty.args.is_empty() {
         ty.name.clone()
     } else {
         let args = ty
@@ -1612,7 +1623,7 @@ fn type_ref_name(ty: &TypeRef) -> String {
             .join(", ");
         format!("{}<{args}>", ty.name)
     };
-    if ty.is_noescape {
+    let name = if ty.is_noescape {
         if ty.name == "Fn" {
             let params = ty
                 .fn_params
@@ -1625,9 +1636,15 @@ fn type_ref_name(ty: &TypeRef) -> String {
                 .as_ref()
                 .map(|return_ty| format!(" -> {}", type_ref_name(return_ty)))
                 .unwrap_or_default();
-            return format!("noescape Fn({params}){return_ty}");
+            format!("noescape Fn({params}){return_ty}")
+        } else {
+            format!("noescape {base}")
         }
-        format!("noescape {name}")
+    } else {
+        base
+    };
+    if ty.is_fresh {
+        format!("fresh {name}")
     } else {
         name
     }

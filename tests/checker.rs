@@ -8,13 +8,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rsscript::syntax::ast::{EffectDecl, Expr, Item};
 use rsscript::syntax::parse_source;
 use rsscript::{
-    NativeRustDependency, ReviewMapClassification, ReviewMapFileRisk, ReviewRisk, analyze_source,
-    analyze_source_with_core, analyze_source_with_interfaces, check_generated_rust_package,
-    check_package_dir, core_interfaces, diff_package_dirs, diff_package_locks,
-    explain_diagnostic_code, format_diagnostic_explanation, format_diagnostics_json,
-    format_package_lock_toml, format_review_human, format_review_json, format_review_map_human,
-    format_review_map_json, lint_source, lock_package_dir, lower_source_to_rust,
-    lower_source_to_rust_package, lower_source_to_rust_with_map,
+    NativeRustDependency, ReviewMapClassification, ReviewMapFileRisk, ReviewRisk, Severity,
+    analyze_source, analyze_source_with_core, analyze_source_with_interfaces,
+    check_generated_rust_package, check_package_dir, core_interfaces, diff_package_dirs,
+    diff_package_locks, explain_diagnostic_code, format_diagnostic_explanation,
+    format_diagnostics_json, format_package_lock_toml, format_review_human, format_review_json,
+    format_review_map_human, format_review_map_json, lint_source, lock_package_dir,
+    lower_source_to_rust, lower_source_to_rust_package, lower_source_to_rust_with_map,
     lower_sources_to_rust_package_with_options, package_lowering_input, package_metadata,
     package_tree, parse_runtime_diagnostics, publish_package_dry_run, remap_rustc_diagnostic_json,
     remap_rustc_diagnostic_json_lines, review_map_sources, review_package_dir, review_sources,
@@ -1498,6 +1498,98 @@ fn main() -> Unit {
                 && diagnostic.summary
                     == "callback argument `callback` for `apply` returns `Int`, expected `String`."
         }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_noescape_callback_fresh_return_captured_managed_value() {
+    let source = r#"
+struct ImageData {
+    size: Int
+}
+
+fn apply(callback: noescape Fn() -> fresh ImageData) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    let image = ImageData(size: 1)
+    apply(callback: || image)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-fresh-captured-managed.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "callback argument `callback` for `apply` returns non-fresh value `image`, expected `fresh ImageData`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_noescape_callback_result_fresh_payload_captured_managed_value() {
+    let source = r#"
+struct ImageData {
+    size: Int
+}
+
+class BuildProblem {
+    code: Int
+}
+
+fn apply(callback: noescape Fn() -> Result<fresh ImageData, BuildProblem>) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    let image = ImageData(size: 1)
+    apply(callback: || Ok(image))
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-result-fresh-captured-managed.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "callback argument `callback` for `apply` returns non-fresh value `image`, expected `fresh ImageData`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_accepts_noescape_callback_result_fresh_payload_constructor() {
+    let source = r#"
+struct ImageData {
+    size: Int
+}
+
+class BuildProblem {
+    code: Int
+}
+
+fn apply(callback: noescape Fn() -> Result<fresh ImageData, BuildProblem>) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: || Ok(ImageData(size: 1)))
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-result-fresh-constructor.rss", source);
+
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error),
         "{diagnostics:?}"
     );
 }
@@ -7752,6 +7844,56 @@ fn parser_preserves_noescape_function_return_types() {
             .map(|return_ty| return_ty.args.len()),
         Some(2)
     );
+}
+
+#[test]
+fn parser_preserves_noescape_fresh_function_return_types() {
+    let source =
+        r#"fn build(create: noescape Fn() -> Result<fresh DbConnection, DbError>) -> Unit"#;
+    let program = parse_source("fn-fresh-return-type.rssi", source);
+    let function = program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(function) => Some(function),
+            _ => None,
+        })
+        .find(|function| function.name == "build")
+        .expect("function should parse");
+    let create = &function.params[0].ty;
+    let ok_ty = create
+        .fn_return
+        .as_ref()
+        .and_then(|return_ty| return_ty.args.first())
+        .expect("Result ok type should parse");
+
+    assert!(create.is_noescape);
+    assert_eq!(create.name, "Fn");
+    assert_eq!(ok_ty.name, "DbConnection");
+    assert!(ok_ty.is_fresh);
+}
+
+#[test]
+fn parser_keeps_top_level_fresh_as_function_contract() {
+    let source = r#"fn make() -> fresh DbConnection"#;
+    let program = parse_source("top-level-fresh.rssi", source);
+    let function = program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(function) => Some(function),
+            _ => None,
+        })
+        .find(|function| function.name == "make")
+        .expect("function should parse");
+    let return_ty = function
+        .return_ty
+        .as_ref()
+        .expect("return type should parse");
+
+    assert!(function.returns_fresh);
+    assert_eq!(return_ty.name, "DbConnection");
+    assert!(!return_ty.is_fresh);
 }
 
 #[test]

@@ -2467,7 +2467,7 @@ fn type_ref_contains_name(ty: &TypeRef, name: &str) -> bool {
 }
 
 fn type_ref_name(ty: &TypeRef) -> String {
-    let name = if ty.args.is_empty() {
+    let base = if ty.args.is_empty() {
         ty.name.clone()
     } else {
         let args = ty
@@ -2478,7 +2478,7 @@ fn type_ref_name(ty: &TypeRef) -> String {
             .join(", ");
         format!("{}<{args}>", ty.name)
     };
-    if ty.is_noescape {
+    let name = if ty.is_noescape {
         if ty.name == "Fn" {
             let params = ty
                 .fn_params
@@ -2491,9 +2491,15 @@ fn type_ref_name(ty: &TypeRef) -> String {
                 .as_ref()
                 .map(|return_ty| format!(" -> {}", type_ref_name(return_ty)))
                 .unwrap_or_default();
-            return format!("noescape Fn({params}){return_ty}");
+            format!("noescape Fn({params}){return_ty}")
+        } else {
+            format!("noescape {base}")
         }
-        format!("noescape {name}")
+    } else {
+        base
+    };
+    if ty.is_fresh {
+        format!("fresh {name}")
     } else {
         name
     }

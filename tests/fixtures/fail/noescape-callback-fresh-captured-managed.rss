@@ -1,0 +1,15 @@
+// expect: RS0207
+
+struct ImageData {
+    size: Int
+}
+
+fn apply(callback: noescape Fn() -> fresh ImageData) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    let image = ImageData(size: 1)
+    apply(callback: || image)
+    return Unit
+}

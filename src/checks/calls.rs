@@ -922,6 +922,10 @@ fn expected_variant_payload_type(expected_type: &str, variant: &str) -> Option<S
     }
 }
 
+fn fresh_type_target(type_name: &str) -> Option<&str> {
+    type_name.trim().strip_prefix("fresh ").map(str::trim)
+}
+
 fn nested_payload_label(variant: &str) -> &'static str {
     match variant {
         "Ok" => "Ok payload",
@@ -1310,6 +1314,7 @@ fn check_noescape_closure_return_type(
         return true;
     }
     let expected_return = noescape_return_type(expected_type).unwrap_or("Unit");
+    let (local_bindings, managed_bindings) = closure_binding_sets(body);
     let contract = CallbackContract {
         call_name,
         arg_name,
@@ -1317,6 +1322,8 @@ fn check_noescape_closure_return_type(
         generic_params,
         params,
         param_types: &expected_params,
+        local_bindings,
+        managed_bindings,
     };
     let returns = closure_return_sites(body);
     if returns.is_empty() {
@@ -1410,6 +1417,57 @@ struct CallbackContract<'a> {
     generic_params: &'a [String],
     params: &'a [String],
     param_types: &'a [&'a str],
+    local_bindings: HashSet<String>,
+    managed_bindings: HashSet<String>,
+}
+
+fn closure_binding_sets(body: &HirBlock) -> (HashSet<String>, HashSet<String>) {
+    let mut local_bindings = HashSet::new();
+    let mut managed_bindings = HashSet::new();
+    collect_closure_binding_sets(body, &mut local_bindings, &mut managed_bindings);
+    (local_bindings, managed_bindings)
+}
+
+fn collect_closure_binding_sets(
+    block: &HirBlock,
+    local_bindings: &mut HashSet<String>,
+    managed_bindings: &mut HashSet<String>,
+) {
+    for statement in &block.statements {
+        match statement {
+            HirStmt::Let { kind, name, .. } => match kind {
+                HirBindingKind::LocalLet => {
+                    local_bindings.insert(name.clone());
+                }
+                HirBindingKind::ManagedLet | HirBindingKind::Param => {
+                    managed_bindings.insert(name.clone());
+                }
+            },
+            HirStmt::With { body, .. } | HirStmt::Loop { body, .. } => {
+                collect_closure_binding_sets(body, local_bindings, managed_bindings);
+            }
+            HirStmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_closure_binding_sets(then_body, local_bindings, managed_bindings);
+                if let Some(else_body) = else_body {
+                    collect_closure_binding_sets(else_body, local_bindings, managed_bindings);
+                }
+            }
+            HirStmt::Match { arms, .. } => {
+                for arm in arms {
+                    collect_closure_binding_sets(&arm.body, local_bindings, managed_bindings);
+                }
+            }
+            HirStmt::Return { .. }
+            | HirStmt::Expr(_)
+            | HirStmt::Break(_)
+            | HirStmt::Continue(_)
+            | HirStmt::Unknown(_) => {}
+        }
+    }
 }
 
 fn closure_return_sites(body: &HirBlock) -> Vec<ClosureReturn<'_>> {
@@ -1511,6 +1569,9 @@ fn check_callback_return_expr_type(
     if check_callback_variant_return_type(analyzer, expr, contract) {
         return;
     }
+    if check_callback_fresh_return_type(analyzer, expr, contract.expected_return, contract) {
+        return;
+    }
     let Some(actual) = callback_expr_type_name(expr, contract.params, contract.param_types) else {
         return;
     };
@@ -1609,6 +1670,9 @@ fn check_callback_payload_return_type(
         );
         return;
     }
+    if check_callback_fresh_return_type(analyzer, payload, expected, contract) {
+        return;
+    }
     let Some(actual) = callback_expr_type_name(payload, contract.params, contract.param_types)
     else {
         return;
@@ -1622,6 +1686,116 @@ fn check_callback_payload_return_type(
             expected,
             hir_expr_span(payload),
         );
+    }
+}
+
+fn check_callback_fresh_return_type(
+    analyzer: &mut Analyzer<'_>,
+    expr: &HirExpr,
+    expected: &str,
+    contract: &CallbackContract<'_>,
+) -> bool {
+    let Some(target) = fresh_type_target(expected) else {
+        return false;
+    };
+    let Some(actual) = callback_expr_type_name(expr, contract.params, contract.param_types) else {
+        return false;
+    };
+    if !type_pattern_matches(target, &actual, contract.generic_params) {
+        callback_return_type_mismatch_diagnostic(
+            analyzer,
+            contract.call_name,
+            contract.arg_name,
+            &actual,
+            expected,
+            hir_expr_span(expr),
+        );
+        return true;
+    }
+    if callback_expr_is_fresh_value(expr, target, contract) {
+        return true;
+    }
+    if let Some(name) = fresh_return_ident(expr) {
+        callback_fresh_return_not_clean_diagnostic(
+            analyzer,
+            contract.call_name,
+            contract.arg_name,
+            name,
+            expected,
+            hir_expr_span(expr),
+        );
+    } else {
+        callback_fresh_return_unknown_diagnostic(
+            analyzer,
+            contract.call_name,
+            contract.arg_name,
+            expected,
+            hir_expr_span(expr),
+        );
+    }
+    true
+}
+
+fn callback_expr_is_fresh_value(
+    expr: &HirExpr,
+    target: &str,
+    contract: &CallbackContract<'_>,
+) -> bool {
+    match expr {
+        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => {
+            callback_expr_is_fresh_value(value, target, contract)
+        }
+        HirExpr::Ident { name, .. } => {
+            contract.local_bindings.contains(name) && !contract.managed_bindings.contains(name)
+        }
+        HirExpr::Field { base, access, .. } if !access.is_handle && !access.is_weak => {
+            fresh_return_ident(base).is_some_and(|name| {
+                contract.local_bindings.contains(name) && !contract.managed_bindings.contains(name)
+            })
+        }
+        HirExpr::Call {
+            callee,
+            resolution,
+            type_name,
+            ..
+        } => {
+            type_name.as_deref().is_some_and(|actual| {
+                type_pattern_matches(target, actual, contract.generic_params)
+                    && (callee_name(callee) == target
+                        || matches!(resolution, CallResolution::Resolved { signature, .. } if signature.returns_fresh))
+            })
+        }
+        HirExpr::Manage { .. }
+        | HirExpr::Spawn { .. }
+        | HirExpr::Await { .. }
+        | HirExpr::Field { .. }
+        | HirExpr::Index { .. }
+        | HirExpr::Binary { .. }
+        | HirExpr::Closure { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => false,
+    }
+}
+
+fn fresh_return_ident(expr: &HirExpr) -> Option<&str> {
+    match expr {
+        HirExpr::Ident { name, .. } => Some(name),
+        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => fresh_return_ident(value),
+        HirExpr::Field { base, access, .. } if !access.is_handle && !access.is_weak => {
+            fresh_return_ident(base)
+        }
+        HirExpr::Manage { .. }
+        | HirExpr::Spawn { .. }
+        | HirExpr::Await { .. }
+        | HirExpr::Field { .. }
+        | HirExpr::Index { .. }
+        | HirExpr::Call { .. }
+        | HirExpr::Binary { .. }
+        | HirExpr::Closure { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => None,
     }
 }
 
@@ -1911,6 +2085,57 @@ fn callback_return_type_mismatch_diagnostic(
         .with_fix(
             "match_callback_return_type",
             format!("Return a `{expected}` value from this callback."),
+            "manual",
+        ),
+    );
+}
+
+fn callback_fresh_return_not_clean_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    call_name: &str,
+    arg_name: &str,
+    name: &str,
+    expected: &str,
+    span: &Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::ARGUMENT_TYPE_MISMATCH,
+            format!(
+                "callback argument `{arg_name}` for `{call_name}` returns non-fresh value `{name}`, expected `{expected}`."
+            ),
+            span.clone(),
+            "argument type mismatch",
+        )
+        .with_cause("`noescape Fn() -> fresh T` callback returns are fresh contracts and cannot return captured or managed values.")
+        .with_fix(
+            "return_fresh_callback_value",
+            "Return a struct constructor, fresh call, or local value created inside the callback.",
+            "manual",
+        ),
+    );
+}
+
+fn callback_fresh_return_unknown_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    call_name: &str,
+    arg_name: &str,
+    expected: &str,
+    span: &Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::ARGUMENT_TYPE_MISMATCH,
+            format!(
+                "callback argument `{arg_name}` for `{call_name}` returns value whose freshness cannot be proven, expected `{expected}`."
+            ),
+            span.clone(),
+            "argument type mismatch",
+        )
+        .with_cause("`noescape Fn() -> fresh T` callback returns must be proven fresh before Rust lowering.")
+        .with_fix(
+            "return_fresh_callback_value",
+            "Return a struct constructor, fresh call, or local value created inside the callback.",
             "manual",
         ),
     );
@@ -2799,6 +3024,9 @@ fn argument_type_matches(expected: &str, actual: &str) -> bool {
     if expected == actual {
         return true;
     }
+    if strip_fresh_type(expected) == strip_fresh_type(actual) {
+        return true;
+    }
     if actual == "Option<?>" {
         return type_root_name(expected) == "Option";
     }
@@ -2806,6 +3034,13 @@ fn argument_type_matches(expected: &str, actual: &str) -> bool {
         return type_root_name(expected) == "Result";
     }
     false
+}
+
+fn strip_fresh_type(type_name: &str) -> &str {
+    type_name
+        .trim()
+        .strip_prefix("fresh ")
+        .unwrap_or(type_name.trim())
 }
 
 fn is_result_type_name(type_name: &str) -> bool {
@@ -2817,7 +3052,7 @@ fn is_option_type_name(type_name: &str) -> bool {
 }
 
 fn type_ref_name(ty: &TypeRef) -> String {
-    let name = if ty.args.is_empty() {
+    let base = if ty.args.is_empty() {
         ty.name.clone()
     } else {
         format!(
@@ -2830,19 +3065,28 @@ fn type_ref_name(ty: &TypeRef) -> String {
                 .join(", ")
         )
     };
-    if ty.is_noescape && ty.name == "Fn" {
-        let params = ty
-            .fn_params
-            .iter()
-            .map(type_ref_name)
-            .collect::<Vec<_>>()
-            .join(", ");
-        let return_ty = ty
-            .fn_return
-            .as_ref()
-            .map(|return_ty| format!(" -> {}", type_ref_name(return_ty)))
-            .unwrap_or_default();
-        format!("noescape Fn({params}){return_ty}")
+    let name = if ty.is_noescape {
+        if ty.name == "Fn" {
+            let params = ty
+                .fn_params
+                .iter()
+                .map(type_ref_name)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let return_ty = ty
+                .fn_return
+                .as_ref()
+                .map(|return_ty| format!(" -> {}", type_ref_name(return_ty)))
+                .unwrap_or_default();
+            format!("noescape Fn({params}){return_ty}")
+        } else {
+            format!("noescape {base}")
+        }
+    } else {
+        base
+    };
+    if ty.is_fresh {
+        format!("fresh {name}")
     } else {
         name
     }
@@ -2911,6 +3155,10 @@ fn split_top_level_type_args(args: &str) -> Vec<&str> {
 }
 
 fn type_root_name(type_name: &str) -> &str {
+    let type_name = type_name
+        .trim()
+        .strip_prefix("fresh ")
+        .unwrap_or(type_name.trim());
     type_name
         .split_once('<')
         .map_or(type_name, |(root, _)| root)
