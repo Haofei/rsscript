@@ -4625,11 +4625,7 @@ fn modified_interface_change_risk(
     new_sources: &[PackageSource],
     findings: &[ReviewFinding],
 ) -> PackageRisk {
-    interface_change_risk(findings).max(added_contracts_in_modified_interface_risk(
-        old,
-        new,
-        new_sources,
-    ))
+    interface_change_risk(findings).max(modified_contracts_in_interface_risk(old, new, new_sources))
 }
 
 fn added_interface_change_risk(new_sources: &[PackageSource], file: &str) -> PackageRisk {
@@ -4685,7 +4681,7 @@ fn added_interface_change_risk(new_sources: &[PackageSource], file: &str) -> Pac
     }
 }
 
-fn added_contracts_in_modified_interface_risk(
+fn modified_contracts_in_interface_risk(
     old: &PackageSource,
     new: &PackageSource,
     new_sources: &[PackageSource],
@@ -4694,43 +4690,81 @@ fn added_contracts_in_modified_interface_risk(
     let new_type_contracts = package_type_contracts_for_source(new);
     let old_function_contracts = package_function_contracts_for_source(old);
     let new_function_contracts = package_function_contracts_for_source(new);
-    let resource_types =
+    let mut resource_types =
         collect_package_type_contracts(new_sources, PackageReviewFileKind::Interface)
             .values()
             .filter(|contract| contract.kind == TypeKind::Resource)
             .map(|contract| contract.name.clone())
             .collect::<BTreeSet<_>>();
+    resource_types.extend(
+        old_type_contracts
+            .values()
+            .filter(|contract| contract.kind == TypeKind::Resource)
+            .map(|contract| contract.name.clone()),
+    );
     let resource_type_refs = resource_types
         .iter()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
-    let mut saw_added_contract = false;
+    let mut risk = PackageRisk::Low;
+
+    for name in old_type_contracts.keys() {
+        if !new_type_contracts.contains_key(name) {
+            return PackageRisk::High;
+        }
+    }
+
+    for name in old_function_contracts.keys() {
+        if !new_function_contracts.contains_key(name) {
+            return PackageRisk::High;
+        }
+    }
 
     for (name, contract) in &new_type_contracts {
-        if old_type_contracts.contains_key(name) {
-            continue;
-        }
-        saw_added_contract = true;
-        if package_added_type_contract_is_high_risk(contract) {
-            return PackageRisk::High;
+        match old_type_contracts.get(name) {
+            Some(old_contract) => {
+                if package_type_contracts_match(old_contract, contract) {
+                    continue;
+                }
+                if package_type_contract_boundary_changed(old_contract, contract) {
+                    return PackageRisk::High;
+                }
+                risk = risk.max(PackageRisk::High);
+            }
+            None => {
+                if package_added_type_contract_is_high_risk(contract) {
+                    return PackageRisk::High;
+                }
+                risk = risk.max(PackageRisk::Elevated);
+            }
         }
     }
 
     for (name, contract) in &new_function_contracts {
-        if old_function_contracts.contains_key(name) {
-            continue;
-        }
-        saw_added_contract = true;
-        if package_added_function_contract_is_high_risk(contract, &resource_type_refs) {
-            return PackageRisk::High;
+        match old_function_contracts.get(name) {
+            Some(old_contract) => {
+                if package_function_contracts_match(old_contract, contract) {
+                    continue;
+                }
+                if package_function_contract_boundary_changed(
+                    old_contract,
+                    contract,
+                    &resource_type_refs,
+                ) {
+                    return PackageRisk::High;
+                }
+                risk = risk.max(PackageRisk::Elevated);
+            }
+            None => {
+                if package_added_function_contract_is_high_risk(contract, &resource_type_refs) {
+                    return PackageRisk::High;
+                }
+                risk = risk.max(PackageRisk::Elevated);
+            }
         }
     }
 
-    if saw_added_contract {
-        PackageRisk::Elevated
-    } else {
-        PackageRisk::Low
-    }
+    risk
 }
 
 fn package_type_contracts_for_source(
@@ -4771,6 +4805,17 @@ fn package_added_type_contract_is_high_risk(contract: &PackageTypeContract) -> b
             .any(|field| field.is_handle || field.is_weak)
 }
 
+fn package_type_contract_boundary_changed(
+    old: &PackageTypeContract,
+    new: &PackageTypeContract,
+) -> bool {
+    old.kind != new.kind
+        || old.fields.iter().zip(new.fields.iter()).any(|(old, new)| {
+            old.name != new.name || old.is_handle != new.is_handle || old.is_weak != new.is_weak
+        })
+        || old.fields.len() != new.fields.len()
+}
+
 fn package_added_function_contract_is_high_risk(
     contract: &PackageFunctionContract,
     resource_types: &BTreeSet<&str>,
@@ -4783,6 +4828,40 @@ fn package_added_function_contract_is_high_risk(
             effect.starts_with("retains(") || matches!(effect.as_str(), "native" | "unsafe")
         })
         || package_contract_has_resource_boundary(contract, resource_types)
+}
+
+fn package_function_contract_boundary_changed(
+    old: &PackageFunctionContract,
+    new: &PackageFunctionContract,
+    resource_types: &BTreeSet<&str>,
+) -> bool {
+    function_contract_adds_mut_or_take_effect(old, new)
+        || function_contract_resource_boundary_changed(old, new, resource_types)
+}
+
+fn function_contract_adds_mut_or_take_effect(
+    old: &PackageFunctionContract,
+    new: &PackageFunctionContract,
+) -> bool {
+    old.params
+        .iter()
+        .zip(new.params.iter())
+        .any(|(old, new)| old.effect != new.effect && matches!(new.effect, Some("mut" | "take")))
+        || new.params.len() > old.params.len()
+            && new
+                .params
+                .iter()
+                .skip(old.params.len())
+                .any(|param| matches!(param.effect, Some("mut" | "take")))
+}
+
+fn function_contract_resource_boundary_changed(
+    old: &PackageFunctionContract,
+    new: &PackageFunctionContract,
+    resource_types: &BTreeSet<&str>,
+) -> bool {
+    package_contract_has_resource_boundary(old, resource_types)
+        != package_contract_has_resource_boundary(new, resource_types)
 }
 
 fn manifest_change(
