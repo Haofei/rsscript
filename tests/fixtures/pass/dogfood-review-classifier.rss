@@ -427,10 +427,29 @@ fn dogfood_shape_is_expected() -> Bool {
     return unknown_percent == 0
 }
 
+fn dogfood_summary_line(summary: read ReviewSummary) -> fresh String {
+    let total = String.from_int(value: summary.total_functions)
+    let must = String.from_int(value: summary.must_review_functions)
+    let low = String.from_int(value: summary.low_risk_functions)
+    let unknown = String.from_int(value: summary.unknown_functions)
+    let lines = String.from_int(value: summary.suggested_lines)
+    let first = String.concat(left: read "dogfood review summary total=", right: read total)
+    let second = String.concat(left: read first, right: read " must=")
+    let third = String.concat(left: read second, right: read must)
+    let fourth = String.concat(left: read third, right: read " low=")
+    let fifth = String.concat(left: read fourth, right: read low)
+    let sixth = String.concat(left: read fifth, right: read " unknown=")
+    let seventh = String.concat(left: read sixth, right: read unknown)
+    let eighth = String.concat(left: read seventh, right: read " lines=")
+
+    return String.concat(left: read eighth, right: read lines)
+}
+
 pub fn main() -> Unit {
     let summary = dogfood_sample_summary()
     let unknown_region = make_unknown_region(lines: 7)
     let unknown_decision = classify_function(facts: read unknown_region)
+    let summary_line = dogfood_summary_line(summary: read summary)
 
     Assert.equal_int(left: summary.total_functions, right: 4)
     Assert.equal_int(left: summary.must_review_functions, right: 3)
@@ -438,7 +457,12 @@ pub fn main() -> Unit {
     Assert.equal_int(left: summary.unknown_functions, right: 0)
     Assert.equal_int(left: summary.suggested_lines, right: 50)
     Assert.equal_int(left: unknown_decision.classification, right: ReviewClass.unknown())
+    Assert.equal(
+        left: read summary_line,
+        right: read "dogfood review summary total=4 must=3 low=1 unknown=0 lines=50",
+    )
     Assert.equal_bool(left: dogfood_shape_is_expected(), right: true)
+    Log.write(message: read summary_line)
 
     return Unit
 }

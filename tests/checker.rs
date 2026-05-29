@@ -1336,7 +1336,11 @@ fn rust_lowering_maps_string_concat_to_rust_std_expression() {
     let source = r#"
 fn main() -> Unit {
     let message = String.concat(left: read "hello ", right: read "world")
+    let count = String.from_int(value: 42)
+    let ok = String.from_bool(value: true)
     Log.write(message: read message)
+    Log.write(message: read count)
+    Log.write(message: read ok)
     return Unit
 }
 "#;
@@ -1345,6 +1349,8 @@ fn main() -> Unit {
     assert!(rust.contains(
         "let message = format!(\"{}{}\", &\"hello \".to_string(), &\"world\".to_string());"
     ));
+    assert!(rust.contains("let count = rsscript_runtime::string_from_int(42);"));
+    assert!(rust.contains("let ok = rsscript_runtime::string_from_bool(true);"));
     assert!(rust.contains("rsscript_runtime::log_write(&message);"));
 }
 
@@ -4152,18 +4158,18 @@ fn review_map_dogfood_classifier_has_no_unknown_regions() {
     let source = read_fixture(path);
     let map = review_map_sources(vec![(path.to_str().unwrap(), source.as_str())]);
 
-    assert_eq!(map.summary.total_functions, 30);
-    assert!(map.summary.total_lines >= 400, "{map:?}");
+    assert_eq!(map.summary.total_functions, 31);
+    assert!(map.summary.total_lines >= 430, "{map:?}");
     assert_eq!(map.files[0].risk, ReviewMapFileRisk::Elevated);
     assert_eq!(map.summary.unknown.functions, 0, "{map:?}");
     assert_eq!(map.summary.unknown.lines, 0, "{map:?}");
-    assert!(map.summary.review_required.functions >= 18, "{map:?}");
+    assert!(map.summary.review_required.functions >= 19, "{map:?}");
 
     let json: Value =
         serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
     assert_eq!(json["summary"]["unknown_ratio"], 0.0);
     assert_eq!(json["summary"]["unknown_function_ratio"], 0.0);
-    assert_eq!(json["summary"]["must_review"]["functions"], 18);
+    assert_eq!(json["summary"]["must_review"]["functions"], 19);
     assert_eq!(json["summary"]["low_semantic_risk"]["functions"], 12);
 }
 
@@ -4228,7 +4234,10 @@ fn rss_run_accepts_dogfood_classifier() {
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stdout.trim().is_empty(), "{stdout}");
+    assert_eq!(
+        stdout.trim(),
+        "dogfood review summary total=4 must=3 low=1 unknown=0 lines=50"
+    );
     assert!(stderr.trim().is_empty(), "{stderr}");
 }
 

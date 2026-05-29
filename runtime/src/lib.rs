@@ -1055,6 +1055,14 @@ pub fn log_write(message: &str) {
     println!("{message}");
 }
 
+pub fn string_from_int(value: i64) -> String {
+    value.to_string()
+}
+
+pub fn string_from_bool(value: bool) -> String {
+    value.to_string()
+}
+
 pub fn assert_equal(left: &str, right: &str) {
     assert_eq!(left, right);
 }

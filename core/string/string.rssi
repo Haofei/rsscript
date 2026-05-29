@@ -1,1 +1,5 @@
 pub fn String.concat(left: read String, right: read String) -> fresh String
+
+pub fn String.from_int(value: Int) -> fresh String
+
+pub fn String.from_bool(value: Bool) -> fresh String

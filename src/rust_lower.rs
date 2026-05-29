@@ -1759,6 +1759,12 @@ fn lower_callee(callee: &Callee) -> String {
         callee if is_list_len_callee(callee) => "rsscript_runtime::list_len".to_string(),
         callee if is_list_get_callee(callee) => "rsscript_runtime::list_get".to_string(),
         callee if is_list_consume_callee(callee) => "rsscript_runtime::list_consume".to_string(),
+        callee if is_string_from_int_callee(callee) => {
+            "rsscript_runtime::string_from_int".to_string()
+        }
+        callee if is_string_from_bool_callee(callee) => {
+            "rsscript_runtime::string_from_bool".to_string()
+        }
         callee if is_buffer_new_callee(callee) => "rsscript_runtime::buffer_new".to_string(),
         callee if is_buffer_clear_callee(callee) => "rsscript_runtime::buffer_clear".to_string(),
         callee if is_buffer_consume_callee(callee) => {
@@ -1956,6 +1962,14 @@ fn is_cache_get_callee(callee: &Callee) -> bool {
 
 fn is_string_concat_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "String" && name == "concat")
+}
+
+fn is_string_from_int_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "String" && name == "from_int")
+}
+
+fn is_string_from_bool_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "String" && name == "from_bool")
 }
 
 fn is_file_open_callee(callee: &Callee) -> bool {
