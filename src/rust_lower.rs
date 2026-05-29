@@ -470,7 +470,10 @@ impl<'a> RustLowerer<'a> {
         for (index, item) in self.program.items.iter().enumerate() {
             match item {
                 Item::Type(ty) => self.lower_type_decl(ty, &mut out),
-                Item::Function(function) => self.lower_function(function, &mut out),
+                Item::Function(function) if !function.body.statements.is_empty() => {
+                    self.lower_function(function, &mut out)
+                }
+                Item::Function(_) => {}
             }
             if index + 1 < self.program.items.len() {
                 out.push('\n');
@@ -607,14 +610,7 @@ impl<'a> RustLowerer<'a> {
                 "    // RSScript native/unsafe boundary: review before binding implementation.\n",
             );
         }
-        if function.body.statements.is_empty() {
-            for param in &function.params {
-                out.push_str(&format!("    let _ = &{};\n", rust_ident(&param.name)));
-            }
-            out.push_str("    panic!(\"RSScript declaration has no generated implementation\");\n");
-        } else {
-            self.lower_block(&function.body, out, 1);
-        }
+        self.lower_block(&function.body, out, 1);
         out.push_str("}\n");
         self.param_effects = previous_param_effects;
         self.value_types = previous_value_types;

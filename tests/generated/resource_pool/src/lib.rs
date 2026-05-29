@@ -15,8 +15,3 @@ impl Drop for DbConnection {
         // RSScript resource drop body is lowered by the runtime-aware pass.
     }
 }
-
-pub fn pooled(pool: &mut rsscript_runtime::ResourcePool<DbConnection>) {
-    let _ = &pool;
-    todo!("RSScript interface function");
-}

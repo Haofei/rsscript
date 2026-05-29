@@ -12,8 +12,8 @@ fn read_value(counter: &Counter) -> i64 {
 }
 
 fn touch(counter: &mut Counter) {
-    let _ = &counter;
-    todo!("RSScript interface function");
+    counter.value = counter.value + 1;
+    return ();
 }
 
 pub fn run() -> i64 {

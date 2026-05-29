@@ -18,8 +18,8 @@ fn maybe_point(x: i64, y: i64) -> Result<Point, BuildError> {
 }
 
 fn shift(point: &mut Point) {
-    let _ = &point;
-    todo!("RSScript interface function");
+    point.x = point.x + 1;
+    return ();
 }
 
 pub fn use_try(x: i64, y: i64) -> Result<Point, BuildError> {

@@ -179,6 +179,23 @@ fn examples_have_no_diagnostics_and_lower_to_runnable_packages() {
 }
 
 #[test]
+fn checked_in_generated_fixtures_have_no_executable_fallbacks() {
+    for path in recursive_paths_with_extension("tests/generated", "rs") {
+        let source = read_fixture(&path);
+        assert!(
+            !source.contains("todo!"),
+            "{} should not contain generated todo! fallbacks",
+            path.display()
+        );
+        assert!(
+            !source.contains("RSScript declaration has no generated implementation"),
+            "{} should not contain declaration panic fallbacks",
+            path.display()
+        );
+    }
+}
+
+#[test]
 fn bundled_core_interfaces_are_available_to_checker() {
     assert!(
         core_interfaces()
@@ -2316,8 +2333,8 @@ fn pooled(pool: mut ResourcePool<TestConnection>) -> Unit
     assert!(rust.contains("impl rsscript_runtime::Resource for TestConnection"));
     assert!(rust.contains("impl Drop for TestConnection"));
     assert!(rust.contains("rsscript_runtime::os_close(self.fd);"));
-    assert!(rust.contains("pool: &mut rsscript_runtime::ResourcePool<TestConnection>"));
-    assert!(rust.contains("let _ = &pool;"));
+    assert!(!rust.contains("pub fn pooled"));
+    assert!(!rust.contains("RSScript declaration has no generated implementation"));
     assert!(!rust.contains("todo!"));
 }
 
@@ -2587,7 +2604,9 @@ class User {
     id: Int
 }
 
-fn touch(user: mut User) -> Unit
+fn touch(user: mut User) -> Unit {
+    return Unit
+}
 
 fn call(user: mut User) -> Unit {
     touch(user: mut user)
@@ -2665,7 +2684,9 @@ fn read_value(counter: read Meter) -> Int {
     return counter.value
 }
 
-fn touch(counter: mut Meter) -> Unit
+fn touch(counter: mut Meter) -> Unit {
+    return Unit
+}
 
 pub fn run() -> Int {
     local counter = Meter(value: 1)
@@ -10678,6 +10699,30 @@ fn recursive_fixture_paths(directory: &str) -> Vec<PathBuf> {
     collect_fixture_paths(Path::new(directory), &mut paths);
     paths.sort();
     paths
+}
+
+fn recursive_paths_with_extension(directory: &str, extension: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    collect_paths_with_extension(Path::new(directory), extension, &mut paths);
+    paths.sort();
+    paths
+}
+
+fn collect_paths_with_extension(directory: &Path, extension: &str, paths: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(directory)
+        .unwrap_or_else(|error| panic!("failed to read {directory:?}: {error}"))
+    {
+        let path = entry.expect("fixture entry should be readable").path();
+        if path.is_dir() {
+            collect_paths_with_extension(&path, extension, paths);
+        } else if path
+            .extension()
+            .and_then(|path_extension| path_extension.to_str())
+            == Some(extension)
+        {
+            paths.push(path);
+        }
+    }
 }
 
 fn collect_fixture_paths(directory: &Path, paths: &mut Vec<PathBuf>) {
