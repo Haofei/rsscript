@@ -1973,6 +1973,77 @@ runtime type surface
 
 Do not implement lowering before defining the runtime target surface. Do not defer source mapping until after lowering.
 
+### 20.1 Post-v0.5 design directions
+
+These directions are not part of the v0.5 executable MVP. They are recorded
+because they have high future value and are consistent with RSScript's
+review-first, no-hidden-machinery model. Several are influenced by Dart, which
+demonstrates that an ergonomic managed application surface can be built without
+exposing low-level execution machinery to users.
+
+The single-isolate runtime model with non-`Send` managed handles (Chapter 4 and
+section 3.2) is the enabling decision for the async and concurrency directions
+below: because managed values never move across threads, future tasks never move
+across threads either, so RSScript can expose ergonomic async boundaries without
+Rust's `Pin`/`Poll`/`Waker` machinery leaking into source.
+
+```text
+A. Ergonomic async surface (executable async milestone)
+   - Async operation/task handles, if exposed, are isolate-local managed handles,
+     not a user-facing Future/Pin/Poll type system.
+   - await and a stream / "await for" async-sequence form.
+   - single-threaded cooperative executor per isolate.
+   - read/mut guards must not be held across await (section 10.2 becomes a
+     checker rule when async lowering lands).
+   - must not expose Future / Pin / Poll / Waker to RSScript users (section 14.4).
+
+B. Cross-isolate message API with zero-copy transfer
+   - explicit typed send/receive channels between isolates.
+   - cross-isolate payloads are owned/Copy data or values moved with take.
+   - take-based move across an isolate boundary is the no-shared-alias transfer
+     path; implementations may make it zero-copy when representation permits.
+     Single ownership is enforced statically rather than by runtime convention.
+   - managed handles never cross isolates; only explicit messages do.
+
+C. Two-tier execution: dev interpreter + Rust-lowering AOT
+   - a HIR-level interpreter for the managed subset for a fast edit-run loop,
+     since rustc compilation cost is poor for inner-loop iteration.
+   - the Rust-lowering path remains the production/AOT target.
+   - both paths must observe identical RSScript semantics and diagnostics.
+
+D. Structured-fix tooling and analysis server
+   - an `rss fix` command applying machine-applicable structured fixes
+     (section 17.2 already carries fix applicability).
+   - a language/analysis server streaming structured diagnostics and fixes,
+     serving both human editors and AI repair agents as first-class consumers.
+
+E. User-defined sum types via sealed types + exhaustive match
+   - when user-defined variant types are added beyond Option/Result, model them
+     on sealed type hierarchies with exhaustive match, not Rust enums with
+     lifetime/generic complexity.
+   - exhaustiveness is a review property and must be checked before lowering,
+     consistent with current Option/Result match exhaustiveness.
+
+F. Registry-level review-risk badges
+   - the package registry should surface review-risk signals as first-class
+     quality badges: native, unsafe, unknown, mutating/retaining ratios.
+   - this reuses the package review metadata already produced by package tooling
+     (section 18.3) rather than inventing a separate scoring system.
+```
+
+Explicitly rejected influences. The following Dart-style conveniences conflict
+with RSScript's review-first and no-hidden-behavior principles (Chapter 2) and
+must not be adopted:
+
+```text
+cascade operator (..)        hides repeated receiver mutation; RSScript requires
+                             visible mut at each call
+extension methods /          conflicts with explicit Type.method(self: ...) calls
+implicit method resolution   and no auto method resolution
+positional records /         conflicts with named-everything canonical style;
+implicit flow promotion       any record-like form must use named fields
+```
+
 ---
 
 ## 21. Non-goals
