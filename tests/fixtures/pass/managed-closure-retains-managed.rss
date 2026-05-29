@@ -1,0 +1,9 @@
+struct Image
+
+fn retain_callback(image: read Image) -> Unit {
+    let callback = || {
+        Image.inspect(image: read image)
+    }
+
+    return Unit
+}
