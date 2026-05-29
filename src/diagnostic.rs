@@ -37,6 +37,7 @@ pub mod code {
     pub const ARGUMENT_TYPE_MISMATCH: &str = "RS0207";
     pub const RETURN_TYPE_MISMATCH: &str = "RS0208";
     pub const CONTROL_FLOW_TYPE_MISMATCH: &str = "RS0209";
+    pub const OPERATOR_TYPE_MISMATCH: &str = "RS0210";
     pub const MANAGED_TO_LOCAL: &str = "RS0301";
     pub const FIELD_PARTIAL_ACCESS_CONFLICT: &str = "RS0302";
     pub const FIELD_PREFIX_CONFLICT: &str = "RS0303";
@@ -433,6 +434,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::CONTROL_FLOW_TYPE_MISMATCH,
         title: "control-flow type mismatch",
         explanation: "`if` and `while` conditions must be `Bool`, and v0.5 `match` scrutinees must be `Option<T>` or `Result<T, E>` before Rust lowering.",
+    },
+    DiagnosticExplanation {
+        code: code::OPERATOR_TYPE_MISMATCH,
+        title: "operator type mismatch",
+        explanation: "Built-in comparison and logical operators have fixed operand types. Equality requires matching known operand types, ordering requires numeric operands, and logical operators require Bool operands.",
     },
     DiagnosticExplanation {
         code: code::MANAGED_TO_LOCAL,

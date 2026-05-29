@@ -580,6 +580,12 @@ match (statement form, over Option/Result variants)
 `if` and `while` conditions must have type `Bool`. RSScript has no truthy or
 falsey coercions for strings, numbers, handles, resources, or containers.
 
+Built-in operators have fixed operand types. Arithmetic operators require
+numeric operands. Equality operators require matching known operand types.
+Ordering operators require numeric operands. Logical `&&` and `||` require
+`Bool` operands. RSScript has no implicit conversion or user-defined operator
+overload resolution.
+
 RSScript v0.5 has **no assignment statement** other than these initialization
 bindings: there is no `x = y`, `obj.field = y`, or `list[i] = y`. All mutation is
 expressed through explicit `mut` API calls (`Map.insert(map: mut m, ...)`), so
@@ -2590,6 +2596,7 @@ missing read/mut/take effect
 call argument type mismatch
 return type mismatch
 control-flow type mismatch
+operator type mismatch
 same-call place conflict
 constructor/variant call-like conflict
 handle-field same-call conflict

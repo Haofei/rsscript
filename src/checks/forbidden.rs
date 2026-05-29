@@ -213,6 +213,7 @@ fn check_operator_overload_attempts_in_expr(analyzer: &mut Analyzer<'_>, expr: &
                     ),
                 );
             }
+            check_builtin_operator_operand_types(analyzer, *op, left, right, span);
         }
         HirExpr::Field { base, .. } => check_operator_overload_attempts_in_expr(analyzer, base),
         HirExpr::Index { base, index, .. } => {
@@ -237,6 +238,115 @@ fn check_operator_overload_attempts_in_expr(analyzer: &mut Analyzer<'_>, expr: &
     }
 }
 
+fn check_builtin_operator_operand_types(
+    analyzer: &mut Analyzer<'_>,
+    op: BinaryOp,
+    left: &HirExpr,
+    right: &HirExpr,
+    span: &crate::diagnostic::Span,
+) {
+    match op {
+        BinaryOp::Equal | BinaryOp::NotEqual => {
+            let (Some(left_type), Some(right_type)) = (
+                inferred_operand_type(analyzer, left).map(str::to_string),
+                inferred_operand_type(analyzer, right).map(str::to_string),
+            ) else {
+                return;
+            };
+            if type_root_name(&left_type) != type_root_name(&right_type) {
+                operator_type_mismatch_diagnostic(
+                    analyzer,
+                    span.clone(),
+                    operator_label(op),
+                    &left_type,
+                    &right_type,
+                    "matching operand types",
+                );
+            }
+        }
+        BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => {
+            let (Some(left_type), Some(right_type)) = (
+                inferred_operand_type(analyzer, left).map(str::to_string),
+                inferred_operand_type(analyzer, right).map(str::to_string),
+            ) else {
+                return;
+            };
+            if !is_numeric_type(&left_type) || !is_numeric_type(&right_type) {
+                operator_type_mismatch_diagnostic(
+                    analyzer,
+                    span.clone(),
+                    operator_label(op),
+                    &left_type,
+                    &right_type,
+                    "numeric operands",
+                );
+            }
+        }
+        BinaryOp::LogicalAnd | BinaryOp::LogicalOr => {
+            let (Some(left_type), Some(right_type)) = (
+                inferred_operand_type(analyzer, left).map(str::to_string),
+                inferred_operand_type(analyzer, right).map(str::to_string),
+            ) else {
+                return;
+            };
+            if type_root_name(&left_type) != "Bool" || type_root_name(&right_type) != "Bool" {
+                operator_type_mismatch_diagnostic(
+                    analyzer,
+                    span.clone(),
+                    operator_label(op),
+                    &left_type,
+                    &right_type,
+                    "Bool operands",
+                );
+            }
+        }
+        BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide => {}
+    }
+}
+
+fn operator_type_mismatch_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    span: crate::diagnostic::Span,
+    operator: &str,
+    left_type: &str,
+    right_type: &str,
+    expected: &str,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::OPERATOR_TYPE_MISMATCH,
+            format!(
+                "operator `{operator}` has operands `{left_type}` and `{right_type}`, expected {expected}."
+            ),
+            span,
+            "operator type mismatch",
+        )
+        .with_cause("RSScript operators have fixed built-in operand types and do not use implicit conversion or overload resolution.")
+        .with_fix(
+            "use_typed_operator_operands",
+            "Compare values of the same supported type, or call an explicit named conversion/function first.",
+            "manual",
+        ),
+    );
+}
+
+fn operator_label(op: BinaryOp) -> &'static str {
+    match op {
+        BinaryOp::Add => "+",
+        BinaryOp::Subtract => "-",
+        BinaryOp::Multiply => "*",
+        BinaryOp::Divide => "/",
+        BinaryOp::Equal => "==",
+        BinaryOp::NotEqual => "!=",
+        BinaryOp::Less => "<",
+        BinaryOp::LessEqual => "<=",
+        BinaryOp::Greater => ">",
+        BinaryOp::GreaterEqual => ">=",
+        BinaryOp::LogicalAnd => "&&",
+        BinaryOp::LogicalOr => "||",
+    }
+}
+
 fn arithmetic_operator(op: BinaryOp) -> bool {
     matches!(
         op,
@@ -252,12 +362,15 @@ fn inferred_operand_type<'a>(analyzer: &'a Analyzer<'_>, expr: &'a HirExpr) -> O
     match expr {
         HirExpr::Ident {
             name, type_name, ..
-        } => type_name.as_deref().or_else(|| {
-            analyzer
-                .hir
-                .type_info(name)
-                .map(|type_info| type_info.name.as_str())
-        }),
+        } => type_name
+            .as_deref()
+            .or_else(|| builtin_value_type_name(name))
+            .or_else(|| {
+                analyzer
+                    .hir
+                    .type_info(name)
+                    .map(|type_info| type_info.name.as_str())
+            }),
         HirExpr::Number { .. } => Some("Int"),
         HirExpr::String { .. } => Some("String"),
         HirExpr::Call { type_name, .. }
@@ -271,6 +384,15 @@ fn inferred_operand_type<'a>(analyzer: &'a Analyzer<'_>, expr: &'a HirExpr) -> O
         | HirExpr::Index { .. }
         | HirExpr::Closure { .. }
         | HirExpr::Unknown(_) => None,
+    }
+}
+
+fn builtin_value_type_name(name: &str) -> Option<&'static str> {
+    match name {
+        "true" | "false" => Some("Bool"),
+        "Unit" => Some("Unit"),
+        "None" => Some("Option<?>"),
+        _ => None,
     }
 }
 

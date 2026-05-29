@@ -30,6 +30,7 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
     ("call argument type mismatch", "RS0207"),
     ("return type mismatch", "RS0208"),
     ("control-flow type mismatch", "RS0209"),
+    ("operator type mismatch", "RS0210"),
     ("same-call place conflict", "RS0302"),
     ("constructor/variant call-like conflict", "RS0203"),
     ("handle-field same-call conflict", "RS0303"),
@@ -694,6 +695,7 @@ fn diagnostic_explanations_are_available_by_code() {
     let return_mismatch = explain_diagnostic_code("RS0208").expect("RS0208 should be registered");
     let control_flow_mismatch =
         explain_diagnostic_code("RS0209").expect("RS0209 should be registered");
+    let operator_mismatch = explain_diagnostic_code("RS0210").expect("RS0210 should be registered");
 
     assert_eq!(explanation.title, "use after manage");
     assert!(formatted.contains("RS0401"));
@@ -719,6 +721,8 @@ fn diagnostic_explanations_are_available_by_code() {
             .explanation
             .contains("conditions must be `Bool`")
     );
+    assert_eq!(operator_mismatch.title, "operator type mismatch");
+    assert!(operator_mismatch.explanation.contains("Equality requires"));
     assert_eq!(
         pool_contract.title,
         "ResourcePool factory contract violation"
@@ -1058,6 +1062,93 @@ fn main() -> Unit {
         diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == "RS0209"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_mixed_equality_operand_types_before_backend_lowering() {
+    let source = r#"
+fn main() -> Unit {
+    if 1 == "1" {
+        return Unit
+    }
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("operator-equality-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0210"
+                && diagnostic.summary
+                    == "operator `==` has operands `Int` and `String`, expected matching operand types."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn rust_lowering_rejects_mixed_equality_operand_types_before_rustc() {
+    let source = r#"
+fn main() -> Unit {
+    if 1 == "1" {
+        return Unit
+    }
+    return Unit
+}
+"#;
+    let diagnostics = lower_source_to_rust("operator-equality-type.rss", source)
+        .expect_err("operator type mismatch should fail before Rust generation");
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0210"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_ordering_operand_types_before_backend_lowering() {
+    let source = r#"
+fn main() -> Unit {
+    if "a" > 1 {
+        return Unit
+    }
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("operator-ordering-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0210"
+                && diagnostic.summary
+                    == "operator `>` has operands `String` and `Int`, expected numeric operands."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_logical_operand_types_before_backend_lowering() {
+    let source = r#"
+fn main() -> Unit {
+    if true && "yes" {
+        return Unit
+    }
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("operator-logical-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0210"
+                && diagnostic.summary
+                    == "operator `&&` has operands `Bool` and `String`, expected Bool operands."
+        }),
         "{diagnostics:?}"
     );
 }

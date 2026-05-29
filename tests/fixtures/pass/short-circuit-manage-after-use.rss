@@ -5,8 +5,9 @@ struct Image {
 }
 
 fn Image.load(path: read Path) -> fresh Image
+fn Image.ready(image: read Image) -> Bool
 
 fn ok_short_circuit(path: read Path) -> Unit {
     local image = Image.load(path: read path)
-    let ok = image && manage image
+    let ok = Image.ready(image: read image) && Image.ready(image: read (manage image))
 }
