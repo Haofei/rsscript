@@ -1,8 +1,5 @@
-# RSScript (Reviewable System Script) Language Specification v0.5 — Reorganized Draft
+# RSScript (Reviewable System Script) Language Specification v0.5
 
-Status: Draft / editorial consolidation candidate
-Version: 0.5.1-editorial
-Based on: RSScript v0.5 draft
 Audience: language designers, compiler implementers, standard-library authors, review-tool authors
 Architecture note: v0.5 uses **RSScript frontend -> Rust source lowering -> rustc backend**.
 
@@ -570,7 +567,12 @@ continue
 match (statement form, over Option/Result variants)
 ```
 
-### Postfix `?`
+RSScript v0.5 has **no assignment statement** other than these initialization
+bindings: there is no `x = y`, `obj.field = y`, or `list[i] = y`. All mutation is
+expressed through explicit `mut` API calls (`Map.insert(map: mut m, ...)`), so
+mutation always participates in call-like effect, conflict-root, and resource
+checking. If assignment is added later it must itself become a call-like,
+effect-checked construct; v0.5 deliberately omits it.
 
 `?` is the failure-propagation operator.
 
@@ -611,11 +613,27 @@ v0.5 surface.
 `?` is the only implicit control transfer in RSScript, and it is visible in the
 source as the `?` token.
 
-*Implementation note (non-normative): full operand/return error-type matching is
-part of the broader v0.5 type-checking surface, which is incomplete; until the
-frontend rejects a mismatched error type, the Rust lowering must not emit a bare
-`?` that would let the backend insert a `From` conversion. The source-level rule
-is exact error-type match.*
+**Pre-MVP blocker (not just a note).** This is the one implicit control transfer
+RSScript allows, and it lowers to Rust's `?`, whose default behavior is exactly
+the `From` conversion Article III forbids. Two obligations, both required before
+the MVP is sound:
+
+```text
+1. The RSScript lowering emits no `From`/`Into` conversions for error types. With
+   that invariant, a mismatched error type has no `From` impl to convert through,
+   so it fails at rustc and is remapped to a diagnostic — not silently converted.
+   (The current lowering already emits no such impls; this must stay true.)
+2. The frontend must reject a mismatched operand/return error type directly, so
+   the rule is enforced at the source level, not left to a backend rustc error.
+   This is part of the broader v0.5 type-checking surface, which is incomplete;
+   until it lands, error-type matching for `?` is not yet frontend-enforced.
+```
+
+The residual silent-conversion risk is a **native-provided `From`** at a native
+boundary; that is a native-boundary review item, not ordinary safe-surface
+behavior. Frontend enforcement of exact error-type match on `?` is a tracked
+pre-MVP blocker, because an unenforced rule here violates a constitutional
+article rather than merely lagging.
 
 ### `return`, `break`, `continue`
 
@@ -691,6 +709,16 @@ fixed by the **scrutinee's** materialization mode:
   context and cannot escape its arm.
 - Copy payloads copy.
 ```
+
+A *local* `Option`/`Result` is not produced by extracting from a managed value
+(that is forbidden, §7.4). It arises only from a `local` binding of an
+`Option<fresh T>` / `Result<fresh T, E>` value — for example
+`local parsed = Json.try_parse(...)` where the result type is
+`Result<fresh JsonValue, E>`. The `local` binding makes the variant value itself
+local with a fresh payload (Chapter 5 materialization), and matching it moves the
+fresh payload out under local move rules. Without such a `local` binding, a
+matched `Option`/`Result` is managed and its payload binds as a managed read
+value.
 
 ### Branch joins: `if`/`else` and `match`
 
@@ -864,7 +892,9 @@ are handles
 do not keep the target object alive
 terminate local-inline paths
 cannot be taken as inline local fields
-may target class types in the MVP
+must target a class type: a weak field whose type is not a class is a
+  diagnostic (RS0902). v0.5 weak references break managed cycles only between
+  class identities; a weak struct/container field is not permitted.
 must be explicitly upgraded before use
 must be initialized from an explicit weak-handle expression
 ```
@@ -937,6 +967,19 @@ closure  closure-typed parameters do not use read/mut/take syntax, but closures
          `noescape` or `effects(retains(callback))`, and managed-closure capture
          retention (§10.8) is unchanged.
 ```
+
+The sized and unsized scalar names are **distinct types in v0.5, not aliases**:
+`Int` is not an alias for `Int64`, `Byte` is not an alias for `UInt8`, and so on.
+There is no implicit conversion between them (§2.4); width changes are explicit
+through a `T.from` constructor (`let n: Int64 = Int64.from(value: x)`). Whether
+any of these should later become aliases is deferred; v0.5 keeps them distinct so
+no conversion is hidden.
+
+How the checker knows it is "inside a trusted native/resource internal" for the
+`Fd` exemption: `Fd` appears only in `native fn` declarations and `resource`
+implementations (e.g. `File`); the exemption applies there, and `Fd` is not a
+permitted public-API parameter type in ordinary managed/local code. A future
+version may formalize this with a capability rather than a type convention.
 
 Everything else is non-Copy: managed handles, weak handles, resources,
 containers (`List`, `Map`, `Set`), `String`, `Bytes`, `Buffer`, generic type
@@ -1243,9 +1286,31 @@ Foo.run(a: mut cache.entries, b: mut cache.stats)   // cache is a managed class
 This is rejected (diagnostic RS0309): `entries` and `stats` are inline fields of
 one managed object and share its write guard. If `entries` were a `handle Map`,
 the root would stop at `cache.entries` (a distinct managed object) and the two
-accesses could be disjoint. A `mut`/`take` parameter is locally exclusive only
-when its type is a value type; a `mut` parameter of a class or container type is
-a managed object base.
+accesses could be disjoint.
+
+Splittability keys off the **binding world**, not the declared type. A base is
+field-splittable only when its value is *provably local-exclusive in this
+function*:
+
+```text
+- a `local` binding: splittable (one exclusive owner).
+- a `take` parameter: splittable (`take` requires a local value, §10.4, so the
+  caller handed over an exclusive value).
+- a `mut` parameter: NOT assumed splittable. A `mut` parameter — even of a value
+  type like a struct — may be backed by a managed object at the call site (a
+  managed `let` value passed `mut`), which the callee cannot see. So a `mut`
+  parameter base is treated as a managed object base for field splitting.
+- a managed `let` binding: not splittable.
+```
+
+The earlier "value type ⇒ splittable" reading was wrong: a struct is a value
+type but a `mut` struct parameter can still be managed-backed.
+
+*Implementation note (non-normative): the v0.5 checker keys splittability off
+"local in checker state plus a non-class, non-container type," which over-permits
+a `mut` struct parameter whose caller-side value is managed. That unsound case is
+still caught dynamically (a managed write conflict at runtime); tightening the
+static check to exclude `mut` parameters is a tracked refinement.*
 
 ---
 
@@ -1449,6 +1514,18 @@ Standard effects:
 
 Guarantees are checked only over RSScript-known constructs and trusted signature metadata. They are not whole-program proofs over arbitrary native or runtime internals.
 
+`pure` needs a scoped definition, because managed mutation is dynamically shared
+(§10.3): reading a managed value a callee mutates through an alias is not visible
+in the conflict-root model, so `pure` over managed inputs is effectively
+unprovable. In v0.5, `pure` is assertable only on functions whose reachable state
+is closed: no `mut`/`take` parameters, no `retains`, and no managed value
+reachable for mutation — in practice functions over `Copy` and `local`-closed
+data calling only `pure` callees. "Reachable" here means reachable for mutation
+through the same conflict roots (§8.2): inline fields of a value the function can
+mutate, not values behind handle/weak boundaries the function does not touch.
+`pure` is not claimable for a function that takes a managed parameter it could
+observe being mutated elsewhere.
+
 ### 10.7 `retains(x)`
 
 `retains(x)` means the function may keep a managed value derived from parameter `x` after returning.
@@ -1514,9 +1591,13 @@ The following forms are retention-equivalent and must not hide captures:
 let cb = || Image.save(image: read image, path: read output)
 return Some(cb)
 return Ok(cb)
-Registry.register(callback: read cb)
-Widget(on_click: read cb)
+Registry.register(callback: cb)
+Widget(on_click: cb)
 ```
+
+A closure-typed argument is written by name (`callback: cb`), without a
+`read`/`mut`/`take` wrapper: a closure's review-critical property is escape and
+retention, not a data effect (§6.8). The canonical spelling is `callback: cb`.
 
 If `image` is managed, the closure retains `image`. If `image` is local or a resource, the closure is rejected unless it is a `noescape` temporary.
 
@@ -1527,6 +1608,24 @@ A `noescape Fn(...)` parameter cannot store, return, or retain the closure. Noes
 ```rust
 fn apply(callback: noescape Fn()) -> Unit
 ```
+
+v0.5 `noescape Fn` closures are **non-consuming**: a callee may call the closure
+any number of times (for example `ResourcePool.new` calls its factory `max_size`
+times), so the closure may `read` or `mut` a captured local but must not `take`
+or `manage` a captured local — that would move it on the first call and leave it
+gone on the next. Taking or managing a captured local in a `noescape` closure is
+a diagnostic. A consuming `FnOnce`-style parameter is a future feature.
+
+```rust
+local seed = Buffer.new(size: 1024)
+// rejected: `take seed` inside a closure the callee may call repeatedly
+ResourcePool<Conn>.new(create: || Conn.from_seed(seed: take seed), max_size: 16)
+```
+
+*Implementation note (non-normative): the frontend rejection of consuming
+captures in `noescape` closures is a specified obligation; until it lands the
+runtime contract (the factory is called `max_size` times) still holds, so source
+relying on a single call is non-conforming.*
 
 A closure bound with `local` is a local closure and may move-capture local values, but it is allowed only under `features: local` and cannot become managed, be returned as a managed value, be stored in managed data, or be passed to a retaining parameter.
 
@@ -1562,7 +1661,7 @@ An expression is fresh if it is one of:
 struct constructor expression creating a new shell
 call to a function returning fresh T
 clean local binding
-composition of valid fresh/managed fields into a fresh shell
+composition of fields that are each valid under the constructor field-effect rules (§9.3) into a fresh shell
 ```
 
 ### 11.3 Clean local binding
@@ -1576,7 +1675,7 @@ captured by a managed closure
 passed to a function that retains it
 moved by take
 returned previously
-assigned into a handle field
+stored into a handle field through a constructor or explicit mut API
 wrapped in a constructor or variant that escapes or is retained
 ```
 
@@ -1815,10 +1914,11 @@ Exhaustion and nesting, made precise for v0.5:
 ```text
 - borrow does not return Result and must not block.
 - a lease is tied to the pool that produced it. While a lease from a pool is
-  active, the same pool is held `mut` for the lease's `with` scope.
-- nested borrow from the same pool inside an active lease's scope is rejected in
-  v0.5. A multi-borrow API is reserved for a future version; until then, borrow
-  one resource at a time per pool.
+  active, the same pool is held `mut` for the lease's `with` scope, so any
+  read/mut/take/manage use of the same pool root inside the lease body is
+  rejected (this includes a nested borrow, but also Pool.stats(pool: read pool),
+  Pool.reset(pool: mut pool), etc.). A future API may explicitly permit
+  introspection or multi-borrow; until then, use one lease per pool at a time.
 ```
 
 Exhaustion is not expected in ordinary v0.5 source: `max_size` is a positive
@@ -2430,6 +2530,10 @@ Result-returning resource producer missing explicit ?
 invalid resource type in ordinary Result/Option/container context
 ResourcePool.new used with fallible factory
 ResourcePool factory contract violation
+ResourcePool max_size not a positive Int literal
+managed object field-split conflict
+noescape closure consuming a captured local
+`?` operand error type does not match the function error type
 local captured by managed closure
 take of handle field
 weak field initialized without explicit weak handle
@@ -2476,7 +2580,13 @@ through RS01xx (feature) and reported as forbidden/native-binding issues in the
 ranges above. A future per-call `unsafe` marker diagnostic (§15.4.2) would also
 sit in RS01xx with the other feature/boundary codes.
 
-### 17.2 JSON form
+Every diagnostic class listed in §17.1 is allocated a stable code within the
+range matching its concern above (for example the new ResourcePool/`?` classes
+sit in RS07xx and RS02xx respectively). Review-map *facts* that are not
+diagnostics — such as a "removed guarantee" surfaced by `rss review --diff`
+(§16.3) — are review metadata, not RS-coded diagnostics, and do not consume a
+code. A complete class→code table is a conformance artifact to be generated from
+the implemented code constants, so it cannot drift from the registry.
 
 ```json
 {
