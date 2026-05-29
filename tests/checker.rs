@@ -1045,9 +1045,11 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     let has_profile_prefix = Json.array_contains_substring(value: read value, text: read "prof")?
     let has_profile_named_prefix = Json.array_contains_prefix(value: read value, prefix: read "pro")?
     let profile = Json.field(value: read value, name: read "profile")?
+    let profile_name_value = Json.field(value: read profile, name: read "name")?
+    let profile_name = Json.as_string(value: read profile_name_value)?
     let active = Json.field_bool(value: read profile, name: read "active")?
     let age = Json.field_int(value: read profile, name: read "age")?
-    return Json.field_string(value: read profile, name: read "name")
+    return profile_name
 }
 "#;
     let rust = lower_source_to_rust("json.rss", source).expect("source should lower");
@@ -1073,15 +1075,14 @@ fn read_name(text: read String) -> Result<String, JsonError> {
         "let active = rsscript_runtime::json_field_bool(&profile, &\"active\".to_string())?;"
     ));
     assert!(
+        rust.contains("let profile_name = rsscript_runtime::json_as_string(&profile_name_value)?;")
+    );
+    assert!(
         rust.contains(
             "let age = rsscript_runtime::json_field_int(&profile, &\"age\".to_string())?;"
         )
     );
-    assert!(
-        rust.contains(
-            "return rsscript_runtime::json_field_string(&profile, &\"name\".to_string());"
-        )
-    );
+    assert!(rust.contains("return Ok(profile_name);"));
 }
 
 #[test]
@@ -1369,6 +1370,7 @@ fn main() -> Unit {
     let message = String.concat(left: read "hello ", right: read "world")
     let count = String.from_int(value: 42)
     let ok = String.from_bool(value: true)
+    let starts = String.starts_with(value: read message, prefix: read "hello")
     Log.write(message: read message)
     Log.write(message: read count)
     Log.write(message: read ok)
@@ -1382,6 +1384,9 @@ fn main() -> Unit {
     ));
     assert!(rust.contains("let count = rsscript_runtime::string_from_int(42);"));
     assert!(rust.contains("let ok = rsscript_runtime::string_from_bool(true);"));
+    assert!(rust.contains(
+        "let starts = rsscript_runtime::string_starts_with(&message, &\"hello\".to_string());"
+    ));
     assert!(rust.contains("rsscript_runtime::log_write(&message);"));
 }
 
@@ -4391,7 +4396,7 @@ fn rss_run_accepts_dogfood_classifier() {
 
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
     let expected_stdout = format!(
-        "dogfood review summary total={} must={} low={} unknown={} lines={} mismatches=0 first_mismatch=none",
+        "dogfood review summary total={} must={} low={} unknown={} lines={} mismatches=0 unmodeled_reasons=0 first_mismatch=none",
         review_json["summary"]["total_functions"],
         review_json["summary"]["must_review"]["functions"],
         review_json["summary"]["low_semantic_risk"]["functions"],
@@ -4429,7 +4434,41 @@ fn rss_run_reports_dogfood_classification_mismatch_detail() {
 
     assert!(!output.status.success(), "stdout={stdout}");
     assert!(
-        stdout.contains("mismatches=1 first_mismatch=ReviewClass.unknown expected=must_review actual=low_semantic_risk"),
+        stdout.contains("mismatches=1 unmodeled_reasons=0 first_mismatch=ReviewClass.unknown expected=must_review actual=low_semantic_risk"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn rss_run_reports_dogfood_unmodeled_reason_count() {
+    let temp_dir = unique_temp_dir("rsscript-dogfood-run-unmodeled-reason");
+    let Some(fixture_dir) = prepare_dogfood_run_dir(&temp_dir) else {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return;
+    };
+    let mut review_json = generated_dogfood_review_map_json();
+    review_json["files"][0]["regions"][0]["reasons"]
+        .as_array_mut()
+        .expect("first region reasons should be an array")
+        .push(Value::String("new unmodeled review reason".to_string()));
+    fs::write(
+        fixture_dir.join("dogfood-review-facts.json"),
+        serde_json::to_vec(&review_json).expect("review JSON should serialize"),
+    )
+    .expect("mutated review map should write");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("tests/fixtures/pass/dogfood-review-classifier.rss")
+        .current_dir(&temp_dir)
+        .output()
+        .expect("rss run should execute dogfood classifier");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!output.status.success(), "stdout={stdout}");
+    assert!(
+        stdout.contains("mismatches=0 unmodeled_reasons=1 first_mismatch=none"),
         "{stdout}"
     );
 }

@@ -917,6 +917,13 @@ pub fn json_field_bool(value: &JsonValue, name: &str) -> Result<bool, JsonError>
     Ok(flag)
 }
 
+pub fn json_as_string(value: &JsonValue) -> Result<String, JsonError> {
+    let Some(text) = value.inner.as_str() else {
+        return Err(JsonError::new("JSON value is not a string"));
+    };
+    Ok(text.to_string())
+}
+
 pub fn json_array_len(value: &JsonValue) -> Result<i64, JsonError> {
     let Some(items) = value.inner.as_array() else {
         return Err(JsonError::new("JSON value is not an array"));
@@ -1151,6 +1158,10 @@ pub fn string_from_int(value: i64) -> String {
 
 pub fn string_from_bool(value: bool) -> String {
     value.to_string()
+}
+
+pub fn string_starts_with(value: &str, prefix: &str) -> bool {
+    value.starts_with(prefix)
 }
 
 pub fn assert_equal(left: &str, right: &str) {
@@ -1589,6 +1600,8 @@ mod tests {
         let profile = super::json_array_get(&profiles, 0).expect("first profile should exist");
         let name =
             super::json_field_string(&profile, "name").expect("name field should be a string");
+        let profile_name =
+            super::json_as_string(&super::json_field(&profile, "name").unwrap()).unwrap();
         let age = super::json_field_int(&profile, "age").expect("age should be an integer");
         let active = super::json_field_bool(&profile, "active").expect("active should be a bool");
         let reasons =
@@ -1598,10 +1611,12 @@ mod tests {
         let has_error = super::json_array_contains_substring(&reasons, "error handling").unwrap();
         let has_pool = super::json_array_contains_substring(&reasons, "ResourcePool").unwrap();
         let has_public_prefix = super::json_array_contains_prefix(&reasons, "public").unwrap();
+        let name_starts_with_rss = super::string_starts_with(&name, "RSS");
 
         assert_eq!(file_len, 1);
         assert_eq!(len, 1);
         assert_eq!(name, "RSScript");
+        assert_eq!(profile_name, "RSScript");
         assert_eq!(age, 1);
         assert!(active);
         assert!(has_public);
@@ -1609,6 +1624,7 @@ mod tests {
         assert!(has_error);
         assert!(!has_pool);
         assert!(has_public_prefix);
+        assert!(name_starts_with_rss);
         let _ = std::fs::remove_file(path);
     }
 

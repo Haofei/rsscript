@@ -1793,6 +1793,9 @@ fn lower_callee(callee: &Callee) -> String {
         callee if is_string_from_bool_callee(callee) => {
             "rsscript_runtime::string_from_bool".to_string()
         }
+        callee if is_string_starts_with_callee(callee) => {
+            "rsscript_runtime::string_starts_with".to_string()
+        }
         callee if is_buffer_new_callee(callee) => "rsscript_runtime::buffer_new".to_string(),
         callee if is_buffer_clear_callee(callee) => "rsscript_runtime::buffer_clear".to_string(),
         callee if is_buffer_consume_callee(callee) => {
@@ -1916,6 +1919,9 @@ fn lower_callee(callee: &Callee) -> String {
         callee if is_json_field_bool_callee(callee) => {
             "rsscript_runtime::json_field_bool".to_string()
         }
+        callee if is_json_as_string_callee(callee) => {
+            "rsscript_runtime::json_as_string".to_string()
+        }
         callee if is_json_array_len_callee(callee) => {
             "rsscript_runtime::json_array_len".to_string()
         }
@@ -2025,6 +2031,10 @@ fn is_string_from_int_callee(callee: &Callee) -> bool {
 
 fn is_string_from_bool_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "String" && name == "from_bool")
+}
+
+fn is_string_starts_with_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "String" && name == "starts_with")
 }
 
 fn is_file_open_callee(callee: &Callee) -> bool {
@@ -2233,6 +2243,10 @@ fn is_json_field_int_callee(callee: &Callee) -> bool {
 
 fn is_json_field_bool_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "field_bool")
+}
+
+fn is_json_as_string_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Json" && name == "as_string")
 }
 
 fn is_json_array_len_callee(callee: &Callee) -> bool {

@@ -3,3 +3,8 @@ pub fn String.concat(left: read String, right: read String) -> fresh String
 pub fn String.from_int(value: Int) -> fresh String
 
 pub fn String.from_bool(value: Bool) -> fresh String
+
+pub fn String.starts_with(
+    value: read String,
+    prefix: read String,
+) -> Bool

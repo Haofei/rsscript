@@ -16,6 +16,7 @@ struct ReviewFacts {
     has_error_boundary: Bool
     callee_risk: Int
     line_count: Int
+    unmodeled_reasons: Int
 }
 
 struct ReviewDecision {
@@ -259,6 +260,7 @@ fn make_low_helper(lines: Int) -> fresh ReviewFacts {
         has_error_boundary: false,
         callee_risk: ReviewClass.low_semantic_risk(),
         line_count: lines,
+        unmodeled_reasons: 0,
     )
 }
 
@@ -279,6 +281,7 @@ fn make_native_entry(lines: Int) -> fresh ReviewFacts {
         has_error_boundary: true,
         callee_risk: ReviewClass.low_semantic_risk(),
         line_count: lines,
+        unmodeled_reasons: 0,
     )
 }
 
@@ -299,6 +302,7 @@ fn make_resource_worker(lines: Int) -> fresh ReviewFacts {
         has_error_boundary: true,
         callee_risk: ReviewClass.low_semantic_risk(),
         line_count: lines,
+        unmodeled_reasons: 0,
     )
 }
 
@@ -319,6 +323,7 @@ fn make_retaining_cache(lines: Int) -> fresh ReviewFacts {
         has_error_boundary: false,
         callee_risk: ReviewClass.low_semantic_risk(),
         line_count: lines,
+        unmodeled_reasons: 0,
     )
 }
 
@@ -339,6 +344,7 @@ fn make_unknown_region(lines: Int) -> fresh ReviewFacts {
         has_error_boundary: false,
         callee_risk: ReviewClass.low_semantic_risk(),
         line_count: lines,
+        unmodeled_reasons: 0,
     )
 }
 
@@ -346,6 +352,12 @@ fn parse_review_region(value: read JsonValue) -> Result<fresh ReviewFacts, JsonE
     let function_name = Json.field_string(value: read value, name: read "function")?
     let classification = Json.field_string(value: read value, name: read "classification")?
     let reasons = Json.field(value: read value, name: read "reasons")?
+    let reason_count = Json.array_len(value: read reasons)?
+    let unmodeled = count_unmodeled_reasons(
+        reasons: read reasons,
+        index: 0,
+        limit: reason_count,
+    )?
 
     return ReviewFacts(
         function_name: read function_name,
@@ -367,7 +379,92 @@ fn parse_review_region(value: read JsonValue) -> Result<fresh ReviewFacts, JsonE
         has_error_boundary: Json.array_contains_string(value: read reasons, item: read "error handling boundary")?,
         callee_risk: review_callee_risk(reasons: read reasons)?,
         line_count: Json.field_int(value: read value, name: read "line_count")?,
+        unmodeled_reasons: unmodeled,
     )
+}
+
+fn reason_is_modeled(reason: read String) -> Bool {
+    if reason == "public entry point" || reason == "entry point" {
+        return true
+    }
+
+    if reason == "local binding" || reason == "fresh guarantee boundary" {
+        return true
+    }
+
+    if reason == "error handling boundary" || reason == "writes to managed state" {
+        return true
+    }
+
+    if reason == "private pure helper with no retention or resource boundary" {
+        return true
+    }
+
+    if String.starts_with(value: read reason, prefix: read "native") {
+        return true
+    }
+
+    if String.starts_with(value: read reason, prefix: read "unsafe") {
+        return true
+    }
+
+    if String.starts_with(value: read reason, prefix: read "resource ") {
+        return true
+    }
+
+    if String.starts_with(value: read reason, prefix: read "ResourcePool") {
+        return true
+    }
+
+    if String.starts_with(value: read reason, prefix: read "retains ") {
+        return true
+    }
+
+    if String.starts_with(value: read reason, prefix: read "retention ") {
+        return true
+    }
+
+    if String.starts_with(value: read reason, prefix: read "mut ") {
+        return true
+    }
+
+    if String.starts_with(value: read reason, prefix: read "noescape") {
+        return true
+    }
+
+    if String.starts_with(value: read reason, prefix: read "calls unknown") {
+        return true
+    }
+
+    if String.starts_with(value: read reason, prefix: read "calls must-review") {
+        return true
+    }
+
+    return false
+}
+
+fn count_unmodeled_reasons(
+    reasons: read JsonValue,
+    index: Int,
+    limit: Int,
+) -> Result<Int, JsonError> {
+    if index >= limit {
+        return Ok(0)
+    }
+
+    let item = Json.array_get(value: read reasons, index: index)?
+    let reason = Json.as_string(value: read item)?
+    let rest = count_unmodeled_reasons(
+        reasons: read reasons,
+        index: index + 1,
+        limit: limit,
+    )?
+
+    if reason_is_modeled(reason: read reason) {
+        return Ok(rest)
+    }
+
+    return Ok(rest + 1)
 }
 
 fn review_callee_risk(reasons: read JsonValue) -> Result<Int, JsonError> {
@@ -588,6 +685,27 @@ fn classification_mismatch_count(items: read List<ReviewFacts>) -> Int {
     return classification_mismatch_count_from(items: read items, index: 0)
 }
 
+fn unmodeled_reason_count_from(
+    items: read List<ReviewFacts>,
+    index: Int,
+) -> Int {
+    if index >= List.len(list: read items) {
+        return 0
+    }
+
+    let facts = List.get(list: read items, index: index)
+    let rest = unmodeled_reason_count_from(
+        items: read items,
+        index: index + 1,
+    )
+
+    return rest + facts.unmodeled_reasons
+}
+
+fn unmodeled_reason_count(items: read List<ReviewFacts>) -> Int {
+    return unmodeled_reason_count_from(items: read items, index: 0)
+}
+
 fn mismatch_detail(facts: read ReviewFacts) -> fresh String {
     let decision_value = classify_function(facts: read facts)
     let expected = review_class_to_string(value: facts.expected_classification)
@@ -667,6 +785,7 @@ fn dogfood_shape_is_expected() -> Result<Bool, JsonError> {
     let expected = dogfood_expected_summary()?
     let unknown_percent = unknown_ratio_percent(summary: read summary)
     let mismatches = classification_mismatch_count(items: read items)
+    let unmodeled = unmodeled_reason_count(items: read items)
 
     if summary.total_functions != expected.total_functions {
         return Ok(false)
@@ -692,12 +811,17 @@ fn dogfood_shape_is_expected() -> Result<Bool, JsonError> {
         return Ok(false)
     }
 
+    if unmodeled != 0 {
+        return Ok(false)
+    }
+
     return Ok(unknown_percent == 0)
 }
 
 fn dogfood_summary_line(
     summary: read ReviewSummary,
     mismatches: Int,
+    unmodeled_reasons: Int,
     first_mismatch: read String,
 ) -> fresh String {
     let total = String.from_int(value: summary.total_functions)
@@ -706,6 +830,7 @@ fn dogfood_summary_line(
     let unknown = String.from_int(value: summary.unknown_functions)
     let lines = String.from_int(value: summary.suggested_lines)
     let mismatch_count = String.from_int(value: mismatches)
+    let unmodeled_count = String.from_int(value: unmodeled_reasons)
     let first = String.concat(left: read "dogfood review summary total=", right: read total)
     let second = String.concat(left: read first, right: read " must=")
     let third = String.concat(left: read second, right: read must)
@@ -717,9 +842,11 @@ fn dogfood_summary_line(
     let ninth = String.concat(left: read eighth, right: read lines)
     let tenth = String.concat(left: read ninth, right: read " mismatches=")
     let eleventh = String.concat(left: read tenth, right: read mismatch_count)
-    let twelfth = String.concat(left: read eleventh, right: read " first_mismatch=")
+    let twelfth = String.concat(left: read eleventh, right: read " unmodeled_reasons=")
+    let thirteenth = String.concat(left: read twelfth, right: read unmodeled_count)
+    let fourteenth = String.concat(left: read thirteenth, right: read " first_mismatch=")
 
-    return String.concat(left: read twelfth, right: read first_mismatch)
+    return String.concat(left: read fourteenth, right: read first_mismatch)
 }
 
 pub fn main() -> Result<Unit, JsonError> {
@@ -729,10 +856,12 @@ pub fn main() -> Result<Unit, JsonError> {
     let unknown_region = make_unknown_region(lines: 7)
     let unknown_decision = classify_function(facts: read unknown_region)
     let mismatches = classification_mismatch_count(items: read items)
+    let unmodeled = unmodeled_reason_count(items: read items)
     let first_mismatch = first_classification_mismatch(items: read items)
     let summary_line = dogfood_summary_line(
         summary: read summary,
         mismatches: mismatches,
+        unmodeled_reasons: unmodeled,
         first_mismatch: read first_mismatch,
     )
     let shape_ok = dogfood_shape_is_expected()?
@@ -745,6 +874,7 @@ pub fn main() -> Result<Unit, JsonError> {
     Assert.equal_int(left: summary.unknown_functions, right: expected.unknown_functions)
     Assert.equal_int(left: summary.suggested_lines, right: expected.suggested_lines)
     Assert.equal_int(left: mismatches, right: 0)
+    Assert.equal_int(left: unmodeled, right: 0)
     Assert.equal(left: read first_mismatch, right: read "none")
     Assert.equal_int(left: unknown_decision.classification, right: ReviewClass.unknown())
     Assert.equal_bool(left: shape_ok, right: true)
