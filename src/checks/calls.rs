@@ -17,9 +17,9 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
                 .iter()
                 .filter_map(|binding| {
                     (binding.type_name.as_deref() == Some("noescape Fn()"))
-                        .then_some(binding.name.clone())
+                        .then_some((binding.name.clone(), binding.span.clone()))
                 })
-                .collect::<HashSet<_>>();
+                .collect::<HashMap<_, _>>();
             if let Some(block) = &body.block {
                 check_block(analyzer, block, &noescape_bindings);
             }
@@ -27,16 +27,49 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
     }
 }
 
-fn check_block(analyzer: &mut Analyzer<'_>, block: &HirBlock, noescape_bindings: &HashSet<String>) {
+fn check_block(
+    analyzer: &mut Analyzer<'_>,
+    block: &HirBlock,
+    noescape_bindings: &HashMap<String, Span>,
+) {
     for statement in &block.statements {
         match statement {
             HirStmt::Let {
-                value: Some(value), ..
+                value: Some(value),
+                span,
+                ..
+            } => {
+                check_noescape_escape(
+                    analyzer,
+                    value,
+                    span,
+                    noescape_bindings,
+                    NoescapeEscapeContext::Store,
+                );
+                check_expr(analyzer, value, noescape_bindings);
             }
-            | HirStmt::Return {
+            HirStmt::Return {
                 value: Some(value), ..
+            } => {
+                check_noescape_escape(
+                    analyzer,
+                    value,
+                    hir_expr_span(value),
+                    noescape_bindings,
+                    NoescapeEscapeContext::Return,
+                );
+                check_expr(analyzer, value, noescape_bindings);
             }
-            | HirStmt::Expr(value) => check_expr(analyzer, value, noescape_bindings),
+            HirStmt::Expr(value) => {
+                check_noescape_escape(
+                    analyzer,
+                    value,
+                    hir_expr_span(value),
+                    noescape_bindings,
+                    NoescapeEscapeContext::UseAsValue,
+                );
+                check_expr(analyzer, value, noescape_bindings);
+            }
             HirStmt::With { resource, body, .. } => {
                 check_expr(analyzer, resource, noescape_bindings);
                 check_block(analyzer, body, noescape_bindings);
@@ -76,7 +109,11 @@ fn check_block(analyzer: &mut Analyzer<'_>, block: &HirBlock, noescape_bindings:
     }
 }
 
-fn check_expr(analyzer: &mut Analyzer<'_>, expr: &HirExpr, noescape_bindings: &HashSet<String>) {
+fn check_expr(
+    analyzer: &mut Analyzer<'_>,
+    expr: &HirExpr,
+    noescape_bindings: &HashMap<String, Span>,
+) {
     match expr {
         HirExpr::Call {
             callee,
@@ -120,7 +157,7 @@ fn check_call_args(
     args: &[HirCallArg],
     call_span: &Span,
     resolution: &CallResolution,
-    noescape_bindings: &HashSet<String>,
+    noescape_bindings: &HashMap<String, Span>,
 ) {
     let call_name = callee_name(callee);
     if is_noescape_callback_call(callee, args, resolution, noescape_bindings) {
@@ -281,17 +318,268 @@ fn check_call_args(
             );
         }
     }
+
+    for arg in args {
+        let expected_param = arg
+            .name
+            .as_ref()
+            .and_then(|name| signature.params.iter().find(|param| param.name == *name));
+        if expected_param.is_some_and(|param| param.type_name == "noescape Fn()") {
+            continue;
+        }
+        check_noescape_escape(
+            analyzer,
+            &arg.value,
+            &arg.span,
+            noescape_bindings,
+            NoescapeEscapeContext::Pass { callee: &call_name },
+        );
+    }
 }
 
 fn is_noescape_callback_call(
     callee: &Callee,
     args: &[HirCallArg],
     resolution: &CallResolution,
-    noescape_bindings: &HashSet<String>,
+    noescape_bindings: &HashMap<String, Span>,
 ) -> bool {
     matches!(resolution, CallResolution::Unknown)
         && args.is_empty()
-        && matches!(callee, Callee::Name(name) if noescape_bindings.contains(name))
+        && matches!(callee, Callee::Name(name) if noescape_bindings.contains_key(name))
+}
+
+#[derive(Debug, Clone, Copy)]
+enum NoescapeEscapeContext<'a> {
+    Store,
+    Return,
+    UseAsValue,
+    Pass { callee: &'a str },
+}
+
+fn check_noescape_escape(
+    analyzer: &mut Analyzer<'_>,
+    expr: &HirExpr,
+    context_span: &Span,
+    noescape_bindings: &HashMap<String, Span>,
+    context: NoescapeEscapeContext<'_>,
+) {
+    let Some((name, use_span)) = noescape_escape_use(expr, noescape_bindings) else {
+        return;
+    };
+    analyzer.diagnostics.push(noescape_escape_diagnostic(
+        name,
+        use_span,
+        context_span.clone(),
+        context,
+    ));
+}
+
+fn noescape_escape_use<'a>(
+    expr: &'a HirExpr,
+    noescape_bindings: &'a HashMap<String, Span>,
+) -> Option<(&'a str, Span)> {
+    match expr {
+        HirExpr::Ident { name, span, .. } if noescape_bindings.contains_key(name) => {
+            Some((name.as_str(), span.clone()))
+        }
+        HirExpr::Call {
+            callee,
+            args,
+            resolution,
+            ..
+        } if is_noescape_callback_call(callee, args, resolution, noescape_bindings) => None,
+        HirExpr::Call {
+            args, resolution, ..
+        } => {
+            for arg in args {
+                if call_arg_targets_noescape_param(arg, resolution) {
+                    continue;
+                }
+                if let Some(found) = noescape_escape_use(&arg.value, noescape_bindings) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. } => noescape_escape_use(value, noescape_bindings),
+        HirExpr::Binary { left, right, .. } => noescape_escape_use(left, noescape_bindings)
+            .or_else(|| noescape_escape_use(right, noescape_bindings)),
+        HirExpr::Field { base, .. } => noescape_escape_use(base, noescape_bindings),
+        HirExpr::Index { base, index, .. } => noescape_escape_use(base, noescape_bindings)
+            .or_else(|| noescape_escape_use(index, noescape_bindings)),
+        HirExpr::Closure { body, .. } => {
+            for statement in &body.statements {
+                if let Some(found) = noescape_any_use_in_stmt(statement, noescape_bindings) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => None,
+    }
+}
+
+fn noescape_any_use_in_stmt<'a>(
+    statement: &'a HirStmt,
+    noescape_bindings: &'a HashMap<String, Span>,
+) -> Option<(&'a str, Span)> {
+    match statement {
+        HirStmt::Let {
+            value: Some(value), ..
+        }
+        | HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => noescape_any_use(value, noescape_bindings),
+        HirStmt::With { resource, body, .. } => noescape_any_use(resource, noescape_bindings)
+            .or_else(|| {
+                body.statements
+                    .iter()
+                    .find_map(|statement| noescape_any_use_in_stmt(statement, noescape_bindings))
+            }),
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => noescape_any_use(condition, noescape_bindings)
+            .or_else(|| {
+                then_body
+                    .statements
+                    .iter()
+                    .find_map(|statement| noescape_any_use_in_stmt(statement, noescape_bindings))
+            })
+            .or_else(|| {
+                else_body.as_ref().and_then(|body| {
+                    body.statements.iter().find_map(|statement| {
+                        noescape_any_use_in_stmt(statement, noescape_bindings)
+                    })
+                })
+            }),
+        HirStmt::Loop {
+            condition, body, ..
+        } => condition
+            .as_ref()
+            .and_then(|condition| noescape_any_use(condition, noescape_bindings))
+            .or_else(|| {
+                body.statements
+                    .iter()
+                    .find_map(|statement| noescape_any_use_in_stmt(statement, noescape_bindings))
+            }),
+        HirStmt::Match { value, arms, .. } => {
+            noescape_any_use(value, noescape_bindings).or_else(|| {
+                arms.iter().find_map(|arm| {
+                    arm.body.statements.iter().find_map(|statement| {
+                        noescape_any_use_in_stmt(statement, noescape_bindings)
+                    })
+                })
+            })
+        }
+        HirStmt::Let { value: None, .. }
+        | HirStmt::Return { value: None, .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => None,
+    }
+}
+
+fn noescape_any_use<'a>(
+    expr: &'a HirExpr,
+    noescape_bindings: &'a HashMap<String, Span>,
+) -> Option<(&'a str, Span)> {
+    match expr {
+        HirExpr::Ident { name, span, .. } if noescape_bindings.contains_key(name) => {
+            Some((name.as_str(), span.clone()))
+        }
+        HirExpr::Call {
+            callee, args, span, ..
+        } => {
+            if let Callee::Name(name) = callee
+                && noescape_bindings.contains_key(name)
+            {
+                return Some((name.as_str(), span.clone()));
+            }
+            args.iter()
+                .find_map(|arg| noescape_any_use(&arg.value, noescape_bindings))
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. } => noescape_any_use(value, noescape_bindings),
+        HirExpr::Binary { left, right, .. } => noescape_any_use(left, noescape_bindings)
+            .or_else(|| noescape_any_use(right, noescape_bindings)),
+        HirExpr::Field { base, .. } => noescape_any_use(base, noescape_bindings),
+        HirExpr::Index { base, index, .. } => noescape_any_use(base, noescape_bindings)
+            .or_else(|| noescape_any_use(index, noescape_bindings)),
+        HirExpr::Closure { body, .. } => body
+            .statements
+            .iter()
+            .find_map(|statement| noescape_any_use_in_stmt(statement, noescape_bindings)),
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => None,
+    }
+}
+
+fn call_arg_targets_noescape_param(arg: &HirCallArg, resolution: &CallResolution) -> bool {
+    let CallResolution::Resolved { signature, .. } = resolution else {
+        return false;
+    };
+    arg.name
+        .as_ref()
+        .and_then(|name| signature.params.iter().find(|param| param.name == *name))
+        .is_some_and(|param| param.type_name == "noescape Fn()")
+}
+
+fn noescape_escape_diagnostic(
+    name: &str,
+    use_span: Span,
+    context_span: Span,
+    context: NoescapeEscapeContext<'_>,
+) -> Diagnostic {
+    let (summary, cause) = match context {
+        NoescapeEscapeContext::Store => (
+            format!("noescape callback `{name}` cannot be stored."),
+            "`noescape Fn()` parameters are temporary callback capabilities and cannot be bound into stored values.".to_string(),
+        ),
+        NoescapeEscapeContext::Return => (
+            format!("noescape callback `{name}` cannot be returned."),
+            "`noescape Fn()` parameters cannot escape the current function through a return value.".to_string(),
+        ),
+        NoescapeEscapeContext::UseAsValue => (
+            format!("noescape callback `{name}` cannot be used as an ordinary value."),
+            "Call the noescape callback directly, or pass it to another resolved `noescape Fn()` parameter.".to_string(),
+        ),
+        NoescapeEscapeContext::Pass { callee } => (
+            format!("noescape callback `{name}` cannot be passed to `{callee}` as an ordinary value."),
+            "Forwarding a noescape callback is only allowed when the target parameter is also `noescape Fn()`.".to_string(),
+        ),
+    };
+    Diagnostic::error(
+        code::NOESCAPE_CALLBACK_ESCAPE,
+        summary,
+        use_span,
+        "noescape callback escapes",
+    )
+    .with_cause(cause)
+    .with_cause(format!(
+        "The escaping context starts at {}:{}.",
+        context_span.line, context_span.column
+    ))
+    .with_fix(
+        "keep_noescape_local",
+        "Call the callback directly, or change the API to an ordinary managed callback type.",
+        "manual",
+    )
 }
 
 fn join_param_names(params: &[crate::hir::ParamSig]) -> String {

@@ -1,0 +1,9 @@
+fn apply(callback: noescape Fn()) -> Unit {
+    callback()
+    return Unit
+}
+
+fn forward(callback: noescape Fn()) -> Unit {
+    apply(callback: callback)
+    return Unit
+}

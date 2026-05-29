@@ -1,0 +1,8 @@
+// expect: RS0802
+fn bad(callback: noescape Fn()) -> Unit {
+    let stored = || {
+        callback()
+    }
+
+    return Unit
+}

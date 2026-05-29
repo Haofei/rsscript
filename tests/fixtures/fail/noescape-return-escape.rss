@@ -1,0 +1,4 @@
+// expect: RS0802
+fn leak(callback: noescape Fn()) -> Fn {
+    return callback
+}

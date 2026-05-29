@@ -778,6 +778,30 @@ impl Analyzer<'_> {
                             "manual",
                         ),
                     );
+                    continue;
+                }
+                if function.params.iter().any(|function_param| {
+                    function_param.name == *param && type_ref_is_noescape(&function_param.ty)
+                }) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::NOESCAPE_CALLBACK_ESCAPE,
+                            format!(
+                                "`{}` cannot retain noescape callback parameter `{param}`.",
+                                function.name
+                            ),
+                            function.span.clone(),
+                            "noescape callback escapes",
+                        )
+                        .with_cause(
+                            "`noescape Fn()` parameters may be called or forwarded to another noescape parameter, but they cannot be retained after return.",
+                        )
+                        .with_fix(
+                            "remove_noescape_retention",
+                            format!("Remove `effects(retains({param}))`, or use an ordinary managed callback type."),
+                            "manual",
+                        ),
+                    );
                 }
             }
 
