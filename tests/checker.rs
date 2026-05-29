@@ -4255,6 +4255,29 @@ fn rss_review_map_json_reports_app_benchmark_unknown_zero() {
 }
 
 #[test]
+fn dogfood_review_facts_match_generated_review_map_output() {
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("review")
+        .arg("--map")
+        .arg("--json")
+        .arg("tests/fixtures/pass/complex-supported-review-map.rss")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss review --map --json should execute");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let generated: Value = serde_json::from_str(&stdout).expect("stdout should be review map JSON");
+    let checked_in: Value = serde_json::from_str(&read_fixture(Path::new(
+        "tests/fixtures/pass/dogfood-review-facts.json",
+    )))
+    .expect("dogfood review facts should be JSON");
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert_eq!(checked_in, generated);
+}
+
+#[test]
 fn rss_verify_rust_json_accepts_dogfood_classifier() {
     let temp_dir = unique_temp_dir("rsscript-dogfood-review-classifier");
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
@@ -4282,14 +4305,56 @@ fn rss_verify_rust_json_accepts_dogfood_classifier() {
 
 #[test]
 fn rss_run_accepts_dogfood_classifier() {
+    let temp_dir = unique_temp_dir("rsscript-dogfood-run-generated-review-map");
+    fs::create_dir_all(&temp_dir).expect("temporary root should be created");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime"),
+        temp_dir.join("runtime"),
+    )
+    .expect("runtime crate symlink should be created");
+    #[cfg(not(unix))]
+    {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return;
+    }
+    let fixture_dir = temp_dir.join("tests/fixtures/pass");
+    fs::create_dir_all(&fixture_dir).expect("fixture directory should be created");
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/pass/dogfood-review-classifier.rss"),
+        fixture_dir.join("dogfood-review-classifier.rss"),
+    )
+    .expect("dogfood classifier should copy");
+    let review_output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("review")
+        .arg("--map")
+        .arg("--json")
+        .arg("tests/fixtures/pass/complex-supported-review-map.rss")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss review --map --json should execute");
+    assert!(
+        review_output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&review_output.stdout),
+        String::from_utf8_lossy(&review_output.stderr)
+    );
+    fs::write(
+        fixture_dir.join("dogfood-review-facts.json"),
+        review_output.stdout,
+    )
+    .expect("generated review map should write");
+
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("run")
         .arg("tests/fixtures/pass/dogfood-review-classifier.rss")
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .current_dir(&temp_dir)
         .output()
         .expect("rss run should execute dogfood classifier");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let _ = fs::remove_dir_all(&temp_dir);
 
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
     assert_eq!(
