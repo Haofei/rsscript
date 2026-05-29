@@ -1,0 +1,321 @@
+features: local
+
+struct PackageDiffFacts {
+    declared_risk: Int
+    old_review_risk: Int
+    new_review_risk: Int
+    manifest_risk: Int
+    interface_risk: Int
+    manifest_changes: Int
+    interface_changes: Int
+    high_interface_changes: Int
+    unmodeled_reasons: Int
+}
+
+struct PackageDiffDecision {
+    risk: Int
+    mismatches: Int
+}
+
+fn DiffRisk.low() -> Int {
+    return 1
+}
+
+fn DiffRisk.elevated() -> Int {
+    return 2
+}
+
+fn DiffRisk.high() -> Int {
+    return 3
+}
+
+fn DiffRisk.unknown() -> Int {
+    return 4
+}
+
+fn diff_risk_from_string(value: read String) -> Int {
+    if value == "unknown" {
+        return DiffRisk.unknown()
+    }
+
+    if value == "high" {
+        return DiffRisk.high()
+    }
+
+    if value == "elevated" {
+        return DiffRisk.elevated()
+    }
+
+    return DiffRisk.low()
+}
+
+fn max_risk(left: Int, right: Int) -> Int {
+    if left > right {
+        return left
+    }
+
+    return right
+}
+
+fn diff_reason_is_modeled(reason: read String) -> Bool {
+    if reason == "RSScript dependencies changed" {
+        return true
+    }
+
+    if reason == "package features changed" {
+        return true
+    }
+
+    if reason == "native Rust wrapper metadata changed" {
+        return true
+    }
+
+    if reason == "public .rssi semantic contract changed" {
+        return true
+    }
+
+    if reason == "high-risk interface change detected" {
+        return true
+    }
+
+    if String.starts_with(value: read reason, prefix: read "package risk changed from ") {
+        return true
+    }
+
+    return false
+}
+
+fn count_unmodeled_diff_reasons_from(
+    reasons: read JsonValue,
+    index: Int,
+    limit: Int,
+) -> Result<Int, JsonError> {
+    if index >= limit {
+        return Ok(0)
+    }
+
+    let item = Json.array_get(value: read reasons, index: index)?
+    let reason = Json.as_string(value: read item)?
+    let rest = count_unmodeled_diff_reasons_from(
+        reasons: read reasons,
+        index: index + 1,
+        limit: limit,
+    )?
+
+    if diff_reason_is_modeled(reason: read reason) {
+        return Ok(rest)
+    }
+
+    return Ok(rest + 1)
+}
+
+fn count_unmodeled_diff_reasons(reasons: read JsonValue) -> Result<Int, JsonError> {
+    let limit = Json.array_len(value: read reasons)?
+
+    return count_unmodeled_diff_reasons_from(
+        reasons: read reasons,
+        index: 0,
+        limit: limit,
+    )
+}
+
+fn max_manifest_risk_from(
+    changes: read JsonValue,
+    index: Int,
+    limit: Int,
+    risk: Int,
+) -> Result<Int, JsonError> {
+    if index >= limit {
+        return Ok(risk)
+    }
+
+    let change = Json.array_get(value: read changes, index: index)?
+    let risk_text = Json.field_string(value: read change, name: read "risk")?
+    let change_risk = diff_risk_from_string(value: read risk_text)
+    let next = max_risk(left: risk, right: change_risk)
+
+    return max_manifest_risk_from(
+        changes: read changes,
+        index: index + 1,
+        limit: limit,
+        risk: next,
+    )
+}
+
+fn max_manifest_risk(changes: read JsonValue) -> Result<Int, JsonError> {
+    let limit = Json.array_len(value: read changes)?
+
+    return max_manifest_risk_from(
+        changes: read changes,
+        index: 0,
+        limit: limit,
+        risk: DiffRisk.low(),
+    )
+}
+
+fn high_interface_count_from(
+    changes: read JsonValue,
+    index: Int,
+    limit: Int,
+) -> Result<Int, JsonError> {
+    if index >= limit {
+        return Ok(0)
+    }
+
+    let change = Json.array_get(value: read changes, index: index)?
+    let risk_text = Json.field_string(value: read change, name: read "risk")?
+    let rest = high_interface_count_from(
+        changes: read changes,
+        index: index + 1,
+        limit: limit,
+    )?
+
+    if risk_text == "high" {
+        return Ok(rest + 1)
+    }
+
+    return Ok(rest)
+}
+
+fn max_interface_risk_from(
+    changes: read JsonValue,
+    index: Int,
+    limit: Int,
+    risk: Int,
+) -> Result<Int, JsonError> {
+    if index >= limit {
+        return Ok(risk)
+    }
+
+    let change = Json.array_get(value: read changes, index: index)?
+    let risk_text = Json.field_string(value: read change, name: read "risk")?
+    let change_risk = diff_risk_from_string(value: read risk_text)
+    let next = max_risk(left: risk, right: change_risk)
+
+    return max_interface_risk_from(
+        changes: read changes,
+        index: index + 1,
+        limit: limit,
+        risk: next,
+    )
+}
+
+fn max_interface_risk(changes: read JsonValue) -> Result<Int, JsonError> {
+    let limit = Json.array_len(value: read changes)?
+
+    return max_interface_risk_from(
+        changes: read changes,
+        index: 0,
+        limit: limit,
+        risk: DiffRisk.low(),
+    )
+}
+
+fn review_risk_from_summary(summary: read JsonValue) -> Result<Int, JsonError> {
+    let errors = Json.field_int(value: read summary, name: read "errors")?
+    let native = Json.field_int(value: read summary, name: read "native_apis")?
+    let unknown = Json.field_int(value: read summary, name: read "unknown_apis")?
+    let public_apis = Json.field_int(value: read summary, name: read "public_apis")?
+
+    if unknown > 0 {
+        return Ok(DiffRisk.unknown())
+    }
+
+    if errors > 0 {
+        return Ok(DiffRisk.high())
+    }
+
+    if native > 0 || public_apis > 0 {
+        return Ok(DiffRisk.elevated())
+    }
+
+    return Ok(DiffRisk.low())
+}
+
+fn parse_package_diff_facts(value: read JsonValue) -> Result<fresh PackageDiffFacts, JsonError> {
+    let risk = Json.field_string(value: read value, name: read "risk")?
+    let old_review = Json.field(value: read value, name: read "old_review")?
+    let new_review = Json.field(value: read value, name: read "new_review")?
+    let manifest_changes = Json.field(value: read value, name: read "manifest_changes")?
+    let interface_changes = Json.field(value: read value, name: read "interface_changes")?
+    let reasons = Json.field(value: read value, name: read "reasons")?
+    let interface_count = Json.array_len(value: read interface_changes)?
+
+    return PackageDiffFacts(
+        declared_risk: diff_risk_from_string(value: read risk),
+        old_review_risk: review_risk_from_summary(summary: read old_review)?,
+        new_review_risk: review_risk_from_summary(summary: read new_review)?,
+        manifest_risk: max_manifest_risk(changes: read manifest_changes)?,
+        interface_risk: max_interface_risk(changes: read interface_changes)?,
+        manifest_changes: Json.array_len(value: read manifest_changes)?,
+        interface_changes: interface_count,
+        high_interface_changes: high_interface_count_from(
+            changes: read interface_changes,
+            index: 0,
+            limit: interface_count,
+        )?,
+        unmodeled_reasons: count_unmodeled_diff_reasons(reasons: read reasons)?,
+    )
+}
+
+fn classify_package_diff(facts: read PackageDiffFacts) -> fresh PackageDiffDecision {
+    let review_risk = max_risk(left: facts.old_review_risk, right: facts.new_review_risk)
+    let change_risk = max_risk(left: facts.manifest_risk, right: facts.interface_risk)
+    let risk = max_risk(left: review_risk, right: change_risk)
+    let mismatch = diff_mismatch_count(risk: risk, expected: facts.declared_risk)
+
+    return PackageDiffDecision(
+        risk: risk,
+        mismatches: mismatch,
+    )
+}
+
+fn diff_mismatch_count(risk: Int, expected: Int) -> Int {
+    if risk != expected {
+        return 1
+    }
+
+    return 0
+}
+
+fn dogfood_package_diff_facts() -> Result<fresh PackageDiffFacts, JsonError> {
+    let path = Path.from_string(value: read "tests/fixtures/pass/dogfood-package-diff.json")
+    let json = Json.parse_file(path: read path)?
+
+    return parse_package_diff_facts(value: read json)
+}
+
+fn diff_summary_line(
+    facts: read PackageDiffFacts,
+    decision: read PackageDiffDecision,
+) -> fresh String {
+    let manifest = String.from_int(value: facts.manifest_changes)
+    let interfaces = String.from_int(value: facts.interface_changes)
+    let high_interfaces = String.from_int(value: facts.high_interface_changes)
+    let mismatches = String.from_int(value: decision.mismatches)
+    let unmodeled = String.from_int(value: facts.unmodeled_reasons)
+    let first = String.concat(left: read "dogfood package diff manifest=", right: read manifest)
+    let second = String.concat(left: read first, right: read " interface=")
+    let third = String.concat(left: read second, right: read interfaces)
+    let fourth = String.concat(left: read third, right: read " high_interface=")
+    let fifth = String.concat(left: read fourth, right: read high_interfaces)
+    let sixth = String.concat(left: read fifth, right: read " mismatches=")
+    let seventh = String.concat(left: read sixth, right: read mismatches)
+    let eighth = String.concat(left: read seventh, right: read " unmodeled_reasons=")
+
+    return String.concat(left: read eighth, right: read unmodeled)
+}
+
+pub fn main() -> Result<Unit, JsonError> {
+    let facts = dogfood_package_diff_facts()?
+    let decision = classify_package_diff(facts: read facts)
+    let summary = diff_summary_line(facts: read facts, decision: read decision)
+
+    Log.write(message: read summary)
+
+    Assert.equal_int(left: decision.risk, right: facts.declared_risk)
+    Assert.equal_int(left: decision.mismatches, right: 0)
+    Assert.equal_int(left: facts.unmodeled_reasons, right: 0)
+
+    return Ok(Unit)
+}

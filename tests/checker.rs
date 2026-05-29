@@ -4603,6 +4603,71 @@ fn rss_run_reports_dogfood_package_export_mismatch() {
     );
 }
 
+#[test]
+fn rss_run_accepts_dogfood_package_diff_classifier() {
+    let temp_dir = unique_temp_dir("rsscript-dogfood-package-diff");
+    let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-diff.rss")
+    else {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return;
+    };
+    let package_diff_json = generated_dogfood_package_diff_json(&temp_dir);
+    fs::write(
+        fixture_dir.join("dogfood-package-diff.json"),
+        serde_json::to_vec(&package_diff_json).expect("package diff JSON should serialize"),
+    )
+    .expect("generated package diff should write");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("tests/fixtures/pass/dogfood-package-diff.rss")
+        .current_dir(&temp_dir)
+        .output()
+        .expect("rss run should execute dogfood package diff classifier");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "dogfood package diff manifest=8 interface=1 high_interface=1 mismatches=0 unmodeled_reasons=0"
+    );
+    assert!(stderr.trim().is_empty(), "{stderr}");
+}
+
+#[test]
+fn rss_run_reports_dogfood_package_diff_mismatch() {
+    let temp_dir = unique_temp_dir("rsscript-dogfood-package-diff-mismatch");
+    let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-diff.rss")
+    else {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return;
+    };
+    let mut package_diff_json = generated_dogfood_package_diff_json(&temp_dir);
+    package_diff_json["risk"] = Value::String("elevated".to_string());
+    fs::write(
+        fixture_dir.join("dogfood-package-diff.json"),
+        serde_json::to_vec(&package_diff_json).expect("package diff JSON should serialize"),
+    )
+    .expect("mutated package diff should write");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("tests/fixtures/pass/dogfood-package-diff.rss")
+        .current_dir(&temp_dir)
+        .output()
+        .expect("rss run should execute dogfood package diff classifier");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!output.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("dogfood package diff manifest=8 interface=1 high_interface=1 mismatches=1 unmodeled_reasons=0"),
+        "{stdout}"
+    );
+}
+
 fn prepare_dogfood_run_dir(temp_dir: &Path) -> Option<PathBuf> {
     prepare_dogfood_run_dir_for(temp_dir, "dogfood-review-classifier.rss")
 }
@@ -4736,6 +4801,51 @@ pub fn Api.run() -> Unit
     .expect("source should be written");
 
     package_review_json_for_dir(&package_dir)
+}
+
+fn generated_dogfood_package_diff_json(temp_dir: &Path) -> Value {
+    let old_dir = temp_dir.join("package-diff-old");
+    let new_dir = temp_dir.join("package-diff-new");
+    write_package_fixture(
+        &old_dir,
+        "0.1.0",
+        r#"[dependencies]
+rss-core = "0.5"
+"#,
+        r#"struct JsonValue
+struct JsonError
+
+pub fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
+"#,
+    );
+    write_package_fixture(
+        &new_dir,
+        "0.2.0",
+        r#"[dependencies]
+rss-core = "0.5"
+rss-cache = "0.1"
+
+[features]
+streaming = []
+
+[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_json_native"
+build_scripts = "review"
+"#,
+        r#"features: native
+
+struct JsonValue
+struct JsonError
+
+pub fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
+    effects(native)
+"#,
+    );
+    let diff = diff_package_dirs(&old_dir, &new_dir).expect("package diff should succeed");
+    serde_json::from_str(&rsscript::format_package_diff_json(&diff))
+        .expect("package diff JSON should parse")
 }
 
 #[test]
