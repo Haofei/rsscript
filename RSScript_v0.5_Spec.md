@@ -1516,17 +1516,26 @@ Standard effects:
 
 Guarantees are checked only over RSScript-known constructs and trusted signature metadata. They are not whole-program proofs over arbitrary native or runtime internals.
 
-`pure` needs a scoped definition, because managed mutation is dynamically shared
-(§10.3): reading a managed value a callee mutates through an alias is not visible
-in the conflict-root model, so `pure` over managed inputs is effectively
-unprovable. In v0.5, `pure` is assertable only on functions whose reachable state
-is closed: no `mut`/`take` parameters, no `retains`, and no managed value
-reachable for mutation — in practice functions over `Copy` and `local`-closed
-data calling only `pure` callees. "Reachable" here means reachable for mutation
-through the same conflict roots (§8.2): inline fields of a value the function can
-mutate, not values behind handle/weak boundaries the function does not touch.
-`pure` is not claimable for a function that takes a managed parameter it could
-observe being mutated elsewhere.
+`pure` is call-time observational purity, not Haskell-style referential
+transparency over mutable identity and not a memoization guarantee. It means the
+function performs no observable external side effects, does not mutate reachable
+managed state, does not retain values, does not consume local values, does not
+open or return resources, and calls only functions whose contracts are also
+`pure` under these rules.
+
+A `pure` function may read non-Copy managed inputs through `read` parameters,
+including `String`, `Bytes`, `Buffer`, structs, and class handles. It may inspect
+the current value reachable from those inputs for the duration of the call, but
+must not mutate or retain that value. Repeated calls with the same managed handle
+are not guaranteed to return the same result if another call mutates the handle
+between those calls.
+
+A `pure` function must not read ambient state such as time, randomness,
+environment variables, filesystem, network, global mutable state, or native
+state unless a future explicit trusted capability defines a stronger contract.
+Pure over native functions is trusted metadata, not inferred proof. A native
+function marked `pure` remains a native boundary and must-review unless package
+policy explicitly trusts that boundary.
 
 ### 10.7 `retains(x)`
 

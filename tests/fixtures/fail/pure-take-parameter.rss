@@ -1,0 +1,12 @@
+// expect: RS0009
+features: local
+
+struct Image {
+    pixels: Buffer
+}
+
+fn consume(image: take Image) -> Unit
+    effects(pure)
+{
+    return Unit
+}

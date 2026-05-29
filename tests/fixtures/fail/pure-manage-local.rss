@@ -1,0 +1,13 @@
+// expect: RS0009
+features: local
+
+struct Image {
+    pixels: Int
+}
+
+fn make_shared() -> Image
+    effects(pure)
+{
+    local image = Image(pixels: 1)
+    return manage image
+}

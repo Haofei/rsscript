@@ -832,27 +832,35 @@ impl Analyzer<'_> {
                 .iter()
                 .any(|effect| matches!(effect, EffectDecl::Name(name) if name == "pure"))
             {
-                for param in function
-                    .params
-                    .iter()
-                    .filter(|param| param.effect == Some(DataEffect::Mut))
-                {
+                for param in function.params.iter().filter(|param| {
+                    matches!(param.effect, Some(DataEffect::Mut | DataEffect::Take))
+                }) {
+                    let (label, cause, fix) = match param.effect {
+                        Some(DataEffect::Take) => (
+                            "taking parameter in pure function",
+                            "A `pure` function must not consume values or change ownership boundaries.",
+                            "Remove `pure`, or change the parameter to `read` if the function only observes it.",
+                        ),
+                        _ => (
+                            "mutable parameter in pure function",
+                            "A `pure` function must not mutate reachable managed state.",
+                            "Remove `pure`, or change the parameter to `read` if the function does not mutate it.",
+                        ),
+                    };
                     self.diagnostics.push(
                         Diagnostic::error(
                             code::INVALID_PURE_EFFECT,
                             format!(
-                                "`{}` is declared pure but parameter `{}` is mutable.",
-                                function.name, param.name
+                                "`{}` is declared pure but parameter `{}` uses `{}`.",
+                                function.name,
+                                param.name,
+                                param.effect.map_or("unknown", data_effect_name)
                             ),
                             param.span.clone(),
-                            "mutable parameter in pure function",
+                            label,
                         )
-                        .with_cause("A `pure` function must not mutate reachable managed state.")
-                        .with_fix(
-                            "remove_pure_or_mut",
-                            "Remove `pure`, or change the parameter to `read` if the function does not mutate it.",
-                            "manual",
-                        ),
+                        .with_cause(cause)
+                        .with_fix("remove_pure_or_use_read", fix, "manual"),
                     );
                 }
 
@@ -1179,6 +1187,9 @@ impl Analyzer<'_> {
                         span,
                         "`manage` may allocate while migrating a local graph.".to_string(),
                     );
+                }
+                if guarantee == RuntimeGuarantee::Pure {
+                    self.pure_manage_diagnostic(function_name, span);
                 }
                 self.check_runtime_guarantee_expr(guarantee, function_name, value);
             }
@@ -1737,6 +1748,25 @@ impl Analyzer<'_> {
         );
     }
 
+    fn pure_manage_diagnostic(&mut self, function_name: &str, span: &crate::diagnostic::Span) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::INVALID_PURE_EFFECT,
+                format!("`{function_name}` is declared pure but uses `manage`."),
+                span.clone(),
+                "manage in pure function",
+            )
+            .with_cause(
+                "`manage` consumes a local value and changes its ownership boundary; `pure` functions may observe inputs but must not consume local values.",
+            )
+            .with_fix(
+                "remove_manage_or_pure",
+                "Move the `manage` operation outside the pure function, or remove `pure`.",
+                "manual",
+            ),
+        );
+    }
+
     fn blocking_call_diagnostic(
         &mut self,
         function_name: &str,
@@ -1826,6 +1856,14 @@ fn split_top_level_type_args(args: &str) -> Vec<&str> {
 fn effect_name(effect: &EffectDecl) -> &str {
     match effect {
         EffectDecl::Name(name) | EffectDecl::Retains(name) => name,
+    }
+}
+
+fn data_effect_name(effect: DataEffect) -> &'static str {
+    match effect {
+        DataEffect::Read => "read",
+        DataEffect::Mut => "mut",
+        DataEffect::Take => "take",
     }
 }
 

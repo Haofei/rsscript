@@ -290,7 +290,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::INVALID_PURE_EFFECT,
         title: "invalid pure effect",
-        explanation: "`effects(pure)` is a guarantee that the function does not mutate reachable managed state and does not retain parameters.",
+        explanation: "`effects(pure)` is call-time observational purity: the function may read current inputs, including non-Copy managed values, but must not mutate, retain, consume local values, use `manage`, or call non-pure functions.",
     },
     DiagnosticExplanation {
         code: code::REMOVED_PROFILE_DECLARATION,
