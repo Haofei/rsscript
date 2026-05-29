@@ -3,7 +3,7 @@ resource File {
     fd: Int
 }
 
-fn read_file(path: read Path) -> Result<fresh Bytes, IOError> {
+fn read_file(path: read Path) -> Result<fresh Bytes, FileError> {
     with File.open_read(
         path: read path
     ) as file {

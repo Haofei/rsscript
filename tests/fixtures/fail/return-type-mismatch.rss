@@ -1,0 +1,9 @@
+// expect: RS0208
+
+class BuildError {
+    code: Int
+}
+
+fn build_name() -> Result<String, BuildError> {
+    return Ok(42)
+}

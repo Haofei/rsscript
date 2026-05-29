@@ -28,6 +28,7 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
     ("missing named argument", "RS0204"),
     ("missing read/mut/take effect", "RS0202"),
     ("call argument type mismatch", "RS0207"),
+    ("return type mismatch", "RS0208"),
     ("same-call place conflict", "RS0302"),
     ("constructor/variant call-like conflict", "RS0203"),
     ("handle-field same-call conflict", "RS0303"),
@@ -689,6 +690,7 @@ fn diagnostic_explanations_are_available_by_code() {
     let unknown_field = explain_diagnostic_code("RS0025").expect("RS0025 should be registered");
     let unknown_binding = explain_diagnostic_code("RS0026").expect("RS0026 should be registered");
     let type_mismatch = explain_diagnostic_code("RS0207").expect("RS0207 should be registered");
+    let return_mismatch = explain_diagnostic_code("RS0208").expect("RS0208 should be registered");
 
     assert_eq!(explanation.title, "use after manage");
     assert!(formatted.contains("RS0401"));
@@ -706,6 +708,8 @@ fn diagnostic_explanations_are_available_by_code() {
             .explanation
             .contains("resolved parameter type")
     );
+    assert_eq!(return_mismatch.title, "return type mismatch");
+    assert!(return_mismatch.explanation.contains("declared return type"));
     assert_eq!(
         pool_contract.title,
         "ResourcePool factory contract violation"
@@ -729,6 +733,29 @@ fn main() -> Unit {
             diagnostic.code == "RS0207"
                 && diagnostic.summary
                     == "argument `message` for `Log.write` has type `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_constructor_field_type_mismatch_before_backend_lowering() {
+    let source = r#"
+struct User {
+    name: String
+}
+
+fn build() -> User {
+    return User(name: read 42)
+}
+"#;
+    let diagnostics = analyze_source("constructor-field-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "argument `name` for `User` has type `Int`, expected `String`."
         }),
         "{diagnostics:?}"
     );
@@ -768,6 +795,173 @@ fn main() -> Unit {
         diagnostics
             .iter()
             .all(|diagnostic| diagnostic.code != "RS0207"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_option_argument_payload_type_mismatch() {
+    let source = r#"
+fn accept(value: read Option<String>) -> Unit
+fn main() -> Unit {
+    accept(value: read Some(42))
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("option-arg-payload-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "argument `value` for `accept` has payload type `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_result_argument_payload_type_mismatch() {
+    let source = r#"
+class BuildError {
+    code: Int
+}
+
+fn accept(value: read Result<String, BuildError>) -> Unit
+fn main() -> Unit {
+    accept(value: read Err("bad"))
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("result-arg-payload-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "argument `value` for `accept` has payload type `String`, expected `BuildError`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_return_type_mismatch_before_backend_lowering() {
+    let source = r#"
+fn build() -> String {
+    return 42
+}
+"#;
+    let diagnostics = analyze_source("return-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0208"
+                && diagnostic.summary == "return in `build` has type `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn rust_lowering_rejects_return_type_mismatch_before_rustc() {
+    let source = r#"
+fn build() -> String {
+    return 42
+}
+"#;
+    let diagnostics = lower_source_to_rust("return-type.rss", source)
+        .expect_err("return type mismatch should fail before Rust generation");
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0208"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_result_ok_payload_type_mismatch() {
+    let source = r#"
+class BuildError {
+    code: Int
+}
+
+fn build() -> Result<String, BuildError> {
+    return Ok(42)
+}
+"#;
+    let diagnostics = analyze_source("result-ok-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0208"
+                && diagnostic.summary == "Ok payload in `build` has type `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_result_err_payload_type_mismatch() {
+    let source = r#"
+class BuildError {
+    code: Int
+}
+
+fn build() -> Result<String, BuildError> {
+    return Err("bad")
+}
+"#;
+    let diagnostics = analyze_source("result-err-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0208"
+                && diagnostic.summary
+                    == "Err payload in `build` has type `String`, expected `BuildError`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_option_some_payload_type_mismatch() {
+    let source = r#"
+fn maybe_name() -> Option<String> {
+    return Some(42)
+}
+"#;
+    let diagnostics = analyze_source("option-some-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0208"
+                && diagnostic.summary
+                    == "Some payload in `maybe_name` has type `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_allows_bare_result_success_returns_to_match_ok_type() {
+    let source = r#"
+class BuildError {
+    code: Int
+}
+
+fn build() -> Result<String, BuildError> {
+    return "ok"
+}
+"#;
+    let diagnostics = analyze_source("result-bare-success.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "RS0208"),
         "{diagnostics:?}"
     );
 }

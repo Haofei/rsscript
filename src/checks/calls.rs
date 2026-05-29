@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::{CallResolution, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirStmt};
-use crate::syntax::ast::{Callee, Item};
+use crate::syntax::ast::{Callee, FunctionDecl, Item, TypeRef};
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
     let items = analyzer.syntax_program.items.clone();
@@ -26,7 +26,13 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
             if let Some(block) = &body.block {
                 let mut local_closure_bindings = HashMap::new();
                 collect_local_closure_bindings(block, &mut local_closure_bindings);
-                check_block(analyzer, block, &noescape_bindings, &local_closure_bindings);
+                check_block(
+                    analyzer,
+                    function,
+                    block,
+                    &noescape_bindings,
+                    &local_closure_bindings,
+                );
             }
         }
     }
@@ -74,6 +80,7 @@ fn collect_local_closure_bindings(block: &HirBlock, bindings: &mut HashMap<Strin
 
 fn check_block(
     analyzer: &mut Analyzer<'_>,
+    function: &FunctionDecl,
     block: &HirBlock,
     noescape_bindings: &HashMap<String, Span>,
     local_closure_bindings: &HashMap<String, Span>,
@@ -104,6 +111,7 @@ fn check_block(
             HirStmt::Return {
                 value: Some(value), ..
             } => {
+                check_return_type(analyzer, function, Some(value), hir_expr_span(value));
                 check_noescape_escape(
                     analyzer,
                     value,
@@ -119,6 +127,11 @@ fn check_block(
                     LocalClosureEscapeContext::Return,
                 );
                 check_expr(analyzer, value, noescape_bindings, local_closure_bindings);
+            }
+            HirStmt::Return {
+                value: None, span, ..
+            } => {
+                check_return_type(analyzer, function, None, span);
             }
             HirStmt::Expr(value) => {
                 check_noescape_escape(
@@ -144,7 +157,13 @@ fn check_block(
                     noescape_bindings,
                     local_closure_bindings,
                 );
-                check_block(analyzer, body, noescape_bindings, local_closure_bindings);
+                check_block(
+                    analyzer,
+                    function,
+                    body,
+                    noescape_bindings,
+                    local_closure_bindings,
+                );
             }
             HirStmt::If {
                 condition,
@@ -160,6 +179,7 @@ fn check_block(
                 );
                 check_block(
                     analyzer,
+                    function,
                     then_body,
                     noescape_bindings,
                     local_closure_bindings,
@@ -167,6 +187,7 @@ fn check_block(
                 if let Some(else_body) = else_body {
                     check_block(
                         analyzer,
+                        function,
                         else_body,
                         noescape_bindings,
                         local_closure_bindings,
@@ -184,13 +205,20 @@ fn check_block(
                         local_closure_bindings,
                     );
                 }
-                check_block(analyzer, body, noescape_bindings, local_closure_bindings);
+                check_block(
+                    analyzer,
+                    function,
+                    body,
+                    noescape_bindings,
+                    local_closure_bindings,
+                );
             }
             HirStmt::Match { value, arms, .. } => {
                 check_expr(analyzer, value, noescape_bindings, local_closure_bindings);
                 for arm in arms {
                     check_block(
                         analyzer,
+                        function,
                         &arm.body,
                         noescape_bindings,
                         local_closure_bindings,
@@ -198,7 +226,6 @@ fn check_block(
                 }
             }
             HirStmt::Let { value: None, .. }
-            | HirStmt::Return { value: None, .. }
             | HirStmt::Break(_)
             | HirStmt::Continue(_)
             | HirStmt::Unknown(_) => {}
@@ -257,13 +284,352 @@ fn check_expr(
             check_expr(analyzer, index, noescape_bindings, local_closure_bindings);
         }
         HirExpr::Closure { body, .. } => {
-            check_block(analyzer, body, noescape_bindings, local_closure_bindings)
+            // Closure bodies use the enclosing function's return contract only when they
+            // are lowered as ordinary statements. noescape callback return contracts are
+            // checked at their call/parameter boundary.
+            check_expr_block_without_return_contract(
+                analyzer,
+                body,
+                noescape_bindings,
+                local_closure_bindings,
+            )
         }
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}
     }
+}
+
+fn check_expr_block_without_return_contract(
+    analyzer: &mut Analyzer<'_>,
+    block: &HirBlock,
+    noescape_bindings: &HashMap<String, Span>,
+    local_closure_bindings: &HashMap<String, Span>,
+) {
+    for statement in &block.statements {
+        match statement {
+            HirStmt::Let {
+                value: Some(value), ..
+            }
+            | HirStmt::Return {
+                value: Some(value), ..
+            }
+            | HirStmt::Expr(value) => {
+                check_expr(analyzer, value, noescape_bindings, local_closure_bindings);
+            }
+            HirStmt::With { resource, body, .. } => {
+                check_expr(
+                    analyzer,
+                    resource,
+                    noescape_bindings,
+                    local_closure_bindings,
+                );
+                check_expr_block_without_return_contract(
+                    analyzer,
+                    body,
+                    noescape_bindings,
+                    local_closure_bindings,
+                );
+            }
+            HirStmt::If {
+                condition,
+                then_body,
+                else_body,
+                ..
+            } => {
+                check_expr(
+                    analyzer,
+                    condition,
+                    noescape_bindings,
+                    local_closure_bindings,
+                );
+                check_expr_block_without_return_contract(
+                    analyzer,
+                    then_body,
+                    noescape_bindings,
+                    local_closure_bindings,
+                );
+                if let Some(else_body) = else_body {
+                    check_expr_block_without_return_contract(
+                        analyzer,
+                        else_body,
+                        noescape_bindings,
+                        local_closure_bindings,
+                    );
+                }
+            }
+            HirStmt::Loop {
+                condition, body, ..
+            } => {
+                if let Some(condition) = condition {
+                    check_expr(
+                        analyzer,
+                        condition,
+                        noescape_bindings,
+                        local_closure_bindings,
+                    );
+                }
+                check_expr_block_without_return_contract(
+                    analyzer,
+                    body,
+                    noescape_bindings,
+                    local_closure_bindings,
+                );
+            }
+            HirStmt::Match { value, arms, .. } => {
+                check_expr(analyzer, value, noescape_bindings, local_closure_bindings);
+                for arm in arms {
+                    check_expr_block_without_return_contract(
+                        analyzer,
+                        &arm.body,
+                        noescape_bindings,
+                        local_closure_bindings,
+                    );
+                }
+            }
+            HirStmt::Let { value: None, .. }
+            | HirStmt::Return { value: None, .. }
+            | HirStmt::Break(_)
+            | HirStmt::Continue(_)
+            | HirStmt::Unknown(_) => {}
+        }
+    }
+}
+
+fn check_return_type(
+    analyzer: &mut Analyzer<'_>,
+    function: &FunctionDecl,
+    value: Option<&HirExpr>,
+    span: &Span,
+) {
+    let Some(return_ty) = &function.return_ty else {
+        return;
+    };
+    let function_type_params = function
+        .type_params
+        .iter()
+        .map(|param| param.name.clone())
+        .collect::<Vec<_>>();
+    if type_contains_unresolved_generic(&type_ref_name(return_ty), &function_type_params) {
+        return;
+    }
+
+    match value {
+        None => {
+            if return_ty.name != "Unit" {
+                return_type_mismatch_diagnostic(
+                    analyzer,
+                    &function.name,
+                    "Unit",
+                    &type_ref_name(return_ty),
+                    span,
+                );
+            }
+        }
+        Some(value) => {
+            check_return_expr_type(analyzer, function, return_ty, value, hir_expr_span(value));
+        }
+    }
+}
+
+fn check_return_expr_type(
+    analyzer: &mut Analyzer<'_>,
+    function: &FunctionDecl,
+    return_ty: &TypeRef,
+    value: &HirExpr,
+    span: &Span,
+) {
+    if return_ty.name == "Result" && return_ty.args.len() == 2 {
+        check_result_return_expr_type(analyzer, function, return_ty, value, span);
+        return;
+    }
+    if return_ty.name == "Option" && return_ty.args.len() == 1 {
+        check_option_return_expr_type(analyzer, function, return_ty, value, span);
+        return;
+    }
+
+    let expected = type_ref_name(return_ty);
+    let Some(actual) = hir_expr_type_name(value) else {
+        return;
+    };
+    if unresolved_generic_type(actual) {
+        return;
+    }
+    if !argument_type_matches(&expected, actual) {
+        return_type_mismatch_diagnostic(analyzer, &function.name, actual, &expected, span);
+    }
+}
+
+fn check_result_return_expr_type(
+    analyzer: &mut Analyzer<'_>,
+    function: &FunctionDecl,
+    return_ty: &TypeRef,
+    value: &HirExpr,
+    span: &Span,
+) {
+    let ok_ty = type_ref_name(&return_ty.args[0]);
+    let err_ty = type_ref_name(&return_ty.args[1]);
+    match enum_variant_payload(value) {
+        Some(("Ok", Some(payload))) => {
+            check_return_payload_type(analyzer, function, payload, &ok_ty, "Ok payload");
+        }
+        Some(("Err", Some(payload))) => {
+            check_return_payload_type(analyzer, function, payload, &err_ty, "Err payload");
+        }
+        Some(("Ok", None)) => {
+            if ok_ty != "Unit" {
+                return_type_mismatch_diagnostic(analyzer, &function.name, "Unit", &ok_ty, span);
+            }
+        }
+        Some(("Err", None)) => {
+            if err_ty != "Unit" {
+                return_type_mismatch_diagnostic(analyzer, &function.name, "Unit", &err_ty, span);
+            }
+        }
+        _ => {
+            let Some(actual) = hir_expr_type_name(value) else {
+                return;
+            };
+            if unresolved_generic_type(actual) {
+                return;
+            }
+            let expected_result = type_ref_name(return_ty);
+            if is_result_type_name(actual) {
+                if !argument_type_matches(&expected_result, actual) {
+                    return_type_mismatch_diagnostic(
+                        analyzer,
+                        &function.name,
+                        actual,
+                        &expected_result,
+                        span,
+                    );
+                }
+            } else if !argument_type_matches(&ok_ty, actual) {
+                return_type_mismatch_diagnostic(analyzer, &function.name, actual, &ok_ty, span);
+            }
+        }
+    }
+}
+
+fn check_option_return_expr_type(
+    analyzer: &mut Analyzer<'_>,
+    function: &FunctionDecl,
+    return_ty: &TypeRef,
+    value: &HirExpr,
+    span: &Span,
+) {
+    let some_ty = type_ref_name(&return_ty.args[0]);
+    match enum_variant_payload(value) {
+        Some(("Some", Some(payload))) => {
+            check_return_payload_type(analyzer, function, payload, &some_ty, "Some payload");
+        }
+        Some(("Some", None)) => {
+            if some_ty != "Unit" {
+                return_type_mismatch_diagnostic(analyzer, &function.name, "Unit", &some_ty, span);
+            }
+        }
+        Some(("None", _)) => {}
+        _ => {
+            let Some(actual) = hir_expr_type_name(value) else {
+                return;
+            };
+            if unresolved_generic_type(actual) {
+                return;
+            }
+            let expected_option = type_ref_name(return_ty);
+            if is_option_type_name(actual) {
+                if !argument_type_matches(&expected_option, actual) {
+                    return_type_mismatch_diagnostic(
+                        analyzer,
+                        &function.name,
+                        actual,
+                        &expected_option,
+                        span,
+                    );
+                }
+            } else if !argument_type_matches(&some_ty, actual) {
+                return_type_mismatch_diagnostic(analyzer, &function.name, actual, &some_ty, span);
+            }
+        }
+    }
+}
+
+fn check_return_payload_type(
+    analyzer: &mut Analyzer<'_>,
+    function: &FunctionDecl,
+    payload: &HirExpr,
+    expected: &str,
+    label: &str,
+) {
+    let Some(actual) = hir_expr_type_name(payload) else {
+        return;
+    };
+    if unresolved_generic_type(actual) {
+        return;
+    }
+    if !argument_type_matches(expected, actual) {
+        analyzer.diagnostics.push(
+            Diagnostic::error(
+                code::RETURN_TYPE_MISMATCH,
+                format!(
+                    "{label} in `{}` has type `{actual}`, expected `{expected}`.",
+                    function.name
+                ),
+                hir_expr_span(payload).clone(),
+                "return type mismatch",
+            )
+            .with_cause("Result and Option return constructors are checked against the declared return payload before Rust lowering.")
+            .with_fix(
+                "match_return_payload_type",
+                format!("Return a `{expected}` payload here."),
+                "manual",
+            ),
+        );
+    }
+}
+
+fn enum_variant_payload(expr: &HirExpr) -> Option<(&'static str, Option<&HirExpr>)> {
+    if let HirExpr::Effect { value, .. }
+    | HirExpr::Manage { value, .. }
+    | HirExpr::Try { value, .. } = expr
+    {
+        return enum_variant_payload(value);
+    }
+    let HirExpr::Call { callee, args, .. } = expr else {
+        return None;
+    };
+    let variant = match callee_name(callee).as_str() {
+        "Ok" => "Ok",
+        "Err" => "Err",
+        "Some" => "Some",
+        "None" => "None",
+        _ => return None,
+    };
+    Some((variant, args.first().map(|arg| &arg.value)))
+}
+
+fn return_type_mismatch_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    function_name: &str,
+    actual: &str,
+    expected: &str,
+    span: &Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::RETURN_TYPE_MISMATCH,
+            format!("return in `{function_name}` has type `{actual}`, expected `{expected}`."),
+            span.clone(),
+            "return type mismatch",
+        )
+        .with_cause("RSScript return types are part of the review contract and must be checked before Rust lowering.")
+        .with_fix(
+            "match_return_type",
+            format!("Return a value of type `{expected}` here."),
+            "manual",
+        ),
+    );
 }
 
 fn check_call_args(
@@ -451,6 +817,15 @@ fn check_call_args(
         if type_contains_unresolved_generic(&expected_param.type_name, &signature.type_params) {
             continue;
         }
+        if check_argument_variant_payload_type(
+            analyzer,
+            &call_name,
+            name,
+            &expected_param.type_name,
+            &arg.value,
+        ) {
+            continue;
+        }
         let Some(actual_type) = hir_expr_type_name(&arg.value) else {
             continue;
         };
@@ -504,6 +879,120 @@ fn check_call_args(
             LocalClosureEscapeContext::Pass { callee: &call_name },
         );
     }
+}
+
+fn check_argument_variant_payload_type(
+    analyzer: &mut Analyzer<'_>,
+    call_name: &str,
+    arg_name: &str,
+    expected_type: &str,
+    value: &HirExpr,
+) -> bool {
+    let Some((variant, payload)) = enum_variant_payload(value) else {
+        return false;
+    };
+    match (type_root_name(expected_type), variant) {
+        ("Option", "None") => true,
+        ("Option", "Some") => {
+            let Some(expected) = type_arg_names(expected_type)
+                .and_then(|args| args.first().map(|arg| arg.trim().to_string()))
+            else {
+                return false;
+            };
+            if let Some(payload) = payload {
+                check_argument_payload_type(analyzer, call_name, arg_name, payload, &expected);
+            } else if expected != "Unit" {
+                argument_payload_type_mismatch_diagnostic(
+                    analyzer,
+                    call_name,
+                    arg_name,
+                    "Unit",
+                    &expected,
+                    hir_expr_span(value),
+                );
+            }
+            true
+        }
+        ("Result", "Ok" | "Err") => {
+            let Some(args) = type_arg_names(expected_type) else {
+                return false;
+            };
+            let expected = match variant {
+                "Ok" => args.first().copied(),
+                "Err" => args.get(1).copied(),
+                _ => None,
+            };
+            let Some(expected) = expected else {
+                return false;
+            };
+            let expected = expected.trim();
+            if let Some(payload) = payload {
+                check_argument_payload_type(analyzer, call_name, arg_name, payload, expected);
+            } else if expected != "Unit" {
+                argument_payload_type_mismatch_diagnostic(
+                    analyzer,
+                    call_name,
+                    arg_name,
+                    "Unit",
+                    expected,
+                    hir_expr_span(value),
+                );
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn check_argument_payload_type(
+    analyzer: &mut Analyzer<'_>,
+    call_name: &str,
+    arg_name: &str,
+    payload: &HirExpr,
+    expected: &str,
+) {
+    let Some(actual) = hir_expr_type_name(payload) else {
+        return;
+    };
+    if unresolved_generic_type(actual) {
+        return;
+    }
+    if !argument_type_matches(expected, actual) {
+        argument_payload_type_mismatch_diagnostic(
+            analyzer,
+            call_name,
+            arg_name,
+            actual,
+            expected,
+            hir_expr_span(payload),
+        );
+    }
+}
+
+fn argument_payload_type_mismatch_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    call_name: &str,
+    arg_name: &str,
+    actual: &str,
+    expected: &str,
+    span: &Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::ARGUMENT_TYPE_MISMATCH,
+            format!(
+                "argument `{arg_name}` for `{call_name}` has payload type `{actual}`, expected `{expected}`."
+            ),
+            span.clone(),
+            "argument type mismatch",
+        )
+        .with_cause("Result and Option argument constructors are checked against the resolved parameter payload before Rust lowering.")
+        .with_fix(
+            "match_argument_payload_type",
+            format!("Pass a `{expected}` payload for `{arg_name}`."),
+            "manual",
+        ),
+    );
 }
 
 fn is_closure_binding_call(
@@ -1101,6 +1590,40 @@ fn argument_type_matches(expected: &str, actual: &str) -> bool {
         return type_root_name(expected) == "Result";
     }
     false
+}
+
+fn is_result_type_name(type_name: &str) -> bool {
+    type_root_name(type_name) == "Result"
+}
+
+fn is_option_type_name(type_name: &str) -> bool {
+    type_root_name(type_name) == "Option"
+}
+
+fn type_ref_name(ty: &TypeRef) -> String {
+    let name = if ty.args.is_empty() {
+        ty.name.clone()
+    } else {
+        format!(
+            "{}<{}>",
+            ty.name,
+            ty.args
+                .iter()
+                .map(type_ref_name)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    if ty.is_noescape && ty.name == "Fn" {
+        let return_ty = ty
+            .fn_return
+            .as_ref()
+            .map(|return_ty| format!(" -> {}", type_ref_name(return_ty)))
+            .unwrap_or_default();
+        format!("noescape Fn(){return_ty}")
+    } else {
+        name
+    }
 }
 
 fn type_contains_unresolved_generic(type_name: &str, generics: &[String]) -> bool {
