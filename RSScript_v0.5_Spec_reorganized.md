@@ -343,6 +343,9 @@ For v0.5, `Managed<T>` is part of the single-isolate ABI: it is non-atomic,
 intentionally `!Send` and `!Sync`, and valid only inside one RSScript isolate.
 Generated Rust must not require or promise ordinary Rust thread sharing for
 managed handles.
+This is an ABI contract, not merely a reference-runtime implementation detail:
+native bindings, lowered Rust, and runtime helpers must treat managed handles as
+single-isolate, non-atomic, non-thread-shareable values.
 
 The runtime type surface must be defined before lowering is implemented. A compiler release pins a compatible runtime crate version.
 
