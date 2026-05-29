@@ -242,7 +242,7 @@ spawn
 future task runtime
 full user-defined enum system beyond standard Option/Result-like variants
 general user FFI
-advanced interface/dynamic dispatch model
+advanced protocol/dynamic dispatch model
 ```
 
 `async fn` signatures are review-visible contracts. Executable async bodies, `await`, and `spawn` must be rejected before lowering in v0.5.
@@ -1492,37 +1492,95 @@ T: Copy      for Copy-only APIs
 
 Resource types are not `Managed`. Ordinary `List<T>` cannot be instantiated with resource types.
 
-### 14.6 Minimal interfaces are future design candidates
+### 14.6 Protocols are future capability contracts
 
-RSScript interfaces are not Rust traits. A future interface feature should be an app-layer capability contract, not a general trait system.
+Terminology note: the future capability-contract feature is named **`protocol`**,
+not `interface` and not `trait`. The word "interface" in RSScript refers only to
+`.rssi` semantic-contract files (the public signature surface). A `protocol` is a
+language-level capability that a type can satisfy. The two are related — a
+`protocol` is, in effect, a named bundle of `.rssi`-style effect-carrying method
+contracts raised to the type level — but they are not the same thing, and the
+shared word must not be reused for the language feature.
 
-Excluded from the v0.5 executable MVP:
+A `protocol` is an app-layer capability contract, not a general trait system. It
+is not part of the v0.5 executable MVP.
+
+#### Positive model (what a protocol is)
+
+A protocol must satisfy the feature admission rule (section 2.8): it is a
+reviewer question ("what capability does this type promise, and what is the
+effect of each capability method?") expressed through explicit, named syntax.
 
 ```text
+nominal            a type satisfies a protocol only by an explicit declaration,
+                   never structurally / by accident
+effect-carrying    every protocol method declares read/mut/take, return
+                   freshness, and retention/guarantee effects, exactly like a
+                   .rssi function contract
+contract-checked   an implementation is validated against the protocol the same
+                   way package .rssi contracts are checked against source today;
+                   the protocol feature reuses that checker, it does not invent a
+                   new dispatch or resolution mechanism
+explicit calls     protocol methods are called in qualified form
+                   `Protocol.method(self: <effect> value, ...)`, never
+                   `value.method(...)`; there is no auto method resolution
+self convention    `self` is a reserved first-parameter name carrying a data
+                   effect (`self: mut logger`); user parameters may not be named
+                   `self`
+```
+
+Excluded permanently (these conflict with sections 2.4 and 2.8):
+
+```text
+structural / accidental satisfaction
 associated types
 blanket impls
 specialization
-trait objects
-object safety rules
 higher-ranked bounds
 lifetime bounds
 arbitrary where clauses
 operator overloading
 auto method resolution
-interface inheritance
-default methods
+protocol inheritance
+default method bodies
+implicit coercion to a protocol type
 ```
 
-If added later, interface calls remain explicit:
+#### Static dispatch (the default)
+
+A protocol is usable as a generic bound, monomorphized, with no hidden
+indirection:
 
 ```rust
-Logger.write(self: mut logger, message: read message)
+fn write_line<W: Writer>(writer: mut W, message: read String) -> Unit
 ```
 
-not:
+This covers "write code against a capability" and is fully review-resolvable.
 
-```rust
-logger.write(message: read message)
+#### Dynamic dispatch (open design question, not yet decided)
+
+Whether RSScript admits protocol-typed dynamic dispatch (an open set of
+implementing types chosen at runtime) is unresolved. It is recorded as deferred,
+not forbidden. The closed-set case should instead use sealed sum types with
+exhaustive match (section 20.1), which are strictly more reviewable; dynamic
+dispatch is only for genuinely open sets (runtime-registered plugins, third-party
+extensions).
+
+Any future dynamic-dispatch design is binding-constrained by the following. If a
+design cannot meet all of them, it is rejected:
+
+```text
+1. Only through a protocol whose methods carry full effect contracts. A dynamic
+   call's concrete type is unknown but its effects are bounded by the protocol
+   contract, so the call's mutation/retention/resource behavior stays known.
+2. Coercion to a protocol-typed value is explicit (e.g. an explicit `as Protocol`
+   or wrapper construction), never an implicit upcast.
+3. Calls stay explicit and qualified: `Protocol.method(self: read value, ...)`.
+4. A protocol-typed value is an ordinary managed handle (single-isolate, not
+   `Send`); its allocation is the normal managed allocation, not hidden boxing.
+5. Review classification: a protocol-dynamic call is `review_if_changed` /
+   must-review with effects bounded by the protocol contract. It is NOT `unknown`
+   (section 16.5), because the effects are known even though the type is not.
 ```
 
 ---
