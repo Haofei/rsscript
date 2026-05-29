@@ -4552,6 +4552,46 @@ fn apply(callback: noescape Fn()) -> Unit {
 }
 
 #[test]
+fn review_map_marks_native_calls_inside_noescape_callbacks() {
+    let source = r#"
+features: native
+
+native fn Native.echo(message: read String) -> String
+    effects(native)
+
+fn apply(callback: noescape Fn()) -> Unit {
+    callback()
+    return Unit
+}
+
+fn caller(message: read String) -> Unit {
+    apply(callback: || {
+        Native.echo(message: read message)
+    })
+    return Unit
+}
+"#;
+    let map = review_map_sources(vec![("callback-native.rss", source)]);
+    let region = map.files[0]
+        .regions
+        .iter()
+        .find(|region| region.function == "caller")
+        .expect("expected caller region");
+
+    assert_eq!(
+        region.classification,
+        ReviewMapClassification::ReviewRequired
+    );
+    assert!(
+        region
+            .reasons
+            .iter()
+            .any(|reason| reason == "native call `Native.echo`"),
+        "{region:?}"
+    );
+}
+
+#[test]
 fn review_map_marks_local_closure_direct_calls_review_required_not_unknown() {
     let source = r#"
 features: local

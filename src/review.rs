@@ -1294,6 +1294,9 @@ fn collect_review_map_hir_facts_expr(
         HirExpr::Call {
             args, resolution, ..
         } => {
+            if let CallResolution::Resolved { signature, .. } = resolution {
+                collect_call_boundary_facts(signature, facts);
+            }
             for (index, arg) in args.iter().enumerate() {
                 if let Some(body) = noescape_call_closure_body(arg, index, resolution) {
                     collect_review_map_hir_facts_block(body, local_bindings, facts);
