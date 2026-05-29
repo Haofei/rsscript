@@ -995,6 +995,9 @@ impl Analyzer<'_> {
         for arg in &ty.args {
             self.check_unknown_type_ref(arg, generic_params);
         }
+        for param in &ty.fn_params {
+            self.check_unknown_type_ref(param, generic_params);
+        }
         if let Some(return_ty) = &ty.fn_return {
             self.check_unknown_type_ref(return_ty, generic_params);
         }
@@ -1147,8 +1150,9 @@ impl Analyzer<'_> {
             | HirExpr::Spawn { value, .. }
             | HirExpr::Await { value, .. }
             | HirExpr::Try { value, .. } => self.check_unknown_bindings_in_expr(value, visible),
-            HirExpr::Closure { body, .. } => {
+            HirExpr::Closure { params, body, .. } => {
                 let mut closure_visible = visible.clone();
+                closure_visible.extend(params.iter().cloned());
                 self.check_unknown_bindings_in_block(body, &mut closure_visible);
             }
             HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
@@ -2453,6 +2457,10 @@ fn type_ref_contains_name(ty: &TypeRef, name: &str) -> bool {
     ty.name == name
         || ty.args.iter().any(|arg| type_ref_contains_name(arg, name))
         || ty
+            .fn_params
+            .iter()
+            .any(|param| type_ref_contains_name(param, name))
+        || ty
             .fn_return
             .as_deref()
             .is_some_and(|return_ty| type_ref_contains_name(return_ty, name))
@@ -2472,12 +2480,18 @@ fn type_ref_name(ty: &TypeRef) -> String {
     };
     if ty.is_noescape {
         if ty.name == "Fn" {
+            let params = ty
+                .fn_params
+                .iter()
+                .map(type_ref_name)
+                .collect::<Vec<_>>()
+                .join(", ");
             let return_ty = ty
                 .fn_return
                 .as_ref()
                 .map(|return_ty| format!(" -> {}", type_ref_name(return_ty)))
                 .unwrap_or_default();
-            return format!("noescape Fn(){return_ty}");
+            return format!("noescape Fn({params}){return_ty}");
         }
         format!("noescape {name}")
     } else {

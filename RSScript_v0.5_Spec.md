@@ -1650,6 +1650,17 @@ such as `ResourcePool<T>.new(create: noescape Fn() -> T, ...)` and
 `ResourcePool<T>.try_new(create: noescape Fn() -> Result<T, E>, ...)` use the
 same callback return contract rather than a ResourcePool-only type shortcut.
 
+`Fn` may also declare positional parameter types:
+
+```rust
+fn map(callback: noescape Fn(Int) -> String) -> Unit
+```
+
+A closure passed to this parameter must have the same arity, for example
+`callback: |value| String.from_int(value: value)`. The callback parameter names
+are local to the closure; the contract supplies their positional types. A
+callback with the wrong parameter count is a diagnostic before lowering.
+
 v0.5 `noescape Fn` closures are **non-consuming**: a callee may call the closure
 any number of times (for example `ResourcePool.new` calls its factory `max_size`
 times), so the closure may `read` or `mut` a captured local but must not `take`
@@ -2633,6 +2644,7 @@ ResourcePool max_size not a positive Int literal
 ResourcePool active lease conflict
 managed object field-split conflict
 noescape callback return type mismatch
+noescape callback parameter count mismatch
 noescape closure consuming a captured local
 `?` operand error type does not match the function error type
 Fd used outside native/resource internals

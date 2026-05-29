@@ -1231,6 +1231,73 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_reports_noescape_callback_parameter_count_mismatch() {
+    let source = r#"
+fn apply(callback: noescape Fn(Int) -> String) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: || "x")
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-arity-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "callback argument `callback` for `apply` has 0 parameter(s), expected 1."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_uses_noescape_callback_parameter_type_for_return_contract() {
+    let source = r#"
+fn stringify(callback: noescape Fn(Int) -> String) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    stringify(callback: |value| value)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-param-return-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "callback argument `callback` for `stringify` returns `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn rust_lowering_accepts_noescape_callback_with_parameter() {
+    let source = r#"
+fn apply(callback: noescape Fn(Int) -> Int) -> Int {
+    return callback(41)
+}
+
+fn main() -> Unit {
+    let value = apply(callback: |item| item + 1)
+    return Unit
+}
+"#;
+    let rust = lower_source_to_rust("callback-param.rss", source)
+        .expect("callback with parameter should lower");
+
+    assert!(rust.contains("callback(41)"));
+    assert!(rust.contains("|item|"));
+}
+
+#[test]
 fn checker_reports_mixed_equality_operand_types_before_backend_lowering() {
     let source = r#"
 fn main() -> Unit {
@@ -7187,7 +7254,8 @@ fn run() -> Unit {
 
 #[test]
 fn parser_preserves_noescape_function_return_types() {
-    let source = r#"fn build(create: noescape Fn() -> Result<DbConnection, DbError>) -> Unit"#;
+    let source =
+        r#"fn build(create: noescape Fn(Url, Int) -> Result<DbConnection, DbError>) -> Unit"#;
     let program = parse_source("fn-return-type.rssi", source);
     let function = program
         .items
@@ -7202,6 +7270,14 @@ fn parser_preserves_noescape_function_return_types() {
 
     assert!(create.is_noescape);
     assert_eq!(create.name, "Fn");
+    assert_eq!(
+        create
+            .fn_params
+            .iter()
+            .map(|param| param.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Url", "Int"]
+    );
     assert_eq!(
         create
             .fn_return

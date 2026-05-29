@@ -317,8 +317,10 @@ impl Formatter {
                 self.expr(value, 7);
                 self.out.push('?');
             }
-            Expr::Closure { body, .. } => {
-                self.out.push_str("|| {\n");
+            Expr::Closure { params, body, .. } => {
+                self.out.push('|');
+                self.out.push_str(&params.join(", "));
+                self.out.push_str("| {\n");
                 self.block(body, 1);
                 self.out.push('}');
             }
@@ -456,12 +458,18 @@ fn type_ref_text(ty: &TypeRef) -> String {
     };
     if ty.is_noescape {
         if ty.name == "Fn" {
+            let params = ty
+                .fn_params
+                .iter()
+                .map(type_ref_text)
+                .collect::<Vec<_>>()
+                .join(", ");
             let return_ty = ty
                 .fn_return
                 .as_ref()
                 .map(|return_ty| format!(" -> {}", type_ref_text(return_ty)))
                 .unwrap_or_default();
-            return format!("noescape Fn(){return_ty}");
+            return format!("noescape Fn({params}){return_ty}");
         }
         format!("noescape {text}")
     } else {

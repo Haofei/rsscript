@@ -313,6 +313,7 @@ pub enum HirExpr {
         span: Span,
     },
     Closure {
+        params: Vec<String>,
         body: HirBlock,
         span: Span,
     },
@@ -998,9 +999,10 @@ fn lower_hir_expr(
             type_name: infer_hir_expr_type(hir, expr, value_types),
             span: span.clone(),
         },
-        Expr::Closure { body, span } => {
+        Expr::Closure { params, body, span } => {
             let mut closure_types = value_types.clone();
             HirExpr::Closure {
+                params: params.clone(),
                 body: lower_hir_block(hir, function_name, body, &mut closure_types),
                 span: span.clone(),
             }
@@ -1566,10 +1568,6 @@ fn collect_arg_type_substitutions(
     }
 }
 
-fn noescape_return_type(type_name: &str) -> Option<&str> {
-    type_name.strip_prefix("noescape Fn() -> ")
-}
-
 fn infer_closure_return_type(
     hir: &Hir,
     body: &Block,
@@ -1615,8 +1613,14 @@ fn infer_arg_expr_type(
         | Expr::Try { value, .. } => infer_arg_expr_type(hir, value, value_types),
         Expr::Ident(name, _) => value_types.get(name).cloned(),
         Expr::Call { .. } => infer_hir_expr_type(hir, expr, value_types),
-        Expr::Closure { body, .. } => infer_closure_return_type(hir, body, value_types)
-            .map(|return_type| format!("noescape Fn() -> {return_type}")),
+        Expr::Closure { params, body, .. } => infer_closure_return_type(hir, body, value_types)
+            .map(|return_type| {
+                let params = (0..params.len())
+                    .map(|_| "?")
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("noescape Fn({params}) -> {return_type}")
+            }),
         Expr::Field { .. }
         | Expr::Index { .. }
         | Expr::Binary { .. }
@@ -1639,6 +1643,26 @@ fn collect_type_substitutions(
         return;
     }
 
+    if is_noescape_fn_type(pattern) && is_noescape_fn_type(actual) {
+        for (pattern_param, actual_param) in noescape_param_types(pattern)
+            .into_iter()
+            .zip(noescape_param_types(actual))
+        {
+            collect_type_substitutions(pattern_param, actual_param, generic_params, substitutions);
+        }
+        if let (Some(pattern_return), Some(actual_return)) =
+            (noescape_return_type(pattern), noescape_return_type(actual))
+        {
+            collect_type_substitutions(
+                pattern_return,
+                actual_return,
+                generic_params,
+                substitutions,
+            );
+        }
+        return;
+    }
+
     let Some(pattern_args) = type_arg_names(pattern) else {
         return;
     };
@@ -1658,9 +1682,14 @@ fn substitute_type_params(type_name: &str, substitutions: &HashMap<String, Strin
     if let Some(replacement) = substitutions.get(type_name) {
         return replacement.clone();
     }
-    if let Some(return_ty) = type_name.strip_prefix("noescape Fn() -> ") {
+    if let Some(return_ty) = noescape_return_type(type_name) {
+        let params = noescape_param_types(type_name)
+            .into_iter()
+            .map(|param| substitute_type_params(param, substitutions))
+            .collect::<Vec<_>>()
+            .join(", ");
         return format!(
-            "noescape Fn() -> {}",
+            "noescape Fn({params}) -> {}",
             substitute_type_params(return_ty, substitutions)
         );
     }
@@ -1681,6 +1710,35 @@ fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
         .split_once('<')
         .and_then(|(_, rest)| rest.strip_suffix('>'))?;
     Some(split_top_level_type_args(inner))
+}
+
+fn noescape_return_type(type_name: &str) -> Option<&str> {
+    type_name
+        .strip_prefix("noescape Fn(")
+        .and_then(|rest| rest.split_once(')'))
+        .and_then(|(_, rest)| rest.trim_start().strip_prefix("->"))
+        .map(str::trim)
+}
+
+fn is_noescape_fn_type(type_name: &str) -> bool {
+    type_name
+        .strip_prefix("noescape Fn(")
+        .and_then(|rest| rest.split_once(')'))
+        .is_some()
+}
+
+fn noescape_param_types(type_name: &str) -> Vec<&str> {
+    let Some(params) = type_name
+        .strip_prefix("noescape Fn(")
+        .and_then(|rest| rest.split_once(')').map(|(params, _)| params.trim()))
+    else {
+        return Vec::new();
+    };
+    if params.is_empty() {
+        Vec::new()
+    } else {
+        split_top_level_type_args(params)
+    }
 }
 
 fn result_ok_type(type_name: &str) -> Option<String> {
@@ -1884,12 +1942,18 @@ fn type_ref_name(ty: &TypeRef) -> String {
     };
     if ty.is_noescape {
         if ty.name == "Fn" {
+            let params = ty
+                .fn_params
+                .iter()
+                .map(type_ref_name)
+                .collect::<Vec<_>>()
+                .join(", ");
             let return_ty = ty
                 .fn_return
                 .as_ref()
                 .map(|return_ty| format!(" -> {}", type_ref_name(return_ty)))
                 .unwrap_or_default();
-            return format!("noescape Fn(){return_ty}");
+            return format!("noescape Fn({params}){return_ty}");
         }
         format!("noescape {name}")
     } else {

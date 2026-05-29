@@ -1253,12 +1253,17 @@ impl<'a> RustLowerer<'a> {
             Expr::Spawn { span, .. } => unreachable_lowering("spawn expression", span),
             Expr::Await { span, .. } => unreachable_lowering("await expression", span),
             Expr::Try { value, .. } => format!("{}?", self.lower_expr(value)),
-            Expr::Closure { body, .. } => {
+            Expr::Closure { params, body, .. } => {
+                let lowered_params = params
+                    .iter()
+                    .map(|param| rust_ident(param))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 if let [Stmt::Expr(value)] = body.statements.as_slice() {
-                    return format!("|| {}", self.lower_expr(value));
+                    return format!("|{lowered_params}| {}", self.lower_expr(value));
                 }
                 let mut out = String::new();
-                out.push_str("|| {\n");
+                out.push_str(&format!("|{lowered_params}| {{\n"));
                 self.lower_block(body, &mut out, 1);
                 out.push('}');
                 out
@@ -1328,6 +1333,7 @@ impl<'a> RustLowerer<'a> {
                 args: Vec::new(),
                 malformed_arg_spans: Vec::new(),
                 is_noescape: false,
+                fn_params: Vec::new(),
                 fn_return: None,
                 span: span.clone(),
             }),
@@ -1355,6 +1361,12 @@ impl<'a> RustLowerer<'a> {
 
     fn lower_type_ref(&self, ty: &TypeRef, position: ManagedPosition) -> String {
         if ty.is_noescape && ty.name == "Fn" {
+            let params = ty
+                .fn_params
+                .iter()
+                .map(|param| self.lower_type_ref(param, ManagedPosition::Param))
+                .collect::<Vec<_>>()
+                .join(", ");
             let return_ty = ty.fn_return.as_ref().map(|return_ty| {
                 format!(
                     " -> {}",
@@ -1362,8 +1374,10 @@ impl<'a> RustLowerer<'a> {
                 )
             });
             return match position {
-                ManagedPosition::Param => format!("impl FnMut(){}", return_ty.unwrap_or_default()),
-                _ => format!("Box<dyn FnMut(){}>", return_ty.unwrap_or_default()),
+                ManagedPosition::Param => {
+                    format!("impl FnMut({params}){}", return_ty.unwrap_or_default())
+                }
+                _ => format!("Box<dyn FnMut({params}){}>", return_ty.unwrap_or_default()),
             };
         }
         let lowered = match ty.name.as_str() {

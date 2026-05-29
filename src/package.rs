@@ -3024,12 +3024,18 @@ fn package_type_name(ty: &TypeRef) -> String {
     };
     if ty.is_noescape {
         if ty.name == "Fn" {
+            let params = ty
+                .fn_params
+                .iter()
+                .map(package_type_name)
+                .collect::<Vec<_>>()
+                .join(", ");
             let return_ty = ty
                 .fn_return
                 .as_ref()
                 .map(|return_ty| format!(" -> {}", package_type_name(return_ty)))
                 .unwrap_or_default();
-            return format!("noescape Fn(){return_ty}");
+            return format!("noescape Fn({params}){return_ty}");
         }
         format!("noescape {name}")
     } else {

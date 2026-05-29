@@ -877,7 +877,7 @@ fn collect_retained_closure_captures_from_expr(
 
 fn retained_closure_arg(expr: &HirExpr) -> Option<(&HirBlock, &Span)> {
     match expr {
-        HirExpr::Closure { body, span } => Some((body, span)),
+        HirExpr::Closure { body, span, .. } => Some((body, span)),
         HirExpr::Effect {
             effect: ParamEffect::Read,
             value,
@@ -1123,7 +1123,7 @@ fn collect_resource_escapes_in_block(
 
 fn managed_binding_resource_capture_span(expr: &HirExpr, binding: &str) -> Option<Span> {
     match expr {
-        HirExpr::Closure { body, span } if hir_block_mentions_ident(body, binding) => {
+        HirExpr::Closure { body, span, .. } if hir_block_mentions_ident(body, binding) => {
             Some(span.clone())
         }
         HirExpr::Effect {
@@ -2683,6 +2683,7 @@ mod tests {
                         span: span(23),
                     },
                     HirStmt::Expr(HirExpr::Closure {
+                        params: Vec::new(),
                         body: HirBlock {
                             statements: vec![HirStmt::Expr(HirExpr::Ident {
                                 name: "cached".to_string(),
@@ -3061,6 +3062,7 @@ mod tests {
                                 kind: HirBindingKind::ManagedLet,
                                 name: "callback".to_string(),
                                 value: Some(HirExpr::Closure {
+                                    params: Vec::new(),
                                     body: HirBlock {
                                         statements: vec![HirStmt::Expr(HirExpr::Ident {
                                             name: "file".to_string(),
@@ -3240,6 +3242,7 @@ mod tests {
                         kind: HirBindingKind::ManagedLet,
                         name: "callback".to_string(),
                         value: Some(HirExpr::Closure {
+                            params: Vec::new(),
                             body: HirBlock {
                                 statements: vec![HirStmt::Expr(HirExpr::Ident {
                                     name: "image".to_string(),

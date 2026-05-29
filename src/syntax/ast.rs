@@ -84,6 +84,7 @@ pub fn merge_programs(programs: impl IntoIterator<Item = Program>) -> Program {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
     Type(TypeDecl),
@@ -139,6 +140,7 @@ pub struct TypeRef {
     pub args: Vec<TypeRef>,
     pub malformed_arg_spans: Vec<Span>,
     pub is_noescape: bool,
+    pub fn_params: Vec<TypeRef>,
     pub fn_return: Option<Box<TypeRef>>,
     pub span: Span,
 }
@@ -323,6 +325,7 @@ pub enum Expr {
         span: Span,
     },
     Closure {
+        params: Vec<String>,
         body: Block,
         span: Span,
     },

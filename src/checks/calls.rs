@@ -936,8 +936,13 @@ fn substitute_type_params(type_name: &str, substitutions: &HashMap<String, Strin
         return replacement.clone();
     }
     if let Some(return_ty) = noescape_return_type(type_name) {
+        let params = noescape_param_types(type_name)
+            .into_iter()
+            .map(|param| substitute_type_params(param, substitutions))
+            .collect::<Vec<_>>()
+            .join(", ");
         return format!(
-            "noescape Fn() -> {}",
+            "noescape Fn({params}) -> {}",
             substitute_type_params(return_ty, substitutions)
         );
     }
@@ -964,10 +969,30 @@ fn check_noescape_closure_return_type(
     if !is_noescape_fn_type(expected_type) {
         return false;
     }
-    let HirExpr::Closure { body, .. } = value else {
+    let HirExpr::Closure { params, body, .. } = value else {
         return false;
     };
+    let expected_params = noescape_param_types(expected_type);
+    if params.len() != expected_params.len() {
+        callback_arity_mismatch_diagnostic(
+            analyzer,
+            call_name,
+            arg_name,
+            params.len(),
+            expected_params.len(),
+            hir_expr_span(value),
+        );
+        return true;
+    }
     let expected_return = noescape_return_type(expected_type).unwrap_or("Unit");
+    let contract = CallbackContract {
+        call_name,
+        arg_name,
+        expected_return,
+        generic_params,
+        params,
+        param_types: &expected_params,
+    };
     let returns = closure_return_sites(body);
     if returns.is_empty() {
         if !type_pattern_matches(expected_return, "Unit", generic_params) {
@@ -985,14 +1010,7 @@ fn check_noescape_closure_return_type(
     for return_site in returns {
         match return_site {
             ClosureReturn::Expr(expr) => {
-                check_callback_return_expr_type(
-                    analyzer,
-                    call_name,
-                    arg_name,
-                    expr,
-                    expected_return,
-                    generic_params,
-                );
+                check_callback_return_expr_type(analyzer, expr, &contract);
             }
             ClosureReturn::Unit(span) => {
                 if !type_pattern_matches(expected_return, "Unit", generic_params) {
@@ -1014,6 +1032,15 @@ fn check_noescape_closure_return_type(
 enum ClosureReturn<'a> {
     Expr(&'a HirExpr),
     Unit(&'a Span),
+}
+
+struct CallbackContract<'a> {
+    call_name: &'a str,
+    arg_name: &'a str,
+    expected_return: &'a str,
+    generic_params: &'a [String],
+    params: &'a [String],
+    param_types: &'a [&'a str],
 }
 
 fn closure_return_sites(body: &HirBlock) -> Vec<ClosureReturn<'_>> {
@@ -1107,32 +1134,22 @@ fn collect_implicit_closure_return_sites<'a>(
 
 fn check_callback_return_expr_type(
     analyzer: &mut Analyzer<'_>,
-    call_name: &str,
-    arg_name: &str,
     expr: &HirExpr,
-    expected: &str,
-    generic_params: &[String],
+    contract: &CallbackContract<'_>,
 ) {
-    if check_callback_variant_return_type(
-        analyzer,
-        call_name,
-        arg_name,
-        expr,
-        expected,
-        generic_params,
-    ) {
+    if check_callback_variant_return_type(analyzer, expr, contract) {
         return;
     }
-    let Some(actual) = hir_expr_type_name(expr) else {
+    let Some(actual) = callback_expr_type_name(expr, contract.params, contract.param_types) else {
         return;
     };
-    if !type_pattern_matches(expected, actual, generic_params) {
+    if !type_pattern_matches(contract.expected_return, &actual, contract.generic_params) {
         callback_return_type_mismatch_diagnostic(
             analyzer,
-            call_name,
-            arg_name,
-            actual,
-            expected,
+            contract.call_name,
+            contract.arg_name,
+            &actual,
+            contract.expected_return,
             hir_expr_span(expr),
         );
     }
@@ -1140,36 +1157,31 @@ fn check_callback_return_expr_type(
 
 fn check_callback_variant_return_type(
     analyzer: &mut Analyzer<'_>,
-    call_name: &str,
-    arg_name: &str,
     expr: &HirExpr,
-    expected: &str,
-    generic_params: &[String],
+    contract: &CallbackContract<'_>,
 ) -> bool {
     let Some((variant, payload)) = enum_variant_payload(expr) else {
         return false;
     };
-    match (type_root_name(expected), variant) {
+    match (type_root_name(contract.expected_return), variant) {
         ("Option", "None") => true,
         ("Option", "Some") => {
-            let Some(expected_payload) = type_arg_names(expected)
+            let Some(expected_payload) = type_arg_names(contract.expected_return)
                 .and_then(|args| args.first().map(|arg| arg.trim().to_string()))
             else {
                 return false;
             };
             check_callback_payload_return_type(
                 analyzer,
-                call_name,
-                arg_name,
                 payload,
                 &expected_payload,
-                generic_params,
                 expr,
+                contract,
             );
             true
         }
         ("Result", "Ok" | "Err") => {
-            let Some(args) = type_arg_names(expected) else {
+            let Some(args) = type_arg_names(contract.expected_return) else {
                 return false;
             };
             let Some(expected_payload) = (match variant {
@@ -1181,12 +1193,10 @@ fn check_callback_variant_return_type(
             };
             check_callback_payload_return_type(
                 analyzer,
-                call_name,
-                arg_name,
                 payload,
                 expected_payload.trim(),
-                generic_params,
                 expr,
+                contract,
             );
             true
         }
@@ -1196,19 +1206,17 @@ fn check_callback_variant_return_type(
 
 fn check_callback_payload_return_type(
     analyzer: &mut Analyzer<'_>,
-    call_name: &str,
-    arg_name: &str,
     payload: Option<&HirExpr>,
     expected: &str,
-    generic_params: &[String],
     fallback: &HirExpr,
+    contract: &CallbackContract<'_>,
 ) {
     let Some(payload) = payload else {
-        if !type_pattern_matches(expected, "Unit", generic_params) {
+        if !type_pattern_matches(expected, "Unit", contract.generic_params) {
             callback_return_type_mismatch_diagnostic(
                 analyzer,
-                call_name,
-                arg_name,
+                contract.call_name,
+                contract.arg_name,
                 "Unit",
                 expected,
                 hir_expr_span(fallback),
@@ -1216,19 +1224,35 @@ fn check_callback_payload_return_type(
         }
         return;
     };
-    let Some(actual) = hir_expr_type_name(payload) else {
+    let Some(actual) = callback_expr_type_name(payload, contract.params, contract.param_types)
+    else {
         return;
     };
-    if !type_pattern_matches(expected, actual, generic_params) {
+    if !type_pattern_matches(expected, &actual, contract.generic_params) {
         callback_return_type_mismatch_diagnostic(
             analyzer,
-            call_name,
-            arg_name,
-            actual,
+            contract.call_name,
+            contract.arg_name,
+            &actual,
             expected,
             hir_expr_span(payload),
         );
     }
+}
+
+fn callback_expr_type_name(
+    expr: &HirExpr,
+    callback_params: &[String],
+    callback_param_types: &[&str],
+) -> Option<String> {
+    if let HirExpr::Ident { name, .. } = expr
+        && let Some(index) = callback_params.iter().position(|param| param == name)
+    {
+        return callback_param_types
+            .get(index)
+            .map(|type_name| type_name.to_string());
+    }
+    hir_expr_type_name(expr).map(str::to_string)
 }
 
 fn callback_return_type_mismatch_diagnostic(
@@ -1254,6 +1278,34 @@ fn callback_return_type_mismatch_diagnostic(
         .with_fix(
             "match_callback_return_type",
             format!("Return a `{expected}` value from this callback."),
+            "manual",
+        ),
+    );
+}
+
+fn callback_arity_mismatch_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    call_name: &str,
+    arg_name: &str,
+    actual: usize,
+    expected: usize,
+    span: &Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::ARGUMENT_TYPE_MISMATCH,
+            format!(
+                "callback argument `{arg_name}` for `{call_name}` has {actual} parameter(s), expected {expected}."
+            ),
+            span.clone(),
+            "argument type mismatch",
+        )
+        .with_cause(
+            "`noescape Fn(...) -> T` callback parameter counts are part of the call signature and must be checked before Rust lowering.",
+        )
+        .with_fix(
+            "match_callback_parameter_count",
+            format!("Use a callback with {expected} parameter(s)."),
             "manual",
         ),
     );
@@ -1398,24 +1450,22 @@ fn argument_payload_type_mismatch_diagnostic(
 
 fn is_closure_binding_call(
     callee: &Callee,
-    args: &[HirCallArg],
+    _args: &[HirCallArg],
     resolution: &CallResolution,
     noescape_bindings: &HashMap<String, Span>,
     local_closure_bindings: &HashMap<String, Span>,
 ) -> bool {
     matches!(resolution, CallResolution::Unknown)
-        && args.is_empty()
         && matches!(callee, Callee::Name(name) if noescape_bindings.contains_key(name) || local_closure_bindings.contains_key(name))
 }
 
 fn is_noescape_callback_call(
     callee: &Callee,
-    args: &[HirCallArg],
+    _args: &[HirCallArg],
     resolution: &CallResolution,
     noescape_bindings: &HashMap<String, Span>,
 ) -> bool {
     matches!(resolution, CallResolution::Unknown)
-        && args.is_empty()
         && matches!(callee, Callee::Name(name) if noescape_bindings.contains_key(name))
 }
 
@@ -1810,11 +1860,32 @@ fn call_arg_targets_noescape_param(arg: &HirCallArg, resolution: &CallResolution
 }
 
 fn is_noescape_fn_type(type_name: &str) -> bool {
-    type_name == "noescape Fn()" || type_name.starts_with("noescape Fn() -> ")
+    type_name
+        .strip_prefix("noescape Fn(")
+        .and_then(|rest| rest.split_once(')'))
+        .is_some()
 }
 
 fn noescape_return_type(type_name: &str) -> Option<&str> {
-    type_name.strip_prefix("noescape Fn() -> ")
+    type_name
+        .strip_prefix("noescape Fn(")
+        .and_then(|rest| rest.split_once(')'))
+        .and_then(|(_, rest)| rest.trim_start().strip_prefix("->"))
+        .map(str::trim)
+}
+
+fn noescape_param_types(type_name: &str) -> Vec<&str> {
+    let Some(params) = type_name
+        .strip_prefix("noescape Fn(")
+        .and_then(|rest| rest.split_once(')').map(|(params, _)| params.trim()))
+    else {
+        return Vec::new();
+    };
+    if params.is_empty() {
+        Vec::new()
+    } else {
+        split_top_level_type_args(params)
+    }
 }
 
 fn noescape_escape_diagnostic(
@@ -2020,12 +2091,18 @@ fn type_ref_name(ty: &TypeRef) -> String {
         )
     };
     if ty.is_noescape && ty.name == "Fn" {
+        let params = ty
+            .fn_params
+            .iter()
+            .map(type_ref_name)
+            .collect::<Vec<_>>()
+            .join(", ");
         let return_ty = ty
             .fn_return
             .as_ref()
             .map(|return_ty| format!(" -> {}", type_ref_name(return_ty)))
             .unwrap_or_default();
-        format!("noescape Fn(){return_ty}")
+        format!("noescape Fn({params}){return_ty}")
     } else {
         name
     }
@@ -2034,9 +2111,11 @@ fn type_ref_name(ty: &TypeRef) -> String {
 fn type_contains_unresolved_generic(type_name: &str, generics: &[String]) -> bool {
     generics.iter().any(|generic| {
         type_name == generic
-            || type_name
-                .strip_prefix("noescape Fn() -> ")
+            || noescape_return_type(type_name)
                 .is_some_and(|return_type| type_contains_unresolved_generic(return_type, generics))
+            || noescape_param_types(type_name)
+                .iter()
+                .any(|param_type| type_contains_unresolved_generic(param_type, generics))
             || type_arg_names(type_name).is_some_and(|args| {
                 args.iter()
                     .any(|arg| type_contains_unresolved_generic(arg, generics))
@@ -2049,9 +2128,10 @@ fn unresolved_generic_type(type_name: &str) -> bool {
     (root.len() == 1 && root.chars().all(|ch| ch.is_ascii_uppercase()))
         || type_arg_names(type_name)
             .is_some_and(|args| args.iter().any(|arg| unresolved_generic_type(arg)))
-        || type_name
-            .strip_prefix("noescape Fn() -> ")
-            .is_some_and(unresolved_generic_type)
+        || noescape_return_type(type_name).is_some_and(unresolved_generic_type)
+        || noescape_param_types(type_name)
+            .iter()
+            .any(|param_type| unresolved_generic_type(param_type))
 }
 
 fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {

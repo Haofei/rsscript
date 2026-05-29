@@ -1350,7 +1350,11 @@ fn call_arg_is_noescape_param(
     else {
         return false;
     };
-    param.type_name == "noescape Fn()" || param.type_name.starts_with("noescape Fn() -> ")
+    param
+        .type_name
+        .strip_prefix("noescape Fn(")
+        .and_then(|rest| rest.split_once(')'))
+        .is_some()
 }
 
 fn hir_closure_body(expr: &HirExpr) -> Option<&HirBlock> {
@@ -2279,12 +2283,18 @@ fn type_name(ty: &TypeRef) -> String {
     };
     if ty.is_noescape {
         if ty.name == "Fn" {
+            let params = ty
+                .fn_params
+                .iter()
+                .map(type_name)
+                .collect::<Vec<_>>()
+                .join(", ");
             let return_ty = ty
                 .fn_return
                 .as_ref()
                 .map(|return_ty| format!(" -> {}", type_name(return_ty)))
                 .unwrap_or_default();
-            return format!("noescape Fn(){return_ty}");
+            return format!("noescape Fn({params}){return_ty}");
         }
         format!("noescape {name}")
     } else {

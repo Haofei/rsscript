@@ -1,0 +1,10 @@
+// expect: RS0207
+
+fn apply(callback: noescape Fn(Int) -> String) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: || "x")
+    return Unit
+}

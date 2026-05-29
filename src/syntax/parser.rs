@@ -522,6 +522,7 @@ fn parse_params(tokens: &[Token], start: usize, end: usize) -> ParsedParams {
                     args: Vec::new(),
                     malformed_arg_spans: Vec::new(),
                     is_noescape: false,
+                    fn_params: Vec::new(),
                     fn_return: None,
                     span: tokens[start].span.clone(),
                 },
@@ -539,6 +540,7 @@ fn parse_params(tokens: &[Token], start: usize, end: usize) -> ParsedParams {
             args: Vec::new(),
             malformed_arg_spans: Vec::new(),
             is_noescape: false,
+            fn_params: Vec::new(),
             fn_return: None,
             span: tokens[start].span.clone(),
         });
@@ -1051,28 +1053,10 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
         return None;
     }
 
-    if tokens[start].symbol("|") && tokens.get(start + 1).is_some_and(|token| token.symbol("|")) {
-        let Some(open) = (start + 2..end).find(|index| tokens[*index].symbol("{")) else {
-            let value = parse_expr(tokens, start + 2, end)
-                .unwrap_or_else(|| Expr::Unknown(tokens[start].span.clone()));
-            return Some(Expr::Closure {
-                body: Block {
-                    statements: vec![Stmt::Expr(value)],
-                    span: tokens[start].span.clone(),
-                },
-                span: tokens[start].span.clone(),
-            });
-        };
-        let Some(close) = find_matching(tokens, open, "{", "}") else {
-            return Some(Expr::Unknown(tokens[start].span.clone()));
-        };
-        if close + 1 != end {
-            return Some(Expr::Unknown(tokens[start].span.clone()));
-        }
-        return Some(Expr::Closure {
-            body: parse_block(tokens, open, close),
-            span: tokens[start].span.clone(),
-        });
+    if tokens[start].symbol("|")
+        && let Some(closure) = parse_closure_expr(tokens, start, end)
+    {
+        return Some(closure);
     }
 
     if let Some(binary) = parse_binary_expr(tokens, start, end) {
@@ -1337,6 +1321,51 @@ fn find_trailing_top_level_question(tokens: &[Token], start: usize, end: usize) 
     None
 }
 
+fn parse_closure_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
+    let close_pipe = (start + 1..end).find(|index| tokens[*index].symbol("|"))?;
+    let mut params = Vec::new();
+    for range in split_param_ranges(tokens, start + 1, close_pipe) {
+        if range.empty_span.is_some() {
+            continue;
+        }
+        if range.start + 1 != range.end {
+            return Some(Expr::Unknown(tokens[start].span.clone()));
+        }
+        let Some(name) = ident_name(&tokens[range.start]) else {
+            return Some(Expr::Unknown(tokens[start].span.clone()));
+        };
+        params.push(name.to_string());
+    }
+
+    let body_start = close_pipe + 1;
+    let Some(open) = (body_start..end).find(|index| tokens[*index].symbol("{")) else {
+        let value = parse_expr(tokens, body_start, end)
+            .unwrap_or_else(|| Expr::Unknown(tokens[start].span.clone()));
+        return Some(Expr::Closure {
+            params,
+            body: Block {
+                statements: vec![Stmt::Expr(value)],
+                span: tokens[start].span.clone(),
+            },
+            span: tokens[start].span.clone(),
+        });
+    };
+    if open != body_start {
+        return Some(Expr::Unknown(tokens[start].span.clone()));
+    }
+    let Some(close) = find_matching(tokens, open, "{", "}") else {
+        return Some(Expr::Unknown(tokens[start].span.clone()));
+    };
+    if close + 1 != end {
+        return Some(Expr::Unknown(tokens[start].span.clone()));
+    }
+    Some(Expr::Closure {
+        params,
+        body: parse_block(tokens, open, close),
+        span: tokens[start].span.clone(),
+    })
+}
+
 fn parse_call_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
     let open = find_call_open(tokens, start, end)?;
     let callee = parse_callee(tokens, start, open)?;
@@ -1510,10 +1539,24 @@ fn parse_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<TypeRef>
             malformed_arg_spans.push(tokens[cursor].span.clone());
         }
     }
+    let mut fn_params = Vec::new();
     if name == "Fn"
         && tokens.get(cursor).is_some_and(|token| token.symbol("("))
         && let Some(close) = find_matching(tokens, cursor, "(", ")")
     {
+        for range in split_param_ranges(tokens, cursor + 1, close) {
+            if let Some(span) = range.empty_span {
+                malformed_arg_spans.push(span);
+                continue;
+            }
+            let Some(param) = parse_type_ref(tokens, range.start, range.end) else {
+                if let Some(token) = tokens.get(range.start) {
+                    malformed_arg_spans.push(token.span.clone());
+                }
+                continue;
+            };
+            fn_params.push(param);
+        }
         cursor = close + 1;
     }
     let fn_return = if name == "Fn" && tokens.get(cursor).is_some_and(|token| token.symbol("->")) {
@@ -1526,6 +1569,7 @@ fn parse_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<TypeRef>
         args,
         malformed_arg_spans,
         is_noescape,
+        fn_params,
         fn_return,
         span: tokens[name_index].span.clone(),
     })
@@ -1560,12 +1604,18 @@ fn type_ref_name(ty: &TypeRef) -> String {
     };
     if ty.is_noescape {
         if ty.name == "Fn" {
+            let params = ty
+                .fn_params
+                .iter()
+                .map(type_ref_name)
+                .collect::<Vec<_>>()
+                .join(", ");
             let return_ty = ty
                 .fn_return
                 .as_ref()
                 .map(|return_ty| format!(" -> {}", type_ref_name(return_ty)))
                 .unwrap_or_default();
-            return format!("noescape Fn(){return_ty}");
+            return format!("noescape Fn({params}){return_ty}");
         }
         format!("noescape {name}")
     } else {
