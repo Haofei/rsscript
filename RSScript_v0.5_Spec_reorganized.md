@@ -584,8 +584,34 @@ match (statement form, over Option/Result variants)
   a normal block exit, `return`, `break`, or `continue` performs (Chapter 12).
 ```
 
+`?` performs **no implicit error conversion**. For `expr?` inside a function
+returning `Result<U, E>`, `expr` must have type `Result<T, E>` with the *same*
+error type `E`. A mismatched error type is a diagnostic, not a silent conversion
+(§2.4 forbids implicit `From`/`Into` chains; this is the `?`-specific application
+of that rule). Conversion must be written explicitly:
+
+```rust
+let file = match File.open(path: read path) {
+    Ok(file) => file,
+    Err(e) => return Err(AppError.from_io(error: read e)),
+}
+```
+
+A future explicit `map_err` API would also be explicit, never an implicit
+backend conversion:
+
+```rust
+File.open(path: read path).map_err(mapper: noescape |e| AppError.from_io(error: read e))?
+```
+
 `?` is the only implicit control transfer in RSScript, and it is visible in the
 source as the `?` token.
+
+*Implementation note (non-normative): full operand/return error-type matching is
+part of the broader v0.5 type-checking surface, which is incomplete; until the
+frontend rejects a mismatched error type, the Rust lowering must not emit a bare
+`?` that would let the backend insert a `From` conversion. The source-level rule
+is exact error-type match.*
 
 ### `return`, `break`, `continue`
 
@@ -642,11 +668,52 @@ shapes and must be exhaustive: it covers `Some`/`None`, `Ok`/`Err`, or includes
 ```text
 - a variant payload binding obeys the same data-effect, move, and resource rules
   as any other binding; a payload that is a resource cannot escape its arm.
-- local-move and freshness facts from all arms are joined path-sensitively at the
-  match exit, so a value moved in one arm is treated as moved after the match
-  only if it is moved on every arm.
 - a `with` resource opened inside an arm drops at that arm's exit.
+- local-move, freshness, and clean-local state from the arms are combined at the
+  match exit by the conservative branch join below.
 ```
+
+A payload binding has no `read`/`mut`/`take` syntax of its own, so its mode is
+fixed by the **scrutinee's** materialization mode:
+
+```text
+- matching a managed/read Option/Result binds a non-Copy payload as a managed
+  read value (a read view), usable within the arm but not consumed.
+- matching a `fresh Result<fresh T, E>` (return-position analysis) may keep the
+  payload fresh only within the arm.
+- matching a local Option/Result is allowed only under features: local; the
+  selected payload moves out under local move rules.
+- a resource payload may be matched only inside an approved immediate resource
+  context and cannot escape its arm.
+- Copy payloads copy.
+```
+
+### Branch joins: `if`/`else` and `match`
+
+At every branch join (the exit of an `if`/`else` or a `match`), local state is
+joined **conservatively** — the join is the *intersection* of what holds on the
+incoming paths, not the union:
+
+```text
+local-move:
+    a local place is usable after the join only if it is live (not moved) on
+    every reachable incoming path.
+    Live  + Live   => Live       (usable)
+    Moved + Moved  => Moved       (use after join rejected)
+    Live  + Moved  => MaybeMoved  (use after join rejected)
+    MaybeMoved + _ => MaybeMoved  (use after join rejected)
+
+freshness / clean-local:
+    a place is fresh (or clean-local) after the join only if it is fresh
+    (clean-local) on every reachable incoming path.
+```
+
+So if a place is moved (`take`/`manage`) on *any* reachable arm and used after
+the join, that use is rejected — moving on one arm is enough to poison the use,
+because the runtime may have taken that arm. A path that exits the enclosing
+scope before the join (e.g. `return`/`break` in an arm) is not an incoming path
+to the join. Loops (`while`/`loop`/`for`) use the same conservative join as a
+fixpoint over the back-edge.
 
 ---
 
@@ -1663,7 +1730,11 @@ fn ResourcePool<T: Resource>.new(
 
 `new` is the v0.5 constructor and requires an **infallible** factory: `create` must return a resource `T`, never `Result<T, E>`. Construction is eager and exact: the runtime calls `create` exactly `max_size` times, stores the `max_size` resources in the local pool, then discards the factory closure. In v0.5, `max_size` must be a positive `Int` literal; a non-positive literal is a diagnostic (RS0708), not a runtime condition — this keeps `new` infallible without needing a `Result` for a degenerate pool size. Because construction cannot fail, `new` returns the pool directly, not a `Result`. "Eager" and "exactly `max_size`" together remove any ambiguity with lazy replenishment: the pool never creates a resource after construction.
 
-*v0.5 enforcement status: the runtime constructs exactly `max_size` resources and clamps a non-positive `max_size` to an empty pool; the RS0708 positive-literal check is a specified frontend obligation being added.*
+Implementation note (non-normative): a conforming v0.5 frontend rejects a
+non-positive `max_size` literal (RS0708) before lowering. A prototype runtime may
+additionally clamp a non-positive size to an empty pool defensively, but that is
+not RSScript source semantics — the source-level rule is the RS0708 rejection
+above, and the roadmap (Chapter 20) tracks implementation.
 
 A fallible factory passed to `new` is rejected (diagnostic RS0707): hiding a creation failure inside `new` would violate no-hidden-behavior, since failure is represented by a return type (section 14.3). The closure literal is checked against the expected `noescape Fn() -> T` parameter contract, including its result type: the user need not annotate the closure's return type, but the checker takes the expected result `T` from the parameter and rejects a factory whose result is `Result<T, E>` (that is the RS0707 case). The `-> T` in the contract is the expected result the checker enforces, not mere documentation.
 
@@ -1740,15 +1811,21 @@ The lease cannot escape the `with` body, be returned through `Ok`/`Some`, be cap
 Exhaustion and nesting, made precise for v0.5:
 
 ```text
-- borrow does not return Result and must not block. Borrowing from an exhausted
-  pool (every resource currently leased out) is a runtime diagnostic with a
-  source span, not a block and not a silent failure.
+- borrow does not return Result and must not block.
 - a lease is tied to the pool that produced it. While a lease from a pool is
   active, the same pool is held `mut` for the lease's `with` scope.
 - nested borrow from the same pool inside an active lease's scope is rejected in
   v0.5. A multi-borrow API is reserved for a future version; until then, borrow
   one resource at a time per pool.
 ```
+
+Exhaustion is not expected in ordinary v0.5 source: `max_size` is a positive
+literal and nested same-pool borrow is rejected, so a single sequential lease per
+pool cannot exhaust it. Borrowing from an exhausted pool is therefore a
+**defensive** runtime diagnostic (with a source span, not a block and not a
+silent failure) that covers runtime/native/compiler bugs, prototype
+non-conformance, or future multi-borrow APIs — not a case ordinary RSScript code
+is expected to handle. This is why `borrow` need not return a `Result`.
 
 ```rust
 with ResourcePool.borrow(pool: mut pool) as a {
@@ -1762,6 +1839,10 @@ with ResourcePool.borrow(pool: mut pool) as a {
 produces a resource-pool-empty diagnostic with a source span). The static
 nested-borrow rejection is the specified frontend obligation; if the checker does
 not yet reject it, that is a known gap to close, not a different rule.*
+
+---
+
+## 13. Containers
 
 ### 13.1 Managed containers
 
