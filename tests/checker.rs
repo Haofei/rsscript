@@ -59,6 +59,7 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
     ("local captured by managed closure", "RS0801"),
     ("noescape callback escape", "RS0802"),
     ("local closure escape", "RS0803"),
+    ("noescape closure consuming a captured local", "RS0804"),
     ("take of handle field", "RS0901"),
     (
         "weak field initialized without explicit weak handle",

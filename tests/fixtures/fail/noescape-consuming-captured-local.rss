@@ -1,0 +1,21 @@
+// expect: RS0804
+features: local
+
+struct Image {
+    id: Int
+}
+
+fn apply(callback: noescape Fn()) -> Unit {
+    callback()
+    return Unit
+}
+
+fn consume(image: take Image) -> Unit
+
+fn bad() -> Unit {
+    local image = Image(id: 1)
+    apply(callback: || {
+        consume(image: take image)
+    })
+    return Unit
+}

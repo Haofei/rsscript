@@ -1,0 +1,19 @@
+// expect: RS0804
+features: local
+
+struct Image {
+    id: Int
+}
+
+fn apply(callback: noescape Fn()) -> Unit {
+    callback()
+    return Unit
+}
+
+fn bad() -> Unit {
+    local image = Image(id: 1)
+    apply(callback: || {
+        let shared = manage image
+    })
+    return Unit
+}

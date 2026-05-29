@@ -57,6 +57,7 @@ pub mod code {
     pub const LOCAL_CAPTURED_BY_MANAGED_CLOSURE: &str = "RS0801";
     pub const NOESCAPE_CALLBACK_ESCAPE: &str = "RS0802";
     pub const LOCAL_CLOSURE_ESCAPE: &str = "RS0803";
+    pub const NOESCAPE_CONSUMES_CAPTURE: &str = "RS0804";
     pub const TAKE_HANDLE_FIELD: &str = "RS0901";
     pub const INVALID_WEAK_FIELD: &str = "RS0902";
     pub const WEAK_FIELD_REQUIRES_UPGRADE: &str = "RS0903";
@@ -520,6 +521,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::LOCAL_CLOSURE_ESCAPE,
         title: "local closure escape",
         explanation: "A closure bound with `local` is an exclusive local capability. It may be called directly or passed to `noescape Fn()` parameters, but it cannot be returned, stored in managed bindings, or passed as an ordinary managed callback.",
+    },
+    DiagnosticExplanation {
+        code: code::NOESCAPE_CONSUMES_CAPTURE,
+        title: "noescape closure consumes captured local",
+        explanation: "`noescape Fn()` callbacks are non-consuming in v0.5: the callee may call them multiple times, so a noescape closure may read or mutate captured local values but must not take or manage them.",
     },
     DiagnosticExplanation {
         code: code::TAKE_HANDLE_FIELD,

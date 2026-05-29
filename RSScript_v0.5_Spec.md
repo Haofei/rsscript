@@ -1629,10 +1629,8 @@ local seed = Buffer.new(size: 1024)
 ResourcePool<Conn>.new(create: || Conn.from_seed(seed: take seed), max_size: 16)
 ```
 
-*Implementation note (non-normative): the frontend rejection of consuming
-captures in `noescape` closures is a specified obligation; until it lands the
-runtime contract (the factory is called `max_size` times) still holds, so source
-relying on a single call is non-conforming.*
+The frontend reports this as `RS0804`; source that relies on a noescape closure
+being called only once is non-conforming.
 
 A closure bound with `local` is a local closure and may move-capture local values, but it is allowed only under `features: local` and cannot become managed, be returned as a managed value, be stored in managed data, or be passed to a retaining parameter.
 

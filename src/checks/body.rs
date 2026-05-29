@@ -982,7 +982,10 @@ fn check_call_place_conflicts(
                 continue;
             }
             if let HirExpr::Closure { body, .. } = &arg.value {
-                collect_closure_capture_accesses(body, &mut accesses);
+                let mut closure_accesses = Vec::new();
+                collect_closure_capture_accesses(body, &mut closure_accesses);
+                check_noescape_consuming_captured_locals(analyzer, &closure_accesses, state);
+                accesses.extend(closure_accesses);
             }
         }
     }
@@ -1012,6 +1015,18 @@ fn collect_closure_capture_accesses(body: &HirBlock, out: &mut Vec<CallPlaceAcce
     let mut bound = HashSet::new();
     collect_closure_bound_names(body, &mut bound);
     collect_closure_effect_accesses_block(body, &bound, out);
+}
+
+fn check_noescape_consuming_captured_locals(
+    analyzer: &mut Analyzer<'_>,
+    accesses: &[CallPlaceAccess],
+    state: &BodyState,
+) {
+    for access in accesses {
+        if access.moves_path && state.is_local(&access.path.base) {
+            noescape_consumes_capture_diagnostic(analyzer, access);
+        }
+    }
 }
 
 fn collect_closure_bound_names(block: &HirBlock, bound: &mut HashSet<String>) {
@@ -1829,6 +1844,31 @@ fn retained_closure_capture_diagnostic(
         .with_fix(
             "avoid_retained_capture",
             "Do not capture local values in closures passed to retaining APIs.",
+            "manual",
+        ),
+    );
+}
+
+fn noescape_consumes_capture_diagnostic(analyzer: &mut Analyzer<'_>, access: &CallPlaceAccess) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::NOESCAPE_CONSUMES_CAPTURE,
+            format!(
+                "noescape closure cannot consume captured local value `{}`.",
+                access.path.base
+            ),
+            access.span.clone(),
+            "captured local consumed here",
+        )
+        .with_cause(
+            "`noescape Fn()` callbacks are non-consuming; the callee may call this closure more than once.",
+        )
+        .with_cause(
+            "Read or mutate the captured local inside the noescape closure, or move/manage it before constructing the closure.",
+        )
+        .with_fix(
+            "avoid_consuming_capture",
+            "Do not use `take` or `manage` on captured local values inside noescape callbacks.",
             "manual",
         ),
     );
