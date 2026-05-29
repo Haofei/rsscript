@@ -2599,6 +2599,7 @@ ResourcePool active lease conflict
 managed object field-split conflict
 noescape closure consuming a captured local
 `?` operand error type does not match the function error type
+Fd used outside native/resource internals
 local captured by managed closure
 take of handle field
 weak field initialized without explicit weak handle

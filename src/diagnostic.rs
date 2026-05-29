@@ -23,6 +23,7 @@ pub mod code {
     pub const INVALID_NOALLOC_CALL: &str = "RS0020";
     pub const NON_EXHAUSTIVE_MATCH: &str = "RS0021";
     pub const ASYNC_CALL_NOT_CONSUMED: &str = "RS0022";
+    pub const FD_OUTSIDE_INTERNAL_BOUNDARY: &str = "RS0023";
     pub const FEATURE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
@@ -356,6 +357,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::ASYNC_CALL_NOT_CONSUMED,
         title: "async call not consumed",
         explanation: "Async calls must be consumed by `await` or `spawn` so suspension and task boundaries remain review-visible.",
+    },
+    DiagnosticExplanation {
+        code: code::FD_OUTSIDE_INTERNAL_BOUNDARY,
+        title: "Fd outside native/resource internals",
+        explanation: "`Fd` is not an ordinary user-facing value type in v0.5. It may appear only in native function signatures or resource internals such as resource fields.",
     },
     DiagnosticExplanation {
         code: code::FEATURE_VIOLATION,

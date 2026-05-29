@@ -1,1 +1,4 @@
-pub fn OS.close(fd: Fd) -> Unit
+features: native
+
+pub native fn OS.close(fd: Fd) -> Unit
+    effects(native)

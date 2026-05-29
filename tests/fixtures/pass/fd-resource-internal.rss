@@ -1,0 +1,11 @@
+resource FileHandle {
+    fd: Fd
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+fn main() -> Unit {
+    return Unit
+}

@@ -56,6 +56,7 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
     ("ResourcePool max_size not a positive Int literal", "RS0708"),
     ("ResourcePool active lease conflict", "RS0709"),
     ("local captured by managed closure", "RS0801"),
+    ("Fd used outside native/resource internals", "RS0023"),
     ("noescape callback escape", "RS0802"),
     ("local closure escape", "RS0803"),
     ("noescape closure consuming a captured local", "RS0804"),
@@ -972,10 +973,6 @@ fn rust_lowering_maps_take_consume_core_calls_to_runtime_hooks() {
     let source = r#"
 features: local
 
-fn close_fd() -> Unit {
-    OS.close(fd: 0)
-}
-
 fn consume_list(list: take List<Int>) -> Unit {
     List.consume(list: take list)
 }
@@ -986,7 +983,6 @@ fn consume_buffer(buffer: take Buffer) -> Unit {
 "#;
     let rust = lower_source_to_rust("consume.rss", source).expect("source should lower");
 
-    assert!(rust.contains("rsscript_runtime::os_close(0);"));
     assert!(rust.contains("fn consume_list(list: Vec<i64>)"));
     assert!(rust.contains("rsscript_runtime::list_consume(list);"));
     assert!(rust.contains("fn consume_buffer(buffer: Vec<u8>)"));

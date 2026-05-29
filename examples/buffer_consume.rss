@@ -12,7 +12,6 @@ fn main() -> Result<Unit, FileError> {
         Buffer.consume(buffer: take bytes)
     }
 
-    OS.close(fd: 0)
     Log.write(message: read "buffer consumed")
     return Ok(Unit)
 }

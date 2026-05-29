@@ -1,0 +1,4 @@
+// expect: RS0023
+fn bad(fd: Fd) -> Unit {
+    return Unit
+}

@@ -130,6 +130,7 @@ impl Analyzer<'_> {
         self.check_match_exhaustiveness();
         self.check_duplicate_declarations();
         self.check_signature_explicitness();
+        self.check_fd_surface();
         self.check_generic_constraints();
         self.check_runtime_guarantee_bodies();
         self.check_try_operator_result_returns();
@@ -669,6 +670,7 @@ impl Analyzer<'_> {
                     && param.ty.name != "share"
                     && !type_ref_is_noescape(&param.ty)
                     && !type_ref_has_surface_reference(&param.ty, self.tokens)
+                    && !type_ref_contains_name(&param.ty, "Fd")
                     && !is_copy_type(&param.ty)
                 {
                     self.diagnostics.push(
@@ -1284,6 +1286,51 @@ impl Analyzer<'_> {
         }
     }
 
+    fn check_fd_surface(&mut self) {
+        let items = self.syntax_program.items.clone();
+        for item in &items {
+            match item {
+                Item::Function(function) => {
+                    if function.is_native {
+                        continue;
+                    }
+                    for param in &function.params {
+                        if type_ref_contains_name(&param.ty, "Fd") {
+                            self.fd_surface_diagnostic(
+                                param.ty.span.clone(),
+                                "`Fd` parameter outside native boundary",
+                                "Use a `resource` type such as `File` instead of exposing raw descriptor handles.",
+                            );
+                        }
+                    }
+                    if let Some(return_ty) = &function.return_ty
+                        && type_ref_contains_name(return_ty, "Fd")
+                    {
+                        self.fd_surface_diagnostic(
+                            return_ty.span.clone(),
+                            "`Fd` return outside native boundary",
+                            "Return a `resource` type such as `File` instead of exposing raw descriptor handles.",
+                        );
+                    }
+                }
+                Item::Type(decl) => {
+                    if decl.kind == TypeKind::Resource {
+                        continue;
+                    }
+                    for field in &decl.fields {
+                        if type_ref_contains_name(&field.ty, "Fd") {
+                            self.fd_surface_diagnostic(
+                                field.ty.span.clone(),
+                                "`Fd` field outside resource internals",
+                                "Use a `resource` field wrapper or a non-Fd public value type.",
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn check_weak_fields(&mut self) {
         for item in &self.syntax_program.items {
             let Item::Type(decl) = item else {
@@ -1619,6 +1666,26 @@ impl Analyzer<'_> {
                 "Use a resource type argument or a non-resource container for ordinary values.",
                 "manual",
             ),
+        );
+    }
+
+    fn fd_surface_diagnostic(
+        &mut self,
+        span: crate::diagnostic::Span,
+        summary: impl Into<String>,
+        fix: impl Into<String>,
+    ) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::FD_OUTSIDE_INTERNAL_BOUNDARY,
+                summary,
+                span,
+                "Fd outside native/resource internals",
+            )
+            .with_cause(
+                "`Fd` is a trusted native/resource-internal descriptor handle, not an ordinary RSScript value type.",
+            )
+            .with_fix("use_resource_wrapper", fix, "manual"),
         );
     }
 
@@ -2054,9 +2121,17 @@ fn is_copy_type(ty: &TypeRef) -> bool {
                 | "UInt32"
                 | "UInt64"
                 | "Closure"
-                | "Fd"
                 | "Unit"
         )
+}
+
+fn type_ref_contains_name(ty: &TypeRef, name: &str) -> bool {
+    ty.name == name
+        || ty.args.iter().any(|arg| type_ref_contains_name(arg, name))
+        || ty
+            .fn_return
+            .as_deref()
+            .is_some_and(|return_ty| type_ref_contains_name(return_ty, name))
 }
 
 fn type_ref_name(ty: &TypeRef) -> String {

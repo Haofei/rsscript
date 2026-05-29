@@ -1,0 +1,8 @@
+// expect: RS0023
+struct BadHandle {
+    fd: Fd
+}
+
+fn main() -> Unit {
+    return Unit
+}

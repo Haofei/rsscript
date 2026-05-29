@@ -1,3 +1,5 @@
+features: native
+
 resource DbConnection
 
 pub fn DbConnection.open(url: read Url) -> DbConnection
@@ -9,4 +11,5 @@ pub fn DbConnection.query(
     sql: read String,
 ) -> Result<Unit, DbError>
 
-pub fn Db.close(fd: Fd) -> Unit
+pub native fn Db.close(fd: Fd) -> Unit
+    effects(native)
