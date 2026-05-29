@@ -1,0 +1,10 @@
+// expect: RS0015
+namespace Json
+
+opaque struct JsonValue
+
+pub fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
+
+fn main() -> Unit {
+    return Unit
+}

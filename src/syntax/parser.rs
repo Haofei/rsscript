@@ -13,7 +13,6 @@ pub fn parse_source(file: &str, source: &str) -> Program {
     Parser {
         tokens: &tokens,
         index: 0,
-        current_namespace: None,
     }
     .parse_program()
 }
@@ -21,7 +20,6 @@ pub fn parse_source(file: &str, source: &str) -> Program {
 struct Parser<'a> {
     tokens: &'a [Token],
     index: usize,
-    current_namespace: Option<String>,
 }
 
 struct ParsedFeatures {
@@ -51,14 +49,6 @@ impl Parser<'_> {
             } else if self.at_ident("profile") && self.peek_symbol(1, ":") {
                 profile_spans.push(self.tokens[self.index].span.clone());
                 self.index += 1;
-            } else if self.at_ident("namespace") {
-                let start = self.index;
-                if let Some(namespace) = self.parse_namespace_decl() {
-                    self.current_namespace = Some(namespace);
-                } else {
-                    malformed_declaration_spans.push(self.tokens[start].span.clone());
-                    self.index = skip_unknown_top_level(self.tokens, start);
-                }
             } else if self.at_ident("class")
                 || self.at_ident("struct")
                 || self.at_ident("resource")
@@ -99,19 +89,6 @@ impl Parser<'_> {
             malformed_declaration_spans,
             items,
         }
-    }
-
-    fn parse_namespace_decl(&mut self) -> Option<String> {
-        self.index += 1;
-        let namespace = self.take_function_name()?;
-        if self
-            .tokens
-            .get(self.index)
-            .is_some_and(|token| token.span.line == self.tokens[self.index - 1].span.line)
-        {
-            self.index = declaration_line_end(self.tokens, self.index);
-        }
-        Some(namespace)
     }
 
     fn parse_features(&mut self) -> ParsedFeatures {
@@ -171,8 +148,7 @@ impl Parser<'_> {
             return None;
         };
         self.index += 1;
-        let mut name = self.take_function_name()?;
-        name = self.qualify_name(&name);
+        let name = self.take_function_name()?;
         let parsed_type_params = self.parse_generic_params();
         let type_params = parsed_type_params.params;
         let malformed_generic_param_spans = parsed_type_params.malformed_spans;
@@ -197,16 +173,6 @@ impl Parser<'_> {
             }
             (Vec::new(), Vec::new(), None)
         };
-        let generic_names = type_params
-            .iter()
-            .map(|param| param.name.as_str())
-            .collect::<HashSet<_>>();
-        let mut fields = fields;
-        if let Some(namespace) = self.current_namespace.as_deref() {
-            for field in &mut fields {
-                qualify_type_ref(&mut field.ty, namespace, &generic_names);
-            }
-        }
 
         Some(TypeDecl {
             kind,
@@ -242,8 +208,7 @@ impl Parser<'_> {
             return None;
         }
         self.index += 1;
-        let mut name = self.take_function_name()?;
-        name = self.qualify_name(&name);
+        let name = self.take_function_name()?;
         let parsed_type_params = self.parse_generic_params();
         let type_params = parsed_type_params.params;
         let malformed_generic_param_spans = parsed_type_params.malformed_spans;
@@ -257,15 +222,6 @@ impl Parser<'_> {
             params = parsed_params.params;
             malformed_param_spans = parsed_params.malformed_spans;
             self.index = close + 1;
-        }
-        let generic_names = type_params
-            .iter()
-            .map(|param| param.name.as_str())
-            .collect::<HashSet<_>>();
-        if let Some(namespace) = self.current_namespace.as_deref() {
-            for param in &mut params {
-                qualify_type_ref(&mut param.ty, namespace, &generic_names);
-            }
         }
 
         let signature_end = function_signature_end(self.tokens, self.index);
@@ -281,11 +237,6 @@ impl Parser<'_> {
                 self.index += 1;
             }
             return_ty = parse_type_ref(self.tokens, return_start, self.index);
-            if let (Some(namespace), Some(return_ty)) =
-                (self.current_namespace.as_deref(), return_ty.as_mut())
-            {
-                qualify_type_ref(return_ty, namespace, &generic_names);
-            }
         }
 
         let mut effects = Vec::new();
@@ -330,21 +281,6 @@ impl Parser<'_> {
             body,
             span,
         })
-    }
-
-    fn qualify_name(&self, name: &str) -> String {
-        let Some(namespace) = self.current_namespace.as_deref() else {
-            return name.to_string();
-        };
-        if name == namespace
-            || name
-                .strip_prefix(namespace)
-                .is_some_and(|rest| rest.starts_with('.'))
-        {
-            name.to_string()
-        } else {
-            format!("{namespace}.{name}")
-        }
     }
 
     fn current(&self) -> Option<&Token> {
@@ -1608,67 +1544,6 @@ fn parse_type_name(tokens: &[Token], start: usize, end: usize) -> Option<(String
         index += 2;
     }
     Some((name, index))
-}
-
-fn qualify_type_ref(ty: &mut TypeRef, namespace: &str, generic_names: &HashSet<&str>) {
-    if should_namespace_qualify_type(&ty.name, namespace, generic_names) {
-        ty.name = format!("{namespace}.{}", ty.name);
-    }
-    for arg in &mut ty.args {
-        qualify_type_ref(arg, namespace, generic_names);
-    }
-    if let Some(return_ty) = ty.fn_return.as_mut() {
-        qualify_type_ref(return_ty, namespace, generic_names);
-    }
-}
-
-fn should_namespace_qualify_type(
-    name: &str,
-    namespace: &str,
-    generic_names: &HashSet<&str>,
-) -> bool {
-    if name.contains('.')
-        || generic_names.contains(name)
-        || is_builtin_type_name(name)
-        || name == namespace
-    {
-        return false;
-    }
-    true
-}
-
-fn is_builtin_type_name(name: &str) -> bool {
-    matches!(
-        name,
-        "Unit"
-            | "Bool"
-            | "Int"
-            | "Int8"
-            | "Int16"
-            | "Int32"
-            | "Int64"
-            | "UInt"
-            | "UInt8"
-            | "UInt16"
-            | "UInt32"
-            | "UInt64"
-            | "Float"
-            | "Float32"
-            | "Float64"
-            | "Byte"
-            | "Char"
-            | "String"
-            | "Bytes"
-            | "Buffer"
-            | "Path"
-            | "List"
-            | "Map"
-            | "Option"
-            | "Result"
-            | "Task"
-            | "Fn"
-            | "ResourcePool"
-    )
 }
 
 fn type_ref_name(ty: &TypeRef) -> String {

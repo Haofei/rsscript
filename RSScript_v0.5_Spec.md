@@ -2282,17 +2282,16 @@ signature vocabulary as RSScript source: parameter names, `read`/`mut`/`take`,
 return freshness, `effects(retains(...))`, guarantees, `native`, `unsafe`, and
 resource contracts.
 
-The compiler frontend owns `.rssi` parsing and canonical normalization. Package
-tooling may select which interface files are active for a package feature set,
-but it must then ask the frontend to normalize the effective interface. Package
-tooling must not implement an independent semantic normalizer and must not infer
-RSScript effects from Rust signatures.
+The compiler frontend owns `.rssi` parsing and canonical contract validation.
+Package tooling may select which interface files are active for a package
+feature set, but it must then ask the frontend to validate the effective
+interface. Package tooling must not implement an independent semantic
+normalizer and must not infer RSScript effects from Rust signatures.
 
 Provisional v0.5 interface-only surface:
 
 ```text
 features: <file features>       # same file-feature gate as source files
-namespace <Name>                # optional exported root namespace
 opaque struct <Name>            # representation hidden from dependents
 opaque class <Name>             # representation hidden, managed identity kind
 opaque resource <Name>          # representation hidden, resource kind
@@ -2300,14 +2299,18 @@ pub fn ...                      # bodyless public RSScript contract
 native fn ... effects(native)   # bodyless native boundary contract
 ```
 
-Canonical namespace form is relative to the namespace. Inside
-`namespace Json`, the declaration `native fn parse(...)` normalizes to the public
-symbol `Json.parse`. Method-like names such as `HttpClient.get` are relative to
-the active namespace; authors write `HttpClient.get`, not `Http.HttpClient.get`.
-Repeating the namespace prefix inside the namespace, such as
-`native fn Json.parse(...)`, is non-canonical and should be rejected or normalized
-by the compiler frontend in one deterministic way; package tooling must consume
-only the normalized symbol form.
+There is no package-level `namespace` shorthand in v0.5. Public contract symbols
+use the same fully-qualified canonical names as source files:
+
+```rust
+opaque struct Json.JsonValue
+
+pub fn Json.parse(text: read String) -> Result<fresh Json.JsonValue, JsonError>
+```
+
+The compiler must reject namespace shorthands instead of normalizing them.
+RSScript has no users yet, so there is no compatibility value in keeping alias
+spellings that would increase review surface area.
 
 Opaque interface types are distinct from empty ordinary declarations. Their kind
 is explicit (`struct`, `class`, or `resource`) and the ordinary kind rules still
@@ -2318,7 +2321,7 @@ rules. Opaque resource types must use `opaque resource`, not `opaque struct`.
 Package features declared in `rsspkg.toml` are package-selection features, not
 RSScript file features. A package feature may cause additional `.rssi` files to
 be selected by package tooling, but the resulting effective interface is still a
-compiler-normalized `.rssi` contract.
+compiler-validated `.rssi` contract.
 
 ---
 
@@ -2783,7 +2786,7 @@ invokes Cargo for Rust native wrapper implementation builds
 
 It must not infer RSScript semantic contracts from Rust signatures and must not weaken language checks such as conflict roots, constructor/variant call-like checking, ResourcePool factory contracts, or managed closure capture retention.
 
-Package features declared in `rsspkg.toml` are package selection features. They are not the same as RSScript file features declared with `features:`. If a package feature changes the public surface, package tooling selects a different effective `.rssi` interface and the compiler frontend normalizes that interface; the package manager still does not define language semantics.
+Package features declared in `rsspkg.toml` are package selection features. They are not the same as RSScript file features declared with `features:`. If a package feature changes the public surface, package tooling selects a different effective `.rssi` interface and the compiler frontend validates that interface; the package manager still does not define language semantics.
 
 ---
 

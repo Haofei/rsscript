@@ -5752,7 +5752,7 @@ pub fn field_string(
 }
 
 #[test]
-fn parser_normalizes_namespace_and_opaque_interface_declarations() {
+fn parser_rejects_namespace_interface_shorthand() {
     let source = r#"
 features: native
 namespace Json
@@ -5765,35 +5765,11 @@ native fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
 "#;
     let program = parse_source("json.rssi", source);
 
-    assert_eq!(program.unknown_top_level_spans, Vec::new());
-    let type_names = program
-        .items
-        .iter()
-        .filter_map(|item| match item {
-            Item::Type(ty) => Some((ty.name.as_str(), ty.is_opaque)),
-            Item::Function(_) => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        type_names,
-        vec![("Json.JsonValue", true), ("Json.JsonError", true)]
-    );
-    let function = program
-        .items
-        .iter()
-        .find_map(|item| match item {
-            Item::Function(function) => Some(function),
-            Item::Type(_) => None,
-        })
-        .expect("expected namespace-normalized function");
-
-    assert_eq!(function.name, "Json.parse");
-    assert_eq!(function.params[0].ty.name, "String");
-    let return_ty = function.return_ty.as_ref().expect("return type");
-    assert_eq!(return_ty.name, "Result");
-    assert_eq!(return_ty.args[0].name, "Json.JsonValue");
-    assert_eq!(return_ty.args[1].name, "Json.JsonError");
-    assert!(analyze_source("json.rssi", source).is_empty());
+    assert_eq!(program.unknown_top_level_spans.len(), 1);
+    let diagnostics = analyze_source("json.rssi", source);
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS0015" && diagnostic.label == "unsupported top-level item"
+    }));
 }
 
 #[test]
@@ -7332,7 +7308,7 @@ fn package_review_reports_interface_type_contract_mismatch() {
 }
 
 #[test]
-fn package_review_accepts_namespace_opaque_interface_contract() {
+fn package_review_rejects_namespace_interface_shorthand() {
     let temp_dir = unique_temp_dir("rsscript-package-namespace-opaque-interface");
     write_named_package_fixture(
         &temp_dir,
@@ -7356,7 +7332,7 @@ opaque struct JsonValue
     )
     .expect("source should be written");
 
-    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let review = review_package_dir(&temp_dir).expect("package review should complete");
     let _ = fs::remove_dir_all(&temp_dir);
 
     let codes = review
@@ -7364,45 +7340,7 @@ opaque struct JsonValue
         .iter()
         .map(|diagnostic| diagnostic.code.as_str())
         .collect::<Vec<_>>();
-    assert!(!codes.contains(&"RS1301"), "{:?}", review.diagnostics);
-}
-
-#[test]
-fn package_lock_hashes_compiler_normalized_interface_contracts() {
-    let namespace_dir = unique_temp_dir("rsscript-package-namespace-interface-hash");
-    let canonical_dir = unique_temp_dir("rsscript-package-canonical-interface-hash");
-    write_named_package_fixture(
-        &namespace_dir,
-        "rss-interface-hash",
-        "0.1.0",
-        "",
-        r#"namespace Json
-
-opaque struct JsonValue
-
-pub fn parse(text: read String) -> fresh JsonValue
-"#,
-    );
-    write_named_package_fixture(
-        &canonical_dir,
-        "rss-interface-hash",
-        "0.1.0",
-        "",
-        r#"opaque struct Json.JsonValue
-
-pub fn Json.parse(text: read String) -> fresh Json.JsonValue
-"#,
-    );
-
-    let namespace_lock = lock_package_dir(&namespace_dir).expect("namespace package lock");
-    let canonical_lock = lock_package_dir(&canonical_dir).expect("canonical package lock");
-    let _ = fs::remove_dir_all(&namespace_dir);
-    let _ = fs::remove_dir_all(&canonical_dir);
-
-    assert_eq!(
-        namespace_lock.packages[0].interface_hash,
-        canonical_lock.packages[0].interface_hash
-    );
+    assert!(codes.contains(&"RS0015"), "{:?}", review.diagnostics);
 }
 
 #[test]
