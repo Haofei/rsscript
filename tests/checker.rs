@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rsscript::syntax::ast::{EffectDecl, Expr, Item};
@@ -72,6 +73,8 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
     ("unmappable rustc diagnostic", "RS1102"),
     ("native boundary violation", "RS1302"),
 ];
+
+static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[test]
 fn pass_fixtures_have_no_diagnostics() {
@@ -3981,6 +3984,28 @@ fn review_map_realistic_supported_corpus_has_no_unknown_regions() {
         serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
     assert_eq!(json["summary"]["unknown_ratio"], 0.0);
     assert_eq!(json["summary"]["unknown_function_ratio"], 0.0);
+}
+
+#[test]
+fn review_map_app_benchmark_has_no_unknown_regions() {
+    let path = Path::new("tests/fixtures/pass/app-review-benchmark.rss");
+    let source = read_fixture(path);
+    let map = review_map_sources(vec![(path.to_str().unwrap(), source.as_str())]);
+
+    assert_eq!(map.summary.total_functions, 30);
+    assert!(map.summary.total_lines >= 300, "{map:?}");
+    assert_eq!(map.files[0].risk, ReviewMapFileRisk::High);
+    assert_eq!(map.summary.unknown.functions, 0, "{map:?}");
+    assert_eq!(map.summary.unknown.lines, 0, "{map:?}");
+    assert!(map.summary.review_required.functions >= 25, "{map:?}");
+    assert!(map.summary.foldable.functions <= 5, "{map:?}");
+
+    let json: Value =
+        serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
+    assert_eq!(json["summary"]["unknown_ratio"], 0.0);
+    assert_eq!(json["summary"]["unknown_function_ratio"], 0.0);
+    assert_eq!(json["summary"]["must_review"]["functions"], 25);
+    assert_eq!(json["summary"]["low_semantic_risk"]["functions"], 5);
 }
 
 #[test]
@@ -7901,7 +7926,8 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
+    let counter = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("{prefix}-{}-{nanos}-{counter}", std::process::id()))
 }
 
 fn write_package_fixture(

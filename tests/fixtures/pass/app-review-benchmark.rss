@@ -1,0 +1,333 @@
+features: local, native
+
+class User {
+    id: String
+}
+
+struct Session {
+    owner: weak User
+    trace_id: String
+}
+
+struct UploadPlan {
+    input: Path
+    output: Path
+    trace_id: String
+}
+
+struct WorkItem {
+    plan: UploadPlan
+    session: Session
+}
+
+struct AuditRecord {
+    trace_id: String
+    status: String
+}
+
+struct RenderResult {
+    response: Response
+    status: String
+}
+
+fn User.lookup(id: read String) -> User
+
+fn User.touch(user: read User) -> Unit
+
+fn audit_step(callback: noescape Fn()) -> Unit {
+    callback()
+    return Unit
+}
+
+fn parse_plan(request: read Request) -> Result<fresh UploadPlan, JsonError> {
+    let body = Request.path(request: read request)
+    let json = Json.parse(text: read body)?
+    let input_text = Json.field_string(value: read json, name: read "input")?
+    let output_text = Json.field_string(value: read json, name: read "output")?
+    let trace_id = Json.field_string(value: read json, name: read "trace")?
+    let input = Path.from_string(value: read input_text)
+    let output = Path.from_string(value: read output_text)
+
+    return UploadPlan(
+        input: read input,
+        output: read output,
+        trace_id: read trace_id,
+    )
+}
+
+fn build_session(owner: read User, trace_id: read String) -> fresh Session {
+    return Session(
+        owner: Weak.from(value: read owner),
+        trace_id: read trace_id,
+    )
+}
+
+fn inspect_session(session: read Session) -> Unit {
+    let maybe_owner = Weak.upgrade(value: read session.owner)
+
+    match maybe_owner {
+        Some(owner) => {
+            User.touch(user: read owner)
+        }
+        None => {
+            Log.write(message: read session.trace_id)
+        }
+    }
+
+    audit_step(callback: || {
+        Log.write(message: read session.trace_id)
+    })
+
+    return Unit
+}
+
+fn build_work_item(request: read Request, owner_id: read String) -> Result<fresh WorkItem, JsonError> {
+    let plan = parse_plan(request: read request)?
+    let owner = User.lookup(id: read owner_id)
+    let session = build_session(owner: read owner, trace_id: read plan.trace_id)
+
+    return WorkItem(plan: read plan, session: read session)
+}
+
+fn load_request_row(path: read Path) -> Result<fresh Row, CsvError> {
+    local buffer = RowBuffer.new(size: 8192)
+
+    with File.open_read(path: read path) as file {
+        Csv.read_into(file: mut file, buffer: mut buffer)?
+    }
+
+    return Csv.parse_row(buffer: read buffer)
+}
+
+fn decode_row_status(path: read Path) -> Result<String, CsvError> {
+    let row = load_request_row(path: read path)?
+    let status = Row.field_string(row: read row, index: 1)?
+
+    return Ok(status)
+}
+
+fn process_image(plan: read UploadPlan, cache: mut ImageCache) -> Result<Unit, ImageError> {
+    local image = Image.load(path: read plan.input)?
+
+    audit_step(callback: || {
+        Image.inspect(image: read image)
+    })
+
+    Image.resize(image: mut image, width: 1024, height: 768)
+    Image.normalize(image: mut image)
+    Image.sharpen(image: mut image)
+
+    let shared = manage image
+    ImageCache.store(cache: mut cache, image: read shared)
+    Image.save(image: read shared, path: read plan.output)?
+
+    return Ok(Unit)
+}
+
+fn build_image_cache() -> fresh ImageCache {
+    return ImageCache.new(capacity: 64)
+}
+
+fn refresh_config(path: read Path, store: mut ConfigStore) -> Result<Unit, ConfigError> {
+    let config = Config.load(path: read path)?
+    ConfigStore.replace(store: mut store, value: read config)
+
+    return Ok(Unit)
+}
+
+fn load_rules_config(path: read Path) -> Result<fresh Config, ConfigError> {
+    let rules = RuleLoader.load_rules(path: read path)?
+    let name = String.concat(left: read "rules:", right: read "active")
+
+    return Config.new(name: read name, rules: read rules)
+}
+
+fn replace_global_rules(path: read Path, global: mut GlobalConfig) -> Result<Unit, ConfigError> {
+    let config = load_rules_config(path: read path)?
+    GlobalConfig.replace(global: mut global, value: read config)
+
+    return Ok(Unit)
+}
+
+fn initialize_global_rules(path: read Path) -> Result<fresh GlobalConfig, ConfigError> {
+    let config = load_rules_config(path: read path)?
+
+    return GlobalConfig.new(value: read config)
+}
+
+fn run_audit_query(url: read Url, trace_id: read String) -> Result<Unit, DbError> {
+    local pool = ResourcePool<DbConnection>.new(
+        create: || DbConnection.open(url: read url),
+        max_size: 2,
+    )
+
+    with ResourcePool.borrow(pool: mut pool) as conn {
+        DbConnection.query(conn: mut conn, sql: read trace_id)?
+    }
+
+    return Ok(Unit)
+}
+
+fn run_status_query(url: read Url, status: read String) -> Result<Unit, DbError> {
+    local pool = ResourcePool<DbConnection>.new(
+        create: || DbConnection.open(url: read url),
+        max_size: 1,
+    )
+
+    with ResourcePool.borrow(pool: mut pool) as conn {
+        DbConnection.query(conn: mut conn, sql: read status)?
+    }
+
+    return Ok(Unit)
+}
+
+fn persist_trace(cache: mut Cache, trace_id: read String, status: read String) -> Unit {
+    Cache.insert(cache: mut cache, key: read trace_id, value: read status)
+    return Unit
+}
+
+fn lookup_trace(cache: read Cache, trace_id: read String) -> String {
+    let status = Cache.lookup(cache: read cache, key: read trace_id)
+
+    return status
+}
+
+fn build_audit_record(trace_id: read String, status: read String) -> fresh AuditRecord {
+    return AuditRecord(trace_id: read trace_id, status: read status)
+}
+
+fn save_audit_record(cache: mut Cache, record: read AuditRecord) -> Unit {
+    Cache.insert(cache: mut cache, key: read record.trace_id, value: read record.status)
+    return Unit
+}
+
+fn write_response_file(path: read Path, text: read String) -> Result<Unit, FileError> {
+    let bytes = Path.from_string(value: read text)
+
+    with File.open_write(path: read path) as file {
+        File.write(file: mut file, data: read bytes)?
+    }
+
+    return Ok(Unit)
+}
+
+fn consume_local_buffer() -> Unit {
+    local buffer = Buffer.new(size: 4096)
+    Buffer.clear(buffer: mut buffer)
+    Buffer.consume(buffer: take buffer)
+
+    return Unit
+}
+
+fn build_environment() -> Environment {
+    let root = Environment.root()
+    let child = Environment.child(parent: read root)
+    let function = FunctionObject.new(closure: read child)
+    Environment.bind_function(env: mut child, function: read function)
+
+    return child
+}
+
+fn inspect_environment(env: read Environment, function: read FunctionObject) -> Unit {
+    let has_parent = Environment.has_parent(env: read env)
+    let has_function = Environment.has_function(env: read env)
+    let has_closure = FunctionObject.has_closure(function: read function)
+
+    if has_parent {
+        Log.write(message: read "parent")
+    } else {
+        Log.write(message: read "root")
+    }
+
+    if has_function {
+        Log.write(message: read "function")
+    } else {
+        Log.write(message: read "empty")
+    }
+
+    if has_closure {
+        Log.write(message: read "closure")
+    } else {
+        Log.write(message: read "no closure")
+    }
+
+    return Unit
+}
+
+fn count_request(counter: mut Counter) -> Int {
+    Counter.add(counter: mut counter, amount: 1)
+    let value = Counter.value(counter: read counter)
+
+    return value
+}
+
+fn verify_status(expected: read String, actual: read String) -> Unit {
+    Assert.equal(left: read expected, right: read actual)
+    return Unit
+}
+
+fn render_response(status: read String) -> Result<fresh RenderResult, HttpError> {
+    let response = Response.ok(body: read status)?
+
+    return RenderResult(response: read response, status: read status)
+}
+
+fn complete_request(
+    request: read Request,
+    owner_id: read String,
+    image_cache: mut ImageCache,
+    config_store: mut ConfigStore,
+    rules_global: mut GlobalConfig,
+    status_cache: mut Cache,
+    counter: mut Counter,
+    db_url: read Url,
+    csv_path: read Path,
+) -> Result<fresh Response, HttpError> {
+    let config_path = Path.from_string(value: read "config.json")
+    let rules_path = Path.from_string(value: read "rules.json")
+    refresh_config(path: read config_path, store: mut config_store)?
+    replace_global_rules(path: read rules_path, global: mut rules_global)?
+
+    let item = build_work_item(request: read request, owner_id: read owner_id)?
+    inspect_session(session: read item.session)
+
+    process_image(plan: read item.plan, cache: mut image_cache)?
+    run_audit_query(url: read db_url, trace_id: read item.plan.trace_id)?
+
+    let csv_status = decode_row_status(path: read csv_path)?
+    run_status_query(url: read db_url, status: read csv_status)?
+
+    let status = ConfigStore.name(store: read config_store)
+    let record = build_audit_record(trace_id: read item.plan.trace_id, status: read status)
+    save_audit_record(cache: mut status_cache, record: read record)
+    persist_trace(cache: mut status_cache, trace_id: read item.plan.trace_id, status: read csv_status)
+
+    let cached = lookup_trace(cache: read status_cache, trace_id: read item.plan.trace_id)
+    verify_status(expected: read status, actual: read cached)
+
+    count_request(counter: mut counter)
+    consume_local_buffer()
+
+    Log.write(message: read status)
+
+    return Response.ok(body: read status)?
+}
+
+fn main_handler(
+    request: read Request,
+    owner_id: read String,
+    config_store: mut ConfigStore,
+    rules_global: mut GlobalConfig,
+    status_cache: mut Cache,
+    counter: mut Counter,
+    db_url: read Url,
+    csv_path: read Path,
+) -> Result<fresh Response, HttpError> {
+    let image_cache = build_image_cache()
+    let env = build_environment()
+    let child = Environment.child(parent: read env)
+    let function = FunctionObject.new(closure: read child)
+    inspect_environment(env: read child, function: read function)
+
+    return complete_request(request: read request, owner_id: read owner_id, image_cache: mut image_cache, config_store: mut config_store, rules_global: mut rules_global, status_cache: mut status_cache, counter: mut counter, db_url: read db_url, csv_path: read csv_path)?
+}
