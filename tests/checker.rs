@@ -54,6 +54,7 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
     ),
     ("ResourcePool.new used with fallible factory", "RS0707"),
     ("ResourcePool factory contract violation", "RS0707"),
+    ("ResourcePool max_size not a positive Int literal", "RS0708"),
     ("local captured by managed closure", "RS0801"),
     ("noescape callback escape", "RS0802"),
     ("local closure escape", "RS0803"),
@@ -1783,11 +1784,11 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"#;
 }
 
 #[test]
-fn rss_run_maps_runtime_conflict_to_rsscript_diagnostic() {
+fn rss_run_rejects_empty_resource_pool_before_runtime() {
     let temp_dir = unique_temp_dir("rsscript-runtime-diagnostic");
     fs::create_dir_all(&temp_dir).expect("temp dir should be created");
     let source_path = temp_dir.join("empty_pool.rss");
-    write_runtime_conflict_fixture(&source_path);
+    write_empty_resource_pool_fixture(&source_path);
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("run")
@@ -1801,24 +1802,24 @@ fn rss_run_maps_runtime_conflict_to_rsscript_diagnostic() {
 
     assert!(!output.status.success());
     assert!(stderr.trim().is_empty(), "{stderr}");
-    assert!(stdout.contains("error[RS1201]"), "{stdout}");
     assert!(
-        stdout.contains("RSScript runtime error: resource pool has no available resources"),
+        stdout
+            .contains("error[RS0708]: `ResourcePool.new` requires a positive literal `max_size`."),
         "{stdout}"
     );
     assert!(stdout.contains("empty_pool.rss"), "{stdout}");
     assert!(
-        stdout.contains("runtime error kind: resource_pool_empty"),
+        !stdout.contains("runtime error kind: resource_pool_empty"),
         "{stdout}"
     );
 }
 
 #[test]
-fn rss_run_json_maps_runtime_conflict_to_diagnostics_json() {
+fn rss_run_json_rejects_empty_resource_pool_before_runtime() {
     let temp_dir = unique_temp_dir("rsscript-runtime-diagnostic-json");
     fs::create_dir_all(&temp_dir).expect("temp dir should be created");
     let source_path = temp_dir.join("empty_pool.rss");
-    write_runtime_conflict_fixture(&source_path);
+    write_empty_resource_pool_fixture(&source_path);
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("run")
@@ -1834,14 +1835,14 @@ fn rss_run_json_maps_runtime_conflict_to_diagnostics_json() {
 
     assert!(!output.status.success());
     assert!(stderr.trim().is_empty(), "{stderr}");
-    assert_eq!(json[0]["code"], "RS1201");
+    assert_eq!(json[0]["code"], "RS0708");
     assert_eq!(json[0]["severity"], "error");
     assert_eq!(
         json[0]["spans"][0]["file"],
         source_path.display().to_string()
     );
     assert!(
-        json[0]["causes"]
+        !json[0]["causes"]
             .as_array()
             .expect("causes should be an array")
             .iter()
@@ -3573,6 +3574,53 @@ fn File.open(path: read Path) -> Result<File, IOError>
         .count();
 
     assert_eq!(generic_resource_count, 2, "{diagnostics:?}");
+}
+
+#[test]
+fn checker_rejects_resource_pool_non_positive_or_dynamic_max_size() {
+    let source = r#"
+features: local
+
+resource DbConnection {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+fn DbConnection.open(url: read String) -> DbConnection
+
+fn zero_pool(url: read String) -> Unit {
+    local pool = ResourcePool<DbConnection>.new(
+        create: || DbConnection.open(url: read url),
+        max_size: 0,
+    )
+}
+
+fn negative_pool(url: read String) -> Unit {
+    local pool = ResourcePool<DbConnection>.new(
+        create: || DbConnection.open(url: read url),
+        max_size: -1,
+    )
+}
+
+fn dynamic_pool(url: read String, count: Int) -> Unit {
+    local pool = ResourcePool<DbConnection>.new(
+        create: || DbConnection.open(url: read url),
+        max_size: count,
+    )
+}
+"#;
+    let diagnostics = analyze_source("resourcepool-max-size.rss", source);
+    let invalid_max_size_count = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == "RS0708" && diagnostic.label == "invalid ResourcePool max_size"
+        })
+        .count();
+
+    assert_eq!(invalid_max_size_count, 3, "{diagnostics:?}");
 }
 
 #[test]
@@ -10479,7 +10527,7 @@ edition = "2026"
     .expect("package manifest should be written");
 }
 
-fn write_runtime_conflict_fixture(path: &Path) {
+fn write_empty_resource_pool_fixture(path: &Path) {
     fs::write(
         path,
         r#"features: local

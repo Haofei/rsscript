@@ -299,6 +299,7 @@ fn check_expr_semantics_with_context(
             check_constructor_field_initializers(analyzer, callee, args, expr, state);
             check_call_place_conflicts(analyzer, args, resolution, state);
             check_resource_pool_new_factory_contract(analyzer, callee, args);
+            check_resource_pool_new_max_size_contract(analyzer, callee, args);
             let weak_upgrade = is_weak_upgrade_callee(callee);
             for arg in args {
                 check_expr_semantics_with_context(analyzer, &arg.value, state, weak_upgrade, false);
@@ -2139,6 +2140,30 @@ fn check_resource_pool_new_factory_contract(
     resource_pool_fallible_factory_diagnostic(analyzer, hir_expr_span(fallible).clone(), type_name);
 }
 
+fn check_resource_pool_new_max_size_contract(
+    analyzer: &mut Analyzer<'_>,
+    callee: &Callee,
+    args: &[HirCallArg],
+) {
+    if !is_resource_pool_new(callee) {
+        return;
+    }
+    let Some(max_size) = args
+        .iter()
+        .find(|arg| arg.name.as_deref() == Some("max_size"))
+        .or_else(|| args.get(1))
+    else {
+        return;
+    };
+    let HirExpr::Number { value, span } = &max_size.value else {
+        resource_pool_invalid_max_size_diagnostic(analyzer, hir_expr_span(&max_size.value).clone());
+        return;
+    };
+    if value.parse::<i64>().ok().is_none_or(|value| value <= 0) {
+        resource_pool_invalid_max_size_diagnostic(analyzer, span.clone());
+    }
+}
+
 fn resource_pool_fallible_factory_expr(expr: &HirExpr) -> Option<&HirExpr> {
     if hir_expr_type_name(expr).is_some_and(is_result_type) {
         return Some(expr);
@@ -2492,6 +2517,27 @@ fn resource_pool_fallible_factory_diagnostic(
         .with_fix(
             "use_infallible_factory",
             "Handle failure before constructing the pool, or use a future explicitly fallible ResourcePool API.",
+            "manual",
+        ),
+    );
+}
+
+fn resource_pool_invalid_max_size_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    span: crate::diagnostic::Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::RESOURCE_POOL_INVALID_MAX_SIZE,
+            "`ResourcePool.new` requires a positive literal `max_size`.",
+            span,
+            "invalid ResourcePool max_size",
+        )
+        .with_cause("v0.5 `ResourcePool.new` eagerly constructs exactly `max_size` resources and returns no `Result`.")
+        .with_cause("Use a positive `Int` literal so empty or dynamically sized pools cannot hide construction failure or exhaustion behavior.")
+        .with_fix(
+            "use_positive_literal_max_size",
+            "Pass a positive integer literal such as `max_size: 1`.",
             "manual",
         ),
     );

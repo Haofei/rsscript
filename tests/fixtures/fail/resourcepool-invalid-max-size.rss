@@ -1,0 +1,19 @@
+// expect: RS0708
+features: local
+
+resource DbConnection {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+fn DbConnection.open(url: read String) -> DbConnection
+
+fn bad_pool(url: read String) -> Unit {
+    local pool = ResourcePool<DbConnection>.new(
+        create: || DbConnection.open(url: read url),
+        max_size: 0,
+    )
+}

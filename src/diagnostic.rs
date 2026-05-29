@@ -52,6 +52,7 @@ pub mod code {
     pub const RESOURCE_POOL_NOT_LOCAL: &str = "RS0705";
     pub const RESOURCE_PRODUCER_MISSING_TRY: &str = "RS0706";
     pub const RESOURCE_POOL_FALLIBLE_FACTORY: &str = "RS0707";
+    pub const RESOURCE_POOL_INVALID_MAX_SIZE: &str = "RS0708";
     pub const LOCAL_CAPTURED_BY_MANAGED_CLOSURE: &str = "RS0801";
     pub const NOESCAPE_CALLBACK_ESCAPE: &str = "RS0802";
     pub const LOCAL_CLOSURE_ESCAPE: &str = "RS0803";
@@ -493,6 +494,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::RESOURCE_POOL_FALLIBLE_FACTORY,
         title: "ResourcePool.new used with fallible factory",
         explanation: "`ResourcePool.new` is the v0.5 eager noescape pool constructor and requires an infallible factory. Use an infallible factory, or introduce a distinct fallible pool API instead of hiding failure inside `new`.",
+    },
+    DiagnosticExplanation {
+        code: code::RESOURCE_POOL_INVALID_MAX_SIZE,
+        title: "ResourcePool max_size not a positive Int literal",
+        explanation: "`ResourcePool.new` is eager and infallible in v0.5, so `max_size` must be a positive `Int` literal checked before lowering.",
     },
     DiagnosticExplanation {
         code: code::LOCAL_CAPTURED_BY_MANAGED_CLOSURE,
