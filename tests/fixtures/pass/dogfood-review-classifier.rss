@@ -737,6 +737,8 @@ pub fn main() -> Result<Unit, JsonError> {
     )
     let shape_ok = dogfood_shape_is_expected()?
 
+    Log.write(message: read summary_line)
+
     Assert.equal_int(left: summary.total_functions, right: expected.total_functions)
     Assert.equal_int(left: summary.must_review_functions, right: expected.must_review_functions)
     Assert.equal_int(left: summary.low_risk_functions, right: expected.low_risk_functions)
@@ -747,7 +749,6 @@ pub fn main() -> Result<Unit, JsonError> {
     Assert.equal_int(left: unknown_decision.classification, right: ReviewClass.unknown())
     Assert.equal_bool(left: shape_ok, right: true)
     Assert.equal_bool(left: every_region_classification_matches(items: read items, index: 0), right: true)
-    Log.write(message: read summary_line)
 
     return Ok(Unit)
 }

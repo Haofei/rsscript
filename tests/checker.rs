@@ -4368,45 +4368,14 @@ fn rss_verify_rust_json_accepts_dogfood_classifier() {
 #[test]
 fn rss_run_accepts_dogfood_classifier() {
     let temp_dir = unique_temp_dir("rsscript-dogfood-run-generated-review-map");
-    fs::create_dir_all(&temp_dir).expect("temporary root should be created");
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime"),
-        temp_dir.join("runtime"),
-    )
-    .expect("runtime crate symlink should be created");
-    #[cfg(not(unix))]
-    {
+    let Some(fixture_dir) = prepare_dogfood_run_dir(&temp_dir) else {
         let _ = fs::remove_dir_all(&temp_dir);
         return;
-    }
-    let fixture_dir = temp_dir.join("tests/fixtures/pass");
-    fs::create_dir_all(&fixture_dir).expect("fixture directory should be created");
-    fs::copy(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/pass/dogfood-review-classifier.rss"),
-        fixture_dir.join("dogfood-review-classifier.rss"),
-    )
-    .expect("dogfood classifier should copy");
-    let review_output = Command::new(env!("CARGO_BIN_EXE_rss"))
-        .arg("review")
-        .arg("--map")
-        .arg("--json")
-        .arg("tests/fixtures/pass/dogfood-review-classifier.rss")
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss review --map --json should execute");
-    assert!(
-        review_output.status.success(),
-        "stdout={}\nstderr={}",
-        String::from_utf8_lossy(&review_output.stdout),
-        String::from_utf8_lossy(&review_output.stderr)
-    );
-    let review_json: Value =
-        serde_json::from_slice(&review_output.stdout).expect("review map stdout should be JSON");
+    };
+    let review_json = generated_dogfood_review_map_json();
     fs::write(
         fixture_dir.join("dogfood-review-facts.json"),
-        &review_output.stdout,
+        serde_json::to_vec(&review_json).expect("review JSON should serialize"),
     )
     .expect("generated review map should write");
 
@@ -4431,6 +4400,81 @@ fn rss_run_accepts_dogfood_classifier() {
     );
     assert_eq!(stdout.trim(), expected_stdout);
     assert!(stderr.trim().is_empty(), "{stderr}");
+}
+
+#[test]
+fn rss_run_reports_dogfood_classification_mismatch_detail() {
+    let temp_dir = unique_temp_dir("rsscript-dogfood-run-mismatch");
+    let Some(fixture_dir) = prepare_dogfood_run_dir(&temp_dir) else {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return;
+    };
+    let mut review_json = generated_dogfood_review_map_json();
+    review_json["files"][0]["regions"][0]["classification"] =
+        Value::String("must_review".to_string());
+    fs::write(
+        fixture_dir.join("dogfood-review-facts.json"),
+        serde_json::to_vec(&review_json).expect("review JSON should serialize"),
+    )
+    .expect("mutated review map should write");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("tests/fixtures/pass/dogfood-review-classifier.rss")
+        .current_dir(&temp_dir)
+        .output()
+        .expect("rss run should execute dogfood classifier");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!output.status.success(), "stdout={stdout}");
+    assert!(
+        stdout.contains("mismatches=1 first_mismatch=ReviewClass.unknown expected=must_review actual=low_semantic_risk"),
+        "{stdout}"
+    );
+}
+
+fn prepare_dogfood_run_dir(temp_dir: &Path) -> Option<PathBuf> {
+    fs::create_dir_all(temp_dir).expect("temporary root should be created");
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime"),
+            temp_dir.join("runtime"),
+        )
+        .expect("runtime crate symlink should be created");
+    }
+    #[cfg(not(unix))]
+    {
+        return None;
+    }
+    let fixture_dir = temp_dir.join("tests/fixtures/pass");
+    fs::create_dir_all(&fixture_dir).expect("fixture directory should be created");
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/pass/dogfood-review-classifier.rss"),
+        fixture_dir.join("dogfood-review-classifier.rss"),
+    )
+    .expect("dogfood classifier should copy");
+    Some(fixture_dir)
+}
+
+fn generated_dogfood_review_map_json() -> Value {
+    let review_output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("review")
+        .arg("--map")
+        .arg("--json")
+        .arg("tests/fixtures/pass/dogfood-review-classifier.rss")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss review --map --json should execute");
+    assert!(
+        review_output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&review_output.stdout),
+        String::from_utf8_lossy(&review_output.stderr)
+    );
+    serde_json::from_slice(&review_output.stdout).expect("review map stdout should be JSON")
 }
 
 #[test]
