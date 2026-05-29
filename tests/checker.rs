@@ -2106,6 +2106,30 @@ fn pooled(pool: mut ResourcePool<TestConnection>) -> Unit {
 }
 
 #[test]
+fn rust_lowering_mangles_qualified_user_functions() {
+    let source = r#"
+struct User {
+    name: String
+}
+
+fn User.lookup(name: read String) -> fresh User {
+    return User(name: read name)
+}
+
+fn render(name: read String) -> fresh User {
+    return User.lookup(name: read name)
+}
+"#;
+    let rust = lower_source_to_rust("qualified.rss", source).expect("source should lower");
+
+    assert!(rust.contains("fn User_lookup(name: &String) -> User"));
+    assert!(rust.contains("fn render(name: &String) -> User"));
+    assert!(rust.contains("return User_lookup(&name);"));
+    assert!(!rust.contains("fn User.lookup"));
+    assert!(!rust.contains("User::lookup"));
+}
+
+#[test]
 fn rust_lowering_wraps_managed_class_returns_in_managed_handle() {
     let source = r#"
 class Session {

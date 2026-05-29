@@ -573,7 +573,7 @@ impl<'a> RustLowerer<'a> {
             "{}{}fn {}{}(",
             visibility(is_public),
             async_prefix,
-            rust_ident(&function.name),
+            rust_function_ident(&function.name),
             lower_generic_params(&function.type_params)
         ));
         out.push_str(
@@ -1744,9 +1744,7 @@ fn lower_callee(callee: &Callee) -> String {
         Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" => {
             format!("rsscript_runtime::ResourcePool::{}", rust_ident(name))
         }
-        Callee::Qualified { namespace, name } => {
-            format!("{}::{}", lower_namespace(namespace), rust_ident(name))
-        }
+        Callee::Qualified { namespace, name } => rust_qualified_function_ident(namespace, name),
     }
 }
 
@@ -2100,13 +2098,20 @@ fn lower_source_span(span: &Span) -> String {
     )
 }
 
-fn lower_namespace(namespace: &str) -> String {
-    let namespace = namespace.replace('<', "::<");
+fn rust_function_ident(name: &str) -> String {
+    name.split('.')
+        .map(rust_ident)
+        .collect::<Vec<_>>()
+        .join("_")
+}
+
+fn rust_qualified_function_ident(namespace: &str, name: &str) -> String {
     namespace
         .split('.')
+        .chain(std::iter::once(name))
         .map(rust_path_segment)
         .collect::<Vec<_>>()
-        .join("::")
+        .join("_")
 }
 
 fn type_root_name(name: &str) -> &str {
