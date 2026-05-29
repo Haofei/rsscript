@@ -773,6 +773,50 @@ fn render(body: read String) -> fresh HtmlEscaped {
 }
 
 #[test]
+fn calling_unsafe_function_requires_features_unsafe() {
+    let interface = r#"
+features: unsafe
+pub fn Crypto.raw_copy(dst: mut Buffer, src: read Buffer) -> Unit
+    effects(unsafe)
+"#;
+    let source = r#"
+fn looks_safe(dst: mut Buffer, src: read Buffer) -> Unit {
+    Crypto.raw_copy(dst: mut dst, src: read src)
+    return Unit
+}
+"#;
+    let codes = analyze_source_with_interfaces("caller.rss", source, &[("crypto.rssi", interface)])
+        .into_iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+    assert!(
+        codes.contains(&"RS0101".to_string()),
+        "calling an unsafe function from a file without `features: unsafe` should be rejected, got {codes:?}"
+    );
+}
+
+#[test]
+fn calling_unsafe_function_is_allowed_under_features_unsafe() {
+    let interface = r#"
+features: unsafe
+pub fn Crypto.raw_copy(dst: mut Buffer, src: read Buffer) -> Unit
+    effects(unsafe)
+"#;
+    let source = r#"
+features: unsafe
+
+fn wrapper(dst: mut Buffer, src: read Buffer) -> Unit {
+    Crypto.raw_copy(dst: mut dst, src: read src)
+    return Unit
+}
+"#;
+    assert_eq!(
+        analyze_source_with_interfaces("caller.rss", source, &[("crypto.rssi", interface)]),
+        Vec::new()
+    );
+}
+
+#[test]
 fn checker_reports_interface_signature_call_violations() {
     let interface = r#"
 struct HtmlEscaped

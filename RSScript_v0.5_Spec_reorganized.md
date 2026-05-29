@@ -148,12 +148,18 @@ Ordinary application code uses managed values and avoids ownership/lifetime reas
 
 ```rust
 fn main() -> Result<Unit, ImageError> {
-    let image = Image.load(path: read "in.png")?
+    let in_path = Path.from_string(value: read "in.png")
+    let out_path = Path.from_string(value: read "out.png")
+    let image = Image.load(path: read in_path)?
     Image.resize(image: mut image, width: 800, height: 600)
-    Image.save(image: read image, path: read "out.png")?
+    Image.save(image: read image, path: read out_path)?
     return Ok(Unit)
 }
 ```
+
+A string literal is a `String`, not a `Path`. Constructing the `Path` is explicit
+through `Path.from_string` — there is no implicit `String -> Path` conversion
+(section 2.4). This is the canonical form; the bundled examples use it.
 
 ### 2.2 Fast when local
 
@@ -367,6 +373,23 @@ a source format users are expected to edit
 RSScript's semantic definition
 ```
 
+The backend is replaceable; RSScript is not a Rust dialect or a Rust derivative.
+The language's semantic model lives entirely in the RSScript frontend (its
+syntax, type/effect checking, conflict roots, freshness, resource and managed
+rules). Lowering is a separate stage defined by a backend-agnostic shape
+contract (section 4.3). The same contract could be satisfied against another
+systems backend — for example Zig or C — without changing RSScript semantics.
+
+Targeting Rust in v0.5 is an engineering decision, not an identity. rustc, LLVM,
+Cargo, and the crate ecosystem supply a mature backend — codegen, optimization,
+platform support, linking, libraries, and a type-checking backstop for generated
+code — that would otherwise take years to build. Reusing it lets RSScript spend
+its effort on the review protocol, which is the product. A future backend is a
+preserved option, exercised only with a concrete forcing function (a platform
+Rust serves poorly, a much smaller runtime, or a C-interop-dominated domain), not
+a default; a second backend is a large, mostly duplicating surface and must clear
+the feature admission rule before it is added.
+
 ### 4.3 Lowering shape contract
 
 Every RSScript semantic construct must lower to a deterministic, documented Rust shape.
@@ -515,7 +538,75 @@ This avoids ambiguity around `?`, field access, and indexing in review.
 
 ---
 
-## 6. Type and Field Model
+## Statements and Control Flow
+
+This section defines the v0.5 executable statement and control-flow surface. It
+is normative for where resources drop, where freshness and local-move state
+change, and where source maps mark boundaries; the Rust lowering must preserve
+these semantics.
+
+### Statements
+
+The v0.5 statement forms are:
+
+```text
+let binding
+local binding
+with binding
+expression statement
+return
+if / else
+while
+loop
+for
+break
+continue
+match (statement form, over Option/Result variants)
+```
+
+### Postfix `?`
+
+`?` is the failure-propagation operator.
+
+```text
+- `?` is allowed only inside a function whose return type is Result<_, E>;
+  applying it elsewhere is a diagnostic (it requires a Result value).
+- on Ok(v) it evaluates to v and control continues.
+- on Err(e) it is an early return of Err(e) from the enclosing function.
+- on that early return, every active `with` resource in scope is dropped, in
+  reverse order of acquisition, before the function returns — the same drop that
+  a normal block exit, `return`, `break`, or `continue` performs (Chapter 12).
+```
+
+`?` is the only implicit control transfer in RSScript, and it is visible in the
+source as the `?` token.
+
+### `return`, `break`, `continue`
+
+```text
+- return exits the function; break/continue exit or re-enter the nearest loop.
+- each drops the `with` resources whose scope it leaves, in reverse order.
+- a local value moved by take/manage before one of these does not become live
+  again on the path after it; local-move state is per-path (Chapter 11 freshness
+  analysis is intra-procedural and path-sensitive at these boundaries).
+```
+
+### `for`
+
+```text
+for <var> in <iterable> { ... }
+```
+
+The iterable is consumed by an iteration that does not expose a managed alias or
+a resource lease beyond the loop body. The loop variable is bound per iteration;
+it is a Copy value or a managed read view of the element, never a local exclusive
+value extracted from a managed container and never a resource taken out of a
+pool. A loop body may open its own `with` resources, which drop at the end of
+each iteration.
+
+Resources, freshness, and local-move state observe loop back-edges: a value moved
+inside the loop body is not usable on a later iteration, and a `with` resource
+opened in the body is dropped before the next iteration.
 
 ### 6.1 User-facing type declaration kinds
 
@@ -609,7 +700,24 @@ handle
 weak handle
 ```
 
-Inline fields are stored inside their containing value. Copy fields and struct fields are inline by default.
+Inline fields are stored inside their containing value. Whether a field is a
+handle follows one uniform rule, the same in `struct` and `class` declarations:
+
+```text
+A field is a handle field iff it is marked `handle`/`weak`, or its declared
+type is a `class`. Every other field — Copy fields, and non-Copy struct-typed,
+String, Bytes, Buffer, or container fields — is inline by default.
+```
+
+The class/struct distinction is not about field handle-ness; it is about the
+containing value. A `class` is itself a managed identity object (§6.2): the class
+value is a managed handle, and its inline fields live inside that managed object.
+A `struct` is a value object (§6.3). So a class may hold inline non-Copy fields
+(for example `entries: Map<String, Image>`); those fields are not separate
+handles, they are stored within the managed class. A field whose type is a class
+is a separate handle in both kinds, because class values are always managed
+handles. This is enforced by the checker (class-typed fields are treated as
+handles for conflict-root analysis) and matches the Rust lowering.
 
 A handle field stores a managed handle. Fields of `class` type are always handles. A struct field can explicitly request a handle:
 
@@ -676,6 +784,38 @@ struct Logger {
 ```
 
 Use `with` or `ResourcePool<T: Resource>`.
+
+### 6.8 Copy types
+
+`Copy` is a core distinction: Copy parameters do not require a data effect
+(§10.5), Copy fields are inline (§6.5), and managed containers and closures may
+hold Copy values freely. v0.5 therefore fixes the Copy set explicitly.
+
+The Copy types in v0.5 are exactly the compiler-declared scalar primitives:
+
+```text
+Bool
+Byte  Char
+Int  Int8  Int16  Int32  Int64
+UInt UInt8 UInt16 UInt32 UInt64
+Float Float32 Float64
+Unit
+```
+
+Two further types are exempt from call-site data effects and are treated as Copy
+for that purpose: `Fd` (a descriptor handle) and closure-typed parameters. This
+exemption is only about not requiring `read`/`mut`/`take`; it does not change
+managed-closure retention rules (§10.8).
+
+Everything else is non-Copy: managed handles, weak handles, resources,
+containers (`List`, `Map`, `Set`), `String`, `Bytes`, `Buffer`, generic type
+parameters, and every user-defined `class`, `struct`, or `resource` — including a
+struct all of whose fields are Copy.
+
+User-defined types are non-Copy in v0.5 with no implicit derivation; a struct is
+never silently Copy because its fields are. A future explicit `copy struct` or
+`derives(copy)` is deferred, not excluded (Article VI), and would have to be
+explicit per the no-hidden-behavior rule (§2.4).
 
 ---
 
@@ -921,6 +1061,31 @@ Arguments are evaluated in written source order, but this conflict rule is indep
 ### 8.5 Dynamic alias conflicts
 
 The static rule catches syntactic conflicts. If two different managed variables alias the same runtime handle and a conflict is visible only dynamically, the managed runtime must report an RSScript runtime diagnostic rather than deadlocking or surfacing a raw Rust lock/borrow error.
+
+### 8.6 Noescape closure captures participate in same-call conflicts
+
+A closure literal passed as a `noescape` argument is invoked during the call (it
+cannot escape it, §10.9). Its captured `read`/`mut`/`take` uses of places are
+therefore synthetic accesses of the enclosing call-like expression and take part
+in the same-call conflict check of section 8.4, exactly as if they were written
+as direct arguments.
+
+```rust
+apply(
+    image: mut image,
+    callback: || Image.save(image: read image, path: read output),
+)
+```
+
+This is rejected: `image` is used as `mut` directly and as `read` through the
+closure capture, an overlapping `mut` + `read` in one call. Without this rule a
+`noescape` callback would be a back door that hides mutation or retention of a
+captured place that also appears as a direct argument, violating Article III.
+
+Capture roots are computed from the closure body; names bound inside the closure
+(`let`/`local`/`with`) are not captures and do not participate. This applies to
+`noescape` closures, whose body runs synchronously within the call; an escaping
+managed closure is governed by retention analysis (section 10.8) instead.
 
 ---
 
@@ -1284,6 +1449,14 @@ approved resource container insertion
 immediate resource lease APIs
 ```
 
+In v0.5 these last two are concrete and closed: the only approved resource
+container is `ResourcePool<T: Resource>`, and the only standard immediate resource
+lease API is `ResourcePool.borrow`. There is no general mechanism for a package to
+declare a new approved container or lease API in v0.5; any other container or
+lease API is rejected by the v0.5 checker. The extension points are reserved for a
+future version, which must define how approval is expressed in `.rssi` and how the
+checker recognizes it.
+
 Invalid:
 
 ```rust
@@ -1341,22 +1514,58 @@ Borrow returns a with-compatible resource lease.
 Resource values cannot escape the pool lease.
 ```
 
+This is an exception to the default materialization rules in Chapter 5. Although
+`ResourcePool.new` returns `fresh ResourcePool<T>`, a `ResourcePool<T>` may only
+materialize in a `local` binding context. Materializing it into a `let` (managed)
+binding, a managed container, or a managed field is rejected (diagnostic RS0705),
+because a pool owns long-lived resources and must not be hidden behind a managed
+binding. The general "let x = fresh_expr materializes as managed" rule does not
+apply to `ResourcePool<T>`.
+
 ### 12.4 ResourcePool factory contract
 
 This is a hard implementation boundary.
 
 The v0.5 standard ResourcePool factory is eager and noescape.
 
-Conceptual contracts:
+Conceptual contract for the v0.5 constructor:
 
 ```rust
 fn ResourcePool<T: Resource>.new(
-    create: noescape Fn(),
+    create: noescape Fn() -> T,
     max_size: Int,
 ) -> fresh ResourcePool<T>
 ```
 
-`new` is for infallible resource factories. During construction, the runtime may call `create` up to `max_size` times, store the resulting resources inside the local pool, and then discard the factory closure.
+`new` is the v0.5 constructor and requires an **infallible** factory: `create` must return a resource `T`, never `Result<T, E>`. Construction is eager and exact: the runtime calls `create` exactly `max_size` times, stores the `max_size` resources in the local pool, then discards the factory closure. `max_size` must be positive; a non-positive `max_size` yields an empty pool whose first borrow fails. Because construction cannot fail, `new` returns the pool directly, not a `Result`. "Eager" and "exactly `max_size`" together remove any ambiguity with lazy replenishment: the pool never creates a resource after construction.
+
+A fallible factory passed to `new` is rejected (diagnostic RS0707): hiding a creation failure inside `new` would violate no-hidden-behavior, since failure is represented by a return type (section 14.3). Note that in v0.5 the closure type does not model its return type in the type system; the `-> T` above documents intent for the reader, but infallibility is enforced structurally from the closure body, not from a declared closure return type.
+
+The canonical example below uses `DbConnection.open` as an *infallible* factory — it returns `DbConnection`, not `Result`, which is what makes it valid with `new`. This is a deliberate simplification: most real poolable resources (database connections, sockets, file handles) fail to create and need the fallible constructor below.
+
+#### Fallible construction: `try_new` (deferred, not excluded)
+
+The realistic case is a factory that can fail. `try_new` is a future API — not in the v0.5 executable MVP — recorded here with its binding contract so the design space is fixed:
+
+```rust
+fn ResourcePool<T: Resource>.try_new<E>(
+    create: noescape Fn() -> Result<T, E>,
+    max_size: Int,
+) -> Result<fresh ResourcePool<T>, E>
+```
+
+`try_new` is eager like `new`, but because `create` can fail, construction can fail, so it returns a `Result` and the caller writes `?`. Binding semantics for the eventual implementation:
+
+```text
+1. eager: create is called up to max_size times at construction.
+2. on the first create() returning Err, construction stops and returns that Err.
+3. partial-construction cleanup: every resource already created before the
+   failure must be dropped (its resource cleanup runs) before Err is returned;
+   no resource leaks and no half-built pool is exposed.
+4. the factory closure is discarded after construction, like new.
+```
+
+The constructor space has two axes — eager/lazy and infallible/fallible: `new` is eager+infallible, `try_new` is eager+fallible, and a lazy variant would be a distinct name (`lazy_new` / `retained_new`) with its own contract. A constructor must never silently change which cell it occupies behind the same `.rssi` signature.
 
 Because `create` is not retained by the pool:
 
@@ -1520,6 +1729,17 @@ fn load(path: read Path) -> Result<Image, ImageError>
 
 `async fn` is a review-visible signature boundary. Executable async function bodies, `await`, and `spawn` are unsupported before lowering in v0.5.
 
+`features: async` permits declaring review-visible `async fn` signatures only; it
+does not permit executable async bodies.
+
+In v0.5 executable code, a call to an `async fn` is always rejected before
+lowering, because the only consumers of an async call — `await` and `spawn` — are
+themselves unsupported in v0.5. There is therefore no valid v0.5 fix for an async
+call other than removing it. The diagnostic "async call not consumed by await or
+spawn" describes the contract of the future executable-async milestone, where a
+consumer exists; in v0.5 it should be read as "async calls are not executable
+yet," not as a fixable omission.
+
 Future executable async must not expose Rust's `Future`, `Pin`, `Poll`, `Waker`, executor internals, or lifetime-across-await machinery to RSScript users.
 
 The future execution target is a single-isolate cooperative executor. `spawn`
@@ -1566,6 +1786,29 @@ genuine `Copy`-only generic API appears, the bound may be added later under the
 feature admission rule (section 2.8).
 
 Resource types are not `Managed`. Ordinary `List<T>` cannot be instantiated with resource types.
+
+The bound lattice:
+
+```text
+Managed   = managed-capable: Copy primitives, class types, and struct types.
+            This is the default and the broadest bound. Managed-capable values
+            may go in managed bindings and managed containers (List<T>, Map, Set).
+Struct    = struct types only (excludes class and excludes resource). A struct
+            type is also Managed-capable, so T: Struct implies T: Managed.
+Resource  = resource types only. Disjoint from Managed and from Struct: a
+            resource is neither managed-capable nor a struct.
+```
+
+Consequences:
+
+```text
+- T: Struct implies T: Managed, so a T: Struct value may go in List<T>.
+- fresh T and local T require T: Struct, because only struct shells are fresh or
+  local; a plain T: Managed cannot be returned `fresh T` (a class cannot be
+  fresh, §6.2), which is why Result<fresh T, E> on a generic T requires T: Struct.
+- Resource generics (ResourcePool<T: Resource>) are a separate world; resource
+  types never satisfy Managed or Struct and never enter ordinary containers.
+```
 
 ### 14.6 Protocols are future capability contracts
 
@@ -1659,9 +1902,11 @@ cannot meet them is not admitted:
 3. Calls stay explicit and qualified: `Protocol.method(self: read value, ...)`.
 4. A protocol-typed value is an ordinary managed handle (single-isolate, not
    `Send`); its allocation is the normal managed allocation, not hidden boxing.
-5. Review classification: a protocol-dynamic call is `review_if_changed` /
-   must-review with effects bounded by the protocol contract. It is NOT `unknown`
-   (section 16.5), because the effects are known even though the type is not.
+5. Review classification: a protocol-dynamic call classifies the region as
+   `must_review` (single classification, per the §16.2 precedence) with a
+   `protocol_dynamic_dispatch` reason, its effects bounded by the protocol
+   contract. It is NOT `unknown` (section 16.5), because the effects are known
+   even though the concrete type is not.
 ```
 
 This is why dynamic dispatch passes the feature admission rule (section 2.8):
@@ -1743,6 +1988,42 @@ must preserve source location hooks where applicable
 
 The safe RSScript surface has no specified undefined behavior. Managed aliasing conflicts, resource-pool borrow conflicts, and runtime ownership conflicts must become diagnostics or runtime errors, not unchecked memory behavior.
 
+#### 15.4.1 Calling an unsafe function
+
+Crossing into unsafe must be visible at the call site, not only at the
+definition. The rules:
+
+```text
+1. A call to a function declared `effects(unsafe)` must be written with an
+   explicit `unsafe` call marker:  unsafe Crypto.raw_copy(dst: mut d, src: read s)
+2. The `unsafe` marker requires `features: unsafe` in the calling file, the same
+   gate that declaring `effects(unsafe)` requires.
+3. Marking a call that is not unsafe with `unsafe` is a diagnostic; the marker
+   must be load-bearing, not decorative.
+4. A call to an unsafe function without the marker is a diagnostic.
+```
+
+A function that contains an unsafe call is **not** forced to declare
+`effects(unsafe)` itself: establishing a safe, reviewed abstraction over unsafe
+operations is the purpose of `unsafe`, the same way a safe function may contain a
+Rust `unsafe` block. What prevents unsafe from hiding is the combination of the
+mandatory per-call `unsafe` marker, the file-level `features: unsafe` gate, and
+the review map classifying any region containing an unsafe call as must-review
+(§16.3). A function may also choose to propagate `effects(unsafe)` when its own
+contract is unsafe.
+
+The `unsafe` marker is review metadata. It does not change the lowered call; it
+makes the boundary visible and reviewable, consistent with Article III.
+
+*v0.5 enforcement status: rule 2 is enforced — declaring `effects(unsafe)` and
+**calling** an `effects(unsafe)` function both require `features: unsafe` in the
+file, so a file cannot touch unsafe while looking feature-clean, and unsafe
+functions and their callers are classified must-review. The per-call `unsafe`
+marker (rules 1, 3, 4) is deferred, not excluded: it adds call-site-line locality
+on top of the file- and function-level signals that already exist. v0.5 ships no
+unsafe code, so the marker is scheduled for when unsafe usage makes line-level
+review locality worth its cost; the design above is its fixed contract.*
+
 ---
 
 ## 16. Review Tools and Review Metadata
@@ -1770,6 +2051,33 @@ unknown
 
 The old skip-safety label is not a v0.5 review-map category. Implementations
 must emit `low_semantic_risk`.
+
+A region carries exactly one **classification** plus a list of **reasons**.
+Classification is single-valued and chosen by this precedence (highest wins), so
+a region that is both a public API and has an unresolved call is `unknown`, not
+`must_review`:
+
+```text
+1. unknown            (cannot be classified; an unresolved call wins over all)
+2. must_review        (a must-review fact is present, §16.3)
+3. review_if_changed  (no must-review fact, but behavior others depend on)
+4. low_semantic_risk  (none of the above)
+```
+
+`entry_point` is orthogonal: it is a marker on a region, not a point on this
+precedence ladder. A region may be an entry point and also `must_review` or
+`unknown`; the classification still follows the precedence above, and
+`entry_point` is reported as a reason/marker.
+
+Reasons are a list and never collapse: a region may report
+`["public_api", "unresolved_call"]` with classification `unknown`. This keeps the
+single displayed category deterministic while preserving why.
+
+*v0.5 implementation status: the checker emits `must_review`, `low_semantic_risk`,
+and `unknown` as classifications, reports `entry_point` as a marker, and folds
+`review_if_changed` into `must_review`; `unknown` propagates to any region that
+calls an `unknown` region. A future version may split out `review_if_changed`
+under the same precedence.*
 
 ### 16.3 Must-review facts
 
@@ -1882,6 +2190,38 @@ async call not consumed by await or spawn
 unmappable rustc diagnostic
 native boundary violation
 ```
+
+#### 17.1.1 Diagnostic code registry
+
+Diagnostic codes are `RSnnnn` and stable. They are allocated by range so codes
+are not invented ad hoc; new codes join the range matching their concern. This is
+the v0.5 allocation (it reflects the implemented codes, not an idealized scheme):
+
+```text
+RS00xx  signature / declaration / syntax / effect validity, match exhaustiveness,
+        unsupported syntax, async-call-not-consumed
+RS01xx  file-feature violations (local / native / unsafe / async gating, incl.
+        declaring or calling an effects(unsafe) function without features: unsafe)
+RS02xx  call arguments: named/missing/unknown/duplicate args, missing data
+        effect, unresolved callee
+RS03xx  local / move / same-call conflict; managed->local; manage/take operands
+RS04xx  manage boundary (use-after-manage)
+RS05xx  retention (local value retained by a retaining API)
+RS06xx  freshness
+RS07xx  resources, with, and ResourcePool
+RS08xx  closures and closure capture (managed-capture, noescape, local closure)
+RS09xx  weak and handle fields
+RS10xx  forbidden constructs (operator overload, implicit conversion, surface
+        references, removed forms)
+RS11xx  backend / rustc diagnostic mapping
+RS12xx  runtime diagnostics
+RS13xx  package / interface contract
+```
+
+There is no dedicated native/unsafe range: native and unsafe boundaries are gated
+through RS01xx (feature) and reported as forbidden/native-binding issues in the
+ranges above. A future per-call `unsafe` marker diagnostic (§15.4.1) would also
+sit in RS01xx with the other feature/boundary codes.
 
 ### 17.2 JSON form
 

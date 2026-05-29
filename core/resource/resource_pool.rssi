@@ -3,7 +3,7 @@ features: local
 struct ResourcePool<T: Resource>
 
 pub fn ResourcePool.new<T: Resource>(
-    create: noescape Fn(),
+    create: noescape Fn() -> T,
     max_size: Int,
 ) -> fresh ResourcePool<T>
 

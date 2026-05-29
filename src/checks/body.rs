@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::{
@@ -294,7 +296,7 @@ fn check_expr_semantics_with_context(
         } => {
             check_async_call_consumed(analyzer, callee, resolution, span, async_call_consumed);
             check_constructor_field_initializers(analyzer, callee, args, expr, state);
-            check_call_place_conflicts(analyzer, args, state);
+            check_call_place_conflicts(analyzer, args, resolution, state);
             check_resource_pool_new_factory_contract(analyzer, callee, args);
             let weak_upgrade = is_weak_upgrade_callee(callee);
             for arg in args {
@@ -943,17 +945,195 @@ fn collect_spawn_capture_idents_from_stmt(statement: &HirStmt, captures: &mut Ve
 fn check_call_place_conflicts(
     analyzer: &mut Analyzer<'_>,
     args: &[HirCallArg],
+    resolution: &CallResolution,
     _state: &BodyState,
 ) {
-    let accesses = args
+    let mut accesses = args
         .iter()
         .filter_map(call_place_access)
         .collect::<Vec<_>>();
+
+    // A closure literal passed to a `noescape` parameter is invoked within this
+    // call, so its captured read/mut/take uses participate in the same-call
+    // conflict check as synthetic accesses. Otherwise a `noescape` callback
+    // becomes a back door that hides mutation/retention of a captured place that
+    // also appears as a direct argument of the same call.
+    let noescape_params: Vec<&str> = match resolution {
+        CallResolution::Resolved { signature, .. } => signature
+            .params
+            .iter()
+            .filter(|param| param.type_name.starts_with("noescape"))
+            .map(|param| param.name.as_str())
+            .collect(),
+        _ => Vec::new(),
+    };
+    if !noescape_params.is_empty() {
+        for arg in args {
+            let Some(name) = arg.name.as_deref() else {
+                continue;
+            };
+            if !noescape_params.contains(&name) {
+                continue;
+            }
+            if let HirExpr::Closure { body, .. } = &arg.value {
+                collect_closure_capture_accesses(body, &mut accesses);
+            }
+        }
+    }
 
     for left_index in 0..accesses.len() {
         for right in accesses.iter().skip(left_index + 1) {
             check_place_pair_conflict(analyzer, &accesses[left_index], right);
         }
+    }
+}
+
+/// Collect the read/mut/take uses a closure body makes of captured places (free
+/// variables), as synthetic call accesses. Names bound inside the closure
+/// (`let`/`local`/`with`) are not captures and are excluded.
+fn collect_closure_capture_accesses(body: &HirBlock, out: &mut Vec<CallPlaceAccess>) {
+    let mut bound = HashSet::new();
+    collect_closure_bound_names(body, &mut bound);
+    collect_closure_effect_accesses_block(body, &bound, out);
+}
+
+fn collect_closure_bound_names(block: &HirBlock, bound: &mut HashSet<String>) {
+    for statement in &block.statements {
+        match statement {
+            HirStmt::Let { name, .. } => {
+                bound.insert(name.clone());
+            }
+            HirStmt::With { binding, body, .. } => {
+                bound.insert(binding.clone());
+                collect_closure_bound_names(body, bound);
+            }
+            HirStmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_closure_bound_names(then_body, bound);
+                if let Some(else_body) = else_body {
+                    collect_closure_bound_names(else_body, bound);
+                }
+            }
+            HirStmt::Loop { body, .. } => collect_closure_bound_names(body, bound),
+            HirStmt::Match { arms, .. } => {
+                for arm in arms {
+                    collect_closure_bound_names(&arm.body, bound);
+                }
+            }
+            HirStmt::Return { .. }
+            | HirStmt::Break(_)
+            | HirStmt::Continue(_)
+            | HirStmt::Expr(_)
+            | HirStmt::Unknown(_) => {}
+        }
+    }
+}
+
+fn collect_closure_effect_accesses_block(
+    block: &HirBlock,
+    bound: &HashSet<String>,
+    out: &mut Vec<CallPlaceAccess>,
+) {
+    for statement in &block.statements {
+        match statement {
+            HirStmt::Let {
+                value: Some(value), ..
+            }
+            | HirStmt::Return {
+                value: Some(value), ..
+            }
+            | HirStmt::Expr(value) => collect_closure_effect_accesses_expr(value, bound, out),
+            HirStmt::With { resource, body, .. } => {
+                collect_closure_effect_accesses_expr(resource, bound, out);
+                collect_closure_effect_accesses_block(body, bound, out);
+            }
+            HirStmt::If {
+                condition,
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_closure_effect_accesses_expr(condition, bound, out);
+                collect_closure_effect_accesses_block(then_body, bound, out);
+                if let Some(else_body) = else_body {
+                    collect_closure_effect_accesses_block(else_body, bound, out);
+                }
+            }
+            HirStmt::Loop {
+                condition, body, ..
+            } => {
+                if let Some(condition) = condition {
+                    collect_closure_effect_accesses_expr(condition, bound, out);
+                }
+                collect_closure_effect_accesses_block(body, bound, out);
+            }
+            HirStmt::Match { value, arms, .. } => {
+                collect_closure_effect_accesses_expr(value, bound, out);
+                for arm in arms {
+                    collect_closure_effect_accesses_block(&arm.body, bound, out);
+                }
+            }
+            HirStmt::Let { value: None, .. }
+            | HirStmt::Return { value: None, .. }
+            | HirStmt::Break(_)
+            | HirStmt::Continue(_)
+            | HirStmt::Unknown(_) => {}
+        }
+    }
+}
+
+fn collect_closure_effect_accesses_expr(
+    expr: &HirExpr,
+    bound: &HashSet<String>,
+    out: &mut Vec<CallPlaceAccess>,
+) {
+    match expr {
+        HirExpr::Effect { value, span, .. } => {
+            if let Some(path) = place_path(value)
+                && !bound.contains(&path.base)
+            {
+                out.push(CallPlaceAccess {
+                    effect: effect_of(expr),
+                    moves_path: expr_moves_path(expr),
+                    path,
+                    span: span.clone(),
+                });
+            }
+            collect_closure_effect_accesses_expr(value, bound, out);
+        }
+        HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. } => collect_closure_effect_accesses_expr(value, bound, out),
+        HirExpr::Binary { left, right, .. } => {
+            collect_closure_effect_accesses_expr(left, bound, out);
+            collect_closure_effect_accesses_expr(right, bound, out);
+        }
+        HirExpr::Field { base, .. } => collect_closure_effect_accesses_expr(base, bound, out),
+        HirExpr::Index { base, index, .. } => {
+            collect_closure_effect_accesses_expr(base, bound, out);
+            collect_closure_effect_accesses_expr(index, bound, out);
+        }
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                collect_closure_effect_accesses_expr(&arg.value, bound, out);
+            }
+        }
+        HirExpr::Closure { body, .. } => collect_closure_effect_accesses_block(body, bound, out),
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn effect_of(expr: &HirExpr) -> ParamEffect {
+    match expr {
+        HirExpr::Effect { effect, .. } => *effect,
+        _ => ParamEffect::Read,
     }
 }
 

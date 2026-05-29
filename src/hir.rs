@@ -367,8 +367,42 @@ impl Hir {
             hir.collect_item_signatures(interface, &mut type_symbols, &mut callable_symbols);
         }
         hir.collect_item_signatures(program, &mut type_symbols, &mut callable_symbols);
+        hir.normalize_class_typed_handle_fields();
         hir.collect_body_facts(program);
         hir
+    }
+
+    /// A field whose declared type is a `class` is always a handle field
+    /// (spec §6.5), matching the rule the Rust lowering applies via type kinds.
+    /// The parser only sets `is_handle` from the explicit `handle`/`weak`
+    /// keyword, so class-typed fields are promoted here before conflict-root and
+    /// retention analysis read field handle-ness from the type table.
+    fn normalize_class_typed_handle_fields(&mut self) {
+        let class_types: HashSet<String> = self
+            .types
+            .iter()
+            .filter(|(_, info)| info.kind == HirTypeKind::Class)
+            .map(|(name, _)| name.clone())
+            .collect();
+        for info in self.types.values_mut() {
+            for field in info.fields.values_mut() {
+                if !field.is_handle
+                    && !field.is_weak
+                    && class_types.contains(type_root_name(&field.type_name))
+                {
+                    field.is_handle = true;
+                }
+            }
+        }
+        self.fields_by_name.clear();
+        for info in self.types.values() {
+            for field in info.fields.values() {
+                self.fields_by_name
+                    .entry(field.name.clone())
+                    .or_default()
+                    .push(field.clone());
+            }
+        }
     }
 
     fn collect_item_signatures(
@@ -1194,6 +1228,17 @@ fn collect_body_facts_in_expr(
                     span: span.clone(),
                 });
             }
+            if matches!(
+                &resolution,
+                CallResolution::Resolved { signature, .. }
+                    if signature.effects.iter().any(|effect| effect == "unsafe")
+            ) {
+                facts.feature_uses.push(HirFeatureUse {
+                    function_name: Some(function_name.to_string()),
+                    kind: HirFeatureUseKind::Unsafe,
+                    span: span.clone(),
+                });
+            }
             if is_resource_pool_callee(callee) {
                 facts.feature_uses.push(HirFeatureUse {
                     function_name: Some(function_name.to_string()),
@@ -1878,6 +1923,32 @@ struct Session {
         assert!(hir.is_handle_field_name("user"));
         assert!(hir.is_handle_field_name("parent"));
         assert!(!hir.is_handle_field_name("file_name"));
+    }
+
+    #[test]
+    fn promotes_class_typed_fields_to_handle_without_keyword() {
+        let source = r#"
+class User {
+    name: String
+}
+
+struct Session {
+    owner: User
+    label: String
+    tags: List<String>
+}
+"#;
+
+        let program = parse_source("test.rss", source);
+        let hir = Hir::from_syntax(&program);
+        let session = hir.type_info("Session").expect("session type exists");
+
+        // A class-typed field is a handle even without the `handle` keyword.
+        assert!(session.fields["owner"].is_handle);
+        assert!(!session.fields["owner"].is_weak);
+        // Non-class fields stay inline.
+        assert!(!session.fields["label"].is_handle);
+        assert!(!session.fields["tags"].is_handle);
     }
 
     #[test]
