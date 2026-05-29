@@ -2,7 +2,10 @@ use std::collections::{HashMap, HashSet};
 
 use crate::checks;
 use crate::diagnostic::{Diagnostic, code};
-use crate::hir::{CallResolution, DuplicateSymbolKind, Hir, HirTypeKind, ResolvedCalleeKind};
+use crate::hir::{
+    CallResolution, DuplicateSymbolKind, Hir, HirBlock, HirExpr, HirStmt, HirTypeKind,
+    ResolvedCalleeKind,
+};
 use crate::interfaces::CORE_INTERFACES;
 use crate::lexer::{Token, lex};
 use crate::syntax::ast::merge_programs;
@@ -132,6 +135,7 @@ impl Analyzer<'_> {
         self.check_signature_explicitness();
         self.check_unknown_types();
         self.check_unknown_fields();
+        self.check_unknown_bindings();
         self.check_fd_surface();
         self.check_generic_constraints();
         self.check_runtime_guarantee_bodies();
@@ -1019,6 +1023,138 @@ impl Analyzer<'_> {
         }
     }
 
+    fn check_unknown_bindings(&mut self) {
+        let items = self.syntax_program.items.clone();
+        for item in &items {
+            let Item::Function(function) = item else {
+                continue;
+            };
+            let Some(block) = self
+                .hir
+                .function_body(&function.name)
+                .and_then(|body| body.block.clone())
+            else {
+                continue;
+            };
+            let mut visible = function
+                .params
+                .iter()
+                .map(|param| param.name.clone())
+                .collect::<HashSet<_>>();
+            self.check_unknown_bindings_in_block(&block, &mut visible);
+        }
+    }
+
+    fn check_unknown_bindings_in_block(&mut self, block: &HirBlock, visible: &mut HashSet<String>) {
+        for statement in &block.statements {
+            self.check_unknown_bindings_in_stmt(statement, visible);
+        }
+    }
+
+    fn check_unknown_bindings_in_stmt(
+        &mut self,
+        statement: &HirStmt,
+        visible: &mut HashSet<String>,
+    ) {
+        match statement {
+            HirStmt::Let { name, value, .. } => {
+                if let Some(value) = value {
+                    self.check_unknown_bindings_in_expr(value, visible);
+                }
+                visible.insert(name.clone());
+            }
+            HirStmt::Return { value, .. } => {
+                if let Some(value) = value {
+                    self.check_unknown_bindings_in_expr(value, visible);
+                }
+            }
+            HirStmt::With {
+                resource,
+                binding,
+                body,
+                ..
+            } => {
+                self.check_unknown_bindings_in_expr(resource, visible);
+                let mut body_visible = visible.clone();
+                body_visible.insert(binding.clone());
+                self.check_unknown_bindings_in_block(body, &mut body_visible);
+            }
+            HirStmt::If {
+                condition,
+                then_body,
+                else_body,
+                ..
+            } => {
+                self.check_unknown_bindings_in_expr(condition, visible);
+                let mut then_visible = visible.clone();
+                self.check_unknown_bindings_in_block(then_body, &mut then_visible);
+                if let Some(else_body) = else_body {
+                    let mut else_visible = visible.clone();
+                    self.check_unknown_bindings_in_block(else_body, &mut else_visible);
+                }
+            }
+            HirStmt::Loop {
+                condition, body, ..
+            } => {
+                if let Some(condition) = condition {
+                    self.check_unknown_bindings_in_expr(condition, visible);
+                }
+                let mut body_visible = visible.clone();
+                self.check_unknown_bindings_in_block(body, &mut body_visible);
+            }
+            HirStmt::Match { value, arms, .. } => {
+                self.check_unknown_bindings_in_expr(value, visible);
+                for arm in arms {
+                    let mut arm_visible = visible.clone();
+                    if let MatchPattern::Variant {
+                        binding: Some(binding),
+                        ..
+                    } = &arm.pattern
+                    {
+                        arm_visible.insert(binding.clone());
+                    }
+                    self.check_unknown_bindings_in_block(&arm.body, &mut arm_visible);
+                }
+            }
+            HirStmt::Expr(value) => self.check_unknown_bindings_in_expr(value, visible),
+            HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
+        }
+    }
+
+    fn check_unknown_bindings_in_expr(&mut self, expr: &HirExpr, visible: &HashSet<String>) {
+        match expr {
+            HirExpr::Ident { name, span, .. } => {
+                if !visible.contains(name) && !builtin_value_ident(name) {
+                    self.unknown_binding_diagnostic(name, span);
+                }
+            }
+            HirExpr::Binary { left, right, .. } => {
+                self.check_unknown_bindings_in_expr(left, visible);
+                self.check_unknown_bindings_in_expr(right, visible);
+            }
+            HirExpr::Field { base, .. } => self.check_unknown_bindings_in_expr(base, visible),
+            HirExpr::Index { base, index, .. } => {
+                self.check_unknown_bindings_in_expr(base, visible);
+                self.check_unknown_bindings_in_expr(index, visible);
+            }
+            HirExpr::Call { args, .. } => {
+                for arg in args {
+                    self.check_unknown_bindings_in_expr(&arg.value, visible);
+                }
+            }
+            HirExpr::Effect { value, .. }
+            | HirExpr::Manage { value, .. }
+            | HirExpr::Spawn { value, .. }
+            | HirExpr::Await { value, .. }
+            | HirExpr::Try { value, .. } => self.check_unknown_bindings_in_expr(value, visible),
+            HirExpr::Closure { body, .. } => {
+                let mut closure_visible = visible.clone();
+                self.check_unknown_bindings_in_block(body, &mut closure_visible);
+            }
+            HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
+        }
+    }
+
     fn check_fresh_generic_return_bound(
         &mut self,
         function_name: &str,
@@ -1799,6 +1935,23 @@ impl Analyzer<'_> {
         );
     }
 
+    fn unknown_binding_diagnostic(&mut self, name: &str, span: &crate::diagnostic::Span) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::UNKNOWN_BINDING,
+                format!("unknown value binding `{name}`."),
+                span.clone(),
+                "unknown binding",
+            )
+            .with_cause("RSScript values must resolve before Rust lowering.")
+            .with_fix(
+                "declare_binding",
+                format!("Declare `{name}` before using it or pass it as a parameter."),
+                "manual",
+            ),
+        );
+    }
+
     fn resource_generic_argument_diagnostic(
         &mut self,
         generic_name: &str,
@@ -2290,6 +2443,10 @@ fn is_builtin_type_name(name: &str) -> bool {
             | "CsvError"
             | "NetworkError"
     )
+}
+
+fn builtin_value_ident(name: &str) -> bool {
+    matches!(name, "true" | "false" | "Unit" | "None")
 }
 
 fn type_ref_contains_name(ty: &TypeRef, name: &str) -> bool {

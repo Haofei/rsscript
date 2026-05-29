@@ -2602,6 +2602,7 @@ noescape closure consuming a captured local
 Fd used outside native/resource internals
 unknown type in signature or field
 unknown field access on a resolved base type
+unknown value binding
 local captured by managed closure
 take of handle field
 weak field initialized without explicit weak handle

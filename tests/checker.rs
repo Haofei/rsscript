@@ -686,6 +686,7 @@ fn diagnostic_explanations_are_available_by_code() {
     let pool_contract = explain_diagnostic_code("RS0707").expect("RS0707 should be registered");
     let unknown_type = explain_diagnostic_code("RS0024").expect("RS0024 should be registered");
     let unknown_field = explain_diagnostic_code("RS0025").expect("RS0025 should be registered");
+    let unknown_binding = explain_diagnostic_code("RS0026").expect("RS0026 should be registered");
 
     assert_eq!(explanation.title, "use after manage");
     assert!(formatted.contains("RS0401"));
@@ -695,12 +696,70 @@ fn diagnostic_explanations_are_available_by_code() {
     assert!(unknown_type.explanation.contains("before Rust lowering"));
     assert_eq!(unknown_field.title, "unknown field");
     assert!(unknown_field.explanation.contains("deferred"));
+    assert_eq!(unknown_binding.title, "unknown binding");
+    assert!(unknown_binding.explanation.contains("visible parameter"));
     assert_eq!(
         pool_contract.title,
         "ResourcePool factory contract violation"
     );
     assert!(pool_contract.explanation.contains("ResourcePool.try_new"));
     assert!(explain_diagnostic_code("RS9999").is_none());
+}
+
+#[test]
+fn checker_reports_unknown_value_bindings_before_backend_lowering() {
+    let source = r#"
+fn main() -> Unit {
+    Log.write(message: read missing)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source_with_core("unknown-binding.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0026" && diagnostic.summary == "unknown value binding `missing`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn rust_lowering_rejects_unknown_bindings_before_rustc() {
+    let source = r#"
+fn main() -> Unit {
+    Log.write(message: read missing)
+    return Unit
+}
+"#;
+    let diagnostics = lower_source_to_rust("unknown-binding.rss", source)
+        .expect_err("unknown binding should fail before Rust generation");
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0026"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_rejects_use_before_local_binding_declaration() {
+    let source = r#"
+fn main() -> Unit {
+    Log.write(message: read later)
+    let later = "ready"
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source_with_core("use-before-let.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0026"),
+        "{diagnostics:?}"
+    );
 }
 
 #[test]
