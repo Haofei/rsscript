@@ -8,3 +8,8 @@ pub fn String.starts_with(
     value: read String,
     prefix: read String,
 ) -> Bool
+
+pub fn String.ends_with(
+    value: read String,
+    suffix: read String,
+) -> Bool

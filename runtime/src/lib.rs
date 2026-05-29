@@ -1164,6 +1164,10 @@ pub fn string_starts_with(value: &str, prefix: &str) -> bool {
     value.starts_with(prefix)
 }
 
+pub fn string_ends_with(value: &str, suffix: &str) -> bool {
+    value.ends_with(suffix)
+}
+
 pub fn assert_equal(left: &str, right: &str) {
     assert_eq!(left, right);
 }
@@ -1595,6 +1599,7 @@ mod tests {
         let has_pool = super::json_array_contains_substring(&reasons, "ResourcePool").unwrap();
         let has_public_prefix = super::json_array_contains_prefix(&reasons, "public").unwrap();
         let name_starts_with_rss = super::string_starts_with(&name, "RSS");
+        let name_ends_with_script = super::string_ends_with(&name, "Script");
 
         assert_eq!(file_len, 1);
         assert_eq!(len, 1);
@@ -1608,6 +1613,7 @@ mod tests {
         assert!(!has_pool);
         assert!(has_public_prefix);
         assert!(name_starts_with_rss);
+        assert!(name_ends_with_script);
         let _ = std::fs::remove_file(path);
     }
 

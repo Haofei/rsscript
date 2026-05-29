@@ -1796,6 +1796,9 @@ fn lower_callee(callee: &Callee) -> String {
         callee if is_string_starts_with_callee(callee) => {
             "rsscript_runtime::string_starts_with".to_string()
         }
+        callee if is_string_ends_with_callee(callee) => {
+            "rsscript_runtime::string_ends_with".to_string()
+        }
         callee if is_buffer_new_callee(callee) => "rsscript_runtime::buffer_new".to_string(),
         callee if is_buffer_clear_callee(callee) => "rsscript_runtime::buffer_clear".to_string(),
         callee if is_buffer_consume_callee(callee) => {
@@ -2035,6 +2038,10 @@ fn is_string_from_bool_callee(callee: &Callee) -> bool {
 
 fn is_string_starts_with_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "String" && name == "starts_with")
+}
+
+fn is_string_ends_with_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "String" && name == "ends_with")
 }
 
 fn is_file_open_callee(callee: &Callee) -> bool {

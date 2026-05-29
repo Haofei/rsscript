@@ -1371,6 +1371,7 @@ fn main() -> Unit {
     let count = String.from_int(value: 42)
     let ok = String.from_bool(value: true)
     let starts = String.starts_with(value: read message, prefix: read "hello")
+    let ends = String.ends_with(value: read message, suffix: read "world")
     Log.write(message: read message)
     Log.write(message: read count)
     Log.write(message: read ok)
@@ -1386,6 +1387,9 @@ fn main() -> Unit {
     assert!(rust.contains("let ok = rsscript_runtime::string_from_bool(true);"));
     assert!(rust.contains(
         "let starts = rsscript_runtime::string_starts_with(&message, &\"hello\".to_string());"
+    ));
+    assert!(rust.contains(
+        "let ends = rsscript_runtime::string_ends_with(&message, &\"world\".to_string());"
     ));
     assert!(rust.contains("rsscript_runtime::log_write(&message);"));
 }
@@ -4668,6 +4672,71 @@ fn rss_run_reports_dogfood_package_diff_mismatch() {
     );
 }
 
+#[test]
+fn rss_run_accepts_dogfood_rustc_remap_classifier() {
+    let temp_dir = unique_temp_dir("rsscript-dogfood-rustc-remap");
+    let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-rustc-remap.rss")
+    else {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return;
+    };
+    let diagnostics_json = generated_dogfood_rustc_remap_json(&temp_dir);
+    fs::write(
+        fixture_dir.join("dogfood-rustc-remap.json"),
+        serde_json::to_vec(&diagnostics_json).expect("remap diagnostics JSON should serialize"),
+    )
+    .expect("generated remap diagnostics should write");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("tests/fixtures/pass/dogfood-rustc-remap.rss")
+        .current_dir(&temp_dir)
+        .output()
+        .expect("rss run should execute dogfood rustc remap classifier");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "dogfood rustc remap diagnostics=1 mapped=1 rustc_code=1 source_file=1 source_line=1 source_column=1"
+    );
+    assert!(stderr.trim().is_empty(), "{stderr}");
+}
+
+#[test]
+fn rss_run_reports_dogfood_rustc_remap_mismatch() {
+    let temp_dir = unique_temp_dir("rsscript-dogfood-rustc-remap-mismatch");
+    let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-rustc-remap.rss")
+    else {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return;
+    };
+    let mut diagnostics_json = generated_dogfood_rustc_remap_json(&temp_dir);
+    diagnostics_json[0]["code"] = Value::String("RS1102".to_string());
+    fs::write(
+        fixture_dir.join("dogfood-rustc-remap.json"),
+        serde_json::to_vec(&diagnostics_json).expect("remap diagnostics JSON should serialize"),
+    )
+    .expect("mutated remap diagnostics should write");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("tests/fixtures/pass/dogfood-rustc-remap.rss")
+        .current_dir(&temp_dir)
+        .output()
+        .expect("rss run should execute dogfood rustc remap classifier");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!output.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("dogfood rustc remap diagnostics=1 mapped=0 rustc_code=1 source_file=1 source_line=1 source_column=1"),
+        "{stdout}"
+    );
+}
+
 fn prepare_dogfood_run_dir(temp_dir: &Path) -> Option<PathBuf> {
     prepare_dogfood_run_dir_for(temp_dir, "dogfood-review-classifier.rss")
 }
@@ -4846,6 +4915,79 @@ pub fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
     let diff = diff_package_dirs(&old_dir, &new_dir).expect("package diff should succeed");
     serde_json::from_str(&rsscript::format_package_diff_json(&diff))
         .expect("package diff JSON should parse")
+}
+
+fn generated_dogfood_rustc_remap_json(temp_dir: &Path) -> Value {
+    let package_dir = temp_dir.join("remap-package");
+    write_named_package_fixture(
+        &package_dir,
+        "rss-dogfood-rustc-remap",
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_json_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+        r#"features: native
+
+native fn Native.echo(message: read String) -> String
+"#,
+    );
+    fs::create_dir_all(package_dir.join("src")).expect("source dir should be created");
+    fs::create_dir_all(package_dir.join("native/rust/src"))
+        .expect("native src dir should be created");
+    fs::create_dir_all(package_dir.join("native")).expect("native dir should be created");
+    fs::write(
+        package_dir.join("src/main.rss"),
+        r#"features: native
+
+fn main() -> Unit {
+    let message = Native.echo(message: read "hello")
+    Log.write(message: read message)
+}
+"#,
+    )
+    .expect("source should be written");
+    fs::write(
+        package_dir.join("native/bindings.rssbind.toml"),
+        r#"[bindings]
+"Native.echo" = "rss_json_native::echo"
+"#,
+    )
+    .expect("native binding manifest should be written");
+    fs::write(
+        package_dir.join("native/rust/Cargo.toml"),
+        "[package]\nname = \"rss_json_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("native Cargo.toml should be written");
+    fs::write(
+        package_dir.join("native/rust/src/lib.rs"),
+        "pub fn echo(message: String) -> String { message }\n",
+    )
+    .expect("native source should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("--json")
+        .arg(&package_dir)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss run --json should execute");
+    assert!(
+        !output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).trim().is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("remap diagnostics JSON should parse")
 }
 
 #[test]

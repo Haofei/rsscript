@@ -1,0 +1,130 @@
+struct RemapFacts {
+    diagnostics: Int
+    mapped_errors: Int
+    rustc_code_causes: Int
+    source_file_hits: Int
+    source_line_hits: Int
+    source_column_hits: Int
+}
+
+fn empty_remap_facts() -> fresh RemapFacts {
+    return RemapFacts(
+        diagnostics: 0,
+        mapped_errors: 0,
+        rustc_code_causes: 0,
+        source_file_hits: 0,
+        source_line_hits: 0,
+        source_column_hits: 0,
+    )
+}
+
+fn add_bool(value: Int, condition: Bool) -> Int {
+    if condition {
+        return value + 1
+    }
+
+    return value
+}
+
+fn diagnose_remap_item(item: read JsonValue, facts: read RemapFacts) -> Result<fresh RemapFacts, JsonError> {
+    let code = Json.field_string(value: read item, name: read "code")?
+    let severity = Json.field_string(value: read item, name: read "severity")?
+    let spans = Json.field(value: read item, name: read "spans")?
+    let causes = Json.field(value: read item, name: read "causes")?
+    let span = Json.array_get(value: read spans, index: 0)?
+    let file = Json.field_string(value: read span, name: read "file")?
+    let line = Json.field_int(value: read span, name: read "line")?
+    let column = Json.field_int(value: read span, name: read "column")?
+    let is_mapped_error = code == "RS1101" && severity == "error"
+    let has_rustc_code = Json.array_contains_string(value: read causes, item: read "rustc code: E0308")?
+    let has_source_file = String.ends_with(value: read file, suffix: read "src/main.rss")
+    let has_source_line = line == 4
+    let has_source_column = column == 31
+
+    return RemapFacts(
+        diagnostics: facts.diagnostics + 1,
+        mapped_errors: add_bool(value: facts.mapped_errors, condition: is_mapped_error),
+        rustc_code_causes: add_bool(value: facts.rustc_code_causes, condition: has_rustc_code),
+        source_file_hits: add_bool(value: facts.source_file_hits, condition: has_source_file),
+        source_line_hits: add_bool(value: facts.source_line_hits, condition: has_source_line),
+        source_column_hits: add_bool(value: facts.source_column_hits, condition: has_source_column),
+    )
+}
+
+fn summarize_remap_from(
+    diagnostics: read JsonValue,
+    index: Int,
+    limit: Int,
+    facts: read RemapFacts,
+) -> Result<fresh RemapFacts, JsonError> {
+    if index >= limit {
+        return RemapFacts(
+            diagnostics: facts.diagnostics,
+            mapped_errors: facts.mapped_errors,
+            rustc_code_causes: facts.rustc_code_causes,
+            source_file_hits: facts.source_file_hits,
+            source_line_hits: facts.source_line_hits,
+            source_column_hits: facts.source_column_hits,
+        )
+    }
+
+    let item = Json.array_get(value: read diagnostics, index: index)?
+    let next = diagnose_remap_item(item: read item, facts: read facts)?
+
+    return summarize_remap_from(
+        diagnostics: read diagnostics,
+        index: index + 1,
+        limit: limit,
+        facts: read next,
+    )
+}
+
+fn dogfood_remap_facts() -> Result<fresh RemapFacts, JsonError> {
+    let path = Path.from_string(value: read "tests/fixtures/pass/dogfood-rustc-remap.json")
+    let diagnostics = Json.parse_file(path: read path)?
+    let limit = Json.array_len(value: read diagnostics)?
+
+    return summarize_remap_from(
+        diagnostics: read diagnostics,
+        index: 0,
+        limit: limit,
+        facts: read empty_remap_facts(),
+    )
+}
+
+fn remap_summary_line(facts: read RemapFacts) -> fresh String {
+    let diagnostics = String.from_int(value: facts.diagnostics)
+    let mapped = String.from_int(value: facts.mapped_errors)
+    let rustc = String.from_int(value: facts.rustc_code_causes)
+    let files = String.from_int(value: facts.source_file_hits)
+    let lines = String.from_int(value: facts.source_line_hits)
+    let columns = String.from_int(value: facts.source_column_hits)
+    let first = String.concat(left: read "dogfood rustc remap diagnostics=", right: read diagnostics)
+    let second = String.concat(left: read first, right: read " mapped=")
+    let third = String.concat(left: read second, right: read mapped)
+    let fourth = String.concat(left: read third, right: read " rustc_code=")
+    let fifth = String.concat(left: read fourth, right: read rustc)
+    let sixth = String.concat(left: read fifth, right: read " source_file=")
+    let seventh = String.concat(left: read sixth, right: read files)
+    let eighth = String.concat(left: read seventh, right: read " source_line=")
+    let ninth = String.concat(left: read eighth, right: read lines)
+    let tenth = String.concat(left: read ninth, right: read " source_column=")
+
+    return String.concat(left: read tenth, right: read columns)
+}
+
+pub fn main() -> Result<Unit, JsonError> {
+    let facts = dogfood_remap_facts()?
+    let summary = remap_summary_line(facts: read facts)
+
+    Log.write(message: read summary)
+
+    Assert.equal_int(left: facts.diagnostics, right: 1)
+    Assert.equal_int(left: facts.mapped_errors, right: 1)
+    Assert.equal_int(left: facts.rustc_code_causes, right: 1)
+    Assert.equal_int(left: facts.source_file_hits, right: 1)
+    Assert.equal_int(left: facts.source_line_hits, right: 1)
+    Assert.equal_int(left: facts.source_column_hits, right: 1)
+
+    return Ok(Unit)
+}
