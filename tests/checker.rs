@@ -2687,6 +2687,44 @@ fn bad(path: read Path) -> Unit {
 }
 
 #[test]
+fn checker_rejects_managed_type_drop_blocks() {
+    let source = r#"
+class Session {
+    id: Int
+
+    drop {
+        Log.write(message: read "closing")
+    }
+}
+
+struct BufferOwner {
+    bytes: Bytes
+
+    drop {
+        Log.write(message: read "closing")
+    }
+}
+
+resource File {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+"#;
+    let diagnostics = analyze_source("managed-drop.rss", source);
+    let managed_drop_count = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == "RS0015" && diagnostic.label == "unsupported managed drop"
+        })
+        .count();
+
+    assert_eq!(managed_drop_count, 2, "{diagnostics:?}");
+}
+
+#[test]
 fn checker_reports_unknown_top_level_items_as_unsupported() {
     let source = r#"
 enum Color {

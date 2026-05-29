@@ -308,6 +308,15 @@ impl Analyzer<'_> {
                 for field in &type_decl.fields {
                     self.check_unsupported_syntax_type_ref(&field.ty, false);
                 }
+                if type_decl.kind != TypeKind::Resource
+                    && let Some(drop_body) = &type_decl.drop_body
+                {
+                    self.unsupported_syntax(
+                        drop_body.span.clone(),
+                        "unsupported managed drop",
+                        "Managed class and struct values do not have user-observable destructors in v0.5. Use `resource` with `with` or `ResourcePool` for deterministic cleanup.",
+                    );
+                }
             }
         }
     }

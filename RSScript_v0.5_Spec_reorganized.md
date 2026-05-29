@@ -1971,12 +1971,36 @@ Future / Pin / Poll / Waker source model
 general user-defined FFI
 GPU kernel language
 agent runtime as language core
-custom thread-shared tracing heap
-moving GC
 managed -> local demotion
 operator-overloaded numeric DSLs
 macro-heavy metaprogramming
 ```
+
+### 21.1 Deferred, not excluded: managed memory strategy
+
+The v0.5 managed runtime is reference counted (`Arc`/`RwLock`-like). Reference
+counting does not collect reference cycles on its own, so v0.5 requires `weak`
+fields to break managed cycles, the same way Swift does. This is an accepted
+v0.5 limitation, not a permanent language guarantee.
+
+A future major version may add a tracing or moving collector for managed memory
+as an alternative backend. The following are therefore **deferred beyond v0.5,
+not permanent non-goals**:
+
+```text
+tracing collector for managed memory
+moving / compacting collector for managed memory
+automatic managed-cycle collection (removing the need for weak)
+```
+
+This option stays open only while one invariant holds: **managed `class` and
+`struct` values have no user-observable destructor**. Deterministic cleanup is
+expressed exclusively through `resource`, `with`, and `ResourcePool`, which are
+orthogonal to the managed memory strategy. As long as managed objects expose no
+user-visible finalization order, "reference counted vs garbage collected" is an
+unobservable backend choice and may change between major versions. If managed
+objects ever gain side-effecting user destructors, the language would be welded
+to reference counting and this option would close.
 
 ---
 
