@@ -4323,10 +4323,11 @@ fn compare_interface_sources(
         match (old_interfaces.get(&file), new_interfaces.get(&file)) {
             (Some(old), Some(new)) if old.contents != new.contents => {
                 let findings = review_sources(&old.path, &old.contents, &new.path, &new.contents);
+                let risk = modified_interface_change_risk(old, new, new_sources, &findings);
                 changes.push(PackageInterfaceChange {
                     file,
                     change: PackageInterfaceChangeKind::Modified,
-                    risk: interface_change_risk(&findings),
+                    risk,
                     findings,
                 });
             }
@@ -4618,6 +4619,19 @@ fn interface_change_risk(findings: &[ReviewFinding]) -> PackageRisk {
     }
 }
 
+fn modified_interface_change_risk(
+    old: &PackageSource,
+    new: &PackageSource,
+    new_sources: &[PackageSource],
+    findings: &[ReviewFinding],
+) -> PackageRisk {
+    interface_change_risk(findings).max(added_contracts_in_modified_interface_risk(
+        old,
+        new,
+        new_sources,
+    ))
+}
+
 fn added_interface_change_risk(new_sources: &[PackageSource], file: &str) -> PackageRisk {
     let Some(source_path) = new_sources
         .iter()
@@ -4669,6 +4683,92 @@ fn added_interface_change_risk(new_sources: &[PackageSource], file: &str) -> Pac
     } else {
         PackageRisk::Low
     }
+}
+
+fn added_contracts_in_modified_interface_risk(
+    old: &PackageSource,
+    new: &PackageSource,
+    new_sources: &[PackageSource],
+) -> PackageRisk {
+    let old_type_contracts = package_type_contracts_for_source(old);
+    let new_type_contracts = package_type_contracts_for_source(new);
+    let old_function_contracts = package_function_contracts_for_source(old);
+    let new_function_contracts = package_function_contracts_for_source(new);
+    let resource_types =
+        collect_package_type_contracts(new_sources, PackageReviewFileKind::Interface)
+            .values()
+            .filter(|contract| contract.kind == TypeKind::Resource)
+            .map(|contract| contract.name.clone())
+            .collect::<BTreeSet<_>>();
+    let resource_type_refs = resource_types
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let mut saw_added_contract = false;
+
+    for (name, contract) in &new_type_contracts {
+        if old_type_contracts.contains_key(name) {
+            continue;
+        }
+        saw_added_contract = true;
+        if package_added_type_contract_is_high_risk(contract) {
+            return PackageRisk::High;
+        }
+    }
+
+    for (name, contract) in &new_function_contracts {
+        if old_function_contracts.contains_key(name) {
+            continue;
+        }
+        saw_added_contract = true;
+        if package_added_function_contract_is_high_risk(contract, &resource_type_refs) {
+            return PackageRisk::High;
+        }
+    }
+
+    if saw_added_contract {
+        PackageRisk::Elevated
+    } else {
+        PackageRisk::Low
+    }
+}
+
+fn package_type_contracts_for_source(
+    source: &PackageSource,
+) -> BTreeMap<String, PackageTypeContract> {
+    parse_source(&source.path, &source.contents)
+        .items
+        .into_iter()
+        .filter_map(|item| match item {
+            Item::Type(type_decl) => {
+                Some((type_decl.name.clone(), package_type_contract(&type_decl)))
+            }
+            Item::Function(_) => None,
+        })
+        .collect()
+}
+
+fn package_function_contracts_for_source(
+    source: &PackageSource,
+) -> BTreeMap<String, PackageFunctionContract> {
+    parse_source(&source.path, &source.contents)
+        .items
+        .into_iter()
+        .filter_map(|item| match item {
+            Item::Function(function) => {
+                Some((function.name.clone(), package_function_contract(&function)))
+            }
+            Item::Type(_) => None,
+        })
+        .collect()
+}
+
+fn package_added_type_contract_is_high_risk(contract: &PackageTypeContract) -> bool {
+    contract.kind == TypeKind::Resource
+        || contract
+            .fields
+            .iter()
+            .any(|field| field.is_handle || field.is_weak)
 }
 
 fn package_added_function_contract_is_high_risk(

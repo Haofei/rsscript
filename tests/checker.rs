@@ -7132,6 +7132,53 @@ pub fn Cache.get(cache: read Cache) -> Bytes
 }
 
 #[test]
+fn package_diff_marks_added_boundary_contracts_in_modified_interface_high_risk() {
+    let old_dir = unique_temp_dir("rsscript-package-modified-boundary-interface-old");
+    let new_dir = unique_temp_dir("rsscript-package-modified-boundary-interface-new");
+    write_named_package_fixture(
+        &old_dir,
+        "rss-modified-interface",
+        "0.1.0",
+        "",
+        r#"features: native
+
+struct Bytes
+
+pub fn Bytes.len(value: read Bytes) -> Int
+"#,
+    );
+    write_named_package_fixture(
+        &new_dir,
+        "rss-modified-interface",
+        "0.1.0",
+        "",
+        r#"features: native
+
+struct Bytes
+
+pub fn Bytes.len(value: read Bytes) -> Int
+
+native fn Bytes.decode(value: read Bytes) -> String
+"#,
+    );
+
+    let diff = diff_package_dirs(&old_dir, &new_dir).expect("package diff should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_diff_json(&diff))
+        .expect("package diff JSON should parse");
+    let _ = fs::remove_dir_all(&old_dir);
+    let _ = fs::remove_dir_all(&new_dir);
+
+    assert_eq!(json["risk"], "high");
+    assert!(json["interface_changes"].as_array().is_some_and(|changes| {
+        changes.iter().any(|change| {
+            change["file"] == "interface/lib.rssi"
+                && change["change"] == "modified"
+                && change["risk"] == "high"
+        })
+    }));
+}
+
+#[test]
 fn package_diff_marks_boundary_package_feature_changes_high_risk() {
     let old_dir = unique_temp_dir("rsscript-package-feature-diff-old");
     let new_dir = unique_temp_dir("rsscript-package-feature-diff-new");
