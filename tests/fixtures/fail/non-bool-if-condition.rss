@@ -1,0 +1,9 @@
+// expect: RS0209
+
+fn main() -> Unit {
+    if "yes" {
+        return Unit
+    }
+
+    return Unit
+}

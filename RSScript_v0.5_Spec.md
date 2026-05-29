@@ -577,6 +577,9 @@ continue
 match (statement form, over Option/Result variants)
 ```
 
+`if` and `while` conditions must have type `Bool`. RSScript has no truthy or
+falsey coercions for strings, numbers, handles, resources, or containers.
+
 RSScript v0.5 has **no assignment statement** other than these initialization
 bindings: there is no `x = y`, `obj.field = y`, or `list[i] = y`. All mutation is
 expressed through explicit `mut` API calls (`Map.insert(map: mut m, ...)`), so
@@ -689,8 +692,9 @@ match <value> { <arm> => { ... } ... }
 ```
 
 In v0.5, `match` is over the standard `Option<T>` and `Result<T, E>` variant
-shapes and must be exhaustive: it covers `Some`/`None`, `Ok`/`Err`, or includes
-`_`; a non-exhaustive match is a diagnostic before lowering. Arm rules:
+shapes only. The scrutinee must have type `Option<T>` or `Result<T, E>`.
+It must be exhaustive: it covers `Some`/`None`, `Ok`/`Err`, or includes `_`;
+a non-exhaustive match is a diagnostic before lowering. Arm rules:
 
 ```text
 - a variant payload binding obeys the same data-effect, move, and resource rules
@@ -2585,6 +2589,7 @@ missing named argument
 missing read/mut/take effect
 call argument type mismatch
 return type mismatch
+control-flow type mismatch
 same-call place conflict
 constructor/variant call-like conflict
 handle-field same-call conflict

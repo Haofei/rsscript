@@ -1467,7 +1467,9 @@ fn infer_hir_expr_type(
                 .map(|field| field.type_name.clone())
         }
         Expr::Index { .. } => None,
-        Expr::Closure { .. } | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => None,
+        Expr::Number(_, _) => Some("Int".to_string()),
+        Expr::String(_, _) => Some("String".to_string()),
+        Expr::Closure { .. } | Expr::Unknown(_) => None,
     }
 }
 

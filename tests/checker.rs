@@ -29,6 +29,7 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
     ("missing read/mut/take effect", "RS0202"),
     ("call argument type mismatch", "RS0207"),
     ("return type mismatch", "RS0208"),
+    ("control-flow type mismatch", "RS0209"),
     ("same-call place conflict", "RS0302"),
     ("constructor/variant call-like conflict", "RS0203"),
     ("handle-field same-call conflict", "RS0303"),
@@ -691,6 +692,8 @@ fn diagnostic_explanations_are_available_by_code() {
     let unknown_binding = explain_diagnostic_code("RS0026").expect("RS0026 should be registered");
     let type_mismatch = explain_diagnostic_code("RS0207").expect("RS0207 should be registered");
     let return_mismatch = explain_diagnostic_code("RS0208").expect("RS0208 should be registered");
+    let control_flow_mismatch =
+        explain_diagnostic_code("RS0209").expect("RS0209 should be registered");
 
     assert_eq!(explanation.title, "use after manage");
     assert!(formatted.contains("RS0401"));
@@ -710,6 +713,12 @@ fn diagnostic_explanations_are_available_by_code() {
     );
     assert_eq!(return_mismatch.title, "return type mismatch");
     assert!(return_mismatch.explanation.contains("declared return type"));
+    assert_eq!(control_flow_mismatch.title, "control-flow type mismatch");
+    assert!(
+        control_flow_mismatch
+            .explanation
+            .contains("conditions must be `Bool`")
+    );
     assert_eq!(
         pool_contract.title,
         "ResourcePool factory contract violation"
@@ -960,6 +969,95 @@ fn maybe_name() -> Option<String> {
                 && diagnostic.summary
                     == "return in `maybe_name` has type `String`, expected `Option<String>`."
         }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_non_bool_if_condition_before_backend_lowering() {
+    let source = r#"
+fn main() -> Unit {
+    if "yes" {
+        return Unit
+    }
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("if-condition-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0209"
+                && diagnostic.summary == "if condition has type `String`, expected `Bool`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn rust_lowering_rejects_non_bool_if_condition_before_rustc() {
+    let source = r#"
+fn main() -> Unit {
+    if "yes" {
+        return Unit
+    }
+    return Unit
+}
+"#;
+    let diagnostics = lower_source_to_rust("if-condition-type.rss", source)
+        .expect_err("if condition type mismatch should fail before Rust generation");
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0209"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_non_option_result_match_scrutinee_before_backend_lowering() {
+    let source = r#"
+fn main() -> Unit {
+    let value = "yes"
+    match value {
+        Some(result) => return Unit
+        None => return Unit
+    }
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("match-scrutinee-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0209"
+                && diagnostic.summary
+                    == "match scrutinee has type `String`, expected `Option<T>` or `Result<T, E>`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn rust_lowering_rejects_non_option_result_match_scrutinee_before_rustc() {
+    let source = r#"
+fn main() -> Unit {
+    let value = "yes"
+    match value {
+        Some(result) => return Unit
+        None => return Unit
+    }
+    return Unit
+}
+"#;
+    let diagnostics = lower_source_to_rust("match-scrutinee-type.rss", source)
+        .expect_err("match scrutinee type mismatch should fail before Rust generation");
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0209"),
         "{diagnostics:?}"
     );
 }

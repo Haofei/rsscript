@@ -1,0 +1,12 @@
+// expect: RS0209
+
+fn main() -> Unit {
+    let value = "yes"
+
+    match value {
+        Some(result) => return Unit
+        None => return Unit
+    }
+
+    return Unit
+}

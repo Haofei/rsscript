@@ -176,6 +176,7 @@ fn check_stmt_semantics(
             else_body,
             ..
         } => {
+            check_bool_condition(analyzer, condition, "if");
             check_expr_semantics(analyzer, condition, state);
             check_resource_pool_lease_expr(analyzer, condition, false);
             check_resource_producer_expr(analyzer, condition, false);
@@ -197,6 +198,7 @@ fn check_stmt_semantics(
             condition, body, ..
         } => {
             if let Some(condition) = condition {
+                check_bool_condition(analyzer, condition, "while");
                 check_expr_semantics(analyzer, condition, state);
                 check_resource_pool_lease_expr(analyzer, condition, false);
                 check_resource_producer_expr(analyzer, condition, false);
@@ -216,6 +218,7 @@ fn check_stmt_semantics(
             )
         }
         HirStmt::Match { value, arms, .. } => {
+            check_match_scrutinee_type(analyzer, value);
             check_expr_semantics(analyzer, value, state);
             check_resource_pool_lease_expr(analyzer, value, false);
             check_resource_producer_expr(analyzer, value, false);
@@ -286,6 +289,52 @@ fn apply_stmt_effects(statement: &HirStmt, state: &mut BodyState) {
 
 fn check_expr_semantics(analyzer: &mut Analyzer<'_>, expr: &HirExpr, state: &BodyState) {
     check_expr_semantics_with_context(analyzer, expr, state, false, false);
+}
+
+fn check_bool_condition(analyzer: &mut Analyzer<'_>, expr: &HirExpr, construct: &str) {
+    let Some(type_name) = hir_expr_type_name(expr) else {
+        return;
+    };
+    if type_name == "Bool" {
+        return;
+    }
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::CONTROL_FLOW_TYPE_MISMATCH,
+            format!("{construct} condition has type `{type_name}`, expected `Bool`."),
+            hir_expr_span(expr).clone(),
+            "control-flow type mismatch",
+        )
+        .with_cause("RSScript control-flow conditions are explicit `Bool` values; non-empty strings, numbers, and managed handles do not coerce to truthy or falsey values.")
+        .with_fix(
+            "use_bool_condition",
+            "Compare explicitly or call a function that returns `Bool`.",
+            "manual",
+        ),
+    );
+}
+
+fn check_match_scrutinee_type(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
+    let Some(type_name) = hir_expr_type_name(expr) else {
+        return;
+    };
+    if type_root_name(type_name) == "Option" || type_root_name(type_name) == "Result" {
+        return;
+    }
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::CONTROL_FLOW_TYPE_MISMATCH,
+            format!("match scrutinee has type `{type_name}`, expected `Option<T>` or `Result<T, E>`."),
+            hir_expr_span(expr).clone(),
+            "control-flow type mismatch",
+        )
+        .with_cause("RSScript v0.5 `match` is limited to review-visible `Option` and `Result` variant handling.")
+        .with_fix(
+            "match_option_or_result",
+            "Match an `Option<T>` or `Result<T, E>` value, or rewrite this branch as `if`.",
+            "manual",
+        ),
+    );
 }
 
 fn check_expr_semantics_with_context(
@@ -1375,19 +1424,31 @@ fn check_try_error_types_expr(
 
 fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
     match expr {
-        HirExpr::Ident { type_name, .. }
-        | HirExpr::Call { type_name, .. }
+        HirExpr::Ident {
+            name, type_name, ..
+        } => type_name
+            .as_deref()
+            .or_else(|| builtin_value_type_name(name)),
+        HirExpr::Call { type_name, .. }
         | HirExpr::Effect { type_name, .. }
         | HirExpr::Manage { type_name, .. }
         | HirExpr::Spawn { type_name, .. }
         | HirExpr::Await { type_name, .. }
         | HirExpr::Try { type_name, .. } => type_name.as_deref(),
         HirExpr::Field { access, .. } => access.type_name.as_deref(),
+        HirExpr::Number { .. } => Some("Int"),
+        HirExpr::String { .. } => Some("String"),
         HirExpr::Binary { .. } | HirExpr::Index { .. } => None,
-        HirExpr::Number { .. }
-        | HirExpr::String { .. }
-        | HirExpr::Closure { .. }
-        | HirExpr::Unknown(_) => None,
+        HirExpr::Closure { .. } | HirExpr::Unknown(_) => None,
+    }
+}
+
+fn builtin_value_type_name(name: &str) -> Option<&'static str> {
+    match name {
+        "true" | "false" => Some("Bool"),
+        "Unit" => Some("Unit"),
+        "None" => Some("Option<?>"),
+        _ => None,
     }
 }
 

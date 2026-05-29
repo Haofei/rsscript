@@ -36,6 +36,7 @@ pub mod code {
     pub const UNKNOWN_CALLEE: &str = "RS0206";
     pub const ARGUMENT_TYPE_MISMATCH: &str = "RS0207";
     pub const RETURN_TYPE_MISMATCH: &str = "RS0208";
+    pub const CONTROL_FLOW_TYPE_MISMATCH: &str = "RS0209";
     pub const MANAGED_TO_LOCAL: &str = "RS0301";
     pub const FIELD_PARTIAL_ACCESS_CONFLICT: &str = "RS0302";
     pub const FIELD_PREFIX_CONFLICT: &str = "RS0303";
@@ -427,6 +428,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::RETURN_TYPE_MISMATCH,
         title: "return type mismatch",
         explanation: "When both sides are known, a returned expression must match the function's declared return type before Rust lowering. Result and Option constructors are checked against their success, error, or Some payload types.",
+    },
+    DiagnosticExplanation {
+        code: code::CONTROL_FLOW_TYPE_MISMATCH,
+        title: "control-flow type mismatch",
+        explanation: "`if` and `while` conditions must be `Bool`, and v0.5 `match` scrutinees must be `Option<T>` or `Result<T, E>` before Rust lowering.",
     },
     DiagnosticExplanation {
         code: code::MANAGED_TO_LOCAL,
