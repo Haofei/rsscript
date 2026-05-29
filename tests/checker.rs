@@ -1445,6 +1445,18 @@ fn main() -> Unit {
 }
 
 #[test]
+fn rust_lowering_compares_read_string_params_to_literals() {
+    let source = r#"
+fn is_unknown(value: read String) -> Bool {
+    return value == "unknown"
+}
+"#;
+    let rust = lower_source_to_rust("string-compare.rss", source).expect("source should lower");
+
+    assert!(rust.contains("return value.as_str() == \"unknown\";"));
+}
+
+#[test]
 fn rust_lowering_maps_try_operator_to_rust_result_propagation() {
     let source = r#"
 features: local
@@ -4258,19 +4270,19 @@ fn review_map_dogfood_classifier_has_no_unknown_regions() {
     let source = read_fixture(path);
     let map = review_map_sources(vec![(path.to_str().unwrap(), source.as_str())]);
 
-    assert_eq!(map.summary.total_functions, 36);
-    assert!(map.summary.total_lines >= 543, "{map:?}");
+    assert_eq!(map.summary.total_functions, 40);
+    assert!(map.summary.total_lines >= 622, "{map:?}");
     assert_eq!(map.files[0].risk, ReviewMapFileRisk::Elevated);
     assert_eq!(map.summary.unknown.functions, 0, "{map:?}");
     assert_eq!(map.summary.unknown.lines, 0, "{map:?}");
-    assert!(map.summary.review_required.functions >= 24, "{map:?}");
+    assert!(map.summary.review_required.functions >= 27, "{map:?}");
 
     let json: Value =
         serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
     assert_eq!(json["summary"]["unknown_ratio"], 0.0);
     assert_eq!(json["summary"]["unknown_function_ratio"], 0.0);
-    assert_eq!(json["summary"]["must_review"]["functions"], 24);
-    assert_eq!(json["summary"]["low_semantic_risk"]["functions"], 12);
+    assert_eq!(json["summary"]["must_review"]["functions"], 27);
+    assert_eq!(json["summary"]["low_semantic_risk"]["functions"], 13);
 }
 
 #[test]
@@ -4401,7 +4413,7 @@ fn rss_run_accepts_dogfood_classifier() {
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
     assert_eq!(
         stdout.trim(),
-        "dogfood review summary total=36 must=24 low=12 unknown=0 lines=487"
+        "dogfood review summary total=40 must=27 low=13 unknown=0 lines=554"
     );
     assert!(stderr.trim().is_empty(), "{stderr}");
 }

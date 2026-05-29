@@ -934,6 +934,16 @@ impl<'a> RustLowerer<'a> {
                     BinaryOp::LogicalAnd => "&&",
                     BinaryOp::LogicalOr => "||",
                 };
+                if matches!(op, "==" | "!=")
+                    && (self.is_string_comparison_operand(left)
+                        || self.is_string_comparison_operand(right))
+                {
+                    return format!(
+                        "{} {op} {}",
+                        self.lower_string_comparison_operand(left),
+                        self.lower_string_comparison_operand(right)
+                    );
+                }
                 format!("{} {op} {}", self.lower_expr(left), self.lower_expr(right))
             }
             Expr::Field { base, name, span } => {
@@ -1142,6 +1152,23 @@ impl<'a> RustLowerer<'a> {
             }),
             Expr::Manage { value, .. } | Expr::Try { value, .. } => self.infer_expr_type(value),
             _ => None,
+        }
+    }
+
+    fn is_string_comparison_operand(&self, expr: &Expr) -> bool {
+        matches!(expr, Expr::String(_, _))
+            || self
+                .infer_expr_type(expr)
+                .is_some_and(|ty| ty.name == "String" && ty.args.is_empty())
+    }
+
+    fn lower_string_comparison_operand(&mut self, expr: &Expr) -> String {
+        match expr {
+            Expr::String(value, _) => format!("{:?}", decode_string_token(value)),
+            _ if self.is_string_comparison_operand(expr) => {
+                format!("{}.as_str()", self.lower_expr(expr))
+            }
+            _ => self.lower_expr(expr),
         }
     }
 

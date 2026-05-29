@@ -1,6 +1,7 @@
 features: local
 
 struct ReviewFacts {
+    expected_classification: Int
     public_api: Bool
     has_unknown_call: Bool
     has_native_boundary: Bool
@@ -40,6 +41,18 @@ fn ReviewClass.must_review() -> Int {
 
 fn ReviewClass.low_semantic_risk() -> Int {
     return 1
+}
+
+fn review_class_from_string(value: read String) -> Int {
+    if value == "unknown" {
+        return ReviewClass.unknown()
+    }
+
+    if value == "must_review" {
+        return ReviewClass.must_review()
+    }
+
+    return ReviewClass.low_semantic_risk()
 }
 
 fn risk_line_budget(facts: read ReviewFacts) -> Int {
@@ -105,6 +118,14 @@ fn classify_boundary(facts: read ReviewFacts) -> fresh ReviewDecision {
         return decision(
             classification: ReviewClass.unknown(),
             reason: read reason_unknown(),
+            lines: lines,
+        )
+    }
+
+    if facts.callee_risk == ReviewClass.must_review() {
+        return decision(
+            classification: ReviewClass.must_review(),
+            reason: read reason_public(),
             lines: lines,
         )
     }
@@ -210,6 +231,7 @@ fn classify_function(facts: read ReviewFacts) -> fresh ReviewDecision {
 
 fn make_low_helper(lines: Int) -> fresh ReviewFacts {
     return ReviewFacts(
+        expected_classification: ReviewClass.low_semantic_risk(),
         public_api: false,
         has_unknown_call: false,
         has_native_boundary: false,
@@ -228,6 +250,7 @@ fn make_low_helper(lines: Int) -> fresh ReviewFacts {
 
 fn make_native_entry(lines: Int) -> fresh ReviewFacts {
     return ReviewFacts(
+        expected_classification: ReviewClass.must_review(),
         public_api: true,
         has_unknown_call: false,
         has_native_boundary: true,
@@ -246,6 +269,7 @@ fn make_native_entry(lines: Int) -> fresh ReviewFacts {
 
 fn make_resource_worker(lines: Int) -> fresh ReviewFacts {
     return ReviewFacts(
+        expected_classification: ReviewClass.must_review(),
         public_api: false,
         has_unknown_call: false,
         has_native_boundary: false,
@@ -264,6 +288,7 @@ fn make_resource_worker(lines: Int) -> fresh ReviewFacts {
 
 fn make_retaining_cache(lines: Int) -> fresh ReviewFacts {
     return ReviewFacts(
+        expected_classification: ReviewClass.must_review(),
         public_api: false,
         has_unknown_call: false,
         has_native_boundary: false,
@@ -282,6 +307,7 @@ fn make_retaining_cache(lines: Int) -> fresh ReviewFacts {
 
 fn make_unknown_region(lines: Int) -> fresh ReviewFacts {
     return ReviewFacts(
+        expected_classification: ReviewClass.unknown(),
         public_api: false,
         has_unknown_call: true,
         has_native_boundary: false,
@@ -303,6 +329,7 @@ fn parse_review_region(value: read JsonValue) -> Result<fresh ReviewFacts, JsonE
     let reasons = Json.field(value: read value, name: read "reasons")?
 
     return ReviewFacts(
+        expected_classification: review_class_from_string(value: read classification),
         public_api: Json.array_contains_string(value: read reasons, item: read "public entry point")?
             || Json.array_contains_string(value: read reasons, item: read "entry point")?,
         has_unknown_call: classification == "unknown",
@@ -318,9 +345,21 @@ fn parse_review_region(value: read JsonValue) -> Result<fresh ReviewFacts, JsonE
         has_fresh_return: Json.array_contains_string(value: read reasons, item: read "fresh guarantee boundary")?,
         has_noescape: Json.array_contains_prefix(value: read reasons, prefix: read "noescape")?,
         has_error_boundary: Json.array_contains_string(value: read reasons, item: read "error handling boundary")?,
-        callee_risk: ReviewClass.low_semantic_risk(),
+        callee_risk: review_callee_risk(reasons: read reasons)?,
         line_count: Json.field_int(value: read value, name: read "line_count")?,
     )
+}
+
+fn review_callee_risk(reasons: read JsonValue) -> Result<Int, JsonError> {
+    if Json.array_contains_prefix(value: read reasons, prefix: read "calls unknown")? {
+        return Ok(ReviewClass.unknown())
+    }
+
+    if Json.array_contains_prefix(value: read reasons, prefix: read "calls must-review")? {
+        return Ok(ReviewClass.must_review())
+    }
+
+    return Ok(ReviewClass.low_semantic_risk())
 }
 
 fn parse_region_list_from(
@@ -470,6 +509,40 @@ fn summarize_list(items: read List<ReviewFacts>) -> fresh ReviewSummary {
     )
 }
 
+fn classification_matches_region(facts: read ReviewFacts) -> Bool {
+    let decision_value = classify_function(facts: read facts)
+
+    if decision_value.classification != facts.expected_classification {
+        return false
+    }
+
+    if decision_value.classification == ReviewClass.low_semantic_risk() {
+        return decision_value.suggested_lines == 0
+    }
+
+    return decision_value.suggested_lines == facts.line_count
+}
+
+fn every_region_classification_matches(
+    items: read List<ReviewFacts>,
+    index: Int,
+) -> Bool {
+    if index >= List.len(list: read items) {
+        return true
+    }
+
+    let facts = List.get(list: read items, index: index)
+
+    if classification_matches_region(facts: read facts) == false {
+        return false
+    }
+
+    return every_region_classification_matches(
+        items: read items,
+        index: index + 1,
+    )
+}
+
 fn dogfood_fact_list() -> Result<fresh List<ReviewFacts>, JsonError> {
     let path = Path.from_string(value: read "tests/fixtures/pass/dogfood-review-facts.json")
     let json = Json.parse_file(path: read path)?
@@ -509,6 +582,7 @@ fn dogfood_sample_summary() -> Result<fresh ReviewSummary, JsonError> {
 }
 
 fn dogfood_shape_is_expected() -> Result<Bool, JsonError> {
+    let items = dogfood_fact_list()?
     let summary = dogfood_sample_summary()?
     let expected = dogfood_expected_summary()?
     let unknown_percent = unknown_ratio_percent(summary: read summary)
@@ -530,6 +604,10 @@ fn dogfood_shape_is_expected() -> Result<Bool, JsonError> {
     }
 
     if summary.suggested_lines != expected.suggested_lines {
+        return Ok(false)
+    }
+
+    if every_region_classification_matches(items: read items, index: 0) == false {
         return Ok(false)
     }
 
@@ -556,6 +634,7 @@ fn dogfood_summary_line(summary: read ReviewSummary) -> fresh String {
 
 pub fn main() -> Result<Unit, JsonError> {
     let summary = dogfood_sample_summary()?
+    let items = dogfood_fact_list()?
     let expected = dogfood_expected_summary()?
     let unknown_region = make_unknown_region(lines: 7)
     let unknown_decision = classify_function(facts: read unknown_region)
@@ -569,6 +648,7 @@ pub fn main() -> Result<Unit, JsonError> {
     Assert.equal_int(left: summary.suggested_lines, right: expected.suggested_lines)
     Assert.equal_int(left: unknown_decision.classification, right: ReviewClass.unknown())
     Assert.equal_bool(left: shape_ok, right: true)
+    Assert.equal_bool(left: every_region_classification_matches(items: read items, index: 0), right: true)
     Log.write(message: read summary_line)
 
     return Ok(Unit)
