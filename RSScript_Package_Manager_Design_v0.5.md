@@ -2374,7 +2374,7 @@ number of dependencies with unknown native facts required by policy
 
 ## 17. Diagnostics
 
-Package manager diagnostics should use stable codes eventually.
+Package manager diagnostics use stable `PKGxxxx` codes.
 
 Diagnostic classes:
 
@@ -2411,6 +2411,13 @@ PKG06xx  native bindings and native conformance
 PKG07xx  Cargo integration
 PKG08xx  registry/publish
 PKG09xx  provider/interface-only package resolution
+```
+
+Current package-manager diagnostic allocations:
+
+```text
+PKG0501  review policy violation
+PKG0601  native binding metadata or conformance mismatch
 ```
 
 Boundary with language diagnostics:

@@ -1040,8 +1040,15 @@ pub fn check_package_dir(package_dir: &Path) -> Result<PackageCheck, String> {
     reasons.sort();
     reasons.dedup();
 
-    let diagnostics_have_errors = review
-        .diagnostics
+    let mut diagnostics = review.diagnostics.clone();
+    diagnostics.extend(collect_manifest_review_policy_diagnostics(
+        &package.manifest,
+        package_dir,
+        &review,
+        native_rust.as_ref(),
+    ));
+    dedup_diagnostics(&mut diagnostics);
+    let diagnostics_have_errors = diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity.is_error());
     let native_ok = native_rust
@@ -1061,17 +1068,24 @@ pub fn check_package_dir(package_dir: &Path) -> Result<PackageCheck, String> {
         risk = risk.max(PackageRisk::High);
     }
 
+    let mut summary = review.summary;
+    summary.diagnostics = diagnostics.len();
+    summary.errors = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity.is_error())
+        .count();
+
     Ok(PackageCheck {
         package: review.package,
         package_dir: package_dir.display().to_string(),
         ok,
         risk,
         reasons,
-        summary: review.summary,
+        summary,
         graph,
         lock,
         native_rust,
-        diagnostics: review.diagnostics,
+        diagnostics,
     })
 }
 
@@ -4131,6 +4145,130 @@ fn package_review_policy_has_high_risk_violation(
             && (review.summary.unsafe_apis > 0
                 || manifest_native_unsafe_boundary(manifest)
                 || native_check.is_some_and(|native| native.unsafe_detected))
+}
+
+fn collect_manifest_review_policy_diagnostics(
+    manifest: &Manifest,
+    package_dir: &Path,
+    review: &PackageReview,
+    native_check: Option<&PackageNativeRustCheck>,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let Some(review_policy) = manifest.review.as_ref() else {
+        return diagnostics;
+    };
+    let policy = &review_policy.policy;
+    if policy.deny_unknown == Some(true) && review.risk == PackageRisk::Unknown {
+        diagnostics.push(package_review_policy_diagnostic(
+            package_dir,
+            "deny_unknown",
+            "package review policy denies unknown review risk.",
+            "deny_unknown",
+            "The package computed unknown review risk while `[review.policy].deny_unknown = true`.",
+        ));
+    }
+    if policy.deny_native == Some(true) && review.summary.native_apis > 0 {
+        diagnostics.push(package_review_policy_diagnostic(
+            package_dir,
+            "deny_native",
+            "package review policy denies native public APIs.",
+            "deny_native",
+            "The public `.rssi` contract exposes native APIs while `[review.policy].deny_native = true`.",
+        ));
+    }
+    if policy.deny_native == Some(true) && manifest_native_enabled(manifest) {
+        diagnostics.push(package_review_policy_diagnostic(
+            package_dir,
+            "deny_native",
+            "package review policy denies native Rust wrappers.",
+            "deny_native",
+            "The manifest enables a native Rust wrapper while `[review.policy].deny_native = true`.",
+        ));
+    }
+    if policy.deny_native == Some(true)
+        && native_check.is_some_and(|native| native.risk >= PackageRisk::Elevated)
+    {
+        diagnostics.push(package_review_policy_diagnostic(
+            package_dir,
+            "deny_native",
+            "package review policy denies native implementation risk.",
+            "deny_native",
+            "Native Rust metadata raised package risk while `[review.policy].deny_native = true`.",
+        ));
+    }
+    if policy.deny_unsafe_apis == Some(true) && review.summary.unsafe_apis > 0 {
+        diagnostics.push(package_review_policy_diagnostic(
+            package_dir,
+            "deny_unsafe_apis",
+            "package review policy denies unsafe public APIs.",
+            "deny_unsafe_apis",
+            "The public `.rssi` contract exposes unsafe APIs while `[review.policy].deny_unsafe_apis = true`.",
+        ));
+    }
+    if policy.deny_unsafe_apis == Some(true) && manifest_native_unsafe_boundary(manifest) {
+        diagnostics.push(package_review_policy_diagnostic(
+            package_dir,
+            "deny_unsafe_apis",
+            "package review policy denies native unsafe policy.",
+            "deny_unsafe_apis",
+            "The native Rust policy permits unsafe boundaries while `[review.policy].deny_unsafe_apis = true`.",
+        ));
+    }
+    if policy.deny_unsafe_apis == Some(true)
+        && native_check.is_some_and(|native| native.unsafe_detected)
+    {
+        diagnostics.push(package_review_policy_diagnostic(
+            package_dir,
+            "deny_unsafe_apis",
+            "package review policy denies detected unsafe native code.",
+            "deny_unsafe_apis",
+            "Native Rust code contains unsafe blocks while `[review.policy].deny_unsafe_apis = true`.",
+        ));
+    }
+    diagnostics
+}
+
+fn package_review_policy_diagnostic(
+    package_dir: &Path,
+    key: &str,
+    summary: impl Into<String>,
+    label: impl Into<String>,
+    cause: impl Into<String>,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::PACKAGE_REVIEW_POLICY_VIOLATION,
+        summary,
+        package_manifest_key_span(package_dir, key),
+        label,
+    )
+    .with_cause(cause)
+    .with_fix(
+        "update_review_policy",
+        "Relax the package review policy, or remove the API/risk source that violates it.",
+        "manual",
+    )
+}
+
+fn package_manifest_key_span(package_dir: &Path, key: &str) -> crate::diagnostic::Span {
+    let path = package_dir.join("rsspkg.toml");
+    let file = path.display().to_string();
+    let source = fs::read_to_string(&path).unwrap_or_default();
+    for (index, line) in source.lines().enumerate() {
+        if let Some(column) = line.find(key) {
+            return crate::diagnostic::Span {
+                file,
+                line: index + 1,
+                column: column + 1,
+                length: key.len().max(1),
+            };
+        }
+    }
+    crate::diagnostic::Span {
+        file,
+        line: 1,
+        column: 1,
+        length: key.len().max(1),
+    }
 }
 
 fn collect_manifest_review_policy_violations(

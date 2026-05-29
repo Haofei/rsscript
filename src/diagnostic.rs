@@ -67,9 +67,11 @@ pub mod code {
     pub const RUSTC_DIAGNOSTIC_UNMAPPABLE: &str = "RS1102";
     pub const RUNTIME_DIAGNOSTIC: &str = "RS1201";
     pub const PACKAGE_INTERFACE_MISMATCH: &str = "RS1301";
-    pub const PACKAGE_NATIVE_BINDING: &str = "RS1302";
     pub const LINT_SIGNATURE_COMPLEXITY: &str = "RSL001";
     pub const LINT_DUPLICATE_EFFECT: &str = "RSL002";
+
+    pub const PACKAGE_REVIEW_POLICY_VIOLATION: &str = "PKG0501";
+    pub const PACKAGE_NATIVE_BINDING: &str = "PKG0601";
 
     pub const REVIEW_FEATURES_CHANGED: &str = "RSR001";
     pub const REVIEW_FUNCTION_REMOVED: &str = "RSR002";
@@ -567,9 +569,14 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         explanation: "A package `.rssi` public contract must be implemented by the package source with the same type declarations, function signatures, return freshness, and declared effects.",
     },
     DiagnosticExplanation {
+        code: code::PACKAGE_REVIEW_POLICY_VIOLATION,
+        title: "package review policy violation",
+        explanation: "`[review.policy]` turns package review facts such as unknown risk, native boundaries, and unsafe APIs into package-manager errors.",
+    },
+    DiagnosticExplanation {
         code: code::PACKAGE_NATIVE_BINDING,
-        title: "package native binding mismatch",
-        explanation: "`native/bindings.rssbind.toml` entries must point from declared native `.rssi` functions to Rust wrapper functions in the configured native Rust crate.",
+        title: "package native binding metadata mismatch",
+        explanation: "`native/bindings.rssbind.toml` and `[native.rust]` metadata must point from declared native `.rssi` functions to Rust wrapper functions in the configured native Rust crate. This is a package-manager diagnostic, not an RSScript frontend diagnostic.",
     },
     DiagnosticExplanation {
         code: code::LINT_SIGNATURE_COMPLEXITY,

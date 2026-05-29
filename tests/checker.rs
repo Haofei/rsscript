@@ -73,7 +73,8 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
     ),
     ("async call not consumed by await or spawn", "RS0022"),
     ("unmappable rustc diagnostic", "RS1102"),
-    ("native boundary violation", "RS1302"),
+    ("package review policy violation", "PKG0501"),
+    ("package native binding metadata violation", "PKG0601"),
 ];
 
 static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -111,9 +112,10 @@ fn fail_fixtures_report_expected_diagnostic_codes() {
 fn required_spec_diagnostics_have_regression_coverage() {
     let fixture_codes = fail_fixture_expected_code_set();
     let dedicated_test_codes = BTreeSet::from([
-        "RS1102", // rustc_diagnostics_report_unmappable_generated_spans
-        "RS1201", // runtime_diagnostic_lines_parse_to_rsscript_diagnostics
-        "RS1302", // package native binding diagnostics
+        "RS1102",  // rustc_diagnostics_report_unmappable_generated_spans
+        "RS1201",  // runtime_diagnostic_lines_parse_to_rsscript_diagnostics
+        "PKG0501", // package review policy diagnostics
+        "PKG0601", // package native binding diagnostics
     ]);
 
     for &(spec_class, code) in REQUIRED_SPEC_DIAGNOSTICS {
@@ -7286,11 +7288,16 @@ deny_unknown = true
     assert!(!check.ok);
     assert_eq!(json["risk"], "unknown");
     assert_eq!(json["lock"]["matches"], true);
-    assert_eq!(json["summary"]["errors"], 0);
+    assert_eq!(json["summary"]["errors"], 1);
     assert!(json["reasons"].as_array().is_some_and(|reasons| {
         reasons
             .iter()
             .any(|reason| reason == "package policy denies unknown review risk")
+    }));
+    assert!(json["diagnostics"].as_array().is_some_and(|diagnostics| {
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == "PKG0501" && diagnostic["label"] == "deny_unknown"
+        })
     }));
 }
 
@@ -7349,6 +7356,11 @@ native fn Native.echo(message: read String) -> String
             .iter()
             .any(|reason| reason == "package policy denies native public APIs")
     }));
+    assert!(json["diagnostics"].as_array().is_some_and(|diagnostics| {
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == "PKG0501" && diagnostic["label"] == "deny_native"
+        })
+    }));
 }
 
 #[test]
@@ -7385,6 +7397,11 @@ fn Native.danger(message: read String) -> String
         reasons
             .iter()
             .any(|reason| reason == "package policy denies unsafe public APIs")
+    }));
+    assert!(json["diagnostics"].as_array().is_some_and(|diagnostics| {
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == "PKG0501" && diagnostic["label"] == "deny_unsafe_apis"
+        })
     }));
 }
 
@@ -8829,7 +8846,7 @@ native fn Native.echo(message: read String) -> String
 
     assert!(!check.ok);
     assert!(check.diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == "RS1302" && diagnostic.label == "unknown native binding symbol"
+        diagnostic.code == "PKG0601" && diagnostic.label == "unknown native binding symbol"
     }));
 }
 
@@ -8896,7 +8913,7 @@ fn main() -> Unit {
 
     assert!(!check.ok);
     assert!(check.diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == "RS1302" && diagnostic.label == "native binding crate mismatch"
+        diagnostic.code == "PKG0601" && diagnostic.label == "native binding crate mismatch"
     }));
 }
 
@@ -8939,7 +8956,7 @@ native fn Native.echo(message: read String) -> String
 
     assert!(!check.ok);
     assert!(check.diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == "RS1302"
+        diagnostic.code == "PKG0601"
             && diagnostic.label == "native binding without native Rust wrapper"
     }));
 }
@@ -8999,7 +9016,7 @@ native fn Native.echo(message: read String) -> String
 
     assert!(!check.ok);
     assert!(check.diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == "RS1302" && diagnostic.label == "native binding crate missing"
+        diagnostic.code == "PKG0601" && diagnostic.label == "native binding crate missing"
     }));
 }
 
