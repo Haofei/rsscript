@@ -1487,8 +1487,14 @@ Other bounds:
 ```text
 T: Struct    for fresh or local-capable values
 T: Resource  for resource generic APIs
-T: Copy      for Copy-only APIs
 ```
+
+The recognized generic bounds are exactly `Managed`, `Struct`, and `Resource`;
+any other bound is a malformed-generic-parameter diagnostic. A `Copy`-only bound
+is not recognized: managed containers already accept `Copy` values under the
+default `Managed` bound, so a restrictive `Copy` bound has no current use. If a
+genuine `Copy`-only generic API appears, the bound may be added later under the
+feature admission rule (section 2.8).
 
 Resource types are not `Managed`. Ordinary `List<T>` cannot be instantiated with resource types.
 
@@ -1557,17 +1563,23 @@ fn write_line<W: Writer>(writer: mut W, message: read String) -> Unit
 
 This covers "write code against a capability" and is fully review-resolvable.
 
-#### Dynamic dispatch (open design question, not yet decided)
+#### Dynamic dispatch (admitted, in a reviewable form)
 
-Whether RSScript admits protocol-typed dynamic dispatch (an open set of
-implementing types chosen at runtime) is unresolved. It is recorded as deferred,
-not forbidden. The closed-set case should instead use sealed sum types with
-exhaustive match (section 20.1), which are strictly more reviewable; dynamic
-dispatch is only for genuinely open sets (runtime-registered plugins, third-party
-extensions).
+RSScript admits protocol-typed dynamic dispatch (an open set of implementing
+types chosen at runtime). It is a future feature, not part of the v0.5 executable
+MVP, but the design decision is settled: dynamic dispatch is supported, because
+forbidding it makes users write timidly around capabilities that the review
+model can in fact express safely. The constraints below are what make it
+reviewable; they are normative for the eventual implementation, not open
+questions.
 
-Any future dynamic-dispatch design is binding-constrained by the following. If a
-design cannot meet all of them, it is rejected:
+Closed sets should still prefer sealed sum types with exhaustive match
+(section 20.1), which are strictly more reviewable. Dynamic dispatch is the
+escape hatch for genuinely open sets (runtime-registered plugins, third-party
+extensions), not the default tool.
+
+The dynamic-dispatch design must satisfy all of the following. A form that
+cannot meet them is not admitted:
 
 ```text
 1. Only through a protocol whose methods carry full effect contracts. A dynamic
@@ -1582,6 +1594,13 @@ design cannot meet all of them, it is rejected:
    must-review with effects bounded by the protocol contract. It is NOT `unknown`
    (section 16.5), because the effects are known even though the type is not.
 ```
+
+This is why dynamic dispatch passes the feature admission rule (section 2.8):
+the concrete type is hidden, but the reviewer question — what does this call
+mutate, retain, or own — is answered by the protocol's effect contract, and both
+coercion and call stay explicit. Review-first does not require knowing the
+concrete callee; it requires knowing the effects, and an effect-carrying protocol
+provides exactly that.
 
 ---
 
