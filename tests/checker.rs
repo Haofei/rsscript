@@ -4478,6 +4478,81 @@ fn rss_run_reports_dogfood_unmodeled_reason_count() {
 }
 
 #[test]
+fn rss_run_accepts_current_review_reason_families_in_dogfood_classifier() {
+    let temp_dir = unique_temp_dir("rsscript-dogfood-run-current-reasons");
+    let Some(fixture_dir) = prepare_dogfood_run_dir(&temp_dir) else {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return;
+    };
+    let mut review_json = generated_dogfood_review_map_json();
+    let regions = review_json["files"][0]["regions"]
+        .as_array_mut()
+        .expect("first file regions should be an array");
+    let region = regions
+        .iter_mut()
+        .find(|region| region["classification"] == "low_semantic_risk")
+        .expect("dogfood review map should contain a low-risk region");
+    let line_count = region["line_count"]
+        .as_i64()
+        .expect("region line_count should be an integer");
+    region["classification"] = Value::String("must_review".to_string());
+    let reasons = region["reasons"]
+        .as_array_mut()
+        .expect("region reasons should be an array");
+    reasons.extend([
+        Value::String("manage boundary".to_string()),
+        Value::String("take effect".to_string()),
+        Value::String("async function boundary".to_string()),
+        Value::String("await suspension boundary".to_string()),
+        Value::String("spawn task boundary".to_string()),
+        Value::String("spawn retains-until-task-complete `task`".to_string()),
+        Value::String("writes through handle field".to_string()),
+        Value::String("guarantee `no_panic`".to_string()),
+        Value::String("take parameter `buffer`".to_string()),
+    ]);
+    review_json["summary"]["must_review"]["functions"] = Value::from(
+        review_json["summary"]["must_review"]["functions"]
+            .as_i64()
+            .unwrap()
+            + 1,
+    );
+    review_json["summary"]["low_semantic_risk"]["functions"] = Value::from(
+        review_json["summary"]["low_semantic_risk"]["functions"]
+            .as_i64()
+            .unwrap()
+            - 1,
+    );
+    review_json["summary"]["suggested_review_lines"] = Value::from(
+        review_json["summary"]["suggested_review_lines"]
+            .as_i64()
+            .unwrap()
+            + line_count,
+    );
+    fs::write(
+        fixture_dir.join("dogfood-review-facts.json"),
+        serde_json::to_vec(&review_json).expect("review JSON should serialize"),
+    )
+    .expect("mutated review map should write");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("tests/fixtures/pass/dogfood-review-classifier.rss")
+        .current_dir(&temp_dir)
+        .output()
+        .expect("rss run should execute dogfood classifier");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(
+        stdout.contains("mismatches=0 unmodeled_reasons=0 first_mismatch=none"),
+        "{stdout}"
+    );
+    assert!(stderr.trim().is_empty(), "{stderr}");
+}
+
+#[test]
 fn rss_run_accepts_dogfood_package_risk_classifier() {
     let temp_dir = unique_temp_dir("rsscript-dogfood-package-risk");
     let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-risk.rss")

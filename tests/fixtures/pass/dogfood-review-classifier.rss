@@ -10,6 +10,12 @@ struct ReviewFacts {
     has_resource_boundary: Bool
     has_retains: Bool
     has_mut: Bool
+    has_manage_boundary: Bool
+    has_take_effect: Bool
+    has_async_boundary: Bool
+    has_task_boundary: Bool
+    has_handle_write: Bool
+    has_guarantee_boundary: Bool
     has_local: Bool
     has_fresh_return: Bool
     has_noescape: Bool
@@ -170,7 +176,13 @@ fn classify_boundary(facts: read ReviewFacts) -> fresh ReviewDecision {
 fn classify_semantics(facts: read ReviewFacts) -> fresh ReviewDecision {
     let lines = risk_line_budget(facts: read facts)
 
-    if facts.has_retains || facts.has_mut || facts.has_noescape {
+    if facts.has_retains
+        || facts.has_mut
+        || facts.has_manage_boundary
+        || facts.has_take_effect
+        || facts.has_task_boundary
+        || facts.has_handle_write
+        || facts.has_noescape {
         return decision(
             classification: ReviewClass.must_review(),
             reason: read reason_retention(),
@@ -178,7 +190,11 @@ fn classify_semantics(facts: read ReviewFacts) -> fresh ReviewDecision {
         )
     }
 
-    if facts.has_local || facts.has_fresh_return || facts.has_error_boundary {
+    if facts.has_local
+        || facts.has_fresh_return
+        || facts.has_error_boundary
+        || facts.has_async_boundary
+        || facts.has_guarantee_boundary {
         return decision(
             classification: ReviewClass.must_review(),
             reason: read reason_fresh(),
@@ -254,6 +270,12 @@ fn make_low_helper(lines: Int) -> fresh ReviewFacts {
         has_resource_boundary: false,
         has_retains: false,
         has_mut: false,
+        has_manage_boundary: false,
+        has_take_effect: false,
+        has_async_boundary: false,
+        has_task_boundary: false,
+        has_handle_write: false,
+        has_guarantee_boundary: false,
         has_local: false,
         has_fresh_return: false,
         has_noescape: false,
@@ -275,6 +297,12 @@ fn make_native_entry(lines: Int) -> fresh ReviewFacts {
         has_resource_boundary: false,
         has_retains: false,
         has_mut: false,
+        has_manage_boundary: false,
+        has_take_effect: false,
+        has_async_boundary: false,
+        has_task_boundary: false,
+        has_handle_write: false,
+        has_guarantee_boundary: false,
         has_local: false,
         has_fresh_return: true,
         has_noescape: false,
@@ -296,6 +324,12 @@ fn make_resource_worker(lines: Int) -> fresh ReviewFacts {
         has_resource_boundary: true,
         has_retains: false,
         has_mut: true,
+        has_manage_boundary: false,
+        has_take_effect: false,
+        has_async_boundary: false,
+        has_task_boundary: false,
+        has_handle_write: false,
+        has_guarantee_boundary: false,
         has_local: true,
         has_fresh_return: false,
         has_noescape: false,
@@ -317,6 +351,12 @@ fn make_retaining_cache(lines: Int) -> fresh ReviewFacts {
         has_resource_boundary: false,
         has_retains: true,
         has_mut: true,
+        has_manage_boundary: false,
+        has_take_effect: false,
+        has_async_boundary: false,
+        has_task_boundary: false,
+        has_handle_write: false,
+        has_guarantee_boundary: false,
         has_local: false,
         has_fresh_return: false,
         has_noescape: false,
@@ -338,6 +378,12 @@ fn make_unknown_region(lines: Int) -> fresh ReviewFacts {
         has_resource_boundary: false,
         has_retains: false,
         has_mut: false,
+        has_manage_boundary: false,
+        has_take_effect: false,
+        has_async_boundary: false,
+        has_task_boundary: false,
+        has_handle_write: false,
+        has_guarantee_boundary: false,
         has_local: false,
         has_fresh_return: false,
         has_noescape: false,
@@ -373,6 +419,15 @@ fn parse_review_region(value: read JsonValue) -> Result<fresh ReviewFacts, JsonE
             || Json.array_contains_prefix(value: read reasons, prefix: read "retention ")?,
         has_mut: Json.array_contains_prefix(value: read reasons, prefix: read "mut ")?
             || Json.array_contains_string(value: read reasons, item: read "writes to managed state")?,
+        has_manage_boundary: Json.array_contains_string(value: read reasons, item: read "manage boundary")?,
+        has_take_effect: Json.array_contains_string(value: read reasons, item: read "take effect")?
+            || Json.array_contains_prefix(value: read reasons, prefix: read "take parameter")?,
+        has_async_boundary: Json.array_contains_string(value: read reasons, item: read "async function boundary")?
+            || Json.array_contains_string(value: read reasons, item: read "await suspension boundary")?,
+        has_task_boundary: Json.array_contains_string(value: read reasons, item: read "spawn task boundary")?
+            || Json.array_contains_prefix(value: read reasons, prefix: read "spawn retains-until-task-complete")?,
+        has_handle_write: Json.array_contains_string(value: read reasons, item: read "writes through handle field")?,
+        has_guarantee_boundary: Json.array_contains_prefix(value: read reasons, prefix: read "guarantee ")?,
         has_local: Json.array_contains_string(value: read reasons, item: read "local binding")?,
         has_fresh_return: Json.array_contains_string(value: read reasons, item: read "fresh guarantee boundary")?,
         has_noescape: Json.array_contains_prefix(value: read reasons, prefix: read "noescape")?,
@@ -393,6 +448,18 @@ fn reason_is_modeled(reason: read String) -> Bool {
     }
 
     if reason == "error handling boundary" || reason == "writes to managed state" {
+        return true
+    }
+
+    if reason == "manage boundary" || reason == "take effect" {
+        return true
+    }
+
+    if reason == "async function boundary" || reason == "await suspension boundary" {
+        return true
+    }
+
+    if reason == "spawn task boundary" || reason == "writes through handle field" {
         return true
     }
 
@@ -425,6 +492,18 @@ fn reason_is_modeled(reason: read String) -> Bool {
     }
 
     if String.starts_with(value: read reason, prefix: read "mut ") {
+        return true
+    }
+
+    if String.starts_with(value: read reason, prefix: read "take parameter") {
+        return true
+    }
+
+    if String.starts_with(value: read reason, prefix: read "spawn retains-until-task-complete") {
+        return true
+    }
+
+    if String.starts_with(value: read reason, prefix: read "guarantee ") {
         return true
     }
 
