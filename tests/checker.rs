@@ -4501,7 +4501,7 @@ fn rss_run_accepts_dogfood_package_risk_classifier() {
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
     assert_eq!(
         stdout.trim(),
-        "dogfood package risk expected=elevated actual=elevated unmodeled_reasons=0"
+        "dogfood package risk cases=4 mismatches=0 unmodeled_reasons=0 low=1 elevated=1 high=1 unknown=1"
     );
     assert!(stderr.trim().is_empty(), "{stderr}");
 }
@@ -4515,7 +4515,7 @@ fn rss_run_reports_dogfood_package_risk_mismatch() {
         return;
     };
     let mut package_review_json = generated_dogfood_package_review_json(&temp_dir);
-    package_review_json["risk"] = Value::String("low".to_string());
+    package_review_json[1]["risk"] = Value::String("low".to_string());
     fs::write(
         fixture_dir.join("dogfood-package-review.json"),
         serde_json::to_vec(&package_review_json).expect("package review JSON should serialize"),
@@ -4533,7 +4533,7 @@ fn rss_run_reports_dogfood_package_risk_mismatch() {
 
     assert!(!output.status.success(), "{stdout}");
     assert!(
-        stdout.contains("dogfood package risk expected=low actual=elevated unmodeled_reasons=0"),
+        stdout.contains("dogfood package risk cases=4 mismatches=1 unmodeled_reasons=0 low=1 elevated=1 high=1 unknown=1"),
         "{stdout}"
     );
 }
@@ -4587,16 +4587,58 @@ fn generated_dogfood_review_map_json() -> Value {
 }
 
 fn generated_dogfood_package_review_json(temp_dir: &Path) -> Value {
-    let package_dir = temp_dir.join("package");
+    let low_dir = temp_dir.join("package-low");
+    write_empty_named_package_fixture(&low_dir, "rss-dogfood-low", "0.1.0", "");
+
+    let elevated_dir = temp_dir.join("package-elevated");
     write_named_package_fixture(
-        &package_dir,
-        "rss-dogfood-package",
+        &elevated_dir,
+        "rss-dogfood-elevated",
         "0.1.0",
         "",
         r#"pub fn Api.run() -> Unit
 "#,
     );
-    let review = review_package_dir(&package_dir).expect("package review should succeed");
+
+    let high_dir = temp_dir.join("package-high");
+    write_named_package_fixture(
+        &high_dir,
+        "rss-dogfood-high",
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_dogfood_native"
+build_scripts = "review"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+        r#"features: native
+
+native fn Native.echo(message: read String) -> String
+"#,
+    );
+
+    let unknown_dir = temp_dir.join("package-unknown");
+    write_empty_named_package_fixture(
+        &unknown_dir,
+        "rss-dogfood-unknown",
+        "0.1.0",
+        r#"[review]
+risk = "unknown"
+"#,
+    );
+
+    Value::Array(vec![
+        package_review_json_for_dir(&low_dir),
+        package_review_json_for_dir(&elevated_dir),
+        package_review_json_for_dir(&high_dir),
+        package_review_json_for_dir(&unknown_dir),
+    ])
+}
+
+fn package_review_json_for_dir(package_dir: &Path) -> Value {
+    let review = review_package_dir(package_dir).expect("package review should succeed");
     serde_json::from_str(&rsscript::format_package_review_json(&review))
         .expect("package review JSON should parse")
 }
@@ -8590,6 +8632,28 @@ paths = ["interface"]
     .expect("package manifest should be written");
     fs::write(directory.join("interface/lib.rssi"), interface_source)
         .expect("interface should be written");
+}
+
+fn write_empty_named_package_fixture(
+    directory: &Path,
+    name: &str,
+    version: &str,
+    extra_manifest: &str,
+) {
+    fs::create_dir_all(directory).expect("package dir should be created");
+    fs::write(
+        directory.join("rsspkg.toml"),
+        format!(
+            r#"[package]
+name = "{name}"
+version = "{version}"
+edition = "2026"
+
+{extra_manifest}
+"#
+        ),
+    )
+    .expect("package manifest should be written");
 }
 
 fn write_runtime_conflict_fixture(path: &Path) {

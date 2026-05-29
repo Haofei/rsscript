@@ -15,6 +15,16 @@ struct PackageRiskFacts {
     unmodeled_reasons: Int
 }
 
+struct PackageRiskSummary {
+    total_cases: Int
+    mismatches: Int
+    unmodeled_reasons: Int
+    low_cases: Int
+    elevated_cases: Int
+    high_cases: Int
+    unknown_cases: Int
+}
+
 fn PackageRisk.low() -> Int {
     return 1
 }
@@ -45,22 +55,6 @@ fn package_risk_from_string(value: read String) -> Int {
     }
 
     return PackageRisk.low()
-}
-
-fn package_risk_to_string(value: Int) -> String {
-    if value == PackageRisk.unknown() {
-        return "unknown"
-    }
-
-    if value == PackageRisk.high() {
-        return "high"
-    }
-
-    if value == PackageRisk.elevated() {
-        return "elevated"
-    }
-
-    return "low"
 }
 
 fn package_reason_is_modeled(reason: read String) -> Bool {
@@ -194,42 +188,171 @@ fn classify_package_risk(facts: read PackageRiskFacts) -> Int {
     return PackageRisk.low()
 }
 
-fn dogfood_package_risk_facts() -> Result<fresh PackageRiskFacts, JsonError> {
+fn empty_package_risk_summary() -> fresh PackageRiskSummary {
+    return PackageRiskSummary(
+        total_cases: 0,
+        mismatches: 0,
+        unmodeled_reasons: 0,
+        low_cases: 0,
+        elevated_cases: 0,
+        high_cases: 0,
+        unknown_cases: 0,
+    )
+}
+
+fn add_package_risk_case(
+    summary: read PackageRiskSummary,
+    facts: read PackageRiskFacts,
+) -> fresh PackageRiskSummary {
+    let actual = classify_package_risk(facts: read facts)
+    let next_mismatches = next_mismatch_count(
+        summary: read summary,
+        facts: read facts,
+        actual: actual,
+    )
+    let next_unmodeled = summary.unmodeled_reasons + facts.unmodeled_reasons
+
+    if actual == PackageRisk.unknown() {
+        return PackageRiskSummary(
+            total_cases: summary.total_cases + 1,
+            mismatches: next_mismatches,
+            unmodeled_reasons: next_unmodeled,
+            low_cases: summary.low_cases,
+            elevated_cases: summary.elevated_cases,
+            high_cases: summary.high_cases,
+            unknown_cases: summary.unknown_cases + 1,
+        )
+    }
+
+    if actual == PackageRisk.high() {
+        return PackageRiskSummary(
+            total_cases: summary.total_cases + 1,
+            mismatches: next_mismatches,
+            unmodeled_reasons: next_unmodeled,
+            low_cases: summary.low_cases,
+            elevated_cases: summary.elevated_cases,
+            high_cases: summary.high_cases + 1,
+            unknown_cases: summary.unknown_cases,
+        )
+    }
+
+    if actual == PackageRisk.elevated() {
+        return PackageRiskSummary(
+            total_cases: summary.total_cases + 1,
+            mismatches: next_mismatches,
+            unmodeled_reasons: next_unmodeled,
+            low_cases: summary.low_cases,
+            elevated_cases: summary.elevated_cases + 1,
+            high_cases: summary.high_cases,
+            unknown_cases: summary.unknown_cases,
+        )
+    }
+
+    return PackageRiskSummary(
+        total_cases: summary.total_cases + 1,
+        mismatches: next_mismatches,
+        unmodeled_reasons: next_unmodeled,
+        low_cases: summary.low_cases + 1,
+        elevated_cases: summary.elevated_cases,
+        high_cases: summary.high_cases,
+        unknown_cases: summary.unknown_cases,
+    )
+}
+
+fn next_mismatch_count(
+    summary: read PackageRiskSummary,
+    facts: read PackageRiskFacts,
+    actual: Int,
+) -> Int {
+    if actual != facts.declared_risk {
+        return summary.mismatches + 1
+    }
+
+    return summary.mismatches
+}
+
+fn summarize_package_risk_cases_from(
+    json: read JsonValue,
+    index: Int,
+    limit: Int,
+    summary: read PackageRiskSummary,
+) -> Result<fresh PackageRiskSummary, JsonError> {
+    if index >= limit {
+        return PackageRiskSummary(
+            total_cases: summary.total_cases,
+            mismatches: summary.mismatches,
+            unmodeled_reasons: summary.unmodeled_reasons,
+            low_cases: summary.low_cases,
+            elevated_cases: summary.elevated_cases,
+            high_cases: summary.high_cases,
+            unknown_cases: summary.unknown_cases,
+        )
+    }
+
+    let item = Json.array_get(value: read json, index: index)?
+    let facts = parse_package_risk_facts(value: read item)?
+    let next = add_package_risk_case(summary: read summary, facts: read facts)
+
+    return summarize_package_risk_cases_from(
+        json: read json,
+        index: index + 1,
+        limit: limit,
+        summary: read next,
+    )
+}
+
+fn dogfood_package_risk_summary() -> Result<fresh PackageRiskSummary, JsonError> {
     let path = Path.from_string(value: read "tests/fixtures/pass/dogfood-package-review.json")
     let json = Json.parse_file(path: read path)?
+    let limit = Json.array_len(value: read json)?
 
-    return parse_package_risk_facts(value: read json)
+    return summarize_package_risk_cases_from(
+        json: read json,
+        index: 0,
+        limit: limit,
+        summary: read empty_package_risk_summary(),
+    )
 }
 
 fn package_risk_summary_line(
-    expected: Int,
-    actual: Int,
-    unmodeled_reasons: Int,
+    summary: read PackageRiskSummary,
 ) -> fresh String {
-    let expected_text = package_risk_to_string(value: expected)
-    let actual_text = package_risk_to_string(value: actual)
-    let unmodeled = String.from_int(value: unmodeled_reasons)
-    let first = String.concat(left: read "dogfood package risk expected=", right: read expected_text)
-    let second = String.concat(left: read first, right: read " actual=")
-    let third = String.concat(left: read second, right: read actual_text)
+    let total = String.from_int(value: summary.total_cases)
+    let mismatches = String.from_int(value: summary.mismatches)
+    let unmodeled = String.from_int(value: summary.unmodeled_reasons)
+    let low = String.from_int(value: summary.low_cases)
+    let elevated = String.from_int(value: summary.elevated_cases)
+    let high = String.from_int(value: summary.high_cases)
+    let unknown = String.from_int(value: summary.unknown_cases)
+    let first = String.concat(left: read "dogfood package risk cases=", right: read total)
+    let second = String.concat(left: read first, right: read " mismatches=")
+    let third = String.concat(left: read second, right: read mismatches)
     let fourth = String.concat(left: read third, right: read " unmodeled_reasons=")
+    let fifth = String.concat(left: read fourth, right: read unmodeled)
+    let sixth = String.concat(left: read fifth, right: read " low=")
+    let seventh = String.concat(left: read sixth, right: read low)
+    let eighth = String.concat(left: read seventh, right: read " elevated=")
+    let ninth = String.concat(left: read eighth, right: read elevated)
+    let tenth = String.concat(left: read ninth, right: read " high=")
+    let eleventh = String.concat(left: read tenth, right: read high)
+    let twelfth = String.concat(left: read eleventh, right: read " unknown=")
 
-    return String.concat(left: read fourth, right: read unmodeled)
+    return String.concat(left: read twelfth, right: read unknown)
 }
 
 pub fn main() -> Result<Unit, JsonError> {
-    let facts = dogfood_package_risk_facts()?
-    let actual = classify_package_risk(facts: read facts)
-    let summary = package_risk_summary_line(
-        expected: facts.declared_risk,
-        actual: actual,
-        unmodeled_reasons: facts.unmodeled_reasons,
-    )
+    let summary = dogfood_package_risk_summary()?
+    let summary_line = package_risk_summary_line(summary: read summary)
 
-    Log.write(message: read summary)
+    Log.write(message: read summary_line)
 
-    Assert.equal_int(left: actual, right: facts.declared_risk)
-    Assert.equal_int(left: facts.unmodeled_reasons, right: 0)
+    Assert.equal_int(left: summary.total_cases, right: 4)
+    Assert.equal_int(left: summary.mismatches, right: 0)
+    Assert.equal_int(left: summary.unmodeled_reasons, right: 0)
+    Assert.equal_int(left: summary.low_cases, right: 1)
+    Assert.equal_int(left: summary.elevated_cases, right: 1)
+    Assert.equal_int(left: summary.high_cases, right: 1)
+    Assert.equal_int(left: summary.unknown_cases, right: 1)
 
     return Ok(Unit)
 }
