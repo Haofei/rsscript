@@ -222,6 +222,13 @@ advanced interface/dynamic dispatch model
 
 `async fn` signatures are review-visible contracts. Executable async bodies, `await`, and `spawn` must be rejected before lowering in v0.5.
 
+Future executable async is expected to follow the same single-isolate model:
+`spawn` means isolate-local cooperative task creation, not Rust `std::thread`
+or multi-threaded `tokio::spawn`. Managed values may cross isolate-local
+suspension and task boundaries; local values, resources, and runtime read/write
+guards may not cross `await`. Cross-isolate or cross-thread work must use an
+explicit message/channel API rather than shared managed handles.
+
 ### 3.3 Unsupported syntax must not lower to placeholders
 
 Unsupported source must not become generated Rust `todo!()`, silently skipped code, or deferred backend failure. Unsupported constructs require stable frontend diagnostics.
@@ -315,7 +322,8 @@ rssc 0.5.x -> rss_rt 0.5.x
 
 ### 4.5 Managed runtime reference model
 
-Managed values are runtime-mediated handles. The reference v0.5 implementation is `Arc<RwLock<T>>`-like:
+Managed values are runtime-mediated handles. The reference v0.5 implementation
+is single-isolate and `Rc<RefCell<T>>`-like:
 
 ```text
 read x  acquires a shared runtime read view
@@ -324,10 +332,12 @@ mut x   acquires an exclusive runtime write view
 
 RSScript v0.5 exposes a single-isolate source model. Within that model,
 frontend-visible conflicts such as same-call `read`/`mut`/`take`/`manage`
-overlap are static diagnostics. Runtime lock conflicts that remain after
-frontend checking are treated as reentrant managed-access conflicts or internal
-runtime failures; they must become RSScript runtime diagnostics with source
-spans, not raw Rust panics or deadlocks.
+overlap are static diagnostics. Managed handles are intentionally not `Send` or
+`Sync`; Rust's type system must prevent them from being moved to ordinary
+multi-threaded execution. Runtime borrow conflicts that remain after frontend
+checking are treated as reentrant managed-access conflicts or internal runtime
+failures; they must become RSScript runtime diagnostics with source spans, not
+raw Rust panics or deadlocks.
 
 Waiting or serializing ordinary contention is a future cross-thread or
 cross-isolate runtime behavior, not a v0.5 source-level promise.
@@ -340,7 +350,9 @@ read/mut do not expose backend-specific borrow errors
 runtime failures are reported as RSScript diagnostics
 ```
 
-RSScript v0.5 has a single-isolate model. Managed handles do not cross isolates. Future cross-thread or cross-isolate transfer requires explicit capabilities.
+RSScript v0.5 has a single-isolate model. Managed handles do not cross isolates.
+Future cross-thread or cross-isolate transfer requires explicit message or
+channel capabilities rather than implicit shared managed handles.
 
 ---
 
@@ -1411,6 +1423,12 @@ fn load(path: read Path) -> Result<Image, ImageError>
 
 Future executable async must not expose Rust's `Future`, `Pin`, `Poll`, `Waker`, executor internals, or lifetime-across-await machinery to RSScript users.
 
+The future execution target is a single-isolate cooperative executor. `spawn`
+lowers to an isolate-local task primitive such as `spawn_local`; it must not
+imply `Send`, shared heap transfer, or multi-threaded execution. Managed values
+may cross isolate-local suspension points, but local values, resources, and
+runtime read/write guards may not be live across `await`.
+
 ### 14.5 Generics
 
 Generic type parameters default to `Managed`:
@@ -1978,10 +1996,11 @@ macro-heavy metaprogramming
 
 ### 21.1 Deferred, not excluded: managed memory strategy
 
-The v0.5 managed runtime is reference counted (`Arc`/`RwLock`-like). Reference
-counting does not collect reference cycles on its own, so v0.5 requires `weak`
-fields to break managed cycles, the same way Swift does. This is an accepted
-v0.5 limitation, not a permanent language guarantee.
+The v0.5 managed runtime is single-isolate reference counted
+(`Rc`/`RefCell`-like). Reference counting does not collect reference cycles on
+its own, so v0.5 requires `weak` fields to break managed cycles, the same way
+Swift does. This is an accepted v0.5 limitation, not a permanent language
+guarantee.
 
 A future major version may add a tracing or moving collector for managed memory
 as an alternative backend. The following are therefore **deferred beyond v0.5,

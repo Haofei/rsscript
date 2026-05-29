@@ -67,7 +67,7 @@ fn put(
     effects(retains(key), retains(value))
 ```
 
-Four lines instead of nine. The `Arc` and `RwLock` are gone from the source — they're implementation details added during lowering to Rust, not things the application author has to think about. The `PoisonError<RwLockWriteGuard<'_, ...>>` collapses to nothing — lock poisoning is a runtime concern handled by the runtime, not a type the application author writes. The `impl Into<String>` is gone because named arguments at the call site already give callers the flexibility they wanted from it.
+Four lines instead of nine. The runtime handle machinery is gone from the source — in the current single-isolate runtime that means `Rc`/`RefCell`-like internals, not something the application author has to think about. Runtime borrow conflicts become RSScript diagnostics instead of lock or guard types in the application signature. The `impl Into<String>` is gone because named arguments at the call site already give callers the flexibility they wanted from it.
 
 And the load-bearing content — *this function mutates the cache and retains the key and value* — is now visible in the signature, not buried in the body. The reviewer reads four lines and is done.
 
