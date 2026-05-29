@@ -2552,7 +2552,10 @@ fn check_resource_pool_factory_stmt(analyzer: &mut Analyzer<'_>, statement: &Hir
 
 fn expr_is_resource_producer(analyzer: &Analyzer<'_>, expr: &HirExpr) -> bool {
     match expr {
-        HirExpr::Call { .. } => expr_type_is_resource(analyzer, expr),
+        HirExpr::Call { .. } => {
+            expr_type_is_resource(analyzer, expr)
+                || result_resource_ok_type(analyzer, expr).is_some()
+        }
         HirExpr::Try { value, .. } | HirExpr::Effect { value, .. } => {
             expr_type_is_resource(analyzer, expr) && expr_is_resource_producer(analyzer, value)
         }

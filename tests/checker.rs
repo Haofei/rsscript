@@ -4122,8 +4122,17 @@ fn bad_let(path: read Path) -> Unit {
     let file = File.open(path: read path)
 }
 
+fn bad_result_let(path: read Path) -> Result<Unit, IOError> {
+    let file = File.open_result(path: read path)?
+    return Ok(Unit)
+}
+
 fn bad_return(path: read Path) -> File {
     return File.open(path: read path)
+}
+
+fn bad_result_return(path: read Path) -> Result<File, IOError> {
+    return File.open_result(path: read path)?
 }
 
 fn bad_arg(path: read Path) -> Unit {
@@ -4138,7 +4147,7 @@ fn bad_arg(path: read Path) -> Unit {
         })
         .count();
 
-    assert_eq!(producer_escape_count, 3, "{diagnostics:?}");
+    assert_eq!(producer_escape_count, 5, "{diagnostics:?}");
     assert!(
         diagnostics.iter().any(|diagnostic| {
             diagnostic.code == "RS0706" && diagnostic.label == "missing resource producer `?`"
