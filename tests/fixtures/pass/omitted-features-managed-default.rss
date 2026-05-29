@@ -1,3 +1,7 @@
+struct Image
+
+fn Image.load(path: read Path) -> Image
+
 fn render(path: read Path) -> Image {
     return Image.load(path: read path)
 }

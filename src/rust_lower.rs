@@ -2150,6 +2150,21 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         rust_target: "rsscript_runtime::buffer_new",
     },
     RuntimeIntrinsic {
+        namespace: "Bytes",
+        name: "consume",
+        rust_target: "rsscript_runtime::bytes_consume",
+    },
+    RuntimeIntrinsic {
+        namespace: "Bytes",
+        name: "from_buffer",
+        rust_target: "rsscript_runtime::bytes_from_buffer",
+    },
+    RuntimeIntrinsic {
+        namespace: "Bytes",
+        name: "from_string",
+        rust_target: "rsscript_runtime::bytes_from_string",
+    },
+    RuntimeIntrinsic {
         namespace: "Cache",
         name: "get",
         rust_target: "rsscript_runtime::cache_get",
@@ -2308,6 +2323,11 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         namespace: "File",
         name: "write",
         rust_target: "rsscript_runtime::file_write",
+    },
+    RuntimeIntrinsic {
+        namespace: "File",
+        name: "write_buffer",
+        rust_target: "rsscript_runtime::file_write_buffer",
     },
     RuntimeIntrinsic {
         namespace: "FunctionObject",
@@ -2543,6 +2563,11 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         namespace: "String",
         name: "starts_with",
         rust_target: "rsscript_runtime::string_starts_with",
+    },
+    RuntimeIntrinsic {
+        namespace: "Url",
+        name: "from_string",
+        rust_target: "rsscript_runtime::url_from_string",
     },
 ];
 

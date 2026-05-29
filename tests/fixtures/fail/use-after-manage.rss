@@ -5,6 +5,9 @@ struct Image {
     pixels: Buffer
 }
 
+fn Image.load(path: read Path) -> fresh Image
+fn Image.save(image: read Image, path: read Path) -> Unit
+
 fn publish(path: read Path) -> Unit {
     local image = Image.load(path: read path)
     let shared = manage image

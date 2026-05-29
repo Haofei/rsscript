@@ -8,6 +8,9 @@ struct Image {
     pixels: Buffer
 }
 
+fn Image.load(path: read Path) -> fresh Image
+fn Image.inspect(image: read Image) -> Unit
+
 fn cache_put(cache: mut Cache, value: read Image) -> Unit
     effects(retains(value))
 {

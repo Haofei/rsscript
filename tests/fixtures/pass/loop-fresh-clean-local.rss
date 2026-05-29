@@ -4,6 +4,9 @@ struct Image {
     pixels: Buffer
 }
 
+fn Image.load(path: read Path) -> fresh Image
+fn Image.inspect(image: read Image) -> Unit
+
 fn inspect_until(path: read Path, keep_going: Bool) -> fresh Image {
     local image = Image.load(path: read path)
     while keep_going {

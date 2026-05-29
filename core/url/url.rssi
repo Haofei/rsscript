@@ -1,0 +1,1 @@
+pub fn Url.from_string(value: read String) -> fresh Url

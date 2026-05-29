@@ -14,7 +14,8 @@ fn run_query(url: read Url, sql: read String) -> Result<Unit, DbError> {
 }
 
 fn main() -> Result<Unit, DbError> {
-    run_query(url: read "db://local", sql: read "select 1")?
+    let url = Url.from_string(value: read "db://local")
+    run_query(url: read url, sql: read "select 1")?
     Log.write(message: read "db pool ran")
     return Ok(Unit)
 }

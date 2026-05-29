@@ -1,0 +1,7 @@
+features: local
+
+pub fn Bytes.from_string(value: read String) -> fresh Bytes
+
+pub fn Bytes.from_buffer(buffer: read Buffer) -> fresh Bytes
+
+pub fn Bytes.consume(bytes: take Bytes) -> Unit

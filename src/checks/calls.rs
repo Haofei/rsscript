@@ -275,7 +275,7 @@ fn check_call_args(
     noescape_bindings: &HashMap<String, Span>,
     local_closure_bindings: &HashMap<String, Span>,
 ) {
-    let call_name = callee_name(callee);
+    let call_name = callee_display(callee);
     if is_closure_binding_call(
         callee,
         args,
@@ -436,6 +436,46 @@ fn check_call_args(
                     "add_data_effect",
                     format!("Write `{name}: {expected} ...` at the call site."),
                     "machine-applicable",
+                ),
+            );
+        }
+    }
+
+    for arg in args {
+        let Some(name) = &arg.name else {
+            continue;
+        };
+        let Some(expected_param) = signature.params.iter().find(|param| param.name == *name) else {
+            continue;
+        };
+        if type_contains_unresolved_generic(&expected_param.type_name, &signature.type_params) {
+            continue;
+        }
+        let Some(actual_type) = hir_expr_type_name(&arg.value) else {
+            continue;
+        };
+        if unresolved_generic_type(actual_type) {
+            continue;
+        }
+        if !argument_type_matches(&expected_param.type_name, actual_type) {
+            analyzer.diagnostics.push(
+                Diagnostic::error(
+                    code::ARGUMENT_TYPE_MISMATCH,
+                    format!(
+                        "argument `{name}` for `{call_name}` has type `{actual_type}`, expected `{}`.",
+                        expected_param.type_name
+                    ),
+                    hir_expr_span(&arg.value).clone(),
+                    "argument type mismatch",
+                )
+                .with_cause("RSScript call argument types must match the resolved callee signature before Rust lowering.")
+                .with_fix(
+                    "match_argument_type",
+                    format!(
+                        "Pass a value of type `{}` for `{name}`.",
+                        expected_param.type_name
+                    ),
+                    "manual",
                 ),
             );
         }
@@ -994,6 +1034,130 @@ fn expr_data_effect(expr: &HirExpr) -> Option<&'static str> {
         HirExpr::Effect { effect, .. } => Some(effect.as_str()),
         _ => None,
     }
+}
+
+fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
+    match expr {
+        HirExpr::Ident {
+            name, type_name, ..
+        } => type_name
+            .as_deref()
+            .or_else(|| builtin_value_type_name(name)),
+        HirExpr::Number { .. } => Some("Int"),
+        HirExpr::String { .. } => Some("String"),
+        HirExpr::Call {
+            callee, type_name, ..
+        } => type_name
+            .as_deref()
+            .or_else(|| enum_variant_type_name(callee)),
+        HirExpr::Effect {
+            value, type_name, ..
+        }
+        | HirExpr::Manage {
+            value, type_name, ..
+        }
+        | HirExpr::Spawn {
+            value, type_name, ..
+        }
+        | HirExpr::Await {
+            value, type_name, ..
+        }
+        | HirExpr::Try {
+            value, type_name, ..
+        } => type_name.as_deref().or_else(|| hir_expr_type_name(value)),
+        HirExpr::Field { access, .. } => access.type_name.as_deref(),
+        HirExpr::Binary { .. }
+        | HirExpr::Index { .. }
+        | HirExpr::Closure { .. }
+        | HirExpr::Unknown(_) => None,
+    }
+}
+
+fn builtin_value_type_name(name: &str) -> Option<&'static str> {
+    match name {
+        "true" | "false" => Some("Bool"),
+        "Unit" => Some("Unit"),
+        "None" => Some("Option<?>"),
+        _ => None,
+    }
+}
+
+fn enum_variant_type_name(callee: &Callee) -> Option<&'static str> {
+    match callee_name(callee).as_str() {
+        "Some" | "None" => Some("Option<?>"),
+        "Ok" | "Err" => Some("Result<?>"),
+        _ => None,
+    }
+}
+
+fn argument_type_matches(expected: &str, actual: &str) -> bool {
+    if expected == actual {
+        return true;
+    }
+    if actual == "Option<?>" {
+        return type_root_name(expected) == "Option";
+    }
+    if actual == "Result<?>" {
+        return type_root_name(expected) == "Result";
+    }
+    false
+}
+
+fn type_contains_unresolved_generic(type_name: &str, generics: &[String]) -> bool {
+    generics.iter().any(|generic| {
+        type_name == generic
+            || type_name
+                .strip_prefix("noescape Fn() -> ")
+                .is_some_and(|return_type| type_contains_unresolved_generic(return_type, generics))
+            || type_arg_names(type_name).is_some_and(|args| {
+                args.iter()
+                    .any(|arg| type_contains_unresolved_generic(arg, generics))
+            })
+    })
+}
+
+fn unresolved_generic_type(type_name: &str) -> bool {
+    let root = type_root_name(type_name);
+    (root.len() == 1 && root.chars().all(|ch| ch.is_ascii_uppercase()))
+        || type_arg_names(type_name)
+            .is_some_and(|args| args.iter().any(|arg| unresolved_generic_type(arg)))
+        || type_name
+            .strip_prefix("noescape Fn() -> ")
+            .is_some_and(unresolved_generic_type)
+}
+
+fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
+    let inner = type_name
+        .split_once('<')
+        .and_then(|(_, rest)| rest.strip_suffix('>'))?;
+    Some(split_top_level_type_args(inner))
+}
+
+fn split_top_level_type_args(args: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0usize;
+    for (index, ch) in args.char_indices() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(args[start..index].trim());
+                start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    if start < args.len() {
+        parts.push(args[start..].trim());
+    }
+    parts
+}
+
+fn type_root_name(type_name: &str) -> &str {
+    type_name
+        .split_once('<')
+        .map_or(type_name, |(root, _)| root)
 }
 
 fn hir_expr_span(expr: &HirExpr) -> &Span {

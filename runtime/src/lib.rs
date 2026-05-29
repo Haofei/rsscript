@@ -461,6 +461,10 @@ pub fn file_write<B: RuntimeBytes + ?Sized>(file: &mut File, data: &B) -> std::i
     file.inner.write_all(data.as_bytes_slice())
 }
 
+pub fn file_write_buffer(file: &mut File, buffer: &[u8]) -> std::io::Result<()> {
+    file.inner.write_all(buffer)
+}
+
 pub fn os_close(fd: i64) {
     let _ = fd;
 }
@@ -495,6 +499,22 @@ pub fn buffer_clear(buffer: &mut Vec<u8>) {
 
 pub fn buffer_consume(buffer: Vec<u8>) {
     drop(buffer);
+}
+
+pub fn bytes_from_string(value: &str) -> Vec<u8> {
+    value.as_bytes().to_vec()
+}
+
+pub fn bytes_from_buffer(buffer: &[u8]) -> Vec<u8> {
+    buffer.to_vec()
+}
+
+pub fn bytes_consume(bytes: Vec<u8>) {
+    drop(bytes);
+}
+
+pub fn url_from_string(value: &str) -> String {
+    value.to_string()
 }
 
 pub fn cache_new() -> Cache {

@@ -12,6 +12,10 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../core/collections/buffer.rssi"),
     ),
     (
+        "core/collections/bytes.rssi",
+        include_str!("../core/collections/bytes.rssi"),
+    ),
+    (
         "core/collections/list.rssi",
         include_str!("../core/collections/list.rssi"),
     ),
@@ -68,6 +72,7 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         "core/test/assert.rssi",
         include_str!("../core/test/assert.rssi"),
     ),
+    ("core/url/url.rssi", include_str!("../core/url/url.rssi")),
     (
         "core/weak/weak.rssi",
         include_str!("../core/weak/weak.rssi"),

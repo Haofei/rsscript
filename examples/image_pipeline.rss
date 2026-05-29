@@ -1,6 +1,6 @@
 features: local
 
-fn process_image(input: read String, output: read String) -> Result<Unit, ImageError> {
+fn process_image(input: read Path, output: read Path) -> Result<Unit, ImageError> {
     local image = Image.load(path: read input)?
     Image.resize(image: mut image, width: 320, height: 240)
     Image.normalize(image: mut image)
@@ -13,11 +13,12 @@ fn process_image(input: read String, output: read String) -> Result<Unit, ImageE
 }
 
 fn main() -> Result<Unit, FileError> {
-    let input = "rsscript-image-input.bin"
-    let output = "rsscript-image-output.bin"
+    let input = Path.from_string(value: read "rsscript-image-input.bin")
+    let output = Path.from_string(value: read "rsscript-image-output.bin")
+    let data = Bytes.from_string(value: read "raw image bytes")
 
     with File.open_write(path: read input) as file {
-        File.write(file: mut file, data: read "raw image bytes")?
+        File.write(file: mut file, data: read data)?
     }
 
     match process_image(input: read input, output: read output) {

@@ -1,24 +1,26 @@
 features: local
 
-fn load_config(path: read String) -> Result<fresh ConfigValue, ConfigError> {
+fn load_config(path: read Path) -> Result<fresh ConfigValue, ConfigError> {
     return Config.load(path: read path)
 }
 
-fn reload_config(path: read String, store: mut ConfigStore) -> Result<Unit, ConfigError> {
+fn reload_config(path: read Path, store: mut ConfigStore) -> Result<Unit, ConfigError> {
     let next = load_config(path: read path)?
     ConfigStore.replace(store: mut store, value: read next)
     return Ok(Unit)
 }
 
 fn main() -> Result<Unit, FileError> {
-    let first = "rsscript-config-first.txt"
-    let second = "rsscript-config-second.txt"
+    let first = Path.from_string(value: read "rsscript-config-first.txt")
+    let second = Path.from_string(value: read "rsscript-config-second.txt")
+    let initial = Bytes.from_string(value: read "initial\n")
+    let reloaded = Bytes.from_string(value: read "reloaded\n")
 
     with File.open_write(path: read first) as file {
-        File.write(file: mut file, data: read "initial\n")?
+        File.write(file: mut file, data: read initial)?
     }
     with File.open_write(path: read second) as file {
-        File.write(file: mut file, data: read "reloaded\n")?
+        File.write(file: mut file, data: read reloaded)?
     }
 
     match load_config(path: read first) {

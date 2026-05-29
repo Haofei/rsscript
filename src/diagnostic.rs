@@ -34,6 +34,7 @@ pub mod code {
     pub const MISSING_ARGUMENT: &str = "RS0204";
     pub const DUPLICATE_ARGUMENT: &str = "RS0205";
     pub const UNKNOWN_CALLEE: &str = "RS0206";
+    pub const ARGUMENT_TYPE_MISMATCH: &str = "RS0207";
     pub const MANAGED_TO_LOCAL: &str = "RS0301";
     pub const FIELD_PARTIAL_ACCESS_CONFLICT: &str = "RS0302";
     pub const FIELD_PREFIX_CONFLICT: &str = "RS0303";
@@ -415,6 +416,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::UNKNOWN_CALLEE,
         title: "unknown callee",
         explanation: "The checker could not resolve the function or method call against user declarations, known constructors, or builtin signatures.",
+    },
+    DiagnosticExplanation {
+        code: code::ARGUMENT_TYPE_MISMATCH,
+        title: "argument type mismatch",
+        explanation: "When both sides are known, a call argument's expression type must match the resolved parameter type before Rust lowering.",
     },
     DiagnosticExplanation {
         code: code::MANAGED_TO_LOCAL,

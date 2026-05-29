@@ -208,8 +208,9 @@ fn save_audit_record(cache: mut Cache, record: read AuditRecord) -> Unit {
 }
 
 fn write_response_file(path: read Path, text: read String) -> Result<Unit, FileError> {
+    let bytes = Bytes.from_string(value: read text)
     with File.open_write(path: read path) as file {
-        File.write(file: mut file, data: read text)?
+        File.write(file: mut file, data: read bytes)?
     }
 
     return Ok(Unit)

@@ -2580,6 +2580,7 @@ use after manage
 managed -> local attempt
 missing named argument
 missing read/mut/take effect
+call argument type mismatch
 same-call place conflict
 constructor/variant call-like conflict
 handle-field same-call conflict

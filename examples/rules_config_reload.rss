@@ -1,23 +1,25 @@
-fn load_rules_config(path: read String) -> Result<fresh Config, ConfigError> {
+fn load_rules_config(path: read Path) -> Result<fresh Config, ConfigError> {
     let rules = RuleLoader.load_rules(path: read path)?
     return Ok(Config.new(name: read "rules", rules: read rules))
 }
 
-fn reload_rules_config(path: read String, global: mut GlobalConfig) -> Result<Unit, ConfigError> {
+fn reload_rules_config(path: read Path, global: mut GlobalConfig) -> Result<Unit, ConfigError> {
     let next = load_rules_config(path: read path)?
     GlobalConfig.replace(global: mut global, value: read next)
     return Ok(Unit)
 }
 
 fn main() -> Result<Unit, FileError> {
-    let first = "rsscript-rules-first.txt"
-    let second = "rsscript-rules-second.txt"
+    let first = Path.from_string(value: read "rsscript-rules-first.txt")
+    let second = Path.from_string(value: read "rsscript-rules-second.txt")
+    let first_data = Bytes.from_string(value: read "alpha\nbeta\n")
+    let second_data = Bytes.from_string(value: read "gamma\n")
 
     with File.open_write(path: read first) as file {
-        File.write(file: mut file, data: read "alpha\nbeta\n")?
+        File.write(file: mut file, data: read first_data)?
     }
     with File.open_write(path: read second) as file {
-        File.write(file: mut file, data: read "gamma\n")?
+        File.write(file: mut file, data: read second_data)?
     }
 
     match load_rules_config(path: read first) {

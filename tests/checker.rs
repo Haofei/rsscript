@@ -27,6 +27,7 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
     ("managed -> local attempt", "RS0301"),
     ("missing named argument", "RS0204"),
     ("missing read/mut/take effect", "RS0202"),
+    ("call argument type mismatch", "RS0207"),
     ("same-call place conflict", "RS0302"),
     ("constructor/variant call-like conflict", "RS0203"),
     ("handle-field same-call conflict", "RS0303"),
@@ -687,6 +688,7 @@ fn diagnostic_explanations_are_available_by_code() {
     let unknown_type = explain_diagnostic_code("RS0024").expect("RS0024 should be registered");
     let unknown_field = explain_diagnostic_code("RS0025").expect("RS0025 should be registered");
     let unknown_binding = explain_diagnostic_code("RS0026").expect("RS0026 should be registered");
+    let type_mismatch = explain_diagnostic_code("RS0207").expect("RS0207 should be registered");
 
     assert_eq!(explanation.title, "use after manage");
     assert!(formatted.contains("RS0401"));
@@ -698,12 +700,76 @@ fn diagnostic_explanations_are_available_by_code() {
     assert!(unknown_field.explanation.contains("deferred"));
     assert_eq!(unknown_binding.title, "unknown binding");
     assert!(unknown_binding.explanation.contains("visible parameter"));
+    assert_eq!(type_mismatch.title, "argument type mismatch");
+    assert!(
+        type_mismatch
+            .explanation
+            .contains("resolved parameter type")
+    );
     assert_eq!(
         pool_contract.title,
         "ResourcePool factory contract violation"
     );
     assert!(pool_contract.explanation.contains("ResourcePool.try_new"));
     assert!(explain_diagnostic_code("RS9999").is_none());
+}
+
+#[test]
+fn checker_reports_call_argument_type_mismatch_before_backend_lowering() {
+    let source = r#"
+fn main() -> Unit {
+    Log.write(message: read 42)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source_with_core("arg-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "argument `message` for `Log.write` has type `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn rust_lowering_rejects_call_argument_type_mismatch_before_rustc() {
+    let source = r#"
+fn main() -> Unit {
+    Log.write(message: read 42)
+    return Unit
+}
+"#;
+    let diagnostics = lower_source_to_rust("arg-type.rss", source)
+        .expect_err("argument type mismatch should fail before Rust generation");
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0207"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_accepts_none_for_option_arguments() {
+    let source = r#"
+fn accept(value: read Option<Int>) -> Unit
+fn main() -> Unit {
+    accept(value: read None)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("none-arg.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "RS0207"),
+        "{diagnostics:?}"
+    );
 }
 
 #[test]
@@ -1222,8 +1288,9 @@ fn rust_lowering_maps_path_construction_to_runtime_hook() {
     let source = r#"
 fn main() -> Result<Unit, FileError> {
     let path = Path.from_string(value: read "rsscript-path.txt")
+    let data = Bytes.from_string(value: read "path hook ran")
     with File.open_write(path: read path) as file {
-        File.write(file: mut file, data: read "path hook ran")?
+        File.write(file: mut file, data: read data)?
     }
     return Ok(Unit)
 }
@@ -1246,7 +1313,7 @@ fn copy_file(input: read Path, output: read Path) -> Result<Unit, FileError> {
     with File.open_read(path: read input) as reader {
         with File.open_write(path: read output) as writer {
             while File.read_into(file: mut reader, buffer: mut buffer)? {
-                File.write(file: mut writer, data: read buffer)?
+                File.write_buffer(file: mut writer, buffer: read buffer)?
                 Buffer.clear(buffer: mut buffer)
             }
         }
@@ -1258,7 +1325,7 @@ fn copy_file(input: read Path, output: read Path) -> Result<Unit, FileError> {
 
     assert!(rust.contains("let mut buffer = rsscript_runtime::buffer_new(8192);"));
     assert!(rust.contains("while rsscript_runtime::file_read_into(&mut reader, &mut buffer)? {"));
-    assert!(rust.contains("rsscript_runtime::file_write(&mut writer, &buffer)?;"));
+    assert!(rust.contains("rsscript_runtime::file_write_buffer(&mut writer, &buffer)?;"));
     assert!(rust.contains("rsscript_runtime::buffer_clear(&mut buffer);"));
 }
 
@@ -1473,11 +1540,11 @@ fn rust_lowering_maps_config_reload_to_runtime_hooks() {
     let source = r#"
 features: local
 
-fn load_config(path: read String) -> Result<fresh ConfigValue, ConfigError> {
+fn load_config(path: read Path) -> Result<fresh ConfigValue, ConfigError> {
     return Config.load(path: read path)
 }
 
-fn reload_config(path: read String, store: mut ConfigStore) -> Result<Unit, ConfigError> {
+fn reload_config(path: read Path, store: mut ConfigStore) -> Result<Unit, ConfigError> {
     let next = load_config(path: read path)?
     ConfigStore.replace(store: mut store, value: read next)
     return Ok(Unit)
@@ -1496,12 +1563,12 @@ fn reload_config(path: read String, store: mut ConfigStore) -> Result<Unit, Conf
 #[test]
 fn rust_lowering_maps_rules_config_reload_to_runtime_hooks() {
     let source = r#"
-fn load_rules_config(path: read String) -> Result<fresh Config, ConfigError> {
+fn load_rules_config(path: read Path) -> Result<fresh Config, ConfigError> {
     let rules = RuleLoader.load_rules(path: read path)?
     return Ok(Config.new(name: read "rules", rules: read rules))
 }
 
-fn reload_rules_config(path: read String, global: mut GlobalConfig) -> Result<Unit, ConfigError> {
+fn reload_rules_config(path: read Path, global: mut GlobalConfig) -> Result<Unit, ConfigError> {
     let next = load_rules_config(path: read path)?
     GlobalConfig.replace(global: mut global, value: read next)
     return Ok(Unit)
@@ -2144,7 +2211,8 @@ fn run_query(url: read Url, sql: read String) -> Result<Unit, DbError> {
 }
 
 fn main() -> Result<Unit, DbError> {
-    run_query(url: read "db://local", sql: read "select 1")?
+    let url = Url.from_string(value: read "db://local")
+    run_query(url: read url, sql: read "select 1")?
     return Ok(Unit)
 }
 "#,
@@ -11224,8 +11292,9 @@ fn write_empty_resource_pool_fixture(path: &Path) {
         r#"features: local
 
 fn main() -> Unit {
+    let url = Url.from_string(value: read "db://local")
     local pool = ResourcePool<DbConnection>.new(
-        create: || DbConnection.open(url: read "db://local"),
+        create: || DbConnection.open(url: read url),
         max_size: 0,
     )
 
