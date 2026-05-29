@@ -314,6 +314,11 @@ source-span hooks
 native function registry
 ```
 
+For v0.5, `Managed<T>` is part of the single-isolate ABI: it is non-atomic,
+intentionally `!Send` and `!Sync`, and valid only inside one RSScript isolate.
+Generated Rust must not require or promise ordinary Rust thread sharing for
+managed handles.
+
 The runtime type surface must be defined before lowering is implemented. A compiler release pins a compatible runtime crate version.
 
 ```text

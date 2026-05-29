@@ -4040,6 +4040,9 @@ fn collect_manifest_review_reasons(manifest: &Manifest, reasons: &mut Vec<String
         reasons.push("package declares selectable package features".to_string());
     }
     if let Some(review) = &manifest.review {
+        if review.risk.as_deref() == Some("unknown") {
+            reasons.push("manifest declares unknown package risk".to_string());
+        }
         if review.unknown_is_error == Some(true) {
             reasons.push("unknown package risk is configured as an error".to_string());
         }

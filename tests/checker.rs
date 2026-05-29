@@ -4473,7 +4473,76 @@ fn rss_run_reports_dogfood_unmodeled_reason_count() {
     );
 }
 
+#[test]
+fn rss_run_accepts_dogfood_package_risk_classifier() {
+    let temp_dir = unique_temp_dir("rsscript-dogfood-package-risk");
+    let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-risk.rss")
+    else {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return;
+    };
+    let package_review_json = generated_dogfood_package_review_json(&temp_dir);
+    fs::write(
+        fixture_dir.join("dogfood-package-review.json"),
+        serde_json::to_vec(&package_review_json).expect("package review JSON should serialize"),
+    )
+    .expect("generated package review should write");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("tests/fixtures/pass/dogfood-package-risk.rss")
+        .current_dir(&temp_dir)
+        .output()
+        .expect("rss run should execute dogfood package risk classifier");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "dogfood package risk expected=elevated actual=elevated unmodeled_reasons=0"
+    );
+    assert!(stderr.trim().is_empty(), "{stderr}");
+}
+
+#[test]
+fn rss_run_reports_dogfood_package_risk_mismatch() {
+    let temp_dir = unique_temp_dir("rsscript-dogfood-package-risk-mismatch");
+    let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-risk.rss")
+    else {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return;
+    };
+    let mut package_review_json = generated_dogfood_package_review_json(&temp_dir);
+    package_review_json["risk"] = Value::String("low".to_string());
+    fs::write(
+        fixture_dir.join("dogfood-package-review.json"),
+        serde_json::to_vec(&package_review_json).expect("package review JSON should serialize"),
+    )
+    .expect("mutated package review should write");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("tests/fixtures/pass/dogfood-package-risk.rss")
+        .current_dir(&temp_dir)
+        .output()
+        .expect("rss run should execute dogfood package risk classifier");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!output.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("dogfood package risk expected=low actual=elevated unmodeled_reasons=0"),
+        "{stdout}"
+    );
+}
+
 fn prepare_dogfood_run_dir(temp_dir: &Path) -> Option<PathBuf> {
+    prepare_dogfood_run_dir_for(temp_dir, "dogfood-review-classifier.rss")
+}
+
+fn prepare_dogfood_run_dir_for(temp_dir: &Path, script_name: &str) -> Option<PathBuf> {
     fs::create_dir_all(temp_dir).expect("temporary root should be created");
     #[cfg(unix)]
     {
@@ -4491,10 +4560,11 @@ fn prepare_dogfood_run_dir(temp_dir: &Path) -> Option<PathBuf> {
     fs::create_dir_all(&fixture_dir).expect("fixture directory should be created");
     fs::copy(
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/pass/dogfood-review-classifier.rss"),
-        fixture_dir.join("dogfood-review-classifier.rss"),
+            .join("tests/fixtures/pass")
+            .join(script_name),
+        fixture_dir.join(script_name),
     )
-    .expect("dogfood classifier should copy");
+    .expect("dogfood script should copy");
     Some(fixture_dir)
 }
 
@@ -4514,6 +4584,21 @@ fn generated_dogfood_review_map_json() -> Value {
         String::from_utf8_lossy(&review_output.stderr)
     );
     serde_json::from_slice(&review_output.stdout).expect("review map stdout should be JSON")
+}
+
+fn generated_dogfood_package_review_json(temp_dir: &Path) -> Value {
+    let package_dir = temp_dir.join("package");
+    write_named_package_fixture(
+        &package_dir,
+        "rss-dogfood-package",
+        "0.1.0",
+        "",
+        r#"pub fn Api.run() -> Unit
+"#,
+    );
+    let review = review_package_dir(&package_dir).expect("package review should succeed");
+    serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse")
 }
 
 #[test]
@@ -5934,6 +6019,32 @@ pub fn Api.overloaded<A, B, C, D>(
                     .as_str()
                     .is_some_and(|summary| summary.contains("7 parameters"))
         })
+    }));
+}
+
+#[test]
+fn package_review_explains_manifest_unknown_risk() {
+    let temp_dir = unique_temp_dir("rsscript-package-review-manifest-unknown");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[review]
+risk = "unknown"
+"#,
+        r#"pub fn Api.run() -> Unit
+"#,
+    );
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(json["risk"], "unknown");
+    assert!(json["reasons"].as_array().is_some_and(|reasons| {
+        reasons
+            .iter()
+            .any(|reason| reason == "manifest declares unknown package risk")
     }));
 }
 

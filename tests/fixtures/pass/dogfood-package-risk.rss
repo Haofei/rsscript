@@ -1,0 +1,235 @@
+features: local
+
+struct PackageRiskFacts {
+    declared_risk: Int
+    errors: Int
+    has_manifest_unknown: Bool
+    has_review_unknown: Bool
+    has_interface_error: Bool
+    has_native: Bool
+    has_native_build: Bool
+    has_native_proc_macro: Bool
+    has_native_unsafe: Bool
+    has_native_links: Bool
+    has_review_must: Bool
+    unmodeled_reasons: Int
+}
+
+fn PackageRisk.low() -> Int {
+    return 1
+}
+
+fn PackageRisk.elevated() -> Int {
+    return 2
+}
+
+fn PackageRisk.high() -> Int {
+    return 3
+}
+
+fn PackageRisk.unknown() -> Int {
+    return 4
+}
+
+fn package_risk_from_string(value: read String) -> Int {
+    if value == "unknown" {
+        return PackageRisk.unknown()
+    }
+
+    if value == "high" {
+        return PackageRisk.high()
+    }
+
+    if value == "elevated" {
+        return PackageRisk.elevated()
+    }
+
+    return PackageRisk.low()
+}
+
+fn package_risk_to_string(value: Int) -> String {
+    if value == PackageRisk.unknown() {
+        return "unknown"
+    }
+
+    if value == PackageRisk.high() {
+        return "high"
+    }
+
+    if value == PackageRisk.elevated() {
+        return "elevated"
+    }
+
+    return "low"
+}
+
+fn package_reason_is_modeled(reason: read String) -> Bool {
+    if reason == "manifest declares unknown package risk" {
+        return true
+    }
+
+    if reason == "package declares selectable package features" {
+        return true
+    }
+
+    if reason == "unknown package risk is configured as an error" {
+        return true
+    }
+
+    if reason == "manifest allows native boundaries" || reason == "manifest allows unsafe boundaries" {
+        return true
+    }
+
+    if reason == "native Rust wrapper enabled" {
+        return true
+    }
+
+    if reason == "native Rust build scripts require review" {
+        return true
+    }
+
+    if reason == "native Rust proc macros require review" {
+        return true
+    }
+
+    if reason == "native Rust unsafe policy requires review" {
+        return true
+    }
+
+    if reason == "native Rust links external libraries" {
+        return true
+    }
+
+    if reason == "review map contains unknown functions" {
+        return true
+    }
+
+    if reason == "review map contains must-review functions" {
+        return true
+    }
+
+    if reason == "package contains frontend errors" || reason == "package contains frontend warnings" {
+        return true
+    }
+
+    if reason == "public .rssi contract contains frontend errors" {
+        return true
+    }
+
+    return false
+}
+
+fn count_unmodeled_package_reasons_from(
+    reasons: read JsonValue,
+    index: Int,
+    limit: Int,
+) -> Result<Int, JsonError> {
+    if index >= limit {
+        return Ok(0)
+    }
+
+    let item = Json.array_get(value: read reasons, index: index)?
+    let reason = Json.as_string(value: read item)?
+    let rest = count_unmodeled_package_reasons_from(
+        reasons: read reasons,
+        index: index + 1,
+        limit: limit,
+    )?
+
+    if package_reason_is_modeled(reason: read reason) {
+        return Ok(rest)
+    }
+
+    return Ok(rest + 1)
+}
+
+fn count_unmodeled_package_reasons(reasons: read JsonValue) -> Result<Int, JsonError> {
+    let limit = Json.array_len(value: read reasons)?
+
+    return count_unmodeled_package_reasons_from(
+        reasons: read reasons,
+        index: 0,
+        limit: limit,
+    )
+}
+
+fn parse_package_risk_facts(value: read JsonValue) -> Result<fresh PackageRiskFacts, JsonError> {
+    let risk = Json.field_string(value: read value, name: read "risk")?
+    let reasons = Json.field(value: read value, name: read "reasons")?
+    let summary = Json.field(value: read value, name: read "summary")?
+
+    return PackageRiskFacts(
+        declared_risk: package_risk_from_string(value: read risk),
+        errors: Json.field_int(value: read summary, name: read "errors")?,
+        has_manifest_unknown: Json.array_contains_string(value: read reasons, item: read "manifest declares unknown package risk")?,
+        has_review_unknown: Json.array_contains_string(value: read reasons, item: read "review map contains unknown functions")?,
+        has_interface_error: Json.array_contains_string(value: read reasons, item: read "public .rssi contract contains frontend errors")?,
+        has_native: Json.array_contains_string(value: read reasons, item: read "native Rust wrapper enabled")?,
+        has_native_build: Json.array_contains_string(value: read reasons, item: read "native Rust build scripts require review")?,
+        has_native_proc_macro: Json.array_contains_string(value: read reasons, item: read "native Rust proc macros require review")?,
+        has_native_unsafe: Json.array_contains_string(value: read reasons, item: read "native Rust unsafe policy requires review")?,
+        has_native_links: Json.array_contains_string(value: read reasons, item: read "native Rust links external libraries")?,
+        has_review_must: Json.array_contains_string(value: read reasons, item: read "review map contains must-review functions")?,
+        unmodeled_reasons: count_unmodeled_package_reasons(reasons: read reasons)?,
+    )
+}
+
+fn classify_package_risk(facts: read PackageRiskFacts) -> Int {
+    if facts.has_manifest_unknown || facts.has_review_unknown || facts.has_interface_error {
+        return PackageRisk.unknown()
+    }
+
+    if facts.errors > 0 {
+        return PackageRisk.high()
+    }
+
+    if facts.has_native_build || facts.has_native_proc_macro || facts.has_native_unsafe || facts.has_native_links {
+        return PackageRisk.high()
+    }
+
+    if facts.has_native || facts.has_review_must {
+        return PackageRisk.elevated()
+    }
+
+    return PackageRisk.low()
+}
+
+fn dogfood_package_risk_facts() -> Result<fresh PackageRiskFacts, JsonError> {
+    let path = Path.from_string(value: read "tests/fixtures/pass/dogfood-package-review.json")
+    let json = Json.parse_file(path: read path)?
+
+    return parse_package_risk_facts(value: read json)
+}
+
+fn package_risk_summary_line(
+    expected: Int,
+    actual: Int,
+    unmodeled_reasons: Int,
+) -> fresh String {
+    let expected_text = package_risk_to_string(value: expected)
+    let actual_text = package_risk_to_string(value: actual)
+    let unmodeled = String.from_int(value: unmodeled_reasons)
+    let first = String.concat(left: read "dogfood package risk expected=", right: read expected_text)
+    let second = String.concat(left: read first, right: read " actual=")
+    let third = String.concat(left: read second, right: read actual_text)
+    let fourth = String.concat(left: read third, right: read " unmodeled_reasons=")
+
+    return String.concat(left: read fourth, right: read unmodeled)
+}
+
+pub fn main() -> Result<Unit, JsonError> {
+    let facts = dogfood_package_risk_facts()?
+    let actual = classify_package_risk(facts: read facts)
+    let summary = package_risk_summary_line(
+        expected: facts.declared_risk,
+        actual: actual,
+        unmodeled_reasons: facts.unmodeled_reasons,
+    )
+
+    Log.write(message: read summary)
+
+    Assert.equal_int(left: actual, right: facts.declared_risk)
+    Assert.equal_int(left: facts.unmodeled_reasons, right: 0)
+
+    return Ok(Unit)
+}
