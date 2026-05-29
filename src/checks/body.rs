@@ -158,6 +158,9 @@ fn check_stmt_semantics(
             check_result_resource_with_has_try(analyzer, resource);
             check_resource_producer_expr(analyzer, resource, true);
             check_resource_escape(analyzer, local_analysis, span);
+            if let Some(pool_path) = resource_pool_borrow_pool_path(resource) {
+                check_resource_pool_active_lease_block(analyzer, &pool_path, body);
+            }
             let mut scoped_state = state.clone();
             scoped_state.bind_resource(binding.clone());
             check_block(analyzer, local_analysis, body, &mut scoped_state)
@@ -2164,6 +2167,29 @@ fn check_resource_pool_new_max_size_contract(
     }
 }
 
+fn resource_pool_borrow_pool_path(expr: &HirExpr) -> Option<PlacePath> {
+    match expr {
+        HirExpr::Call { callee, args, .. } if is_resource_pool_borrow(callee) => args
+            .iter()
+            .find(|arg| arg.name.as_deref() == Some("pool"))
+            .or_else(|| args.first())
+            .and_then(|arg| effect_wrapped_place_path(&arg.value)),
+        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => {
+            resource_pool_borrow_pool_path(value)
+        }
+        _ => None,
+    }
+}
+
+fn effect_wrapped_place_path(expr: &HirExpr) -> Option<PlacePath> {
+    match expr {
+        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => {
+            effect_wrapped_place_path(value)
+        }
+        _ => place_path(expr),
+    }
+}
+
 fn resource_pool_fallible_factory_expr(expr: &HirExpr) -> Option<&HirExpr> {
     if hir_expr_type_name(expr).is_some_and(is_result_type) {
         return Some(expr);
@@ -2392,6 +2418,141 @@ fn check_resource_pool_lease_stmt(analyzer: &mut Analyzer<'_>, statement: &HirSt
     }
 }
 
+fn check_resource_pool_active_lease_block(
+    analyzer: &mut Analyzer<'_>,
+    active_pool: &PlacePath,
+    block: &HirBlock,
+) {
+    for statement in &block.statements {
+        check_resource_pool_active_lease_stmt(analyzer, active_pool, statement);
+    }
+}
+
+fn check_resource_pool_active_lease_stmt(
+    analyzer: &mut Analyzer<'_>,
+    active_pool: &PlacePath,
+    statement: &HirStmt,
+) {
+    match statement {
+        HirStmt::Let {
+            value: Some(value), ..
+        }
+        | HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => {
+            check_resource_pool_active_lease_expr(analyzer, active_pool, value)
+        }
+        HirStmt::With { resource, body, .. } => {
+            check_resource_pool_active_lease_expr(analyzer, active_pool, resource);
+            check_resource_pool_active_lease_block(analyzer, active_pool, body);
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            check_resource_pool_active_lease_expr(analyzer, active_pool, condition);
+            check_resource_pool_active_lease_block(analyzer, active_pool, then_body);
+            if let Some(else_body) = else_body {
+                check_resource_pool_active_lease_block(analyzer, active_pool, else_body);
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                check_resource_pool_active_lease_expr(analyzer, active_pool, condition);
+            }
+            check_resource_pool_active_lease_block(analyzer, active_pool, body);
+        }
+        HirStmt::Match { value, arms, .. } => {
+            check_resource_pool_active_lease_expr(analyzer, active_pool, value);
+            for arm in arms {
+                check_resource_pool_active_lease_block(analyzer, active_pool, &arm.body);
+            }
+        }
+        HirStmt::Let { value: None, .. }
+        | HirStmt::Return { value: None, .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn check_resource_pool_active_lease_expr(
+    analyzer: &mut Analyzer<'_>,
+    active_pool: &PlacePath,
+    expr: &HirExpr,
+) {
+    match expr {
+        HirExpr::Effect {
+            effect,
+            value,
+            span,
+            ..
+        } => {
+            if let Some(path) = place_path(value)
+                && place_paths_overlap(active_pool, &path)
+            {
+                resource_pool_active_lease_conflict_diagnostic(analyzer, *effect, span.clone());
+            }
+            check_resource_pool_active_lease_expr(analyzer, active_pool, value);
+        }
+        HirExpr::Manage { value, span, .. } => {
+            if let Some(path) = place_path(value)
+                && place_paths_overlap(active_pool, &path)
+            {
+                resource_pool_active_lease_conflict_diagnostic(
+                    analyzer,
+                    ParamEffect::Take,
+                    span.clone(),
+                );
+            }
+            check_resource_pool_active_lease_expr(analyzer, active_pool, value);
+        }
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                check_resource_pool_active_lease_expr(analyzer, active_pool, &arg.value);
+            }
+        }
+        HirExpr::Binary { left, right, .. } => {
+            check_resource_pool_active_lease_expr(analyzer, active_pool, left);
+            check_resource_pool_active_lease_expr(analyzer, active_pool, right);
+        }
+        HirExpr::Field { base, .. } => {
+            check_resource_pool_active_lease_expr(analyzer, active_pool, base);
+        }
+        HirExpr::Index { base, index, .. } => {
+            check_resource_pool_active_lease_expr(analyzer, active_pool, base);
+            check_resource_pool_active_lease_expr(analyzer, active_pool, index);
+        }
+        HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. } => {
+            check_resource_pool_active_lease_expr(analyzer, active_pool, value);
+        }
+        HirExpr::Closure { body, .. } => {
+            check_resource_pool_active_lease_block(analyzer, active_pool, body);
+        }
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn place_paths_overlap(left: &PlacePath, right: &PlacePath) -> bool {
+    if left.base != right.base {
+        return false;
+    }
+    left.components
+        .iter()
+        .zip(&right.components)
+        .all(|(left, right)| left == right)
+}
+
 fn is_resource_pool_borrow(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && name == "borrow")
 }
@@ -2517,6 +2678,35 @@ fn resource_pool_fallible_factory_diagnostic(
         .with_fix(
             "use_infallible_factory",
             "Handle failure before constructing the pool, or use a future explicitly fallible ResourcePool API.",
+            "manual",
+        ),
+    );
+}
+
+fn resource_pool_active_lease_conflict_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    effect: ParamEffect,
+    span: crate::diagnostic::Span,
+) {
+    let effect = match effect {
+        ParamEffect::Read => "read",
+        ParamEffect::Mut => "mut",
+        ParamEffect::Take => "take/manage",
+    };
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::RESOURCE_POOL_ACTIVE_LEASE_CONFLICT,
+            "ResourcePool cannot be used while one of its leases is active.",
+            span,
+            "ResourcePool active lease conflict",
+        )
+        .with_cause(format!(
+            "This `{effect}` use targets the same pool root as an active `ResourcePool.borrow` lease."
+        ))
+        .with_cause("v0.5 permits one active lease per pool; borrow, stats, reset, take, and manage of the same pool root are rejected until the `with` scope exits.")
+        .with_fix(
+            "end_pool_lease_scope",
+            "Move this pool use after the `with ResourcePool.borrow(...)` block, or use a different pool.",
             "manual",
         ),
     );

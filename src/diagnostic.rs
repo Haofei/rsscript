@@ -53,6 +53,7 @@ pub mod code {
     pub const RESOURCE_PRODUCER_MISSING_TRY: &str = "RS0706";
     pub const RESOURCE_POOL_FALLIBLE_FACTORY: &str = "RS0707";
     pub const RESOURCE_POOL_INVALID_MAX_SIZE: &str = "RS0708";
+    pub const RESOURCE_POOL_ACTIVE_LEASE_CONFLICT: &str = "RS0709";
     pub const LOCAL_CAPTURED_BY_MANAGED_CLOSURE: &str = "RS0801";
     pub const NOESCAPE_CALLBACK_ESCAPE: &str = "RS0802";
     pub const LOCAL_CLOSURE_ESCAPE: &str = "RS0803";
@@ -499,6 +500,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::RESOURCE_POOL_INVALID_MAX_SIZE,
         title: "ResourcePool max_size not a positive Int literal",
         explanation: "`ResourcePool.new` is eager and infallible in v0.5, so `max_size` must be a positive `Int` literal checked before lowering.",
+    },
+    DiagnosticExplanation {
+        code: code::RESOURCE_POOL_ACTIVE_LEASE_CONFLICT,
+        title: "ResourcePool active lease conflict",
+        explanation: "While a `ResourcePool.borrow` lease is active, the same pool root cannot be read, mutated, taken, managed, or borrowed again inside the lease body.",
     },
     DiagnosticExplanation {
         code: code::LOCAL_CAPTURED_BY_MANAGED_CLOSURE,

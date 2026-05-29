@@ -2585,6 +2585,7 @@ invalid resource type in ordinary Result/Option/container context
 ResourcePool.new used with fallible factory
 ResourcePool factory contract violation
 ResourcePool max_size not a positive Int literal
+ResourcePool active lease conflict
 managed object field-split conflict
 noescape closure consuming a captured local
 `?` operand error type does not match the function error type

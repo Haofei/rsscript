@@ -1,0 +1,25 @@
+// expect: RS0709
+features: local
+
+resource DbConnection {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+fn DbConnection.open(url: read String) -> DbConnection
+
+fn bad_nested_borrow(url: read String) -> Unit {
+    local pool = ResourcePool<DbConnection>.new(
+        create: || DbConnection.open(url: read url),
+        max_size: 2,
+    )
+
+    with ResourcePool.borrow(pool: mut pool) as first {
+        with ResourcePool.borrow(pool: mut pool) as second {
+            Log.write(message: read "unreachable")
+        }
+    }
+}

@@ -55,6 +55,7 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
     ("ResourcePool.new used with fallible factory", "RS0707"),
     ("ResourcePool factory contract violation", "RS0707"),
     ("ResourcePool max_size not a positive Int literal", "RS0708"),
+    ("ResourcePool active lease conflict", "RS0709"),
     ("local captured by managed closure", "RS0801"),
     ("noescape callback escape", "RS0802"),
     ("local closure escape", "RS0803"),
@@ -3621,6 +3622,74 @@ fn dynamic_pool(url: read String, count: Int) -> Unit {
         .count();
 
     assert_eq!(invalid_max_size_count, 3, "{diagnostics:?}");
+}
+
+#[test]
+fn checker_rejects_resource_pool_use_while_lease_is_active() {
+    let source = r#"
+features: local
+
+resource DbConnection {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+fn DbConnection.open(url: read String) -> DbConnection
+fn Pool.consume(pool: take ResourcePool<DbConnection>) -> Unit
+
+fn bad_nested_borrow(url: read String) -> Unit {
+    local pool = ResourcePool<DbConnection>.new(
+        create: || DbConnection.open(url: read url),
+        max_size: 2,
+    )
+
+    with ResourcePool.borrow(pool: mut pool) as first {
+        with ResourcePool.borrow(pool: mut pool) as second {
+            Log.write(message: read "unreachable")
+        }
+    }
+}
+
+fn bad_take_during_lease(url: read String) -> Unit {
+    local pool = ResourcePool<DbConnection>.new(
+        create: || DbConnection.open(url: read url),
+        max_size: 1,
+    )
+
+    with ResourcePool.borrow(pool: mut pool) as conn {
+        Pool.consume(pool: take pool)
+    }
+}
+
+fn ok_different_pool(url: read String) -> Unit {
+    local first_pool = ResourcePool<DbConnection>.new(
+        create: || DbConnection.open(url: read url),
+        max_size: 1,
+    )
+    local second_pool = ResourcePool<DbConnection>.new(
+        create: || DbConnection.open(url: read url),
+        max_size: 1,
+    )
+
+    with ResourcePool.borrow(pool: mut first_pool) as conn {
+        with ResourcePool.borrow(pool: mut second_pool) as other {
+            Log.write(message: read "ok")
+        }
+    }
+}
+"#;
+    let diagnostics = analyze_source("resourcepool-active-lease.rss", source);
+    let active_lease_conflicts = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == "RS0709" && diagnostic.label == "ResourcePool active lease conflict"
+        })
+        .count();
+
+    assert_eq!(active_lease_conflicts, 2, "{diagnostics:?}");
 }
 
 #[test]
