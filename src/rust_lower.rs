@@ -584,8 +584,11 @@ struct RustLowerer<'a> {
     native_boundary_callees: BTreeSet<String>,
     native_bindings: BTreeMap<String, String>,
     function_return_types: BTreeMap<String, TypeRef>,
+    retained_params_by_callee: BTreeMap<String, BTreeSet<String>>,
     param_effects: BTreeMap<String, DataEffect>,
     value_types: BTreeMap<String, TypeRef>,
+    managed_bindings: BTreeSet<String>,
+    current_retained_params: BTreeSet<String>,
     mutated_bindings: BTreeSet<String>,
     drop_field_names: BTreeSet<String>,
     current_return_type: Option<TypeRef>,
@@ -604,6 +607,7 @@ impl<'a> RustLowerer<'a> {
             .collect();
         let native_boundary_callees = collect_native_boundary_callees(program);
         let function_return_types = collect_function_return_types(program);
+        let retained_params_by_callee = collect_function_retained_params(program);
 
         Self {
             program,
@@ -611,8 +615,11 @@ impl<'a> RustLowerer<'a> {
             native_boundary_callees,
             native_bindings,
             function_return_types,
+            retained_params_by_callee,
             param_effects: BTreeMap::new(),
             value_types: BTreeMap::new(),
+            managed_bindings: BTreeSet::new(),
+            current_retained_params: BTreeSet::new(),
             mutated_bindings: BTreeSet::new(),
             drop_field_names: BTreeSet::new(),
             current_return_type: None,
@@ -738,6 +745,8 @@ impl<'a> RustLowerer<'a> {
     fn lower_function(&mut self, function: &FunctionDecl, out: &mut String) {
         let previous_param_effects = std::mem::take(&mut self.param_effects);
         let previous_value_types = std::mem::take(&mut self.value_types);
+        let previous_managed_bindings = std::mem::take(&mut self.managed_bindings);
+        let previous_retained_params = std::mem::take(&mut self.current_retained_params);
         let previous_mutated_bindings = std::mem::take(&mut self.mutated_bindings);
         let previous_return_type = self.current_return_type.take();
         self.param_effects = function
@@ -749,6 +758,20 @@ impl<'a> RustLowerer<'a> {
             .params
             .iter()
             .map(|param| (param.name.clone(), param.ty.clone()))
+            .collect();
+        self.managed_bindings = function
+            .params
+            .iter()
+            .filter(|param| self.is_class_type(&param.ty))
+            .map(|param| param.name.clone())
+            .collect();
+        self.current_retained_params = function
+            .effects
+            .iter()
+            .filter_map(|effect| match effect {
+                EffectDecl::Retains(param) => Some(param.clone()),
+                EffectDecl::Name(_) => None,
+            })
             .collect();
         self.mutated_bindings = collect_mutated_bindings(&function.body);
         self.current_return_type = function.return_ty.clone();
@@ -785,12 +808,25 @@ impl<'a> RustLowerer<'a> {
         out.push_str("}\n");
         self.param_effects = previous_param_effects;
         self.value_types = previous_value_types;
+        self.managed_bindings = previous_managed_bindings;
+        self.current_retained_params = previous_retained_params;
         self.mutated_bindings = previous_mutated_bindings;
         self.current_return_type = previous_return_type;
     }
 
     fn lower_param(&self, param: &Param) -> String {
-        let ty = self.lower_type_ref(&param.ty, ManagedPosition::Param);
+        let ty = if param.effect == Some(DataEffect::Read)
+            && self.current_retained_params.contains(&param.name)
+            && !self.is_class_type(&param.ty)
+            && self.type_kinds.contains_key(&param.ty.name)
+        {
+            format!(
+                "rsscript_runtime::Managed<{}>",
+                self.lower_type_ref(&param.ty, ManagedPosition::Bare)
+            )
+        } else {
+            self.lower_type_ref(&param.ty, ManagedPosition::Param)
+        };
         let rust_ty = match param.effect {
             Some(DataEffect::Read) => format!("&{ty}"),
             Some(DataEffect::Mut) if self.is_class_type(&param.ty) => format!("&{ty}"),
@@ -847,8 +883,14 @@ impl<'a> RustLowerer<'a> {
                     if let Some(ty) = inferred_ty {
                         self.value_types.insert(stmt.name.clone(), ty);
                     }
+                    if self.expr_lowers_to_managed_handle(value) {
+                        self.managed_bindings.insert(stmt.name.clone());
+                    } else {
+                        self.managed_bindings.remove(&stmt.name);
+                    }
                 } else {
                     out.push_str(&format!("{pad}let {mutable}{};\n", rust_ident(&stmt.name)));
+                    self.managed_bindings.remove(&stmt.name);
                 }
             }
             Stmt::Return(stmt) => {
@@ -1210,23 +1252,38 @@ impl<'a> RustLowerer<'a> {
                     return lower_resource_pool_try_new_call(self, args, span);
                 }
                 let is_resource_pool_borrow = is_resource_pool_borrow_callee(callee);
-                let callee = if is_resource_pool_borrow {
+                let lowered_callee = if is_resource_pool_borrow {
                     "rsscript_runtime::ResourcePool::borrow_at".to_string()
                 } else {
                     lower_callee(callee)
                 };
                 let mut args = args
                     .iter()
-                    .map(|arg| self.lower_expr(&arg.value))
+                    .enumerate()
+                    .map(|(index, arg)| self.lower_call_arg_for_callee(callee, arg, index))
                     .collect::<Vec<_>>();
                 if is_resource_pool_borrow {
                     args.push(lower_source_span(span));
                 }
                 let args = args.join(", ");
-                format!("{callee}({args})")
+                format!("{lowered_callee}({args})")
             }
-            Expr::Effect { effect, value, .. } => match effect {
-                DataEffect::Read => format!("&{}", self.lower_expr(value)),
+            Expr::Effect {
+                effect,
+                value,
+                span,
+            } => match effect {
+                DataEffect::Read => {
+                    if self.expr_lowers_to_managed_non_class_handle(value) {
+                        format!(
+                            "&*rsscript_runtime::unwrap_runtime({}.try_read_at({}))",
+                            self.lower_expr(value),
+                            lower_source_span(span)
+                        )
+                    } else {
+                        format!("&{}", self.lower_expr(value))
+                    }
+                }
                 DataEffect::Mut => {
                     if let Expr::Ident(name, _) = &**value
                         && self.param_effects.get(name) == Some(&DataEffect::Mut)
@@ -1237,6 +1294,12 @@ impl<'a> RustLowerer<'a> {
                         .is_some_and(|ty| self.is_class_type(&ty))
                     {
                         format!("&{}", self.lower_expr(value))
+                    } else if self.expr_lowers_to_managed_non_class_handle(value) {
+                        format!(
+                            "&mut *rsscript_runtime::unwrap_runtime({}.try_write_at({}))",
+                            self.lower_expr(value),
+                            lower_source_span(span)
+                        )
                     } else {
                         format!("&mut {}", self.lower_expr(value))
                     }
@@ -1277,13 +1340,23 @@ impl<'a> RustLowerer<'a> {
             Expr::Effect {
                 effect: DataEffect::Read,
                 value,
-                ..
+                span,
             }
             | Expr::Effect {
                 effect: DataEffect::Mut,
                 value,
-                ..
-            } => format!("{}.clone()", self.lower_expr(value)),
+                span,
+            } => {
+                if self.expr_lowers_to_managed_non_class_handle(value) {
+                    format!(
+                        "rsscript_runtime::unwrap_runtime({}.try_read_at({})).clone()",
+                        self.lower_expr(value),
+                        lower_source_span(span)
+                    )
+                } else {
+                    format!("{}.clone()", self.lower_expr(value))
+                }
+            }
             Expr::Effect {
                 effect: DataEffect::Take,
                 value,
@@ -1291,6 +1364,35 @@ impl<'a> RustLowerer<'a> {
             } => self.lower_expr(value),
             _ => self.lower_expr(expr),
         }
+    }
+
+    fn lower_call_arg_for_callee(
+        &mut self,
+        callee: &Callee,
+        arg: &CallArg,
+        index: usize,
+    ) -> String {
+        if (self.call_arg_is_retained(callee, arg, index)
+            || runtime_intrinsic_wants_managed_handle_arg(callee, arg.name.as_deref()))
+            && let Expr::Effect { effect, value, .. } = &arg.value
+            && self.expr_lowers_to_managed_handle(value)
+        {
+            return match effect {
+                DataEffect::Read => format!("&{}", self.lower_expr(value)),
+                DataEffect::Mut => format!("&mut {}", self.lower_expr(value)),
+                DataEffect::Take => self.lower_expr(value),
+            };
+        }
+        self.lower_expr(&arg.value)
+    }
+
+    fn call_arg_is_retained(&self, callee: &Callee, arg: &CallArg, _index: usize) -> bool {
+        let Some(name) = arg.name.as_deref() else {
+            return false;
+        };
+        self.retained_params_by_callee
+            .get(&native_boundary_callee_key(callee))
+            .is_some_and(|retained| retained.contains(name))
     }
 
     fn lower_return_expr(&mut self, expr: &Expr) -> String {
@@ -1341,6 +1443,31 @@ impl<'a> RustLowerer<'a> {
             Expr::Manage { value, .. } | Expr::Try { value, .. } => self.infer_expr_type(value),
             _ => None,
         }
+    }
+
+    fn expr_lowers_to_managed_handle(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Ident(name, _) => self.managed_bindings.contains(name),
+            Expr::Manage { .. } => true,
+            Expr::Call {
+                callee: Callee::Name(name),
+                ..
+            } => self
+                .type_kinds
+                .get(name)
+                .is_some_and(|kind| *kind == TypeKind::Class),
+            Expr::Effect { value, .. } | Expr::Try { value, .. } => {
+                self.expr_lowers_to_managed_handle(value)
+            }
+            _ => false,
+        }
+    }
+
+    fn expr_lowers_to_managed_non_class_handle(&self, expr: &Expr) -> bool {
+        self.expr_lowers_to_managed_handle(expr)
+            && !self
+                .infer_expr_type(expr)
+                .is_some_and(|ty| self.is_class_type(&ty))
     }
 
     fn is_string_comparison_operand(&self, expr: &Expr) -> bool {
@@ -1610,6 +1737,38 @@ fn collect_function_return_types(program: &Program) -> BTreeMap<String, TypeRef>
         collect_program_function_return_types(&interface_program, &mut return_types);
     }
     return_types
+}
+
+fn collect_function_retained_params(program: &Program) -> BTreeMap<String, BTreeSet<String>> {
+    let mut retained_params = BTreeMap::new();
+    for (file, source) in builtin_interfaces() {
+        let interface_program = parse_source(file, source);
+        collect_program_function_retained_params(&interface_program, &mut retained_params);
+    }
+    collect_program_function_retained_params(program, &mut retained_params);
+    retained_params
+}
+
+fn collect_program_function_retained_params(
+    program: &Program,
+    retained_params: &mut BTreeMap<String, BTreeSet<String>>,
+) {
+    for item in &program.items {
+        let Item::Function(function) = item else {
+            continue;
+        };
+        let retained = function
+            .effects
+            .iter()
+            .filter_map(|effect| match effect {
+                EffectDecl::Retains(param) => Some(param.clone()),
+                EffectDecl::Name(_) => None,
+            })
+            .collect::<BTreeSet<_>>();
+        if !retained.is_empty() {
+            retained_params.insert(native_boundary_function_key(&function.name), retained);
+        }
+    }
 }
 
 fn collect_program_function_return_types(
@@ -2131,6 +2290,25 @@ fn runtime_intrinsic_target(callee: &Callee) -> Option<&'static str> {
         .iter()
         .find(|intrinsic| intrinsic.namespace == namespace && intrinsic.name == name)
         .map(|intrinsic| intrinsic.rust_target)
+}
+
+fn runtime_intrinsic_wants_managed_handle_arg(callee: &Callee, arg_name: Option<&str>) -> bool {
+    let Some(arg_name) = arg_name else {
+        return false;
+    };
+    let Callee::Qualified { namespace, name } = callee else {
+        return false;
+    };
+    let namespace = type_root_name(namespace);
+    matches!(
+        (namespace, name.as_str(), arg_name),
+        ("Image", "save" | "inspect", "image")
+            | ("Environment", "child", "parent")
+            | ("Environment", "bind_function", "env" | "function")
+            | ("Environment", "has_parent" | "has_function", "env")
+            | ("FunctionObject", "new", "closure")
+            | ("FunctionObject", "has_closure", "function")
+    )
 }
 
 const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[

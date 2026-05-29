@@ -9,7 +9,9 @@ struct Cache {
 }
 
 fn Cache.store(cache: mut Cache, image: read ImageData) -> Unit
-    effects(retains(image))
+    effects(retains(image)) {
+    return Unit
+}
 
 fn apply(callback: noescape Fn()) -> Unit {
     callback()
