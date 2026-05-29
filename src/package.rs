@@ -4330,12 +4330,15 @@ fn compare_interface_sources(
                     findings,
                 });
             }
-            (None, Some(_)) => changes.push(PackageInterfaceChange {
-                file,
-                change: PackageInterfaceChangeKind::Added,
-                risk: PackageRisk::Elevated,
-                findings: Vec::new(),
-            }),
+            (None, Some(_)) => {
+                let risk = added_interface_change_risk(new_sources, &file);
+                changes.push(PackageInterfaceChange {
+                    file,
+                    change: PackageInterfaceChangeKind::Added,
+                    risk,
+                    findings: Vec::new(),
+                });
+            }
             (Some(_), None) => changes.push(PackageInterfaceChange {
                 file,
                 change: PackageInterfaceChangeKind::Removed,
@@ -4613,6 +4616,73 @@ fn interface_change_risk(findings: &[ReviewFinding]) -> PackageRisk {
     } else {
         PackageRisk::Elevated
     }
+}
+
+fn added_interface_change_risk(new_sources: &[PackageSource], file: &str) -> PackageRisk {
+    let Some(source_path) = new_sources
+        .iter()
+        .find(|source| {
+            source.kind == PackageReviewFileKind::Interface && source.relative_path == file
+        })
+        .map(|source| source.path.as_str())
+    else {
+        return PackageRisk::Low;
+    };
+    let type_contracts =
+        collect_package_type_contracts(new_sources, PackageReviewFileKind::Interface);
+    let resource_types = type_contracts
+        .values()
+        .filter(|contract| contract.kind == TypeKind::Resource)
+        .map(|contract| contract.name.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut saw_contract = false;
+
+    for contract in type_contracts.values() {
+        if contract.span.file != source_path {
+            continue;
+        }
+        saw_contract = true;
+        if contract.kind == TypeKind::Resource
+            || contract
+                .fields
+                .iter()
+                .any(|field| field.is_handle || field.is_weak)
+        {
+            return PackageRisk::High;
+        }
+    }
+
+    let function_contracts =
+        collect_package_function_contracts(new_sources, PackageReviewFileKind::Interface);
+    for contract in function_contracts.values() {
+        if contract.span.file != source_path {
+            continue;
+        }
+        saw_contract = true;
+        if package_added_function_contract_is_high_risk(contract, &resource_types) {
+            return PackageRisk::High;
+        }
+    }
+
+    if saw_contract {
+        PackageRisk::Elevated
+    } else {
+        PackageRisk::Low
+    }
+}
+
+fn package_added_function_contract_is_high_risk(
+    contract: &PackageFunctionContract,
+    resource_types: &BTreeSet<&str>,
+) -> bool {
+    contract
+        .params
+        .iter()
+        .any(|param| matches!(param.effect, Some("mut" | "take")))
+        || contract.effects.iter().any(|effect| {
+            effect.starts_with("retains(") || matches!(effect.as_str(), "native" | "unsafe")
+        })
+        || package_contract_has_resource_boundary(contract, resource_types)
 }
 
 fn manifest_change(
