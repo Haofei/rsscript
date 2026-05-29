@@ -480,6 +480,15 @@ fn review_map_region_draft(
             .join(", ");
         reasons.push(format!("spawn retains-until-task-complete {captures}"));
     }
+    if !facts.managed_closure_captures.is_empty() {
+        let captures = facts
+            .managed_closure_captures
+            .iter()
+            .map(|capture| format!("`{capture}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        reasons.push(format!("managed closure retains {captures}"));
+    }
     if facts.has_with {
         reasons.push("resource with block".to_string());
     }
@@ -561,6 +570,7 @@ struct ReviewMapFacts {
     unresolved_calls: BTreeSet<String>,
     callback_calls: BTreeSet<String>,
     spawn_captures: BTreeSet<String>,
+    managed_closure_captures: BTreeSet<String>,
 }
 
 fn propagate_review_map_call_classifications(drafts: &mut [ReviewMapRegionDraft]) {
@@ -934,6 +944,14 @@ fn collect_review_map_hir_facts_stmt(
     facts: &mut ReviewMapFacts,
 ) {
     match statement {
+        HirStmt::Let {
+            kind: HirBindingKind::ManagedLet,
+            value: Some(HirExpr::Closure { body, .. }),
+            ..
+        } => {
+            collect_managed_closure_capture_names(body, local_bindings, facts);
+            collect_review_map_hir_facts_block(body, local_bindings, facts);
+        }
         HirStmt::Let { value, .. } | HirStmt::Return { value, .. } => {
             if let Some(value) = value {
                 collect_review_map_hir_facts_expr(value, local_bindings, facts);
@@ -1016,6 +1034,230 @@ fn collect_review_map_hir_facts_expr(
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn collect_managed_closure_capture_names(
+    body: &HirBlock,
+    local_bindings: &BTreeSet<&str>,
+    facts: &mut ReviewMapFacts,
+) {
+    let mut closure_locals = BTreeSet::new();
+    collect_managed_closure_capture_names_block(body, local_bindings, &mut closure_locals, facts);
+}
+
+fn collect_managed_closure_capture_names_block(
+    block: &HirBlock,
+    local_bindings: &BTreeSet<&str>,
+    closure_locals: &mut BTreeSet<String>,
+    facts: &mut ReviewMapFacts,
+) {
+    for statement in &block.statements {
+        match statement {
+            HirStmt::Let { name, value, .. } => {
+                if let Some(value) = value {
+                    collect_managed_closure_capture_names_expr(
+                        value,
+                        local_bindings,
+                        closure_locals,
+                        facts,
+                    );
+                }
+                closure_locals.insert(name.clone());
+            }
+            HirStmt::Return {
+                value: Some(value), ..
+            }
+            | HirStmt::Expr(value) => {
+                collect_managed_closure_capture_names_expr(
+                    value,
+                    local_bindings,
+                    closure_locals,
+                    facts,
+                );
+            }
+            HirStmt::With {
+                resource,
+                binding,
+                body,
+                ..
+            } => {
+                collect_managed_closure_capture_names_expr(
+                    resource,
+                    local_bindings,
+                    closure_locals,
+                    facts,
+                );
+                closure_locals.insert(binding.clone());
+                collect_managed_closure_capture_names_block(
+                    body,
+                    local_bindings,
+                    closure_locals,
+                    facts,
+                );
+                closure_locals.remove(binding);
+            }
+            HirStmt::If {
+                condition,
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_managed_closure_capture_names_expr(
+                    condition,
+                    local_bindings,
+                    closure_locals,
+                    facts,
+                );
+                let mut then_locals = closure_locals.clone();
+                collect_managed_closure_capture_names_block(
+                    then_body,
+                    local_bindings,
+                    &mut then_locals,
+                    facts,
+                );
+                if let Some(else_body) = else_body {
+                    let mut else_locals = closure_locals.clone();
+                    collect_managed_closure_capture_names_block(
+                        else_body,
+                        local_bindings,
+                        &mut else_locals,
+                        facts,
+                    );
+                }
+            }
+            HirStmt::Loop {
+                condition, body, ..
+            } => {
+                if let Some(condition) = condition {
+                    collect_managed_closure_capture_names_expr(
+                        condition,
+                        local_bindings,
+                        closure_locals,
+                        facts,
+                    );
+                }
+                let mut body_locals = closure_locals.clone();
+                collect_managed_closure_capture_names_block(
+                    body,
+                    local_bindings,
+                    &mut body_locals,
+                    facts,
+                );
+            }
+            HirStmt::Match { value, arms, .. } => {
+                collect_managed_closure_capture_names_expr(
+                    value,
+                    local_bindings,
+                    closure_locals,
+                    facts,
+                );
+                for arm in arms {
+                    let mut arm_locals = closure_locals.clone();
+                    if let crate::syntax::ast::MatchPattern::Variant {
+                        binding: Some(binding),
+                        ..
+                    } = &arm.pattern
+                    {
+                        arm_locals.insert(binding.clone());
+                    }
+                    collect_managed_closure_capture_names_block(
+                        &arm.body,
+                        local_bindings,
+                        &mut arm_locals,
+                        facts,
+                    );
+                }
+            }
+            HirStmt::Return { value: None, .. }
+            | HirStmt::Break(_)
+            | HirStmt::Continue(_)
+            | HirStmt::Unknown(_) => {}
+        }
+    }
+}
+
+fn collect_managed_closure_capture_names_expr(
+    expr: &HirExpr,
+    local_bindings: &BTreeSet<&str>,
+    closure_locals: &BTreeSet<String>,
+    facts: &mut ReviewMapFacts,
+) {
+    if let Some((root, path)) = hir_capture_path(expr)
+        && !local_bindings.contains(root)
+        && !closure_locals.contains(root)
+    {
+        facts.managed_closure_captures.insert(path);
+        return;
+    }
+
+    match expr {
+        HirExpr::Binary { left, right, .. } => {
+            collect_managed_closure_capture_names_expr(left, local_bindings, closure_locals, facts);
+            collect_managed_closure_capture_names_expr(
+                right,
+                local_bindings,
+                closure_locals,
+                facts,
+            );
+        }
+        HirExpr::Index { base, index, .. } => {
+            collect_managed_closure_capture_names_expr(base, local_bindings, closure_locals, facts);
+            collect_managed_closure_capture_names_expr(
+                index,
+                local_bindings,
+                closure_locals,
+                facts,
+            );
+        }
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                collect_managed_closure_capture_names_expr(
+                    &arg.value,
+                    local_bindings,
+                    closure_locals,
+                    facts,
+                );
+            }
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. } => {
+            collect_managed_closure_capture_names_expr(
+                value,
+                local_bindings,
+                closure_locals,
+                facts,
+            );
+        }
+        HirExpr::Closure { body, .. } => {
+            let mut nested_locals = closure_locals.clone();
+            collect_managed_closure_capture_names_block(
+                body,
+                local_bindings,
+                &mut nested_locals,
+                facts,
+            );
+        }
+        HirExpr::Field { .. }
+        | HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn hir_capture_path(expr: &HirExpr) -> Option<(&str, String)> {
+    match expr {
+        HirExpr::Ident { name, .. } => Some((name.as_str(), name.clone())),
+        HirExpr::Field { base, name, .. } => {
+            let (root, path) = hir_capture_path(base)?;
+            Some((root, format!("{path}.{name}")))
+        }
+        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => hir_capture_path(value),
+        _ => None,
     }
 }
 

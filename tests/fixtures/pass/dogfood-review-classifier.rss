@@ -416,7 +416,8 @@ fn parse_review_region(value: read JsonValue) -> Result<fresh ReviewFacts, JsonE
         has_resource_boundary: Json.array_contains_prefix(value: read reasons, prefix: read "resource ")?
             || Json.array_contains_prefix(value: read reasons, prefix: read "ResourcePool")?,
         has_retains: Json.array_contains_prefix(value: read reasons, prefix: read "retains ")?
-            || Json.array_contains_prefix(value: read reasons, prefix: read "retention ")?,
+            || Json.array_contains_prefix(value: read reasons, prefix: read "retention ")?
+            || Json.array_contains_prefix(value: read reasons, prefix: read "managed closure retains")?,
         has_mut: Json.array_contains_prefix(value: read reasons, prefix: read "mut ")?
             || Json.array_contains_string(value: read reasons, item: read "writes to managed state")?,
         has_manage_boundary: Json.array_contains_string(value: read reasons, item: read "manage boundary")?,
@@ -488,6 +489,10 @@ fn reason_is_modeled(reason: read String) -> Bool {
     }
 
     if String.starts_with(value: read reason, prefix: read "retention ") {
+        return true
+    }
+
+    if String.starts_with(value: read reason, prefix: read "managed closure retains") {
         return true
     }
 

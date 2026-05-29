@@ -4191,6 +4191,40 @@ fn apply(callback: noescape Fn()) -> Unit {
 }
 
 #[test]
+fn review_map_marks_managed_closure_capture_retention() {
+    let source = r#"
+struct Image
+
+fn retain_callback(image: read Image) -> Unit {
+    let callback = || {
+        let seen = image
+    }
+    return Unit
+}
+"#;
+    let map = review_map_sources(vec![("managed-closure-retention.rss", source)]);
+    let region = map
+        .files
+        .iter()
+        .flat_map(|file| &file.regions)
+        .find(|region| region.function == "retain_callback")
+        .expect("retain_callback region should exist");
+
+    assert_eq!(
+        region.classification,
+        ReviewMapClassification::ReviewRequired
+    );
+    assert!(
+        region
+            .reasons
+            .iter()
+            .any(|reason| reason == "managed closure retains `image`"),
+        "{region:?}"
+    );
+    assert_eq!(map.summary.unknown.functions, 0);
+}
+
+#[test]
 fn review_map_pass_fixture_unknown_rate_stays_low() {
     let owned_sources = fixture_paths("tests/fixtures/pass")
         .into_iter()
