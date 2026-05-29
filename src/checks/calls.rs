@@ -423,6 +423,22 @@ fn check_binding_payload_type(
     payload: &HirExpr,
     expected: &str,
 ) {
+    if let Some((variant, nested_payload)) = enum_variant_payload(payload)
+        && let Some(expected_payload) = expected_variant_payload_type(expected, variant)
+    {
+        if let Some(nested_payload) = nested_payload {
+            check_binding_payload_type(analyzer, name, nested_payload, &expected_payload);
+        } else if expected_payload != "Unit" {
+            binding_payload_type_mismatch_diagnostic(
+                analyzer,
+                name,
+                "Unit",
+                &expected_payload,
+                hir_expr_span(payload),
+            );
+        }
+        return;
+    }
     let Some(actual) = hir_expr_type_name(payload) else {
         return;
     };
@@ -800,6 +816,29 @@ fn check_return_payload_type(
     expected: &str,
     label: &str,
 ) {
+    if let Some((variant, nested_payload)) = enum_variant_payload(payload)
+        && let Some(expected_payload) = expected_variant_payload_type(expected, variant)
+    {
+        if let Some(nested_payload) = nested_payload {
+            check_return_payload_type(
+                analyzer,
+                function,
+                nested_payload,
+                &expected_payload,
+                nested_payload_label(variant),
+            );
+        } else if expected_payload != "Unit" {
+            return_payload_type_mismatch_diagnostic(
+                analyzer,
+                function,
+                "Unit",
+                &expected_payload,
+                nested_payload_label(variant),
+                hir_expr_span(payload),
+            );
+        }
+        return;
+    }
     let Some(actual) = hir_expr_type_name(payload) else {
         return;
     };
@@ -807,24 +846,42 @@ fn check_return_payload_type(
         return;
     }
     if !argument_type_matches(expected, actual) {
-        analyzer.diagnostics.push(
-            Diagnostic::error(
-                code::RETURN_TYPE_MISMATCH,
-                format!(
-                    "{label} in `{}` has type `{actual}`, expected `{expected}`.",
-                    function.name
-                ),
-                hir_expr_span(payload).clone(),
-                "return type mismatch",
-            )
-            .with_cause("Result and Option return constructors are checked against the declared return payload before Rust lowering.")
-            .with_fix(
-                "match_return_payload_type",
-                format!("Return a `{expected}` payload here."),
-                "manual",
-            ),
+        return_payload_type_mismatch_diagnostic(
+            analyzer,
+            function,
+            actual,
+            expected,
+            label,
+            hir_expr_span(payload),
         );
     }
+}
+
+fn return_payload_type_mismatch_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    function: &FunctionDecl,
+    actual: &str,
+    expected: &str,
+    label: &str,
+    span: &Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::RETURN_TYPE_MISMATCH,
+            format!(
+                "{label} in `{}` has type `{actual}`, expected `{expected}`.",
+                function.name
+            ),
+            span.clone(),
+            "return type mismatch",
+        )
+        .with_cause("Result and Option return constructors are checked against the declared return payload before Rust lowering.")
+        .with_fix(
+            "match_return_payload_type",
+            format!("Return a `{expected}` payload here."),
+            "manual",
+        ),
+    );
 }
 
 fn enum_variant_payload(expr: &HirExpr) -> Option<(&'static str, Option<&HirExpr>)> {
@@ -845,6 +902,34 @@ fn enum_variant_payload(expr: &HirExpr) -> Option<(&'static str, Option<&HirExpr
         _ => return None,
     };
     Some((variant, args.first().map(|arg| &arg.value)))
+}
+
+fn expected_variant_payload_type(expected_type: &str, variant: &str) -> Option<String> {
+    match (type_root_name(expected_type), variant) {
+        ("Option", "None") => Some("Unit".to_string()),
+        ("Option", "Some") => type_arg_names(expected_type)
+            .and_then(|args| args.first().map(|arg| arg.trim().to_string())),
+        ("Result", "Ok" | "Err") => {
+            let args = type_arg_names(expected_type)?;
+            let expected = match variant {
+                "Ok" => args.first().copied(),
+                "Err" => args.get(1).copied(),
+                _ => None,
+            }?;
+            Some(expected.trim().to_string())
+        }
+        _ => None,
+    }
+}
+
+fn nested_payload_label(variant: &str) -> &'static str {
+    match variant {
+        "Ok" => "Ok payload",
+        "Err" => "Err payload",
+        "Some" => "Some payload",
+        "None" => "None payload",
+        _ => "payload",
+    }
 }
 
 fn return_type_mismatch_diagnostic(
@@ -2024,6 +2109,29 @@ fn check_argument_payload_type(
     payload: &HirExpr,
     expected: &str,
 ) {
+    if let Some((variant, nested_payload)) = enum_variant_payload(payload)
+        && let Some(expected_payload) = expected_variant_payload_type(expected, variant)
+    {
+        if let Some(nested_payload) = nested_payload {
+            check_argument_payload_type(
+                analyzer,
+                call_name,
+                arg_name,
+                nested_payload,
+                &expected_payload,
+            );
+        } else if expected_payload != "Unit" {
+            argument_payload_type_mismatch_diagnostic(
+                analyzer,
+                call_name,
+                arg_name,
+                "Unit",
+                &expected_payload,
+                hir_expr_span(payload),
+            );
+        }
+        return;
+    }
     let Some(actual) = hir_expr_type_name(payload) else {
         return;
     };

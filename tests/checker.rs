@@ -957,6 +957,30 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_reports_nested_result_option_binding_payload_type_mismatch_before_backend_lowering() {
+    let source = r#"
+class BuildError {
+    code: Int
+}
+
+fn main() -> Unit {
+    let value: Result<Option<String>, BuildError> = Ok(Some(42))
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("nested-result-option-binding-payload-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "binding `value` has initializer payload type `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn checker_reports_generic_binding_annotation_mismatch_before_backend_lowering() {
     let source = r#"
 fn main() -> Unit {
@@ -996,6 +1020,34 @@ fn main() -> Unit {
             diagnostic.code == "RS0207"
                 && diagnostic.summary
                     == "argument `values` for `accept` has type `List<Int>`, expected `List<String>`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_nested_result_option_argument_payload_type_mismatch_before_backend_lowering() {
+    let source = r#"
+class BuildError {
+    code: Int
+}
+
+fn accept(value: read Result<Option<String>, BuildError>) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    accept(value: read Ok(Some(42)))
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("nested-result-option-argument-payload-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "argument `value` for `accept` has payload type `Int`, expected `String`."
         }),
         "{diagnostics:?}"
     );
@@ -1083,6 +1135,28 @@ fn main() -> Unit {
 }
 
 #[test]
+fn rust_lowering_rejects_nested_result_option_return_payload_mismatch_before_rustc() {
+    let source = r#"
+class BuildError {
+    code: Int
+}
+
+fn build() -> Result<Option<String>, BuildError> {
+    return Ok(Some(42))
+}
+"#;
+    let diagnostics = lower_source_to_rust("nested-result-option-return-payload-type.rss", source)
+        .expect_err("nested return payload mismatch should fail before Rust generation");
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0208"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn rust_lowering_rejects_function_fallthrough_before_rustc() {
     let source = r#"
 fn build() -> String {
@@ -1117,6 +1191,29 @@ fn build() -> Result<String, BuildError> {
         diagnostics.iter().any(|diagnostic| {
             diagnostic.code == "RS0208"
                 && diagnostic.summary == "Ok payload in `build` has type `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_nested_result_option_return_payload_type_mismatch_before_backend_lowering() {
+    let source = r#"
+class BuildError {
+    code: Int
+}
+
+fn build() -> Result<Option<String>, BuildError> {
+    return Ok(Some(42))
+}
+"#;
+    let diagnostics = analyze_source("nested-result-option-return-payload-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0208"
+                && diagnostic.summary
+                    == "Some payload in `build` has type `Int`, expected `String`."
         }),
         "{diagnostics:?}"
     );

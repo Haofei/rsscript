@@ -225,6 +225,9 @@ makes the binding valid.
 Wrapper payloads are checked as part of the same contract:
 `let r: Result<String, E> = Ok(42)` is rejected because the `Ok` payload is
 `Int`, not `String`.
+Nested wrapper payloads are checked recursively:
+`Result<Option<String>, E>` rejects `Ok(Some(42))` because the inner `Some`
+payload is `Int`, not `String`.
 Generic arguments are also part of the contract: `let xs: List<String> =
 List<Int>.new()` is rejected because the initializer has type `List<Int>`.
 

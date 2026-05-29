@@ -1,0 +1,9 @@
+// expect: RS0208
+
+class BuildError {
+    code: Int
+}
+
+fn build() -> Result<Option<String>, BuildError> {
+    return Ok(Some(42))
+}
