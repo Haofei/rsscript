@@ -952,6 +952,13 @@ fn collect_review_map_hir_facts_stmt(
             collect_managed_closure_capture_names(body, local_bindings, facts);
             collect_review_map_hir_facts_block(body, local_bindings, facts);
         }
+        HirStmt::Let {
+            kind: HirBindingKind::LocalLet,
+            value: Some(HirExpr::Closure { body, .. }),
+            ..
+        } => {
+            collect_review_map_hir_facts_block(body, local_bindings, facts);
+        }
         HirStmt::Let { value, .. } | HirStmt::Return { value, .. } => {
             if let Some(value) = value {
                 collect_review_map_hir_facts_expr(value, local_bindings, facts);
@@ -1015,9 +1022,15 @@ fn collect_review_map_hir_facts_expr(
             collect_review_map_hir_facts_expr(base, local_bindings, facts);
             collect_review_map_hir_facts_expr(index, local_bindings, facts);
         }
-        HirExpr::Call { args, .. } => {
-            for arg in args {
-                collect_review_map_hir_facts_expr(&arg.value, local_bindings, facts);
+        HirExpr::Call {
+            args, resolution, ..
+        } => {
+            for (index, arg) in args.iter().enumerate() {
+                if let Some(body) = noescape_call_closure_body(arg, index, resolution) {
+                    collect_review_map_hir_facts_block(body, local_bindings, facts);
+                } else {
+                    collect_review_map_hir_facts_expr(&arg.value, local_bindings, facts);
+                }
             }
         }
         HirExpr::Effect { value, .. }
@@ -1028,12 +1041,51 @@ fn collect_review_map_hir_facts_expr(
             collect_review_map_hir_facts_expr(value, local_bindings, facts);
         }
         HirExpr::Closure { body, .. } => {
-            collect_review_map_hir_facts_block(body, local_bindings, facts)
+            collect_managed_closure_capture_names(body, local_bindings, facts);
+            collect_review_map_hir_facts_block(body, local_bindings, facts);
         }
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn noescape_call_closure_body<'a>(
+    arg: &'a crate::hir::HirCallArg,
+    index: usize,
+    resolution: &CallResolution,
+) -> Option<&'a HirBlock> {
+    if !call_arg_is_noescape_param(arg, index, resolution) {
+        return None;
+    }
+    hir_closure_body(&arg.value)
+}
+
+fn call_arg_is_noescape_param(
+    arg: &crate::hir::HirCallArg,
+    index: usize,
+    resolution: &CallResolution,
+) -> bool {
+    let CallResolution::Resolved { signature, .. } = resolution else {
+        return false;
+    };
+    let Some(param) = arg
+        .name
+        .as_ref()
+        .and_then(|name| signature.params.iter().find(|param| param.name == *name))
+        .or_else(|| signature.params.get(index))
+    else {
+        return false;
+    };
+    param.type_name == "noescape Fn()"
+}
+
+fn hir_closure_body(expr: &HirExpr) -> Option<&HirBlock> {
+    match expr {
+        HirExpr::Closure { body, .. } => Some(body),
+        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => hir_closure_body(value),
+        _ => None,
     }
 }
 

@@ -4225,6 +4225,77 @@ fn retain_callback(image: read Image) -> Unit {
 }
 
 #[test]
+fn review_map_marks_inline_managed_closure_capture_retention_unless_noescape() {
+    let source = r#"
+struct Image
+struct Callback
+
+fn store(callback: read Callback) -> Unit
+    effects(retains(callback))
+
+fn apply(callback: noescape Fn()) -> Unit {
+    callback()
+    return Unit
+}
+
+fn retain_inline(image: read Image) -> Unit {
+    store(callback: read || {
+        Image.inspect(image: read image)
+    })
+    return Unit
+}
+
+fn noescape_inline(image: read Image) -> Unit {
+    apply(callback: || {
+        Image.inspect(image: read image)
+    })
+    return Unit
+}
+"#;
+    let map = review_map_sources(vec![("inline-closure-retention.rss", source)]);
+    let retain_region = map
+        .files
+        .iter()
+        .flat_map(|file| &file.regions)
+        .find(|region| region.function == "retain_inline")
+        .expect("retain_inline region should exist");
+    let noescape_region = map
+        .files
+        .iter()
+        .flat_map(|file| &file.regions)
+        .find(|region| region.function == "noescape_inline")
+        .expect("noescape_inline region should exist");
+    let apply_region = map
+        .files
+        .iter()
+        .flat_map(|file| &file.regions)
+        .find(|region| region.function == "apply")
+        .expect("apply region should exist");
+
+    assert!(
+        retain_region
+            .reasons
+            .iter()
+            .any(|reason| reason == "managed closure retains `image`"),
+        "{retain_region:?}"
+    );
+    assert!(
+        !noescape_region
+            .reasons
+            .iter()
+            .any(|reason| reason == "managed closure retains `image`"),
+        "{noescape_region:?}"
+    );
+    assert!(
+        apply_region
+            .reasons
+            .iter()
+            .any(|reason| reason == "noescape callback call `callback`"),
+        "{apply_region:?}"
+    );
+}
+
+#[test]
 fn review_map_pass_fixture_unknown_rate_stays_low() {
     let owned_sources = fixture_paths("tests/fixtures/pass")
         .into_iter()
