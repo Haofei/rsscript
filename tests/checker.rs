@@ -1606,6 +1606,24 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_allows_arithmetic_with_typed_builtin_call_operands() {
+    let source = r#"
+fn main() -> Unit {
+    let value = 20 + String.len(value: read "rss")
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source_with_core("typed-arithmetic.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "RS1001"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn rust_lowering_maps_builtin_operators_to_rust_expressions() {
     let source = r#"
 fn main() -> Unit {

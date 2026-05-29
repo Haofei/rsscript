@@ -1,6 +1,7 @@
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, code};
-use crate::lexer::TokenKind;
+use crate::hir::{HirBlock, HirExpr, HirStmt};
+use crate::syntax::ast::{BinaryOp, FunctionDecl, Item};
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
     check_operator_overload_attempts(analyzer);
@@ -115,40 +116,183 @@ fn as_belongs_to_with(analyzer: &Analyzer<'_>, as_index: usize) -> bool {
 }
 
 fn check_operator_overload_attempts(analyzer: &mut Analyzer<'_>) {
-    for i in 1..analyzer.tokens.len().saturating_sub(1) {
-        if !(analyzer.tokens[i].symbol("+")
-            || analyzer.tokens[i].symbol("-")
-            || analyzer.tokens[i].symbol("*")
-            || analyzer.tokens[i].symbol("/"))
+    let functions = analyzer
+        .syntax_program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(function) => Some(function.clone()),
+            Item::Type(_) => None,
+        })
+        .collect::<Vec<FunctionDecl>>();
+
+    for function in functions {
+        if let Some(block) = analyzer
+            .hir
+            .function_body(&function.name)
+            .and_then(|body| body.block.clone())
         {
-            continue;
-        }
-        let left_number = matches!(analyzer.tokens[i - 1].kind, TokenKind::Number(_));
-        let right_number = matches!(analyzer.tokens[i + 1].kind, TokenKind::Number(_));
-        let likely_type_name = analyzer.tokens[i - 1]
-            .text()
-            .chars()
-            .next()
-            .is_some_and(char::is_uppercase)
-            || analyzer.tokens[i + 1]
-                .text()
-                .chars()
-                .next()
-                .is_some_and(char::is_uppercase);
-        if !left_number && !right_number && likely_type_name {
-            analyzer.diagnostics.push(
-                Diagnostic::error(
-                    code::OPERATOR_OVERLOAD_ATTEMPT,
-                    "operators cannot be overloaded for user-defined types.",
-                    analyzer.tokens[i].span.clone(),
-                    "operator on non-builtin-looking value",
-                )
-                .with_fix(
-                    "use_named_function",
-                    "Use a named function such as `Type.add(left: read a, right: read b)`.",
-                    "manual",
-                ),
-            );
+            check_operator_overload_attempts_in_block(analyzer, &block);
         }
     }
+}
+
+fn check_operator_overload_attempts_in_block(analyzer: &mut Analyzer<'_>, block: &HirBlock) {
+    for statement in &block.statements {
+        check_operator_overload_attempts_in_stmt(analyzer, statement);
+    }
+}
+
+fn check_operator_overload_attempts_in_stmt(analyzer: &mut Analyzer<'_>, statement: &HirStmt) {
+    match statement {
+        HirStmt::Let { value, .. } | HirStmt::Return { value, .. } => {
+            if let Some(value) = value {
+                check_operator_overload_attempts_in_expr(analyzer, value);
+            }
+        }
+        HirStmt::With { resource, body, .. } => {
+            check_operator_overload_attempts_in_expr(analyzer, resource);
+            check_operator_overload_attempts_in_block(analyzer, body);
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            check_operator_overload_attempts_in_expr(analyzer, condition);
+            check_operator_overload_attempts_in_block(analyzer, then_body);
+            if let Some(else_body) = else_body {
+                check_operator_overload_attempts_in_block(analyzer, else_body);
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                check_operator_overload_attempts_in_expr(analyzer, condition);
+            }
+            check_operator_overload_attempts_in_block(analyzer, body);
+        }
+        HirStmt::Match { value, arms, .. } => {
+            check_operator_overload_attempts_in_expr(analyzer, value);
+            for arm in arms {
+                check_operator_overload_attempts_in_block(analyzer, &arm.body);
+            }
+        }
+        HirStmt::Expr(value) => check_operator_overload_attempts_in_expr(analyzer, value),
+        HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn check_operator_overload_attempts_in_expr(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
+    match expr {
+        HirExpr::Binary {
+            op,
+            left,
+            right,
+            span,
+        } => {
+            check_operator_overload_attempts_in_expr(analyzer, left);
+            check_operator_overload_attempts_in_expr(analyzer, right);
+            if arithmetic_operator(*op)
+                && (non_numeric_operand(analyzer, left) || non_numeric_operand(analyzer, right))
+            {
+                analyzer.diagnostics.push(
+                    Diagnostic::error(
+                        code::OPERATOR_OVERLOAD_ATTEMPT,
+                        "arithmetic operators are only built in for numeric values.",
+                        span.clone(),
+                        "operator on non-numeric value",
+                    )
+                    .with_cause("RSScript does not support user-defined operator overloads.")
+                    .with_fix(
+                        "use_named_function",
+                        "Use a named function such as `Type.add(left: read a, right: read b)`.",
+                        "manual",
+                    ),
+                );
+            }
+        }
+        HirExpr::Field { base, .. } => check_operator_overload_attempts_in_expr(analyzer, base),
+        HirExpr::Index { base, index, .. } => {
+            check_operator_overload_attempts_in_expr(analyzer, base);
+            check_operator_overload_attempts_in_expr(analyzer, index);
+        }
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                check_operator_overload_attempts_in_expr(analyzer, &arg.value);
+            }
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. } => check_operator_overload_attempts_in_expr(analyzer, value),
+        HirExpr::Closure { body, .. } => check_operator_overload_attempts_in_block(analyzer, body),
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn arithmetic_operator(op: BinaryOp) -> bool {
+    matches!(
+        op,
+        BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide
+    )
+}
+
+fn non_numeric_operand(analyzer: &Analyzer<'_>, expr: &HirExpr) -> bool {
+    inferred_operand_type(analyzer, expr).is_some_and(|type_name| !is_numeric_type(type_name))
+}
+
+fn inferred_operand_type<'a>(analyzer: &'a Analyzer<'_>, expr: &'a HirExpr) -> Option<&'a str> {
+    match expr {
+        HirExpr::Ident {
+            name, type_name, ..
+        } => type_name.as_deref().or_else(|| {
+            analyzer
+                .hir
+                .type_info(name)
+                .map(|type_info| type_info.name.as_str())
+        }),
+        HirExpr::Number { .. } => Some("Int"),
+        HirExpr::String { .. } => Some("String"),
+        HirExpr::Call { type_name, .. }
+        | HirExpr::Effect { type_name, .. }
+        | HirExpr::Manage { type_name, .. }
+        | HirExpr::Spawn { type_name, .. }
+        | HirExpr::Await { type_name, .. }
+        | HirExpr::Try { type_name, .. } => type_name.as_deref(),
+        HirExpr::Field { access, .. } => access.type_name.as_deref(),
+        HirExpr::Binary { .. }
+        | HirExpr::Index { .. }
+        | HirExpr::Closure { .. }
+        | HirExpr::Unknown(_) => None,
+    }
+}
+
+fn is_numeric_type(type_name: &str) -> bool {
+    matches!(
+        type_root_name(type_name),
+        "Int"
+            | "Int8"
+            | "Int16"
+            | "Int32"
+            | "Int64"
+            | "UInt"
+            | "UInt8"
+            | "UInt16"
+            | "UInt32"
+            | "UInt64"
+            | "Float"
+            | "Float32"
+            | "Float64"
+    )
+}
+
+fn type_root_name(type_name: &str) -> &str {
+    type_name.split('<').next().unwrap_or(type_name)
 }

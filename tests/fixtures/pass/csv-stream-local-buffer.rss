@@ -12,8 +12,7 @@ fn sum_csv(path: read Path) -> Result<Int, CsvError> {
         Csv.read_into(file: mut file, buffer: mut buffer)?
         let row = Csv.parse_row(buffer: read buffer)?
         let amount = Row.field_string(row: read row, index: 1)?
-        let amount_len = String.len(value: read amount)
-        total + amount_len
+        total + String.len(value: read amount)
     }
 
     return Ok(total)
