@@ -1,0 +1,20 @@
+// expect: RS0009
+
+resource File {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+fn File.fake() -> File
+    effects(pure)
+
+fn read_fake() -> Unit
+    effects(pure)
+{
+    with File.fake() as file {
+        return Unit
+    }
+}

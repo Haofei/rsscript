@@ -605,7 +605,8 @@ impl Analyzer<'_> {
     }
 
     fn check_signature_explicitness(&mut self) {
-        for item in &self.syntax_program.items {
+        let items = self.syntax_program.items.clone();
+        for item in &items {
             let Item::Function(function) = item else {
                 continue;
             };
@@ -832,6 +833,18 @@ impl Analyzer<'_> {
                 .iter()
                 .any(|effect| matches!(effect, EffectDecl::Name(name) if name == "pure"))
             {
+                if let Some(return_ty) = &function.return_ty
+                    && let Some(resource_name) = self
+                        .resource_return_type_name(return_ty)
+                        .map(str::to_string)
+                {
+                    self.pure_resource_return_diagnostic(
+                        &function.name,
+                        return_ty.span.clone(),
+                        &resource_name,
+                    );
+                }
+
                 for param in function.params.iter().filter(|param| {
                     matches!(param.effect, Some(DataEffect::Mut | DataEffect::Take))
                 }) {
@@ -1106,6 +1119,9 @@ impl Analyzer<'_> {
             }
             Stmt::Expr(value) => self.check_runtime_guarantee_expr(guarantee, function_name, value),
             Stmt::With(stmt) => {
+                if guarantee == RuntimeGuarantee::Pure {
+                    self.pure_with_resource_diagnostic(function_name, &stmt.span);
+                }
                 self.check_runtime_guarantee_expr(guarantee, function_name, &stmt.resource);
                 self.check_runtime_guarantee_block(guarantee, function_name, &stmt.body);
             }
@@ -1765,6 +1781,68 @@ impl Analyzer<'_> {
                 "manual",
             ),
         );
+    }
+
+    fn pure_with_resource_diagnostic(
+        &mut self,
+        function_name: &str,
+        span: &crate::diagnostic::Span,
+    ) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::INVALID_PURE_EFFECT,
+                format!("`{function_name}` is declared pure but opens a resource scope."),
+                span.clone(),
+                "resource scope in pure function",
+            )
+            .with_cause(
+                "`with` introduces deterministic resource lifetime behavior; `pure` functions may observe inputs but must not open resource scopes.",
+            )
+            .with_fix(
+                "remove_with_or_pure",
+                "Move resource handling outside the pure function, or remove `pure`.",
+                "manual",
+            ),
+        );
+    }
+
+    fn pure_resource_return_diagnostic(
+        &mut self,
+        function_name: &str,
+        span: crate::diagnostic::Span,
+        resource_name: &str,
+    ) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::INVALID_PURE_EFFECT,
+                format!(
+                    "`{function_name}` is declared pure but returns resource `{resource_name}`."
+                ),
+                span,
+                "resource return in pure function",
+            )
+            .with_cause(
+                "Returning a resource creates a lifetime boundary; `pure` functions must not open or return resources.",
+            )
+            .with_fix(
+                "remove_resource_return_or_pure",
+                "Return an ordinary value, or remove `pure` from the resource-producing function.",
+                "manual",
+            ),
+        );
+    }
+
+    fn resource_return_type_name<'a>(&self, ty: &'a TypeRef) -> Option<&'a str> {
+        let target = if matches!(ty.name.as_str(), "Result" | "Option") {
+            ty.args.first().unwrap_or(ty)
+        } else {
+            ty
+        };
+        if self.hir.type_kind(&target.name) == Some(HirTypeKind::Resource) {
+            Some(target.name.as_str())
+        } else {
+            None
+        }
     }
 
     fn blocking_call_diagnostic(
