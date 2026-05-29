@@ -219,6 +219,10 @@ If a conversion happens, it is visible:
 let y: Int64 = Int64.from(value: x)
 ```
 
+The annotation is a checked binding contract. `let y: Int64 = x` is rejected
+unless `x` already has type `Int64`; the explicit conversion call above is what
+makes the binding valid.
+
 ### 2.5 Public APIs are review contracts
 
 *Elaborates Constitution Article III. The article is the governing statement; this section lists exactly what a public API must expose.*
@@ -2636,6 +2640,7 @@ managed -> local attempt
 missing named argument
 missing read/mut/take effect
 call argument type mismatch
+binding type annotation mismatch
 return type mismatch
 function fallthrough return type mismatch
 control-flow type mismatch

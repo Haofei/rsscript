@@ -202,6 +202,7 @@ pub enum HirStmt {
         name: String,
         value: Option<HirExpr>,
         type_name: Option<String>,
+        value_type_name: Option<String>,
         span: Span,
     },
     Return {
@@ -774,10 +775,14 @@ fn lower_hir_stmt(
 ) -> HirStmt {
     match statement {
         Stmt::Let(stmt) => {
-            let type_name = stmt
+            let value_type_name = stmt
                 .value
                 .as_ref()
                 .and_then(|value| infer_hir_expr_type(hir, value, value_types));
+            let declared_type_name = stmt.type_annotation.as_ref().map(type_ref_name);
+            let type_name = declared_type_name
+                .clone()
+                .or_else(|| value_type_name.clone());
             let value = stmt
                 .value
                 .as_ref()
@@ -790,6 +795,7 @@ fn lower_hir_stmt(
                 name: stmt.name.clone(),
                 value,
                 type_name,
+                value_type_name,
                 span: stmt.span.clone(),
             }
         }
@@ -1117,10 +1123,14 @@ fn collect_body_facts_in_stmt(
                     span: stmt.span.clone(),
                 });
             }
-            let type_name = stmt
+            let value_type_name = stmt
                 .value
                 .as_ref()
                 .and_then(|value| infer_hir_expr_type(hir, value, value_types));
+            let declared_type_name = stmt.type_annotation.as_ref().map(type_ref_name);
+            let type_name = declared_type_name
+                .clone()
+                .or_else(|| value_type_name.clone());
             facts.bindings.push(HirBinding {
                 function_name: function_name.to_string(),
                 name: stmt.name.clone(),

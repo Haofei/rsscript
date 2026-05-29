@@ -168,9 +168,13 @@ fn check_block(
         match statement {
             HirStmt::Let {
                 value: Some(value),
+                type_name,
+                value_type_name,
+                name,
                 span,
                 ..
             } => {
+                check_binding_type(analyzer, name, type_name, value_type_name, value);
                 check_noescape_escape(
                     analyzer,
                     value,
@@ -310,6 +314,38 @@ fn check_block(
             | HirStmt::Unknown(_) => {}
         }
     }
+}
+
+fn check_binding_type(
+    analyzer: &mut Analyzer<'_>,
+    name: &str,
+    expected: &Option<String>,
+    actual: &Option<String>,
+    value: &HirExpr,
+) {
+    let (Some(expected), Some(actual)) = (expected.as_deref(), actual.as_deref()) else {
+        return;
+    };
+    if unresolved_generic_type(expected) || unresolved_generic_type(actual) {
+        return;
+    }
+    if argument_type_matches(expected, actual) {
+        return;
+    }
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::ARGUMENT_TYPE_MISMATCH,
+            format!("binding `{name}` has initializer type `{actual}`, expected `{expected}`."),
+            hir_expr_span(value).clone(),
+            "binding type mismatch",
+        )
+        .with_cause("Explicit `let` and `local` type annotations are source-level contracts and must match the initializer before Rust lowering.")
+        .with_fix(
+            "match_binding_type",
+            format!("Initialize `{name}` with a `{expected}` value, or change the binding annotation."),
+            "manual",
+        ),
+    );
 }
 
 fn check_expr(

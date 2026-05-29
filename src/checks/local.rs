@@ -2626,6 +2626,7 @@ mod tests {
                         name: "cached".to_string(),
                         value: None,
                         type_name: Some("Image".to_string()),
+                        value_type_name: None,
                         span: span(2),
                     },
                     HirStmt::Expr(HirExpr::Call {
@@ -2747,6 +2748,7 @@ mod tests {
                             span: span(1),
                         }),
                         type_name: Some("Image".to_string()),
+                        value_type_name: Some("Image".to_string()),
                         span: span(1),
                     },
                     HirStmt::Expr(HirExpr::Call {
@@ -2796,6 +2798,7 @@ mod tests {
                     name: "seed".to_string(),
                     value: None,
                     type_name: Some("Image".to_string()),
+                    value_type_name: None,
                     span: span(1),
                 },
                 HirStmt::If {
@@ -3074,6 +3077,7 @@ mod tests {
                                     span: span(4),
                                 }),
                                 type_name: None,
+                                value_type_name: None,
                                 span: span(4),
                             },
                         ],
@@ -3128,6 +3132,7 @@ mod tests {
                         name: "image".to_string(),
                         value: None,
                         type_name: Some("Image".to_string()),
+                        value_type_name: None,
                         span: span(1),
                     },
                     HirStmt::If {
@@ -3187,6 +3192,7 @@ mod tests {
                         name: "config".to_string(),
                         value: None,
                         type_name: Some("InlineConfig".to_string()),
+                        value_type_name: None,
                         span: span(1),
                     },
                     HirStmt::If {
@@ -3236,6 +3242,7 @@ mod tests {
                         name: "image".to_string(),
                         value: None,
                         type_name: Some("Image".to_string()),
+                        value_type_name: None,
                         span: span(1),
                     },
                     HirStmt::Let {
@@ -3254,6 +3261,7 @@ mod tests {
                             span: span(2),
                         }),
                         type_name: None,
+                        value_type_name: None,
                         span: span(2),
                     },
                 ],
@@ -3287,6 +3295,7 @@ mod tests {
                         name: "image".to_string(),
                         value: None,
                         type_name: Some("Image".to_string()),
+                        value_type_name: None,
                         span: span(1),
                     },
                     HirStmt::Loop {
@@ -3356,6 +3365,7 @@ mod tests {
                         name: "image".to_string(),
                         value: None,
                         type_name: Some("Image".to_string()),
+                        value_type_name: None,
                         span: span(1),
                     },
                     HirStmt::Expr(HirExpr::Manage {
@@ -3401,6 +3411,7 @@ mod tests {
                         name: "image".to_string(),
                         value: None,
                         type_name: Some("Image".to_string()),
+                        value_type_name: None,
                         span: span(1),
                     },
                     HirStmt::Let {
@@ -3412,6 +3423,7 @@ mod tests {
                             span: span(2),
                         }),
                         type_name: Some("Image".to_string()),
+                        value_type_name: Some("Image".to_string()),
                         span: span(2),
                     },
                 ],

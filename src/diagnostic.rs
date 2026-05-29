@@ -423,7 +423,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::ARGUMENT_TYPE_MISMATCH,
         title: "argument type mismatch",
-        explanation: "When both sides are known, a call argument's expression type must match the resolved parameter type before Rust lowering. For `noescape Fn(...) -> T` parameters, the callback arity, callback call arguments, callback body call arguments, and known return expression must match the function type before Rust lowering.",
+        explanation: "When both sides are known, a call argument's expression type must match the resolved parameter type before Rust lowering, and a binding initializer must match its explicit binding type. For `noescape Fn(...) -> T` parameters, the callback arity, callback call arguments, callback body call arguments, and known return expression must match the function type before Rust lowering.",
     },
     DiagnosticExplanation {
         code: code::RETURN_TYPE_MISMATCH,

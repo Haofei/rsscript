@@ -913,6 +913,45 @@ fn build() -> String {
 }
 
 #[test]
+fn checker_reports_let_type_annotation_mismatch_before_backend_lowering() {
+    let source = r#"
+fn main() -> Unit {
+    let value: String = 42
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("let-annotation-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "binding `value` has initializer type `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn rust_lowering_rejects_let_type_annotation_mismatch_before_rustc() {
+    let source = r#"
+fn main() -> Unit {
+    let value: String = 42
+    return Unit
+}
+"#;
+    let diagnostics = lower_source_to_rust("let-annotation-type.rss", source)
+        .expect_err("binding type mismatch should fail before Rust generation");
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0207"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn rust_lowering_rejects_function_fallthrough_before_rustc() {
     let source = r#"
 fn build() -> String {

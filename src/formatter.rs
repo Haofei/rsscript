@@ -154,6 +154,10 @@ impl Formatter {
                     LetKind::Local => "local ",
                 });
                 self.out.push_str(&stmt.name);
+                if let Some(type_annotation) = &stmt.type_annotation {
+                    self.out.push_str(": ");
+                    self.type_ref(type_annotation);
+                }
                 if let Some(value) = &stmt.value {
                     self.out.push_str(" = ");
                     self.expr(value, 0);

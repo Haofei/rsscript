@@ -219,6 +219,7 @@ pub enum LetKind {
 pub struct LetStmt {
     pub kind: LetKind,
     pub name: String,
+    pub type_annotation: Option<TypeRef>,
     pub value: Option<Expr>,
     pub malformed: bool,
     pub span: Span,

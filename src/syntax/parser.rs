@@ -768,13 +768,19 @@ fn parse_let_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize)
     let name = parsed_name.unwrap_or("").to_string();
     let end = statement_end(tokens, start, limit);
     let equals = (start + 2..end).find(|index| tokens[*index].symbol("="));
+    let annotation_end = equals.unwrap_or(end);
+    let colon = (start + 2..annotation_end).find(|index| tokens[*index].symbol(":"));
+    let type_annotation = colon.and_then(|colon| parse_type_ref(tokens, colon + 1, annotation_end));
     let value = equals.and_then(|equals| parse_expr(tokens, equals + 1, end));
-    let malformed = parsed_name.is_none() || (equals.is_some() && value.is_none());
+    let malformed = parsed_name.is_none()
+        || (equals.is_some() && value.is_none())
+        || (colon.is_some() && type_annotation.is_none());
 
     (
         Stmt::Let(LetStmt {
             kind,
             name,
+            type_annotation,
             value,
             malformed,
             span: tokens[start].span.clone(),

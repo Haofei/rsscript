@@ -1,0 +1,6 @@
+// expect: RS0207
+
+fn main() -> Unit {
+    let value: String = 42
+    return Unit
+}
