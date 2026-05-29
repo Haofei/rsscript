@@ -30,3 +30,8 @@ pub fn Json.array_get(
     value: read JsonValue,
     index: Int,
 ) -> Result<fresh JsonValue, JsonError>
+
+pub fn Json.array_contains_string(
+    value: read JsonValue,
+    item: read String,
+) -> Result<Bool, JsonError>

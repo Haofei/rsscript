@@ -1041,6 +1041,7 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     let value_from_file = Json.parse_file(path: read path)?
     let count = Json.array_len(value: read value)?
     let first = Json.array_get(value: read value, index: 0)?
+    let has_profile = Json.array_contains_string(value: read value, item: read "profile")?
     let profile = Json.field(value: read value, name: read "profile")?
     let active = Json.field_bool(value: read profile, name: read "active")?
     let age = Json.field_int(value: read profile, name: read "age")?
@@ -1057,6 +1058,9 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     ));
     assert!(rust.contains("let count = rsscript_runtime::json_array_len(&value)?;"));
     assert!(rust.contains("let first = rsscript_runtime::json_array_get(&value, 0)?;"));
+    assert!(rust.contains(
+        "let has_profile = rsscript_runtime::json_array_contains_string(&value, &\"profile\".to_string())?;"
+    ));
     assert!(rust.contains(
         "let active = rsscript_runtime::json_field_bool(&profile, &\"active\".to_string())?;"
     ));
@@ -4208,18 +4212,18 @@ fn review_map_dogfood_classifier_has_no_unknown_regions() {
     let source = read_fixture(path);
     let map = review_map_sources(vec![(path.to_str().unwrap(), source.as_str())]);
 
-    assert_eq!(map.summary.total_functions, 33);
-    assert!(map.summary.total_lines >= 480, "{map:?}");
+    assert_eq!(map.summary.total_functions, 34);
+    assert!(map.summary.total_lines >= 515, "{map:?}");
     assert_eq!(map.files[0].risk, ReviewMapFileRisk::Elevated);
     assert_eq!(map.summary.unknown.functions, 0, "{map:?}");
     assert_eq!(map.summary.unknown.lines, 0, "{map:?}");
-    assert!(map.summary.review_required.functions >= 21, "{map:?}");
+    assert!(map.summary.review_required.functions >= 22, "{map:?}");
 
     let json: Value =
         serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
     assert_eq!(json["summary"]["unknown_ratio"], 0.0);
     assert_eq!(json["summary"]["unknown_function_ratio"], 0.0);
-    assert_eq!(json["summary"]["must_review"]["functions"], 21);
+    assert_eq!(json["summary"]["must_review"]["functions"], 22);
     assert_eq!(json["summary"]["low_semantic_risk"]["functions"], 12);
 }
 

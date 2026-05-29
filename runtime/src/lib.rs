@@ -943,6 +943,15 @@ pub fn json_array_get(value: &JsonValue, index: i64) -> Result<JsonValue, JsonEr
     })
 }
 
+pub fn json_array_contains_string(value: &JsonValue, item: &str) -> Result<bool, JsonError> {
+    let Some(items) = value.inner.as_array() else {
+        return Err(JsonError::new("JSON value is not an array"));
+    };
+    Ok(items
+        .iter()
+        .any(|value| value.as_str().is_some_and(|text| text == item)))
+}
+
 pub fn row_buffer_new(size: i64) -> RowBuffer {
     RowBuffer {
         bytes: Vec::with_capacity(size.max(0) as usize),
@@ -1564,12 +1573,18 @@ mod tests {
             super::json_field_string(&profile, "name").expect("name field should be a string");
         let age = super::json_field_int(&profile, "age").expect("age should be an integer");
         let active = super::json_field_bool(&profile, "active").expect("active should be a bool");
+        let reasons =
+            super::json_parse(r#"["public entry point","error handling boundary"]"#).unwrap();
+        let has_public = super::json_array_contains_string(&reasons, "public entry point").unwrap();
+        let has_native = super::json_array_contains_string(&reasons, "native boundary").unwrap();
 
         assert_eq!(file_len, 1);
         assert_eq!(len, 1);
         assert_eq!(name, "RSScript");
         assert_eq!(age, 1);
         assert!(active);
+        assert!(has_public);
+        assert!(!has_native);
         let _ = std::fs::remove_file(path);
     }
 

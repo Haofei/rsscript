@@ -298,25 +298,28 @@ fn make_unknown_region(lines: Int) -> fresh ReviewFacts {
     )
 }
 
-fn parse_review_fact(value: read JsonValue) -> Result<fresh ReviewFacts, JsonError> {
+fn parse_review_region(value: read JsonValue) -> Result<fresh ReviewFacts, JsonError> {
+    let classification = Json.field_string(value: read value, name: read "classification")?
+    let reasons = Json.field(value: read value, name: read "reasons")?
+
     return ReviewFacts(
-        public_api: Json.field_bool(value: read value, name: read "public_api")?,
-        has_unknown_call: Json.field_bool(value: read value, name: read "has_unknown_call")?,
-        has_native_boundary: Json.field_bool(value: read value, name: read "has_native_boundary")?,
-        has_unsafe_boundary: Json.field_bool(value: read value, name: read "has_unsafe_boundary")?,
-        has_resource_boundary: Json.field_bool(value: read value, name: read "has_resource_boundary")?,
-        has_retains: Json.field_bool(value: read value, name: read "has_retains")?,
-        has_mut: Json.field_bool(value: read value, name: read "has_mut")?,
-        has_local: Json.field_bool(value: read value, name: read "has_local")?,
-        has_fresh_return: Json.field_bool(value: read value, name: read "has_fresh_return")?,
-        has_noescape: Json.field_bool(value: read value, name: read "has_noescape")?,
-        has_error_boundary: Json.field_bool(value: read value, name: read "has_error_boundary")?,
-        callee_risk: Json.field_int(value: read value, name: read "callee_risk")?,
+        public_api: Json.array_contains_string(value: read reasons, item: read "public entry point")?,
+        has_unknown_call: classification == "unknown",
+        has_native_boundary: Json.array_contains_string(value: read reasons, item: read "native boundary")?,
+        has_unsafe_boundary: Json.array_contains_string(value: read reasons, item: read "unsafe boundary")?,
+        has_resource_boundary: Json.array_contains_string(value: read reasons, item: read "resource lifetime boundary")?,
+        has_retains: Json.array_contains_string(value: read reasons, item: read "retention boundary")?,
+        has_mut: Json.array_contains_string(value: read reasons, item: read "mut call-site effect")?,
+        has_local: Json.array_contains_string(value: read reasons, item: read "local binding")?,
+        has_fresh_return: Json.array_contains_string(value: read reasons, item: read "fresh guarantee boundary")?,
+        has_noescape: Json.array_contains_string(value: read reasons, item: read "noescape callback")?,
+        has_error_boundary: Json.array_contains_string(value: read reasons, item: read "error handling boundary")?,
+        callee_risk: ReviewClass.low_semantic_risk(),
         line_count: Json.field_int(value: read value, name: read "line_count")?,
     )
 }
 
-fn parse_fact_list_from(
+fn parse_region_list_from(
     json: read JsonValue,
     index: Int,
     limit: Int,
@@ -327,11 +330,42 @@ fn parse_fact_list_from(
     }
 
     let item = Json.array_get(value: read json, index: index)?
-    let facts = parse_review_fact(value: read item)?
+    let facts = parse_review_region(value: read item)?
     List.push(list: mut items, value: read facts)
 
-    parse_fact_list_from(
+    parse_region_list_from(
         json: read json,
+        index: index + 1,
+        limit: limit,
+        items: mut items,
+    )?
+
+    return Ok(Unit)
+}
+
+fn parse_file_regions_from(
+    files: read JsonValue,
+    index: Int,
+    limit: Int,
+    items: mut List<ReviewFacts>,
+) -> Result<Unit, JsonError> {
+    if index >= limit {
+        return Ok(Unit)
+    }
+
+    let file = Json.array_get(value: read files, index: index)?
+    let regions = Json.field(value: read file, name: read "regions")?
+    let region_count = Json.array_len(value: read regions)?
+
+    parse_region_list_from(
+        json: read regions,
+        index: 0,
+        limit: region_count,
+        items: mut items,
+    )?
+
+    parse_file_regions_from(
+        files: read files,
         index: index + 1,
         limit: limit,
         items: mut items,
@@ -420,11 +454,12 @@ fn summarize_list(items: read List<ReviewFacts>) -> fresh ReviewSummary {
 fn dogfood_fact_list() -> Result<fresh List<ReviewFacts>, JsonError> {
     let path = Path.from_string(value: read "tests/fixtures/pass/dogfood-review-facts.json")
     let json = Json.parse_file(path: read path)?
-    let limit = Json.array_len(value: read json)?
+    let files = Json.field(value: read json, name: read "files")?
+    let limit = Json.array_len(value: read files)?
     local items = List<ReviewFacts>.new()
 
-    parse_fact_list_from(
-        json: read json,
+    parse_file_regions_from(
+        files: read files,
         index: 0,
         limit: limit,
         items: mut items,

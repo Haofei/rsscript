@@ -1,62 +1,52 @@
-[
-  {
-    "public_api": false,
-    "has_unknown_call": false,
-    "has_native_boundary": false,
-    "has_unsafe_boundary": false,
-    "has_resource_boundary": false,
-    "has_retains": false,
-    "has_mut": false,
-    "has_local": false,
-    "has_fresh_return": false,
-    "has_noescape": false,
-    "has_error_boundary": false,
-    "callee_risk": 1,
-    "line_count": 4
+{
+  "summary": {
+    "total_functions": 4,
+    "unknown_ratio": 0.0
   },
-  {
-    "public_api": true,
-    "has_unknown_call": false,
-    "has_native_boundary": true,
-    "has_unsafe_boundary": false,
-    "has_resource_boundary": false,
-    "has_retains": false,
-    "has_mut": false,
-    "has_local": false,
-    "has_fresh_return": true,
-    "has_noescape": false,
-    "has_error_boundary": true,
-    "callee_risk": 1,
-    "line_count": 20
-  },
-  {
-    "public_api": false,
-    "has_unknown_call": false,
-    "has_native_boundary": false,
-    "has_unsafe_boundary": false,
-    "has_resource_boundary": true,
-    "has_retains": false,
-    "has_mut": true,
-    "has_local": true,
-    "has_fresh_return": false,
-    "has_noescape": false,
-    "has_error_boundary": true,
-    "callee_risk": 1,
-    "line_count": 18
-  },
-  {
-    "public_api": false,
-    "has_unknown_call": false,
-    "has_native_boundary": false,
-    "has_unsafe_boundary": false,
-    "has_resource_boundary": false,
-    "has_retains": true,
-    "has_mut": true,
-    "has_local": false,
-    "has_fresh_return": false,
-    "has_noescape": false,
-    "has_error_boundary": false,
-    "callee_risk": 1,
-    "line_count": 12
-  }
-]
+  "files": [
+    {
+      "file": "dogfood-supported-review-map.rss",
+      "regions": [
+        {
+          "function": "helper",
+          "classification": "low_semantic_risk",
+          "line_count": 4,
+          "reasons": [
+            "private pure helper with no retention or resource boundary"
+          ]
+        },
+        {
+          "function": "native_entry",
+          "classification": "must_review",
+          "line_count": 20,
+          "reasons": [
+            "public entry point",
+            "native boundary",
+            "fresh guarantee boundary",
+            "error handling boundary"
+          ]
+        },
+        {
+          "function": "resource_worker",
+          "classification": "must_review",
+          "line_count": 18,
+          "reasons": [
+            "resource lifetime boundary",
+            "mut call-site effect",
+            "local binding",
+            "error handling boundary"
+          ]
+        },
+        {
+          "function": "cache_worker",
+          "classification": "must_review",
+          "line_count": 12,
+          "reasons": [
+            "retention boundary",
+            "mut call-site effect"
+          ]
+        }
+      ]
+    }
+  ]
+}
