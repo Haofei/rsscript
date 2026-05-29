@@ -38,6 +38,11 @@ fn main() -> ExitCode {
         "fmt" => run_fmt(&args[2..]),
         "review" => run_review(&args[2..]),
         "pkg" => run_package(&args[2..]),
+        "package" => {
+            eprintln!("unknown command `package`; use `rsscript pkg ...`.");
+            print_usage();
+            ExitCode::from(2)
+        }
         "lower" => run_lower(&args[2..]),
         "run" => run_generated_rust(&args[2..]),
         "remap-rustc" => run_remap_rustc(&args[2..]),

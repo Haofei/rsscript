@@ -7196,6 +7196,10 @@ fn rss_package_command_is_rejected() {
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(!output.status.success(), "stderr={stderr}");
+    assert!(
+        stderr.contains("unknown command `package`; use `rsscript pkg ...`."),
+        "{stderr}"
+    );
     assert!(stderr.contains("rsscript pkg check"), "{stderr}");
     assert!(!stderr.contains("rsscript package"), "{stderr}");
 }

@@ -1292,26 +1292,34 @@ Sandboxing is future work. MVP should at least surface build-time native executi
 
 ## 14. CLI Design
 
-Canonical command namespace:
+Canonical command namespace for the v0.5 prototype:
+
+```sh
+rss pkg check
+rss pkg tree
+rss pkg review
+rss pkg review update
+rss pkg lock
+rss pkg metadata
+rss pkg publish
+rss pkg vendor
+rss pkg diff
+```
+
+No `rss package ...` command is defined for v0.5 tooling.
+
+Future package-management commands may extend the same `rss pkg` namespace, but
+they are not part of the current executable surface until implemented and tested:
 
 ```sh
 rss pkg init
 rss pkg add <package>
 rss pkg remove <package>
 rss pkg update [package]
-rss pkg check
-rss pkg tree
-rss pkg review
-rss pkg review update
-rss pkg metadata
-rss pkg publish
-rss pkg vendor
 rss pkg clean
 ```
 
-No `rss package ...` command is defined for v0.5 tooling.
-
-### 14.1 `rss pkg add`
+### 14.1 Future `rss pkg add`
 
 ```sh
 rss pkg add rss-json
@@ -1328,7 +1336,7 @@ update rsspkg.lock
 show review summary of introduced dependency
 ```
 
-### 14.2 `rss pkg update`
+### 14.2 Future `rss pkg update`
 
 ```sh
 rss pkg update
