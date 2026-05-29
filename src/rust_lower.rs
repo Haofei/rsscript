@@ -1027,10 +1027,10 @@ impl<'a> RustLowerer<'a> {
                     return format!("{native_target}({args})");
                 }
                 if is_resource_pool_new_callee(callee) {
-                    return lower_resource_pool_new_call(self, args);
+                    return lower_resource_pool_new_call(self, args, span);
                 }
                 if is_resource_pool_try_new_callee(callee) {
-                    return lower_resource_pool_try_new_call(self, args);
+                    return lower_resource_pool_try_new_call(self, args, span);
                 }
                 let is_resource_pool_borrow = is_resource_pool_borrow_callee(callee);
                 let callee = if is_resource_pool_borrow {
@@ -2349,27 +2349,37 @@ fn is_resource_pool_borrow_expr(expr: &Expr) -> bool {
     matches!(expr, Expr::Call { callee, .. } if is_resource_pool_borrow_callee(callee))
 }
 
-fn lower_resource_pool_new_call(lowerer: &mut RustLowerer<'_>, args: &[CallArg]) -> String {
-    let create = lower_call_arg(
-        lowerer,
-        args,
-        "create",
-        0,
-        "|| panic!(\"missing resource factory\")",
-    );
-    let max_size = lower_call_arg(lowerer, args, "max_size", 1, "0");
+fn lower_required_call_arg(
+    lowerer: &mut RustLowerer<'_>,
+    args: &[CallArg],
+    name: &str,
+    index: usize,
+    call_span: &Span,
+) -> String {
+    args.iter()
+        .find(|arg| arg.name.as_deref() == Some(name))
+        .or_else(|| args.get(index))
+        .map(|arg| lowerer.lower_expr(&arg.value))
+        .unwrap_or_else(|| unreachable_lowering("validated call argument", call_span))
+}
+
+fn lower_resource_pool_new_call(
+    lowerer: &mut RustLowerer<'_>,
+    args: &[CallArg],
+    call_span: &Span,
+) -> String {
+    let create = lower_required_call_arg(lowerer, args, "create", 0, call_span);
+    let max_size = lower_required_call_arg(lowerer, args, "max_size", 1, call_span);
     format!("rsscript_runtime::ResourcePool::from_factory({max_size}, {create})")
 }
 
-fn lower_resource_pool_try_new_call(lowerer: &mut RustLowerer<'_>, args: &[CallArg]) -> String {
-    let create = lower_call_arg(
-        lowerer,
-        args,
-        "create",
-        0,
-        "|| panic!(\"missing resource factory\")",
-    );
-    let max_size = lower_call_arg(lowerer, args, "max_size", 1, "0");
+fn lower_resource_pool_try_new_call(
+    lowerer: &mut RustLowerer<'_>,
+    args: &[CallArg],
+    call_span: &Span,
+) -> String {
+    let create = lower_required_call_arg(lowerer, args, "create", 0, call_span);
+    let max_size = lower_required_call_arg(lowerer, args, "max_size", 1, call_span);
     format!("rsscript_runtime::ResourcePool::try_from_factory({max_size}, {create})")
 }
 
