@@ -303,6 +303,10 @@ bash scripts/lint_sources.sh
 bash scripts/run_examples.sh
 ```
 
+Development discipline is documented in [DEVELOPMENT.md](DEVELOPMENT.md): spec
+prerequisites first, dogfood as the main pressure test, no fixture-only
+shortcuts, and a broad-first testing loop.
+
 CI sets `RSSCRIPT_FULL_TESTS=1` so the same scripts run the full workspace test suite and execute every `examples/*.rss` file through `rss run`.
 
 The runtime hooks wired through so far: `Log.write`, `Assert.equal`, `OS.close`, `List.consume`, `Buffer.consume`, `Path.from_string`, plus the core `File`, `Json`, `Csv`, `Cache`, `Image`, `ImageCache`, HTTP handler, DB resource-pool, config reload, rules config reload, interpreter object links, and `Counter` APIs. `ImageCache` is the first retained managed-container hook; the interpreter hooks model `Environment` and `FunctionObject` as managed handles with the closure link stored weakly. Simple operations like `String.concat` keep `.rssi` signatures for checking but lower directly to Rust std expressions. Built-in literals, arithmetic and comparison operators, `Option<T>` constructors, and surface types (`Bytes`, `Buffer`, `Path`, `List<T>`, `Map<K,V>`, `Set<T>`) lower to the matching Rust forms. User-defined operator overloading stays forbidden.
