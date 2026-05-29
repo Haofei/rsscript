@@ -25,6 +25,7 @@ pub mod code {
     pub const ASYNC_CALL_NOT_CONSUMED: &str = "RS0022";
     pub const FD_OUTSIDE_INTERNAL_BOUNDARY: &str = "RS0023";
     pub const UNKNOWN_TYPE: &str = "RS0024";
+    pub const UNKNOWN_FIELD: &str = "RS0025";
     pub const FEATURE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
@@ -368,6 +369,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::UNKNOWN_TYPE,
         title: "unknown type",
         explanation: "Every type used in a signature or field must be a built-in type, a core/runtime type known to the frontend, a generic parameter in scope, or a declared source/interface type. Unknown types are rejected before Rust lowering.",
+    },
+    DiagnosticExplanation {
+        code: code::UNKNOWN_FIELD,
+        title: "unknown field",
+        explanation: "Field accesses must resolve against the RSScript type known for the base expression. Unknown fields are rejected by the frontend instead of being deferred to generated Rust diagnostics.",
     },
     DiagnosticExplanation {
         code: code::FEATURE_VIOLATION,

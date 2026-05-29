@@ -1163,6 +1163,10 @@ pub fn string_from_bool(value: bool) -> String {
     value.to_string()
 }
 
+pub fn string_len(value: &str) -> i64 {
+    value.len() as i64
+}
+
 pub fn string_starts_with(value: &str, prefix: &str) -> bool {
     value.starts_with(prefix)
 }

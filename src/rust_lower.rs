@@ -2536,6 +2536,11 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     },
     RuntimeIntrinsic {
         namespace: "String",
+        name: "len",
+        rust_target: "rsscript_runtime::string_len",
+    },
+    RuntimeIntrinsic {
+        namespace: "String",
         name: "starts_with",
         rust_target: "rsscript_runtime::string_starts_with",
     },

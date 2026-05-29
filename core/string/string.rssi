@@ -7,6 +7,9 @@ pub fn String.from_int(value: Int) -> fresh String
 pub fn String.from_bool(value: Bool) -> fresh String
     effects(pure)
 
+pub fn String.len(value: read String) -> Int
+    effects(pure)
+
 pub fn String.starts_with(
     value: read String,
     prefix: read String,

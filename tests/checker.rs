@@ -685,6 +685,7 @@ fn diagnostic_explanations_are_available_by_code() {
     let fresh_unknown = explain_diagnostic_code("RS0602").expect("RS0602 should be registered");
     let pool_contract = explain_diagnostic_code("RS0707").expect("RS0707 should be registered");
     let unknown_type = explain_diagnostic_code("RS0024").expect("RS0024 should be registered");
+    let unknown_field = explain_diagnostic_code("RS0025").expect("RS0025 should be registered");
 
     assert_eq!(explanation.title, "use after manage");
     assert!(formatted.contains("RS0401"));
@@ -692,12 +693,62 @@ fn diagnostic_explanations_are_available_by_code() {
     assert!(fresh_unknown.explanation.contains("clean inline fields"));
     assert_eq!(unknown_type.title, "unknown type");
     assert!(unknown_type.explanation.contains("before Rust lowering"));
+    assert_eq!(unknown_field.title, "unknown field");
+    assert!(unknown_field.explanation.contains("deferred"));
     assert_eq!(
         pool_contract.title,
         "ResourcePool factory contract violation"
     );
     assert!(pool_contract.explanation.contains("ResourcePool.try_new"));
     assert!(explain_diagnostic_code("RS9999").is_none());
+}
+
+#[test]
+fn checker_reports_unknown_fields_before_backend_lowering() {
+    let source = r#"
+struct User {
+    id: Int
+}
+
+fn main() -> Unit {
+    let user = User(id: 1)
+    Assert.equal_int(left: user.missing, right: 1)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("unknown-field.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0025"
+                && diagnostic.summary == "unknown field `missing` on type `User`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn rust_lowering_rejects_unknown_fields_before_rustc() {
+    let source = r#"
+struct User {
+    id: Int
+}
+
+fn main() -> Unit {
+    let user = User(id: 1)
+    Assert.equal_int(left: user.missing, right: 1)
+    return Unit
+}
+"#;
+    let diagnostics = lower_source_to_rust("unknown-field.rss", source)
+        .expect_err("unknown field should fail before Rust generation");
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0025"),
+        "{diagnostics:?}"
+    );
 }
 
 #[test]
@@ -1515,6 +1566,7 @@ fn main() -> Unit {
     let message = String.concat(left: read "hello ", right: read "world")
     let count = String.from_int(value: 42)
     let ok = String.from_bool(value: true)
+    let length = String.len(value: read message)
     let starts = String.starts_with(value: read message, prefix: read "hello")
     let ends = String.ends_with(value: read message, suffix: read "world")
     Log.write(message: read message)
@@ -1530,6 +1582,7 @@ fn main() -> Unit {
     ));
     assert!(rust.contains("let count = rsscript_runtime::string_from_int(42);"));
     assert!(rust.contains("let ok = rsscript_runtime::string_from_bool(true);"));
+    assert!(rust.contains("let length = rsscript_runtime::string_len(&message);"));
     assert!(rust.contains(
         "let starts = rsscript_runtime::string_starts_with(&message, &\"hello\".to_string());"
     ));

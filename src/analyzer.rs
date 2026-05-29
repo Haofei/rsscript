@@ -131,6 +131,7 @@ impl Analyzer<'_> {
         self.check_duplicate_declarations();
         self.check_signature_explicitness();
         self.check_unknown_types();
+        self.check_unknown_fields();
         self.check_fd_surface();
         self.check_generic_constraints();
         self.check_runtime_guarantee_bodies();
@@ -995,6 +996,29 @@ impl Analyzer<'_> {
         }
     }
 
+    fn check_unknown_fields(&mut self) {
+        let items = self.syntax_program.items.clone();
+        for item in &items {
+            let Item::Function(function) = item else {
+                continue;
+            };
+            let Some(body) = self.hir.function_body(&function.name).cloned() else {
+                continue;
+            };
+            for access in &body.field_accesses {
+                let Some(base_type) = &access.base_type else {
+                    continue;
+                };
+                let Some(type_info) = self.hir.type_info(base_type) else {
+                    continue;
+                };
+                if !type_info.fields.contains_key(&access.name) {
+                    self.unknown_field_diagnostic(&access.name, base_type, &access.span);
+                }
+            }
+        }
+    }
+
     fn check_fresh_generic_return_bound(
         &mut self,
         function_name: &str,
@@ -1748,6 +1772,28 @@ impl Analyzer<'_> {
                     "Declare `{}`, import an `.rssi` contract that declares it, or use a known core/runtime type.",
                     ty.name
                 ),
+                "manual",
+            ),
+        );
+    }
+
+    fn unknown_field_diagnostic(
+        &mut self,
+        field_name: &str,
+        base_type: &str,
+        span: &crate::diagnostic::Span,
+    ) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::UNKNOWN_FIELD,
+                format!("unknown field `{field_name}` on type `{base_type}`."),
+                span.clone(),
+                "unknown field",
+            )
+            .with_cause("RSScript field accesses must resolve before Rust lowering.")
+            .with_fix(
+                "use_declared_field",
+                format!("Use a field declared on `{base_type}` or update the type declaration."),
                 "manual",
             ),
         );
