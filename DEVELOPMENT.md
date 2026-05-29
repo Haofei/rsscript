@@ -79,6 +79,7 @@ cargo clippy -q --workspace -- -D warnings
 cargo test -q --workspace
 bash scripts/check.sh
 bash scripts/run_examples.sh
+bash scripts/run_dogfood.sh
 git diff --check
 ```
 
