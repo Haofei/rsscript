@@ -1370,6 +1370,30 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_uses_noescape_callback_parameter_type_for_body_call_arguments() {
+    let source = r#"
+fn apply(callback: noescape Fn(Int) -> Int) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: |value| String.len(value: read value))
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-body-call-arg-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "argument `value` for `String.len` has type `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn checker_reports_mixed_equality_operand_types_before_backend_lowering() {
     let source = r#"
 fn main() -> Unit {

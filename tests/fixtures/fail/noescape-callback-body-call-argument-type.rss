@@ -1,0 +1,10 @@
+// expect: RS0207
+
+fn apply(callback: noescape Fn(Int) -> Int) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: |value| String.len(value: read value))
+    return Unit
+}

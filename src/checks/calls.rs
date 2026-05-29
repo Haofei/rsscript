@@ -1193,6 +1193,7 @@ fn check_callback_return_expr_type(
     contract: &CallbackContract<'_>,
 ) {
     check_callback_operator_operand_types(analyzer, expr, contract);
+    check_callback_call_argument_types(analyzer, expr, contract);
     if check_callback_variant_return_type(analyzer, expr, contract) {
         return;
     }
@@ -1280,6 +1281,7 @@ fn check_callback_payload_return_type(
         }
         return;
     };
+    check_callback_call_argument_types(analyzer, payload, contract);
     check_callback_operator_operand_types(analyzer, payload, contract);
     let Some(actual) = callback_expr_type_name(payload, contract.params, contract.param_types)
     else {
@@ -1309,6 +1311,14 @@ fn callback_expr_type_name(
             .get(index)
             .map(|type_name| type_name.to_string());
     }
+    if let HirExpr::Effect { value, .. }
+    | HirExpr::Manage { value, .. }
+    | HirExpr::Spawn { value, .. }
+    | HirExpr::Await { value, .. }
+    | HirExpr::Try { value, .. } = expr
+    {
+        return callback_expr_type_name(value, callback_params, callback_param_types);
+    }
     if let HirExpr::Binary { op, .. } = expr {
         return match op {
             BinaryOp::Equal
@@ -1323,6 +1333,93 @@ fn callback_expr_type_name(
         };
     }
     hir_expr_type_name(expr).map(str::to_string)
+}
+
+fn check_callback_call_argument_types(
+    analyzer: &mut Analyzer<'_>,
+    expr: &HirExpr,
+    contract: &CallbackContract<'_>,
+) {
+    match expr {
+        HirExpr::Call {
+            callee,
+            args,
+            resolution,
+            ..
+        } => {
+            if let CallResolution::Resolved { signature, .. } = resolution {
+                check_callback_resolved_call_argument_types(
+                    analyzer, callee, args, signature, contract,
+                );
+            }
+            for arg in args {
+                check_callback_call_argument_types(analyzer, &arg.value, contract);
+            }
+        }
+        HirExpr::Binary { left, right, .. } => {
+            check_callback_call_argument_types(analyzer, left, contract);
+            check_callback_call_argument_types(analyzer, right, contract);
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. } => {
+            check_callback_call_argument_types(analyzer, value, contract);
+        }
+        HirExpr::Field { base, .. } => check_callback_call_argument_types(analyzer, base, contract),
+        HirExpr::Index { base, index, .. } => {
+            check_callback_call_argument_types(analyzer, base, contract);
+            check_callback_call_argument_types(analyzer, index, contract);
+        }
+        HirExpr::Closure { .. }
+        | HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn check_callback_resolved_call_argument_types(
+    analyzer: &mut Analyzer<'_>,
+    callee: &Callee,
+    args: &[HirCallArg],
+    signature: &FunctionSig,
+    contract: &CallbackContract<'_>,
+) {
+    let call_name = callee_display(callee);
+    let type_param_substitutions = call_type_param_substitutions(analyzer, callee, signature);
+    for arg in args {
+        let Some(name) = &arg.name else {
+            continue;
+        };
+        let Some(expected_param) = signature.params.iter().find(|param| param.name == *name) else {
+            continue;
+        };
+        let expected_type =
+            substitute_type_params(&expected_param.type_name, &type_param_substitutions);
+        if type_contains_unresolved_generic(&expected_type, &signature.type_params) {
+            continue;
+        }
+        let Some(actual_type) =
+            callback_expr_type_name(&arg.value, contract.params, contract.param_types)
+        else {
+            continue;
+        };
+        if unresolved_generic_type(&actual_type) {
+            continue;
+        }
+        if !argument_type_matches(&expected_type, &actual_type) {
+            callback_call_site_argument_type_mismatch_diagnostic(
+                analyzer,
+                &call_name,
+                name,
+                &actual_type,
+                &expected_type,
+                hir_expr_span(&arg.value),
+            );
+        }
+    }
 }
 
 fn check_callback_operator_operand_types(
@@ -1572,6 +1669,34 @@ fn callback_call_argument_type_mismatch_diagnostic(
         .with_fix(
             "match_callback_call_argument_type",
             format!("Pass a `{expected}` value for argument {}.", index + 1),
+            "manual",
+        ),
+    );
+}
+
+fn callback_call_site_argument_type_mismatch_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    call_name: &str,
+    arg_name: &str,
+    actual: &str,
+    expected: &str,
+    span: &Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::ARGUMENT_TYPE_MISMATCH,
+            format!(
+                "argument `{arg_name}` for `{call_name}` has type `{actual}`, expected `{expected}`."
+            ),
+            span.clone(),
+            "argument type mismatch",
+        )
+        .with_cause(
+            "`noescape Fn(...)` callback parameter types apply to ordinary calls inside callback expressions before Rust lowering.",
+        )
+        .with_fix(
+            "match_callback_body_call_argument_type",
+            format!("Pass a `{expected}` value for `{arg_name}`."),
             "manual",
         ),
     );
