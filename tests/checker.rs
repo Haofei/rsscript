@@ -1172,6 +1172,65 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_reports_noescape_callback_early_return_type_mismatch() {
+    let source = r#"
+fn apply(callback: noescape Fn() -> Result<String, BuildError>) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: || {
+        if true {
+            return Ok(42)
+        }
+        return Ok("ok")
+    })
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-early-return-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "callback argument `callback` for `apply` returns `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_noescape_callback_match_arm_return_type_mismatch() {
+    let source = r#"
+fn apply(callback: noescape Fn() -> Result<String, BuildError>) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    let value = Some("x")
+    apply(callback: || {
+        match value {
+            Some(result) => return Ok(result)
+            None => return Ok(42)
+        }
+    })
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-match-return-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0207"
+                && diagnostic.summary
+                    == "callback argument `callback` for `apply` returns `Int`, expected `String`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn checker_reports_mixed_equality_operand_types_before_backend_lowering() {
     let source = r#"
 fn main() -> Unit {

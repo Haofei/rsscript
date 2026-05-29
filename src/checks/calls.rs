@@ -968,30 +968,45 @@ fn check_noescape_closure_return_type(
         return false;
     };
     let expected_return = noescape_return_type(expected_type).unwrap_or("Unit");
-    match closure_return_expr(body) {
-        ClosureReturn::Expr(expr) => {
-            check_callback_return_expr_type(
+    let returns = closure_return_sites(body);
+    if returns.is_empty() {
+        if !type_pattern_matches(expected_return, "Unit", generic_params) {
+            callback_return_type_mismatch_diagnostic(
                 analyzer,
                 call_name,
                 arg_name,
-                expr,
+                "Unit",
                 expected_return,
-                generic_params,
+                &body.span,
             );
         }
-        ClosureReturn::Unit(span) => {
-            if !type_pattern_matches(expected_return, "Unit", generic_params) {
-                callback_return_type_mismatch_diagnostic(
+        return true;
+    }
+    for return_site in returns {
+        match return_site {
+            ClosureReturn::Expr(expr) => {
+                check_callback_return_expr_type(
                     analyzer,
                     call_name,
                     arg_name,
-                    "Unit",
+                    expr,
                     expected_return,
-                    span,
+                    generic_params,
                 );
             }
+            ClosureReturn::Unit(span) => {
+                if !type_pattern_matches(expected_return, "Unit", generic_params) {
+                    callback_return_type_mismatch_diagnostic(
+                        analyzer,
+                        call_name,
+                        arg_name,
+                        "Unit",
+                        expected_return,
+                        span,
+                    );
+                }
+            }
         }
-        ClosureReturn::Unknown => {}
     }
     true
 }
@@ -999,29 +1014,94 @@ fn check_noescape_closure_return_type(
 enum ClosureReturn<'a> {
     Expr(&'a HirExpr),
     Unit(&'a Span),
-    Unknown,
 }
 
-fn closure_return_expr(body: &HirBlock) -> ClosureReturn<'_> {
-    let Some(statement) = body.statements.iter().next_back() else {
-        return ClosureReturn::Unknown;
-    };
+fn closure_return_sites(body: &HirBlock) -> Vec<ClosureReturn<'_>> {
+    let mut returns = Vec::new();
+    for statement in &body.statements {
+        collect_explicit_return_sites(statement, &mut returns);
+    }
+    if !body
+        .statements
+        .iter()
+        .any(|statement| matches!(statement, HirStmt::Return { .. }))
+        && let Some(statement) = body.statements.iter().next_back()
+    {
+        collect_implicit_closure_return_sites(statement, &mut returns);
+    }
+    returns
+}
+
+fn collect_explicit_return_sites<'a>(statement: &'a HirStmt, returns: &mut Vec<ClosureReturn<'a>>) {
     match statement {
         HirStmt::Return {
             value: Some(value), ..
-        }
-        | HirStmt::Expr(value) => ClosureReturn::Expr(value),
+        } => returns.push(ClosureReturn::Expr(value)),
         HirStmt::Return {
             value: None, span, ..
+        } => returns.push(ClosureReturn::Unit(span)),
+        HirStmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            collect_explicit_return_sites_from_block(then_body, returns);
+            if let Some(else_body) = else_body {
+                collect_explicit_return_sites_from_block(else_body, returns);
+            }
         }
-        | HirStmt::Let { span, .. } => ClosureReturn::Unit(span),
-        HirStmt::With { .. }
+        HirStmt::Loop { body, .. } | HirStmt::With { body, .. } => {
+            collect_explicit_return_sites_from_block(body, returns);
+        }
+        HirStmt::Match { arms, .. } => {
+            for arm in arms {
+                collect_explicit_return_sites_from_block(&arm.body, returns);
+            }
+        }
+        HirStmt::Let { .. }
+        | HirStmt::Expr(_)
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn collect_explicit_return_sites_from_block<'a>(
+    block: &'a HirBlock,
+    returns: &mut Vec<ClosureReturn<'a>>,
+) {
+    for statement in &block.statements {
+        collect_explicit_return_sites(statement, returns);
+    }
+}
+
+fn collect_implicit_closure_return_sites<'a>(
+    statement: &'a HirStmt,
+    returns: &mut Vec<ClosureReturn<'a>>,
+) {
+    match statement {
+        HirStmt::Expr(value) => returns.push(ClosureReturn::Expr(value)),
+        HirStmt::Let { span, .. } => returns.push(ClosureReturn::Unit(span)),
+        HirStmt::If {
+            then_body,
+            else_body: Some(else_body),
+            ..
+        } => {
+            if let Some(statement) = then_body.statements.last() {
+                collect_implicit_closure_return_sites(statement, returns);
+            }
+            if let Some(statement) = else_body.statements.last() {
+                collect_implicit_closure_return_sites(statement, returns);
+            }
+        }
+        HirStmt::Return { .. }
+        | HirStmt::With { .. }
         | HirStmt::If { .. }
         | HirStmt::Loop { .. }
         | HirStmt::Match { .. }
         | HirStmt::Break(_)
         | HirStmt::Continue(_)
-        | HirStmt::Unknown(_) => ClosureReturn::Unknown,
+        | HirStmt::Unknown(_) => {}
     }
 }
 
