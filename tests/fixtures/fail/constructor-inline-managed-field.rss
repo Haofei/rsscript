@@ -1,0 +1,18 @@
+// expect: RS0202
+
+struct MyImage {
+    id: Int
+}
+
+struct Boxed {
+    image: MyImage
+}
+
+fn make_image() -> fresh MyImage {
+    return MyImage(id: 1)
+}
+
+fn bad() -> fresh Boxed {
+    let image = make_image()
+    return Boxed(image: read image)
+}

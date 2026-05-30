@@ -1,8 +1,10 @@
+features: local
+
 struct Pair<T: Struct> {
     left: T
     right: T
 }
 
-fn make_pair<T: Struct>(left: read T, right: read T) -> fresh Pair<T> {
-    return Pair(left: read left, right: read right)
+fn make_pair<T: Struct>(left: take T, right: take T) -> fresh Pair<T> {
+    return Pair(left: take left, right: take right)
 }

@@ -18,12 +18,12 @@ fn HttpError.from_db(error: read DbError) -> HttpError
 fn decode_upload(request: read Request) -> Result<fresh UploadPlan, JsonError> {
     let body = Request.path(request: read request)
     let json = Json.parse(text: read body)?
-    let input_text = Json.field_string(value: read json, name: read "input")?
-    let output_text = Json.field_string(value: read json, name: read "output")?
-    let input = Path.from_string(value: read input_text)
-    let output = Path.from_string(value: read output_text)
+    local input_text = Json.field_string(value: read json, name: read "input")?
+    local output_text = Json.field_string(value: read json, name: read "output")?
+    local input = Path.from_string(value: read input_text)
+    local output = Path.from_string(value: read output_text)
 
-    return UploadPlan(input: read input, output: read output)
+    return UploadPlan(input: take input, output: take output)
 }
 
 fn transform_image(plan: read UploadPlan, cache: mut ImageCache) -> Result<Unit, ImageError> {

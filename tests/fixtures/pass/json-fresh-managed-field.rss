@@ -1,4 +1,6 @@
 
+features: local
+
 class Schema {
     name: String
 }
@@ -14,12 +16,12 @@ struct UserConfig {
 }
 
 fn parse_user_config(text: read String, schema: read Schema) -> Result<fresh UserConfig, JsonError> {
-    let json = Json.parse(text: read text)?
+    local json = Json.parse(text: read text)?
     let name = Json.field_string(value: read json, name: read "name")?
 
     return UserConfig(
         schema: read schema,
-        json: read json,
+        json: take json,
         name: read name,
     )
 }

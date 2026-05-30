@@ -2789,7 +2789,7 @@ impl BodyState {
     }
 }
 
-fn is_copy_type_name(type_name: &str) -> bool {
+pub(crate) fn is_copy_type_name(type_name: &str) -> bool {
     let type_name = type_name.trim();
     !type_name.contains('<')
         && matches!(

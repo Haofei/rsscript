@@ -10,8 +10,8 @@ use crate::syntax::ast::{Callee, FunctionDecl, Item, MatchPattern, TypeRef};
 
 use super::local::{
     BodyState, FreshReturnIssue, FreshReturnIssueKind, LocalAnalysis, ManagedToLocalUse, MovedUse,
-    ResourceEscapeKind, RetainedClosureCapture, RetainedLocalUse, TakeHandleField, merge_if_state,
-    merge_loop_state,
+    ResourceEscapeKind, RetainedClosureCapture, RetainedLocalUse, TakeHandleField,
+    is_copy_type_name, merge_if_state, merge_loop_state,
 };
 
 pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
@@ -870,7 +870,7 @@ fn check_constructor_field_initializers(
         signature,
         kind:
             ResolvedCalleeKind::Constructor {
-                type_kind: HirTypeKind::Struct,
+                type_kind: HirTypeKind::Struct | HirTypeKind::Class,
             },
     } = resolution
     else {
@@ -930,6 +930,17 @@ fn check_constructor_field_initializers(
                 &arg.value,
                 "Inline fields take ownership of non-Copy local values stored inside the constructed struct.",
             );
+        } else if !field.is_handle
+            && analyzer.hir.type_kind(&field.type_name).is_some()
+            && !is_copy_type_name(&field.type_name)
+            && constructor_arg_uses_managed_inline_value(analyzer, &arg.value, state)
+        {
+            managed_inline_constructor_field_diagnostic(
+                analyzer,
+                &constructor_name,
+                name,
+                &arg.value,
+            );
         }
     }
 }
@@ -956,6 +967,58 @@ fn constructor_arg_place_path(expr: &HirExpr) -> Option<PlacePath> {
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => None,
+    }
+}
+
+fn constructor_arg_uses_managed_inline_value(
+    analyzer: &Analyzer<'_>,
+    expr: &HirExpr,
+    state: &BodyState,
+) -> bool {
+    match expr {
+        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => {
+            constructor_arg_uses_managed_inline_value(analyzer, value, state)
+        }
+        HirExpr::Manage { .. } => true,
+        HirExpr::Ident { .. } | HirExpr::Field { .. } | HirExpr::Index { .. } => {
+            constructor_arg_place_path(expr)
+                .is_some_and(|path| path.crosses_handle || state.is_managed(&path.base))
+        }
+        HirExpr::Call { resolution, .. } => match resolution {
+            CallResolution::Resolved {
+                signature,
+                kind:
+                    ResolvedCalleeKind::Constructor {
+                        type_kind: HirTypeKind::Struct,
+                    },
+            } if signature.returns_fresh => false,
+            CallResolution::Resolved {
+                signature,
+                kind:
+                    ResolvedCalleeKind::Constructor {
+                        type_kind: HirTypeKind::Class,
+                    },
+            } if signature.returns_fresh => true,
+            CallResolution::Resolved { signature, .. } => {
+                signature.return_type.as_deref().is_some_and(|type_name| {
+                    let type_name = type_name
+                        .trim()
+                        .strip_prefix("fresh ")
+                        .unwrap_or(type_name.trim());
+                    !signature.returns_fresh
+                        && !is_copy_type_name(type_name)
+                        && analyzer.hir.type_kind(type_name).is_some()
+                })
+            }
+            CallResolution::EnumVariant | CallResolution::Unknown => false,
+        },
+        HirExpr::Binary { .. }
+        | HirExpr::Closure { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Spawn { .. }
+        | HirExpr::Await { .. }
+        | HirExpr::Unknown(_) => false,
     }
 }
 
@@ -1013,6 +1076,32 @@ fn constructor_field_effect_diagnostic(
             "add_constructor_field_effect",
             format!("Write `{field_name}: {expected} ...` in the constructor."),
             "machine-applicable",
+        ),
+    );
+}
+
+fn managed_inline_constructor_field_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    constructor_name: &str,
+    field_name: &str,
+    value: &HirExpr,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::MISSING_DATA_EFFECT,
+            format!(
+                "field `{field_name}` for `{constructor_name}` cannot be initialized from a managed value."
+            ),
+            hir_expr_span(value).clone(),
+            "managed value used for inline field",
+        )
+        .with_cause(
+            "Inline non-Copy fields own their stored value. RSScript has no implicit clone from managed values into inline fields.",
+        )
+        .with_fix(
+            "make_field_handle_or_bind_local",
+            "Use a `handle` field, construct a fresh inline value, or bind the value as `local` and pass it with `take`.",
+            "manual",
         ),
     );
 }

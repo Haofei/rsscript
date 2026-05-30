@@ -85,6 +85,8 @@
           "line_count": 11,
           "reasons": [
             "fresh guarantee boundary",
+            "local binding",
+            "take effect",
             "error handling boundary"
           ]
         },

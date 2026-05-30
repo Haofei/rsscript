@@ -4250,6 +4250,8 @@ fn make_session_from_param(user: read User) -> Session {
 #[test]
 fn rust_lowering_materializes_constructor_read_fields_as_owned_values() {
     let source = r#"
+features: local
+
 struct Inner {
     name: String
 }
@@ -4260,17 +4262,18 @@ struct Outer {
 }
 
 fn make_outer(name: read String, label: read String) -> fresh Outer {
-    let inner = Inner(name: read name)
-    return Outer(inner: read inner, label: read label)
+    local inner = Inner(name: read name)
+    return Outer(inner: take inner, label: read label)
 }
 "#;
     let rust = lower_source_to_rust("owned-constructor.rss", source).expect("source should lower");
 
     assert!(rust.contains("#[derive(Debug, Clone)]"));
     assert!(rust.contains("Inner { name: name.clone() }"));
-    assert!(rust.contains("Outer { inner: inner.clone(), label: label.clone() }"));
+    assert!(rust.contains("Outer { inner: inner, label: label.clone() }"));
     assert!(!rust.contains("name: &name"));
     assert!(!rust.contains("inner: &inner"));
+    assert!(!rust.contains("inner: inner.clone()"));
 }
 
 #[test]
