@@ -480,6 +480,8 @@ fn run_generated_rust(args: &[String]) -> ExitCode {
         .arg("--quiet")
         .arg("--manifest-path")
         .arg(package_dir.join("Cargo.toml"))
+        .arg("--")
+        .args(&options.program_args)
         .output()
     {
         Ok(output) => output,
@@ -657,6 +659,7 @@ struct RunOptions<'a> {
     json: bool,
     path: Option<&'a str>,
     out_dir: Option<&'a str>,
+    program_args: Vec<&'a str>,
 }
 
 struct VerifyOptions<'a> {
@@ -734,16 +737,22 @@ fn parse_run_args(args: &[String]) -> RunOptions<'_> {
     let mut json = false;
     let mut path = None;
     let mut out_dir = None;
+    let mut program_args = Vec::new();
     let mut index = 0;
 
     while let Some(arg) = args.get(index) {
-        if arg == "--json" {
+        if arg == "--" {
+            program_args.extend(args[index + 1..].iter().map(String::as_str));
+            break;
+        } else if arg == "--json" {
             json = true;
         } else if arg == "--out-dir" {
             index += 1;
             out_dir = args.get(index).map(String::as_str);
         } else if path.is_none() {
             path = Some(arg.as_str());
+        } else {
+            program_args.push(arg.as_str());
         }
         index += 1;
     }
@@ -752,6 +761,7 @@ fn parse_run_args(args: &[String]) -> RunOptions<'_> {
         json,
         path,
         out_dir,
+        program_args,
     }
 }
 
@@ -1385,8 +1395,10 @@ fn print_usage() {
     eprintln!("  rsscript fmt <file.rss>");
     eprintln!("  rsscript lower --rust <file.rss>");
     eprintln!("  rsscript lower --rust <file.rss> --out-dir <directory>");
-    eprintln!("  rsscript run [--json] <file-or-package-directory>");
-    eprintln!("  rsscript run [--json] <file-or-package-directory> --out-dir <directory>");
+    eprintln!("  rsscript run [--json] <file-or-package-directory> [-- <args>...]");
+    eprintln!(
+        "  rsscript run [--json] <file-or-package-directory> --out-dir <directory> [-- <args>...]"
+    );
     eprintln!("  rsscript remap-rustc [--json] <rsscript-source-map.json> <rustc-json-lines>");
     eprintln!("  rsscript verify-rust [--json] <file-or-package-directory>");
     eprintln!("  rsscript verify-rust [--json] <file-or-package-directory> --out-dir <directory>");

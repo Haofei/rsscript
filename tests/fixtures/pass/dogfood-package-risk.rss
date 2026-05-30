@@ -324,7 +324,11 @@ fn summarize_package_risk_cases_from(
 }
 
 fn dogfood_package_risk_summary() -> Result<fresh PackageRiskSummary, JsonError> {
-    let path = Path.from_string(value: read "tests/fixtures/pass/dogfood-package-review.json")
+    let input = Args.get_or_default(
+        index: 0,
+        default: read "tests/fixtures/pass/dogfood-package-review.json",
+    )
+    let path = Path.from_string(value: read input)
     let json = Json.parse_file(path: read path)?
     let limit = Json.array_len(value: read json)?
 

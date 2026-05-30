@@ -221,6 +221,12 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("List", "new", "rsscript_runtime::list_new"),
     runtime_intrinsic("List", "push", "rsscript_runtime::list_push"),
     runtime_intrinsic("Log", "write", "rsscript_runtime::log_write"),
+    runtime_intrinsic("Args", "count", "rsscript_runtime::args_count"),
+    runtime_intrinsic(
+        "Args",
+        "get_or_default",
+        "rsscript_runtime::args_get_or_default",
+    ),
     runtime_intrinsic("OS", "close", "rsscript_runtime::os_close"),
     runtime_intrinsic("Path", "from_string", "rsscript_runtime::path_from_string"),
     runtime_intrinsic("Request", "new", "rsscript_runtime::request_new"),

@@ -7142,6 +7142,42 @@ fn rss_run_accepts_dogfood_package_risk_classifier() {
 }
 
 #[test]
+fn rss_run_accepts_dogfood_package_risk_classifier_with_cli_generated_input_path() {
+    let temp_dir = unique_temp_dir("rsscript-dogfood-package-risk-cli-input");
+    let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-risk.rss")
+    else {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return;
+    };
+    let package_review_json = generated_dogfood_package_review_json_via_cli(&temp_dir);
+    let input_path = fixture_dir.join("generated-package-review.json");
+    fs::write(
+        &input_path,
+        serde_json::to_vec(&package_review_json).expect("package review JSON should serialize"),
+    )
+    .expect("CLI generated package review should write");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("tests/fixtures/pass/dogfood-package-risk.rss")
+        .arg("--")
+        .arg(input_path.strip_prefix(&temp_dir).unwrap())
+        .current_dir(&temp_dir)
+        .output()
+        .expect("rss run should execute dogfood package risk classifier");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "dogfood package risk cases=5 mismatches=0 unmodeled_reasons=0 low=1 elevated=1 high=2 unknown=1"
+    );
+    assert!(stderr.trim().is_empty(), "{stderr}");
+}
+
+#[test]
 fn rss_run_reports_dogfood_package_risk_mismatch() {
     let temp_dir = unique_temp_dir("rsscript-dogfood-package-risk-mismatch");
     let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-risk.rss")
@@ -7484,6 +7520,17 @@ fn generated_dogfood_review_map_json() -> Value {
 }
 
 fn generated_dogfood_package_review_json(temp_dir: &Path) -> Value {
+    generated_dogfood_package_review_json_with(temp_dir, package_review_json_for_dir)
+}
+
+fn generated_dogfood_package_review_json_via_cli(temp_dir: &Path) -> Value {
+    generated_dogfood_package_review_json_with(temp_dir, package_review_json_for_dir_via_cli)
+}
+
+fn generated_dogfood_package_review_json_with(
+    temp_dir: &Path,
+    review_json_for_dir: fn(&Path) -> Value,
+) -> Value {
     let low_dir = temp_dir.join("package-low");
     write_empty_named_package_fixture(&low_dir, "rss-dogfood-low", "0.1.0", "");
 
@@ -7540,11 +7587,11 @@ native-tls = ["native"]
     );
 
     Value::Array(vec![
-        package_review_json_for_dir(&low_dir),
-        package_review_json_for_dir(&elevated_dir),
-        package_review_json_for_dir(&high_dir),
-        package_review_json_for_dir(&feature_high_dir),
-        package_review_json_for_dir(&unknown_dir),
+        review_json_for_dir(&low_dir),
+        review_json_for_dir(&elevated_dir),
+        review_json_for_dir(&high_dir),
+        review_json_for_dir(&feature_high_dir),
+        review_json_for_dir(&unknown_dir),
     ])
 }
 
@@ -7552,6 +7599,24 @@ fn package_review_json_for_dir(package_dir: &Path) -> Value {
     let review = review_package_dir(package_dir).expect("package review should succeed");
     serde_json::from_str(&rsscript::format_package_review_json(&review))
         .expect("package review JSON should parse")
+}
+
+fn package_review_json_for_dir_via_cli(package_dir: &Path) -> Value {
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("pkg")
+        .arg("review")
+        .arg("--json")
+        .arg(package_dir)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss pkg review --json should execute");
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("package review CLI stdout should be JSON")
 }
 
 fn generated_dogfood_package_exports_json(temp_dir: &Path) -> Value {

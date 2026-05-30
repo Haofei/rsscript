@@ -469,6 +469,20 @@ pub fn os_close(fd: i64) {
     let _ = fd;
 }
 
+pub fn args_count() -> i64 {
+    std::env::args().skip(1).count() as i64
+}
+
+pub fn args_get_or_default(index: i64, default: &str) -> String {
+    if index < 0 {
+        return default.to_string();
+    }
+    std::env::args()
+        .skip(1)
+        .nth(index as usize)
+        .unwrap_or_else(|| default.to_string())
+}
+
 pub fn list_new<T>() -> Vec<T> {
     Vec::new()
 }

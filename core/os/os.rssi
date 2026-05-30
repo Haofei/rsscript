@@ -1,4 +1,13 @@
 features: native
 
+pub native fn Args.count() -> Int
+    effects(native)
+
+pub native fn Args.get_or_default(
+    index: Int,
+    default: read String,
+) -> String
+    effects(native)
+
 pub native fn OS.close(fd: Fd) -> Unit
     effects(native)
