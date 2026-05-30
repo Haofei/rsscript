@@ -111,6 +111,7 @@ struct LocalFlowBinding {
     type_name: Option<String>,
     value_ident: Option<(String, Span)>,
     value_handle_field: Option<(String, Span)>,
+    fresh_from_local_source: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1878,7 +1879,7 @@ fn collect_stmt_local_flow(
             condition, body, ..
         } => collect_loop_local_flow(steps, node, condition.is_some(), body),
         HirStmt::For { body, .. } => collect_loop_local_flow(steps, node, true, body),
-        HirStmt::Match { arms, .. } => collect_match_local_flow(steps, node, arms),
+        HirStmt::Match { value, arms, .. } => collect_match_local_flow(steps, node, value, arms),
         HirStmt::With { binding, body, .. } => collect_scoped_body_flow(steps, node, binding, body),
         HirStmt::Return { .. } => LocalFlowFragment {
             entry: Some(node),
@@ -1910,6 +1911,7 @@ fn collect_stmt_local_flow(
 fn collect_match_local_flow(
     steps: &mut Vec<LocalFlowStep>,
     match_node: usize,
+    value: &HirExpr,
     arms: &[crate::hir::HirMatchArm],
 ) -> LocalFlowFragment {
     let mut exits = Vec::new();
@@ -1920,7 +1922,16 @@ fn collect_match_local_flow(
     }
     for arm in arms {
         let arm_flow = collect_block_local_flow(&arm.body, steps);
-        if let Some(arm_entry) = arm_flow.entry {
+        let arm_entry = if let Some(binding) = fresh_match_pattern_binding(value, arm) {
+            let binding_node = push_pattern_binding_flow_step(steps, &arm.span, binding);
+            if let Some(body_entry) = arm_flow.entry {
+                add_successor(steps, LocalFlowExit::new(binding_node), body_entry);
+            }
+            Some(binding_node)
+        } else {
+            arm_flow.entry
+        };
+        if let Some(arm_entry) = arm_entry {
             add_successor(steps, LocalFlowExit::new(match_node), arm_entry);
             exits.extend(arm_flow.exits);
             breaks.extend(arm_flow.breaks);
@@ -1934,6 +1945,110 @@ fn collect_match_local_flow(
         exits,
         breaks,
         continues,
+    }
+}
+
+fn push_pattern_binding_flow_step(
+    steps: &mut Vec<LocalFlowStep>,
+    span: &Span,
+    binding: LocalFlowBinding,
+) -> usize {
+    let id = steps.len();
+    steps.push(LocalFlowStep {
+        id,
+        span: span.clone(),
+        kind: LocalFlowStepKind::Statement,
+        uses: Vec::new(),
+        managed_closure_captures: Vec::new(),
+        binding: Some(binding),
+        resource_binding: None,
+        events: Vec::new(),
+        successors: Vec::new(),
+    });
+    id
+}
+
+fn fresh_match_pattern_binding(
+    value: &HirExpr,
+    arm: &crate::hir::HirMatchArm,
+) -> Option<LocalFlowBinding> {
+    let value_type = hir_expr_type_name(value)?;
+    let source = hir_expr_ident_name(value)?;
+    let crate::syntax::ast::MatchPattern::Variant {
+        name,
+        binding: Some(binding),
+        ..
+    } = &arm.pattern
+    else {
+        return None;
+    };
+    let payload_type = fresh_payload_type_for_variant(value_type, name)?;
+    Some(LocalFlowBinding {
+        name: binding.clone(),
+        kind: HirBindingKind::LocalLet,
+        type_name: Some(strip_fresh_type(payload_type).to_string()),
+        value_ident: None,
+        value_handle_field: None,
+        fresh_from_local_source: Some(source.to_string()),
+    })
+}
+
+fn fresh_payload_type_for_variant<'a>(value_type: &'a str, variant: &str) -> Option<&'a str> {
+    let inner = value_type
+        .trim()
+        .strip_prefix("Option<")
+        .and_then(|rest| rest.strip_suffix('>'));
+    if variant == "Some" {
+        let payload = inner?.trim();
+        return payload.strip_prefix("fresh ").map(str::trim);
+    }
+
+    let inner = value_type
+        .trim()
+        .strip_prefix("Result<")
+        .and_then(|rest| rest.strip_suffix('>'))?;
+    let args = split_top_level_type_args(inner);
+    let payload = match variant {
+        "Ok" => args.first().copied()?,
+        _ => return None,
+    }
+    .trim();
+    payload.strip_prefix("fresh ").map(str::trim)
+}
+
+fn split_top_level_type_args(args: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0usize;
+    for (index, ch) in args.char_indices() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(args[start..index].trim());
+                start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    if start < args.len() {
+        parts.push(args[start..].trim());
+    }
+    parts
+}
+
+fn strip_fresh_type(type_name: &str) -> &str {
+    type_name
+        .trim()
+        .strip_prefix("fresh ")
+        .unwrap_or(type_name.trim())
+}
+
+fn hir_expr_ident_name(expr: &HirExpr) -> Option<&str> {
+    match expr {
+        HirExpr::Ident { name, .. } => Some(name.as_str()),
+        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => hir_expr_ident_name(value),
+        _ => None,
     }
 }
 
@@ -2206,7 +2321,17 @@ fn transfer_flow_step(step: &LocalFlowStep, mut state: BodyState) -> BodyState {
     if let Some(binding) = &step.binding {
         match binding.kind {
             HirBindingKind::ManagedLet => state.bind_managed(binding.name.clone()),
-            HirBindingKind::LocalLet => state.bind_local(binding.name.clone()),
+            HirBindingKind::LocalLet => {
+                if let Some(source) = &binding.fresh_from_local_source {
+                    if state.is_local(source) {
+                        state.bind_local(binding.name.clone());
+                    } else {
+                        state.bind_managed(binding.name.clone());
+                    }
+                } else {
+                    state.bind_local(binding.name.clone());
+                }
+            }
             HirBindingKind::Param => {}
         }
         if let Some(type_name) = &binding.type_name {
@@ -2347,6 +2472,7 @@ fn local_flow_step_binding(statement: &HirStmt) -> Option<LocalFlowBinding> {
             type_name: type_name.clone(),
             value_ident: value.as_ref().and_then(local_binding_source_ident),
             value_handle_field: value.as_ref().and_then(local_binding_handle_field_source),
+            fresh_from_local_source: None,
         }),
         HirStmt::Return { .. }
         | HirStmt::With { .. }

@@ -1,0 +1,21 @@
+features: local
+
+struct Boxed {
+    value: Int
+}
+
+class BuildError {
+    code: Int
+}
+
+fn make() -> Result<fresh Boxed, BuildError> {
+    return Ok(Boxed(value: 1))
+}
+
+fn unwrap() -> fresh Boxed {
+    local result = make()
+    match result {
+        Ok(value) => return value
+        Err(error) => return Boxed(value: 0)
+    }
+}

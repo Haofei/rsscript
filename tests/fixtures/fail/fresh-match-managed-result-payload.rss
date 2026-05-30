@@ -1,0 +1,21 @@
+// expect: RS0601
+
+struct Boxed {
+    value: Int
+}
+
+class BuildError {
+    code: Int
+}
+
+fn make() -> Result<fresh Boxed, BuildError> {
+    return Ok(Boxed(value: 1))
+}
+
+fn bad() -> fresh Boxed {
+    let result = make()
+    match result {
+        Ok(value) => return value
+        Err(error) => return Boxed(value: 0)
+    }
+}
