@@ -2995,6 +2995,7 @@ fn main() -> Unit {
     let starts = String.starts_with(value: read message, prefix: read "hello")
     let ends = String.ends_with(value: read message, suffix: read "world")
     let contains = String.contains(value: read message, needle: read "lo wo")
+    let lines = String.lines(value: read "one\ntwo")
     Log.write(message: read message)
     Log.write(message: read count)
     Log.write(message: read ok)
@@ -3018,6 +3019,9 @@ fn main() -> Unit {
     assert!(rust.contains(
         "let contains = rsscript_runtime::string_contains(&message, &\"lo wo\".to_string());"
     ));
+    assert!(
+        rust.contains("let lines = rsscript_runtime::string_lines(&\"one\\ntwo\".to_string());")
+    );
     assert!(rust.contains("rsscript_runtime::log_write(&message);"));
 }
 

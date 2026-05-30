@@ -18,6 +18,12 @@ struct PackageSourcePathSets {
     source_paths: handle JsonValue
 }
 
+struct PackageSourceContentFacts {
+    public_functions: Int
+    api_symbols: Int
+    tool_symbols: Int
+}
+
 fn dogfood_source_root() -> fresh Path {
     let input = Args.get_or_default(
         index: 0,
@@ -127,6 +133,59 @@ fn read_file_text_result(path: read Path) -> Result<String, FileError> {
     }
 }
 
+fn source_content_facts_from_lines(
+    lines: read List<String>,
+    index: Int,
+    facts: read PackageSourceContentFacts,
+) -> fresh PackageSourceContentFacts {
+    if index >= List.len(list: read lines) {
+        return PackageSourceContentFacts(
+            public_functions: facts.public_functions,
+            api_symbols: facts.api_symbols,
+            tool_symbols: facts.tool_symbols,
+        )
+    }
+
+    let line = List.get(list: read lines, index: index)
+    let has_public_function = String.starts_with(value: read line, prefix: read "pub fn ")
+    let has_api_run = String.starts_with(value: read line, prefix: read "pub fn Api.run")
+    let has_tool_run = String.starts_with(value: read line, prefix: read "pub fn Tool.run")
+    let next = PackageSourceContentFacts(
+        public_functions: add_bool(
+            value: facts.public_functions,
+            condition: has_public_function,
+        ),
+        api_symbols: add_bool(
+            value: facts.api_symbols,
+            condition: has_api_run,
+        ),
+        tool_symbols: add_bool(
+            value: facts.tool_symbols,
+            condition: has_tool_run,
+        ),
+    )
+
+    return source_content_facts_from_lines(
+        lines: read lines,
+        index: index + 1,
+        facts: read next,
+    )
+}
+
+fn source_content_facts(contents: read String) -> fresh PackageSourceContentFacts {
+    let lines = String.lines(value: read contents)
+
+    return source_content_facts_from_lines(
+        lines: read lines,
+        index: 0,
+        facts: read PackageSourceContentFacts(
+            public_functions: 0,
+            api_symbols: 0,
+            tool_symbols: 0,
+        ),
+    )
+}
+
 fn package_source_path_sets(root: read Path) -> Result<fresh PackageSourcePathSets, String> {
     let manifest_path = Path.join(
         base: read root,
@@ -152,9 +211,10 @@ fn add_source_path(
     let is_manifest = path == "rsspkg.toml"
     let is_interface = String.ends_with(value: read path, suffix: read ".rssi")
     let is_source = String.ends_with(value: read path, suffix: read ".rss")
-    let has_public_function = String.contains(value: read contents, needle: read "pub fn ")
-    let has_api_run = String.contains(value: read contents, needle: read "pub fn Api.run")
-    let has_tool_run = String.contains(value: read contents, needle: read "pub fn Tool.run")
+    let content_facts = source_content_facts(contents: read contents)
+    let has_public_function = content_facts.public_functions > 0
+    let has_api_run = content_facts.api_symbols > 0
+    let has_tool_run = content_facts.tool_symbols > 0
 
     return PackageSourceSetFacts(
         total_files: facts.total_files + 1,

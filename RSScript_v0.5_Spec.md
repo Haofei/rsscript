@@ -2971,6 +2971,9 @@ pub fn String.ends_with(value: read String, suffix: read String) -> Bool
 
 pub fn String.contains(value: read String, needle: read String) -> Bool
     effects(pure)
+
+pub fn String.lines(value: read String) -> fresh List<String>
+    effects(pure)
 ```
 
 Agent, GPU, HTTP, networking, and model-client packages are use-case libraries, not language core.

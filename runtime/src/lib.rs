@@ -1273,6 +1273,10 @@ pub fn string_contains(value: &str, needle: &str) -> bool {
     value.contains(needle)
 }
 
+pub fn string_lines(value: &str) -> Vec<String> {
+    value.lines().map(str::to_string).collect()
+}
+
 pub fn assert_equal(left: &str, right: &str) {
     assert_eq!(left, right);
 }
@@ -1726,6 +1730,7 @@ mod tests {
         let name_starts_with_rss = super::string_starts_with(&name, "RSS");
         let name_ends_with_script = super::string_ends_with(&name, "Script");
         let name_contains_script = super::string_contains(&name, "Script");
+        let lines = super::string_lines("pub fn Api.run()\nreturn Unit\n");
 
         assert_eq!(file_len, 1);
         assert_eq!(len, 1);
@@ -1741,6 +1746,7 @@ mod tests {
         assert!(name_starts_with_rss);
         assert!(name_ends_with_script);
         assert!(name_contains_script);
+        assert_eq!(lines, vec!["pub fn Api.run()", "return Unit"]);
         let _ = std::fs::remove_file(path);
     }
 

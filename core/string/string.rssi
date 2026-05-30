@@ -27,3 +27,6 @@ pub fn String.contains(
     needle: read String,
 ) -> Bool
     effects(pure)
+
+pub fn String.lines(value: read String) -> fresh List<String>
+    effects(pure)
