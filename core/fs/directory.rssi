@@ -1,4 +1,16 @@
 features: native
 
+pub native fn Directory.exists(path: read Path) -> Bool
+    effects(native)
+
+pub native fn Directory.is_file(path: read Path) -> Bool
+    effects(native)
+
+pub native fn Directory.is_dir(path: read Path) -> Bool
+    effects(native)
+
+pub native fn Directory.create_all(path: read Path) -> Result<Unit, FileError>
+    effects(native)
+
 pub native fn Directory.list_files(path: read Path) -> Result<fresh List<String>, FileError>
     effects(native)

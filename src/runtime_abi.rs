@@ -87,6 +87,18 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Counter", "value", "rsscript_runtime::counter_value"),
     runtime_intrinsic(
         "Directory",
+        "create_all",
+        "rsscript_runtime::directory_create_all",
+    ),
+    runtime_intrinsic("Directory", "exists", "rsscript_runtime::directory_exists"),
+    runtime_intrinsic("Directory", "is_dir", "rsscript_runtime::directory_is_dir"),
+    runtime_intrinsic(
+        "Directory",
+        "is_file",
+        "rsscript_runtime::directory_is_file",
+    ),
+    runtime_intrinsic(
+        "Directory",
         "list_files",
         "rsscript_runtime::directory_list_files",
     ),

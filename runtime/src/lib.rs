@@ -506,6 +506,22 @@ pub fn directory_list_files<P: RuntimePath + ?Sized>(path: &P) -> std::io::Resul
     Ok(files)
 }
 
+pub fn directory_exists<P: RuntimePath + ?Sized>(path: &P) -> bool {
+    path.as_path().exists()
+}
+
+pub fn directory_is_file<P: RuntimePath + ?Sized>(path: &P) -> bool {
+    path.as_path().is_file()
+}
+
+pub fn directory_is_dir<P: RuntimePath + ?Sized>(path: &P) -> bool {
+    path.as_path().is_dir()
+}
+
+pub fn directory_create_all<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<()> {
+    std::fs::create_dir_all(path.as_path())
+}
+
 fn collect_directory_files(
     root: &std::path::Path,
     current: &std::path::Path,
@@ -2011,6 +2027,30 @@ mod tests {
         assert!(buffer.is_empty());
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn directory_runtime_hooks_cover_package_manager_fs_checks() {
+        let root =
+            std::env::temp_dir().join(format!("rsscript-runtime-directory-{}", std::process::id()));
+        let nested = root.join("src");
+        let file = nested.join("main.rss");
+
+        super::directory_create_all(&nested).expect("directory should be created");
+        std::fs::write(&file, "pub fn main() -> Unit {}\n").expect("file should write");
+
+        assert!(super::directory_exists(&root));
+        assert!(super::directory_is_dir(&root));
+        assert!(!super::directory_is_file(&root));
+        assert!(super::directory_exists(&file));
+        assert!(super::directory_is_file(&file));
+        assert!(!super::directory_is_dir(&file));
+        assert_eq!(
+            super::directory_list_files(&root).expect("files should list"),
+            vec!["src/main.rss".to_string()]
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
