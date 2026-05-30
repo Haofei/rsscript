@@ -7806,6 +7806,86 @@ paths = ["src"]
 
 #[test]
 #[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
+fn rss_run_accepts_minimal_selfhost_package_manager_review() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-package-manager-review");
+    let source_root = temp_dir.join("source");
+    let review_path = temp_dir.join("review/package-review.json");
+    fs::create_dir_all(source_root.join("interface")).expect("interface dir should exist");
+    fs::create_dir_all(source_root.join("src")).expect("source dir should exist");
+    fs::write(
+        source_root.join("interface/lib.rssi"),
+        r#"struct ReviewThing
+
+pub fn ReviewThing.new() -> Result<fresh ReviewThing, ReviewError>
+pub fn ReviewThing.update(value: mut ReviewThing, label: read String) -> Unit
+pub fn ReviewThing.cache(value: read ReviewThing, label: read String) -> Unit effects(retains(label))
+pub native fn ReviewThing.native_probe(value: read ReviewThing) -> Bool effects(native)
+"#,
+    )
+    .expect("interface should write");
+    fs::write(
+        source_root.join("src/main.rss"),
+        "pub fn ReviewThing.main() -> Unit { return Unit }\n",
+    )
+    .expect("source should write");
+    fs::write(
+        source_root.join("rsspkg.toml"),
+        r#"[package]
+name = "rss-review-root"
+version = "0.5.0"
+edition = "2026"
+
+[interfaces]
+paths = ["interface"]
+
+[sources]
+paths = ["src"]
+"#,
+    )
+    .expect("manifest should write");
+
+    let review_output = rss_command()
+        .arg("run")
+        .arg("rss/package-manager/main.rss")
+        .arg("--")
+        .arg("review")
+        .arg(&source_root)
+        .arg(&review_path)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss run should execute minimal package manager review command");
+    let review_stdout = String::from_utf8_lossy(&review_output.stdout);
+    let review_stderr = String::from_utf8_lossy(&review_output.stderr);
+
+    assert!(
+        review_output.status.success(),
+        "stdout={review_stdout}\nstderr={review_stderr}"
+    );
+    assert!(
+        review_stdout.contains("rss package manager review rss-review-root risk=native apis=4"),
+        "{review_stdout}"
+    );
+    assert!(review_stderr.trim().is_empty(), "{review_stderr}");
+    let review = fs::read_to_string(&review_path)
+        .unwrap_or_else(|error| panic!("review JSON should be written: {error}"));
+    let review_json: Value =
+        serde_json::from_str(&review).expect("review output should be valid JSON");
+    assert_eq!(review_json["package"], "rss-review-root");
+    assert_eq!(review_json["risk"], "native");
+    assert_eq!(review_json["public_types"], 1);
+    assert_eq!(review_json["public_apis"], 4);
+    assert_eq!(review_json["mutating_apis"], 1);
+    assert_eq!(review_json["retaining_apis"], 1);
+    assert_eq!(review_json["fresh_apis"], 1);
+    assert_eq!(review_json["native_apis"], 1);
+    assert_eq!(review_json["unsafe_apis"], 0);
+    assert_eq!(review_json["unknown_apis"], 0);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_accepts_selfhost_package_manifest_parser_with_input_path() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-package-manifest");
     let Some(_fixture_dir) =
@@ -8355,7 +8435,68 @@ fn generated_selfhost_package_review_json(temp_dir: &Path) -> Value {
 }
 
 fn generated_selfhost_package_review_json_via_cli(temp_dir: &Path) -> Value {
-    generated_selfhost_package_review_json_with(temp_dir, package_review_json_for_dir_via_cli)
+    let low_dir = temp_dir.join("package-low");
+    write_empty_named_package_fixture(&low_dir, "rss-selfhost-low", "0.1.0", "");
+
+    let elevated_dir = temp_dir.join("package-elevated");
+    write_named_package_fixture(
+        &elevated_dir,
+        "rss-selfhost-elevated",
+        "0.1.0",
+        "",
+        r#"pub fn Api.run() -> Unit
+"#,
+    );
+
+    let high_dir = temp_dir.join("package-high");
+    write_named_package_fixture(
+        &high_dir,
+        "rss-selfhost-high",
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_selfhost_native"
+build_scripts = "review"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+        r#"features: native
+
+native fn Native.echo(message: read String) -> String
+    effects(native)
+"#,
+    );
+
+    let unknown_dir = temp_dir.join("package-unknown");
+    write_empty_named_package_fixture(
+        &unknown_dir,
+        "rss-selfhost-unknown",
+        "0.1.0",
+        r#"[review.expect]
+risk = "unknown"
+"#,
+    );
+
+    let feature_high_dir = temp_dir.join("package-feature-high");
+    write_named_package_fixture(
+        &feature_high_dir,
+        "rss-selfhost-feature-high",
+        "0.1.0",
+        r#"[features]
+native-tls = ["native"]
+"#,
+        r#"pub fn Api.run() -> Unit
+"#,
+    );
+
+    Value::Array(vec![
+        package_review_json_for_dir_via_cli(&low_dir),
+        package_review_json_for_dir(&elevated_dir),
+        package_review_json_for_dir(&high_dir),
+        package_review_json_for_dir(&feature_high_dir),
+        package_review_json_for_dir(&unknown_dir),
+    ])
 }
 
 fn generated_selfhost_package_review_json_with(

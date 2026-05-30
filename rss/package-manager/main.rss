@@ -30,6 +30,19 @@ struct PackageTreeFacts {
     unresolved_dependencies: Int
 }
 
+struct PackageReviewFacts {
+    package_name: String
+    public_types: Int
+    public_apis: Int
+    mutating_apis: Int
+    retaining_apis: Int
+    resource_apis: Int
+    fresh_apis: Int
+    native_apis: Int
+    unsafe_apis: Int
+    unknown_apis: Int
+}
+
 fn json_error(prefix: read String, error: read JsonError) -> fresh String {
     let message = JsonError.message(error: read error)
     let first = String.concat(left: read prefix, right: read ": ")
@@ -436,6 +449,198 @@ fn package_tree_json(facts: read PackageTreeFacts) -> fresh String {
     return StringBuilder.finish(builder: take builder)
 }
 
+fn package_review_risk(facts: read PackageReviewFacts) -> String {
+    if facts.unknown_apis > 0 {
+        return "unknown"
+    }
+
+    if facts.unsafe_apis > 0 {
+        return "unsafe"
+    }
+
+    if facts.native_apis > 0 {
+        return "native"
+    }
+
+    if facts.resource_apis > 0 {
+        return "resource"
+    }
+
+    if facts.retaining_apis > 0 {
+        return "elevated"
+    }
+
+    if facts.mutating_apis > 0 {
+        return "elevated"
+    }
+
+    return "low"
+}
+
+fn package_review_json(facts: read PackageReviewFacts) -> fresh String {
+    local builder = StringBuilder.new()
+    StringBuilder.push(builder: mut builder, value: read "{\n")
+    StringBuilder.push(builder: mut builder, value: read "  \"package\": ")
+    let package_name = Json.quote_string(value: read facts.package_name)
+    StringBuilder.push(builder: mut builder, value: read package_name)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"risk\": ")
+    let risk = Json.quote_string(value: read package_review_risk(facts: read facts))
+    StringBuilder.push(builder: mut builder, value: read risk)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"public_types\": ")
+    let public_types = String.from_int(value: facts.public_types)
+    StringBuilder.push(builder: mut builder, value: read public_types)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"public_apis\": ")
+    let public_apis = String.from_int(value: facts.public_apis)
+    StringBuilder.push(builder: mut builder, value: read public_apis)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"mutating_apis\": ")
+    let mutating = String.from_int(value: facts.mutating_apis)
+    StringBuilder.push(builder: mut builder, value: read mutating)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"retaining_apis\": ")
+    let retaining = String.from_int(value: facts.retaining_apis)
+    StringBuilder.push(builder: mut builder, value: read retaining)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"resource_apis\": ")
+    let resources = String.from_int(value: facts.resource_apis)
+    StringBuilder.push(builder: mut builder, value: read resources)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"fresh_apis\": ")
+    let fresh = String.from_int(value: facts.fresh_apis)
+    StringBuilder.push(builder: mut builder, value: read fresh)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"native_apis\": ")
+    let native = String.from_int(value: facts.native_apis)
+    StringBuilder.push(builder: mut builder, value: read native)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"unsafe_apis\": ")
+    let unsafe_count = String.from_int(value: facts.unsafe_apis)
+    StringBuilder.push(builder: mut builder, value: read unsafe_count)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"unknown_apis\": ")
+    let unknown = String.from_int(value: facts.unknown_apis)
+    StringBuilder.push(builder: mut builder, value: read unknown)
+    StringBuilder.push(builder: mut builder, value: read "\n}\n")
+
+    return StringBuilder.finish(builder: take builder)
+}
+
+fn empty_package_review_facts(package_name: read String) -> fresh PackageReviewFacts {
+    return PackageReviewFacts(
+        package_name: read package_name,
+        public_types: 0,
+        public_apis: 0,
+        mutating_apis: 0,
+        retaining_apis: 0,
+        resource_apis: 0,
+        fresh_apis: 0,
+        native_apis: 0,
+        unsafe_apis: 0,
+        unknown_apis: 0,
+    )
+}
+
+fn copy_package_review_facts(facts: read PackageReviewFacts) -> fresh PackageReviewFacts {
+    return PackageReviewFacts(
+        package_name: read facts.package_name,
+        public_types: facts.public_types,
+        public_apis: facts.public_apis,
+        mutating_apis: facts.mutating_apis,
+        retaining_apis: facts.retaining_apis,
+        resource_apis: facts.resource_apis,
+        fresh_apis: facts.fresh_apis,
+        native_apis: facts.native_apis,
+        unsafe_apis: facts.unsafe_apis,
+        unknown_apis: facts.unknown_apis,
+    )
+}
+
+fn add_review_line(facts: read PackageReviewFacts, line: read String) -> fresh PackageReviewFacts {
+    let trimmed = String.trim(value: read line)
+    let is_type = String.starts_with(value: read trimmed, prefix: read "struct ")
+    let is_public_type = String.starts_with(value: read trimmed, prefix: read "pub struct ")
+    let is_fn = String.starts_with(value: read trimmed, prefix: read "pub fn ")
+    let is_native_fn = String.starts_with(value: read trimmed, prefix: read "pub native fn ")
+    let is_api = is_fn || is_native_fn
+    let has_mut = String.contains(value: read trimmed, needle: read " mut ")
+    let has_retains = String.contains(value: read trimmed, needle: read "effects(retains")
+    let has_resource_pool = String.contains(value: read trimmed, needle: read "ResourcePool")
+    let has_resource_name = String.contains(value: read trimmed, needle: read "resource")
+    let has_resource = has_resource_pool || has_resource_name
+    let has_fresh = String.contains(value: read trimmed, needle: read "fresh ")
+    let has_native = is_native_fn || String.contains(value: read trimmed, needle: read "effects(native")
+    let has_unsafe = String.contains(value: read trimmed, needle: read "unsafe")
+    let has_unknown = String.contains(value: read trimmed, needle: read "unknown")
+
+    return PackageReviewFacts(
+        package_name: read facts.package_name,
+        public_types: facts.public_types + bool_count(value: is_type || is_public_type),
+        public_apis: facts.public_apis + bool_count(value: is_api),
+        mutating_apis: facts.mutating_apis + bool_count(value: is_api && has_mut),
+        retaining_apis: facts.retaining_apis + bool_count(value: is_api && has_retains),
+        resource_apis: facts.resource_apis + bool_count(value: is_api && has_resource),
+        fresh_apis: facts.fresh_apis + bool_count(value: is_api && has_fresh),
+        native_apis: facts.native_apis + bool_count(value: is_api && has_native),
+        unsafe_apis: facts.unsafe_apis + bool_count(value: is_api && has_unsafe),
+        unknown_apis: facts.unknown_apis + bool_count(value: is_api && has_unknown),
+    )
+}
+
+fn review_interface_file(
+    root: read Path,
+    child: read String,
+    file: read String,
+    facts: read PackageReviewFacts,
+) -> Result<fresh PackageReviewFacts, String> {
+    if String.ends_with(value: read file, suffix: read ".rssi") == false {
+        return Ok(copy_package_review_facts(facts: read facts))
+    }
+
+    let directory = Path.join(base: read root, child: read child)
+    let path = Path.join(base: read directory, child: read file)
+    let text = read_text_result(path: read path)?
+    let lines = String.lines(value: read text)
+
+    return List.fold<String, PackageReviewFacts>(
+        list: read lines,
+        initial: read facts,
+        folder: |state, line| {
+            return add_review_line(facts: read state, line: read line)
+        },
+    )
+}
+
+fn review_interface_root(
+    root: read Path,
+    child: read String,
+    facts: read PackageReviewFacts,
+) -> Result<fresh PackageReviewFacts, String> {
+    let directory = Path.join(base: read root, child: read child)
+    require_directory(path: read directory, label: read child)?
+    let files = list_files_result(path: read directory)?
+
+    return List.try_fold<String, PackageReviewFacts, String>(
+        list: read files,
+        initial: read facts,
+        folder: |state, file| {
+            return review_interface_file(
+                root: read root,
+                child: read child,
+                file: read file,
+                facts: read state,
+            )
+        },
+    )
+}
+
+fn package_review_facts(root: read Path) -> Result<fresh PackageReviewFacts, String> {
+    let manifest = parse_toml_result(path: read manifest_path(root: read root))?
+    let package = json_field_result(value: read manifest, name: read "package")?
+    let package_name = json_field_string_result(value: read package, name: read "name")?
+    let interface_roots = manifest_interface_roots(manifest: read manifest)?
+
+    return List.try_fold<String, PackageReviewFacts, String>(
+        list: read interface_roots,
+        initial: read empty_package_review_facts(package_name: read package_name),
+        folder: |facts, child| {
+            return review_interface_root(root: read root, child: read child, facts: read facts)
+        },
+    )
+}
+
 fn manifest_dependencies(manifest: read JsonValue) -> Result<Option<JsonValue>, String> {
     match Json.field(value: read manifest, name: read "dependencies") {
         Ok(dependencies) => {
@@ -692,6 +897,32 @@ fn run_tree(root: read Path, output: read Path) -> Result<Unit, String> {
     return Ok(Unit)
 }
 
+fn run_review(root: read Path, output: read Path) -> Result<Unit, String> {
+    let facts = package_review_facts(root: read root)?
+    let text = package_review_json(facts: read facts)
+    write_text_result(path: read output, text: read text)?
+
+    local builder = StringBuilder.new()
+    StringBuilder.push(builder: mut builder, value: read "rss package manager review ")
+    StringBuilder.push(builder: mut builder, value: read facts.package_name)
+    StringBuilder.push(builder: mut builder, value: read " risk=")
+    let risk = package_review_risk(facts: read facts)
+    StringBuilder.push(builder: mut builder, value: read risk)
+    StringBuilder.push(builder: mut builder, value: read " apis=")
+    let apis = String.from_int(value: facts.public_apis)
+    StringBuilder.push(builder: mut builder, value: read apis)
+    StringBuilder.push(builder: mut builder, value: read " native=")
+    let native = String.from_int(value: facts.native_apis)
+    StringBuilder.push(builder: mut builder, value: read native)
+    StringBuilder.push(builder: mut builder, value: read " unknown=")
+    let unknown = String.from_int(value: facts.unknown_apis)
+    StringBuilder.push(builder: mut builder, value: read unknown)
+    let message = StringBuilder.finish(builder: take builder)
+    Log.write(message: read message)
+
+    return Ok(Unit)
+}
+
 pub fn main() -> Result<Unit, String> {
     let command = Args.get_or_default(index: 0, default: read "metadata")
     let root = root_path()
@@ -711,6 +942,10 @@ pub fn main() -> Result<Unit, String> {
 
     if command == "tree" {
         return run_tree(root: read root, output: read output)
+    }
+
+    if command == "review" {
+        return run_review(root: read root, output: read output)
     }
 
     let message = String.concat(left: read "unknown package command: ", right: read command)
