@@ -14,6 +14,7 @@ pub(crate) struct BodyState {
     pub(crate) locals: HashSet<String>,
     pub(crate) field_splittable_locals: HashSet<String>,
     pub(crate) clean_locals: HashSet<String>,
+    pub(crate) fresh_returnable_locals: HashSet<String>,
     pub(crate) managed: HashSet<String>,
     pub(crate) resources: HashSet<String>,
     pub(crate) moved: HashMap<String, Span>,
@@ -475,7 +476,10 @@ fn collect_fresh_return_issue(
                 .unwrap_or(return_span)
                 .clone();
             if let Some(state) = entry_states.get(return_span) {
-                if state.is_managed(name) || (state.is_local(name) && !state.is_clean_local(name)) {
+                if state.is_managed(name)
+                    || (state.is_local(name)
+                        && (!state.is_clean_local(name) || !state.is_fresh_returnable_local(name)))
+                {
                     push_fresh_return_issue(
                         issues,
                         FreshReturnIssueKind::NotClean { name: name.clone() },
@@ -508,9 +512,11 @@ fn collect_fresh_return_issue(
             }
             if let Some(value) = value
                 && fresh_field_access_base(value).is_some_and(|name| {
-                    entry_states
-                        .get(return_span)
-                        .is_some_and(|state| state.is_local(name) && state.is_clean_local(name))
+                    entry_states.get(return_span).is_some_and(|state| {
+                        state.is_local(name)
+                            && state.is_clean_local(name)
+                            && state.is_fresh_returnable_local(name)
+                    })
                 })
             {
                 return;
@@ -2291,12 +2297,19 @@ fn merge_flow_states(left: &BodyState, right: &BodyState) -> BodyState {
         .intersection(&right.clean_locals)
         .filter(|name| locals.contains(*name))
         .cloned()
-        .collect();
+        .collect::<HashSet<_>>();
+    let fresh_returnable_locals = left
+        .fresh_returnable_locals
+        .intersection(&right.fresh_returnable_locals)
+        .filter(|name| clean_locals.contains(*name))
+        .cloned()
+        .collect::<HashSet<_>>();
 
     BodyState {
         locals,
         field_splittable_locals,
         clean_locals,
+        fresh_returnable_locals,
         managed,
         resources,
         moved,
@@ -2490,9 +2503,9 @@ impl BodyState {
             }
             if matches!(binding.effect, Some(ParamEffect::Mut | ParamEffect::Take)) {
                 if binding.effect == Some(ParamEffect::Take) {
-                    self.bind_local(binding.name.clone());
+                    self.bind_param_local(binding.name.clone(), true);
                 } else {
-                    self.bind_local_without_field_split(binding.name.clone());
+                    self.bind_param_local(binding.name.clone(), false);
                 }
             }
         }
@@ -2514,12 +2527,16 @@ impl BodyState {
         let name = name.into();
         self.locals.insert(name.clone());
         self.field_splittable_locals.insert(name.clone());
-        self.clean_locals.insert(name);
+        self.clean_locals.insert(name.clone());
+        self.fresh_returnable_locals.insert(name);
     }
 
-    fn bind_local_without_field_split(&mut self, name: impl Into<String>) {
+    fn bind_param_local(&mut self, name: impl Into<String>, field_splittable: bool) {
         let name = name.into();
         self.locals.insert(name.clone());
+        if field_splittable {
+            self.field_splittable_locals.insert(name.clone());
+        }
         self.clean_locals.insert(name);
     }
 
@@ -2532,15 +2549,18 @@ impl BodyState {
             self.moved_paths.insert(name.to_string(), span);
             if let Some(root) = path_root(name) {
                 self.clean_locals.remove(root);
+                self.fresh_returnable_locals.remove(root);
             }
         } else {
             self.moved.insert(name.to_string(), span);
             self.clean_locals.remove(name);
+            self.fresh_returnable_locals.remove(name);
         }
     }
 
     pub(crate) fn mark_retained(&mut self, name: &str) {
         self.clean_locals.remove(name);
+        self.fresh_returnable_locals.remove(name);
     }
 
     pub(crate) fn is_local(&self, name: &str) -> bool {
@@ -2561,6 +2581,10 @@ impl BodyState {
 
     pub(crate) fn is_clean_local(&self, name: &str) -> bool {
         self.clean_locals.contains(name)
+    }
+
+    pub(crate) fn is_fresh_returnable_local(&self, name: &str) -> bool {
+        self.fresh_returnable_locals.contains(name)
     }
 
     pub(crate) fn move_span(&self, name: &str) -> Option<&Span> {
@@ -2718,6 +2742,12 @@ pub(crate) fn merge_loop_state(
         .filter(|name| base.locals.contains(*name))
         .cloned()
         .collect();
+    state.fresh_returnable_locals = base
+        .fresh_returnable_locals
+        .intersection(&body_state.fresh_returnable_locals)
+        .filter(|name| state.clean_locals.contains(*name))
+        .cloned()
+        .collect();
     Flow::Fallthrough
 }
 
@@ -2735,6 +2765,19 @@ fn fallthrough_projection(base: &BodyState, branch: &BodyState) -> BodyState {
     }
     merge_moved_paths_from_branch(&mut moved_paths, base, branch);
 
+    let clean_locals = branch
+        .clean_locals
+        .intersection(&base.clean_locals)
+        .filter(|name| base.locals.contains(*name))
+        .cloned()
+        .collect::<HashSet<_>>();
+    let fresh_returnable_locals = branch
+        .fresh_returnable_locals
+        .intersection(&base.fresh_returnable_locals)
+        .filter(|name| clean_locals.contains(*name))
+        .cloned()
+        .collect::<HashSet<_>>();
+
     BodyState {
         locals: base.locals.clone(),
         field_splittable_locals: base.field_splittable_locals.clone(),
@@ -2743,12 +2786,8 @@ fn fallthrough_projection(base: &BodyState, branch: &BodyState) -> BodyState {
         value_types: base.value_types.clone(),
         moved,
         moved_paths,
-        clean_locals: branch
-            .clean_locals
-            .intersection(&base.clean_locals)
-            .filter(|name| base.locals.contains(*name))
-            .cloned()
-            .collect(),
+        clean_locals,
+        fresh_returnable_locals,
     }
 }
 
@@ -2764,6 +2803,19 @@ fn merge_fallthrough_states(base: &BodyState, left: &BodyState, right: &BodyStat
         merge_moved_paths_from_branch(&mut moved_paths, base, branch);
     }
 
+    let clean_locals = left
+        .clean_locals
+        .intersection(&right.clean_locals)
+        .filter(|name| base.locals.contains(*name))
+        .cloned()
+        .collect::<HashSet<_>>();
+    let fresh_returnable_locals = left
+        .fresh_returnable_locals
+        .intersection(&right.fresh_returnable_locals)
+        .filter(|name| clean_locals.contains(*name))
+        .cloned()
+        .collect::<HashSet<_>>();
+
     BodyState {
         locals: base.locals.clone(),
         field_splittable_locals: base.field_splittable_locals.clone(),
@@ -2772,12 +2824,8 @@ fn merge_fallthrough_states(base: &BodyState, left: &BodyState, right: &BodyStat
         value_types: base.value_types.clone(),
         moved,
         moved_paths,
-        clean_locals: left
-            .clean_locals
-            .intersection(&right.clean_locals)
-            .filter(|name| base.locals.contains(*name))
-            .cloned()
-            .collect(),
+        clean_locals,
+        fresh_returnable_locals,
     }
 }
 

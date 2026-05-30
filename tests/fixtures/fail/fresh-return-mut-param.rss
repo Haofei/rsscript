@@ -1,0 +1,11 @@
+// expect: RS0601
+
+features: local
+
+struct Boxed {
+    value: Int
+}
+
+fn bad(value: mut Boxed) -> fresh Boxed {
+    return value
+}

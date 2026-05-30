@@ -1742,6 +1742,10 @@ clean local binding
 composition of fields that are each valid under the constructor field-effect rules (§9.3) into a fresh shell
 ```
 
+A `mut` or `take` parameter gives the callee local mutation or move capability,
+but it is not a fresh source. Returning a parameter as `fresh T` is rejected
+unless the function constructs a new shell or calls a fresh-returning function.
+
 ### 11.3 Clean local binding
 
 A local binding is clean if it has not been:

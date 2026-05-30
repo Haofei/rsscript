@@ -3623,16 +3623,16 @@ fn fresh_return_diagnostic(
         Diagnostic::error(
             code::FRESH_RETURN_NOT_CLEAN,
             format!(
-                "fresh function `{}` returns managed value `{name}`.",
+                "fresh function `{}` returns non-fresh value `{name}`.",
                 function_name
             ),
             span,
-            "aliased value returned",
+            "non-fresh value returned",
         )
-        .with_cause("A `fresh` return must be newly created or a clean local value.")
+        .with_cause("A `fresh` return must be newly created or a clean local binding created inside the function.")
         .with_fix(
             "return_fresh_value",
-            "Return a struct constructor, fresh call, or clean local binding.",
+            "Return a struct constructor, fresh call, or clean local binding created inside the function.",
             "manual",
         ),
     );
