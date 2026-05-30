@@ -7,6 +7,7 @@ struct TestCase {
     command: String
     args: List<String>
     contains: String
+    contains_all: List<String>
     ignored: Bool
 }
 
@@ -140,6 +141,7 @@ fn test_case_from_json(value: read JsonValue) -> Result<fresh TestCase, String> 
         command: json_string_or_default(value: read value, name: read "command", default: read ""),
         args: json_string_list_or_empty(value: read value, name: read "args"),
         contains: json_string_or_default(value: read value, name: read "contains", default: read ""),
+        contains_all: json_string_list_or_empty(value: read value, name: read "contains_all"),
         ignored: json_bool_or_default(value: read value, name: read "ignored", default: false),
     ))
 }
@@ -195,24 +197,69 @@ fn test_matches_filter(test: read TestCase, filter: read String) -> Bool {
     return String.contains(value: read test.name, needle: read filter)
 }
 
-fn file_contains(path: read Path, needle: read String) -> Result<Bool, String> {
-    let text = read_text(path: read path)?
+fn text_contains_required(value: read String, required: read String) -> Bool {
+    if String.is_empty(value: read required) {
+        return true
+    }
 
-    return Ok(String.contains(value: read text, needle: read needle))
+    return String.contains(value: read value, needle: read required)
+}
+
+fn text_contains_all_from(
+    value: read String,
+    needles: read List<String>,
+    index: Int,
+) -> Bool {
+    if index >= List.len(list: read needles) {
+        return true
+    }
+
+    let needle = List.get(list: read needles, index: index)
+    if String.contains(value: read value, needle: read needle) == false {
+        return false
+    }
+
+    return text_contains_all_from(
+        value: read value,
+        needles: read needles,
+        index: index + 1,
+    )
+}
+
+fn text_matches_expectations(
+    value: read String,
+    contains: read String,
+    contains_all: read List<String>,
+) -> Result<Bool, String> {
+    if text_contains_required(value: read value, required: read contains) == false {
+        return Ok(false)
+    }
+
+    return Ok(text_contains_all_from(
+        value: read value,
+        needles: read contains_all,
+        index: 0,
+    ))
 }
 
 fn run_test(test: read TestCase) -> Result<Bool, String> {
     if test.kind == "file_contains" {
-        return file_contains(
-            path: read Path.from_string(value: read test.path),
-            needle: read test.contains,
+        let text = read_text(path: read Path.from_string(value: read test.path))?
+        return text_matches_expectations(
+            value: read text,
+            contains: read test.contains,
+            contains_all: read test.contains_all,
         )
     }
 
     if test.kind == "command_stdout_contains" {
         match Process.run_stdout(command: read test.command, args: read test.args) {
             Ok(stdout) => {
-                return Ok(String.contains(value: read stdout, needle: read test.contains))
+                return text_matches_expectations(
+                    value: read stdout,
+                    contains: read test.contains,
+                    contains_all: read test.contains_all,
+                )
             }
             Err(error) => {
                 return Err(error)
