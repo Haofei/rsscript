@@ -1761,6 +1761,7 @@ impl<'a> RustLowerer<'a> {
             "Float32" => "f32".to_string(),
             "Float64" => "f64".to_string(),
             "String" => "String".to_string(),
+            "StringBuilder" => "String".to_string(),
             "Url" => "String".to_string(),
             "Fd" => "i64".to_string(),
             "Bytes" | "Buffer" => "Vec<u8>".to_string(),

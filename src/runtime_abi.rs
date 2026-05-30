@@ -275,6 +275,21 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "starts_with",
         "rsscript_runtime::string_starts_with",
     ),
+    runtime_intrinsic(
+        "StringBuilder",
+        "finish",
+        "rsscript_runtime::string_builder_finish",
+    ),
+    runtime_intrinsic(
+        "StringBuilder",
+        "new",
+        "rsscript_runtime::string_builder_new",
+    ),
+    runtime_intrinsic(
+        "StringBuilder",
+        "push",
+        "rsscript_runtime::string_builder_push",
+    ),
     runtime_intrinsic("Toml", "parse_file", "rsscript_runtime::toml_parse_file"),
     runtime_intrinsic("Url", "from_string", "rsscript_runtime::url_from_string"),
 ];

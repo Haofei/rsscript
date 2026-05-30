@@ -1290,6 +1290,18 @@ pub fn string_before(value: &str, delimiter: &str) -> Option<String> {
     Some(value[..index].to_string())
 }
 
+pub fn string_builder_new() -> String {
+    String::new()
+}
+
+pub fn string_builder_push(builder: &mut String, value: &str) {
+    builder.push_str(value);
+}
+
+pub fn string_builder_finish(builder: String) -> String {
+    builder
+}
+
 pub fn assert_equal(left: &str, right: &str) {
     assert_eq!(left, right);
 }
@@ -1747,6 +1759,10 @@ mod tests {
         let joined = super::string_join(&lines, " | ");
         let stripped = super::string_strip_prefix("pub fn Api.run() -> Unit", "pub fn ");
         let before_args = super::string_before("Api.run() -> Unit", "(");
+        let mut builder = super::string_builder_new();
+        super::string_builder_push(&mut builder, "dogfood ");
+        super::string_builder_push(&mut builder, "summary");
+        let built = super::string_builder_finish(builder);
 
         assert_eq!(file_len, 1);
         assert_eq!(len, 1);
@@ -1766,6 +1782,7 @@ mod tests {
         assert_eq!(joined, "pub fn Api.run() | return Unit");
         assert_eq!(stripped.as_deref(), Some("Api.run() -> Unit"));
         assert_eq!(before_args.as_deref(), Some("Api.run"));
+        assert_eq!(built, "dogfood summary");
         let _ = std::fs::remove_file(path);
     }
 

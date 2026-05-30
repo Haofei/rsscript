@@ -2987,6 +2987,8 @@ fn main() -> Unit {
 #[test]
 fn rust_lowering_maps_string_concat_to_rust_std_expression() {
     let source = r#"
+features: local
+
 fn main() -> Unit {
     let message = String.concat(left: read "hello ", right: read "world")
     let count = String.from_int(value: 42)
@@ -2999,6 +3001,10 @@ fn main() -> Unit {
     let joined = String.join(parts: read lines, separator: read ",")
     let stripped = String.strip_prefix(value: read "pub fn Api.run()", prefix: read "pub fn ")
     let before = String.before(value: read "Api.run() -> Unit", delimiter: read "(")
+    local builder = StringBuilder.new()
+    StringBuilder.push(builder: mut builder, value: read "hello")
+    StringBuilder.push(builder: mut builder, value: read " builder")
+    let built = StringBuilder.finish(builder: take builder)
     Log.write(message: read message)
     Log.write(message: read count)
     Log.write(message: read ok)
@@ -3034,6 +3040,13 @@ fn main() -> Unit {
     assert!(rust.contains(
         "let before = rsscript_runtime::string_before(&\"Api.run() -> Unit\".to_string(), &\"(\".to_string());"
     ));
+    assert!(rust.contains("let mut builder = rsscript_runtime::string_builder_new();"));
+    assert!(
+        rust.contains(
+            "rsscript_runtime::string_builder_push(&mut builder, &\"hello\".to_string());"
+        )
+    );
+    assert!(rust.contains("let built = rsscript_runtime::string_builder_finish(builder);"));
     assert!(rust.contains("rsscript_runtime::log_write(&message);"));
 }
 

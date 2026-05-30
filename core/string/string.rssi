@@ -1,3 +1,7 @@
+features: local
+
+struct StringBuilder
+
 pub fn String.concat(left: read String, right: read String) -> fresh String
     effects(pure)
 
@@ -48,3 +52,12 @@ pub fn String.before(
     delimiter: read String,
 ) -> Option<String>
     effects(pure)
+
+pub fn StringBuilder.new() -> fresh StringBuilder
+
+pub fn StringBuilder.push(
+    builder: mut StringBuilder,
+    value: read String,
+) -> Unit
+
+pub fn StringBuilder.finish(builder: take StringBuilder) -> fresh String

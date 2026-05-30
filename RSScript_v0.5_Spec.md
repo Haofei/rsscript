@@ -2960,6 +2960,10 @@ The minimum `String` core surface includes pure current-value inspection helpers
 needed by review tooling and package dogfood:
 
 ```rust
+features: local
+
+struct StringBuilder
+
 pub fn String.len(value: read String) -> Int
     effects(pure)
 
@@ -2983,6 +2987,12 @@ pub fn String.strip_prefix(value: read String, prefix: read String) -> Option<St
 
 pub fn String.before(value: read String, delimiter: read String) -> Option<String>
     effects(pure)
+
+pub fn StringBuilder.new() -> fresh StringBuilder
+
+pub fn StringBuilder.push(builder: mut StringBuilder, value: read String) -> Unit
+
+pub fn StringBuilder.finish(builder: take StringBuilder) -> fresh String
 ```
 
 Agent, GPU, HTTP, networking, and model-client packages are use-case libraries, not language core.
