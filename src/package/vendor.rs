@@ -2,11 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
+use super::lock::{package_checksum, package_native_hash};
 use super::source_set::load_package;
 use super::{
     PackageIdentity, PackageRisk, PackageVendorEntry, PackageVendorReport, PackageVendorUnresolved,
-    canonical_path_label, copy_package_directory, package_checksum, package_dependency_spec,
-    package_identity, package_native_hash, sanitize_vendor_path_component,
+    canonical_path_label, copy_package_directory, package_dependency_spec, package_identity,
+    sanitize_vendor_path_component,
 };
 
 pub fn vendor_package_dir(
