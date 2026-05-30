@@ -7681,6 +7681,48 @@ fn rss_run_accepts_minimal_selfhost_package_manager_vendor() {
 
 #[test]
 #[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
+fn rss_run_accepts_minimal_selfhost_package_manager_check() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-package-manager-check");
+    let check_path = temp_dir.join("review/package-check.json");
+    let source_root = "tests/fixtures/pass/selfhost-package-source-set";
+
+    let check_output = rss_command()
+        .arg("run")
+        .arg("tests/fixtures/pass/selfhost-package-manager.rss")
+        .arg("--")
+        .arg("check")
+        .arg(source_root)
+        .arg(&check_path)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss run should execute minimal package manager check command");
+    let check_stdout = String::from_utf8_lossy(&check_output.stdout);
+    let check_stderr = String::from_utf8_lossy(&check_output.stderr);
+
+    assert!(
+        check_output.status.success(),
+        "stdout={check_stdout}\nstderr={check_stderr}"
+    );
+    assert!(
+        check_stdout
+            .contains("rss package manager check rss-selfhost-source-set interfaces=2 sources=2"),
+        "{check_stdout}"
+    );
+    assert!(check_stderr.trim().is_empty(), "{check_stderr}");
+    let check = fs::read_to_string(&check_path)
+        .unwrap_or_else(|error| panic!("check JSON should be written: {error}"));
+    let check_json: Value =
+        serde_json::from_str(&check).expect("check output should be valid JSON");
+    assert_eq!(check_json["package"], "rss-selfhost-source-set");
+    assert_eq!(check_json["ok"], true);
+    assert_eq!(check_json["interface_roots"], 2);
+    assert_eq!(check_json["source_roots"], 2);
+    assert_eq!(check_json["interface_files"], 2);
+    assert_eq!(check_json["source_files"], 2);
+}
+
+#[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_accepts_selfhost_package_manifest_parser_with_input_path() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-package-manifest");
     let Some(_fixture_dir) =
@@ -14147,6 +14189,14 @@ fn read_fixture(path: &Path) -> String {
 fn rss_command() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_rss"));
     command.env(
+        "RSSCRIPT_TEMP_DIR",
+        std::env::var_os("RSSCRIPT_TEMP_DIR").unwrap_or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("target/rsscript-temp")
+                .into_os_string()
+        }),
+    );
+    command.env(
         "RSSCRIPT_GENERATED_TARGET_DIR",
         std::env::var_os("RSSCRIPT_GENERATED_TARGET_DIR").unwrap_or_else(|| {
             Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -14163,7 +14213,11 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
     let counter = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("{prefix}-{}-{nanos}-{counter}", std::process::id()))
+    std::env::var_os("RSSCRIPT_TEMP_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(format!("{prefix}-{}-{nanos}-{counter}", std::process::id()))
 }
 
 fn write_package_fixture(

@@ -28,6 +28,8 @@ cargo fmt --check
 cargo clippy --workspace -- -D warnings
 
 export RSSCRIPT_GENERATED_TARGET_DIR="${RSSCRIPT_GENERATED_TARGET_DIR:-$(pwd)/target/rsscript-generated-target}"
+export RSSCRIPT_TEMP_DIR="${RSSCRIPT_TEMP_DIR:-$(pwd)/target/rsscript-temp}"
+mkdir -p "$RSSCRIPT_TEMP_DIR"
 
 generated_manifests=(
   tests/generated/simple/Cargo.toml

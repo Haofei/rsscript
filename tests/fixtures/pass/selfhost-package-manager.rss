@@ -15,6 +15,14 @@ struct VendorCopyFacts {
     manifest_files: Int
 }
 
+struct PackageCheckFacts {
+    package_name: String
+    interface_roots: Int
+    source_roots: Int
+    interface_files: Int
+    source_files: Int
+}
+
 fn json_error(prefix: read String, error: read JsonError) -> fresh String {
     let message = JsonError.message(error: read error)
     let first = String.concat(left: read prefix, right: read ": ")
@@ -101,6 +109,17 @@ fn json_array_len_result(value: read JsonValue) -> Result<Int, String> {
     }
 }
 
+fn json_array_strings_result(value: read JsonValue) -> Result<List<String>, String> {
+    match Json.array_strings(value: read value) {
+        Ok(items) => {
+            return Ok(items)
+        }
+        Err(error) => {
+            return Err(json_error(prefix: read "manifest array strings", error: read error))
+        }
+    }
+}
+
 fn package_manifest_facts(root: read Path) -> Result<fresh PackageManifestFacts, String> {
     let manifest = parse_toml_result(path: read manifest_path(root: read root))?
     let package = json_field_result(value: read manifest, name: read "package")?
@@ -118,6 +137,35 @@ fn package_manifest_facts(root: read Path) -> Result<fresh PackageManifestFacts,
     )
 }
 
+fn manifest_array_field(
+    manifest: read JsonValue,
+    section: read String,
+    field: read String,
+) -> Result<JsonValue, String> {
+    let section_value = json_field_result(value: read manifest, name: read section)?
+    return json_field_result(value: read section_value, name: read field)
+}
+
+fn manifest_interface_roots(manifest: read JsonValue) -> Result<List<String>, String> {
+    let paths = manifest_array_field(
+        manifest: read manifest,
+        section: read "interfaces",
+        field: read "paths",
+    )?
+
+    return json_array_strings_result(value: read paths)
+}
+
+fn manifest_source_roots(manifest: read JsonValue) -> Result<List<String>, String> {
+    let paths = manifest_array_field(
+        manifest: read manifest,
+        section: read "sources",
+        field: read "paths",
+    )?
+
+    return json_array_strings_result(value: read paths)
+}
+
 fn ensure_parent_directory(path: read Path) -> Result<Unit, String> {
     match Path.parent(path: read path) {
         Some(parent) => {
@@ -131,6 +179,18 @@ fn ensure_parent_directory(path: read Path) -> Result<Unit, String> {
         }
         None => {
         }
+    }
+
+    return Ok(Unit)
+}
+
+fn require_directory(path: read Path, label: read String) -> Result<Unit, String> {
+    if Directory.exists(path: read path) == false {
+        return Err(String.concat(left: read "missing directory ", right: read label))
+    }
+
+    if Directory.is_dir(path: read path) == false {
+        return Err(String.concat(left: read "not a directory ", right: read label))
     }
 
     return Ok(Unit)
@@ -187,6 +247,44 @@ fn list_files_result(path: read Path) -> Result<List<String>, String> {
     }
 }
 
+fn count_files_with_suffix(
+    root: read Path,
+    child: read String,
+    suffix: read String,
+) -> Result<Int, String> {
+    let directory = Path.join(base: read root, child: read child)
+    require_directory(path: read directory, label: read child)?
+    let files = list_files_result(path: read directory)?
+    let counter = Counter.new(value: 0)
+
+    for file in files {
+        if String.ends_with(value: read file, suffix: read suffix) {
+            Counter.add(counter: mut counter, amount: 1)
+        }
+    }
+
+    return Ok(Counter.value(counter: read counter))
+}
+
+fn count_root_files_with_suffix(
+    root: read Path,
+    children: read List<String>,
+    suffix: read String,
+) -> Result<Int, String> {
+    let counter = Counter.new(value: 0)
+
+    for child in children {
+        let count = count_files_with_suffix(
+            root: read root,
+            child: read child,
+            suffix: read suffix,
+        )?
+        Counter.add(counter: mut counter, amount: count)
+    }
+
+    return Ok(Counter.value(counter: read counter))
+}
+
 fn create_dir_result(path: read Path) -> Result<Unit, String> {
     match Directory.create_all(path: read path) {
         Ok(_) => {
@@ -196,6 +294,31 @@ fn create_dir_result(path: read Path) -> Result<Unit, String> {
             return Err(file_error(prefix: read "create directory", error: read error))
         }
     }
+}
+
+fn package_check_facts(root: read Path) -> Result<fresh PackageCheckFacts, String> {
+    let manifest = parse_toml_result(path: read manifest_path(root: read root))?
+    let package = json_field_result(value: read manifest, name: read "package")?
+    let interface_roots = manifest_interface_roots(manifest: read manifest)?
+    let source_roots = manifest_source_roots(manifest: read manifest)?
+    let interface_files = count_root_files_with_suffix(
+        root: read root,
+        children: read interface_roots,
+        suffix: read ".rssi",
+    )?
+    let source_files = count_root_files_with_suffix(
+        root: read root,
+        children: read source_roots,
+        suffix: read ".rss",
+    )?
+
+    return PackageCheckFacts(
+        package_name: json_field_string_result(value: read package, name: read "name")?,
+        interface_roots: List.len(list: read interface_roots),
+        source_roots: List.len(list: read source_roots),
+        interface_files: interface_files,
+        source_files: source_files,
+    )
 }
 
 fn package_metadata_json(facts: read PackageManifestFacts) -> fresh String {
@@ -216,6 +339,30 @@ fn package_metadata_json(facts: read PackageManifestFacts) -> fresh String {
     StringBuilder.push(builder: mut builder, value: read ",\n  \"source_paths\": ")
     let source_paths = String.from_int(value: facts.source_paths)
     StringBuilder.push(builder: mut builder, value: read source_paths)
+    StringBuilder.push(builder: mut builder, value: read "\n}\n")
+
+    return StringBuilder.finish(builder: take builder)
+}
+
+fn package_check_json(facts: read PackageCheckFacts) -> fresh String {
+    local builder = StringBuilder.new()
+    StringBuilder.push(builder: mut builder, value: read "{\n")
+    StringBuilder.push(builder: mut builder, value: read "  \"package\": ")
+    let package_name = Json.quote_string(value: read facts.package_name)
+    StringBuilder.push(builder: mut builder, value: read package_name)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"ok\": true")
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"interface_roots\": ")
+    let interface_roots = String.from_int(value: facts.interface_roots)
+    StringBuilder.push(builder: mut builder, value: read interface_roots)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"source_roots\": ")
+    let source_roots = String.from_int(value: facts.source_roots)
+    StringBuilder.push(builder: mut builder, value: read source_roots)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"interface_files\": ")
+    let interface_files = String.from_int(value: facts.interface_files)
+    StringBuilder.push(builder: mut builder, value: read interface_files)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"source_files\": ")
+    let source_files = String.from_int(value: facts.source_files)
+    StringBuilder.push(builder: mut builder, value: read source_files)
     StringBuilder.push(builder: mut builder, value: read "\n}\n")
 
     return StringBuilder.finish(builder: take builder)
@@ -354,6 +501,26 @@ fn run_vendor(root: read Path, vendor: read Path) -> Result<Unit, String> {
     return Ok(Unit)
 }
 
+fn run_check(root: read Path, output: read Path) -> Result<Unit, String> {
+    let facts = package_check_facts(root: read root)?
+    let text = package_check_json(facts: read facts)
+    write_text_result(path: read output, text: read text)?
+
+    local builder = StringBuilder.new()
+    StringBuilder.push(builder: mut builder, value: read "rss package manager check ")
+    StringBuilder.push(builder: mut builder, value: read facts.package_name)
+    StringBuilder.push(builder: mut builder, value: read " interfaces=")
+    let interfaces = String.from_int(value: facts.interface_files)
+    StringBuilder.push(builder: mut builder, value: read interfaces)
+    StringBuilder.push(builder: mut builder, value: read " sources=")
+    let sources = String.from_int(value: facts.source_files)
+    StringBuilder.push(builder: mut builder, value: read sources)
+    let message = StringBuilder.finish(builder: take builder)
+    Log.write(message: read message)
+
+    return Ok(Unit)
+}
+
 pub fn main() -> Result<Unit, String> {
     let command = Args.get_or_default(index: 0, default: read "metadata")
     let root = root_path()
@@ -365,6 +532,10 @@ pub fn main() -> Result<Unit, String> {
 
     if command == "vendor" {
         return run_vendor(root: read root, vendor: read output)
+    }
+
+    if command == "check" {
+        return run_check(root: read root, output: read output)
     }
 
     let message = String.concat(left: read "unknown package command: ", right: read command)

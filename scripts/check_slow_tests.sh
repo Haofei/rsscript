@@ -7,6 +7,8 @@ cd "$ROOT"
 threshold="${RSSCRIPT_SLOW_TEST_THRESHOLD:-10}"
 pattern="${RSSCRIPT_SLOW_TEST_PATTERN:-rss_run|rss_verify_rust}"
 export RSSCRIPT_GENERATED_TARGET_DIR="${RSSCRIPT_GENERATED_TARGET_DIR:-$ROOT/target/rsscript-generated-target}"
+export RSSCRIPT_TEMP_DIR="${RSSCRIPT_TEMP_DIR:-$ROOT/target/rsscript-temp}"
+mkdir -p "$RSSCRIPT_TEMP_DIR"
 
 detect_jobs() {
   if [[ -n "${RSSCRIPT_JOBS:-}" ]]; then
@@ -29,7 +31,7 @@ if [[ -z "$checker_bin" ]]; then
   exit 1
 fi
 
-tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/rsscript-slow-tests.XXXXXX")"
+tmp_dir="$(mktemp -d "${RSSCRIPT_TEMP_DIR:-${TMPDIR:-/tmp}}/rsscript-slow-tests.XXXXXX")"
 trap 'rm -rf "$tmp_dir"' EXIT
 
 "$checker_bin" --list | awk -F: -v pattern="$pattern" '$1 ~ pattern {print $1}' \

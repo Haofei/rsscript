@@ -51,6 +51,8 @@ if [[ ! -x "$RSS_BIN" ]]; then
 fi
 export RSS_BIN
 export RSSCRIPT_GENERATED_TARGET_DIR="${RSSCRIPT_GENERATED_TARGET_DIR:-$ROOT/target/rsscript-generated-target}"
+export RSSCRIPT_TEMP_DIR="${RSSCRIPT_TEMP_DIR:-$ROOT/target/rsscript-temp}"
+mkdir -p "$RSSCRIPT_TEMP_DIR"
 
 printf '%s\0' "${selfhost_scripts[@]}" | xargs -0 -n1 -P "$jobs" bash -c '
   set -euo pipefail

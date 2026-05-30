@@ -99,6 +99,17 @@ For a release-like verification, use:
 RSSCRIPT_FULL_TESTS=1 bash scripts/check.sh
 ```
 
+For package-manager dogfood work, use the focused TDD gate first:
+
+```sh
+bash scripts/check_package_manager_tdd.sh
+```
+
+This runs the full checker integration suite plus the current executable
+RSScript package-manager e2e check. It is the intended sub-10-second loop while
+iterating on `tests/fixtures/pass/selfhost-package-manager.rss`; run the full
+gate only before committing or when touching shared lowering/runtime behavior.
+
 CI sets `RSSCRIPT_FULL_TESTS=1 RSSCRIPT_E2E_TESTS=1`, so the same scripts run
 the full workspace test suite, execute every `examples/*.rss` file, run the
 ignored checker e2e tests, and run the checked-in self-hosted RSScript tools
@@ -111,16 +122,18 @@ generated-package and filesystem IO. Set `RSSCRIPT_TEST_THREADS=N` for
 `RSSCRIPT_JOBS=N` for script-runner fan-out when you need to cap concurrency or
 reproduce a parallel-run issue.
 Generated Rust packages share `target/rsscript-generated-target` during local
-gates through `RSSCRIPT_GENERATED_TARGET_DIR`; keep that cache unless you are
-debugging a clean backend build.
+gates through `RSSCRIPT_GENERATED_TARGET_DIR`; temporary generated packages use
+`target/rsscript-temp` through `RSSCRIPT_TEMP_DIR`. Keep both caches unless you
+are debugging a clean backend build.
 
 The generated target cache is disposable and can be moved to memory-backed
-storage when local disk IO dominates test time. On macOS, create a 2 GiB
-ramdisk and point the generated Cargo target there:
+storage when local disk IO dominates test time. On macOS, create a 4 GiB
+ramdisk and point both generated-package paths there:
 
 ```sh
-diskutil erasevolume HFS+ RSScriptRAMDisk "$(hdiutil attach -nomount ram://4194304)"
+diskutil erasevolume HFS+ RSScriptRAMDisk "$(hdiutil attach -nomount ram://8388608)"
 export RSSCRIPT_GENERATED_TARGET_DIR=/Volumes/RSScriptRAMDisk/rsscript-generated-target
+export RSSCRIPT_TEMP_DIR=/Volumes/RSScriptRAMDisk/rsscript-temp
 RSSCRIPT_FULL_TESTS=1 bash scripts/check.sh
 diskutil eject /Volumes/RSScriptRAMDisk
 ```
@@ -129,12 +142,15 @@ On Linux, `/dev/shm` is usually enough for the same cache:
 
 ```sh
 mkdir -p /dev/shm/rsscript-generated-target
+mkdir -p /dev/shm/rsscript-temp
 export RSSCRIPT_GENERATED_TARGET_DIR=/dev/shm/rsscript-generated-target
+export RSSCRIPT_TEMP_DIR=/dev/shm/rsscript-temp
 RSSCRIPT_FULL_TESTS=1 bash scripts/check.sh
 ```
 
-The cache was about 380 MiB in the current local workspace; use a larger
-ramdisk if you run the ignored e2e gate or want room for incremental rebuilds.
+The generated target cache was about 380 MiB in the current local workspace;
+the 4 GiB ramdisk leaves headroom for temporary packages, ignored e2e runs, and
+incremental rebuilds.
 
 No individual checker integration test should exceed 10 seconds. Expensive
 `rss run` / `rss verify-rust` tests are marked ignored in the normal Rust

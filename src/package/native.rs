@@ -423,6 +423,7 @@ fn scan_native_cargo_metadata(
     }
     super::copy_package_directory(native_root, &scan_root)?;
     let scan_cargo_toml = scan_root.join("Cargo.toml");
+    isolate_cargo_manifest_from_parent_workspace(&scan_cargo_toml)?;
     let output = Command::new("cargo")
         .arg("metadata")
         .arg("--format-version")
@@ -491,6 +492,19 @@ fn scan_native_cargo_metadata(
     })
 }
 
+fn isolate_cargo_manifest_from_parent_workspace(cargo_toml: &Path) -> Result<(), String> {
+    let manifest = fs::read_to_string(cargo_toml)
+        .map_err(|error| format!("failed to read {}: {error}", cargo_toml.display()))?;
+    if manifest
+        .lines()
+        .any(|line| line.trim_start().starts_with("[workspace]"))
+    {
+        return Ok(());
+    }
+    fs::write(cargo_toml, format!("{manifest}\n[workspace]\n"))
+        .map_err(|error| format!("failed to write {}: {error}", cargo_toml.display()))
+}
+
 fn native_cargo_metadata_temp_dir(cargo_toml: &Path) -> PathBuf {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -501,10 +515,17 @@ fn native_cargo_metadata_temp_dir(cargo_toml: &Path) -> PathBuf {
         .and_then(|path| path.file_name())
         .and_then(|name| name.to_str())
         .unwrap_or("native");
-    env::temp_dir().join(format!(
+    temp_root_dir().join(format!(
         "rsscript-native-metadata-{name}-{}-{now}",
         std::process::id()
     ))
+}
+
+fn temp_root_dir() -> PathBuf {
+    env::var_os("RSSCRIPT_TEMP_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(env::temp_dir)
 }
 
 fn native_rust_unsafe_detected(files: &[PathBuf]) -> Result<bool, String> {

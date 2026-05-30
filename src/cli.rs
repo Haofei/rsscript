@@ -851,10 +851,17 @@ fn temp_package_dir(prefix: &str, package_name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    env::temp_dir().join(format!(
+    temp_root_dir().join(format!(
         "{prefix}-{package_name}-{}-{now}",
         std::process::id()
     ))
+}
+
+fn temp_root_dir() -> PathBuf {
+    env::var_os("RSSCRIPT_TEMP_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(env::temp_dir)
 }
 
 fn cleanup_temp_dir(path: &Path) {
