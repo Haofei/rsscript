@@ -571,6 +571,25 @@ pub fn args_get_or_default(index: i64, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
+pub fn process_run_stdout(command: &str, args: &[String]) -> Result<String, String> {
+    let output = std::process::Command::new(command)
+        .args(args)
+        .output()
+        .map_err(|error| format!("failed to run `{command}`: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    if output.status.success() {
+        return Ok(stdout);
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let code = output
+        .status
+        .code()
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| "signal".to_string());
+    Err(format!("`{command}` exited with {code}: {}", stderr.trim()))
+}
+
 pub fn list_new<T>() -> Vec<T> {
     Vec::new()
 }
@@ -2381,6 +2400,17 @@ mod tests {
         assert_eq!(path, "/users");
         assert_eq!(super::response_status(&response), 200);
         assert_eq!(super::response_body(&response), "handled /users");
+    }
+
+    #[test]
+    fn process_runtime_hook_captures_stdout_and_failure() {
+        let args = vec!["hello process".to_string()];
+        let stdout = super::process_run_stdout("printf", &args).expect("printf should run");
+        assert_eq!(stdout, "hello process");
+
+        let error = super::process_run_stdout("__rsscript_missing_process__", &[])
+            .expect_err("missing command should fail");
+        assert!(error.contains("failed to run `__rsscript_missing_process__`"));
     }
 
     #[test]

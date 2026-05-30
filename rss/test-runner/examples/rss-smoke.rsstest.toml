@@ -15,3 +15,10 @@ name = "package manager rss command surface exists"
 kind = "file_contains"
 path = "rss/package-manager/main.rss"
 contains = "rss package manager"
+
+[[tests]]
+name = "rss binary checks rayon wrapper package"
+kind = "command_stdout_contains"
+command = "target/debug/rss"
+args = ["pkg", "check", "--json", "rss/rayon"]
+contains = "\"ok\":true"

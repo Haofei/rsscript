@@ -238,6 +238,11 @@ fn bundled_core_interfaces_are_available_to_checker() {
     assert!(
         core_interfaces()
             .iter()
+            .any(|(path, _)| *path == "core/process/process.rssi")
+    );
+    assert!(
+        core_interfaces()
+            .iter()
             .any(|(path, _)| *path == "core/cache/image_cache.rssi")
     );
     assert!(
@@ -3327,6 +3332,22 @@ fn main() -> Unit {
 }
 
 #[test]
+fn rust_lowering_maps_process_core_calls_to_runtime_hooks() {
+    let source = r#"
+fn main() -> Result<Unit, String> {
+    let args = List<String>.new()
+    List.push(list: mut args, value: read "hello")
+    let stdout = Process.run_stdout(command: read "printf", args: read args)?
+    Log.write(message: read stdout)
+    return Ok(Unit)
+}
+"#;
+    let rust = lower_source_to_rust("process.rss", source).expect("source should lower");
+
+    assert!(rust.contains("rsscript_runtime::process_run_stdout"));
+}
+
+#[test]
 fn rust_lowering_maps_int_add_to_rust_std_expression() {
     let source = r#"
 fn main() -> Unit {
@@ -4153,6 +4174,51 @@ fn main() -> Unit {
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
     assert!(stderr.trim().is_empty(), "{stderr}");
     assert!(stdout.contains("rayon wrapper sum_squares=14"), "{stdout}");
+}
+
+#[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
+fn rss_run_accepts_rss_test_runner_command_stdout_manifest() {
+    let temp_dir = unique_temp_dir("rsscript-run-rss-test-runner");
+    let manifest_path = temp_dir.join("rss-runner.rsstest.toml");
+    fs::create_dir_all(&temp_dir).expect("test manifest dir should be created");
+    fs::write(
+        &manifest_path,
+        format!(
+            r#"[[tests]]
+name = "rss binary checks rayon wrapper package"
+kind = "command_stdout_contains"
+command = "{}"
+args = ["pkg", "check", "--json", "rss/rayon"]
+contains = "\"ok\":true"
+"#,
+            env!("CARGO_BIN_EXE_rss")
+        ),
+    )
+    .expect("test manifest should be written");
+
+    let output = rss_command()
+        .arg("run")
+        .arg("rss/test-runner")
+        .arg("--")
+        .arg(&manifest_path)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss test runner should execute command stdout manifest");
+    let _ = fs::remove_dir_all(&temp_dir);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert!(
+        stdout.contains("pass rss binary checks rayon wrapper package"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("rss test summary total=1 selected=1 passed=1 failed=0 skipped=0"),
+        "{stdout}"
+    );
 }
 
 #[test]

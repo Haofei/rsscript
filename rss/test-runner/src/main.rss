@@ -4,6 +4,8 @@ struct TestCase {
     name: String
     kind: String
     path: String
+    command: String
+    args: List<String>
     contains: String
     ignored: Bool
 }
@@ -82,6 +84,39 @@ fn json_string(value: read JsonValue, name: read String) -> Result<String, Strin
     }
 }
 
+fn json_string_or_default(
+    value: read JsonValue,
+    name: read String,
+    default: read String,
+) -> fresh String {
+    match Json.field_string(value: read value, name: read name) {
+        Ok(text) => {
+            return String.concat(left: read "", right: read text)
+        }
+        Err(_) => {
+            return String.concat(left: read "", right: read default)
+        }
+    }
+}
+
+fn json_string_list_or_empty(value: read JsonValue, name: read String) -> fresh List<String> {
+    match Json.field(value: read value, name: read name) {
+        Ok(field) => {
+            match Json.array_strings(value: read field) {
+                Ok(items) => {
+                    return items
+                }
+                Err(_) => {
+                    return List<String>.new()
+                }
+            }
+        }
+        Err(_) => {
+            return List<String>.new()
+        }
+    }
+}
+
 fn json_bool_or_default(
     value: read JsonValue,
     name: read String,
@@ -101,8 +136,10 @@ fn test_case_from_json(value: read JsonValue) -> Result<fresh TestCase, String> 
     return Ok(TestCase(
         name: json_string(value: read value, name: read "name")?,
         kind: json_string(value: read value, name: read "kind")?,
-        path: json_string(value: read value, name: read "path")?,
-        contains: json_string(value: read value, name: read "contains")?,
+        path: json_string_or_default(value: read value, name: read "path", default: read ""),
+        command: json_string_or_default(value: read value, name: read "command", default: read ""),
+        args: json_string_list_or_empty(value: read value, name: read "args"),
+        contains: json_string_or_default(value: read value, name: read "contains", default: read ""),
         ignored: json_bool_or_default(value: read value, name: read "ignored", default: false),
     ))
 }
@@ -170,6 +207,17 @@ fn run_test(test: read TestCase) -> Result<Bool, String> {
             path: read Path.from_string(value: read test.path),
             needle: read test.contains,
         )
+    }
+
+    if test.kind == "command_stdout_contains" {
+        match Process.run_stdout(command: read test.command, args: read test.args) {
+            Ok(stdout) => {
+                return Ok(String.contains(value: read stdout, needle: read test.contains))
+            }
+            Err(error) => {
+                return Err(error)
+            }
+        }
     }
 
     return Err(String.concat(left: read "unsupported test kind ", right: read test.kind))
