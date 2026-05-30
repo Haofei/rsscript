@@ -494,6 +494,10 @@ pub fn file_write<B: RuntimeBytes + ?Sized>(file: &mut File, data: &B) -> std::i
     file.inner.write_all(data.as_bytes_slice())
 }
 
+pub fn file_write_string(file: &mut File, text: &str) -> std::io::Result<()> {
+    file.inner.write_all(text.as_bytes())
+}
+
 pub fn file_write_buffer(file: &mut File, buffer: &[u8]) -> std::io::Result<()> {
     file.inner.write_all(buffer)
 }
@@ -1992,7 +1996,7 @@ mod tests {
 
         {
             let mut file = super::file_open_write(&path).expect("file should open for write");
-            super::file_write(&mut file, &"hello file").expect("write should succeed");
+            super::file_write_string(&mut file, "hello file").expect("write should succeed");
         }
 
         let mut file = super::file_open_read(&path).expect("file should open for read");

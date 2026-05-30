@@ -159,6 +159,11 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("File", "write", "rsscript_runtime::file_write"),
     runtime_intrinsic(
         "File",
+        "write_string",
+        "rsscript_runtime::file_write_string",
+    ),
+    runtime_intrinsic(
+        "File",
         "write_buffer",
         "rsscript_runtime::file_write_buffer",
     ),
