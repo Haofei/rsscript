@@ -2996,6 +2996,7 @@ fn main() -> Unit {
     let ends = String.ends_with(value: read message, suffix: read "world")
     let contains = String.contains(value: read message, needle: read "lo wo")
     let lines = String.lines(value: read "one\ntwo")
+    let joined = String.join(parts: read lines, separator: read ",")
     let stripped = String.strip_prefix(value: read "pub fn Api.run()", prefix: read "pub fn ")
     let before = String.before(value: read "Api.run() -> Unit", delimiter: read "(")
     Log.write(message: read message)
@@ -3023,6 +3024,9 @@ fn main() -> Unit {
     ));
     assert!(
         rust.contains("let lines = rsscript_runtime::string_lines(&\"one\\ntwo\".to_string());")
+    );
+    assert!(
+        rust.contains("let joined = rsscript_runtime::string_join(&lines, &\",\".to_string());")
     );
     assert!(rust.contains(
         "let stripped = rsscript_runtime::string_strip_prefix(&\"pub fn Api.run()\".to_string(), &\"pub fn \".to_string());"

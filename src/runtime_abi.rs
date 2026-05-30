@@ -262,6 +262,7 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("String", "ends_with", "rsscript_runtime::string_ends_with"),
     runtime_intrinsic("String", "from_bool", "rsscript_runtime::string_from_bool"),
     runtime_intrinsic("String", "from_int", "rsscript_runtime::string_from_int"),
+    runtime_intrinsic("String", "join", "rsscript_runtime::string_join"),
     runtime_intrinsic("String", "len", "rsscript_runtime::string_len"),
     runtime_intrinsic("String", "lines", "rsscript_runtime::string_lines"),
     runtime_intrinsic(

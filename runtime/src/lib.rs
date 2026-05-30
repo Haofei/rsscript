@@ -1277,6 +1277,10 @@ pub fn string_lines(value: &str) -> Vec<String> {
     value.lines().map(str::to_string).collect()
 }
 
+pub fn string_join(parts: &[String], separator: &str) -> String {
+    parts.join(separator)
+}
+
 pub fn string_strip_prefix(value: &str, prefix: &str) -> Option<String> {
     value.strip_prefix(prefix).map(str::to_string)
 }
@@ -1740,6 +1744,7 @@ mod tests {
         let name_ends_with_script = super::string_ends_with(&name, "Script");
         let name_contains_script = super::string_contains(&name, "Script");
         let lines = super::string_lines("pub fn Api.run()\nreturn Unit\n");
+        let joined = super::string_join(&lines, " | ");
         let stripped = super::string_strip_prefix("pub fn Api.run() -> Unit", "pub fn ");
         let before_args = super::string_before("Api.run() -> Unit", "(");
 
@@ -1758,6 +1763,7 @@ mod tests {
         assert!(name_ends_with_script);
         assert!(name_contains_script);
         assert_eq!(lines, vec!["pub fn Api.run()", "return Unit"]);
+        assert_eq!(joined, "pub fn Api.run() | return Unit");
         assert_eq!(stripped.as_deref(), Some("Api.run() -> Unit"));
         assert_eq!(before_args.as_deref(), Some("Api.run"));
         let _ = std::fs::remove_file(path);

@@ -2975,6 +2975,9 @@ pub fn String.contains(value: read String, needle: read String) -> Bool
 pub fn String.lines(value: read String) -> fresh List<String>
     effects(pure)
 
+pub fn String.join(parts: read List<String>, separator: read String) -> fresh String
+    effects(pure)
+
 pub fn String.strip_prefix(value: read String, prefix: read String) -> Option<String>
     effects(pure)
 
