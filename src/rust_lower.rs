@@ -1665,7 +1665,7 @@ impl<'a> RustLowerer<'a> {
     }
 
     fn lower_type_ref(&self, ty: &TypeRef, position: ManagedPosition) -> String {
-        if ty.is_noescape && ty.name == "Fn" {
+        if ty.name == "Fn" {
             let params = ty
                 .fn_params
                 .iter()
@@ -1678,11 +1678,14 @@ impl<'a> RustLowerer<'a> {
                     self.lower_type_ref(return_ty, ManagedPosition::Return)
                 )
             });
-            return match position {
-                ManagedPosition::Param => {
-                    format!("impl FnMut({params}){}", return_ty.unwrap_or_default())
+            let return_ty = return_ty.unwrap_or_default();
+            return match (ty.is_noescape, position) {
+                (true, ManagedPosition::Param) => {
+                    format!("impl FnMut({params}){return_ty}")
                 }
-                _ => format!("Box<dyn FnMut({params}){}>", return_ty.unwrap_or_default()),
+                (true, _) => format!("Box<dyn FnMut({params}){return_ty}>"),
+                (false, ManagedPosition::Param) => format!("dyn Fn({params}){return_ty}"),
+                (false, _) => format!("Box<dyn Fn({params}){return_ty}>"),
             };
         }
         let lowered = match ty.name.as_str() {
