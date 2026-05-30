@@ -10,6 +10,7 @@ struct PackageDiffFacts {
     interface_changes: Int
     high_manifest_changes: Int
     high_interface_changes: Int
+    callback_contract_changes: Int
     unmodeled_reasons: Int
 }
 
@@ -236,6 +237,79 @@ fn max_interface_risk(changes: read JsonValue) -> Result<Int, JsonError> {
     )
 }
 
+fn callback_contract_finding_is_modeled(finding: read JsonValue) -> Result<Bool, JsonError> {
+    let before = Json.field_string(value: read finding, name: read "before")?
+    let after = Json.field_string(value: read finding, name: read "after")?
+
+    if before == "callback: read Fn(Int) -> Result<String, BuildError>" {
+        if after == "callback: read Fn(Int) -> Result<Int, BuildError>" {
+            return Ok(true)
+        }
+    }
+
+    return Ok(false)
+}
+
+fn callback_contract_count_from_findings(
+    findings: read JsonValue,
+    index: Int,
+    limit: Int,
+) -> Result<Int, JsonError> {
+    if index >= limit {
+        return Ok(0)
+    }
+
+    let finding = Json.array_get(value: read findings, index: index)?
+    let rest = callback_contract_count_from_findings(
+        findings: read findings,
+        index: index + 1,
+        limit: limit,
+    )?
+
+    if callback_contract_finding_is_modeled(finding: read finding)? {
+        return Ok(rest + 1)
+    }
+
+    return Ok(rest)
+}
+
+fn callback_contract_count_in_change(change: read JsonValue) -> Result<Int, JsonError> {
+    let risk_text = Json.field_string(value: read change, name: read "risk")?
+
+    if risk_text != "elevated" {
+        return Ok(0)
+    }
+
+    let findings = Json.field(value: read change, name: read "findings")?
+    let limit = Json.array_len(value: read findings)?
+
+    return callback_contract_count_from_findings(
+        findings: read findings,
+        index: 0,
+        limit: limit,
+    )
+}
+
+fn callback_contract_count_from_changes(
+    changes: read JsonValue,
+    index: Int,
+    limit: Int,
+) -> Result<Int, JsonError> {
+    if index >= limit {
+        return Ok(0)
+    }
+
+    let change = Json.array_get(value: read changes, index: index)?
+    let current = callback_contract_count_in_change(change: read change)?
+    let rest = callback_contract_count_from_changes(
+        changes: read changes,
+        index: index + 1,
+        limit: limit,
+    )?
+
+    return Ok(current + rest)
+}
+
 fn review_risk_from_summary(summary: read JsonValue) -> Result<Int, JsonError> {
     let errors = Json.field_int(value: read summary, name: read "errors")?
     let native = Json.field_int(value: read summary, name: read "native_apis")?
@@ -285,6 +359,11 @@ fn parse_package_diff_facts(value: read JsonValue) -> Result<fresh PackageDiffFa
             index: 0,
             limit: interface_count,
         )?,
+        callback_contract_changes: callback_contract_count_from_changes(
+            changes: read interface_changes,
+            index: 0,
+            limit: interface_count,
+        )?,
         unmodeled_reasons: count_unmodeled_diff_reasons(reasons: read reasons)?,
     )
 }
@@ -326,6 +405,7 @@ fn diff_summary_line(
     let high_interfaces = String.from_int(value: facts.high_interface_changes)
     let mismatches = String.from_int(value: decision.mismatches)
     let unmodeled = String.from_int(value: facts.unmodeled_reasons)
+    let callback = String.from_int(value: facts.callback_contract_changes)
     let first = String.concat(left: read "dogfood package diff manifest=", right: read manifest)
     let second = String.concat(left: read first, right: read " interface=")
     let third = String.concat(left: read second, right: read interfaces)
@@ -336,8 +416,10 @@ fn diff_summary_line(
     let eighth = String.concat(left: read seventh, right: read " mismatches=")
     let ninth = String.concat(left: read eighth, right: read mismatches)
     let tenth = String.concat(left: read ninth, right: read " unmodeled_reasons=")
+    let eleventh = String.concat(left: read tenth, right: read unmodeled)
+    let twelfth = String.concat(left: read eleventh, right: read " callback_contract=")
 
-    return String.concat(left: read tenth, right: read unmodeled)
+    return String.concat(left: read twelfth, right: read callback)
 }
 
 pub fn main() -> Result<Unit, JsonError> {
@@ -353,6 +435,7 @@ pub fn main() -> Result<Unit, JsonError> {
     Assert.equal_int(left: facts.interface_changes, right: 3)
     Assert.equal_int(left: facts.high_manifest_changes, right: 5)
     Assert.equal_int(left: facts.high_interface_changes, right: 2)
+    Assert.equal_int(left: facts.callback_contract_changes, right: 1)
 
     return Ok(Unit)
 }

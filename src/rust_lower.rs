@@ -2279,15 +2279,37 @@ struct RuntimeIntrinsic {
     namespace: &'static str,
     name: &'static str,
     rust_target: &'static str,
-}
-
-struct RuntimeIntrinsicArgAbi {
-    namespace: &'static str,
-    name: &'static str,
     managed_handle_args: &'static [&'static str],
 }
 
-fn runtime_intrinsic_target(callee: &Callee) -> Option<&'static str> {
+const fn runtime_intrinsic(
+    namespace: &'static str,
+    name: &'static str,
+    rust_target: &'static str,
+) -> RuntimeIntrinsic {
+    RuntimeIntrinsic {
+        namespace,
+        name,
+        rust_target,
+        managed_handle_args: &[],
+    }
+}
+
+const fn runtime_intrinsic_with_handles(
+    namespace: &'static str,
+    name: &'static str,
+    rust_target: &'static str,
+    managed_handle_args: &'static [&'static str],
+) -> RuntimeIntrinsic {
+    RuntimeIntrinsic {
+        namespace,
+        name,
+        rust_target,
+        managed_handle_args,
+    }
+}
+
+fn runtime_intrinsic_abi(callee: &Callee) -> Option<&'static RuntimeIntrinsic> {
     let Callee::Qualified { namespace, name } = callee else {
         return None;
     };
@@ -2295,518 +2317,218 @@ fn runtime_intrinsic_target(callee: &Callee) -> Option<&'static str> {
     RUNTIME_INTRINSICS
         .iter()
         .find(|intrinsic| intrinsic.namespace == namespace && intrinsic.name == name)
-        .map(|intrinsic| intrinsic.rust_target)
+}
+
+fn runtime_intrinsic_target(callee: &Callee) -> Option<&'static str> {
+    runtime_intrinsic_abi(callee).map(|intrinsic| intrinsic.rust_target)
 }
 
 fn runtime_intrinsic_wants_managed_handle_arg(callee: &Callee, arg_name: Option<&str>) -> bool {
     let Some(arg_name) = arg_name else {
         return false;
     };
-    let Callee::Qualified { namespace, name } = callee else {
-        return false;
-    };
-    let namespace = type_root_name(namespace);
-    RUNTIME_INTRINSIC_ARG_ABI.iter().any(|abi| {
-        abi.namespace == namespace
-            && abi.name == name
-            && abi.managed_handle_args.contains(&arg_name)
-    })
+    runtime_intrinsic_abi(callee)
+        .is_some_and(|intrinsic| intrinsic.managed_handle_args.contains(&arg_name))
 }
 
-const RUNTIME_INTRINSIC_ARG_ABI: &[RuntimeIntrinsicArgAbi] = &[
-    RuntimeIntrinsicArgAbi {
-        namespace: "Environment",
-        name: "bind_function",
-        managed_handle_args: &["env", "function"],
-    },
-    RuntimeIntrinsicArgAbi {
-        namespace: "Environment",
-        name: "child",
-        managed_handle_args: &["parent"],
-    },
-    RuntimeIntrinsicArgAbi {
-        namespace: "Environment",
-        name: "has_function",
-        managed_handle_args: &["env"],
-    },
-    RuntimeIntrinsicArgAbi {
-        namespace: "Environment",
-        name: "has_parent",
-        managed_handle_args: &["env"],
-    },
-    RuntimeIntrinsicArgAbi {
-        namespace: "FunctionObject",
-        name: "has_closure",
-        managed_handle_args: &["function"],
-    },
-    RuntimeIntrinsicArgAbi {
-        namespace: "FunctionObject",
-        name: "new",
-        managed_handle_args: &["closure"],
-    },
-    RuntimeIntrinsicArgAbi {
-        namespace: "Image",
-        name: "inspect",
-        managed_handle_args: &["image"],
-    },
-    RuntimeIntrinsicArgAbi {
-        namespace: "Image",
-        name: "save",
-        managed_handle_args: &["image"],
-    },
-];
-
 const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
-    RuntimeIntrinsic {
-        namespace: "Assert",
-        name: "equal",
-        rust_target: "rsscript_runtime::assert_equal",
-    },
-    RuntimeIntrinsic {
-        namespace: "Assert",
-        name: "equal_bool",
-        rust_target: "rsscript_runtime::assert_equal_bool",
-    },
-    RuntimeIntrinsic {
-        namespace: "Assert",
-        name: "equal_int",
-        rust_target: "rsscript_runtime::assert_equal_int",
-    },
-    RuntimeIntrinsic {
-        namespace: "Buffer",
-        name: "clear",
-        rust_target: "rsscript_runtime::buffer_clear",
-    },
-    RuntimeIntrinsic {
-        namespace: "Buffer",
-        name: "consume",
-        rust_target: "rsscript_runtime::buffer_consume",
-    },
-    RuntimeIntrinsic {
-        namespace: "Buffer",
-        name: "new",
-        rust_target: "rsscript_runtime::buffer_new",
-    },
-    RuntimeIntrinsic {
-        namespace: "Bytes",
-        name: "consume",
-        rust_target: "rsscript_runtime::bytes_consume",
-    },
-    RuntimeIntrinsic {
-        namespace: "Bytes",
-        name: "from_buffer",
-        rust_target: "rsscript_runtime::bytes_from_buffer",
-    },
-    RuntimeIntrinsic {
-        namespace: "Bytes",
-        name: "from_string",
-        rust_target: "rsscript_runtime::bytes_from_string",
-    },
-    RuntimeIntrinsic {
-        namespace: "Cache",
-        name: "get",
-        rust_target: "rsscript_runtime::cache_get",
-    },
-    RuntimeIntrinsic {
-        namespace: "Cache",
-        name: "insert",
-        rust_target: "rsscript_runtime::cache_insert",
-    },
-    RuntimeIntrinsic {
-        namespace: "Cache",
-        name: "lookup",
-        rust_target: "rsscript_runtime::cache_lookup",
-    },
-    RuntimeIntrinsic {
-        namespace: "Cache",
-        name: "new",
-        rust_target: "rsscript_runtime::cache_new",
-    },
-    RuntimeIntrinsic {
-        namespace: "Config",
-        name: "load",
-        rust_target: "rsscript_runtime::config_load",
-    },
-    RuntimeIntrinsic {
-        namespace: "Config",
-        name: "name",
-        rust_target: "rsscript_runtime::config_name",
-    },
-    RuntimeIntrinsic {
-        namespace: "Config",
-        name: "new",
-        rust_target: "rsscript_runtime::config_new",
-    },
-    RuntimeIntrinsic {
-        namespace: "Config",
-        name: "rule_count",
-        rust_target: "rsscript_runtime::config_rule_count",
-    },
-    RuntimeIntrinsic {
-        namespace: "ConfigStore",
-        name: "name",
-        rust_target: "rsscript_runtime::config_store_name",
-    },
-    RuntimeIntrinsic {
-        namespace: "ConfigStore",
-        name: "new",
-        rust_target: "rsscript_runtime::config_store_new",
-    },
-    RuntimeIntrinsic {
-        namespace: "ConfigStore",
-        name: "replace",
-        rust_target: "rsscript_runtime::config_store_replace",
-    },
-    RuntimeIntrinsic {
-        namespace: "Counter",
-        name: "add",
-        rust_target: "rsscript_runtime::counter_add",
-    },
-    RuntimeIntrinsic {
-        namespace: "Counter",
-        name: "new",
-        rust_target: "rsscript_runtime::counter_new",
-    },
-    RuntimeIntrinsic {
-        namespace: "Counter",
-        name: "value",
-        rust_target: "rsscript_runtime::counter_value",
-    },
-    RuntimeIntrinsic {
-        namespace: "Csv",
-        name: "parse_row",
-        rust_target: "rsscript_runtime::csv_parse_row",
-    },
-    RuntimeIntrinsic {
-        namespace: "Csv",
-        name: "read_into",
-        rust_target: "rsscript_runtime::csv_read_into",
-    },
-    RuntimeIntrinsic {
-        namespace: "Db",
-        name: "close",
-        rust_target: "rsscript_runtime::db_close",
-    },
-    RuntimeIntrinsic {
-        namespace: "DbConnection",
-        name: "open",
-        rust_target: "rsscript_runtime::db_connection_open",
-    },
-    RuntimeIntrinsic {
-        namespace: "DbConnection",
-        name: "query",
-        rust_target: "rsscript_runtime::db_connection_query",
-    },
-    RuntimeIntrinsic {
-        namespace: "DbConnection",
-        name: "try_open",
-        rust_target: "rsscript_runtime::db_connection_try_open",
-    },
-    RuntimeIntrinsic {
-        namespace: "Environment",
-        name: "bind_function",
-        rust_target: "rsscript_runtime::environment_bind_function",
-    },
-    RuntimeIntrinsic {
-        namespace: "Environment",
-        name: "child",
-        rust_target: "rsscript_runtime::environment_child",
-    },
-    RuntimeIntrinsic {
-        namespace: "Environment",
-        name: "has_function",
-        rust_target: "rsscript_runtime::environment_has_function",
-    },
-    RuntimeIntrinsic {
-        namespace: "Environment",
-        name: "has_parent",
-        rust_target: "rsscript_runtime::environment_has_parent",
-    },
-    RuntimeIntrinsic {
-        namespace: "Environment",
-        name: "root",
-        rust_target: "rsscript_runtime::environment_root",
-    },
-    RuntimeIntrinsic {
-        namespace: "File",
-        name: "open",
-        rust_target: "rsscript_runtime::file_open",
-    },
-    RuntimeIntrinsic {
-        namespace: "File",
-        name: "open_read",
-        rust_target: "rsscript_runtime::file_open_read",
-    },
-    RuntimeIntrinsic {
-        namespace: "File",
-        name: "open_write",
-        rust_target: "rsscript_runtime::file_open_write",
-    },
-    RuntimeIntrinsic {
-        namespace: "File",
-        name: "read_all",
-        rust_target: "rsscript_runtime::file_read_all",
-    },
-    RuntimeIntrinsic {
-        namespace: "File",
-        name: "read_all_string",
-        rust_target: "rsscript_runtime::file_read_all_string",
-    },
-    RuntimeIntrinsic {
-        namespace: "File",
-        name: "read_into",
-        rust_target: "rsscript_runtime::file_read_into",
-    },
-    RuntimeIntrinsic {
-        namespace: "File",
-        name: "write",
-        rust_target: "rsscript_runtime::file_write",
-    },
-    RuntimeIntrinsic {
-        namespace: "File",
-        name: "write_buffer",
-        rust_target: "rsscript_runtime::file_write_buffer",
-    },
-    RuntimeIntrinsic {
-        namespace: "FunctionObject",
-        name: "has_closure",
-        rust_target: "rsscript_runtime::function_object_has_closure",
-    },
-    RuntimeIntrinsic {
-        namespace: "FunctionObject",
-        name: "new",
-        rust_target: "rsscript_runtime::function_object_new",
-    },
-    RuntimeIntrinsic {
-        namespace: "GlobalConfig",
-        name: "new",
-        rust_target: "rsscript_runtime::global_config_new",
-    },
-    RuntimeIntrinsic {
-        namespace: "GlobalConfig",
-        name: "replace",
-        rust_target: "rsscript_runtime::global_config_replace",
-    },
-    RuntimeIntrinsic {
-        namespace: "GlobalConfig",
-        name: "rule_count",
-        rust_target: "rsscript_runtime::global_config_rule_count",
-    },
-    RuntimeIntrinsic {
-        namespace: "Image",
-        name: "inspect",
-        rust_target: "rsscript_runtime::image_inspect",
-    },
-    RuntimeIntrinsic {
-        namespace: "Image",
-        name: "load",
-        rust_target: "rsscript_runtime::image_load",
-    },
-    RuntimeIntrinsic {
-        namespace: "Image",
-        name: "normalize",
-        rust_target: "rsscript_runtime::image_normalize",
-    },
-    RuntimeIntrinsic {
-        namespace: "Image",
-        name: "resize",
-        rust_target: "rsscript_runtime::image_resize",
-    },
-    RuntimeIntrinsic {
-        namespace: "Image",
-        name: "save",
-        rust_target: "rsscript_runtime::image_save",
-    },
-    RuntimeIntrinsic {
-        namespace: "Image",
-        name: "sharpen",
-        rust_target: "rsscript_runtime::image_sharpen",
-    },
-    RuntimeIntrinsic {
-        namespace: "ImageCache",
-        name: "len",
-        rust_target: "rsscript_runtime::image_cache_len",
-    },
-    RuntimeIntrinsic {
-        namespace: "ImageCache",
-        name: "new",
-        rust_target: "rsscript_runtime::image_cache_new",
-    },
-    RuntimeIntrinsic {
-        namespace: "ImageCache",
-        name: "store",
-        rust_target: "rsscript_runtime::image_cache_store",
-    },
-    RuntimeIntrinsic {
-        namespace: "Json",
-        name: "array_contains_prefix",
-        rust_target: "rsscript_runtime::json_array_contains_prefix",
-    },
-    RuntimeIntrinsic {
-        namespace: "Json",
-        name: "array_contains_string",
-        rust_target: "rsscript_runtime::json_array_contains_string",
-    },
-    RuntimeIntrinsic {
-        namespace: "Json",
-        name: "array_contains_substring",
-        rust_target: "rsscript_runtime::json_array_contains_substring",
-    },
-    RuntimeIntrinsic {
-        namespace: "Json",
-        name: "array_get",
-        rust_target: "rsscript_runtime::json_array_get",
-    },
-    RuntimeIntrinsic {
-        namespace: "Json",
-        name: "array_len",
-        rust_target: "rsscript_runtime::json_array_len",
-    },
-    RuntimeIntrinsic {
-        namespace: "Json",
-        name: "as_string",
-        rust_target: "rsscript_runtime::json_as_string",
-    },
-    RuntimeIntrinsic {
-        namespace: "Json",
-        name: "field",
-        rust_target: "rsscript_runtime::json_field",
-    },
-    RuntimeIntrinsic {
-        namespace: "Json",
-        name: "field_bool",
-        rust_target: "rsscript_runtime::json_field_bool",
-    },
-    RuntimeIntrinsic {
-        namespace: "Json",
-        name: "field_int",
-        rust_target: "rsscript_runtime::json_field_int",
-    },
-    RuntimeIntrinsic {
-        namespace: "Json",
-        name: "field_string",
-        rust_target: "rsscript_runtime::json_field_string",
-    },
-    RuntimeIntrinsic {
-        namespace: "Json",
-        name: "parse",
-        rust_target: "rsscript_runtime::json_parse",
-    },
-    RuntimeIntrinsic {
-        namespace: "Json",
-        name: "parse_file",
-        rust_target: "rsscript_runtime::json_parse_file",
-    },
-    RuntimeIntrinsic {
-        namespace: "List",
-        name: "consume",
-        rust_target: "rsscript_runtime::list_consume",
-    },
-    RuntimeIntrinsic {
-        namespace: "List",
-        name: "get",
-        rust_target: "rsscript_runtime::list_get",
-    },
-    RuntimeIntrinsic {
-        namespace: "List",
-        name: "len",
-        rust_target: "rsscript_runtime::list_len",
-    },
-    RuntimeIntrinsic {
-        namespace: "List",
-        name: "new",
-        rust_target: "rsscript_runtime::list_new",
-    },
-    RuntimeIntrinsic {
-        namespace: "List",
-        name: "push",
-        rust_target: "rsscript_runtime::list_push",
-    },
-    RuntimeIntrinsic {
-        namespace: "Log",
-        name: "write",
-        rust_target: "rsscript_runtime::log_write",
-    },
-    RuntimeIntrinsic {
-        namespace: "OS",
-        name: "close",
-        rust_target: "rsscript_runtime::os_close",
-    },
-    RuntimeIntrinsic {
-        namespace: "Path",
-        name: "from_string",
-        rust_target: "rsscript_runtime::path_from_string",
-    },
-    RuntimeIntrinsic {
-        namespace: "Request",
-        name: "new",
-        rust_target: "rsscript_runtime::request_new",
-    },
-    RuntimeIntrinsic {
-        namespace: "Request",
-        name: "path",
-        rust_target: "rsscript_runtime::request_path",
-    },
-    RuntimeIntrinsic {
-        namespace: "Response",
-        name: "body",
-        rust_target: "rsscript_runtime::response_body",
-    },
-    RuntimeIntrinsic {
-        namespace: "Response",
-        name: "ok",
-        rust_target: "rsscript_runtime::response_ok",
-    },
-    RuntimeIntrinsic {
-        namespace: "Response",
-        name: "status",
-        rust_target: "rsscript_runtime::response_status",
-    },
-    RuntimeIntrinsic {
-        namespace: "Row",
-        name: "field_string",
-        rust_target: "rsscript_runtime::row_field_string",
-    },
-    RuntimeIntrinsic {
-        namespace: "RowBuffer",
-        name: "new",
-        rust_target: "rsscript_runtime::row_buffer_new",
-    },
-    RuntimeIntrinsic {
-        namespace: "RuleLoader",
-        name: "load_rules",
-        rust_target: "rsscript_runtime::rule_loader_load_rules",
-    },
-    RuntimeIntrinsic {
-        namespace: "String",
-        name: "ends_with",
-        rust_target: "rsscript_runtime::string_ends_with",
-    },
-    RuntimeIntrinsic {
-        namespace: "String",
-        name: "from_bool",
-        rust_target: "rsscript_runtime::string_from_bool",
-    },
-    RuntimeIntrinsic {
-        namespace: "String",
-        name: "from_int",
-        rust_target: "rsscript_runtime::string_from_int",
-    },
-    RuntimeIntrinsic {
-        namespace: "String",
-        name: "len",
-        rust_target: "rsscript_runtime::string_len",
-    },
-    RuntimeIntrinsic {
-        namespace: "String",
-        name: "starts_with",
-        rust_target: "rsscript_runtime::string_starts_with",
-    },
-    RuntimeIntrinsic {
-        namespace: "Url",
-        name: "from_string",
-        rust_target: "rsscript_runtime::url_from_string",
-    },
+    runtime_intrinsic("Assert", "equal", "rsscript_runtime::assert_equal"),
+    runtime_intrinsic(
+        "Assert",
+        "equal_bool",
+        "rsscript_runtime::assert_equal_bool",
+    ),
+    runtime_intrinsic("Assert", "equal_int", "rsscript_runtime::assert_equal_int"),
+    runtime_intrinsic("Buffer", "clear", "rsscript_runtime::buffer_clear"),
+    runtime_intrinsic("Buffer", "consume", "rsscript_runtime::buffer_consume"),
+    runtime_intrinsic("Buffer", "new", "rsscript_runtime::buffer_new"),
+    runtime_intrinsic("Bytes", "consume", "rsscript_runtime::bytes_consume"),
+    runtime_intrinsic(
+        "Bytes",
+        "from_buffer",
+        "rsscript_runtime::bytes_from_buffer",
+    ),
+    runtime_intrinsic(
+        "Bytes",
+        "from_string",
+        "rsscript_runtime::bytes_from_string",
+    ),
+    runtime_intrinsic("Cache", "get", "rsscript_runtime::cache_get"),
+    runtime_intrinsic("Cache", "insert", "rsscript_runtime::cache_insert"),
+    runtime_intrinsic("Cache", "lookup", "rsscript_runtime::cache_lookup"),
+    runtime_intrinsic("Cache", "new", "rsscript_runtime::cache_new"),
+    runtime_intrinsic("Config", "load", "rsscript_runtime::config_load"),
+    runtime_intrinsic("Config", "name", "rsscript_runtime::config_name"),
+    runtime_intrinsic("Config", "new", "rsscript_runtime::config_new"),
+    runtime_intrinsic(
+        "Config",
+        "rule_count",
+        "rsscript_runtime::config_rule_count",
+    ),
+    runtime_intrinsic("ConfigStore", "name", "rsscript_runtime::config_store_name"),
+    runtime_intrinsic("ConfigStore", "new", "rsscript_runtime::config_store_new"),
+    runtime_intrinsic(
+        "ConfigStore",
+        "replace",
+        "rsscript_runtime::config_store_replace",
+    ),
+    runtime_intrinsic("Counter", "add", "rsscript_runtime::counter_add"),
+    runtime_intrinsic("Counter", "new", "rsscript_runtime::counter_new"),
+    runtime_intrinsic("Counter", "value", "rsscript_runtime::counter_value"),
+    runtime_intrinsic("Csv", "parse_row", "rsscript_runtime::csv_parse_row"),
+    runtime_intrinsic("Csv", "read_into", "rsscript_runtime::csv_read_into"),
+    runtime_intrinsic("Db", "close", "rsscript_runtime::db_close"),
+    runtime_intrinsic(
+        "DbConnection",
+        "open",
+        "rsscript_runtime::db_connection_open",
+    ),
+    runtime_intrinsic(
+        "DbConnection",
+        "query",
+        "rsscript_runtime::db_connection_query",
+    ),
+    runtime_intrinsic(
+        "DbConnection",
+        "try_open",
+        "rsscript_runtime::db_connection_try_open",
+    ),
+    runtime_intrinsic_with_handles(
+        "Environment",
+        "bind_function",
+        "rsscript_runtime::environment_bind_function",
+        &["env", "function"],
+    ),
+    runtime_intrinsic_with_handles(
+        "Environment",
+        "child",
+        "rsscript_runtime::environment_child",
+        &["parent"],
+    ),
+    runtime_intrinsic_with_handles(
+        "Environment",
+        "has_function",
+        "rsscript_runtime::environment_has_function",
+        &["env"],
+    ),
+    runtime_intrinsic_with_handles(
+        "Environment",
+        "has_parent",
+        "rsscript_runtime::environment_has_parent",
+        &["env"],
+    ),
+    runtime_intrinsic("Environment", "root", "rsscript_runtime::environment_root"),
+    runtime_intrinsic("File", "open", "rsscript_runtime::file_open"),
+    runtime_intrinsic("File", "open_read", "rsscript_runtime::file_open_read"),
+    runtime_intrinsic("File", "open_write", "rsscript_runtime::file_open_write"),
+    runtime_intrinsic("File", "read_all", "rsscript_runtime::file_read_all"),
+    runtime_intrinsic(
+        "File",
+        "read_all_string",
+        "rsscript_runtime::file_read_all_string",
+    ),
+    runtime_intrinsic("File", "read_into", "rsscript_runtime::file_read_into"),
+    runtime_intrinsic("File", "write", "rsscript_runtime::file_write"),
+    runtime_intrinsic(
+        "File",
+        "write_buffer",
+        "rsscript_runtime::file_write_buffer",
+    ),
+    runtime_intrinsic_with_handles(
+        "FunctionObject",
+        "has_closure",
+        "rsscript_runtime::function_object_has_closure",
+        &["function"],
+    ),
+    runtime_intrinsic_with_handles(
+        "FunctionObject",
+        "new",
+        "rsscript_runtime::function_object_new",
+        &["closure"],
+    ),
+    runtime_intrinsic("GlobalConfig", "new", "rsscript_runtime::global_config_new"),
+    runtime_intrinsic(
+        "GlobalConfig",
+        "replace",
+        "rsscript_runtime::global_config_replace",
+    ),
+    runtime_intrinsic(
+        "GlobalConfig",
+        "rule_count",
+        "rsscript_runtime::global_config_rule_count",
+    ),
+    runtime_intrinsic_with_handles(
+        "Image",
+        "inspect",
+        "rsscript_runtime::image_inspect",
+        &["image"],
+    ),
+    runtime_intrinsic("Image", "load", "rsscript_runtime::image_load"),
+    runtime_intrinsic("Image", "normalize", "rsscript_runtime::image_normalize"),
+    runtime_intrinsic("Image", "resize", "rsscript_runtime::image_resize"),
+    runtime_intrinsic_with_handles("Image", "save", "rsscript_runtime::image_save", &["image"]),
+    runtime_intrinsic("Image", "sharpen", "rsscript_runtime::image_sharpen"),
+    runtime_intrinsic("ImageCache", "len", "rsscript_runtime::image_cache_len"),
+    runtime_intrinsic("ImageCache", "new", "rsscript_runtime::image_cache_new"),
+    runtime_intrinsic("ImageCache", "store", "rsscript_runtime::image_cache_store"),
+    runtime_intrinsic(
+        "Json",
+        "array_contains_prefix",
+        "rsscript_runtime::json_array_contains_prefix",
+    ),
+    runtime_intrinsic(
+        "Json",
+        "array_contains_string",
+        "rsscript_runtime::json_array_contains_string",
+    ),
+    runtime_intrinsic(
+        "Json",
+        "array_contains_substring",
+        "rsscript_runtime::json_array_contains_substring",
+    ),
+    runtime_intrinsic("Json", "array_get", "rsscript_runtime::json_array_get"),
+    runtime_intrinsic("Json", "array_len", "rsscript_runtime::json_array_len"),
+    runtime_intrinsic("Json", "as_string", "rsscript_runtime::json_as_string"),
+    runtime_intrinsic("Json", "field", "rsscript_runtime::json_field"),
+    runtime_intrinsic("Json", "field_bool", "rsscript_runtime::json_field_bool"),
+    runtime_intrinsic("Json", "field_int", "rsscript_runtime::json_field_int"),
+    runtime_intrinsic(
+        "Json",
+        "field_string",
+        "rsscript_runtime::json_field_string",
+    ),
+    runtime_intrinsic("Json", "parse", "rsscript_runtime::json_parse"),
+    runtime_intrinsic("Json", "parse_file", "rsscript_runtime::json_parse_file"),
+    runtime_intrinsic("List", "consume", "rsscript_runtime::list_consume"),
+    runtime_intrinsic("List", "get", "rsscript_runtime::list_get"),
+    runtime_intrinsic("List", "len", "rsscript_runtime::list_len"),
+    runtime_intrinsic("List", "new", "rsscript_runtime::list_new"),
+    runtime_intrinsic("List", "push", "rsscript_runtime::list_push"),
+    runtime_intrinsic("Log", "write", "rsscript_runtime::log_write"),
+    runtime_intrinsic("OS", "close", "rsscript_runtime::os_close"),
+    runtime_intrinsic("Path", "from_string", "rsscript_runtime::path_from_string"),
+    runtime_intrinsic("Request", "new", "rsscript_runtime::request_new"),
+    runtime_intrinsic("Request", "path", "rsscript_runtime::request_path"),
+    runtime_intrinsic("Response", "body", "rsscript_runtime::response_body"),
+    runtime_intrinsic("Response", "ok", "rsscript_runtime::response_ok"),
+    runtime_intrinsic("Response", "status", "rsscript_runtime::response_status"),
+    runtime_intrinsic("Row", "field_string", "rsscript_runtime::row_field_string"),
+    runtime_intrinsic("RowBuffer", "new", "rsscript_runtime::row_buffer_new"),
+    runtime_intrinsic(
+        "RuleLoader",
+        "load_rules",
+        "rsscript_runtime::rule_loader_load_rules",
+    ),
+    runtime_intrinsic("String", "ends_with", "rsscript_runtime::string_ends_with"),
+    runtime_intrinsic("String", "from_bool", "rsscript_runtime::string_from_bool"),
+    runtime_intrinsic("String", "from_int", "rsscript_runtime::string_from_int"),
+    runtime_intrinsic("String", "len", "rsscript_runtime::string_len"),
+    runtime_intrinsic(
+        "String",
+        "starts_with",
+        "rsscript_runtime::string_starts_with",
+    ),
+    runtime_intrinsic("Url", "from_string", "rsscript_runtime::url_from_string"),
 ];
 
 fn is_string_concat_callee(callee: &Callee) -> bool {
