@@ -1,0 +1,154 @@
+features: local
+
+struct VendorCopyFacts {
+    copied_files: Int
+    interface_files: Int
+    source_files: Int
+    manifest_files: Int
+}
+
+fn source_root() -> fresh Path {
+    let input = Args.get_or_default(
+        index: 0,
+        default: read "tests/fixtures/pass/selfhost-package-source-set",
+    )
+
+    return Path.from_string(value: read input)
+}
+
+fn vendor_root() -> fresh Path {
+    let input = Args.get_or_default(
+        index: 1,
+        default: read "target/rsscript-selfhost-vendor/rss-selfhost-source-set-0.5.0",
+    )
+
+    return Path.from_string(value: read input)
+}
+
+fn empty_facts() -> fresh VendorCopyFacts {
+    return VendorCopyFacts(
+        copied_files: 0,
+        interface_files: 0,
+        source_files: 0,
+        manifest_files: 0,
+    )
+}
+
+fn bool_count(value: Bool) -> Int {
+    if value {
+        return 1
+    }
+
+    return 0
+}
+
+fn add_file_facts(facts: read VendorCopyFacts, relative_path: read String) -> fresh VendorCopyFacts {
+    let is_interface = String.ends_with(value: read relative_path, suffix: read ".rssi")
+    let is_source = String.ends_with(value: read relative_path, suffix: read ".rss")
+    let is_manifest = relative_path == "rsspkg.toml"
+
+    return VendorCopyFacts(
+        copied_files: facts.copied_files + 1,
+        interface_files: facts.interface_files + bool_count(value: is_interface),
+        source_files: facts.source_files + bool_count(value: is_source),
+        manifest_files: facts.manifest_files + bool_count(value: is_manifest),
+    )
+}
+
+fn ensure_parent_directory(path: read Path) -> Result<Unit, FileError> {
+    match Path.parent(path: read path) {
+        Some(parent) => {
+            Directory.create_all(path: read parent)?
+        }
+        None => {
+        }
+    }
+
+    return Ok(Unit)
+}
+
+fn read_text(path: read Path) -> Result<String, FileError> {
+    with File.open_read(path: read path)? as file {
+        let text = File.read_all_string(file: mut file)?
+
+        return Ok(text)
+    }
+}
+
+fn write_text(path: read Path, text: read String) -> Result<Unit, FileError> {
+    ensure_parent_directory(path: read path)?
+
+    with File.open_write(path: read path)? as file {
+        File.write_string(file: mut file, text: read text)?
+    }
+
+    return Ok(Unit)
+}
+
+fn copy_relative_file(
+    source: read Path,
+    vendor: read Path,
+    facts: read VendorCopyFacts,
+    relative_path: read String,
+) -> Result<fresh VendorCopyFacts, FileError> {
+    let input = Path.join(base: read source, child: read relative_path)
+    let output = Path.join(base: read vendor, child: read relative_path)
+    let contents = read_text(path: read input)?
+    write_text(path: read output, text: read contents)?
+
+    return add_file_facts(facts: read facts, relative_path: read relative_path)
+}
+
+fn copy_package_tree(
+    source: read Path,
+    vendor: read Path,
+    files: read List<String>,
+) -> Result<fresh VendorCopyFacts, FileError> {
+    return List.try_fold<String, VendorCopyFacts, FileError>(
+        list: read files,
+        initial: read empty_facts(),
+        folder: |facts, relative_path| {
+            return copy_relative_file(
+                source: read source,
+                vendor: read vendor,
+                facts: read facts,
+                relative_path: read relative_path,
+            )
+        },
+    )
+}
+
+fn summary_line(facts: read VendorCopyFacts) -> fresh String {
+    local builder = StringBuilder.new()
+    StringBuilder.push(builder: mut builder, value: read "selfhost package vendor copied=")
+    let copied = String.from_int(value: facts.copied_files)
+    StringBuilder.push(builder: mut builder, value: read copied)
+    StringBuilder.push(builder: mut builder, value: read " interfaces=")
+    let interfaces = String.from_int(value: facts.interface_files)
+    StringBuilder.push(builder: mut builder, value: read interfaces)
+    StringBuilder.push(builder: mut builder, value: read " sources=")
+    let sources = String.from_int(value: facts.source_files)
+    StringBuilder.push(builder: mut builder, value: read sources)
+    StringBuilder.push(builder: mut builder, value: read " manifests=")
+    let manifests = String.from_int(value: facts.manifest_files)
+    StringBuilder.push(builder: mut builder, value: read manifests)
+
+    return StringBuilder.finish(builder: take builder)
+}
+
+pub fn main() -> Result<Unit, FileError> {
+    let source = source_root()
+    let vendor = vendor_root()
+    Directory.create_all(path: read vendor)?
+    let files = Directory.list_files(path: read source)?
+    let facts = copy_package_tree(
+        source: read source,
+        vendor: read vendor,
+        files: read files,
+    )?
+    let summary = summary_line(facts: read facts)
+
+    Log.write(message: read summary)
+
+    return Ok(Unit)
+}

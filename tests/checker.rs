@@ -7486,6 +7486,40 @@ fn rss_run_accepts_selfhost_package_metadata_writer() {
 }
 
 #[test]
+fn rss_run_accepts_selfhost_package_vendor_copy() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-package-vendor-copy");
+    let vendor_dir = temp_dir.join("vendor/rss-selfhost-source-set-0.5.0");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("tests/fixtures/pass/selfhost-package-vendor-copy.rss")
+        .arg("--")
+        .arg("tests/fixtures/pass/selfhost-package-source-set")
+        .arg(&vendor_dir)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss run should execute selfhost package vendor copy");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(
+        stdout.contains("selfhost package vendor copied=5 interfaces=2 sources=2 manifests=1"),
+        "{stdout}"
+    );
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert!(vendor_dir.join("rsspkg.toml").is_file());
+    assert!(vendor_dir.join("interface/lib.rssi").is_file());
+    assert!(vendor_dir.join("contracts/tool.rssi").is_file());
+    assert!(vendor_dir.join("src/main.rss").is_file());
+    assert!(vendor_dir.join("tools/check.rss").is_file());
+
+    let manifest = fs::read_to_string(vendor_dir.join("rsspkg.toml"))
+        .expect("vendored manifest should be readable");
+    assert!(manifest.contains("rss-selfhost-source-set"));
+}
+
+#[test]
 fn rss_run_accepts_selfhost_package_manifest_parser_with_input_path() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-package-manifest");
     let Some(_fixture_dir) =
