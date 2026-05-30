@@ -7076,6 +7076,10 @@ fn rss_run_accepts_checked_in_dogfood_scripts_directly() {
             "dogfood package manifest name=rss-dogfood-manifest version=0.5.0",
         ),
         (
+            "tests/fixtures/pass/dogfood-package-sources.rss",
+            "dogfood package sources total=3 manifests=1 interfaces=1 sources=1",
+        ),
+        (
             "tests/fixtures/pass/dogfood-package-exports.rss",
             "dogfood package exports types=2 functions=3 apis=5",
         ),
@@ -7157,6 +7161,63 @@ native-tls = ["native"]
     assert_eq!(
         stdout.trim(),
         "dogfood package manifest name=rss-dogfood-manifest version=0.5.0 edition=2024 interface_paths=1 dep=0.5 feature_members=1"
+    );
+    assert!(stderr.trim().is_empty(), "{stderr}");
+}
+
+#[test]
+fn rss_run_accepts_dogfood_package_source_set_with_input_path() {
+    let temp_dir = unique_temp_dir("rsscript-dogfood-package-sources");
+    let Some(_fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-sources.rss")
+    else {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return;
+    };
+    let package_dir = temp_dir.join("package");
+    fs::create_dir_all(package_dir.join("interface")).expect("interface directory should exist");
+    fs::create_dir_all(package_dir.join("src")).expect("source directory should exist");
+    fs::write(
+        package_dir.join("rsspkg.toml"),
+        r#"[package]
+name = "rss-dogfood-source-set"
+version = "0.5.0"
+edition = "2024"
+
+[interfaces]
+paths = ["interface"]
+
+[sources]
+paths = ["src"]
+"#,
+    )
+    .expect("manifest should be written");
+    fs::write(
+        package_dir.join("interface/lib.rssi"),
+        "pub fn Api.run() -> Unit\n",
+    )
+    .expect("interface should be written");
+    fs::write(
+        package_dir.join("src/main.rss"),
+        "pub fn Api.run() -> Unit {\n    return Unit\n}\n",
+    )
+    .expect("source should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("tests/fixtures/pass/dogfood-package-sources.rss")
+        .arg("--")
+        .arg("package")
+        .current_dir(&temp_dir)
+        .output()
+        .expect("rss run should execute dogfood package source-set parser");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "dogfood package sources total=3 manifests=1 interfaces=1 sources=1"
     );
     assert!(stderr.trim().is_empty(), "{stderr}");
 }

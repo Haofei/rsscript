@@ -85,6 +85,11 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Counter", "add", "rsscript_runtime::counter_add"),
     runtime_intrinsic("Counter", "new", "rsscript_runtime::counter_new"),
     runtime_intrinsic("Counter", "value", "rsscript_runtime::counter_value"),
+    runtime_intrinsic(
+        "Directory",
+        "list_files",
+        "rsscript_runtime::directory_list_files",
+    ),
     runtime_intrinsic("Csv", "open_read", "rsscript_runtime::csv_open_read"),
     runtime_intrinsic("Csv", "parse_row", "rsscript_runtime::csv_parse_row"),
     runtime_intrinsic("Csv", "read_into", "rsscript_runtime::csv_read_into"),

@@ -1,0 +1,113 @@
+features: local
+
+struct PackageSourceSetFacts {
+    total_files: Int
+    manifest_files: Int
+    interface_files: Int
+    source_files: Int
+}
+
+fn dogfood_source_root() -> fresh Path {
+    let input = Args.get_or_default(
+        index: 0,
+        default: read "tests/fixtures/pass/dogfood-package-source-set",
+    )
+
+    return Path.from_string(value: read input)
+}
+
+fn add_source_path(
+    facts: read PackageSourceSetFacts,
+    path: read String,
+) -> fresh PackageSourceSetFacts {
+    let is_manifest = path == "rsspkg.toml"
+    let is_interface = String.ends_with(value: read path, suffix: read ".rssi")
+    let is_source = String.ends_with(value: read path, suffix: read ".rss")
+
+    return PackageSourceSetFacts(
+        total_files: facts.total_files + 1,
+        manifest_files: add_bool(value: facts.manifest_files, condition: is_manifest),
+        interface_files: add_bool(value: facts.interface_files, condition: is_interface),
+        source_files: add_bool(value: facts.source_files, condition: is_source),
+    )
+}
+
+fn add_bool(value: Int, condition: Bool) -> Int {
+    if condition {
+        return value + 1
+    }
+
+    return value
+}
+
+fn count_source_set_from(
+    paths: read List<String>,
+    index: Int,
+    facts: read PackageSourceSetFacts,
+) -> fresh PackageSourceSetFacts {
+    if index >= List.len(list: read paths) {
+        return PackageSourceSetFacts(
+            total_files: facts.total_files,
+            manifest_files: facts.manifest_files,
+            interface_files: facts.interface_files,
+            source_files: facts.source_files,
+        )
+    }
+
+    let path = List.get(list: read paths, index: index)
+    let next = add_source_path(facts: read facts, path: read path)
+
+    return count_source_set_from(
+        paths: read paths,
+        index: index + 1,
+        facts: read next,
+    )
+}
+
+fn empty_source_set_facts() -> fresh PackageSourceSetFacts {
+    return PackageSourceSetFacts(
+        total_files: 0,
+        manifest_files: 0,
+        interface_files: 0,
+        source_files: 0,
+    )
+}
+
+fn dogfood_source_set_facts() -> Result<fresh PackageSourceSetFacts, FileError> {
+    let paths = Directory.list_files(path: read dogfood_source_root())?
+
+    return count_source_set_from(
+        paths: read paths,
+        index: 0,
+        facts: read empty_source_set_facts(),
+    )
+}
+
+fn source_set_summary_line(facts: read PackageSourceSetFacts) -> fresh String {
+    let total = String.from_int(value: facts.total_files)
+    let manifests = String.from_int(value: facts.manifest_files)
+    let interfaces = String.from_int(value: facts.interface_files)
+    let sources = String.from_int(value: facts.source_files)
+    let first = String.concat(left: read "dogfood package sources total=", right: read total)
+    let second = String.concat(left: read first, right: read " manifests=")
+    let third = String.concat(left: read second, right: read manifests)
+    let fourth = String.concat(left: read third, right: read " interfaces=")
+    let fifth = String.concat(left: read fourth, right: read interfaces)
+    let sixth = String.concat(left: read fifth, right: read " sources=")
+
+    return String.concat(left: read sixth, right: read sources)
+}
+
+pub fn main() -> Result<Unit, FileError> {
+    let facts = dogfood_source_set_facts()?
+    let summary = source_set_summary_line(facts: read facts)
+
+    Log.write(message: read summary)
+
+    Assert.equal_int(left: facts.total_files, right: 3)
+    Assert.equal_int(left: facts.manifest_files, right: 1)
+    Assert.equal_int(left: facts.interface_files, right: 1)
+    Assert.equal_int(left: facts.source_files, right: 1)
+
+    return Ok(Unit)
+}

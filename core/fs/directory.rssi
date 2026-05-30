@@ -1,0 +1,4 @@
+features: native
+
+pub native fn Directory.list_files(path: read Path) -> Result<fresh List<String>, FileError>
+    effects(native)

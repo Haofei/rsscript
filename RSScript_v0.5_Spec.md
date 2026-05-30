@@ -2936,6 +2936,7 @@ List<T>
 Map<K,V>
 Set<T>
 Path
+Directory
 File
 JsonValue
 Json

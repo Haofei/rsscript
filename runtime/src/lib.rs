@@ -465,6 +465,41 @@ pub fn file_write_buffer(file: &mut File, buffer: &[u8]) -> std::io::Result<()> 
     file.inner.write_all(buffer)
 }
 
+pub fn directory_list_files<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<Vec<String>> {
+    let root = path.as_path();
+    let mut files = Vec::new();
+    collect_directory_files(root, root, &mut files)?;
+    files.sort();
+    Ok(files)
+}
+
+fn collect_directory_files(
+    root: &std::path::Path,
+    current: &std::path::Path,
+    files: &mut Vec<String>,
+) -> std::io::Result<()> {
+    if current.is_file() {
+        files.push(relative_runtime_path(root, current));
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(current)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            collect_directory_files(root, &path, files)?;
+        } else if path.is_file() {
+            files.push(relative_runtime_path(root, &path));
+        }
+    }
+    Ok(())
+}
+
+fn relative_runtime_path(root: &std::path::Path, path: &std::path::Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
 pub fn os_close(fd: i64) {
     let _ = fd;
 }

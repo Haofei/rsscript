@@ -37,6 +37,10 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
     ),
     ("core/csv/csv.rssi", include_str!("../core/csv/csv.rssi")),
     ("core/db/db.rssi", include_str!("../core/db/db.rssi")),
+    (
+        "core/fs/directory.rssi",
+        include_str!("../core/fs/directory.rssi"),
+    ),
     ("core/fs/file.rssi", include_str!("../core/fs/file.rssi")),
     (
         "core/http/http.rssi",
