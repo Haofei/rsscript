@@ -4,8 +4,9 @@ use crate::lexer::{Token, TokenKind, lex};
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, DataEffect, DuplicateFileFeature, EffectDecl, Expr,
     FieldDecl, FileFeature, ForStmt, FunctionDecl, GenericBound, GenericParam, IfStmt, Item,
-    LetKind, LetStmt, LoopStmt, MatchArm, MatchPattern, MatchStmt, Param, Program, ReturnStmt,
-    Stmt, TypeDecl, TypeKind, TypeRef, UnknownFileFeature, WithStmt,
+    LetKind, LetStmt, LoopStmt, MatchArm, MatchPattern, MatchStmt, Param, Program, ProtocolDecl,
+    ProtocolImpl, ProtocolImplMapping, ReturnStmt, Stmt, TypeDecl, TypeKind, TypeRef,
+    UnknownFileFeature, WithStmt,
 };
 
 pub fn parse_source(file: &str, source: &str) -> Program {
@@ -37,6 +38,8 @@ impl Parser<'_> {
         let mut profile_spans = Vec::new();
         let mut unknown_top_level_spans = Vec::new();
         let mut malformed_declaration_spans = Vec::new();
+        let mut protocols = Vec::new();
+        let mut protocol_impls = Vec::new();
         let mut items = Vec::new();
 
         while !self.is_eof() {
@@ -63,8 +66,17 @@ impl Parser<'_> {
                 }
             } else if self.at_ident("protocol") {
                 let start = self.index;
-                if let Some(functions) = self.parse_protocol_decl() {
+                if let Some((protocol, functions)) = self.parse_protocol_decl() {
+                    protocols.push(protocol);
                     items.extend(functions.into_iter().map(Item::Function));
+                } else {
+                    malformed_declaration_spans.push(self.tokens[start].span.clone());
+                    self.index = skip_unknown_top_level(self.tokens, start);
+                }
+            } else if self.at_ident("impl") {
+                let start = self.index;
+                if let Some(protocol_impl) = self.parse_protocol_impl_decl() {
+                    protocol_impls.push(protocol_impl);
                 } else {
                     malformed_declaration_spans.push(self.tokens[start].span.clone());
                     self.index = skip_unknown_top_level(self.tokens, start);
@@ -103,6 +115,8 @@ impl Parser<'_> {
             profile_spans,
             unknown_top_level_spans,
             malformed_declaration_spans,
+            protocols,
+            protocol_impls,
             items,
         }
     }
@@ -313,9 +327,14 @@ impl Parser<'_> {
         })
     }
 
-    fn parse_protocol_decl(&mut self) -> Option<Vec<FunctionDecl>> {
+    fn parse_protocol_decl(&mut self) -> Option<(ProtocolDecl, Vec<FunctionDecl>)> {
+        let span = self.current()?.span.clone();
         self.index += 1;
         let protocol = self.take_ident_name()?;
+        let decl = ProtocolDecl {
+            name: protocol.clone(),
+            span,
+        };
         if !self.at_symbol("{") {
             return None;
         }
@@ -352,7 +371,57 @@ impl Parser<'_> {
             methods.push(method);
         }
         self.index = close + 1;
-        Some(methods)
+        Some((decl, methods))
+    }
+
+    fn parse_protocol_impl_decl(&mut self) -> Option<ProtocolImpl> {
+        let span = self.current()?.span.clone();
+        self.index += 1;
+        let protocol = self.take_ident_name()?;
+        if !self.at_ident("for") {
+            return None;
+        }
+        self.index += 1;
+        let type_name = self.take_function_name()?;
+        if !self.at_symbol("{") {
+            return None;
+        }
+        let open = self.index;
+        let close = find_matching(self.tokens, open, "{", "}")?;
+        self.index = open + 1;
+        let mut mappings = Vec::new();
+        while self.index < close {
+            if is_trivia_boundary(self.current()?) {
+                self.index += 1;
+                continue;
+            }
+            let mapping_span = self.current()?.span.clone();
+            let Some(method) = self.take_ident_name() else {
+                self.index = skip_unknown_top_level(self.tokens, self.index).min(close);
+                continue;
+            };
+            if !self.at_symbol("=") {
+                self.index = skip_unknown_top_level(self.tokens, self.index).min(close);
+                continue;
+            }
+            self.index += 1;
+            let Some(target) = self.take_function_name() else {
+                self.index = skip_unknown_top_level(self.tokens, self.index).min(close);
+                continue;
+            };
+            mappings.push(ProtocolImplMapping {
+                method,
+                target,
+                span: mapping_span,
+            });
+        }
+        self.index = close + 1;
+        Some(ProtocolImpl {
+            protocol,
+            type_name,
+            mappings,
+            span,
+        })
     }
 
     fn parse_native_module_decl(&mut self) -> Option<Vec<FunctionDecl>> {
@@ -608,6 +677,7 @@ fn starts_top_level_item(tokens: &[Token], index: usize) -> bool {
         || token.is_ident_text("async")
         || token.is_ident_text("native")
         || token.is_ident_text("protocol")
+        || token.is_ident_text("impl")
 }
 
 fn parse_params(tokens: &[Token], start: usize, end: usize) -> ParsedParams {

@@ -2319,10 +2319,28 @@ protocol Writer {
         effects(retains(message))
 }
 
+struct BufferWriter
+
+fn BufferWriter.write(
+    self: mut BufferWriter,
+    message: read String,
+) -> Unit
+    effects(retains(message))
+
+impl Writer for BufferWriter {
+    write = BufferWriter.write
+}
+
 fn write_line<W: Writer>(writer: mut W, message: read String) -> Unit
 ```
 
 This covers "write code against a capability" and is fully review-resolvable.
+The bound name must resolve to a declared protocol. A concrete type satisfies a
+protocol only through an explicit `impl Protocol for Type` block. Each mapping
+names the protocol method and the concrete function that implements it; the
+checker validates parameter names, read/mut/take effects, `Self` substitution,
+return type and freshness, `retains(...)`, boundary effects, and guarantee
+effects exactly.
 
 #### Dynamic dispatch (admitted, in a reviewable form)
 
@@ -2720,6 +2738,7 @@ Fd used outside native/resource internals
 unknown type in signature or field
 unknown field access on a resolved base type
 unknown value binding
+unknown protocol
 local captured by managed closure
 take of handle field
 weak field initialized without explicit weak handle

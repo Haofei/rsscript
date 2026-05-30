@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use crate::checks;
 use crate::diagnostic::{Diagnostic, code};
 use crate::hir::{
-    CallResolution, DuplicateSymbolKind, Hir, HirBlock, HirExpr, HirStmt, HirTypeKind,
-    ResolvedCalleeKind,
+    CallResolution, DuplicateSymbolKind, FunctionSig, Hir, HirBlock, HirExpr, HirStmt, HirTypeKind,
+    ParamSig, ResolvedCalleeKind,
 };
 use crate::interfaces::CORE_INTERFACES;
 use crate::lexer::{Token, lex};
@@ -132,6 +132,7 @@ impl Analyzer<'_> {
         self.check_unsupported_syntax();
         self.check_match_exhaustiveness();
         self.check_duplicate_declarations();
+        self.check_protocol_contracts();
         self.check_signature_explicitness();
         self.check_unknown_types();
         self.check_unknown_fields();
@@ -968,6 +969,125 @@ impl Analyzer<'_> {
                     }
                 }
             }
+        }
+    }
+
+    fn check_protocol_contracts(&mut self) {
+        let protocol_names = self
+            .syntax_program
+            .protocols
+            .iter()
+            .map(|protocol| protocol.name.clone())
+            .collect::<HashSet<_>>();
+        let items = self.syntax_program.items.clone();
+        for item in &items {
+            match item {
+                Item::Type(decl) => {
+                    for param in &decl.type_params {
+                        self.check_protocol_bound(param, &protocol_names);
+                    }
+                }
+                Item::Function(function) => {
+                    for param in &function.type_params {
+                        self.check_protocol_bound(param, &protocol_names);
+                    }
+                }
+            }
+        }
+
+        let protocol_impls = self.syntax_program.protocol_impls.clone();
+        for protocol_impl in &protocol_impls {
+            if !protocol_names.contains(&protocol_impl.protocol) {
+                self.unknown_protocol_diagnostic(&protocol_impl.protocol, &protocol_impl.span);
+                continue;
+            }
+            if self.hir.type_info(&protocol_impl.type_name).is_none()
+                && !is_builtin_type_name(&protocol_impl.type_name)
+            {
+                self.unknown_type_name_diagnostic(&protocol_impl.type_name, &protocol_impl.span);
+            }
+            let protocol_methods = protocol_method_names(&items, &protocol_impl.protocol);
+            let mapped_methods = protocol_impl
+                .mappings
+                .iter()
+                .map(|mapping| mapping.method.clone())
+                .collect::<HashSet<_>>();
+            for method in &protocol_methods {
+                if !mapped_methods.contains(method) {
+                    self.protocol_impl_mismatch_diagnostic(
+                        &protocol_impl.protocol,
+                        &protocol_impl.type_name,
+                        method,
+                        &protocol_impl.span,
+                        "missing protocol method mapping",
+                        format!(
+                            "`{}` must map protocol method `{method}` to a concrete function.",
+                            protocol_impl.type_name
+                        ),
+                    );
+                }
+            }
+
+            for mapping in &protocol_impl.mappings {
+                let Some(protocol_signature) = self
+                    .hir
+                    .resolve_function(Some(&protocol_impl.protocol), &mapping.method)
+                else {
+                    self.protocol_impl_mismatch_diagnostic(
+                        &protocol_impl.protocol,
+                        &protocol_impl.type_name,
+                        &mapping.method,
+                        &mapping.span,
+                        "unknown protocol method",
+                        format!(
+                            "`{}` does not declare method `{}`.",
+                            protocol_impl.protocol, mapping.method
+                        ),
+                    );
+                    continue;
+                };
+                let (target_namespace, target_name) = split_qualified_name(&mapping.target);
+                let Some(target_signature) = self
+                    .hir
+                    .resolve_function(target_namespace.as_deref(), target_name)
+                else {
+                    self.protocol_impl_mismatch_diagnostic(
+                        &protocol_impl.protocol,
+                        &protocol_impl.type_name,
+                        &mapping.method,
+                        &mapping.span,
+                        "unknown protocol implementation target",
+                        format!(
+                            "Mapped target `{}` must resolve to a concrete function.",
+                            mapping.target
+                        ),
+                    );
+                    continue;
+                };
+                if let Some(reason) = protocol_signature_mismatch(
+                    protocol_signature,
+                    target_signature,
+                    &protocol_impl.type_name,
+                ) {
+                    self.protocol_impl_mismatch_diagnostic(
+                        &protocol_impl.protocol,
+                        &protocol_impl.type_name,
+                        &mapping.method,
+                        &mapping.span,
+                        "protocol implementation signature mismatch",
+                        reason,
+                    );
+                }
+            }
+        }
+    }
+
+    fn check_protocol_bound(&mut self, param: &GenericParam, protocol_names: &HashSet<String>) {
+        let Some(GenericBound::Protocol(protocol)) = &param.bound else {
+            return;
+        };
+        if !protocol_names.contains(protocol) {
+            self.unknown_protocol_diagnostic(protocol, &param.span);
         }
     }
 
@@ -1938,11 +2058,15 @@ impl Analyzer<'_> {
     }
 
     fn unknown_type_diagnostic(&mut self, ty: &TypeRef) {
+        self.unknown_type_name_diagnostic(&type_ref_name(ty), &ty.span);
+    }
+
+    fn unknown_type_name_diagnostic(&mut self, name: &str, span: &crate::diagnostic::Span) {
         self.diagnostics.push(
             Diagnostic::error(
                 code::UNKNOWN_TYPE,
-                format!("unknown type `{}`.", type_ref_name(ty)),
-                ty.span.clone(),
+                format!("unknown type `{name}`."),
+                span.clone(),
                 "unknown type",
             )
             .with_cause("RSScript type checking must resolve source-level types before Rust lowering.")
@@ -1950,8 +2074,52 @@ impl Analyzer<'_> {
                 "declare_or_import_type",
                 format!(
                     "Declare `{}`, import an `.rssi` contract that declares it, or use a known core/runtime type.",
-                    ty.name
+                    name
                 ),
+                "manual",
+            ),
+        );
+    }
+
+    fn unknown_protocol_diagnostic(&mut self, name: &str, span: &crate::diagnostic::Span) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::UNKNOWN_PROTOCOL,
+                format!("unknown protocol `{name}`."),
+                span.clone(),
+                "unknown protocol",
+            )
+            .with_cause(
+                "Protocol bounds and implementations must name an explicit `protocol` declaration.",
+            )
+            .with_fix(
+                "declare_protocol",
+                format!("Declare `protocol {name} {{ ... }}` or use a declared protocol name."),
+                "manual",
+            ),
+        );
+    }
+
+    fn protocol_impl_mismatch_diagnostic(
+        &mut self,
+        protocol: &str,
+        type_name: &str,
+        method: &str,
+        span: &crate::diagnostic::Span,
+        label: impl Into<String>,
+        cause: impl Into<String>,
+    ) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::PACKAGE_INTERFACE_MISMATCH,
+                format!("`{type_name}` does not satisfy protocol `{protocol}` method `{method}`."),
+                span.clone(),
+                label,
+            )
+            .with_cause(cause)
+            .with_fix(
+                "fix_protocol_impl_mapping",
+                "Update the protocol impl mapping or concrete function signature to match the protocol contract exactly.",
                 "manual",
             ),
         );
@@ -2331,6 +2499,116 @@ fn generic_bounds(params: &[GenericParam]) -> HashMap<String, Option<GenericBoun
         .iter()
         .map(|param| (param.name.clone(), param.bound.clone()))
         .collect()
+}
+
+fn protocol_method_names(items: &[Item], protocol: &str) -> HashSet<String> {
+    items
+        .iter()
+        .filter_map(|item| {
+            let Item::Function(function) = item else {
+                return None;
+            };
+            let (namespace, method) = split_qualified_name(&function.name);
+            (namespace.as_deref() == Some(protocol)).then(|| method.to_string())
+        })
+        .collect()
+}
+
+fn protocol_signature_mismatch(
+    protocol: &FunctionSig,
+    target: &FunctionSig,
+    concrete_type: &str,
+) -> Option<String> {
+    if protocol.is_async != target.is_async {
+        return Some("async/sync kind must match the protocol method exactly.".to_string());
+    }
+    if protocol.params.len() != target.params.len() {
+        return Some(format!(
+            "parameter count mismatch: protocol has {}, implementation has {}.",
+            protocol.params.len(),
+            target.params.len()
+        ));
+    }
+    for (protocol_param, target_param) in protocol.params.iter().zip(&target.params) {
+        if let Some(reason) = protocol_param_mismatch(protocol_param, target_param, concrete_type) {
+            return Some(reason);
+        }
+    }
+    let protocol_return = protocol
+        .return_type
+        .as_deref()
+        .map(|return_type| substitute_protocol_self(return_type, concrete_type));
+    if protocol_return.as_deref() != target.return_type.as_deref() {
+        return Some(format!(
+            "return type mismatch: protocol expects `{}`, implementation returns `{}`.",
+            protocol_return.as_deref().unwrap_or("Unit"),
+            target.return_type.as_deref().unwrap_or("Unit")
+        ));
+    }
+    if protocol.returns_fresh != target.returns_fresh {
+        return Some("fresh return mode must match the protocol method exactly.".to_string());
+    }
+    let protocol_effects = protocol.effects.iter().collect::<HashSet<_>>();
+    let target_effects = target.effects.iter().collect::<HashSet<_>>();
+    if protocol_effects != target_effects {
+        return Some(
+            "guarantee and boundary effects must match the protocol method exactly.".to_string(),
+        );
+    }
+    if protocol.retained_params != target.retained_params {
+        return Some("retains(...) effects must match the protocol method exactly.".to_string());
+    }
+    None
+}
+
+fn protocol_param_mismatch(
+    protocol: &ParamSig,
+    target: &ParamSig,
+    concrete_type: &str,
+) -> Option<String> {
+    if protocol.name != target.name {
+        return Some(format!(
+            "parameter name mismatch: protocol expects `{}`, implementation has `{}`.",
+            protocol.name, target.name
+        ));
+    }
+    if protocol.effect != target.effect {
+        return Some(format!(
+            "parameter effect mismatch for `{}`: protocol expects `{}`, implementation has `{}`.",
+            protocol.name,
+            protocol
+                .effect
+                .map(|effect| effect.as_str())
+                .unwrap_or("none"),
+            target
+                .effect
+                .map(|effect| effect.as_str())
+                .unwrap_or("none")
+        ));
+    }
+    let expected_type = substitute_protocol_self(&protocol.type_name, concrete_type);
+    if expected_type != target.type_name {
+        return Some(format!(
+            "parameter type mismatch for `{}`: protocol expects `{expected_type}`, implementation has `{}`.",
+            protocol.name, target.type_name
+        ));
+    }
+    None
+}
+
+fn substitute_protocol_self(type_name: &str, concrete_type: &str) -> String {
+    if type_name == "Self" {
+        return concrete_type.to_string();
+    }
+    type_name.replace("Self", concrete_type)
+}
+
+fn split_qualified_name(name: &str) -> (Option<String>, &str) {
+    if let Some((namespace, name)) = name.rsplit_once('.') {
+        (Some(namespace.to_string()), name)
+    } else {
+        (None, name)
+    }
 }
 
 fn fresh_return_target_type(return_ty: &TypeRef) -> &TypeRef {

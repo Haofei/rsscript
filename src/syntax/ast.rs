@@ -32,6 +32,8 @@ pub struct Program {
     pub profile_spans: Vec<Span>,
     pub unknown_top_level_spans: Vec<Span>,
     pub malformed_declaration_spans: Vec<Span>,
+    pub protocols: Vec<ProtocolDecl>,
+    pub protocol_impls: Vec<ProtocolImpl>,
     pub items: Vec<Item>,
 }
 
@@ -53,6 +55,8 @@ pub fn merge_programs(programs: impl IntoIterator<Item = Program>) -> Program {
     let mut profile_spans = Vec::new();
     let mut unknown_top_level_spans = Vec::new();
     let mut malformed_declaration_spans = Vec::new();
+    let mut protocols = Vec::new();
+    let mut protocol_impls = Vec::new();
     let mut items = Vec::new();
 
     for program in programs {
@@ -69,6 +73,8 @@ pub fn merge_programs(programs: impl IntoIterator<Item = Program>) -> Program {
             feature_spans.extend(program.feature_spans);
         }
         profile_spans.extend(program.profile_spans);
+        protocols.extend(program.protocols);
+        protocol_impls.extend(program.protocol_impls);
         items.extend(program.items);
     }
 
@@ -80,6 +86,8 @@ pub fn merge_programs(programs: impl IntoIterator<Item = Program>) -> Program {
         profile_spans,
         unknown_top_level_spans,
         malformed_declaration_spans,
+        protocols,
+        protocol_impls,
         items,
     }
 }
@@ -124,6 +132,27 @@ pub enum GenericBound {
     Struct,
     Resource,
     Protocol(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtocolDecl {
+    pub name: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtocolImpl {
+    pub protocol: String,
+    pub type_name: String,
+    pub mappings: Vec<ProtocolImplMapping>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtocolImplMapping {
+    pub method: String,
+    pub target: String,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

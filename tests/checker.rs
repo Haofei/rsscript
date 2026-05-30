@@ -79,6 +79,7 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
         "RS0015",
     ),
     ("async call not consumed by await or spawn", "RS0022"),
+    ("unknown protocol", "RS0027"),
     ("unmappable rustc diagnostic", "RS1102"),
     ("package feature resolution violation", "PKG0101"),
     ("package review policy violation", "PKG0501"),
@@ -7528,6 +7529,85 @@ fn write_line<W: Writer>(
 "#;
     let diagnostics = analyze_source("protocol.rss", source);
     assert_eq!(diagnostics, Vec::new());
+}
+
+#[test]
+fn checker_requires_protocol_bounds_to_name_declared_protocols() {
+    let source = r#"
+fn write_line<W: MissingWriter>(
+    writer: mut W,
+    message: read String,
+) -> Unit {
+    MissingWriter.write(self: mut writer, message: read message)
+}
+"#;
+    let diagnostics = analyze_source("unknown-protocol.rss", source);
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS0027" && diagnostic.summary == "unknown protocol `MissingWriter`."
+    }));
+}
+
+#[test]
+fn checker_validates_protocol_impl_mappings_against_contracts() {
+    let source = r#"
+protocol Writer {
+    fn write(
+        self: mut Self,
+        message: read String,
+    ) -> Unit
+        effects(retains(message))
+}
+
+struct BufferWriter
+
+fn BufferWriter.write(
+    self: mut BufferWriter,
+    message: read String,
+) -> Unit
+    effects(retains(message))
+{
+    Log.write(message: read message)
+}
+
+impl Writer for BufferWriter {
+    write = BufferWriter.write
+}
+"#;
+    let diagnostics = analyze_source_with_core("protocol-impl.rss", source);
+    assert_eq!(diagnostics, Vec::new());
+}
+
+#[test]
+fn checker_reports_protocol_impl_signature_mismatch() {
+    let source = r#"
+protocol Writer {
+    fn write(
+        self: mut Self,
+        message: read String,
+    ) -> Unit
+        effects(retains(message))
+}
+
+struct BufferWriter
+
+fn BufferWriter.write(
+    self: read BufferWriter,
+    message: read String,
+) -> Unit
+    effects(retains(message))
+{
+    Log.write(message: read message)
+}
+
+impl Writer for BufferWriter {
+    write = BufferWriter.write
+}
+"#;
+    let diagnostics = analyze_source_with_core("protocol-impl-mismatch.rss", source);
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS1301"
+            && diagnostic.label == "protocol implementation signature mismatch"
+    }));
 }
 
 #[test]
