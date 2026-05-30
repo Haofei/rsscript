@@ -936,7 +936,6 @@ fn enum_variant_payload(expr: &HirExpr) -> Option<(&'static str, Option<&HirExpr
         "Ok" | "Err" | "Some" if args.len() == 1 && args[0].name.is_none() => {
             Some((variant, Some(&args[0].value)))
         }
-        "None" if args.is_empty() => Some((variant, None)),
         _ => None,
     }
 }
@@ -1269,7 +1268,7 @@ fn check_enum_variant_form(
     let variant = callee_name(callee);
     let valid = match variant.as_str() {
         "Ok" | "Err" | "Some" => args.len() == 1 && args[0].name.is_none(),
-        "None" => args.is_empty(),
+        "None" | "Result" | "Option" => false,
         _ => true,
     };
     if valid {
@@ -1281,6 +1280,8 @@ fn check_enum_variant_form(
         "Err" => "`Err(error)`",
         "Some" => "`Some(value)`",
         "None" => "`None`",
+        "Result" => "`Ok(value)` or `Err(error)`",
+        "Option" => "`Some(value)` or `None`",
         _ => "the conventional variant form",
     };
     let span = args
