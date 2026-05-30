@@ -1,0 +1,94 @@
+features: local
+
+struct PackageMetadataInput {
+    package_name: String
+    version: String
+    edition: String
+    public_apis: Int
+    native_apis: Int
+    unknown_apis: Int
+}
+
+fn output_path() -> fresh Path {
+    let input = Args.get_or_default(
+        index: 0,
+        default: read "target/rsscript-selfhost-package-metadata.txt",
+    )
+
+    return Path.from_string(value: read input)
+}
+
+fn package_metadata_input() -> fresh PackageMetadataInput {
+    let package_name = Args.get_or_default(index: 1, default: read "rss-selfhost-package")
+    let version = Args.get_or_default(index: 2, default: read "0.5.0")
+    let edition = Args.get_or_default(index: 3, default: read "2024")
+
+    return PackageMetadataInput(
+        package_name: package_name,
+        version: version,
+        edition: edition,
+        public_apis: 5,
+        native_apis: 1,
+        unknown_apis: 0,
+    )
+}
+
+fn metadata_text(input: read PackageMetadataInput) -> fresh String {
+    local builder = StringBuilder.new()
+    StringBuilder.push(builder: mut builder, value: read "package=")
+    StringBuilder.push(builder: mut builder, value: read input.package_name)
+    StringBuilder.push(builder: mut builder, value: read "\nversion=")
+    StringBuilder.push(builder: mut builder, value: read input.version)
+    StringBuilder.push(builder: mut builder, value: read "\nedition=")
+    StringBuilder.push(builder: mut builder, value: read input.edition)
+    StringBuilder.push(builder: mut builder, value: read "\npublic_apis=")
+    let public_apis = String.from_int(value: input.public_apis)
+    StringBuilder.push(builder: mut builder, value: read public_apis)
+    StringBuilder.push(builder: mut builder, value: read "\nnative_apis=")
+    let native_apis = String.from_int(value: input.native_apis)
+    StringBuilder.push(builder: mut builder, value: read native_apis)
+    StringBuilder.push(builder: mut builder, value: read "\nunknown_apis=")
+    let unknown_apis = String.from_int(value: input.unknown_apis)
+    StringBuilder.push(builder: mut builder, value: read unknown_apis)
+    StringBuilder.push(builder: mut builder, value: read "\n")
+
+    return StringBuilder.finish(builder: take builder)
+}
+
+fn ensure_parent_directory(path: read Path) -> Result<Unit, FileError> {
+    match Path.parent(path: read path) {
+        Some(parent) => {
+            Directory.create_all(path: read parent)?
+        }
+        None => {
+        }
+    }
+
+    return Ok(Unit)
+}
+
+fn write_metadata_file(path: read Path, text: read String) -> Result<Unit, FileError> {
+    ensure_parent_directory(path: read path)?
+
+    with File.open_write(path: read path)? as file {
+        File.write_string(file: mut file, text: read text)?
+    }
+
+    return Ok(Unit)
+}
+
+pub fn main() -> Result<Unit, FileError> {
+    let path = output_path()
+    let input = package_metadata_input()
+    let text = metadata_text(input: read input)
+
+    write_metadata_file(path: read path, text: read text)?
+
+    let message = String.concat(
+        left: read "selfhost package metadata wrote ",
+        right: read input.package_name,
+    )
+    Log.write(message: read message)
+
+    return Ok(Unit)
+}

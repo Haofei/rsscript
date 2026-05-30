@@ -7450,6 +7450,42 @@ fn rss_run_accepts_checked_in_selfhost_scripts_directly() {
 }
 
 #[test]
+fn rss_run_accepts_selfhost_package_metadata_writer() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-package-metadata-writer");
+    let output_path = temp_dir.join("metadata/package.txt");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("tests/fixtures/pass/selfhost-package-metadata-writer.rss")
+        .arg("--")
+        .arg(&output_path)
+        .arg("rss-selfhost-written")
+        .arg("0.5.1")
+        .arg("2024")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss run should execute selfhost package metadata writer");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(
+        stdout.contains("selfhost package metadata wrote rss-selfhost-written"),
+        "{stdout}"
+    );
+    assert!(stderr.trim().is_empty(), "{stderr}");
+
+    let metadata = fs::read_to_string(&output_path)
+        .unwrap_or_else(|error| panic!("metadata file should be written: {error}"));
+    assert!(metadata.contains("package=rss-selfhost-written"));
+    assert!(metadata.contains("version=0.5.1"));
+    assert!(metadata.contains("edition=2024"));
+    assert!(metadata.contains("public_apis=5"));
+    assert!(metadata.contains("native_apis=1"));
+    assert!(metadata.contains("unknown_apis=0"));
+}
+
+#[test]
 fn rss_run_accepts_selfhost_package_manifest_parser_with_input_path() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-package-manifest");
     let Some(_fixture_dir) =
