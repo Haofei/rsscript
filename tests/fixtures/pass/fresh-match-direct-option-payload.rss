@@ -1,0 +1,14 @@
+struct Boxed {
+    value: Int
+}
+
+fn maybe() -> Option<fresh Boxed> {
+    return Some(Boxed(value: 1))
+}
+
+fn unwrap() -> fresh Boxed {
+    match maybe() {
+        Some(value) => return value
+        None => return Boxed(value: 0)
+    }
+}

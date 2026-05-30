@@ -1,3 +1,5 @@
+features: local
+
 fn load_rules_config(path: read Path) -> Result<fresh Config, ConfigError> {
     let rules = RuleLoader.load_rules(path: read path)?
     return Ok(Config.new(name: read "rules", rules: read rules))
@@ -24,7 +26,7 @@ fn main() -> Result<Unit, FileError> {
 
     match load_rules_config(path: read first) {
         Ok(initial) => {
-            let global = GlobalConfig.new(value: read initial)
+            let global = GlobalConfig.new(value: read (manage initial))
             match reload_rules_config(path: read second, global: mut global) {
                 Ok(unit) => {
                     let count = GlobalConfig.rule_count(global: read global)

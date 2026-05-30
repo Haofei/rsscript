@@ -181,7 +181,12 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Image", "sharpen", "rsscript_runtime::image_sharpen"),
     runtime_intrinsic("ImageCache", "len", "rsscript_runtime::image_cache_len"),
     runtime_intrinsic("ImageCache", "new", "rsscript_runtime::image_cache_new"),
-    runtime_intrinsic("ImageCache", "store", "rsscript_runtime::image_cache_store"),
+    runtime_intrinsic_with_handles(
+        "ImageCache",
+        "store",
+        "rsscript_runtime::image_cache_store",
+        &["image"],
+    ),
     runtime_intrinsic(
         "Json",
         "array_contains_prefix",

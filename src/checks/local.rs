@@ -112,6 +112,7 @@ struct LocalFlowBinding {
     value_ident: Option<(String, Span)>,
     value_handle_field: Option<(String, Span)>,
     fresh_from_local_source: Option<String>,
+    fresh_from_scrutinee: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1973,7 +1974,11 @@ fn fresh_match_pattern_binding(
     arm: &crate::hir::HirMatchArm,
 ) -> Option<LocalFlowBinding> {
     let value_type = hir_expr_type_name(value)?;
-    let source = hir_expr_ident_name(value)?;
+    let source = hir_expr_ident_name(value);
+    let fresh_from_scrutinee = is_fresh_match_scrutinee(value);
+    if source.is_none() && !fresh_from_scrutinee {
+        return None;
+    }
     let crate::syntax::ast::MatchPattern::Variant {
         name,
         binding: Some(binding),
@@ -1989,7 +1994,8 @@ fn fresh_match_pattern_binding(
         type_name: Some(strip_fresh_type(payload_type).to_string()),
         value_ident: None,
         value_handle_field: None,
-        fresh_from_local_source: Some(source.to_string()),
+        fresh_from_local_source: source.map(str::to_string),
+        fresh_from_scrutinee,
     })
 }
 
@@ -2014,6 +2020,16 @@ fn fresh_payload_type_for_variant<'a>(value_type: &'a str, variant: &str) -> Opt
     }
     .trim();
     payload.strip_prefix("fresh ").map(str::trim)
+}
+
+fn is_fresh_match_scrutinee(expr: &HirExpr) -> bool {
+    match expr {
+        HirExpr::Call { resolution, .. } => {
+            matches!(resolution, CallResolution::Resolved { signature, .. } if signature.returns_fresh)
+        }
+        HirExpr::Try { value, .. } => is_fresh_match_scrutinee(value),
+        _ => false,
+    }
 }
 
 fn split_top_level_type_args(args: &str) -> Vec<&str> {
@@ -2322,7 +2338,9 @@ fn transfer_flow_step(step: &LocalFlowStep, mut state: BodyState) -> BodyState {
         match binding.kind {
             HirBindingKind::ManagedLet => state.bind_managed(binding.name.clone()),
             HirBindingKind::LocalLet => {
-                if let Some(source) = &binding.fresh_from_local_source {
+                if binding.fresh_from_scrutinee {
+                    state.bind_local(binding.name.clone());
+                } else if let Some(source) = &binding.fresh_from_local_source {
                     if state.is_local(source) {
                         state.bind_local(binding.name.clone());
                     } else {
@@ -2473,6 +2491,7 @@ fn local_flow_step_binding(statement: &HirStmt) -> Option<LocalFlowBinding> {
             value_ident: value.as_ref().and_then(local_binding_source_ident),
             value_handle_field: value.as_ref().and_then(local_binding_handle_field_source),
             fresh_from_local_source: None,
+            fresh_from_scrutinee: false,
         }),
         HirStmt::Return { .. }
         | HirStmt::With { .. }

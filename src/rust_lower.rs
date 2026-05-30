@@ -1535,8 +1535,18 @@ impl<'a> RustLowerer<'a> {
         arg: &CallArg,
         index: usize,
     ) -> String {
-        if (self.call_arg_is_retained(callee, arg, index)
-            || runtime_intrinsic_wants_managed_handle_arg(callee, arg.name.as_deref()))
+        if runtime_intrinsic_wants_managed_handle_arg(callee, arg.name.as_deref())
+            && let Expr::Effect { effect, value, .. } = &arg.value
+            && self.expr_lowers_to_managed_handle(value)
+        {
+            return match effect {
+                DataEffect::Read => format!("&{}", self.lower_expr(value)),
+                DataEffect::Mut => format!("&mut {}", self.lower_expr(value)),
+                DataEffect::Take => self.lower_expr(value),
+            };
+        }
+        if self.call_arg_is_retained(callee, arg, index)
+            && runtime_intrinsic_target(callee).is_none()
             && let Expr::Effect { effect, value, .. } = &arg.value
             && self.expr_lowers_to_managed_handle(value)
         {
