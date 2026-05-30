@@ -10,6 +10,7 @@ mod lexer;
 mod lint;
 mod package;
 mod review;
+mod runtime_abi;
 mod rust_lower;
 pub mod syntax;
 
