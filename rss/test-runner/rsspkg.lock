@@ -1,0 +1,14 @@
+version = 1
+
+[[package]]
+name = "rss-test-runner"
+version = "0.1.0"
+source = "path+rss/test-runner"
+checksum = "sha256:f67276562a09b44ff98f3dc90b71acb9d0a0c8081ac144f727a74caeeaf2a7ee"
+interface_hash = "sha256:3281e549229a291481c7a385d8d248a6a64d1a8724d151bc06f1f9298daf42ed"
+review_hash = "sha256:455d894623f2a3fb67e9aa63ab7ea33cc1ce047c9387bbdcdfb706b4fac11ec7"
+features = []
+
+[metadata]
+rss_version = "0.1.0"
+created_by = "rsscript pkg lock"

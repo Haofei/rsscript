@@ -1,0 +1,331 @@
+features: local
+
+struct TestCase {
+    name: String
+    kind: String
+    path: String
+    contains: String
+    ignored: Bool
+}
+
+struct TestRunSummary {
+    total: Int
+    selected: Int
+    passed: Int
+    failed: Int
+    skipped: Int
+}
+
+fn json_error(prefix: read String, error: read JsonError) -> fresh String {
+    let message = JsonError.message(error: read error)
+    let label = String.concat(left: read prefix, right: read ": ")
+
+    return String.concat(left: read label, right: read message)
+}
+
+fn file_error(prefix: read String, error: read FileError) -> fresh String {
+    let message = FileError.message(error: read error)
+    let label = String.concat(left: read prefix, right: read ": ")
+
+    return String.concat(left: read label, right: read message)
+}
+
+fn read_text_file(path: read Path) -> Result<String, FileError> {
+    with File.open_read(path: read path)? as file {
+        let text = File.read_all_string(file: mut file)?
+
+        return Ok(text)
+    }
+}
+
+fn read_text(path: read Path) -> Result<String, String> {
+    match read_text_file(path: read path) {
+        Ok(text) => {
+            return Ok(text)
+        }
+        Err(error) => {
+            return Err(file_error(prefix: read "read file", error: read error))
+        }
+    }
+}
+
+fn parse_manifest(path: read Path) -> Result<fresh JsonValue, String> {
+    match Toml.parse_file(path: read path) {
+        Ok(value) => {
+            return Ok(value)
+        }
+        Err(error) => {
+            return Err(json_error(prefix: read "test manifest parse", error: read error))
+        }
+    }
+}
+
+fn json_field(value: read JsonValue, name: read String) -> Result<JsonValue, String> {
+    match Json.field(value: read value, name: read name) {
+        Ok(field) => {
+            return Ok(field)
+        }
+        Err(error) => {
+            return Err(json_error(prefix: read "test manifest field", error: read error))
+        }
+    }
+}
+
+fn json_string(value: read JsonValue, name: read String) -> Result<String, String> {
+    match Json.field_string(value: read value, name: read name) {
+        Ok(text) => {
+            return Ok(text)
+        }
+        Err(error) => {
+            return Err(json_error(prefix: read "test manifest string", error: read error))
+        }
+    }
+}
+
+fn json_bool_or_default(
+    value: read JsonValue,
+    name: read String,
+    default: Bool,
+) -> Bool {
+    match Json.field_bool(value: read value, name: read name) {
+        Ok(flag) => {
+            return flag
+        }
+        Err(_) => {
+            return default
+        }
+    }
+}
+
+fn test_case_from_json(value: read JsonValue) -> Result<fresh TestCase, String> {
+    return Ok(TestCase(
+        name: json_string(value: read value, name: read "name")?,
+        kind: json_string(value: read value, name: read "kind")?,
+        path: json_string(value: read value, name: read "path")?,
+        contains: json_string(value: read value, name: read "contains")?,
+        ignored: json_bool_or_default(value: read value, name: read "ignored", default: false),
+    ))
+}
+
+fn parse_tests_from(
+    tests: read JsonValue,
+    index: Int,
+    limit: Int,
+    items: mut List<TestCase>,
+) -> Result<Unit, String> {
+    if index >= limit {
+        return Ok(Unit)
+    }
+
+    match Json.array_get(value: read tests, index: index) {
+        Ok(item) => {
+            let test = test_case_from_json(value: read item)?
+            List.push(list: mut items, value: read test)
+        }
+        Err(error) => {
+            return Err(json_error(prefix: read "test manifest item", error: read error))
+        }
+    }
+
+    return parse_tests_from(
+        tests: read tests,
+        index: index + 1,
+        limit: limit,
+        items: mut items,
+    )
+}
+
+fn load_tests(manifest: read JsonValue) -> Result<fresh List<TestCase>, String> {
+    let tests = json_field(value: read manifest, name: read "tests")?
+    match Json.array_len(value: read tests) {
+        Ok(limit) => {
+            local items = List<TestCase>.new()
+            parse_tests_from(tests: read tests, index: 0, limit: limit, items: mut items)?
+
+            return Ok(items)
+        }
+        Err(error) => {
+            return Err(json_error(prefix: read "test manifest tests", error: read error))
+        }
+    }
+}
+
+fn test_matches_filter(test: read TestCase, filter: read String) -> Bool {
+    if String.is_empty(value: read filter) {
+        return true
+    }
+
+    return String.contains(value: read test.name, needle: read filter)
+}
+
+fn file_contains(path: read Path, needle: read String) -> Result<Bool, String> {
+    let text = read_text(path: read path)?
+
+    return Ok(String.contains(value: read text, needle: read needle))
+}
+
+fn run_test(test: read TestCase) -> Result<Bool, String> {
+    if test.kind == "file_contains" {
+        return file_contains(
+            path: read Path.from_string(value: read test.path),
+            needle: read test.contains,
+        )
+    }
+
+    return Err(String.concat(left: read "unsupported test kind ", right: read test.kind))
+}
+
+fn print_test_line(status: read String, name: read String) -> Unit {
+    local builder = StringBuilder.new()
+    StringBuilder.push(builder: mut builder, value: read status)
+    StringBuilder.push(builder: mut builder, value: read " ")
+    StringBuilder.push(builder: mut builder, value: read name)
+    let line = StringBuilder.finish(builder: take builder)
+    Log.write(message: read line)
+}
+
+fn record_selected(summary: read TestRunSummary) -> fresh TestRunSummary {
+    return TestRunSummary(
+        total: summary.total,
+        selected: summary.selected + 1,
+        passed: summary.passed,
+        failed: summary.failed,
+        skipped: summary.skipped,
+    )
+}
+
+fn record_passed(summary: read TestRunSummary) -> fresh TestRunSummary {
+    return TestRunSummary(
+        total: summary.total,
+        selected: summary.selected,
+        passed: summary.passed + 1,
+        failed: summary.failed,
+        skipped: summary.skipped,
+    )
+}
+
+fn record_failed(summary: read TestRunSummary) -> fresh TestRunSummary {
+    return TestRunSummary(
+        total: summary.total,
+        selected: summary.selected,
+        passed: summary.passed,
+        failed: summary.failed + 1,
+        skipped: summary.skipped,
+    )
+}
+
+fn record_skipped(summary: read TestRunSummary) -> fresh TestRunSummary {
+    return TestRunSummary(
+        total: summary.total,
+        selected: summary.selected,
+        passed: summary.passed,
+        failed: summary.failed,
+        skipped: summary.skipped + 1,
+    )
+}
+
+fn copy_summary(summary: read TestRunSummary) -> fresh TestRunSummary {
+    return TestRunSummary(
+        total: summary.total,
+        selected: summary.selected,
+        passed: summary.passed,
+        failed: summary.failed,
+        skipped: summary.skipped,
+    )
+}
+
+fn execute_selected_test(
+    summary: read TestRunSummary,
+    test: read TestCase,
+) -> Result<fresh TestRunSummary, String> {
+    let selected = record_selected(summary: read summary)
+    if test.ignored {
+        print_test_line(status: read "skip", name: read test.name)
+        return Ok(record_skipped(summary: read selected))
+    }
+
+    match run_test(test: read test) {
+        Ok(ok) => {
+            if ok {
+                print_test_line(status: read "pass", name: read test.name)
+                return Ok(record_passed(summary: read selected))
+            }
+
+            print_test_line(status: read "fail", name: read test.name)
+            return Ok(record_failed(summary: read selected))
+        }
+        Err(error) => {
+            print_test_line(status: read "fail", name: read test.name)
+            Log.write(message: read error)
+            return Ok(record_failed(summary: read selected))
+        }
+    }
+}
+
+fn run_tests(
+    tests: read List<TestCase>,
+    filter: read String,
+) -> Result<fresh TestRunSummary, String> {
+    let initial = TestRunSummary(
+        total: List.len(list: read tests),
+        selected: 0,
+        passed: 0,
+        failed: 0,
+        skipped: 0,
+    )
+
+    return List.try_fold<TestCase, TestRunSummary, String>(
+        list: read tests,
+        initial: read initial,
+        folder: |summary, test| {
+            if test_matches_filter(test: read test, filter: read filter) == false {
+                return Ok(copy_summary(summary: read summary))
+            }
+
+            return execute_selected_test(summary: read summary, test: read test)
+        },
+    )
+}
+
+fn summary_line(summary: read TestRunSummary) -> fresh String {
+    local builder = StringBuilder.new()
+    StringBuilder.push(builder: mut builder, value: read "rss test summary total=")
+    StringBuilder.push(builder: mut builder, value: read String.from_int(value: summary.total))
+    StringBuilder.push(builder: mut builder, value: read " selected=")
+    StringBuilder.push(builder: mut builder, value: read String.from_int(value: summary.selected))
+    StringBuilder.push(builder: mut builder, value: read " passed=")
+    StringBuilder.push(builder: mut builder, value: read String.from_int(value: summary.passed))
+    StringBuilder.push(builder: mut builder, value: read " failed=")
+    StringBuilder.push(builder: mut builder, value: read String.from_int(value: summary.failed))
+    StringBuilder.push(builder: mut builder, value: read " skipped=")
+    StringBuilder.push(builder: mut builder, value: read String.from_int(value: summary.skipped))
+
+    return StringBuilder.finish(builder: take builder)
+}
+
+pub fn RssTest.run(manifest_path: read Path, filter: read String) -> Result<Unit, String> {
+    let manifest = parse_manifest(path: read manifest_path)?
+    let tests = load_tests(manifest: read manifest)?
+    let summary = run_tests(tests: read tests, filter: read filter)?
+    let line = summary_line(summary: read summary)
+    Log.write(message: read line)
+
+    if summary.failed > 0 {
+        return Err("rss test failures")
+    }
+
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, String> {
+    let manifest = Args.get_or_default(
+        index: 0,
+        default: read "rss/test-runner/examples/rss-smoke.rsstest.toml",
+    )
+    let filter = Args.get_or_default(index: 1, default: read "")
+
+    return RssTest.run(
+        manifest_path: read Path.from_string(value: read manifest),
+        filter: read filter,
+    )
+}
