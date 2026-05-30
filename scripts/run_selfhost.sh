@@ -13,23 +13,34 @@ selfhost_scripts=(
   tests/fixtures/pass/selfhost-package-exports.rss
   tests/fixtures/pass/selfhost-package-diff.rss
   tests/fixtures/pass/selfhost-package-lock-diff.rss
+  tests/fixtures/pass/selfhost-package-manager.rss
   tests/fixtures/pass/selfhost-rustc-remap.rss
 )
 
 detect_jobs() {
   if [[ -n "${RSSCRIPT_JOBS:-}" ]]; then
     echo "$RSSCRIPT_JOBS"
-  elif command -v getconf >/dev/null 2>&1; then
-    getconf _NPROCESSORS_ONLN
-  elif command -v sysctl >/dev/null 2>&1; then
-    sysctl -n hw.ncpu
-  else
-    echo 4
+    return
   fi
+
+  local cpus
+  if command -v getconf >/dev/null 2>&1; then
+    cpus="$(getconf _NPROCESSORS_ONLN)"
+  elif command -v sysctl >/dev/null 2>&1; then
+    cpus="$(sysctl -n hw.ncpu)"
+  else
+    cpus=4
+  fi
+
+  if ! [[ "$cpus" =~ ^[0-9]+$ ]] || (( cpus < 1 )); then
+    cpus=4
+  fi
+
+  echo $((cpus * 2))
 }
 
 jobs="$(detect_jobs)"
-if [[ -z "$jobs" || "$jobs" -lt 1 ]]; then
+if ! [[ "$jobs" =~ ^[0-9]+$ ]] || (( jobs < 1 )); then
   jobs=1
 fi
 
@@ -39,6 +50,7 @@ if [[ ! -x "$RSS_BIN" ]]; then
   RSS_BIN="$ROOT/target/debug/rss"
 fi
 export RSS_BIN
+export RSSCRIPT_GENERATED_TARGET_DIR="${RSSCRIPT_GENERATED_TARGET_DIR:-$ROOT/target/rsscript-generated-target}"
 
 printf '%s\0' "${selfhost_scripts[@]}" | xargs -0 -n1 -P "$jobs" bash -c '
   set -euo pipefail

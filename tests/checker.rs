@@ -3678,13 +3678,14 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"#;
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_rejects_empty_resource_pool_before_runtime() {
     let temp_dir = unique_temp_dir("rsscript-runtime-diagnostic");
     fs::create_dir_all(&temp_dir).expect("temp dir should be created");
     let source_path = temp_dir.join("empty_pool.rss");
     write_empty_resource_pool_fixture(&source_path);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg(&source_path)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -3709,13 +3710,14 @@ fn rss_run_rejects_empty_resource_pool_before_runtime() {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_json_rejects_empty_resource_pool_before_runtime() {
     let temp_dir = unique_temp_dir("rsscript-runtime-diagnostic-json");
     fs::create_dir_all(&temp_dir).expect("temp dir should be created");
     let source_path = temp_dir.join("empty_pool.rss");
     write_empty_resource_pool_fixture(&source_path);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("--json")
         .arg(&source_path)
@@ -3761,7 +3763,7 @@ return Unit
     )
     .expect("source should be written");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("fmt")
         .arg(&source_path)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -3787,6 +3789,7 @@ fn main() -> Unit {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_accepts_resource_pool_try_new() {
     let temp_dir = unique_temp_dir("rsscript-run-resource-pool-try-new");
     fs::create_dir_all(&temp_dir).expect("temp dir should be created");
@@ -3817,7 +3820,7 @@ fn main() -> Result<Unit, DbError> {
     )
     .expect("source should be written");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg(&source_path)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -3836,6 +3839,7 @@ fn main() -> Result<Unit, DbError> {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_accepts_protocol_static_dispatch() {
     let temp_dir = unique_temp_dir("rsscript-run-protocol-static-dispatch");
     fs::create_dir_all(&temp_dir).expect("temp dir should be created");
@@ -3885,7 +3889,7 @@ fn main() -> Unit {
     )
     .expect("source should be written");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg(&source_path)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -3901,6 +3905,7 @@ fn main() -> Unit {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_accepts_non_consuming_noescape_callback() {
     let temp_dir = unique_temp_dir("rsscript-run-noescape-fnmut");
     fs::create_dir_all(&temp_dir).expect("temp dir should be created");
@@ -3927,7 +3932,7 @@ fn main() -> Unit {
     )
     .expect("source should be written");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg(&source_path)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -3943,8 +3948,9 @@ fn main() -> Unit {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_accepts_noescape_callback_managing_callback_local_value() {
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("tests/fixtures/pass/noescape-callback-manage-local.rss")
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -3959,8 +3965,9 @@ fn rss_run_accepts_noescape_callback_managing_callback_local_value() {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_accepts_noescape_callback_reading_captured_local_value() {
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("tests/fixtures/pass/noescape-local-callback.rss")
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -3975,6 +3982,7 @@ fn rss_run_accepts_noescape_callback_reading_captured_local_value() {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_accepts_local_closure_that_mutates_captured_local() {
     let temp_dir = unique_temp_dir("rsscript-run-local-closure-fnmut");
     fs::create_dir_all(&temp_dir).expect("temp dir should be created");
@@ -3996,7 +4004,7 @@ fn main() -> Unit {
     )
     .expect("source should be written");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg(&source_path)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -4012,6 +4020,7 @@ fn main() -> Unit {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_accepts_package_directory() {
     let temp_dir = unique_temp_dir("rsscript-run-package-cli");
     write_named_package_fixture(&temp_dir, "rss-run-package", "0.1.0", "", "");
@@ -4025,7 +4034,7 @@ fn rss_run_accepts_package_directory() {
     )
     .expect("source should be written");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg(&temp_dir)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -4041,6 +4050,7 @@ fn rss_run_accepts_package_directory() {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_accepts_multi_file_package_directory() {
     let temp_dir = unique_temp_dir("rsscript-run-multi-package-cli");
     write_named_package_fixture(
@@ -4069,7 +4079,7 @@ fn rss_run_accepts_multi_file_package_directory() {
     )
     .expect("main source should be written");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg(&temp_dir)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -4085,6 +4095,7 @@ fn rss_run_accepts_multi_file_package_directory() {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_json_remaps_rustc_compile_errors() {
     let temp_dir = unique_temp_dir("rsscript-run-rustc-remap");
     write_named_package_fixture(
@@ -4140,7 +4151,7 @@ fn main() -> Unit {
     )
     .expect("native source should be written");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("--json")
         .arg(&temp_dir)
@@ -4172,6 +4183,7 @@ fn main() -> Unit {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_verify_rust_json_accepts_package_directory() {
     let temp_dir = unique_temp_dir("rsscript-verify-package-cli");
     write_named_package_fixture(&temp_dir, "rss-verify-package", "0.1.0", "", "");
@@ -4185,7 +4197,7 @@ fn rss_verify_rust_json_accepts_package_directory() {
     )
     .expect("source should be written");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("verify-rust")
         .arg("--json")
         .arg(&temp_dir)
@@ -4203,6 +4215,7 @@ fn rss_verify_rust_json_accepts_package_directory() {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_verify_rust_accepts_package_native_wrapper_dependency() {
     let temp_dir = unique_temp_dir("rsscript-verify-native-package-cli");
     let out_dir = temp_dir.join("generated-rust");
@@ -4244,7 +4257,7 @@ unsafe = "forbid"
     )
     .expect("native source should be written");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("verify-rust")
         .arg("--json")
         .arg(&temp_dir)
@@ -4267,6 +4280,7 @@ unsafe = "forbid"
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_verify_rust_lowers_native_binding_manifest_calls() {
     let temp_dir = unique_temp_dir("rsscript-verify-native-binding-package-cli");
     let out_dir = temp_dir.join("generated-rust");
@@ -4321,7 +4335,7 @@ fn main() -> Unit {
     )
     .expect("native source should be written");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("verify-rust")
         .arg("--json")
         .arg(&temp_dir)
@@ -7042,7 +7056,7 @@ fn review_map_selfhost_classifier_has_no_unknown_regions() {
 
 #[test]
 fn rss_review_map_json_reports_app_benchmark_unknown_zero() {
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("review")
         .arg("--map")
         .arg("--json")
@@ -7065,7 +7079,7 @@ fn rss_review_map_json_reports_app_benchmark_unknown_zero() {
 
 #[test]
 fn selfhost_review_facts_match_generated_review_map_output() {
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("review")
         .arg("--map")
         .arg("--json")
@@ -7087,9 +7101,10 @@ fn selfhost_review_facts_match_generated_review_map_output() {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_verify_rust_json_accepts_selfhost_classifier() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-review-classifier");
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("verify-rust")
         .arg("--json")
         .arg("tests/fixtures/pass/selfhost-review-classifier.rss")
@@ -7113,6 +7128,7 @@ fn rss_verify_rust_json_accepts_selfhost_classifier() {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_verify_rust_accepts_plain_fn_result_contract_parameter() {
     let temp_dir = unique_temp_dir("rsscript-verify-plain-fn-result");
     let source_path = temp_dir.join("fn_result.rss");
@@ -7130,7 +7146,7 @@ fn run(callback: read Fn(Int) -> Result<String, BuildError>) -> Unit {
     )
     .expect("source should be written");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("verify-rust")
         .arg("--json")
         .arg(&source_path)
@@ -7154,6 +7170,7 @@ fn run(callback: read Fn(Int) -> Result<String, BuildError>) -> Unit {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_verify_rust_accepts_plain_fn_result_direct_call() {
     let temp_dir = unique_temp_dir("rsscript-verify-plain-fn-result-call");
     let source_path = temp_dir.join("fn_result_call.rss");
@@ -7171,7 +7188,7 @@ fn run(callback: read Fn(Int) -> Result<String, BuildError>) -> Result<String, B
     )
     .expect("source should be written");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("verify-rust")
         .arg("--json")
         .arg(&source_path)
@@ -7216,6 +7233,7 @@ fn run(callback: read Fn(Int) -> Result<String, BuildError>) -> Result<String, B
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_accepts_selfhost_classifier() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-run-generated-review-map");
     let Some(fixture_dir) = prepare_selfhost_run_dir(&temp_dir) else {
@@ -7229,7 +7247,7 @@ fn rss_run_accepts_selfhost_classifier() {
     )
     .expect("generated review map should write");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("tests/fixtures/pass/selfhost-review-classifier.rss")
         .current_dir(&temp_dir)
@@ -7253,6 +7271,7 @@ fn rss_run_accepts_selfhost_classifier() {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_reports_selfhost_classification_mismatch_detail() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-run-mismatch");
     let Some(fixture_dir) = prepare_selfhost_run_dir(&temp_dir) else {
@@ -7268,7 +7287,7 @@ fn rss_run_reports_selfhost_classification_mismatch_detail() {
     )
     .expect("mutated review map should write");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("tests/fixtures/pass/selfhost-review-classifier.rss")
         .current_dir(&temp_dir)
@@ -7285,6 +7304,7 @@ fn rss_run_reports_selfhost_classification_mismatch_detail() {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_reports_selfhost_unmodeled_reason_count() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-run-unmodeled-reason");
     let Some(fixture_dir) = prepare_selfhost_run_dir(&temp_dir) else {
@@ -7302,7 +7322,7 @@ fn rss_run_reports_selfhost_unmodeled_reason_count() {
     )
     .expect("mutated review map should write");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("tests/fixtures/pass/selfhost-review-classifier.rss")
         .current_dir(&temp_dir)
@@ -7319,6 +7339,7 @@ fn rss_run_reports_selfhost_unmodeled_reason_count() {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_accepts_current_review_reason_families_in_selfhost_classifier() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-run-current-reasons");
     let Some(fixture_dir) = prepare_selfhost_run_dir(&temp_dir) else {
@@ -7375,7 +7396,7 @@ fn rss_run_accepts_current_review_reason_families_in_selfhost_classifier() {
     )
     .expect("mutated review map should write");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("tests/fixtures/pass/selfhost-review-classifier.rss")
         .current_dir(&temp_dir)
@@ -7393,72 +7414,121 @@ fn rss_run_accepts_current_review_reason_families_in_selfhost_classifier() {
     assert!(stderr.trim().is_empty(), "{stderr}");
 }
 
-#[test]
-fn rss_run_accepts_checked_in_selfhost_scripts_directly() {
-    let cases = [
-        (
-            "tests/fixtures/pass/selfhost-review-classifier.rss",
-            "selfhost review summary total=14 must=10 low=4 unknown=0",
-        ),
-        (
-            "tests/fixtures/pass/selfhost-package-risk.rss",
-            "selfhost package risk cases=5 mismatches=0 unmodeled_reasons=0",
-        ),
-        (
-            "tests/fixtures/pass/selfhost-package-manifest.rss",
-            "selfhost package manifest name=rss-selfhost-manifest version=0.5.0",
-        ),
-        (
-            "tests/fixtures/pass/selfhost-package-root-manifest.rss",
-            "selfhost package root manifest name=rss-selfhost-source-set version=0.5.0",
-        ),
-        (
-            "tests/fixtures/pass/selfhost-package-sources.rss",
-            "selfhost package sources total=5 manifests=1 interfaces=2 sources=2 public_interfaces=2 public_sources=2 api=1/1 tool=1/1",
-        ),
-        (
-            "tests/fixtures/pass/selfhost-package-exports.rss",
-            "selfhost package exports types=2 functions=3 apis=5",
-        ),
-        (
-            "tests/fixtures/pass/selfhost-package-diff.rss",
-            "selfhost package diff manifest=8 interface=3 high_manifest=5 high_interface=2 mismatches=0 unmodeled_reasons=0 callback_contract=1",
-        ),
-        (
-            "tests/fixtures/pass/selfhost-package-lock-diff.rss",
-            "selfhost package lock diff packages=1 high_packages=1 high_features=1",
-        ),
-        (
-            "tests/fixtures/pass/selfhost-rustc-remap.rss",
-            "selfhost rustc remap diagnostics=1 mapped=1 rustc_code=1",
-        ),
-    ];
+fn assert_checked_in_selfhost_script_runs(script: &str, expected: &str) {
+    let output = rss_command()
+        .arg("run")
+        .arg(script)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss run should execute checked-in selfhost script");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
-    for (script, expected) in cases {
-        let output = Command::new(env!("CARGO_BIN_EXE_rss"))
-            .arg("run")
-            .arg(script)
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .output()
-            .expect("rss run should execute checked-in selfhost script");
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        assert!(
-            output.status.success(),
-            "{script}\nstdout={stdout}\nstderr={stderr}"
-        );
-        assert!(stdout.contains(expected), "{script}\n{stdout}");
-        assert!(stderr.trim().is_empty(), "{script}\n{stderr}");
-    }
+    assert!(
+        output.status.success(),
+        "{script}\nstdout={stdout}\nstderr={stderr}"
+    );
+    assert!(stdout.contains(expected), "{script}\n{stdout}");
+    assert!(stderr.trim().is_empty(), "{script}\n{stderr}");
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
+fn rss_run_accepts_checked_in_selfhost_review_classifier_directly() {
+    assert_checked_in_selfhost_script_runs(
+        "tests/fixtures/pass/selfhost-review-classifier.rss",
+        "selfhost review summary total=14 must=10 low=4 unknown=0",
+    );
+}
+
+#[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
+fn rss_run_accepts_checked_in_selfhost_package_risk_directly() {
+    assert_checked_in_selfhost_script_runs(
+        "tests/fixtures/pass/selfhost-package-risk.rss",
+        "selfhost package risk cases=5 mismatches=0 unmodeled_reasons=0",
+    );
+}
+
+#[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
+fn rss_run_accepts_checked_in_selfhost_package_manifest_directly() {
+    assert_checked_in_selfhost_script_runs(
+        "tests/fixtures/pass/selfhost-package-manifest.rss",
+        "selfhost package manifest name=rss-selfhost-manifest version=0.5.0",
+    );
+}
+
+#[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
+fn rss_run_accepts_checked_in_selfhost_package_root_manifest_directly() {
+    assert_checked_in_selfhost_script_runs(
+        "tests/fixtures/pass/selfhost-package-root-manifest.rss",
+        "selfhost package root manifest name=rss-selfhost-source-set version=0.5.0",
+    );
+}
+
+#[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
+fn rss_run_accepts_checked_in_selfhost_package_sources_directly() {
+    assert_checked_in_selfhost_script_runs(
+        "tests/fixtures/pass/selfhost-package-sources.rss",
+        "selfhost package sources total=5 manifests=1 interfaces=2 sources=2 public_interfaces=2 public_sources=2 api=1/1 tool=1/1",
+    );
+}
+
+#[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
+fn rss_run_accepts_checked_in_selfhost_package_exports_directly() {
+    assert_checked_in_selfhost_script_runs(
+        "tests/fixtures/pass/selfhost-package-exports.rss",
+        "selfhost package exports types=2 functions=3 apis=5",
+    );
+}
+
+#[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
+fn rss_run_accepts_checked_in_selfhost_package_diff_directly() {
+    assert_checked_in_selfhost_script_runs(
+        "tests/fixtures/pass/selfhost-package-diff.rss",
+        "selfhost package diff manifest=8 interface=3 high_manifest=5 high_interface=2 mismatches=0 unmodeled_reasons=0 callback_contract=1",
+    );
+}
+
+#[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
+fn rss_run_accepts_checked_in_selfhost_package_lock_diff_directly() {
+    assert_checked_in_selfhost_script_runs(
+        "tests/fixtures/pass/selfhost-package-lock-diff.rss",
+        "selfhost package lock diff packages=1 high_packages=1 high_features=1",
+    );
+}
+
+#[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
+fn rss_run_accepts_checked_in_selfhost_rustc_remap_directly() {
+    assert_checked_in_selfhost_script_runs(
+        "tests/fixtures/pass/selfhost-rustc-remap.rss",
+        "selfhost rustc remap diagnostics=1 mapped=1 rustc_code=1",
+    );
+}
+
+#[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
+fn rss_run_accepts_checked_in_selfhost_package_manager_directly() {
+    assert_checked_in_selfhost_script_runs(
+        "tests/fixtures/pass/selfhost-package-manager.rss",
+        "rss package manager metadata rss-selfhost-source-set",
+    );
+}
+
+#[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_accepts_selfhost_package_metadata_writer() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-package-metadata-writer");
     let output_path = temp_dir.join("metadata/package.txt");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("tests/fixtures/pass/selfhost-package-metadata-writer.rss")
         .arg("--")
@@ -7492,11 +7562,12 @@ fn rss_run_accepts_selfhost_package_metadata_writer() {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_accepts_selfhost_package_vendor_copy() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-package-vendor-copy");
     let vendor_dir = temp_dir.join("vendor/rss-selfhost-source-set-0.5.0");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("tests/fixtures/pass/selfhost-package-vendor-copy.rss")
         .arg("--")
@@ -7526,13 +7597,13 @@ fn rss_run_accepts_selfhost_package_vendor_copy() {
 }
 
 #[test]
-fn rss_run_accepts_minimal_selfhost_package_manager() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-package-manager");
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
+fn rss_run_accepts_minimal_selfhost_package_manager_metadata() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-package-manager-metadata");
     let metadata_path = temp_dir.join("review/package-review.json");
-    let vendor_dir = temp_dir.join("vendor/rss-selfhost-source-set-0.5.0");
     let source_root = "tests/fixtures/pass/selfhost-package-source-set";
 
-    let metadata_output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let metadata_output = rss_command()
         .arg("run")
         .arg("tests/fixtures/pass/selfhost-package-manager.rss")
         .arg("--")
@@ -7563,8 +7634,16 @@ fn rss_run_accepts_minimal_selfhost_package_manager() {
     assert_eq!(metadata_json["edition"], "2024");
     assert_eq!(metadata_json["interface_paths"], 2);
     assert_eq!(metadata_json["source_paths"], 2);
+}
 
-    let vendor_output = Command::new(env!("CARGO_BIN_EXE_rss"))
+#[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
+fn rss_run_accepts_minimal_selfhost_package_manager_vendor() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-package-manager-vendor");
+    let vendor_dir = temp_dir.join("vendor/rss-selfhost-source-set-0.5.0");
+    let source_root = "tests/fixtures/pass/selfhost-package-source-set";
+
+    let vendor_output = rss_command()
         .arg("run")
         .arg("tests/fixtures/pass/selfhost-package-manager.rss")
         .arg("--")
@@ -7601,6 +7680,7 @@ fn rss_run_accepts_minimal_selfhost_package_manager() {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_accepts_selfhost_package_manifest_parser_with_input_path() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-package-manifest");
     let Some(_fixture_dir) =
@@ -7630,7 +7710,7 @@ native-tls = ["native"]
     )
     .expect("manifest should be written");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("tests/fixtures/pass/selfhost-package-manifest.rss")
         .arg("--")
@@ -7651,6 +7731,7 @@ native-tls = ["native"]
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_accepts_selfhost_package_source_set_with_input_path() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-package-sources");
     let Some(_fixture_dir) =
@@ -7700,7 +7781,7 @@ paths = ["src", "tools"]
     )
     .expect("second source should be written");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("tests/fixtures/pass/selfhost-package-sources.rss")
         .arg("--")
@@ -7721,6 +7802,7 @@ paths = ["src", "tools"]
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_accepts_selfhost_package_risk_classifier() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-package-risk");
     let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-risk.rss")
@@ -7735,7 +7817,7 @@ fn rss_run_accepts_selfhost_package_risk_classifier() {
     )
     .expect("generated package review should write");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("tests/fixtures/pass/selfhost-package-risk.rss")
         .current_dir(&temp_dir)
@@ -7754,6 +7836,7 @@ fn rss_run_accepts_selfhost_package_risk_classifier() {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_accepts_selfhost_package_risk_classifier_with_cli_generated_input_path() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-package-risk-cli-input");
     let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-risk.rss")
@@ -7769,7 +7852,7 @@ fn rss_run_accepts_selfhost_package_risk_classifier_with_cli_generated_input_pat
     )
     .expect("CLI generated package review should write");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("tests/fixtures/pass/selfhost-package-risk.rss")
         .arg("--")
@@ -7790,6 +7873,7 @@ fn rss_run_accepts_selfhost_package_risk_classifier_with_cli_generated_input_pat
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_reports_selfhost_package_risk_mismatch() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-package-risk-mismatch");
     let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-risk.rss")
@@ -7805,7 +7889,7 @@ fn rss_run_reports_selfhost_package_risk_mismatch() {
     )
     .expect("mutated package review should write");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("tests/fixtures/pass/selfhost-package-risk.rss")
         .current_dir(&temp_dir)
@@ -7822,6 +7906,7 @@ fn rss_run_reports_selfhost_package_risk_mismatch() {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_accepts_selfhost_package_export_classifier() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-package-exports");
     let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-exports.rss")
@@ -7836,7 +7921,7 @@ fn rss_run_accepts_selfhost_package_export_classifier() {
     )
     .expect("generated package review should write");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("tests/fixtures/pass/selfhost-package-exports.rss")
         .current_dir(&temp_dir)
@@ -7855,6 +7940,7 @@ fn rss_run_accepts_selfhost_package_export_classifier() {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_reports_selfhost_package_export_mismatch() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-package-exports-mismatch");
     let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-exports.rss")
@@ -7870,7 +7956,7 @@ fn rss_run_reports_selfhost_package_export_mismatch() {
     )
     .expect("mutated package review should write");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("tests/fixtures/pass/selfhost-package-exports.rss")
         .current_dir(&temp_dir)
@@ -7887,6 +7973,7 @@ fn rss_run_reports_selfhost_package_export_mismatch() {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_accepts_selfhost_package_diff_classifier() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-package-diff");
     let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-diff.rss")
@@ -7901,7 +7988,7 @@ fn rss_run_accepts_selfhost_package_diff_classifier() {
     )
     .expect("generated package diff should write");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("tests/fixtures/pass/selfhost-package-diff.rss")
         .current_dir(&temp_dir)
@@ -7920,6 +8007,7 @@ fn rss_run_accepts_selfhost_package_diff_classifier() {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_reports_selfhost_package_diff_mismatch() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-package-diff-mismatch");
     let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-diff.rss")
@@ -7935,7 +8023,7 @@ fn rss_run_reports_selfhost_package_diff_mismatch() {
     )
     .expect("mutated package diff should write");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("tests/fixtures/pass/selfhost-package-diff.rss")
         .current_dir(&temp_dir)
@@ -7952,6 +8040,7 @@ fn rss_run_reports_selfhost_package_diff_mismatch() {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_accepts_selfhost_package_lock_diff_classifier() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-package-lock-diff");
     let Some(fixture_dir) =
@@ -7968,7 +8057,7 @@ fn rss_run_accepts_selfhost_package_lock_diff_classifier() {
     )
     .expect("generated package lock diff should write");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("tests/fixtures/pass/selfhost-package-lock-diff.rss")
         .current_dir(&temp_dir)
@@ -7987,6 +8076,7 @@ fn rss_run_accepts_selfhost_package_lock_diff_classifier() {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_reports_selfhost_package_lock_diff_mismatch() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-package-lock-diff-mismatch");
     let Some(fixture_dir) =
@@ -8004,7 +8094,7 @@ fn rss_run_reports_selfhost_package_lock_diff_mismatch() {
     )
     .expect("mutated package lock diff should write");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("tests/fixtures/pass/selfhost-package-lock-diff.rss")
         .current_dir(&temp_dir)
@@ -8021,6 +8111,7 @@ fn rss_run_reports_selfhost_package_lock_diff_mismatch() {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_accepts_selfhost_rustc_remap_classifier() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-rustc-remap");
     let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-rustc-remap.rss")
@@ -8035,7 +8126,7 @@ fn rss_run_accepts_selfhost_rustc_remap_classifier() {
     )
     .expect("generated remap diagnostics should write");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("tests/fixtures/pass/selfhost-rustc-remap.rss")
         .current_dir(&temp_dir)
@@ -8054,6 +8145,7 @@ fn rss_run_accepts_selfhost_rustc_remap_classifier() {
 }
 
 #[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_reports_selfhost_rustc_remap_mismatch() {
     let temp_dir = unique_temp_dir("rsscript-selfhost-rustc-remap-mismatch");
     let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-rustc-remap.rss")
@@ -8061,7 +8153,7 @@ fn rss_run_reports_selfhost_rustc_remap_mismatch() {
         let _ = fs::remove_dir_all(&temp_dir);
         return;
     };
-    let mut diagnostics_json = generated_selfhost_rustc_remap_json(&temp_dir);
+    let mut diagnostics_json = selfhost_rustc_remap_fixture_json();
     diagnostics_json[0]["code"] = Value::String("RS1102".to_string());
     fs::write(
         fixture_dir.join("selfhost-rustc-remap.json"),
@@ -8069,7 +8161,7 @@ fn rss_run_reports_selfhost_rustc_remap_mismatch() {
     )
     .expect("mutated remap diagnostics should write");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("tests/fixtures/pass/selfhost-rustc-remap.rss")
         .current_dir(&temp_dir)
@@ -8116,7 +8208,7 @@ fn prepare_selfhost_run_dir_for(temp_dir: &Path, script_name: &str) -> Option<Pa
 }
 
 fn generated_selfhost_review_map_json() -> Value {
-    let review_output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let review_output = rss_command()
         .arg("review")
         .arg("--map")
         .arg("--json")
@@ -8216,7 +8308,7 @@ fn package_review_json_for_dir(package_dir: &Path) -> Value {
 }
 
 fn package_review_json_for_dir_via_cli(package_dir: &Path) -> Value {
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("pkg")
         .arg("review")
         .arg("--json")
@@ -8421,7 +8513,7 @@ fn main() -> Unit {
     )
     .expect("native source should be written");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("run")
         .arg("--json")
         .arg(&package_dir)
@@ -8440,6 +8532,23 @@ fn main() -> Unit {
         String::from_utf8_lossy(&output.stderr)
     );
     serde_json::from_slice(&output.stdout).expect("remap diagnostics JSON should parse")
+}
+
+fn selfhost_rustc_remap_fixture_json() -> Value {
+    serde_json::json!([
+        {
+            "code": "RS1101",
+            "severity": "error",
+            "spans": [
+                {
+                    "file": "remap-package/src/main.rss",
+                    "line": 4,
+                    "column": 31
+                }
+            ],
+            "causes": ["rustc code: E0308"]
+        }
+    ])
 }
 
 #[test]
@@ -10578,7 +10687,7 @@ paths = ["interface"]
     )
     .expect("interface should be written");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("pkg")
         .arg("review")
         .arg("--json")
@@ -11361,7 +11470,7 @@ risk = "unknown"
 
 #[test]
 fn rss_package_command_is_rejected() {
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("package")
         .arg("check")
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -11420,7 +11529,7 @@ fn rss_pkg_metadata_json_writes_review_metadata_file() {
 "#,
     );
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("pkg")
         .arg("metadata")
         .arg("--json")
@@ -11862,7 +11971,7 @@ rss-core = "0.6"
 "#,
     );
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("pkg")
         .arg("diff")
         .arg("--json")
@@ -12148,7 +12257,7 @@ fn rss_pkg_lock_json_reports_hashes() {
 "#,
     );
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("pkg")
         .arg("lock")
         .arg("--json")
@@ -12487,7 +12596,7 @@ fn rss_pkg_review_update_json_reports_lock_changes() {
     )
     .expect("new lock should be written");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("pkg")
         .arg("review")
         .arg("update")
@@ -12579,7 +12688,7 @@ fn rss_pkg_check_json_reports_consistent_package() {
     )
     .expect("lock should be written");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("pkg")
         .arg("check")
         .arg("--json")
@@ -12618,7 +12727,7 @@ fn rss_check_json_accepts_package_directory() {
     )
     .expect("lock should be written");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("check")
         .arg("--json")
         .arg(&temp_dir)
@@ -12647,7 +12756,7 @@ fn rss_pkg_check_fails_when_lock_missing() {
 "#,
     );
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("pkg")
         .arg("check")
         .arg("--json")
@@ -13551,7 +13660,7 @@ rss-dep = {{ path = "{}" }}
 "#,
     );
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("pkg")
         .arg("tree")
         .arg("--json")
@@ -13746,7 +13855,7 @@ fn rss_pkg_publish_dry_run_reports_local_registry_target() {
     )
     .expect("lock should be written");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("pkg")
         .arg("publish")
         .arg("--dry-run")
@@ -13849,7 +13958,7 @@ rss-remote = "0.5.0"
     )
     .expect("lock should be written");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("pkg")
         .arg("publish")
         .arg("--dry-run")
@@ -13939,7 +14048,7 @@ rss-dep = {{ path = "{}" }}
 "#,
     );
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+    let output = rss_command()
         .arg("pkg")
         .arg("vendor")
         .arg("--json")
@@ -14033,6 +14142,19 @@ fn collect_fixture_paths(directory: &Path, paths: &mut Vec<PathBuf>) {
 fn read_fixture(path: &Path) -> String {
     fs::read_to_string(path)
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()))
+}
+
+fn rss_command() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_rss"));
+    command.env(
+        "RSSCRIPT_GENERATED_TARGET_DIR",
+        std::env::var_os("RSSCRIPT_GENERATED_TARGET_DIR").unwrap_or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("target/rsscript-generated-target")
+                .into_os_string()
+        }),
+    );
+    command
 }
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {

@@ -15,17 +15,27 @@ fi
 detect_jobs() {
   if [[ -n "${RSSCRIPT_JOBS:-}" ]]; then
     echo "$RSSCRIPT_JOBS"
-  elif command -v getconf >/dev/null 2>&1; then
-    getconf _NPROCESSORS_ONLN
-  elif command -v sysctl >/dev/null 2>&1; then
-    sysctl -n hw.ncpu
-  else
-    echo 4
+    return
   fi
+
+  local cpus
+  if command -v getconf >/dev/null 2>&1; then
+    cpus="$(getconf _NPROCESSORS_ONLN)"
+  elif command -v sysctl >/dev/null 2>&1; then
+    cpus="$(sysctl -n hw.ncpu)"
+  else
+    cpus=4
+  fi
+
+  if ! [[ "$cpus" =~ ^[0-9]+$ ]] || (( cpus < 1 )); then
+    cpus=4
+  fi
+
+  echo $((cpus * 2))
 }
 
 jobs="$(detect_jobs)"
-if [[ -z "$jobs" || "$jobs" -lt 1 ]]; then
+if ! [[ "$jobs" =~ ^[0-9]+$ ]] || (( jobs < 1 )); then
   jobs=1
 fi
 

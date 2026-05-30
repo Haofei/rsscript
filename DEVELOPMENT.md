@@ -87,6 +87,7 @@ cargo fmt --check
 cargo clippy -q --workspace -- -D warnings
 cargo test -q --workspace
 bash scripts/check.sh
+bash scripts/lint_sources.sh
 bash scripts/run_examples.sh
 bash scripts/run_selfhost.sh
 git diff --check
@@ -98,9 +99,58 @@ For a release-like verification, use:
 RSSCRIPT_FULL_TESTS=1 bash scripts/check.sh
 ```
 
-The RSScript script runners default to CPU-count parallelism for independent
-`.rss` checks and runs. Set `RSSCRIPT_JOBS=N` when you need to cap the fan-out
-or reproduce a parallel-run issue.
+CI sets `RSSCRIPT_FULL_TESTS=1 RSSCRIPT_E2E_TESTS=1`, so the same scripts run
+the full workspace test suite, execute every `examples/*.rss` file, run the
+ignored checker e2e tests, and run the checked-in self-hosted RSScript tools
+through `rss run`.
+
+The full gate defaults both Rust's test harness and the RSScript script runners
+to twice the CPU count because many jobs spend substantial time on
+generated-package and filesystem IO. Set `RSSCRIPT_TEST_THREADS=N` for
+`cargo test`, `RUST_TEST_THREADS=N` for the raw libtest setting, or
+`RSSCRIPT_JOBS=N` for script-runner fan-out when you need to cap concurrency or
+reproduce a parallel-run issue.
+Generated Rust packages share `target/rsscript-generated-target` during local
+gates through `RSSCRIPT_GENERATED_TARGET_DIR`; keep that cache unless you are
+debugging a clean backend build.
+
+The generated target cache is disposable and can be moved to memory-backed
+storage when local disk IO dominates test time. On macOS, create a 2 GiB
+ramdisk and point the generated Cargo target there:
+
+```sh
+diskutil erasevolume HFS+ RSScriptRAMDisk "$(hdiutil attach -nomount ram://4194304)"
+export RSSCRIPT_GENERATED_TARGET_DIR=/Volumes/RSScriptRAMDisk/rsscript-generated-target
+RSSCRIPT_FULL_TESTS=1 bash scripts/check.sh
+diskutil eject /Volumes/RSScriptRAMDisk
+```
+
+On Linux, `/dev/shm` is usually enough for the same cache:
+
+```sh
+mkdir -p /dev/shm/rsscript-generated-target
+export RSSCRIPT_GENERATED_TARGET_DIR=/dev/shm/rsscript-generated-target
+RSSCRIPT_FULL_TESTS=1 bash scripts/check.sh
+```
+
+The cache was about 380 MiB in the current local workspace; use a larger
+ramdisk if you run the ignored e2e gate or want room for incremental rebuilds.
+
+No individual checker integration test should exceed 10 seconds. Expensive
+`rss run` / `rss verify-rust` tests are marked ignored in the normal Rust
+harness. Run them through the slow-test audit when changing RSScript execution,
+Rust verification, source-map remapping, or self-hosted scripts:
+
+```sh
+bash scripts/check_slow_tests.sh
+```
+
+Override the threshold or test-name pattern with
+`RSSCRIPT_SLOW_TEST_THRESHOLD=N` and `RSSCRIPT_SLOW_TEST_PATTERN=...`.
+The audit defaults to one job so it measures individual test time without Cargo
+target-lock contention; set `RSSCRIPT_JOBS=N` only when you want faster wall
+time rather than strict per-test timing. To include the ignored e2e tests in the
+full gate, run `RSSCRIPT_FULL_TESTS=1 RSSCRIPT_E2E_TESTS=1 bash scripts/check.sh`.
 
 Avoid running multiple workspace Cargo commands in parallel. Cargo's build lock
 makes that slower and noisier. Independent RSScript script checks may run in

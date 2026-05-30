@@ -473,15 +473,18 @@ fn run_generated_rust(args: &[String]) -> ExitCode {
         }
         return ExitCode::from(2);
     }
-    let output = match Command::new("cargo")
+    let mut cargo = Command::new("cargo");
+    cargo
         .arg("run")
         .arg("--quiet")
         .arg("--manifest-path")
         .arg(package_dir.join("Cargo.toml"))
         .arg("--")
-        .args(&options.program_args)
-        .output()
-    {
+        .args(&options.program_args);
+    if let Some(target_dir) = generated_target_dir_from_env() {
+        cargo.env("CARGO_TARGET_DIR", target_dir);
+    }
+    let output = match cargo.output() {
         Ok(output) => output,
         Err(error) => {
             eprintln!("failed to run cargo: {error}");
@@ -543,6 +546,12 @@ fn run_generated_rust(args: &[String]) -> ExitCode {
         .code()
         .map(|code| ExitCode::from(code as u8))
         .unwrap_or_else(|| ExitCode::from(1))
+}
+
+fn generated_target_dir_from_env() -> Option<PathBuf> {
+    env::var_os("RSSCRIPT_GENERATED_TARGET_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 fn run_remap_rustc(args: &[String]) -> ExitCode {

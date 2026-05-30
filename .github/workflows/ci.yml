@@ -20,4 +20,4 @@ jobs:
           components: clippy, rustfmt
 
       - name: Check
-        run: RSSCRIPT_FULL_TESTS=1 bash scripts/check.sh
+        run: RSSCRIPT_FULL_TESTS=1 RSSCRIPT_E2E_TESTS=1 bash scripts/check.sh

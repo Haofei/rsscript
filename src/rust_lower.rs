@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::analyzer::{analyze_source_with_core, analyze_sources_with_interfaces};
@@ -568,11 +569,16 @@ pub fn check_generated_rust_package(package_dir: &Path) -> Result<RustBackendChe
         })?;
     let source_map = parse_source_map_json(&source_map_json)?;
     let manifest_path = package_dir.join("Cargo.toml");
-    let output = Command::new("cargo")
+    let mut cargo = Command::new("cargo");
+    cargo
         .arg("check")
         .arg("--manifest-path")
         .arg(&manifest_path)
-        .arg("--message-format=json")
+        .arg("--message-format=json");
+    if let Some(target_dir) = generated_target_dir_from_env() {
+        cargo.env("CARGO_TARGET_DIR", target_dir);
+    }
+    let output = cargo
         .output()
         .map_err(|error| format!("failed to run cargo check: {error}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -588,6 +594,12 @@ pub fn check_generated_rust_package(package_dir: &Path) -> Result<RustBackendChe
         cargo_status: output.status.code(),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
     })
+}
+
+fn generated_target_dir_from_env() -> Option<PathBuf> {
+    env::var_os("RSSCRIPT_GENERATED_TARGET_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 struct RustLowerer<'a> {
