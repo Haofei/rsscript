@@ -10,7 +10,9 @@ pub fn copy_file(input: read Path, output: read Path) -> Result<Unit, FileError>
 
 fn main() -> Result<Unit, FileError> {
     let input = Path.from_string(value: read "rsscript-file-copy-input.txt")
-    let output = Path.from_string(value: read "rsscript-file-copy-output.txt")
+    let output_dir = Path.from_string(value: read "rsscript-file-copy-output")
+    Directory.create_all(path: read output_dir)?
+    let output = Path.join(base: read output_dir, child: read "copy.txt")
     let data = Bytes.from_string(value: read "file copy ran")
 
     with File.open_write(path: read input)? as file {
