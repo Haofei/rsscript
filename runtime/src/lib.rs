@@ -590,6 +590,91 @@ pub fn process_run_stdout(command: &str, args: &[String]) -> Result<String, Stri
     Err(format!("`{command}` exited with {code}: {}", stderr.trim()))
 }
 
+pub fn process_run_many_stdout(
+    command: &str,
+    args: &[String],
+    appended_args: &[String],
+    jobs: i64,
+) -> Result<Vec<String>, String> {
+    if appended_args.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let worker_count = process_worker_count(jobs).min(appended_args.len());
+    let next_index = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let results = std::sync::Arc::new(
+        (0..appended_args.len())
+            .map(|_| std::sync::Mutex::new(None))
+            .collect::<Vec<std::sync::Mutex<Option<String>>>>(),
+    );
+    let errors = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let args = std::sync::Arc::new(args.to_vec());
+    let appended_args = std::sync::Arc::new(appended_args.to_vec());
+
+    std::thread::scope(|scope| {
+        for _ in 0..worker_count {
+            let next_index = std::sync::Arc::clone(&next_index);
+            let results = std::sync::Arc::clone(&results);
+            let errors = std::sync::Arc::clone(&errors);
+            let args = std::sync::Arc::clone(&args);
+            let appended_args = std::sync::Arc::clone(&appended_args);
+            scope.spawn(move || {
+                loop {
+                    let index = next_index.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(appended_arg) = appended_args.get(index) else {
+                        break;
+                    };
+                    let mut command_args = (*args).clone();
+                    command_args.push(appended_arg.clone());
+                    match process_run_stdout(command, &command_args) {
+                        Ok(stdout) => {
+                            *results[index]
+                                .lock()
+                                .expect("process result lock should not be poisoned") =
+                                Some(stdout);
+                        }
+                        Err(error) => {
+                            errors
+                                .lock()
+                                .expect("process error lock should not be poisoned")
+                                .push(format!("command {index}: {error}"));
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    let errors = errors
+        .lock()
+        .expect("process error lock should not be poisoned");
+    if !errors.is_empty() {
+        return Err(errors.join("\n"));
+    }
+    drop(errors);
+
+    results
+        .iter()
+        .map(|result| {
+            result
+                .lock()
+                .expect("process result lock should not be poisoned")
+                .clone()
+                .ok_or_else(|| "missing process result".to_string())
+        })
+        .collect()
+}
+
+fn process_worker_count(jobs: i64) -> usize {
+    if jobs > 0 {
+        return jobs as usize;
+    }
+    std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(4)
+        .max(1)
+}
+
 pub fn list_new<T>() -> Vec<T> {
     Vec::new()
 }
@@ -2411,6 +2496,17 @@ mod tests {
         let error = super::process_run_stdout("__rsscript_missing_process__", &[])
             .expect_err("missing command should fail");
         assert!(error.contains("failed to run `__rsscript_missing_process__`"));
+    }
+
+    #[test]
+    fn process_runtime_hook_runs_many_commands() {
+        let args = Vec::<String>::new();
+        let appended_args = vec!["--version".to_string(), "--version".to_string()];
+        let stdout = super::process_run_many_stdout("cargo", &args, &appended_args, 2)
+            .expect("cargo should run");
+
+        assert_eq!(stdout.len(), 2);
+        assert!(stdout.iter().all(|output| output.contains("cargo")));
     }
 
     #[test]

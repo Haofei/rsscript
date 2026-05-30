@@ -5,3 +5,11 @@ pub native fn Process.run_stdout(
     args: read List<String>,
 ) -> Result<String, String>
     effects(native)
+
+pub native fn Process.run_many_stdout(
+    command: read String,
+    args: read List<String>,
+    appended_args: read List<String>,
+    jobs: Int,
+) -> Result<List<String>, String>
+    effects(native)

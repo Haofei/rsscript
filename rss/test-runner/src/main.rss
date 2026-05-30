@@ -10,6 +10,7 @@ struct TestCase {
     recursive: Bool
     command: String
     args: List<String>
+    jobs: Int
     contains: String
     contains_all: List<String>
     ignored: Bool
@@ -137,6 +138,21 @@ fn json_bool_or_default(
     }
 }
 
+fn json_int_or_default(
+    value: read JsonValue,
+    name: read String,
+    default: Int,
+) -> Int {
+    match Json.field_int(value: read value, name: read name) {
+        Ok(number) => {
+            return number
+        }
+        Err(_) => {
+            return default
+        }
+    }
+}
+
 fn test_case_from_json(value: read JsonValue) -> Result<fresh TestCase, String> {
     return Ok(TestCase(
         name: json_string(value: read value, name: read "name")?,
@@ -148,6 +164,7 @@ fn test_case_from_json(value: read JsonValue) -> Result<fresh TestCase, String> 
         recursive: json_bool_or_default(value: read value, name: read "recursive", default: true),
         command: json_string_or_default(value: read value, name: read "command", default: read ""),
         args: json_string_list_or_empty(value: read value, name: read "args"),
+        jobs: json_int_or_default(value: read value, name: read "jobs", default: 0),
         contains: json_string_or_default(value: read value, name: read "contains", default: read ""),
         contains_all: json_string_list_or_empty(value: read value, name: read "contains_all"),
         ignored: json_bool_or_default(value: read value, name: read "ignored", default: false),
@@ -346,42 +363,36 @@ fn run_command_for_path(
     return run_command_success(command: read command, args: read next_args)
 }
 
-fn run_command_for_paths_from(
-    command: read String,
-    args: read List<String>,
+fn collect_paths_from(
     paths: read List<String>,
     index: Int,
-) -> Result<Bool, String> {
+    selected: mut List<String>,
+) -> Unit {
     if index >= List.len(list: read paths) {
-        return Ok(true)
+        return Unit
     }
 
     let path = List.get(list: read paths, index: index)
     Log.write(message: read String.concat(left: read "run ", right: read path))
-    let ok = run_command_for_path(command: read command, args: read args, path: read path)?
-    if ok == false {
-        return Ok(false)
-    }
+    List.push(list: mut selected, value: read path)
 
-    return run_command_for_paths_from(
-        command: read command,
-        args: read args,
+    return collect_paths_from(
         paths: read paths,
         index: index + 1,
+        selected: mut selected,
     )
 }
 
-fn run_command_for_files_from(
-    command: read String,
-    args: read List<String>,
+fn collect_files_from(
     directory: read String,
     extension: read String,
     recursive: Bool,
     files: read List<String>,
     index: Int,
-) -> Result<Bool, String> {
+    selected: mut List<String>,
+) -> Unit {
     if index >= List.len(list: read files) {
-        return Ok(true)
+        return Unit
     }
 
     let file = List.get(list: read files, index: index)
@@ -389,22 +400,39 @@ fn run_command_for_files_from(
         if String.ends_with(value: read file, suffix: read extension) {
             let path = joined_path(directory: read directory, file: read file)
             Log.write(message: read String.concat(left: read "run ", right: read path))
-            let ok = run_command_for_path(command: read command, args: read args, path: read path)?
-            if ok == false {
-                return Ok(false)
-            }
+            List.push(list: mut selected, value: read path)
         }
     }
 
-    return run_command_for_files_from(
-        command: read command,
-        args: read args,
+    return collect_files_from(
         directory: read directory,
         extension: read extension,
         recursive: recursive,
         files: read files,
         index: index + 1,
+        selected: mut selected,
     )
+}
+
+fn run_command_with_appended_args(
+    command: read String,
+    args: read List<String>,
+    appended_args: read List<String>,
+    jobs: Int,
+) -> Result<Bool, String> {
+    match Process.run_many_stdout(
+        command: read command,
+        args: read args,
+        appended_args: read appended_args,
+        jobs: jobs,
+    ) {
+        Ok(_) => {
+            return Ok(true)
+        }
+        Err(error) => {
+            return Err(error)
+        }
+    }
 }
 
 fn run_test(test: read TestCase) -> Result<Bool, String> {
@@ -437,25 +465,37 @@ fn run_test(test: read TestCase) -> Result<Bool, String> {
     }
 
     if test.kind == "command_for_each_path" {
-        return run_command_for_paths_from(
-            command: read test.command,
-            args: read test.args,
+        local selected = List<String>.new()
+        collect_paths_from(
             paths: read test.paths,
             index: 0,
+            selected: mut selected,
+        )
+        return run_command_with_appended_args(
+            command: read test.command,
+            args: read test.args,
+            appended_args: read selected,
+            jobs: test.jobs,
         )
     }
 
     if test.kind == "command_for_each_file" {
         match Directory.list_files(path: read Path.from_string(value: read test.directory)) {
             Ok(files) => {
-                return run_command_for_files_from(
-                    command: read test.command,
-                    args: read test.args,
+                local selected = List<String>.new()
+                collect_files_from(
                     directory: read test.directory,
                     extension: read test.extension,
                     recursive: test.recursive,
                     files: read files,
                     index: 0,
+                    selected: mut selected,
+                )
+                return run_command_with_appended_args(
+                    command: read test.command,
+                    args: read test.args,
+                    appended_args: read selected,
+                    jobs: test.jobs,
                 )
             }
             Err(error) => {

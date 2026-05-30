@@ -6,3 +6,4 @@ extension = ".rss"
 recursive = false
 command = "target/debug/rss"
 args = ["run"]
+jobs = 1

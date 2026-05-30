@@ -15,6 +15,7 @@ name = "generated Rust packages compile"
 kind = "command_for_each_path"
 command = "cargo"
 args = ["check", "--manifest-path"]
+jobs = 1
 paths = [
   "tests/generated/simple/Cargo.toml",
   "tests/generated/managed/Cargo.toml",
@@ -78,12 +79,14 @@ extension = ".rss"
 recursive = false
 command = "target/debug/rss"
 args = ["run"]
+jobs = 1
 
 [[tests]]
 name = "self-hosted rss tools run"
 kind = "command_for_each_path"
 command = "target/debug/rss"
 args = ["run"]
+jobs = 1
 paths = [
   "tests/fixtures/pass/selfhost-review-classifier.rss",
   "tests/fixtures/pass/selfhost-package-risk.rss",

@@ -312,6 +312,11 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "run_stdout",
         "rsscript_runtime::process_run_stdout",
     ),
+    runtime_intrinsic(
+        "Process",
+        "run_many_stdout",
+        "rsscript_runtime::process_run_many_stdout",
+    ),
     runtime_intrinsic("Request", "new", "rsscript_runtime::request_new"),
     runtime_intrinsic("Request", "path", "rsscript_runtime::request_path"),
     runtime_intrinsic("Response", "body", "rsscript_runtime::response_body"),

@@ -15,6 +15,7 @@ name = "generated Rust packages compile"
 kind = "command_for_each_path"
 command = "cargo"
 args = ["check", "--manifest-path"]
+jobs = 1
 paths = [
   "tests/generated/simple/Cargo.toml",
   "tests/generated/managed/Cargo.toml",
