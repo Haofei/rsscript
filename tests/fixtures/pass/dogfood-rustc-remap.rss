@@ -55,7 +55,7 @@ fn dogfood_remap_facts() -> Result<fresh RemapFacts, JsonError> {
     let path = Path.from_string(value: read "tests/fixtures/pass/dogfood-rustc-remap.json")
     let diagnostics = Json.parse_file(path: read path)?
 
-    return Json.array_fold(
+    return Json.array_fold<RemapFacts>(
         value: read diagnostics,
         initial: read empty_remap_facts(),
         folder: |facts, item| {

@@ -1202,6 +1202,13 @@ fn call_type_param_substitutions(
     if generic_params.is_empty() {
         return substitutions;
     }
+    if let Some(explicit_args) = explicit_callee_type_args(callee) {
+        for (param, actual) in signature.type_params.iter().zip(explicit_args) {
+            if generic_params.contains(param.as_str()) {
+                substitutions.insert(param.clone(), actual.to_string());
+            }
+        }
+    }
     if let Callee::Qualified { namespace, .. } = callee
         && let Some(namespace_args) = type_arg_names(namespace)
     {
@@ -1226,6 +1233,12 @@ fn call_type_param_substitutions(
     }
     collect_call_arg_type_param_substitutions(args, signature, &generic_params, &mut substitutions);
     substitutions
+}
+
+fn explicit_callee_type_args(callee: &Callee) -> Option<Vec<&str>> {
+    match callee {
+        Callee::Name(name) | Callee::Qualified { name, .. } => type_arg_names(name),
+    }
 }
 
 fn collect_call_arg_type_param_substitutions(

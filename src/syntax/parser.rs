@@ -1627,14 +1627,33 @@ fn find_call_open(tokens: &[Token], start: usize, end: usize) -> Option<usize> {
 }
 
 fn parse_callee(tokens: &[Token], start: usize, end: usize) -> Option<Callee> {
-    if start + 1 == end {
-        return Some(Callee::Name(ident_name(tokens.get(start)?)?.to_string()));
+    if let Some(name) = parse_named_callee_segment(tokens, start, end) {
+        return Some(Callee::Name(name));
     }
 
     let dot = find_top_level_dot(tokens, start, end)?;
     let namespace = type_ref_name(&parse_type_ref(tokens, start, dot)?);
-    let name = ident_name(tokens.get(dot + 1)?)?.to_string();
+    let name = parse_named_callee_segment(tokens, dot + 1, end)?;
     Some(Callee::Qualified { namespace, name })
+}
+
+fn parse_named_callee_segment(tokens: &[Token], start: usize, end: usize) -> Option<String> {
+    let name = ident_name(tokens.get(start)?)?;
+    if start + 1 == end {
+        return Some(name.to_string());
+    }
+    if start + 2 >= end || !tokens.get(start + 1).is_some_and(|token| token.symbol("<")) {
+        return None;
+    }
+    let close = find_matching(tokens, start + 1, "<", ">")?;
+    if close + 1 != end {
+        return None;
+    }
+    let args = tokens_to_source(tokens, start + 2, close);
+    if args.trim().is_empty() {
+        return None;
+    }
+    Some(format!("{name}<{}>", args.trim()))
 }
 
 fn find_top_level_dot(tokens: &[Token], start: usize, end: usize) -> Option<usize> {
@@ -2104,6 +2123,38 @@ fn run() -> Unit {
             }
         );
     }
+
+    #[test]
+    fn parses_explicit_generic_function_call_arguments() {
+        let program = parse_source(
+            "test.rss",
+            r#"
+fn run() -> Unit {
+    Json.array_fold<RemapFacts>(
+        value: read diagnostics,
+        initial: read empty_remap_facts(),
+        folder: |facts, item| {
+            return diagnose_remap_item(item: read item, facts: read facts)
+        },
+    )
+}
+"#,
+        );
+        let Item::Function(function) = &program.items[0] else {
+            panic!("expected function");
+        };
+        let Stmt::Expr(Expr::Call { callee, args, .. }) = &function.body.statements[0] else {
+            panic!("expected call");
+        };
+        assert_eq!(
+            callee,
+            &Callee::Qualified {
+                namespace: "Json".to_string(),
+                name: "array_fold<RemapFacts>".to_string(),
+            }
+        );
+        assert_eq!(args.len(), 3);
+    }
 }
 
 fn ident_name(token: &Token) -> Option<&str> {
@@ -2112,4 +2163,14 @@ fn ident_name(token: &Token) -> Option<&str> {
         TokenKind::Keyword(value) => Some(value),
         _ => None,
     }
+}
+
+fn tokens_to_source(tokens: &[Token], start: usize, end: usize) -> String {
+    tokens
+        .iter()
+        .take(end)
+        .skip(start)
+        .map(Token::text)
+        .collect::<Vec<_>>()
+        .join("")
 }

@@ -516,8 +516,10 @@ impl Hir {
         }
 
         let signature = match callee {
-            Callee::Name(name) => self.resolve_function(None, name),
-            Callee::Qualified { namespace, name } => self.resolve_function(Some(namespace), name),
+            Callee::Name(name) => self.resolve_function(None, type_root_name(name)),
+            Callee::Qualified { namespace, name } => {
+                self.resolve_function(Some(namespace), type_root_name(name))
+            }
         };
         let Some(signature) = signature else {
             return CallResolution::Unknown;
@@ -1412,7 +1414,7 @@ fn collect_body_facts_in_expr(
 }
 
 fn is_resource_pool_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Name(name) if name == "ResourcePool")
+    matches!(callee, Callee::Name(name) if type_root_name(name) == "ResourcePool")
         || matches!(callee, Callee::Qualified { namespace, .. } if type_root_name(namespace) == "ResourcePool")
 }
 
@@ -1550,6 +1552,7 @@ fn infer_signature_return_type(
         .map(String::as_str)
         .collect::<HashSet<_>>();
     let mut substitutions = HashMap::new();
+    collect_callee_type_substitutions(signature, callee, &generic_params, &mut substitutions);
     collect_namespace_type_substitutions(hir, callee, &generic_params, &mut substitutions);
     collect_arg_type_substitutions(
         hir,
@@ -1564,6 +1567,27 @@ fn infer_signature_return_type(
         None
     } else {
         Some(substitute_type_params(return_type, &substitutions))
+    }
+}
+
+fn collect_callee_type_substitutions(
+    signature: &FunctionSig,
+    callee: &Callee,
+    generic_params: &HashSet<&str>,
+    substitutions: &mut HashMap<String, String>,
+) {
+    let type_args = match callee {
+        Callee::Name(name) | Callee::Qualified { name, .. } => type_arg_names(name),
+    };
+    let Some(type_args) = type_args else {
+        return;
+    };
+    for (param, actual) in signature.type_params.iter().zip(type_args) {
+        if generic_params.contains(param.as_str()) {
+            substitutions
+                .entry(param.to_string())
+                .or_insert_with(|| actual.to_string());
+        }
     }
 }
 
@@ -1973,7 +1997,7 @@ fn is_enum_variant_call(name: &str) -> bool {
 
 fn callee_name(callee: &Callee) -> &str {
     match callee {
-        Callee::Name(name) | Callee::Qualified { name, .. } => name,
+        Callee::Name(name) | Callee::Qualified { name, .. } => type_root_name(name),
     }
 }
 

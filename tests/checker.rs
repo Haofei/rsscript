@@ -2659,7 +2659,7 @@ fn read_name(text: read String) -> Result<String, JsonError> {
             return Ok(String.starts_with(value: read text, prefix: read "pro"))
         },
     )?
-    let folded = Json.array_fold(
+    let folded = Json.array_fold<IntBox>(
         value: read value,
         initial: read IntBox(value: 0),
         folder: |state, item| {

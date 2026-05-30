@@ -2237,6 +2237,23 @@ feature admission rule (section 2.8).
 
 Resource types are not `Managed`. Ordinary `List<T>` cannot be instantiated with resource types.
 
+Generic function calls may either infer type arguments from ordinary call
+arguments or write them explicitly after the function name:
+
+```rust
+Json.array_fold<RemapFacts>(
+    value: read diagnostics,
+    initial: read empty_remap_facts(),
+    folder: |facts, item| {
+        return diagnose_remap_item(item: read item, facts: read facts)
+    },
+)
+```
+
+Explicit function type arguments participate in the same signature substitution
+as inferred arguments and qualified receiver type arguments. They do not bypass
+named-argument, `read`/`mut`/`take`, callback, freshness, or resource checks.
+
 The bound lattice:
 
 ```text

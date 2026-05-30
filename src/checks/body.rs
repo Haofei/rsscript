@@ -644,7 +644,7 @@ fn check_async_call_consumed(
 fn is_weak_upgrade_callee(callee: &Callee) -> bool {
     matches!(
         callee,
-        Callee::Qualified { namespace, name } if namespace == "Weak" && name == "upgrade"
+        Callee::Qualified { namespace, name } if namespace == "Weak" && type_root_name(name) == "upgrade"
     )
 }
 
@@ -3385,15 +3385,15 @@ fn place_paths_overlap(left: &PlacePath, right: &PlacePath) -> bool {
 }
 
 fn is_resource_pool_borrow(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && name == "borrow")
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && type_root_name(name) == "borrow")
 }
 
 fn is_resource_pool_new(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && name == "new")
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && type_root_name(name) == "new")
 }
 
 fn is_resource_pool_try_new(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && name == "try_new")
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && type_root_name(name) == "try_new")
 }
 
 fn is_resource_pool_constructor(callee: &Callee) -> bool {

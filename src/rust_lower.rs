@@ -449,8 +449,10 @@ fn executable_declaration_function_key(name: &str) -> String {
 
 fn executable_declaration_callee_key(callee: &Callee) -> String {
     match callee {
-        Callee::Name(name) => name.clone(),
-        Callee::Qualified { namespace, name } => format!("{}.{}", type_root_name(namespace), name),
+        Callee::Name(name) => type_root_name(name).to_string(),
+        Callee::Qualified { namespace, name } => {
+            format!("{}.{}", type_root_name(namespace), type_root_name(name))
+        }
     }
 }
 
@@ -1971,7 +1973,7 @@ fn explicit_weak_handle_source(expr: &Expr) -> Option<&Expr> {
 fn is_weak_upgrade_callee(callee: &Callee) -> bool {
     matches!(
         callee,
-        Callee::Qualified { namespace, name } if namespace == "Weak" && name == "upgrade"
+        Callee::Qualified { namespace, name } if namespace == "Weak" && type_root_name(name) == "upgrade"
     )
 }
 
@@ -2110,8 +2112,10 @@ fn native_boundary_function_key(name: &str) -> String {
 
 fn native_boundary_callee_key(callee: &Callee) -> String {
     match callee {
-        Callee::Name(name) => name.clone(),
-        Callee::Qualified { namespace, name } => format!("{}.{}", type_root_name(namespace), name),
+        Callee::Name(name) => type_root_name(name).to_string(),
+        Callee::Qualified { namespace, name } => {
+            format!("{}.{}", type_root_name(namespace), type_root_name(name))
+        }
     }
 }
 
@@ -2585,9 +2589,12 @@ fn lower_callee(callee: &Callee) -> String {
     }
 
     match callee {
-        Callee::Name(name) => rust_ident(name),
+        Callee::Name(name) => rust_ident(type_root_name(name)),
         Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" => {
-            format!("rsscript_runtime::ResourcePool::{}", rust_ident(name))
+            format!(
+                "rsscript_runtime::ResourcePool::{}",
+                rust_ident(type_root_name(name))
+            )
         }
         Callee::Qualified { namespace, name } => rust_qualified_function_ident(namespace, name),
     }
@@ -2665,7 +2672,7 @@ fn runtime_intrinsic_target(callee: &Callee) -> Option<&'static str> {
     let Callee::Qualified { namespace, name } = callee else {
         return None;
     };
-    runtime_abi::lookup_runtime_intrinsic(type_root_name(namespace), name)
+    runtime_abi::lookup_runtime_intrinsic(type_root_name(namespace), type_root_name(name))
         .map(|intrinsic| intrinsic.rust_target)
 }
 
@@ -2676,24 +2683,24 @@ fn runtime_intrinsic_wants_managed_handle_arg(callee: &Callee, arg_name: Option<
     let Some(arg_name) = arg_name else {
         return false;
     };
-    runtime_abi::lookup_runtime_intrinsic(type_root_name(namespace), name)
+    runtime_abi::lookup_runtime_intrinsic(type_root_name(namespace), type_root_name(name))
         .is_some_and(|intrinsic| intrinsic.managed_handle_args.contains(&arg_name))
 }
 
 fn is_string_concat_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "String" && name == "concat")
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "String" && type_root_name(name) == "concat")
 }
 
 fn is_file_open_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && name == "open")
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && type_root_name(name) == "open")
 }
 
 fn is_file_open_read_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && name == "open_read")
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && type_root_name(name) == "open_read")
 }
 
 fn is_file_open_write_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && name == "open_write")
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && type_root_name(name) == "open_write")
 }
 
 fn is_file_open_expr(expr: &Expr) -> bool {
@@ -2721,15 +2728,15 @@ fn lower_call_arg(
 }
 
 fn is_resource_pool_borrow_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && name == "borrow")
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && type_root_name(name) == "borrow")
 }
 
 fn is_resource_pool_new_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && name == "new")
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && type_root_name(name) == "new")
 }
 
 fn is_resource_pool_try_new_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && name == "try_new")
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && type_root_name(name) == "try_new")
 }
 
 fn is_resource_pool_borrow_expr(expr: &Expr) -> bool {
@@ -2826,7 +2833,7 @@ fn rust_function_ident(name: &str) -> String {
 fn rust_qualified_function_ident(namespace: &str, name: &str) -> String {
     namespace
         .split('.')
-        .chain(std::iter::once(name))
+        .chain(std::iter::once(type_root_name(name)))
         .map(rust_path_segment)
         .collect::<Vec<_>>()
         .join("_")

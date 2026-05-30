@@ -1758,7 +1758,7 @@ fn review_callee_display(callee: &Callee) -> String {
 
 fn is_resource_pool_callee(callee: &Callee) -> bool {
     match callee {
-        Callee::Name(name) => name == "ResourcePool",
+        Callee::Name(name) => type_root_name(name) == "ResourcePool",
         Callee::Qualified { namespace, .. } => type_root_name(namespace) == "ResourcePool",
     }
 }
