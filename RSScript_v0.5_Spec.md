@@ -3024,7 +3024,7 @@ pub fn List.try_fold<T, U: Struct, E>(
 ```
 
 The minimum `String` core surface includes pure current-value inspection helpers
-needed by review tooling and package dogfood:
+needed by review tooling and self-hosted package validation:
 
 ```rust
 features: local
@@ -3084,7 +3084,7 @@ pub fn StringBuilder.finish(builder: take StringBuilder) -> fresh String
 ```
 
 The minimum `Json` core surface includes field access, array access, and a
-noescape predicate helper used by review tooling and package dogfood:
+noescape predicate helper used by review tooling and self-hosted package validation:
 
 ```rust
 struct JsonValue
@@ -3330,7 +3330,7 @@ spec invariant
   -> frontend checker fact
   -> lowering/source-map shape
   -> runtime behavior when static enforcement is impossible
-  -> review metadata and dogfood coverage
+  -> review metadata and self-hosted validation coverage
   -> package metadata only after the underlying language fact is stable
 ```
 
@@ -3341,7 +3341,7 @@ Implementation priorities:
 0.5.x  keep `.rssi` parsing and normalization compiler-owned
 0.5.x  keep source maps complete for every user-originating lowered construct
 0.5.x  preserve RSScript diagnostics before Rust lowering for unsupported syntax
-0.5.x  expand dogfood programs that exercise review maps, package contracts, and diagnostics
+0.5.x  expand self-hosted validation programs that exercise review maps, package contracts, and diagnostics
 0.5.x  keep package-manager features behind stable language facts and normalized interfaces
 ```
 

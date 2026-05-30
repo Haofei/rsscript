@@ -51,8 +51,8 @@ fn diagnose_remap_item(item: read JsonValue, facts: read RemapFacts) -> Result<f
     )
 }
 
-fn dogfood_remap_facts() -> Result<fresh RemapFacts, JsonError> {
-    let path = Path.from_string(value: read "tests/fixtures/pass/dogfood-rustc-remap.json")
+fn selfhost_remap_facts() -> Result<fresh RemapFacts, JsonError> {
+    let path = Path.from_string(value: read "tests/fixtures/pass/selfhost-rustc-remap.json")
     let diagnostics = Json.parse_file(path: read path)?
 
     return Json.array_fold<RemapFacts>(
@@ -71,7 +71,7 @@ fn remap_summary_line(facts: read RemapFacts) -> fresh String {
     let files = String.from_int(value: facts.source_file_hits)
     let lines = String.from_int(value: facts.source_line_hits)
     let columns = String.from_int(value: facts.source_column_hits)
-    let first = String.concat(left: read "dogfood rustc remap diagnostics=", right: read diagnostics)
+    let first = String.concat(left: read "selfhost rustc remap diagnostics=", right: read diagnostics)
     let second = String.concat(left: read first, right: read " mapped=")
     let third = String.concat(left: read second, right: read mapped)
     let fourth = String.concat(left: read third, right: read " rustc_code=")
@@ -86,7 +86,7 @@ fn remap_summary_line(facts: read RemapFacts) -> fresh String {
 }
 
 pub fn main() -> Result<Unit, JsonError> {
-    let facts = dogfood_remap_facts()?
+    let facts = selfhost_remap_facts()?
     let summary = remap_summary_line(facts: read facts)
 
     Log.write(message: read summary)

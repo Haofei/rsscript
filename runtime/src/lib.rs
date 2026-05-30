@@ -2082,7 +2082,7 @@ mod tests {
         let replaced = super::string_replace("review map", "map", "plan");
         let split = super::string_split("review,map", ",");
         let mut builder = super::string_builder_new();
-        super::string_builder_push(&mut builder, "dogfood ");
+        super::string_builder_push(&mut builder, "selfhost ");
         super::string_builder_push(&mut builder, "summary");
         let built = super::string_builder_finish(builder);
 
@@ -2124,7 +2124,7 @@ mod tests {
         assert_eq!(upper, "REVIEW");
         assert_eq!(replaced, "review plan");
         assert_eq!(split, vec!["review", "map"]);
-        assert_eq!(built, "dogfood summary");
+        assert_eq!(built, "selfhost summary");
         let _ = std::fs::remove_file(path);
     }
 

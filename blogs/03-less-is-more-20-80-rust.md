@@ -91,7 +91,7 @@ Yes, relative to native Rust. No, relative to anything else.
 
 Reference counting has a per-access cost that borrow-checked code doesn't pay. That cost is real. It's also relative — about an atomic increment per heap-object access. Compare that to what Python does for the same operation: dispatch through `__getattribute__`, allocate a fresh boxed integer for each arithmetic op, traverse a class MRO, fight the GIL. The per-access cost of an atomic refcount on shared objects is *trivial* next to the per-access cost of running on an interpreter. Primitives stay on the stack, hot loops compile to monomorphic Rust through LLVM, there's no GIL, there's no per-object dict header. Managed-only code in this style should be much closer to compiled Rust than interpreted Python for many workloads.
 
-That is the design target, not a benchmark claim yet. The current prototype already lowers through Rust and keeps primitives in ordinary Rust forms, but the honest performance evidence still has to come from dogfooding and benchmarks.
+That is the design target, not a benchmark claim yet. The current prototype already lowers through Rust and keeps primitives in ordinary Rust forms, but the honest performance evidence still has to come from self-hosted validation and benchmarks.
 
 When you need to beat managed overhead — when you actually do have a hot inner loop where shared handles are the bottleneck — you reach for `local`. Local values are ordinary Rust-owned values: exclusive at the RSScript level, checked against silent retention by managed objects, and still free to contain heap-backed buffers when that is the right representation. Hot paths get a path toward hand-tuned Rust characteristics without making that the default everywhere.
 

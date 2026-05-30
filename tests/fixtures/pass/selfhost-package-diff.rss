@@ -388,8 +388,8 @@ fn diff_mismatch_count(risk: Int, expected: Int) -> Int {
     return 0
 }
 
-fn dogfood_package_diff_facts() -> Result<fresh PackageDiffFacts, JsonError> {
-    let path = Path.from_string(value: read "tests/fixtures/pass/dogfood-package-diff.json")
+fn selfhost_package_diff_facts() -> Result<fresh PackageDiffFacts, JsonError> {
+    let path = Path.from_string(value: read "tests/fixtures/pass/selfhost-package-diff.json")
     let json = Json.parse_file(path: read path)?
 
     return parse_package_diff_facts(value: read json)
@@ -406,7 +406,7 @@ fn diff_summary_line(
     let mismatches = String.from_int(value: decision.mismatches)
     let unmodeled = String.from_int(value: facts.unmodeled_reasons)
     let callback = String.from_int(value: facts.callback_contract_changes)
-    let first = String.concat(left: read "dogfood package diff manifest=", right: read manifest)
+    let first = String.concat(left: read "selfhost package diff manifest=", right: read manifest)
     let second = String.concat(left: read first, right: read " interface=")
     let third = String.concat(left: read second, right: read interfaces)
     let fourth = String.concat(left: read third, right: read " high_manifest=")
@@ -423,7 +423,7 @@ fn diff_summary_line(
 }
 
 pub fn main() -> Result<Unit, JsonError> {
-    let facts = dogfood_package_diff_facts()?
+    let facts = selfhost_package_diff_facts()?
     let decision = classify_package_diff(facts: read facts)
     let summary = diff_summary_line(facts: read facts, decision: read decision)
 

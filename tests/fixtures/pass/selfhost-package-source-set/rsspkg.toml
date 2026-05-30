@@ -1,5 +1,5 @@
 [package]
-name = "rss-dogfood-source-set"
+name = "rss-selfhost-source-set"
 version = "0.5.0"
 edition = "2024"
 

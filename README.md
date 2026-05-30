@@ -268,7 +268,7 @@ A few details worth knowing:
 - `rss check` loads bundled core `.rssi` signatures by default for single files; when pointed at a directory with `rsspkg.toml`, it runs package check.
 - `rss lint` reuses the frontend checks and emits warnings. The first lint is `RSL001` — public signatures over the review budget for parameter count, generics, effects, or nested-type depth.
 - `rss review --map` validates inputs first, so files with frontend errors get diagnostics instead of misleading classifications.
-- `rss review --map --json` reports `unknown_ratio` and `unknown_function_ratio` directly. `tests/fixtures/pass` is treated as the current review-map confidence corpus: it currently reports 338 functions / 4075 lines with 0 unknown functions and 0 unknown lines, including `complex-supported-review-map.rss`, `realistic-supported-review-corpus.rss`, `app-review-benchmark.rss`, managed-closure retention coverage, and the file-backed review-map dogfood classifiers; tests fail if this known-good corpus regresses to unknown or if this documented count drifts from the actual corpus.
+- `rss review --map --json` reports `unknown_ratio` and `unknown_function_ratio` directly. `tests/fixtures/pass` is treated as the current review-map confidence corpus: it currently reports 338 functions / 4030 lines with 0 unknown functions and 0 unknown lines, including `complex-supported-review-map.rss`, `realistic-supported-review-corpus.rss`, `app-review-benchmark.rss`, managed-closure retention coverage, and the file-backed self-hosted review-map classifiers; tests fail if this known-good corpus regresses to unknown or if this documented count drifts from the actual corpus.
 - `rss pkg check` validates a local package, loads local path dependency `.rssi` contracts, checks package `.rssi` type and function contracts against source implementations or explicit native bindings, rejects unresolved or conflicting local dependency graphs, runs package review, compares the current semantic lock against `rsspkg.lock`, and scans enabled native Rust wrappers with Cargo metadata. Packages can set `[review.policy] deny_unknown = true` to make unknown review risk fail the check.
 - `rss pkg review` reads `rsspkg.toml`, treats `.rssi` files as the public semantic contract, reports package feature names, summarizes public type/function/API counts plus mutating, retaining, resource, fresh-returning, native, unsafe, and unknown APIs, emits per-export review classifications, counts frontend errors in `.rssi` contracts as unknown contract exports, and raises risk for native Rust wrappers, build scripts, proc macros, unsafe policy, external links, frontend diagnostics, and unknown review-map regions.
 - `rss pkg review update` compares two `rsspkg.lock` files and reports package version, source, checksum, `.rssi` interface, review metadata, native wrapper, and feature-selection changes.
@@ -301,14 +301,14 @@ bash scripts/check.sh
 RSSCRIPT_FULL_TESTS=1 bash scripts/check.sh
 bash scripts/lint_sources.sh
 bash scripts/run_examples.sh
-bash scripts/run_dogfood.sh
+bash scripts/run_selfhost.sh
 ```
 
 Development discipline is documented in [DEVELOPMENT.md](DEVELOPMENT.md): spec
-prerequisites first, dogfood as the main pressure test, no fixture-only
+prerequisites first, self-hosted validation as the main pressure test, no fixture-only
 shortcuts, and a broad-first testing loop.
 
-The package manager should be dogfooded in RSScript as the language core becomes
+The package manager should be implemented in RSScript as the language core becomes
 capable enough. Rust remains the lowering backend and native-wrapper language,
 but package review, dependency-risk classification, semantic lock diffing, and
 registry metadata shaping are exactly the kind of application-layer systems code
@@ -316,7 +316,7 @@ RSScript is meant to make reviewable. Any part that still needs Rust should mark
 the missing RSScript capability clearly instead of growing a parallel Rust-only
 package-manager model.
 
-CI sets `RSSCRIPT_FULL_TESTS=1` so the same scripts run the full workspace test suite, execute every `examples/*.rss` file, and run the checked-in dogfood RSScript tools through `rss run`.
+CI sets `RSSCRIPT_FULL_TESTS=1` so the same scripts run the full workspace test suite, execute every `examples/*.rss` file, and run the checked-in self-hosted RSScript tools through `rss run`.
 
 The runtime hooks wired through so far: `Log.write`, `Assert.equal`, `Args`, `OS.close`, `List.consume`, the common `List` helpers (`count_where`, `any`, `all`, `find`, `filter`, `map`, `fold`, `try_fold`), the common `String` helpers (`len`, `is_empty`, `trim`, `to_lowercase`, `to_uppercase`, `replace`, `contains`, `lines`, `join`, `strip_prefix`, `before`, `after`, `split`), the common `Json` helpers (`field`, `as_string`, `as_int`, `as_bool`, `is_null`, `is_array`, `is_object`, array helpers), `Path.from_string`, `Path.join`, `Path.to_string`, `Path.file_name`, `Path.extension`, `Path.parent`, the common `Map`/`Set` helpers, `Buffer.consume`, `JsonError.message`, `FileError.message`, plus the core `Directory`, `File`, `Toml`, `Csv`, `Cache`, `Image`, `ImageCache`, HTTP handler, DB resource-pool, config reload, rules config reload, interpreter object links, `StringBuilder`, and `Counter` APIs. `ImageCache` is the first retained managed-container hook; the interpreter hooks model `Environment` and `FunctionObject` as managed handles with the closure link stored weakly. Simple operations keep `.rssi` signatures for checking but lower directly to Rust std expressions/runtime hooks. Built-in literals, arithmetic and comparison operators, `Option<T>` constructors, and surface types (`Bytes`, `Buffer`, `Path`, `List<T>`, `Map<K,V>`, `Set<T>`) lower to the matching Rust forms. User-defined operator overloading stays forbidden.
 
@@ -328,7 +328,7 @@ The supported closure surface includes `noescape Fn()` parameters for temporary 
 
 ## Roadmap
 
-Near term for v0.5 hardening: close remaining static-checker gaps against the spec, keep `.rssi` normalization compiler-owned, tighten package/source/interface consistency checks, expand dogfood that exercises review and package tooling, and keep Rust lowering, source maps, and runtime diagnostics aligned with the documented semantic guarantee table.
+Near term for v0.5 hardening: close remaining static-checker gaps against the spec, keep `.rssi` normalization compiler-owned, tighten package/source/interface consistency checks, expand self-hosted validation that exercises review and package tooling, and keep Rust lowering, source maps, and runtime diagnostics aligned with the documented semantic guarantee table.
 
 Package-management hardening: keep implemented commands documented under their actual `--json` surface, treat dependency updates as review events, preserve unknown risk instead of downgrading it, and land design-only graph-audit/native-ABI/semver workflows only after their underlying interface and native facts are available without weakening review semantics.
 

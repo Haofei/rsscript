@@ -94,9 +94,9 @@ Because the four conditions that make it the right thing to build — a mature R
 
 It's a moment, not a missing insight. RSScript exists because I happened to notice the moment from the position of someone reviewing 100k+ lines of AI-generated Rust and getting tired. Someone else could have noticed it too. Plenty of someones probably will, in the next two years. The thing to do is build the version I think is right and ship it before the moment closes.
 
-If you've read this far, you probably know enough about the project now to decide whether you want to follow along. The MVP is close; once it's stable I'll start dogfooding and writing about what I learn. The earliest you'll see usable RSScript in production code (mine, not yours) is sometime in the next few months. If you want to wait for that before forming an opinion, that's the right call — words are cheap, working software is the only honest evidence.
+If you've read this far, you probably know enough about the project now to decide whether you want to follow along. The MVP is close; once it's stable I'll start self-hosted validation and writing about what I learn. The earliest you'll see usable RSScript in production code (mine, not yours) is sometime in the next few months. If you want to wait for that before forming an opinion, that's the right call — words are cheap, working software is the only honest evidence.
 
-Until then: the problem is real, the moment is real, the moves are visible. Whether RSScript is the right embodiment of those moves is what dogfooding has to determine. I'll write about it when there's something real to write about.
+Until then: the problem is real, the moment is real, the moves are visible. Whether RSScript is the right embodiment of those moves is what self-hosted validation has to determine. I'll write about it when there's something real to write about.
 
 ---
 

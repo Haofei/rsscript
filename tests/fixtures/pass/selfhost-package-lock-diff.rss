@@ -282,8 +282,8 @@ fn lock_diff_mismatch_count(risk: Int, expected: Int) -> Int {
     return 0
 }
 
-fn dogfood_package_lock_diff_json() -> Result<fresh JsonValue, JsonError> {
-    let path = Path.from_string(value: read "tests/fixtures/pass/dogfood-package-lock-diff.json")
+fn selfhost_package_lock_diff_json() -> Result<fresh JsonValue, JsonError> {
+    let path = Path.from_string(value: read "tests/fixtures/pass/selfhost-package-lock-diff.json")
 
     return Json.parse_file(path: read path)
 }
@@ -297,7 +297,7 @@ fn lock_diff_summary_line(
     let high_features = String.from_int(value: facts.high_feature_changes)
     let mismatches = String.from_int(value: decision.mismatches)
     let unmodeled = String.from_int(value: facts.unmodeled_reasons)
-    let first = String.concat(left: read "dogfood package lock diff packages=", right: read packages)
+    let first = String.concat(left: read "selfhost package lock diff packages=", right: read packages)
     let second = String.concat(left: read first, right: read " high_packages=")
     let third = String.concat(left: read second, right: read high_packages)
     let fourth = String.concat(left: read third, right: read " high_features=")
@@ -310,7 +310,7 @@ fn lock_diff_summary_line(
 }
 
 pub fn main() -> Result<Unit, JsonError> {
-    let value = dogfood_package_lock_diff_json()?
+    let value = selfhost_package_lock_diff_json()?
     let changes = Json.field(value: read value, name: read "package_changes")?
     let facts = parse_package_lock_diff_facts(value: read value)?
     let decision = classify_package_lock_diff(

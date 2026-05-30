@@ -140,53 +140,29 @@ fn add_bool(value: Int, condition: Bool) -> Int {
     return value
 }
 
-fn summarize_exports_from(
-    exports: read JsonValue,
-    index: Int,
-    limit: Int,
+fn fold_export_summary(
     summary: read PackageExportSummary,
+    export: read JsonValue,
 ) -> Result<fresh PackageExportSummary, JsonError> {
-    if index >= limit {
-        return PackageExportSummary(
-            public_types: summary.public_types,
-            public_functions: summary.public_functions,
-            public_apis: summary.public_apis,
-            mutating_apis: summary.mutating_apis,
-            retaining_apis: summary.retaining_apis,
-            resource_apis: summary.resource_apis,
-            fresh_returning_apis: summary.fresh_returning_apis,
-            unknown_apis: summary.unknown_apis,
-            unmodeled_reasons: summary.unmodeled_reasons,
-        )
-    }
-
-    let export = Json.array_get(value: read exports, index: index)?
-    let next = add_export_summary(summary: read summary, export: read export)?
-
-    return summarize_exports_from(
-        exports: read exports,
-        index: index + 1,
-        limit: limit,
-        summary: read next,
-    )
+    return add_export_summary(summary: read summary, export: read export)
 }
 
-fn dogfood_export_summary() -> Result<fresh PackageExportSummary, JsonError> {
-    let path = Path.from_string(value: read "tests/fixtures/pass/dogfood-package-exports.json")
+fn selfhost_export_summary() -> Result<fresh PackageExportSummary, JsonError> {
+    let path = Path.from_string(value: read "tests/fixtures/pass/selfhost-package-exports.json")
     let json = Json.parse_file(path: read path)?
     let exports = Json.field(value: read json, name: read "exports")?
-    let limit = Json.array_len(value: read exports)?
 
-    return summarize_exports_from(
-        exports: read exports,
-        index: 0,
-        limit: limit,
-        summary: read empty_export_summary(),
+    return Json.array_fold<PackageExportSummary>(
+        value: read exports,
+        initial: read empty_export_summary(),
+        folder: |summary, export| {
+            return fold_export_summary(summary: read summary, export: read export)
+        },
     )
 }
 
 fn expected_export_summary() -> Result<fresh PackageExportSummary, JsonError> {
-    let path = Path.from_string(value: read "tests/fixtures/pass/dogfood-package-exports.json")
+    let path = Path.from_string(value: read "tests/fixtures/pass/selfhost-package-exports.json")
     let json = Json.parse_file(path: read path)?
     let summary = Json.field(value: read json, name: read "summary")?
 
@@ -257,7 +233,7 @@ fn export_summary_line(
     let mismatch_count = String.from_int(value: mismatches)
     let unmodeled = String.from_int(value: actual.unmodeled_reasons)
     local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: read "dogfood package exports types=")
+    StringBuilder.push(builder: mut builder, value: read "selfhost package exports types=")
     StringBuilder.push(builder: mut builder, value: read types)
     StringBuilder.push(builder: mut builder, value: read " functions=")
     StringBuilder.push(builder: mut builder, value: read functions)
@@ -282,7 +258,7 @@ fn export_summary_line(
 }
 
 pub fn main() -> Result<Unit, JsonError> {
-    let actual = dogfood_export_summary()?
+    let actual = selfhost_export_summary()?
     let expected = expected_export_summary()?
     let mismatches = export_mismatch_count(actual: read actual, expected: read expected)
     let summary = export_summary_line(actual: read actual, mismatches: mismatches)

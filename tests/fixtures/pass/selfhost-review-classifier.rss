@@ -812,8 +812,8 @@ fn first_classification_mismatch(items: read List<ReviewFacts>) -> String {
     return "none"
 }
 
-fn dogfood_fact_list() -> Result<fresh List<ReviewFacts>, JsonError> {
-    let path = Path.from_string(value: read "tests/fixtures/pass/dogfood-review-facts.json")
+fn selfhost_fact_list() -> Result<fresh List<ReviewFacts>, JsonError> {
+    let path = Path.from_string(value: read "tests/fixtures/pass/selfhost-review-facts.json")
     let json = Json.parse_file(path: read path)?
     let files = Json.field(value: read json, name: read "files")?
     let limit = Json.array_len(value: read files)?
@@ -829,8 +829,8 @@ fn dogfood_fact_list() -> Result<fresh List<ReviewFacts>, JsonError> {
     return items
 }
 
-fn dogfood_expected_summary() -> Result<fresh ReviewSummary, JsonError> {
-    let path = Path.from_string(value: read "tests/fixtures/pass/dogfood-review-facts.json")
+fn selfhost_expected_summary() -> Result<fresh ReviewSummary, JsonError> {
+    let path = Path.from_string(value: read "tests/fixtures/pass/selfhost-review-facts.json")
     let json = Json.parse_file(path: read path)?
 
     return expected_summary_from_json(json: read json)
@@ -844,16 +844,16 @@ fn unknown_ratio_percent(summary: read ReviewSummary) -> Int {
     return summary.unknown_functions * 100 / summary.total_functions
 }
 
-fn dogfood_sample_summary() -> Result<fresh ReviewSummary, JsonError> {
-    let items = dogfood_fact_list()?
+fn selfhost_sample_summary() -> Result<fresh ReviewSummary, JsonError> {
+    let items = selfhost_fact_list()?
 
     return summarize_list(items: read items)
 }
 
-fn dogfood_shape_is_expected() -> Result<Bool, JsonError> {
-    let items = dogfood_fact_list()?
-    let summary = dogfood_sample_summary()?
-    let expected = dogfood_expected_summary()?
+fn selfhost_shape_is_expected() -> Result<Bool, JsonError> {
+    let items = selfhost_fact_list()?
+    let summary = selfhost_sample_summary()?
+    let expected = selfhost_expected_summary()?
     let unknown_percent = unknown_ratio_percent(summary: read summary)
     let mismatches = classification_mismatch_count(items: read items)
     let unmodeled = unmodeled_reason_count(items: read items)
@@ -889,7 +889,7 @@ fn dogfood_shape_is_expected() -> Result<Bool, JsonError> {
     return Ok(unknown_percent == 0)
 }
 
-fn dogfood_summary_line(
+fn selfhost_summary_line(
     summary: read ReviewSummary,
     mismatches: Int,
     unmodeled_reasons: Int,
@@ -902,7 +902,7 @@ fn dogfood_summary_line(
     let lines = String.from_int(value: summary.suggested_lines)
     let mismatch_count = String.from_int(value: mismatches)
     let unmodeled_count = String.from_int(value: unmodeled_reasons)
-    let first = String.concat(left: read "dogfood review summary total=", right: read total)
+    let first = String.concat(left: read "selfhost review summary total=", right: read total)
     let second = String.concat(left: read first, right: read " must=")
     let third = String.concat(left: read second, right: read must)
     let fourth = String.concat(left: read third, right: read " low=")
@@ -921,21 +921,21 @@ fn dogfood_summary_line(
 }
 
 pub fn main() -> Result<Unit, JsonError> {
-    let summary = dogfood_sample_summary()?
-    let items = dogfood_fact_list()?
-    let expected = dogfood_expected_summary()?
+    let summary = selfhost_sample_summary()?
+    let items = selfhost_fact_list()?
+    let expected = selfhost_expected_summary()?
     let unknown_region = make_unknown_region(lines: 7)
     let unknown_decision = classify_function(facts: read unknown_region)
     let mismatches = classification_mismatch_count(items: read items)
     let unmodeled = unmodeled_reason_count(items: read items)
     let first_mismatch = first_classification_mismatch(items: read items)
-    let summary_line = dogfood_summary_line(
+    let summary_line = selfhost_summary_line(
         summary: read summary,
         mismatches: mismatches,
         unmodeled_reasons: unmodeled,
         first_mismatch: read first_mismatch,
     )
-    let shape_ok = dogfood_shape_is_expected()?
+    let shape_ok = selfhost_shape_is_expected()?
 
     Log.write(message: read summary_line)
 

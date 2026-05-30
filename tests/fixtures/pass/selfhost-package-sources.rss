@@ -24,10 +24,10 @@ struct PackageSourceContentFacts {
     tool_symbols: Int
 }
 
-fn dogfood_source_root() -> fresh Path {
+fn selfhost_source_root() -> fresh Path {
     let input = Args.get_or_default(
         index: 0,
-        default: read "tests/fixtures/pass/dogfood-package-source-set",
+        default: read "tests/fixtures/pass/selfhost-package-source-set",
     )
 
     return Path.from_string(value: read input)
@@ -354,8 +354,8 @@ fn count_root_paths(
     )
 }
 
-fn dogfood_source_set_facts() -> Result<fresh PackageSourceSetFacts, String> {
-    let root = dogfood_source_root()
+fn selfhost_source_set_facts() -> Result<fresh PackageSourceSetFacts, String> {
+    let root = selfhost_source_root()
     let paths = package_source_path_sets(root: read root)?
     let manifest = PackageSourceSetFacts(
         total_files: 1,
@@ -394,7 +394,7 @@ fn source_set_summary_line(facts: read PackageSourceSetFacts) -> fresh String {
     let tool_interfaces = String.from_int(value: facts.tool_interface_symbols)
     let tool_sources = String.from_int(value: facts.tool_source_symbols)
     local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: read "dogfood package sources total=")
+    StringBuilder.push(builder: mut builder, value: read "selfhost package sources total=")
     StringBuilder.push(builder: mut builder, value: read total)
     StringBuilder.push(builder: mut builder, value: read " manifests=")
     StringBuilder.push(builder: mut builder, value: read manifests)
@@ -419,7 +419,7 @@ fn source_set_summary_line(facts: read PackageSourceSetFacts) -> fresh String {
 }
 
 pub fn main() -> Result<Unit, String> {
-    let facts = dogfood_source_set_facts()?
+    let facts = selfhost_source_set_facts()?
     let summary = source_set_summary_line(facts: read facts)
 
     Log.write(message: read summary)

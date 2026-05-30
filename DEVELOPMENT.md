@@ -1,6 +1,6 @@
 # Development Rules
 
-RSScript development is spec-first and dogfood-driven. The goal is not to
+RSScript development is spec-first and self-hosted-validation-driven. The goal is not to
 accumulate many small fixtures; the goal is to make the language capable of
 reviewing and eventually implementing its own core tooling.
 
@@ -13,16 +13,16 @@ reviewing and eventually implementing its own core tooling.
    the feature. Do not encode a one-off lowering shortcut, fixture-only bypass,
    or runtime fallback that preserves a different language model.
 
-2. Treat dogfood and implementation as one loop.
+2. Treat self-hosted validation and implementation as one loop.
 
-   A useful dogfood file should model a real RSScript tool concern: review-map
+   A useful self-hosted validation file should model a real RSScript tool concern: review-map
    classification, diagnostics, package contract review, source-map remapping,
-   lowering facts, or package risk. If dogfood reveals an unsupported shape, fix
+   lowering facts, or package risk. If self-hosted validation reveals an unsupported shape, fix
    the parser/checker/lowering/runtime layer that is actually missing.
 
 3. Do not treat unknown as safe.
 
-   `unknown` is a product signal. A low unknown ratio on realistic dogfood is
+   `unknown` is a product signal. A low unknown ratio on realistic self-hosted validation is
    evidence that the review protocol is working; a high unknown ratio is a
    language or analyzer gap. Review code must preserve unknown risk instead of
    folding it into low semantic risk.
@@ -31,7 +31,7 @@ reviewing and eventually implementing its own core tooling.
 
    Tiny fixtures are useful for a specific diagnostic regression. They are not
    enough to prove the language. Every new semantic rule should either be
-   covered by a focused negative fixture or be exercised by dogfood that looks
+   covered by a focused negative fixture or be exercised by self-hosted validation that looks
    like real RSScript code.
 
 5. Keep package tooling behind the language core.
@@ -43,7 +43,7 @@ reviewing and eventually implementing its own core tooling.
 6. No aliases or compatibility shims by default.
 
    RSScript is still pre-adoption. Prefer one canonical spelling and migrate
-   all tests, examples, specs, and dogfood to it. Do not keep legacy aliases
+   all tests, examples, specs, and self-hosted validation code to it. Do not keep legacy aliases
    unless there is a current external compatibility contract.
 
 7. Keep documents synchronized with the language model.
@@ -64,7 +64,7 @@ reviewing and eventually implementing its own core tooling.
    semantic boundaries.
 3. Rust lowering, source maps, and rustc diagnostic remapping for already
    supported source constructs.
-4. Dogfood programs that implement RSScript review/package/diagnostic logic in
+4. Self-hosted validation programs that implement RSScript review/package/diagnostic logic in
    RSScript and keep review-map unknown low.
 5. Review map and semantic diff quality.
 6. Package manager surface area after the underlying language behavior is hard.
@@ -88,7 +88,7 @@ cargo clippy -q --workspace -- -D warnings
 cargo test -q --workspace
 bash scripts/check.sh
 bash scripts/run_examples.sh
-bash scripts/run_dogfood.sh
+bash scripts/run_selfhost.sh
 git diff --check
 ```
 

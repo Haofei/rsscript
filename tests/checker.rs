@@ -7008,8 +7008,8 @@ fn review_map_app_benchmark_has_no_unknown_regions() {
 }
 
 #[test]
-fn review_map_dogfood_classifier_has_no_unknown_regions() {
-    let path = Path::new("tests/fixtures/pass/dogfood-review-classifier.rss");
+fn review_map_selfhost_classifier_has_no_unknown_regions() {
+    let path = Path::new("tests/fixtures/pass/selfhost-review-classifier.rss");
     let source = read_fixture(path);
     let map = review_map_sources(vec![(path.to_str().unwrap(), source.as_str())]);
 
@@ -7060,7 +7060,7 @@ fn rss_review_map_json_reports_app_benchmark_unknown_zero() {
 }
 
 #[test]
-fn dogfood_review_facts_match_generated_review_map_output() {
+fn selfhost_review_facts_match_generated_review_map_output() {
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("review")
         .arg("--map")
@@ -7073,9 +7073,9 @@ fn dogfood_review_facts_match_generated_review_map_output() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let generated: Value = serde_json::from_str(&stdout).expect("stdout should be review map JSON");
     let checked_in: Value = serde_json::from_str(&read_fixture(Path::new(
-        "tests/fixtures/pass/dogfood-review-facts.json",
+        "tests/fixtures/pass/selfhost-review-facts.json",
     )))
-    .expect("dogfood review facts should be JSON");
+    .expect("selfhost review facts should be JSON");
 
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
     assert!(stderr.trim().is_empty(), "{stderr}");
@@ -7083,12 +7083,12 @@ fn dogfood_review_facts_match_generated_review_map_output() {
 }
 
 #[test]
-fn rss_verify_rust_json_accepts_dogfood_classifier() {
-    let temp_dir = unique_temp_dir("rsscript-dogfood-review-classifier");
+fn rss_verify_rust_json_accepts_selfhost_classifier() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-review-classifier");
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("verify-rust")
         .arg("--json")
-        .arg("tests/fixtures/pass/dogfood-review-classifier.rss")
+        .arg("tests/fixtures/pass/selfhost-review-classifier.rss")
         .arg("--out-dir")
         .arg(&temp_dir)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -7212,32 +7212,32 @@ fn run(callback: read Fn(Int) -> Result<String, BuildError>) -> Result<String, B
 }
 
 #[test]
-fn rss_run_accepts_dogfood_classifier() {
-    let temp_dir = unique_temp_dir("rsscript-dogfood-run-generated-review-map");
-    let Some(fixture_dir) = prepare_dogfood_run_dir(&temp_dir) else {
+fn rss_run_accepts_selfhost_classifier() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-run-generated-review-map");
+    let Some(fixture_dir) = prepare_selfhost_run_dir(&temp_dir) else {
         let _ = fs::remove_dir_all(&temp_dir);
         return;
     };
-    let review_json = generated_dogfood_review_map_json();
+    let review_json = generated_selfhost_review_map_json();
     fs::write(
-        fixture_dir.join("dogfood-review-facts.json"),
+        fixture_dir.join("selfhost-review-facts.json"),
         serde_json::to_vec(&review_json).expect("review JSON should serialize"),
     )
     .expect("generated review map should write");
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("run")
-        .arg("tests/fixtures/pass/dogfood-review-classifier.rss")
+        .arg("tests/fixtures/pass/selfhost-review-classifier.rss")
         .current_dir(&temp_dir)
         .output()
-        .expect("rss run should execute dogfood classifier");
+        .expect("rss run should execute selfhost classifier");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
     let expected_stdout = format!(
-        "dogfood review summary total={} must={} low={} unknown={} lines={} mismatches=0 unmodeled_reasons=0 first_mismatch=none",
+        "selfhost review summary total={} must={} low={} unknown={} lines={} mismatches=0 unmodeled_reasons=0 first_mismatch=none",
         review_json["summary"]["total_functions"],
         review_json["summary"]["must_review"]["functions"],
         review_json["summary"]["low_semantic_risk"]["functions"],
@@ -7249,27 +7249,27 @@ fn rss_run_accepts_dogfood_classifier() {
 }
 
 #[test]
-fn rss_run_reports_dogfood_classification_mismatch_detail() {
-    let temp_dir = unique_temp_dir("rsscript-dogfood-run-mismatch");
-    let Some(fixture_dir) = prepare_dogfood_run_dir(&temp_dir) else {
+fn rss_run_reports_selfhost_classification_mismatch_detail() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-run-mismatch");
+    let Some(fixture_dir) = prepare_selfhost_run_dir(&temp_dir) else {
         let _ = fs::remove_dir_all(&temp_dir);
         return;
     };
-    let mut review_json = generated_dogfood_review_map_json();
+    let mut review_json = generated_selfhost_review_map_json();
     review_json["files"][0]["regions"][0]["classification"] =
         Value::String("must_review".to_string());
     fs::write(
-        fixture_dir.join("dogfood-review-facts.json"),
+        fixture_dir.join("selfhost-review-facts.json"),
         serde_json::to_vec(&review_json).expect("review JSON should serialize"),
     )
     .expect("mutated review map should write");
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("run")
-        .arg("tests/fixtures/pass/dogfood-review-classifier.rss")
+        .arg("tests/fixtures/pass/selfhost-review-classifier.rss")
         .current_dir(&temp_dir)
         .output()
-        .expect("rss run should execute dogfood classifier");
+        .expect("rss run should execute selfhost classifier");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -7281,29 +7281,29 @@ fn rss_run_reports_dogfood_classification_mismatch_detail() {
 }
 
 #[test]
-fn rss_run_reports_dogfood_unmodeled_reason_count() {
-    let temp_dir = unique_temp_dir("rsscript-dogfood-run-unmodeled-reason");
-    let Some(fixture_dir) = prepare_dogfood_run_dir(&temp_dir) else {
+fn rss_run_reports_selfhost_unmodeled_reason_count() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-run-unmodeled-reason");
+    let Some(fixture_dir) = prepare_selfhost_run_dir(&temp_dir) else {
         let _ = fs::remove_dir_all(&temp_dir);
         return;
     };
-    let mut review_json = generated_dogfood_review_map_json();
+    let mut review_json = generated_selfhost_review_map_json();
     review_json["files"][0]["regions"][0]["reasons"]
         .as_array_mut()
         .expect("first region reasons should be an array")
         .push(Value::String("new unmodeled review reason".to_string()));
     fs::write(
-        fixture_dir.join("dogfood-review-facts.json"),
+        fixture_dir.join("selfhost-review-facts.json"),
         serde_json::to_vec(&review_json).expect("review JSON should serialize"),
     )
     .expect("mutated review map should write");
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("run")
-        .arg("tests/fixtures/pass/dogfood-review-classifier.rss")
+        .arg("tests/fixtures/pass/selfhost-review-classifier.rss")
         .current_dir(&temp_dir)
         .output()
-        .expect("rss run should execute dogfood classifier");
+        .expect("rss run should execute selfhost classifier");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -7315,20 +7315,20 @@ fn rss_run_reports_dogfood_unmodeled_reason_count() {
 }
 
 #[test]
-fn rss_run_accepts_current_review_reason_families_in_dogfood_classifier() {
-    let temp_dir = unique_temp_dir("rsscript-dogfood-run-current-reasons");
-    let Some(fixture_dir) = prepare_dogfood_run_dir(&temp_dir) else {
+fn rss_run_accepts_current_review_reason_families_in_selfhost_classifier() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-run-current-reasons");
+    let Some(fixture_dir) = prepare_selfhost_run_dir(&temp_dir) else {
         let _ = fs::remove_dir_all(&temp_dir);
         return;
     };
-    let mut review_json = generated_dogfood_review_map_json();
+    let mut review_json = generated_selfhost_review_map_json();
     let regions = review_json["files"][0]["regions"]
         .as_array_mut()
         .expect("first file regions should be an array");
     let region = regions
         .iter_mut()
         .find(|region| region["classification"] == "low_semantic_risk")
-        .expect("dogfood review map should contain a low-risk region");
+        .expect("selfhost review map should contain a low-risk region");
     let line_count = region["line_count"]
         .as_i64()
         .expect("region line_count should be an integer");
@@ -7366,17 +7366,17 @@ fn rss_run_accepts_current_review_reason_families_in_dogfood_classifier() {
             + line_count,
     );
     fs::write(
-        fixture_dir.join("dogfood-review-facts.json"),
+        fixture_dir.join("selfhost-review-facts.json"),
         serde_json::to_vec(&review_json).expect("review JSON should serialize"),
     )
     .expect("mutated review map should write");
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("run")
-        .arg("tests/fixtures/pass/dogfood-review-classifier.rss")
+        .arg("tests/fixtures/pass/selfhost-review-classifier.rss")
         .current_dir(&temp_dir)
         .output()
-        .expect("rss run should execute dogfood classifier");
+        .expect("rss run should execute selfhost classifier");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let _ = fs::remove_dir_all(&temp_dir);
@@ -7390,43 +7390,43 @@ fn rss_run_accepts_current_review_reason_families_in_dogfood_classifier() {
 }
 
 #[test]
-fn rss_run_accepts_checked_in_dogfood_scripts_directly() {
+fn rss_run_accepts_checked_in_selfhost_scripts_directly() {
     let cases = [
         (
-            "tests/fixtures/pass/dogfood-review-classifier.rss",
-            "dogfood review summary total=14 must=10 low=4 unknown=0",
+            "tests/fixtures/pass/selfhost-review-classifier.rss",
+            "selfhost review summary total=14 must=10 low=4 unknown=0",
         ),
         (
-            "tests/fixtures/pass/dogfood-package-risk.rss",
-            "dogfood package risk cases=5 mismatches=0 unmodeled_reasons=0",
+            "tests/fixtures/pass/selfhost-package-risk.rss",
+            "selfhost package risk cases=5 mismatches=0 unmodeled_reasons=0",
         ),
         (
-            "tests/fixtures/pass/dogfood-package-manifest.rss",
-            "dogfood package manifest name=rss-dogfood-manifest version=0.5.0",
+            "tests/fixtures/pass/selfhost-package-manifest.rss",
+            "selfhost package manifest name=rss-selfhost-manifest version=0.5.0",
         ),
         (
-            "tests/fixtures/pass/dogfood-package-root-manifest.rss",
-            "dogfood package root manifest name=rss-dogfood-source-set version=0.5.0",
+            "tests/fixtures/pass/selfhost-package-root-manifest.rss",
+            "selfhost package root manifest name=rss-selfhost-source-set version=0.5.0",
         ),
         (
-            "tests/fixtures/pass/dogfood-package-sources.rss",
-            "dogfood package sources total=5 manifests=1 interfaces=2 sources=2 public_interfaces=2 public_sources=2 api=1/1 tool=1/1",
+            "tests/fixtures/pass/selfhost-package-sources.rss",
+            "selfhost package sources total=5 manifests=1 interfaces=2 sources=2 public_interfaces=2 public_sources=2 api=1/1 tool=1/1",
         ),
         (
-            "tests/fixtures/pass/dogfood-package-exports.rss",
-            "dogfood package exports types=2 functions=3 apis=5",
+            "tests/fixtures/pass/selfhost-package-exports.rss",
+            "selfhost package exports types=2 functions=3 apis=5",
         ),
         (
-            "tests/fixtures/pass/dogfood-package-diff.rss",
-            "dogfood package diff manifest=8 interface=3 high_manifest=5 high_interface=2 mismatches=0 unmodeled_reasons=0 callback_contract=1",
+            "tests/fixtures/pass/selfhost-package-diff.rss",
+            "selfhost package diff manifest=8 interface=3 high_manifest=5 high_interface=2 mismatches=0 unmodeled_reasons=0 callback_contract=1",
         ),
         (
-            "tests/fixtures/pass/dogfood-package-lock-diff.rss",
-            "dogfood package lock diff packages=1 high_packages=1 high_features=1",
+            "tests/fixtures/pass/selfhost-package-lock-diff.rss",
+            "selfhost package lock diff packages=1 high_packages=1 high_features=1",
         ),
         (
-            "tests/fixtures/pass/dogfood-rustc-remap.rss",
-            "dogfood rustc remap diagnostics=1 mapped=1 rustc_code=1",
+            "tests/fixtures/pass/selfhost-rustc-remap.rss",
+            "selfhost rustc remap diagnostics=1 mapped=1 rustc_code=1",
         ),
     ];
 
@@ -7436,7 +7436,7 @@ fn rss_run_accepts_checked_in_dogfood_scripts_directly() {
             .arg(script)
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .output()
-            .expect("rss run should execute checked-in dogfood script");
+            .expect("rss run should execute checked-in selfhost script");
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
@@ -7450,9 +7450,10 @@ fn rss_run_accepts_checked_in_dogfood_scripts_directly() {
 }
 
 #[test]
-fn rss_run_accepts_dogfood_package_manifest_parser_with_input_path() {
-    let temp_dir = unique_temp_dir("rsscript-dogfood-package-manifest");
-    let Some(_fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-manifest.rss")
+fn rss_run_accepts_selfhost_package_manifest_parser_with_input_path() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-package-manifest");
+    let Some(_fixture_dir) =
+        prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-manifest.rss")
     else {
         let _ = fs::remove_dir_all(&temp_dir);
         return;
@@ -7462,7 +7463,7 @@ fn rss_run_accepts_dogfood_package_manifest_parser_with_input_path() {
     fs::write(
         package_dir.join("rsspkg.toml"),
         r#"[package]
-name = "rss-dogfood-manifest"
+name = "rss-selfhost-manifest"
 version = "0.5.0"
 edition = "2024"
 
@@ -7480,12 +7481,12 @@ native-tls = ["native"]
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("run")
-        .arg("tests/fixtures/pass/dogfood-package-manifest.rss")
+        .arg("tests/fixtures/pass/selfhost-package-manifest.rss")
         .arg("--")
         .arg("package/rsspkg.toml")
         .current_dir(&temp_dir)
         .output()
-        .expect("rss run should execute dogfood package manifest parser");
+        .expect("rss run should execute selfhost package manifest parser");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let _ = fs::remove_dir_all(&temp_dir);
@@ -7493,15 +7494,16 @@ native-tls = ["native"]
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
     assert_eq!(
         stdout.trim(),
-        "dogfood package manifest name=rss-dogfood-manifest version=0.5.0 edition=2024 interface_paths=1 dep=0.5 feature_members=1"
+        "selfhost package manifest name=rss-selfhost-manifest version=0.5.0 edition=2024 interface_paths=1 dep=0.5 feature_members=1"
     );
     assert!(stderr.trim().is_empty(), "{stderr}");
 }
 
 #[test]
-fn rss_run_accepts_dogfood_package_source_set_with_input_path() {
-    let temp_dir = unique_temp_dir("rsscript-dogfood-package-sources");
-    let Some(_fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-sources.rss")
+fn rss_run_accepts_selfhost_package_source_set_with_input_path() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-package-sources");
+    let Some(_fixture_dir) =
+        prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-sources.rss")
     else {
         let _ = fs::remove_dir_all(&temp_dir);
         return;
@@ -7514,7 +7516,7 @@ fn rss_run_accepts_dogfood_package_source_set_with_input_path() {
     fs::write(
         package_dir.join("rsspkg.toml"),
         r#"[package]
-name = "rss-dogfood-source-set"
+name = "rss-selfhost-source-set"
 version = "0.5.0"
 edition = "2024"
 
@@ -7549,12 +7551,12 @@ paths = ["src", "tools"]
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("run")
-        .arg("tests/fixtures/pass/dogfood-package-sources.rss")
+        .arg("tests/fixtures/pass/selfhost-package-sources.rss")
         .arg("--")
         .arg("package")
         .current_dir(&temp_dir)
         .output()
-        .expect("rss run should execute dogfood package source-set parser");
+        .expect("rss run should execute selfhost package source-set parser");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let _ = fs::remove_dir_all(&temp_dir);
@@ -7562,32 +7564,32 @@ paths = ["src", "tools"]
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
     assert_eq!(
         stdout.trim(),
-        "dogfood package sources total=5 manifests=1 interfaces=2 sources=2 public_interfaces=2 public_sources=2 api=1/1 tool=1/1"
+        "selfhost package sources total=5 manifests=1 interfaces=2 sources=2 public_interfaces=2 public_sources=2 api=1/1 tool=1/1"
     );
     assert!(stderr.trim().is_empty(), "{stderr}");
 }
 
 #[test]
-fn rss_run_accepts_dogfood_package_risk_classifier() {
-    let temp_dir = unique_temp_dir("rsscript-dogfood-package-risk");
-    let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-risk.rss")
+fn rss_run_accepts_selfhost_package_risk_classifier() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-package-risk");
+    let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-risk.rss")
     else {
         let _ = fs::remove_dir_all(&temp_dir);
         return;
     };
-    let package_review_json = generated_dogfood_package_review_json(&temp_dir);
+    let package_review_json = generated_selfhost_package_review_json(&temp_dir);
     fs::write(
-        fixture_dir.join("dogfood-package-review.json"),
+        fixture_dir.join("selfhost-package-review.json"),
         serde_json::to_vec(&package_review_json).expect("package review JSON should serialize"),
     )
     .expect("generated package review should write");
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("run")
-        .arg("tests/fixtures/pass/dogfood-package-risk.rss")
+        .arg("tests/fixtures/pass/selfhost-package-risk.rss")
         .current_dir(&temp_dir)
         .output()
-        .expect("rss run should execute dogfood package risk classifier");
+        .expect("rss run should execute selfhost package risk classifier");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let _ = fs::remove_dir_all(&temp_dir);
@@ -7595,20 +7597,20 @@ fn rss_run_accepts_dogfood_package_risk_classifier() {
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
     assert_eq!(
         stdout.trim(),
-        "dogfood package risk cases=5 mismatches=0 unmodeled_reasons=0 low=1 elevated=1 high=2 unknown=1"
+        "selfhost package risk cases=5 mismatches=0 unmodeled_reasons=0 low=1 elevated=1 high=2 unknown=1"
     );
     assert!(stderr.trim().is_empty(), "{stderr}");
 }
 
 #[test]
-fn rss_run_accepts_dogfood_package_risk_classifier_with_cli_generated_input_path() {
-    let temp_dir = unique_temp_dir("rsscript-dogfood-package-risk-cli-input");
-    let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-risk.rss")
+fn rss_run_accepts_selfhost_package_risk_classifier_with_cli_generated_input_path() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-package-risk-cli-input");
+    let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-risk.rss")
     else {
         let _ = fs::remove_dir_all(&temp_dir);
         return;
     };
-    let package_review_json = generated_dogfood_package_review_json_via_cli(&temp_dir);
+    let package_review_json = generated_selfhost_package_review_json_via_cli(&temp_dir);
     let input_path = fixture_dir.join("generated-package-review.json");
     fs::write(
         &input_path,
@@ -7618,12 +7620,12 @@ fn rss_run_accepts_dogfood_package_risk_classifier_with_cli_generated_input_path
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("run")
-        .arg("tests/fixtures/pass/dogfood-package-risk.rss")
+        .arg("tests/fixtures/pass/selfhost-package-risk.rss")
         .arg("--")
         .arg(input_path.strip_prefix(&temp_dir).unwrap())
         .current_dir(&temp_dir)
         .output()
-        .expect("rss run should execute dogfood package risk classifier");
+        .expect("rss run should execute selfhost package risk classifier");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let _ = fs::remove_dir_all(&temp_dir);
@@ -7631,64 +7633,64 @@ fn rss_run_accepts_dogfood_package_risk_classifier_with_cli_generated_input_path
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
     assert_eq!(
         stdout.trim(),
-        "dogfood package risk cases=5 mismatches=0 unmodeled_reasons=0 low=1 elevated=1 high=2 unknown=1"
+        "selfhost package risk cases=5 mismatches=0 unmodeled_reasons=0 low=1 elevated=1 high=2 unknown=1"
     );
     assert!(stderr.trim().is_empty(), "{stderr}");
 }
 
 #[test]
-fn rss_run_reports_dogfood_package_risk_mismatch() {
-    let temp_dir = unique_temp_dir("rsscript-dogfood-package-risk-mismatch");
-    let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-risk.rss")
+fn rss_run_reports_selfhost_package_risk_mismatch() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-package-risk-mismatch");
+    let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-risk.rss")
     else {
         let _ = fs::remove_dir_all(&temp_dir);
         return;
     };
-    let mut package_review_json = generated_dogfood_package_review_json(&temp_dir);
+    let mut package_review_json = generated_selfhost_package_review_json(&temp_dir);
     package_review_json[1]["risk"] = Value::String("low".to_string());
     fs::write(
-        fixture_dir.join("dogfood-package-review.json"),
+        fixture_dir.join("selfhost-package-review.json"),
         serde_json::to_vec(&package_review_json).expect("package review JSON should serialize"),
     )
     .expect("mutated package review should write");
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("run")
-        .arg("tests/fixtures/pass/dogfood-package-risk.rss")
+        .arg("tests/fixtures/pass/selfhost-package-risk.rss")
         .current_dir(&temp_dir)
         .output()
-        .expect("rss run should execute dogfood package risk classifier");
+        .expect("rss run should execute selfhost package risk classifier");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert!(!output.status.success(), "{stdout}");
     assert!(
-        stdout.contains("dogfood package risk cases=5 mismatches=1 unmodeled_reasons=0 low=1 elevated=1 high=2 unknown=1"),
+        stdout.contains("selfhost package risk cases=5 mismatches=1 unmodeled_reasons=0 low=1 elevated=1 high=2 unknown=1"),
         "{stdout}"
     );
 }
 
 #[test]
-fn rss_run_accepts_dogfood_package_export_classifier() {
-    let temp_dir = unique_temp_dir("rsscript-dogfood-package-exports");
-    let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-exports.rss")
+fn rss_run_accepts_selfhost_package_export_classifier() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-package-exports");
+    let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-exports.rss")
     else {
         let _ = fs::remove_dir_all(&temp_dir);
         return;
     };
-    let package_review_json = generated_dogfood_package_exports_json(&temp_dir);
+    let package_review_json = generated_selfhost_package_exports_json(&temp_dir);
     fs::write(
-        fixture_dir.join("dogfood-package-exports.json"),
+        fixture_dir.join("selfhost-package-exports.json"),
         serde_json::to_vec(&package_review_json).expect("package review JSON should serialize"),
     )
     .expect("generated package review should write");
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("run")
-        .arg("tests/fixtures/pass/dogfood-package-exports.rss")
+        .arg("tests/fixtures/pass/selfhost-package-exports.rss")
         .current_dir(&temp_dir)
         .output()
-        .expect("rss run should execute dogfood package export classifier");
+        .expect("rss run should execute selfhost package export classifier");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let _ = fs::remove_dir_all(&temp_dir);
@@ -7696,64 +7698,64 @@ fn rss_run_accepts_dogfood_package_export_classifier() {
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
     assert_eq!(
         stdout.trim(),
-        "dogfood package exports types=2 functions=3 apis=5 mutating=1 retaining=1 resource=1 fresh=1 unknown=1 mismatches=0 unmodeled_reasons=0"
+        "selfhost package exports types=2 functions=3 apis=5 mutating=1 retaining=1 resource=1 fresh=1 unknown=1 mismatches=0 unmodeled_reasons=0"
     );
     assert!(stderr.trim().is_empty(), "{stderr}");
 }
 
 #[test]
-fn rss_run_reports_dogfood_package_export_mismatch() {
-    let temp_dir = unique_temp_dir("rsscript-dogfood-package-exports-mismatch");
-    let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-exports.rss")
+fn rss_run_reports_selfhost_package_export_mismatch() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-package-exports-mismatch");
+    let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-exports.rss")
     else {
         let _ = fs::remove_dir_all(&temp_dir);
         return;
     };
-    let mut package_review_json = generated_dogfood_package_exports_json(&temp_dir);
+    let mut package_review_json = generated_selfhost_package_exports_json(&temp_dir);
     package_review_json["summary"]["mutating_apis"] = Value::from(0);
     fs::write(
-        fixture_dir.join("dogfood-package-exports.json"),
+        fixture_dir.join("selfhost-package-exports.json"),
         serde_json::to_vec(&package_review_json).expect("package review JSON should serialize"),
     )
     .expect("mutated package review should write");
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("run")
-        .arg("tests/fixtures/pass/dogfood-package-exports.rss")
+        .arg("tests/fixtures/pass/selfhost-package-exports.rss")
         .current_dir(&temp_dir)
         .output()
-        .expect("rss run should execute dogfood package export classifier");
+        .expect("rss run should execute selfhost package export classifier");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert!(!output.status.success(), "{stdout}");
     assert!(
-        stdout.contains("dogfood package exports types=2 functions=3 apis=5 mutating=1 retaining=1 resource=1 fresh=1 unknown=1 mismatches=1 unmodeled_reasons=0"),
+        stdout.contains("selfhost package exports types=2 functions=3 apis=5 mutating=1 retaining=1 resource=1 fresh=1 unknown=1 mismatches=1 unmodeled_reasons=0"),
         "{stdout}"
     );
 }
 
 #[test]
-fn rss_run_accepts_dogfood_package_diff_classifier() {
-    let temp_dir = unique_temp_dir("rsscript-dogfood-package-diff");
-    let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-diff.rss")
+fn rss_run_accepts_selfhost_package_diff_classifier() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-package-diff");
+    let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-diff.rss")
     else {
         let _ = fs::remove_dir_all(&temp_dir);
         return;
     };
-    let package_diff_json = generated_dogfood_package_diff_json(&temp_dir);
+    let package_diff_json = generated_selfhost_package_diff_json(&temp_dir);
     fs::write(
-        fixture_dir.join("dogfood-package-diff.json"),
+        fixture_dir.join("selfhost-package-diff.json"),
         serde_json::to_vec(&package_diff_json).expect("package diff JSON should serialize"),
     )
     .expect("generated package diff should write");
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("run")
-        .arg("tests/fixtures/pass/dogfood-package-diff.rss")
+        .arg("tests/fixtures/pass/selfhost-package-diff.rss")
         .current_dir(&temp_dir)
         .output()
-        .expect("rss run should execute dogfood package diff classifier");
+        .expect("rss run should execute selfhost package diff classifier");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let _ = fs::remove_dir_all(&temp_dir);
@@ -7761,54 +7763,55 @@ fn rss_run_accepts_dogfood_package_diff_classifier() {
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
     assert_eq!(
         stdout.trim(),
-        "dogfood package diff manifest=8 interface=3 high_manifest=5 high_interface=2 mismatches=0 unmodeled_reasons=0 callback_contract=1"
+        "selfhost package diff manifest=8 interface=3 high_manifest=5 high_interface=2 mismatches=0 unmodeled_reasons=0 callback_contract=1"
     );
     assert!(stderr.trim().is_empty(), "{stderr}");
 }
 
 #[test]
-fn rss_run_reports_dogfood_package_diff_mismatch() {
-    let temp_dir = unique_temp_dir("rsscript-dogfood-package-diff-mismatch");
-    let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-diff.rss")
+fn rss_run_reports_selfhost_package_diff_mismatch() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-package-diff-mismatch");
+    let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-diff.rss")
     else {
         let _ = fs::remove_dir_all(&temp_dir);
         return;
     };
-    let mut package_diff_json = generated_dogfood_package_diff_json(&temp_dir);
+    let mut package_diff_json = generated_selfhost_package_diff_json(&temp_dir);
     package_diff_json["risk"] = Value::String("elevated".to_string());
     fs::write(
-        fixture_dir.join("dogfood-package-diff.json"),
+        fixture_dir.join("selfhost-package-diff.json"),
         serde_json::to_vec(&package_diff_json).expect("package diff JSON should serialize"),
     )
     .expect("mutated package diff should write");
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("run")
-        .arg("tests/fixtures/pass/dogfood-package-diff.rss")
+        .arg("tests/fixtures/pass/selfhost-package-diff.rss")
         .current_dir(&temp_dir)
         .output()
-        .expect("rss run should execute dogfood package diff classifier");
+        .expect("rss run should execute selfhost package diff classifier");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert!(!output.status.success(), "{stdout}");
     assert!(
-        stdout.contains("dogfood package diff manifest=8 interface=3 high_manifest=5 high_interface=2 mismatches=1 unmodeled_reasons=0 callback_contract=1"),
+        stdout.contains("selfhost package diff manifest=8 interface=3 high_manifest=5 high_interface=2 mismatches=1 unmodeled_reasons=0 callback_contract=1"),
         "{stdout}"
     );
 }
 
 #[test]
-fn rss_run_accepts_dogfood_package_lock_diff_classifier() {
-    let temp_dir = unique_temp_dir("rsscript-dogfood-package-lock-diff");
-    let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-lock-diff.rss")
+fn rss_run_accepts_selfhost_package_lock_diff_classifier() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-package-lock-diff");
+    let Some(fixture_dir) =
+        prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-lock-diff.rss")
     else {
         let _ = fs::remove_dir_all(&temp_dir);
         return;
     };
-    let package_lock_diff_json = generated_dogfood_package_lock_diff_json(&temp_dir);
+    let package_lock_diff_json = generated_selfhost_package_lock_diff_json(&temp_dir);
     fs::write(
-        fixture_dir.join("dogfood-package-lock-diff.json"),
+        fixture_dir.join("selfhost-package-lock-diff.json"),
         serde_json::to_vec(&package_lock_diff_json)
             .expect("package lock diff JSON should serialize"),
     )
@@ -7816,10 +7819,10 @@ fn rss_run_accepts_dogfood_package_lock_diff_classifier() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("run")
-        .arg("tests/fixtures/pass/dogfood-package-lock-diff.rss")
+        .arg("tests/fixtures/pass/selfhost-package-lock-diff.rss")
         .current_dir(&temp_dir)
         .output()
-        .expect("rss run should execute dogfood package lock diff classifier");
+        .expect("rss run should execute selfhost package lock diff classifier");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let _ = fs::remove_dir_all(&temp_dir);
@@ -7827,23 +7830,24 @@ fn rss_run_accepts_dogfood_package_lock_diff_classifier() {
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
     assert_eq!(
         stdout.trim(),
-        "dogfood package lock diff packages=1 high_packages=1 high_features=1 mismatches=0 unmodeled_reasons=0"
+        "selfhost package lock diff packages=1 high_packages=1 high_features=1 mismatches=0 unmodeled_reasons=0"
     );
     assert!(stderr.trim().is_empty(), "{stderr}");
 }
 
 #[test]
-fn rss_run_reports_dogfood_package_lock_diff_mismatch() {
-    let temp_dir = unique_temp_dir("rsscript-dogfood-package-lock-diff-mismatch");
-    let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-lock-diff.rss")
+fn rss_run_reports_selfhost_package_lock_diff_mismatch() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-package-lock-diff-mismatch");
+    let Some(fixture_dir) =
+        prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-lock-diff.rss")
     else {
         let _ = fs::remove_dir_all(&temp_dir);
         return;
     };
-    let mut package_lock_diff_json = generated_dogfood_package_lock_diff_json(&temp_dir);
+    let mut package_lock_diff_json = generated_selfhost_package_lock_diff_json(&temp_dir);
     package_lock_diff_json["risk"] = Value::String("elevated".to_string());
     fs::write(
-        fixture_dir.join("dogfood-package-lock-diff.json"),
+        fixture_dir.join("selfhost-package-lock-diff.json"),
         serde_json::to_vec(&package_lock_diff_json)
             .expect("package lock diff JSON should serialize"),
     )
@@ -7851,41 +7855,41 @@ fn rss_run_reports_dogfood_package_lock_diff_mismatch() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("run")
-        .arg("tests/fixtures/pass/dogfood-package-lock-diff.rss")
+        .arg("tests/fixtures/pass/selfhost-package-lock-diff.rss")
         .current_dir(&temp_dir)
         .output()
-        .expect("rss run should execute dogfood package lock diff classifier");
+        .expect("rss run should execute selfhost package lock diff classifier");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert!(!output.status.success(), "{stdout}");
     assert!(
-        stdout.contains("dogfood package lock diff packages=1 high_packages=1 high_features=1 mismatches=1 unmodeled_reasons=0"),
+        stdout.contains("selfhost package lock diff packages=1 high_packages=1 high_features=1 mismatches=1 unmodeled_reasons=0"),
         "{stdout}"
     );
 }
 
 #[test]
-fn rss_run_accepts_dogfood_rustc_remap_classifier() {
-    let temp_dir = unique_temp_dir("rsscript-dogfood-rustc-remap");
-    let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-rustc-remap.rss")
+fn rss_run_accepts_selfhost_rustc_remap_classifier() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-rustc-remap");
+    let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-rustc-remap.rss")
     else {
         let _ = fs::remove_dir_all(&temp_dir);
         return;
     };
-    let diagnostics_json = generated_dogfood_rustc_remap_json(&temp_dir);
+    let diagnostics_json = generated_selfhost_rustc_remap_json(&temp_dir);
     fs::write(
-        fixture_dir.join("dogfood-rustc-remap.json"),
+        fixture_dir.join("selfhost-rustc-remap.json"),
         serde_json::to_vec(&diagnostics_json).expect("remap diagnostics JSON should serialize"),
     )
     .expect("generated remap diagnostics should write");
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("run")
-        .arg("tests/fixtures/pass/dogfood-rustc-remap.rss")
+        .arg("tests/fixtures/pass/selfhost-rustc-remap.rss")
         .current_dir(&temp_dir)
         .output()
-        .expect("rss run should execute dogfood rustc remap classifier");
+        .expect("rss run should execute selfhost rustc remap classifier");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let _ = fs::remove_dir_all(&temp_dir);
@@ -7893,48 +7897,48 @@ fn rss_run_accepts_dogfood_rustc_remap_classifier() {
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
     assert_eq!(
         stdout.trim(),
-        "dogfood rustc remap diagnostics=1 mapped=1 rustc_code=1 source_file=1 source_line=1 source_column=1"
+        "selfhost rustc remap diagnostics=1 mapped=1 rustc_code=1 source_file=1 source_line=1 source_column=1"
     );
     assert!(stderr.trim().is_empty(), "{stderr}");
 }
 
 #[test]
-fn rss_run_reports_dogfood_rustc_remap_mismatch() {
-    let temp_dir = unique_temp_dir("rsscript-dogfood-rustc-remap-mismatch");
-    let Some(fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-rustc-remap.rss")
+fn rss_run_reports_selfhost_rustc_remap_mismatch() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-rustc-remap-mismatch");
+    let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-rustc-remap.rss")
     else {
         let _ = fs::remove_dir_all(&temp_dir);
         return;
     };
-    let mut diagnostics_json = generated_dogfood_rustc_remap_json(&temp_dir);
+    let mut diagnostics_json = generated_selfhost_rustc_remap_json(&temp_dir);
     diagnostics_json[0]["code"] = Value::String("RS1102".to_string());
     fs::write(
-        fixture_dir.join("dogfood-rustc-remap.json"),
+        fixture_dir.join("selfhost-rustc-remap.json"),
         serde_json::to_vec(&diagnostics_json).expect("remap diagnostics JSON should serialize"),
     )
     .expect("mutated remap diagnostics should write");
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("run")
-        .arg("tests/fixtures/pass/dogfood-rustc-remap.rss")
+        .arg("tests/fixtures/pass/selfhost-rustc-remap.rss")
         .current_dir(&temp_dir)
         .output()
-        .expect("rss run should execute dogfood rustc remap classifier");
+        .expect("rss run should execute selfhost rustc remap classifier");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert!(!output.status.success(), "{stdout}");
     assert!(
-        stdout.contains("dogfood rustc remap diagnostics=1 mapped=0 rustc_code=1 source_file=1 source_line=1 source_column=1"),
+        stdout.contains("selfhost rustc remap diagnostics=1 mapped=0 rustc_code=1 source_file=1 source_line=1 source_column=1"),
         "{stdout}"
     );
 }
 
-fn prepare_dogfood_run_dir(temp_dir: &Path) -> Option<PathBuf> {
-    prepare_dogfood_run_dir_for(temp_dir, "dogfood-review-classifier.rss")
+fn prepare_selfhost_run_dir(temp_dir: &Path) -> Option<PathBuf> {
+    prepare_selfhost_run_dir_for(temp_dir, "selfhost-review-classifier.rss")
 }
 
-fn prepare_dogfood_run_dir_for(temp_dir: &Path, script_name: &str) -> Option<PathBuf> {
+fn prepare_selfhost_run_dir_for(temp_dir: &Path, script_name: &str) -> Option<PathBuf> {
     fs::create_dir_all(temp_dir).expect("temporary root should be created");
     #[cfg(unix)]
     {
@@ -7956,16 +7960,16 @@ fn prepare_dogfood_run_dir_for(temp_dir: &Path, script_name: &str) -> Option<Pat
             .join(script_name),
         fixture_dir.join(script_name),
     )
-    .expect("dogfood script should copy");
+    .expect("selfhost script should copy");
     Some(fixture_dir)
 }
 
-fn generated_dogfood_review_map_json() -> Value {
+fn generated_selfhost_review_map_json() -> Value {
     let review_output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("review")
         .arg("--map")
         .arg("--json")
-        .arg("tests/fixtures/pass/dogfood-review-classifier.rss")
+        .arg("tests/fixtures/pass/selfhost-review-classifier.rss")
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
         .expect("rss review --map --json should execute");
@@ -7978,25 +7982,25 @@ fn generated_dogfood_review_map_json() -> Value {
     serde_json::from_slice(&review_output.stdout).expect("review map stdout should be JSON")
 }
 
-fn generated_dogfood_package_review_json(temp_dir: &Path) -> Value {
-    generated_dogfood_package_review_json_with(temp_dir, package_review_json_for_dir)
+fn generated_selfhost_package_review_json(temp_dir: &Path) -> Value {
+    generated_selfhost_package_review_json_with(temp_dir, package_review_json_for_dir)
 }
 
-fn generated_dogfood_package_review_json_via_cli(temp_dir: &Path) -> Value {
-    generated_dogfood_package_review_json_with(temp_dir, package_review_json_for_dir_via_cli)
+fn generated_selfhost_package_review_json_via_cli(temp_dir: &Path) -> Value {
+    generated_selfhost_package_review_json_with(temp_dir, package_review_json_for_dir_via_cli)
 }
 
-fn generated_dogfood_package_review_json_with(
+fn generated_selfhost_package_review_json_with(
     temp_dir: &Path,
     review_json_for_dir: fn(&Path) -> Value,
 ) -> Value {
     let low_dir = temp_dir.join("package-low");
-    write_empty_named_package_fixture(&low_dir, "rss-dogfood-low", "0.1.0", "");
+    write_empty_named_package_fixture(&low_dir, "rss-selfhost-low", "0.1.0", "");
 
     let elevated_dir = temp_dir.join("package-elevated");
     write_named_package_fixture(
         &elevated_dir,
-        "rss-dogfood-elevated",
+        "rss-selfhost-elevated",
         "0.1.0",
         "",
         r#"pub fn Api.run() -> Unit
@@ -8006,12 +8010,12 @@ fn generated_dogfood_package_review_json_with(
     let high_dir = temp_dir.join("package-high");
     write_named_package_fixture(
         &high_dir,
-        "rss-dogfood-high",
+        "rss-selfhost-high",
         "0.1.0",
         r#"[native.rust]
 enabled = true
 path = "native/rust"
-crate = "rss_dogfood_native"
+crate = "rss_selfhost_native"
 build_scripts = "review"
 proc_macros = "forbid"
 unsafe = "forbid"
@@ -8026,7 +8030,7 @@ native fn Native.echo(message: read String) -> String
     let unknown_dir = temp_dir.join("package-unknown");
     write_empty_named_package_fixture(
         &unknown_dir,
-        "rss-dogfood-unknown",
+        "rss-selfhost-unknown",
         "0.1.0",
         r#"[review.expect]
 risk = "unknown"
@@ -8036,7 +8040,7 @@ risk = "unknown"
     let feature_high_dir = temp_dir.join("package-feature-high");
     write_named_package_fixture(
         &feature_high_dir,
-        "rss-dogfood-feature-high",
+        "rss-selfhost-feature-high",
         "0.1.0",
         r#"[features]
 native-tls = ["native"]
@@ -8078,11 +8082,11 @@ fn package_review_json_for_dir_via_cli(package_dir: &Path) -> Value {
     serde_json::from_slice(&output.stdout).expect("package review CLI stdout should be JSON")
 }
 
-fn generated_dogfood_package_exports_json(temp_dir: &Path) -> Value {
+fn generated_selfhost_package_exports_json(temp_dir: &Path) -> Value {
     let package_dir = temp_dir.join("package-exports");
     write_named_package_fixture(
         &package_dir,
-        "rss-dogfood-exports",
+        "rss-selfhost-exports",
         "0.1.0",
         "",
         r#"struct Image
@@ -8108,7 +8112,7 @@ pub fn Api.run() -> Unit
     package_review_json_for_dir(&package_dir)
 }
 
-fn generated_dogfood_package_diff_json(temp_dir: &Path) -> Value {
+fn generated_selfhost_package_diff_json(temp_dir: &Path) -> Value {
     let old_dir = temp_dir.join("package-diff-old");
     let new_dir = temp_dir.join("package-diff-new");
     write_package_fixture(
@@ -8178,7 +8182,7 @@ pub fn Scheduler.run(callback: read Fn(Int) -> Result<Int, BuildError>) -> Unit
         .expect("package diff JSON should parse")
 }
 
-fn generated_dogfood_package_lock_diff_json(temp_dir: &Path) -> Value {
+fn generated_selfhost_package_lock_diff_json(temp_dir: &Path) -> Value {
     let lock_dir = temp_dir.join("package-lock-diff");
     fs::create_dir_all(&lock_dir).expect("lock diff dir should be created");
     let old_lock_path = lock_dir.join("old.rsspkg.lock");
@@ -8197,7 +8201,7 @@ fn generated_dogfood_package_lock_diff_json(temp_dir: &Path) -> Value {
         }],
         metadata: rsscript::PackageLockMetadata {
             rsscript_version: "0.5".to_string(),
-            created_by: "dogfood".to_string(),
+            created_by: "selfhost".to_string(),
         },
     };
     let mut new_lock = old_lock.clone();
@@ -8213,11 +8217,11 @@ fn generated_dogfood_package_lock_diff_json(temp_dir: &Path) -> Value {
         .expect("package lock diff JSON should parse")
 }
 
-fn generated_dogfood_rustc_remap_json(temp_dir: &Path) -> Value {
+fn generated_selfhost_rustc_remap_json(temp_dir: &Path) -> Value {
     let package_dir = temp_dir.join("remap-package");
     write_named_package_fixture(
         &package_dir,
-        "rss-dogfood-rustc-remap",
+        "rss-selfhost-rustc-remap",
         "0.1.0",
         r#"[native.rust]
 enabled = true

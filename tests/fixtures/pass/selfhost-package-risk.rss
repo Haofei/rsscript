@@ -273,50 +273,29 @@ fn next_mismatch_count(
     return summary.mismatches
 }
 
-fn summarize_package_risk_cases_from(
-    json: read JsonValue,
-    index: Int,
-    limit: Int,
+fn fold_package_risk_case(
     summary: read PackageRiskSummary,
+    item: read JsonValue,
 ) -> Result<fresh PackageRiskSummary, JsonError> {
-    if index >= limit {
-        return PackageRiskSummary(
-            total_cases: summary.total_cases,
-            mismatches: summary.mismatches,
-            unmodeled_reasons: summary.unmodeled_reasons,
-            low_cases: summary.low_cases,
-            elevated_cases: summary.elevated_cases,
-            high_cases: summary.high_cases,
-            unknown_cases: summary.unknown_cases,
-        )
-    }
-
-    let item = Json.array_get(value: read json, index: index)?
     let facts = parse_package_risk_facts(value: read item)?
-    let next = add_package_risk_case(summary: read summary, facts: read facts)
 
-    return summarize_package_risk_cases_from(
-        json: read json,
-        index: index + 1,
-        limit: limit,
-        summary: read next,
-    )
+    return Ok(add_package_risk_case(summary: read summary, facts: read facts))
 }
 
-fn dogfood_package_risk_summary() -> Result<fresh PackageRiskSummary, JsonError> {
+fn selfhost_package_risk_summary() -> Result<fresh PackageRiskSummary, JsonError> {
     let input = Args.get_or_default(
         index: 0,
-        default: read "tests/fixtures/pass/dogfood-package-review.json",
+        default: read "tests/fixtures/pass/selfhost-package-review.json",
     )
     let path = Path.from_string(value: read input)
     let json = Json.parse_file(path: read path)?
-    let limit = Json.array_len(value: read json)?
 
-    return summarize_package_risk_cases_from(
-        json: read json,
-        index: 0,
-        limit: limit,
-        summary: read empty_package_risk_summary(),
+    return Json.array_fold<PackageRiskSummary>(
+        value: read json,
+        initial: read empty_package_risk_summary(),
+        folder: |summary, item| {
+            return fold_package_risk_case(summary: read summary, item: read item)
+        },
     )
 }
 
@@ -330,7 +309,7 @@ fn package_risk_summary_line(
     let elevated = String.from_int(value: summary.elevated_cases)
     let high = String.from_int(value: summary.high_cases)
     let unknown = String.from_int(value: summary.unknown_cases)
-    let first = String.concat(left: read "dogfood package risk cases=", right: read total)
+    let first = String.concat(left: read "selfhost package risk cases=", right: read total)
     let second = String.concat(left: read first, right: read " mismatches=")
     let third = String.concat(left: read second, right: read mismatches)
     let fourth = String.concat(left: read third, right: read " unmodeled_reasons=")
@@ -347,7 +326,7 @@ fn package_risk_summary_line(
 }
 
 pub fn main() -> Result<Unit, JsonError> {
-    let summary = dogfood_package_risk_summary()?
+    let summary = selfhost_package_risk_summary()?
     let summary_line = package_risk_summary_line(summary: read summary)
 
     Log.write(message: read summary_line)

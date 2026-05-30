@@ -8,24 +8,24 @@ struct PackageRootManifestFacts {
     source_paths: Int
 }
 
-fn dogfood_package_root() -> fresh Path {
+fn selfhost_package_root() -> fresh Path {
     let input = Args.get_or_default(
         index: 0,
-        default: read "tests/fixtures/pass/dogfood-package-source-set",
+        default: read "tests/fixtures/pass/selfhost-package-source-set",
     )
 
     return Path.from_string(value: read input)
 }
 
-fn dogfood_manifest_path() -> fresh Path {
+fn selfhost_manifest_path() -> fresh Path {
     return Path.join(
-        base: read dogfood_package_root(),
+        base: read selfhost_package_root(),
         child: read "rsspkg.toml",
     )
 }
 
-fn dogfood_root_manifest_facts() -> Result<fresh PackageRootManifestFacts, JsonError> {
-    let manifest = Toml.parse_file(path: read dogfood_manifest_path())?
+fn selfhost_root_manifest_facts() -> Result<fresh PackageRootManifestFacts, JsonError> {
+    let manifest = Toml.parse_file(path: read selfhost_manifest_path())?
     let package = Json.field(value: read manifest, name: read "package")?
     let interfaces = Json.field(value: read manifest, name: read "interfaces")?
     let interface_paths = Json.field(value: read interfaces, name: read "paths")?
@@ -42,7 +42,7 @@ fn dogfood_root_manifest_facts() -> Result<fresh PackageRootManifestFacts, JsonE
 }
 
 fn root_manifest_summary_line(facts: read PackageRootManifestFacts) -> fresh String {
-    let first = String.concat(left: read "dogfood package root manifest name=", right: read facts.package_name)
+    let first = String.concat(left: read "selfhost package root manifest name=", right: read facts.package_name)
     let second = String.concat(left: read first, right: read " version=")
     let third = String.concat(left: read second, right: read facts.version)
     let fourth = String.concat(left: read third, right: read " edition=")
@@ -57,12 +57,12 @@ fn root_manifest_summary_line(facts: read PackageRootManifestFacts) -> fresh Str
 }
 
 pub fn main() -> Result<Unit, JsonError> {
-    let facts = dogfood_root_manifest_facts()?
+    let facts = selfhost_root_manifest_facts()?
     let summary = root_manifest_summary_line(facts: read facts)
 
     Log.write(message: read summary)
 
-    Assert.equal(left: read facts.package_name, right: read "rss-dogfood-source-set")
+    Assert.equal(left: read facts.package_name, right: read "rss-selfhost-source-set")
     Assert.equal(left: read facts.version, right: read "0.5.0")
     Assert.equal(left: read facts.edition, right: read "2024")
     Assert.equal_int(left: facts.interface_paths, right: 2)
