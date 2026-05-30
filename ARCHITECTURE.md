@@ -87,6 +87,7 @@ src/checks/*.rs        large semantic checker implementations
    ```text
    src/package/types.rs       public package/review/lock data shapes
    src/package/check.rs       package check aggregation and semantic lock validation
+   src/package/dependency.rs  path dependency specs, interface loading, feature resolution
    src/package/format.rs      JSON/TOML/human output formatting
    src/package/source_set.rs  rsspkg.toml loading and source/interface selection
    src/package/native.rs      native binding metadata and native Rust risk checks
