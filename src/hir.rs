@@ -1101,7 +1101,7 @@ fn retain_events_for_call(
                 return None;
             }
             let (binding_name, value_span) =
-                direct_read_retained_binding(&arg.value, hir, value_types)?;
+                direct_effect_retained_binding(&arg.value, hir, value_types)?;
             Some(HirEffectEvent {
                 function_name: function_name.to_string(),
                 kind: HirEffectEventKind::Retain {
@@ -1416,17 +1416,13 @@ fn is_resource_pool_callee(callee: &Callee) -> bool {
         || matches!(callee, Callee::Qualified { namespace, .. } if type_root_name(namespace) == "ResourcePool")
 }
 
-fn direct_read_retained_binding(
+fn direct_effect_retained_binding(
     expr: &Expr,
     hir: &Hir,
     value_types: &HashMap<String, String>,
 ) -> Option<(String, Span)> {
     match expr {
-        Expr::Effect {
-            effect: DataEffect::Read,
-            value,
-            ..
-        } => retained_inline_binding(value, hir, value_types),
+        Expr::Effect { value, .. } => retained_inline_binding(value, hir, value_types),
         _ => None,
     }
 }

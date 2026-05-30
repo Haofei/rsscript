@@ -1,0 +1,16 @@
+// expect: RS0501
+
+features: local
+
+struct Widget {
+    value: Int
+}
+
+fn store(value: take Widget) -> Unit
+    effects(retains(value))
+
+fn bad() -> Unit {
+    local widget = Widget(value: 1)
+    store(value: take widget)
+    return Unit
+}

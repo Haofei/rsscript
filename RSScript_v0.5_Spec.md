@@ -1577,7 +1577,9 @@ The retained parameter must be non-Copy and managed-capable. `retains(width)`
 for a Copy parameter such as `Int` is rejected because there is no managed
 retention boundary to review.
 
-A local value cannot be passed directly to a retaining parameter. This includes local-inline fields reached without crossing a handle or weak field.
+A local value cannot be passed directly to a retaining parameter. This applies
+regardless of whether the call-site effect is `read`, `mut`, or `take`, and
+includes local-inline fields reached without crossing a handle or weak field.
 
 Correct:
 
