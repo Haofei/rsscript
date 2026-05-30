@@ -555,7 +555,7 @@ fn bad_image(path: read Path) -> fresh Image {
         .map(|diagnostic| diagnostic.code)
         .collect::<Vec<_>>();
 
-    assert!(codes.contains(&"RS0602".to_string()));
+    assert!(codes.contains(&"RS0601".to_string()));
 }
 
 #[test]

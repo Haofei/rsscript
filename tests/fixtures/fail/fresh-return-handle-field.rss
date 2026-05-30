@@ -1,4 +1,4 @@
-// expect: RS0602
+// expect: RS0601
 features: local
 
 struct Image {
