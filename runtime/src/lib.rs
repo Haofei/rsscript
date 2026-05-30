@@ -1207,6 +1207,54 @@ pub fn json_array_get(value: &JsonValue, index: i64) -> Result<JsonValue, JsonEr
     })
 }
 
+pub fn json_array_strings(value: &JsonValue) -> Result<Vec<String>, JsonError> {
+    let Some(items) = value.inner.as_array() else {
+        return Err(JsonError::new("JSON value is not an array"));
+    };
+    let mut strings = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let Some(text) = item.as_str() else {
+            return Err(JsonError::new(format!(
+                "JSON array item `{index}` is not a string"
+            )));
+        };
+        strings.push(text.to_string());
+    }
+    Ok(strings)
+}
+
+pub fn json_array_ints(value: &JsonValue) -> Result<Vec<i64>, JsonError> {
+    let Some(items) = value.inner.as_array() else {
+        return Err(JsonError::new("JSON value is not an array"));
+    };
+    let mut numbers = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let Some(number) = item.as_i64() else {
+            return Err(JsonError::new(format!(
+                "JSON array item `{index}` is not an integer"
+            )));
+        };
+        numbers.push(number);
+    }
+    Ok(numbers)
+}
+
+pub fn json_array_bools(value: &JsonValue) -> Result<Vec<bool>, JsonError> {
+    let Some(items) = value.inner.as_array() else {
+        return Err(JsonError::new("JSON value is not an array"));
+    };
+    let mut flags = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let Some(flag) = item.as_bool() else {
+            return Err(JsonError::new(format!(
+                "JSON array item `{index}` is not a boolean"
+            )));
+        };
+        flags.push(flag);
+    }
+    Ok(flags)
+}
+
 pub fn json_array_contains_string(value: &JsonValue, item: &str) -> Result<bool, JsonError> {
     let Some(items) = value.inner.as_array() else {
         return Err(JsonError::new("JSON value is not an array"));
@@ -1998,6 +2046,11 @@ mod tests {
         let profile_name_is_null = super::json_is_null(&profile_name_value);
         let reasons =
             super::json_parse(r#"["public entry point","error handling boundary"]"#).unwrap();
+        let reason_strings = super::json_array_strings(&reasons).unwrap();
+        let numbers = super::json_parse("[1, 2]").unwrap();
+        let number_values = super::json_array_ints(&numbers).unwrap();
+        let flags = super::json_parse("[true, false]").unwrap();
+        let flag_values = super::json_array_bools(&flags).unwrap();
         let has_public = super::json_array_contains_string(&reasons, "public entry point").unwrap();
         let has_native = super::json_array_contains_string(&reasons, "native boundary").unwrap();
         let has_error = super::json_array_contains_substring(&reasons, "error handling").unwrap();
@@ -2044,6 +2097,12 @@ mod tests {
         assert!(profile_is_object);
         assert!(profiles_is_array);
         assert!(!profile_name_is_null);
+        assert_eq!(
+            reason_strings,
+            vec!["public entry point", "error handling boundary"]
+        );
+        assert_eq!(number_values, vec![1, 2]);
+        assert_eq!(flag_values, vec![true, false]);
         assert!(has_public);
         assert!(!has_native);
         assert!(has_error);

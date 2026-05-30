@@ -3120,6 +3120,12 @@ pub fn Json.array_len(value: read JsonValue) -> Result<Int, JsonError>
 
 pub fn Json.array_get(value: read JsonValue, index: Int) -> Result<fresh JsonValue, JsonError>
 
+pub fn Json.array_strings(value: read JsonValue) -> Result<fresh List<String>, JsonError>
+
+pub fn Json.array_ints(value: read JsonValue) -> Result<fresh List<Int>, JsonError>
+
+pub fn Json.array_bools(value: read JsonValue) -> Result<fresh List<Bool>, JsonError>
+
 pub fn Json.array_count_where(
     value: read JsonValue,
     predicate: noescape Fn(JsonValue) -> Result<Bool, JsonError>,

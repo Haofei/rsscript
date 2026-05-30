@@ -2815,6 +2815,11 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     let value_from_file = Json.parse_file(path: read path)?
     let count = Json.array_len(value: read value)?
     let first = Json.array_get(value: read value, index: 0)?
+    let strings = Json.array_strings(value: read value)?
+    let ints_value = Json.parse(text: read "[1, 2]")?
+    let ints = Json.array_ints(value: read ints_value)?
+    let bools_value = Json.parse(text: read "[true, false]")?
+    let bools = Json.array_bools(value: read bools_value)?
     let has_profile = Json.array_contains_string(value: read value, item: read "profile")?
     let has_profile_prefix = Json.array_contains_substring(value: read value, text: read "prof")?
     let has_profile_named_prefix = Json.array_contains_prefix(value: read value, prefix: read "pro")?
@@ -2862,6 +2867,9 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     ));
     assert!(rust.contains("let count = rsscript_runtime::json_array_len(&value)?;"));
     assert!(rust.contains("let first = rsscript_runtime::json_array_get(&value, 0)?;"));
+    assert!(rust.contains("let strings = rsscript_runtime::json_array_strings(&value)?;"));
+    assert!(rust.contains("let ints = rsscript_runtime::json_array_ints(&ints_value)?;"));
+    assert!(rust.contains("let bools = rsscript_runtime::json_array_bools(&bools_value)?;"));
     assert!(rust.contains(
         "let has_profile = rsscript_runtime::json_array_contains_string(&value, &\"profile\".to_string())?;"
     ));

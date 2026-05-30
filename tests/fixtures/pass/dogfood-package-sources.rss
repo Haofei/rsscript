@@ -114,6 +114,17 @@ fn json_array_len_result(value: read JsonValue) -> Result<Int, String> {
     }
 }
 
+fn json_array_strings_result(value: read JsonValue) -> Result<List<String>, String> {
+    match Json.array_strings(value: read value) {
+        Ok(items) => {
+            return Ok(items)
+        }
+        Err(error) => {
+            return Err(json_error(prefix: read "manifest string array", error: read error))
+        }
+    }
+}
+
 fn list_files_result(path: read Path) -> Result<List<String>, String> {
     match Directory.list_files(path: read path) {
         Ok(paths) => {
@@ -263,28 +274,11 @@ fn add_bool(value: Int, condition: Bool) -> Int {
     return value
 }
 
-fn count_source_set_from(
+fn count_source_path(
     root: read Path,
-    paths: read List<String>,
-    index: Int,
     facts: read PackageSourceSetFacts,
+    relative_path: read String,
 ) -> Result<fresh PackageSourceSetFacts, String> {
-    if index >= List.len(list: read paths) {
-        return Ok(PackageSourceSetFacts(
-            total_files: facts.total_files,
-            manifest_files: facts.manifest_files,
-            interface_files: facts.interface_files,
-            source_files: facts.source_files,
-            public_interface_files: facts.public_interface_files,
-            public_source_files: facts.public_source_files,
-            api_interface_symbols: facts.api_interface_symbols,
-            api_source_symbols: facts.api_source_symbols,
-            tool_interface_symbols: facts.tool_interface_symbols,
-            tool_source_symbols: facts.tool_source_symbols,
-        ))
-    }
-
-    let relative_path = List.get(list: read paths, index: index)
     let file_path = Path.join(
         base: read root,
         child: read relative_path,
@@ -292,18 +286,11 @@ fn count_source_set_from(
 
     match read_file_text_result(path: read file_path) {
         Ok(contents) => {
-            let next = add_source_path(
+            return Ok(add_source_path(
                 facts: read facts,
                 path: read relative_path,
                 contents: read contents,
-            )
-
-            return count_source_set_from(
-                root: read root,
-                paths: read paths,
-                index: index + 1,
-                facts: read next,
-            )
+            ))
         }
         Err(error) => {
             return Err(file_error(prefix: read "source read", error: read error))
@@ -311,47 +298,59 @@ fn count_source_set_from(
     }
 }
 
-fn count_root_paths_from(
+fn count_source_paths(
     root: read Path,
-    roots: read JsonValue,
-    index: Int,
     facts: read PackageSourceSetFacts,
+    paths: read List<String>,
 ) -> Result<fresh PackageSourceSetFacts, String> {
-    let limit = json_array_len_result(value: read roots)?
+    return List.try_fold<String, PackageSourceSetFacts, String>(
+        list: read paths,
+        initial: read facts,
+        folder: |state, relative_path| {
+            return count_source_path(
+                root: read root,
+                facts: read state,
+                relative_path: read relative_path,
+            )
+        },
+    )
+}
 
-    if index >= limit {
-        return Ok(PackageSourceSetFacts(
-            total_files: facts.total_files,
-            manifest_files: facts.manifest_files,
-            interface_files: facts.interface_files,
-            source_files: facts.source_files,
-            public_interface_files: facts.public_interface_files,
-            public_source_files: facts.public_source_files,
-            api_interface_symbols: facts.api_interface_symbols,
-            api_source_symbols: facts.api_source_symbols,
-            tool_interface_symbols: facts.tool_interface_symbols,
-            tool_source_symbols: facts.tool_source_symbols,
-        ))
-    }
-
-    let child = json_array_string_result(value: read roots, index: index)?
+fn count_root_path(
+    root: read Path,
+    facts: read PackageSourceSetFacts,
+    child: read String,
+) -> Result<fresh PackageSourceSetFacts, String> {
     let source_root = Path.join(
         base: read root,
         child: read child,
     )
     let paths = list_files_result(path: read source_root)?
-    let next = count_source_set_from(
-        root: read source_root,
-        paths: read paths,
-        index: 0,
-        facts: read facts,
-    )?
 
-    return count_root_paths_from(
-        root: read root,
-        roots: read roots,
-        index: index + 1,
-        facts: read next,
+    return count_source_paths(
+        root: read source_root,
+        facts: read facts,
+        paths: read paths,
+    )
+}
+
+fn count_root_paths(
+    root: read Path,
+    roots: read JsonValue,
+    facts: read PackageSourceSetFacts,
+) -> Result<fresh PackageSourceSetFacts, String> {
+    let children = json_array_strings_result(value: read roots)?
+
+    return List.try_fold<String, PackageSourceSetFacts, String>(
+        list: read children,
+        initial: read facts,
+        folder: |state, child| {
+            return count_root_path(
+                root: read root,
+                facts: read state,
+                child: read child,
+            )
+        },
     )
 }
 
@@ -370,17 +369,15 @@ fn dogfood_source_set_facts() -> Result<fresh PackageSourceSetFacts, String> {
         tool_interface_symbols: 0,
         tool_source_symbols: 0,
     )
-    let all_interfaces = count_root_paths_from(
+    let all_interfaces = count_root_paths(
         root: read root,
         roots: read paths.interface_paths,
-        index: 0,
         facts: read manifest,
     )?
 
-    return count_root_paths_from(
+    return count_root_paths(
         root: read root,
         roots: read paths.source_paths,
-        index: 0,
         facts: read all_interfaces,
     )
 }
