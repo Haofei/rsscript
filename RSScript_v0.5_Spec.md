@@ -1573,6 +1573,9 @@ fn cache_put(cache: mut Cache, key: read String, value: read Image) -> Unit
 A function that stores both `key` and `value` declares both: `retains` names
 every parameter the function keeps after returning. `retains(x)` may retain a
 managed handle or managed value derived from `x`. It must not retain an active runtime read/write guard.
+The retained parameter must be non-Copy and managed-capable. `retains(width)`
+for a Copy parameter such as `Int` is rejected because there is no managed
+retention boundary to review.
 
 A local value cannot be passed directly to a retaining parameter. This includes local-inline fields reached without crossing a handle or weak field.
 

@@ -290,8 +290,8 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     },
     DiagnosticExplanation {
         code: code::UNKNOWN_RETAINED_PARAMETER,
-        title: "unknown retained parameter",
-        explanation: "`effects(retains(param))` must name a parameter declared by the function signature.",
+        title: "invalid retained parameter",
+        explanation: "`effects(retains(param))` must name a non-Copy parameter declared by the function signature. Copy values have no managed retention boundary.",
     },
     DiagnosticExplanation {
         code: code::MISSING_PARAMETER_EFFECT,

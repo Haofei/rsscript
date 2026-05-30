@@ -890,6 +890,33 @@ impl Analyzer<'_> {
                     );
                     continue;
                 }
+                if let Some(function_param) = function
+                    .params
+                    .iter()
+                    .find(|function_param| function_param.name == *param)
+                    && type_ref_is_copy(&function_param.ty)
+                {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::UNKNOWN_RETAINED_PARAMETER,
+                            format!(
+                                "`{}` declares `effects(retains({param}))`, but `{param}` is Copy.",
+                                function.name
+                            ),
+                            function_param.span.clone(),
+                            "Copy parameter cannot be retained",
+                        )
+                        .with_cause(
+                            "`retains(x)` marks a managed retention boundary. Copy values have no managed handle to retain.",
+                        )
+                        .with_fix(
+                            "remove_copy_retains",
+                            format!("Remove `effects(retains({param}))`."),
+                            "manual",
+                        ),
+                    );
+                    continue;
+                }
                 if function.params.iter().any(|function_param| {
                     function_param.name == *param && type_ref_is_noescape(&function_param.ty)
                 }) {
@@ -2926,6 +2953,34 @@ fn type_ref_name(ty: &TypeRef) -> String {
 
 fn type_ref_is_noescape(ty: &TypeRef) -> bool {
     ty.is_noescape || ty.args.iter().any(type_ref_is_noescape)
+}
+
+fn type_ref_is_copy(ty: &TypeRef) -> bool {
+    !ty.is_fresh
+        && !ty.is_noescape
+        && ty.args.is_empty()
+        && ty.fn_params.is_empty()
+        && ty.fn_return.is_none()
+        && matches!(
+            ty.name.as_str(),
+            "Bool"
+                | "Byte"
+                | "Char"
+                | "Float"
+                | "Float32"
+                | "Float64"
+                | "Int"
+                | "Int8"
+                | "Int16"
+                | "Int32"
+                | "Int64"
+                | "UInt"
+                | "UInt8"
+                | "UInt16"
+                | "UInt32"
+                | "UInt64"
+                | "Unit"
+        )
 }
 
 fn type_ref_is_closure_effect_exempt(ty: &TypeRef) -> bool {
