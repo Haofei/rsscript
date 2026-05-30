@@ -1266,6 +1266,11 @@ fn collect_type_param_substitutions(
     if actual == "?" {
         return;
     }
+    if let Some(pattern) = fresh_type_target(pattern) {
+        let actual = fresh_type_target(actual).unwrap_or(actual);
+        collect_type_param_substitutions(pattern, actual, generic_params, substitutions);
+        return;
+    }
     if generic_params.contains(pattern) {
         substitutions
             .entry(pattern.to_string())
@@ -1314,6 +1319,9 @@ fn collect_type_param_substitutions(
 fn substitute_type_params(type_name: &str, substitutions: &HashMap<String, String>) -> String {
     if let Some(replacement) = substitutions.get(type_name) {
         return replacement.clone();
+    }
+    if let Some(target) = fresh_type_target(type_name) {
+        return format!("fresh {}", substitute_type_params(target, substitutions));
     }
     if let Some(return_ty) = noescape_return_type(type_name) {
         let params = noescape_param_types(type_name)
@@ -2437,6 +2445,10 @@ fn type_pattern_matches(expected: &str, actual: &str, generic_params: &[String])
     if argument_type_matches(expected, actual) {
         return true;
     }
+    if let Some(expected) = fresh_type_target(expected) {
+        let actual = fresh_type_target(actual).unwrap_or(actual);
+        return type_pattern_matches(expected, actual, generic_params);
+    }
     if generic_params.iter().any(|param| param == expected) {
         return true;
     }
@@ -3317,6 +3329,8 @@ fn type_ref_name(ty: &TypeRef) -> String {
 fn type_contains_unresolved_generic(type_name: &str, generics: &[String]) -> bool {
     generics.iter().any(|generic| {
         type_name == generic
+            || fresh_type_target(type_name)
+                .is_some_and(|target| type_contains_unresolved_generic(target, generics))
             || noescape_return_type(type_name)
                 .is_some_and(|return_type| type_contains_unresolved_generic(return_type, generics))
             || noescape_param_types(type_name)
@@ -3332,6 +3346,7 @@ fn type_contains_unresolved_generic(type_name: &str, generics: &[String]) -> boo
 fn unresolved_generic_type(type_name: &str) -> bool {
     let root = type_root_name(type_name);
     (root.len() == 1 && root.chars().all(|ch| ch.is_ascii_uppercase()))
+        || fresh_type_target(type_name).is_some_and(unresolved_generic_type)
         || type_arg_names(type_name)
             .is_some_and(|args| args.iter().any(|arg| unresolved_generic_type(arg)))
         || noescape_return_type(type_name).is_some_and(unresolved_generic_type)

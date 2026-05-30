@@ -752,12 +752,19 @@ fn split_param_ranges(tokens: &[Token], start: usize, end: usize) -> Vec<ParamRa
     let mut ranges = Vec::new();
     let mut range_start = start;
     let mut depth = 0usize;
+    let mut pipe_depth = 0usize;
     for (index, token) in tokens.iter().enumerate().take(end).skip(start) {
-        if token.symbol("(") || token.symbol("{") || token.symbol("[") || token.symbol("<") {
+        if depth == 0 && token.symbol("|") {
+            pipe_depth = 1usize.saturating_sub(pipe_depth);
+        } else if pipe_depth == 0
+            && (token.symbol("(") || token.symbol("{") || token.symbol("[") || token.symbol("<"))
+        {
             depth += 1;
-        } else if token.symbol(")") || token.symbol("}") || token.symbol("]") || token.symbol(">") {
+        } else if pipe_depth == 0
+            && (token.symbol(")") || token.symbol("}") || token.symbol("]") || token.symbol(">"))
+        {
             depth = depth.saturating_sub(1);
-        } else if depth == 0 && token.symbol(",") {
+        } else if depth == 0 && pipe_depth == 0 && token.symbol(",") {
             if range_start < index {
                 ranges.push(ParamRange {
                     start: range_start,

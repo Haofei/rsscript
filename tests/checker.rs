@@ -2639,6 +2639,10 @@ fn copy_file(input: read Path, output: read Path) -> Result<Unit, FileError> {
 #[test]
 fn rust_lowering_maps_json_core_calls_to_runtime_hooks() {
     let source = r#"
+struct IntBox {
+    value: Int
+}
+
 fn read_name(text: read String) -> Result<String, JsonError> {
     let value = Json.parse(text: read text)?
     let path = Path.from_string(value: read "profile.json")
@@ -2653,6 +2657,18 @@ fn read_name(text: read String) -> Result<String, JsonError> {
         predicate: |item| {
             let text = Json.as_string(value: read item)?
             return Ok(String.starts_with(value: read text, prefix: read "pro"))
+        },
+    )?
+    let folded = Json.array_fold(
+        value: read value,
+        initial: read IntBox(value: 0),
+        folder: |state, item| {
+            let text = Json.as_string(value: read item)?
+            if String.starts_with(value: read text, prefix: read "pro") {
+                return Ok(IntBox(value: state.value + 1))
+            }
+
+            return Ok(IntBox(value: state.value))
         },
     )?
     let profile = Json.field(value: read value, name: read "profile")?
@@ -2685,6 +2701,9 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     assert!(
         rust.contains("let matching = rsscript_runtime::json_array_count_where(&value, |item| {")
     );
+    assert!(rust.contains(
+        "let folded = rsscript_runtime::json_array_fold(&value, &IntBox { value: 0 }, |state, item| {"
+    ));
     assert!(rust.contains("let text = rsscript_runtime::json_as_string(&item)?;"));
     assert!(
         rust.contains(

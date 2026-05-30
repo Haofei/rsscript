@@ -3018,6 +3018,12 @@ pub fn Json.array_count_where(
     value: read JsonValue,
     predicate: noescape Fn(JsonValue) -> Result<Bool, JsonError>,
 ) -> Result<Int, JsonError>
+
+pub fn Json.array_fold<T: Struct>(
+    value: read JsonValue,
+    initial: read T,
+    folder: noescape Fn(T, JsonValue) -> Result<fresh T, JsonError>,
+) -> Result<fresh T, JsonError>
 ```
 
 Agent, GPU, HTTP, networking, and model-client packages are use-case libraries, not language core.

@@ -1098,6 +1098,26 @@ pub fn json_array_count_where(
     Ok(count)
 }
 
+pub fn json_array_fold<T: Clone>(
+    value: &JsonValue,
+    initial: &T,
+    mut folder: impl FnMut(T, JsonValue) -> Result<T, JsonError>,
+) -> Result<T, JsonError> {
+    let Some(items) = value.inner.as_array() else {
+        return Err(JsonError::new("JSON value is not an array"));
+    };
+    let mut state = initial.clone();
+    for item in items {
+        state = folder(
+            state,
+            JsonValue {
+                inner: item.clone(),
+            },
+        )?;
+    }
+    Ok(state)
+}
+
 pub fn row_buffer_new(size: i64) -> RowBuffer {
     RowBuffer {
         bytes: Vec::with_capacity(size.max(0) as usize),
@@ -1780,6 +1800,13 @@ mod tests {
             Ok(super::json_as_string(&item)?.starts_with("public"))
         })
         .unwrap();
+        let folded_count = super::json_array_fold(&reasons, &0_i64, |count, item| {
+            if super::json_as_string(&item)?.contains("boundary") {
+                return Ok(count + 1);
+            }
+            Ok(count)
+        })
+        .unwrap();
         let name_starts_with_rss = super::string_starts_with(&name, "RSS");
         let name_ends_with_script = super::string_ends_with(&name, "Script");
         let name_contains_script = super::string_contains(&name, "Script");
@@ -1804,6 +1831,7 @@ mod tests {
         assert!(!has_pool);
         assert!(has_public_prefix);
         assert_eq!(public_count, 1);
+        assert_eq!(folded_count, 1);
         assert!(name_starts_with_rss);
         assert!(name_ends_with_script);
         assert!(name_contains_script);

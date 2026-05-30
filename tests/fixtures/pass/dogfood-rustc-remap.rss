@@ -51,44 +51,16 @@ fn diagnose_remap_item(item: read JsonValue, facts: read RemapFacts) -> Result<f
     )
 }
 
-fn summarize_remap_from(
-    diagnostics: read JsonValue,
-    index: Int,
-    limit: Int,
-    facts: read RemapFacts,
-) -> Result<fresh RemapFacts, JsonError> {
-    if index >= limit {
-        return RemapFacts(
-            diagnostics: facts.diagnostics,
-            mapped_errors: facts.mapped_errors,
-            rustc_code_causes: facts.rustc_code_causes,
-            source_file_hits: facts.source_file_hits,
-            source_line_hits: facts.source_line_hits,
-            source_column_hits: facts.source_column_hits,
-        )
-    }
-
-    let item = Json.array_get(value: read diagnostics, index: index)?
-    let next = diagnose_remap_item(item: read item, facts: read facts)?
-
-    return summarize_remap_from(
-        diagnostics: read diagnostics,
-        index: index + 1,
-        limit: limit,
-        facts: read next,
-    )
-}
-
 fn dogfood_remap_facts() -> Result<fresh RemapFacts, JsonError> {
     let path = Path.from_string(value: read "tests/fixtures/pass/dogfood-rustc-remap.json")
     let diagnostics = Json.parse_file(path: read path)?
-    let limit = Json.array_len(value: read diagnostics)?
 
-    return summarize_remap_from(
-        diagnostics: read diagnostics,
-        index: 0,
-        limit: limit,
-        facts: read empty_remap_facts(),
+    return Json.array_fold(
+        value: read diagnostics,
+        initial: read empty_remap_facts(),
+        folder: |facts, item| {
+            return diagnose_remap_item(item: read item, facts: read facts)
+        },
     )
 }
 

@@ -53,5 +53,11 @@ pub fn Json.array_count_where(
     predicate: noescape Fn(JsonValue) -> Result<Bool, JsonError>,
 ) -> Result<Int, JsonError>
 
+pub fn Json.array_fold<T: Struct>(
+    value: read JsonValue,
+    initial: read T,
+    folder: noescape Fn(T, JsonValue) -> Result<fresh T, JsonError>,
+) -> Result<fresh T, JsonError>
+
 pub fn JsonError.message(error: read JsonError) -> String
     effects(pure)

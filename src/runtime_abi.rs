@@ -217,6 +217,7 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "array_count_where",
         "rsscript_runtime::json_array_count_where",
     ),
+    runtime_intrinsic("Json", "array_fold", "rsscript_runtime::json_array_fold"),
     runtime_intrinsic("Json", "array_get", "rsscript_runtime::json_array_get"),
     runtime_intrinsic("Json", "array_len", "rsscript_runtime::json_array_len"),
     runtime_intrinsic("Json", "as_string", "rsscript_runtime::json_as_string"),
