@@ -209,21 +209,22 @@ fn package_registry_publish_target(
 ) -> PackageRegistryPublishTarget {
     let package_component = sanitize_vendor_path_component(package_name);
     let version_component = sanitize_vendor_path_component(package_version);
+    let index_path = registry_dir
+        .join("index")
+        .join(&package_component)
+        .join(format!("{version_component}.json"));
+    let archive_manifest_path = registry_dir
+        .join("archives")
+        .join(&package_component)
+        .join(&version_component)
+        .join("archive-manifest.json");
     PackageRegistryPublishTarget {
-        registry_dir: registry_dir.display().to_string(),
-        index_path: registry_dir
-            .join("index")
-            .join(&package_component)
-            .join(format!("{version_component}.json"))
+        registry_dir: registry_dir.display().to_string().replace('\\', "/"),
+        index_path: index_path.display().to_string().replace('\\', "/"),
+        archive_manifest_path: archive_manifest_path
             .display()
-            .to_string(),
-        archive_manifest_path: registry_dir
-            .join("archives")
-            .join(&package_component)
-            .join(&version_component)
-            .join("archive-manifest.json")
-            .display()
-            .to_string(),
+            .to_string()
+            .replace('\\', "/"),
     }
 }
 

@@ -1,0 +1,17 @@
+[[tests]]
+name = "self-hosted rss scripts run"
+kind = "command_for_each_path"
+command = "target/debug/rss"
+args = ["run"]
+paths = [
+  "tests/fixtures/pass/selfhost-review-classifier.rss",
+  "tests/fixtures/pass/selfhost-package-risk.rss",
+  "tests/fixtures/pass/selfhost-package-manifest.rss",
+  "tests/fixtures/pass/selfhost-package-root-manifest.rss",
+  "tests/fixtures/pass/selfhost-package-sources.rss",
+  "tests/fixtures/pass/selfhost-package-exports.rss",
+  "tests/fixtures/pass/selfhost-package-diff.rss",
+  "tests/fixtures/pass/selfhost-package-lock-diff.rss",
+  "rss/package-manager/main.rss",
+  "tests/fixtures/pass/selfhost-rustc-remap.rss",
+]

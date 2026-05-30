@@ -86,23 +86,24 @@ Before committing a semantic change, run the full local gate:
 cargo fmt --check
 cargo clippy -q --workspace -- -D warnings
 cargo test -q --workspace
-bash scripts/check.sh
-bash scripts/lint_sources.sh
-bash scripts/run_examples.sh
-bash scripts/run_selfhost.sh
+cargo run --quiet --bin rss -- run rss/test-runner -- rss/test-runner/manifests/check.rsstest.toml
+cargo build --quiet --bin rss
+target/debug/rss run rss/test-runner -- rss/test-runner/manifests/lint-sources.rsstest.toml
+target/debug/rss run rss/test-runner -- rss/test-runner/manifests/run-examples.rsstest.toml
+target/debug/rss run rss/test-runner -- rss/test-runner/manifests/run-selfhost.rsstest.toml
 git diff --check
 ```
 
 For a release-like verification, use:
 
 ```sh
-RSSCRIPT_FULL_TESTS=1 bash scripts/check.sh
+cargo run --quiet --bin rss -- run rss/test-runner -- rss/test-runner/manifests/full.rsstest.toml
 ```
 
 For package-manager dogfood work, use the focused TDD gate first:
 
 ```sh
-bash scripts/check_package_manager_tdd.sh
+cargo run --quiet --bin rss -- run rss/test-runner -- rss/test-runner/manifests/package-manager-tdd.rsstest.toml
 ```
 
 This runs the package-manager-focused Rust tests, the core JSON/lowering hooks
@@ -111,31 +112,44 @@ e2e commands. It is the intended sub-10-second loop while iterating on
 `rss/package-manager/main.rss`; run the full gate only before committing or when
 touching shared lowering/runtime behavior.
 
-CI sets `RSSCRIPT_FULL_TESTS=1 RSSCRIPT_E2E_TESTS=1`, so the same scripts run
-the full workspace test suite, execute every `examples/*.rss` file, run the
-ignored checker e2e tests, and run the checked-in self-hosted RSScript tools
-through `rss run`.
+CI runs the RSScript test-runner full manifest, which runs the full workspace
+test suite, executes every `examples/*.rss` file, and runs the checked-in
+self-hosted RSScript tools through `rss run`.
 
-The full gate defaults both Rust's test harness and the RSScript script runners
-to twice the CPU count because many jobs spend substantial time on
-generated-package and filesystem IO. Set `RSSCRIPT_TEST_THREADS=N` for
-`cargo test`, `RUST_TEST_THREADS=N` for the raw libtest setting, or
-`RSSCRIPT_JOBS=N` for script-runner fan-out when you need to cap concurrency or
-reproduce a parallel-run issue.
 Generated Rust package targets and temporary generated packages are disposable.
-The local gates source `scripts/ramdisk_env.sh`, which creates or reuses a
-memory-backed workspace and points both `RSSCRIPT_GENERATED_TARGET_DIR` and
-`RSSCRIPT_TEMP_DIR` at it. On macOS the default is an 8 GiB
-`/Volumes/RSScriptRAMDisk`; on Linux the default is `/dev/shm/rsscript`.
+Set `RSSCRIPT_RAMDISK_PATH` to a memory-backed workspace when running large
+local gates repeatedly. `rss` derives `rsscript-generated-target` and
+`rsscript-temp` under that root. You can still override the derived paths
+directly with `RSSCRIPT_GENERATED_TARGET_DIR` and `RSSCRIPT_TEMP_DIR`.
+
+On macOS, mount a RAM disk and point `RSSCRIPT_RAMDISK_PATH` at it:
 
 ```sh
-RSSCRIPT_FULL_TESTS=1 bash scripts/check.sh
-df -h /Volumes/RSScriptRAMDisk
-diskutil eject /Volumes/RSScriptRAMDisk
+diskutil erasevolume HFS+ RSScriptRAMDisk "$(hdiutil attach -nomount ram://16777216)"
+export RSSCRIPT_RAMDISK_PATH=/Volumes/RSScriptRAMDisk
 ```
 
-Set `RSSCRIPT_RAMDISK_GIB=N` to change the macOS ramdisk size, or
-`RSSCRIPT_RAMDISK_PATH=/path/to/ramdisk` to use a pre-mounted memory volume.
+On Linux, `/dev/shm` is usually memory-backed:
+
+```sh
+export RSSCRIPT_RAMDISK_PATH=/dev/shm/rsscript
+```
+
+On Windows, use a pre-mounted RAM disk drive or directory from your RAM disk
+tool, then set the same variable in PowerShell:
+
+```powershell
+$env:RSSCRIPT_RAMDISK_PATH = 'R:\rsscript'
+```
+
+Windows does not provide a built-in, non-admin API for creating a true RAM disk,
+so the repository only consumes a mounted RAM disk path instead of trying to
+create one.
+
+```sh
+cargo run --quiet --bin rss -- run rss/test-runner -- rss/test-runner/manifests/full.rsstest.toml
+```
+
 Do not point these paths back at the SSD for normal development; if a test has
 file conflicts, give it an isolated ramdisk subdirectory or copy the ramdisk
 seed target, then clean the copy after the test.
@@ -147,17 +161,13 @@ verification, source-map remapping, package-manager dogfood, or self-hosted
 scripts:
 
 ```sh
-bash scripts/check_slow_tests.sh
+cargo run --quiet --bin rss -- run rss/test-runner -- rss/test-runner/manifests/slow-tests.rsstest.toml
 ```
 
-By default this audits every checker test, including ignored e2e tests. Override
-the threshold or narrow the test-name pattern for local diagnosis with
-`RSSCRIPT_SLOW_TEST_THRESHOLD=N` and `RSSCRIPT_SLOW_TEST_PATTERN=...`.
-The audit defaults to a small non-serial fan-out, capped at four test processes,
-so independent tests still run in parallel without inflating individual
-durations through generated-target contention. Set `RSSCRIPT_JOBS=N` to override
-that fan-out for local diagnosis. To include the ignored e2e tests in the full
-gate, run `RSSCRIPT_FULL_TESTS=1 RSSCRIPT_E2E_TESTS=1 bash scripts/check.sh`.
+The RSScript manifest runs the ignored checker e2e tests through Rust's test
+harness. To narrow the run locally, pass a filter as the second test-runner
+argument, or run the equivalent `cargo test --test checker ...` command
+directly while diagnosing.
 
 Avoid running multiple workspace Cargo commands in parallel. Cargo's build lock
 makes that slower and noisier. Independent RSScript script checks may run in

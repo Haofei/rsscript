@@ -1,0 +1,38 @@
+[[tests]]
+name = "rustfmt is clean"
+kind = "command_success"
+command = "cargo"
+args = ["fmt", "--check"]
+
+[[tests]]
+name = "clippy has no warnings"
+kind = "command_success"
+command = "cargo"
+args = ["clippy", "--workspace", "--", "-D", "warnings"]
+
+[[tests]]
+name = "generated Rust packages compile"
+kind = "command_for_each_path"
+command = "cargo"
+args = ["check", "--manifest-path"]
+paths = [
+  "tests/generated/simple/Cargo.toml",
+  "tests/generated/managed/Cargo.toml",
+  "tests/generated/resource_pool/Cargo.toml",
+  "tests/generated/effects/Cargo.toml",
+  "tests/generated/result/Cargo.toml",
+  "tests/generated/try/Cargo.toml",
+  "tests/generated/runnable/Cargo.toml",
+]
+
+[[tests]]
+name = "workspace tests compile"
+kind = "command_success"
+command = "cargo"
+args = ["test", "--workspace", "--no-run"]
+
+[[tests]]
+name = "git diff has no whitespace errors"
+kind = "command_success"
+command = "git"
+args = ["diff", "--check"]

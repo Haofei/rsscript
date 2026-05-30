@@ -597,7 +597,17 @@ pub fn check_generated_rust_package(package_dir: &Path) -> Result<RustBackendChe
 }
 
 fn generated_target_dir_from_env() -> Option<PathBuf> {
-    env::var_os("RSSCRIPT_GENERATED_TARGET_DIR")
+    let path = env::var_os("RSSCRIPT_GENERATED_TARGET_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| ramdisk_root_dir().map(|root| root.join("rsscript-generated-target")))?;
+    let _ = fs::create_dir_all(&path);
+
+    Some(path)
+}
+
+fn ramdisk_root_dir() -> Option<PathBuf> {
+    env::var_os("RSSCRIPT_RAMDISK_PATH")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
 }
@@ -2424,9 +2434,13 @@ fn best_source_map_entry<'a>(
 ) -> Option<&'a RustSourceMapEntry> {
     source_map
         .iter()
-        .filter(|entry| entry.generated.file == file)
+        .filter(|entry| generated_file_matches(&entry.generated.file, file))
         .filter(|entry| generated_span_starts_before_or_at(&entry.generated, line, column))
         .max_by_key(|entry| (entry.generated.line, entry.generated.column))
+}
+
+fn generated_file_matches(left: &str, right: &str) -> bool {
+    left.replace('\\', "/") == right.replace('\\', "/")
 }
 
 fn generated_span_starts_before_or_at(span: &Span, line: usize, column: usize) -> bool {

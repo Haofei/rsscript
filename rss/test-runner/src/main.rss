@@ -4,6 +4,10 @@ struct TestCase {
     name: String
     kind: String
     path: String
+    paths: List<String>
+    directory: String
+    extension: String
+    recursive: Bool
     command: String
     args: List<String>
     contains: String
@@ -138,6 +142,10 @@ fn test_case_from_json(value: read JsonValue) -> Result<fresh TestCase, String> 
         name: json_string(value: read value, name: read "name")?,
         kind: json_string(value: read value, name: read "kind")?,
         path: json_string_or_default(value: read value, name: read "path", default: read ""),
+        paths: json_string_list_or_empty(value: read value, name: read "paths"),
+        directory: json_string_or_default(value: read value, name: read "directory", default: read ""),
+        extension: json_string_or_default(value: read value, name: read "extension", default: read ""),
+        recursive: json_bool_or_default(value: read value, name: read "recursive", default: true),
         command: json_string_or_default(value: read value, name: read "command", default: read ""),
         args: json_string_list_or_empty(value: read value, name: read "args"),
         contains: json_string_or_default(value: read value, name: read "contains", default: read ""),
@@ -242,6 +250,163 @@ fn text_matches_expectations(
     ))
 }
 
+fn copy_args_from(
+    source: read List<String>,
+    index: Int,
+    target: mut List<String>,
+) -> Unit {
+    if index >= List.len(list: read source) {
+        return Unit
+    }
+
+    let arg = List.get(list: read source, index: index)
+    List.push(list: mut target, value: read arg)
+
+    return copy_args_from(source: read source, index: index + 1, target: mut target)
+}
+
+fn append_arg(args: read List<String>, arg: read String) -> fresh List<String> {
+    local next = List<String>.new()
+    copy_args_from(source: read args, index: 0, target: mut next)
+    List.push(list: mut next, value: read arg)
+
+    return next
+}
+
+fn command_with_windows_exe_suffix(command: read String) -> fresh String {
+    return String.concat(left: read command, right: read ".exe")
+}
+
+fn run_command_stdout(command: read String, args: read List<String>) -> Result<String, String> {
+    match Process.run_stdout(command: read command, args: read args) {
+        Ok(stdout) => {
+            return Ok(stdout)
+        }
+        Err(first_error) => {
+            if String.ends_with(value: read command, suffix: read ".exe") {
+                return Err(first_error)
+            }
+
+            match Process.run_stdout(
+                command: read command_with_windows_exe_suffix(command: read command),
+                args: read args,
+            ) {
+                Ok(stdout) => {
+                    return Ok(stdout)
+                }
+                Err(_) => {
+                    return Err(first_error)
+                }
+            }
+        }
+    }
+}
+
+fn run_command_success(command: read String, args: read List<String>) -> Result<Bool, String> {
+    match run_command_stdout(command: read command, args: read args) {
+        Ok(_) => {
+            return Ok(true)
+        }
+        Err(error) => {
+            return Err(error)
+        }
+    }
+}
+
+fn path_allows_recursive(path: read String, recursive: Bool) -> Bool {
+    if recursive {
+        return true
+    }
+
+    if String.contains(value: read path, needle: read "/") {
+        return false
+    }
+
+    return String.contains(value: read path, needle: read "\\") == false
+}
+
+fn joined_path(directory: read String, file: read String) -> fresh String {
+    if String.ends_with(value: read directory, suffix: read "/") {
+        return String.concat(left: read directory, right: read file)
+    }
+
+    return String.concat(
+        left: read String.concat(left: read directory, right: read "/"),
+        right: read file,
+    )
+}
+
+fn run_command_for_path(
+    command: read String,
+    args: read List<String>,
+    path: read String,
+) -> Result<Bool, String> {
+    let next_args = append_arg(args: read args, arg: read path)
+
+    return run_command_success(command: read command, args: read next_args)
+}
+
+fn run_command_for_paths_from(
+    command: read String,
+    args: read List<String>,
+    paths: read List<String>,
+    index: Int,
+) -> Result<Bool, String> {
+    if index >= List.len(list: read paths) {
+        return Ok(true)
+    }
+
+    let path = List.get(list: read paths, index: index)
+    Log.write(message: read String.concat(left: read "run ", right: read path))
+    let ok = run_command_for_path(command: read command, args: read args, path: read path)?
+    if ok == false {
+        return Ok(false)
+    }
+
+    return run_command_for_paths_from(
+        command: read command,
+        args: read args,
+        paths: read paths,
+        index: index + 1,
+    )
+}
+
+fn run_command_for_files_from(
+    command: read String,
+    args: read List<String>,
+    directory: read String,
+    extension: read String,
+    recursive: Bool,
+    files: read List<String>,
+    index: Int,
+) -> Result<Bool, String> {
+    if index >= List.len(list: read files) {
+        return Ok(true)
+    }
+
+    let file = List.get(list: read files, index: index)
+    if path_allows_recursive(path: read file, recursive: recursive) {
+        if String.ends_with(value: read file, suffix: read extension) {
+            let path = joined_path(directory: read directory, file: read file)
+            Log.write(message: read String.concat(left: read "run ", right: read path))
+            let ok = run_command_for_path(command: read command, args: read args, path: read path)?
+            if ok == false {
+                return Ok(false)
+            }
+        }
+    }
+
+    return run_command_for_files_from(
+        command: read command,
+        args: read args,
+        directory: read directory,
+        extension: read extension,
+        recursive: recursive,
+        files: read files,
+        index: index + 1,
+    )
+}
+
 fn run_test(test: read TestCase) -> Result<Bool, String> {
     if test.kind == "file_contains" {
         let text = read_text(path: read Path.from_string(value: read test.path))?
@@ -253,7 +418,7 @@ fn run_test(test: read TestCase) -> Result<Bool, String> {
     }
 
     if test.kind == "command_stdout_contains" {
-        match Process.run_stdout(command: read test.command, args: read test.args) {
+        match run_command_stdout(command: read test.command, args: read test.args) {
             Ok(stdout) => {
                 return text_matches_expectations(
                     value: read stdout,
@@ -263,6 +428,38 @@ fn run_test(test: read TestCase) -> Result<Bool, String> {
             }
             Err(error) => {
                 return Err(error)
+            }
+        }
+    }
+
+    if test.kind == "command_success" {
+        return run_command_success(command: read test.command, args: read test.args)
+    }
+
+    if test.kind == "command_for_each_path" {
+        return run_command_for_paths_from(
+            command: read test.command,
+            args: read test.args,
+            paths: read test.paths,
+            index: 0,
+        )
+    }
+
+    if test.kind == "command_for_each_file" {
+        match Directory.list_files(path: read Path.from_string(value: read test.directory)) {
+            Ok(files) => {
+                return run_command_for_files_from(
+                    command: read test.command,
+                    args: read test.args,
+                    directory: read test.directory,
+                    extension: read test.extension,
+                    recursive: test.recursive,
+                    files: read files,
+                    index: 0,
+                )
+            }
+            Err(error) => {
+                return Err(file_error(prefix: read "list files", error: read error))
             }
         }
     }

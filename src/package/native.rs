@@ -596,10 +596,20 @@ fn native_cargo_metadata_temp_dir(cargo_toml: &Path) -> PathBuf {
 }
 
 fn temp_root_dir() -> PathBuf {
-    env::var_os("RSSCRIPT_TEMP_DIR")
+    let root = env::var_os("RSSCRIPT_TEMP_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(env::temp_dir)
+        .or_else(|| ramdisk_root_dir().map(|root| root.join("rsscript-temp")))
+        .unwrap_or_else(env::temp_dir);
+    let _ = fs::create_dir_all(&root);
+
+    root
+}
+
+fn ramdisk_root_dir() -> Option<PathBuf> {
+    env::var_os("RSSCRIPT_RAMDISK_PATH")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 fn native_rust_unsafe_detected(files: &[PathBuf]) -> Result<bool, String> {

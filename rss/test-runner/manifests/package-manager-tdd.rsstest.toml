@@ -1,0 +1,21 @@
+[[tests]]
+name = "json runtime hook parses nested fields"
+kind = "command_success"
+command = "cargo"
+args = ["test", "-q", "-p", "rsscript-runtime", "json_runtime_hooks_parse_nested_fields"]
+
+[[tests]]
+name = "package manager focused checker tests"
+kind = "command_for_each_path"
+command = "cargo"
+args = ["test", "-q", "--test", "checker", "--", "--include-ignored", "--exact"]
+paths = [
+  "rust_lowering_maps_json_core_calls_to_runtime_hooks",
+  "package_tree_expands_path_dependencies_and_marks_unresolved",
+  "rss_pkg_tree_json_reports_dependency_summary",
+  "rss_run_accepts_minimal_selfhost_package_manager_metadata",
+  "rss_run_accepts_minimal_selfhost_package_manager_vendor",
+  "rss_run_accepts_minimal_selfhost_package_manager_check",
+  "rss_run_accepts_minimal_selfhost_package_manager_tree",
+  "rss_run_accepts_minimal_selfhost_package_manager_review",
+]

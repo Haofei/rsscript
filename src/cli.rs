@@ -549,9 +549,13 @@ fn run_generated_rust(args: &[String]) -> ExitCode {
 }
 
 fn generated_target_dir_from_env() -> Option<PathBuf> {
-    env::var_os("RSSCRIPT_GENERATED_TARGET_DIR")
+    let path = env::var_os("RSSCRIPT_GENERATED_TARGET_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
+        .or_else(|| ramdisk_root_dir().map(|root| root.join("rsscript-generated-target")))?;
+    let _ = fs::create_dir_all(&path);
+
+    Some(path)
 }
 
 fn run_remap_rustc(args: &[String]) -> ExitCode {
@@ -858,10 +862,20 @@ fn temp_package_dir(prefix: &str, package_name: &str) -> PathBuf {
 }
 
 fn temp_root_dir() -> PathBuf {
-    env::var_os("RSSCRIPT_TEMP_DIR")
+    let root = env::var_os("RSSCRIPT_TEMP_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(env::temp_dir)
+        .or_else(|| ramdisk_root_dir().map(|root| root.join("rsscript-temp")))
+        .unwrap_or_else(env::temp_dir);
+    let _ = fs::create_dir_all(&root);
+
+    root
+}
+
+fn ramdisk_root_dir() -> Option<PathBuf> {
+    env::var_os("RSSCRIPT_RAMDISK_PATH")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 fn cleanup_temp_dir(path: &Path) {

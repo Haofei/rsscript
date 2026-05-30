@@ -2404,9 +2404,9 @@ mod tests {
 
     #[test]
     fn process_runtime_hook_captures_stdout_and_failure() {
-        let args = vec!["hello process".to_string()];
-        let stdout = super::process_run_stdout("printf", &args).expect("printf should run");
-        assert_eq!(stdout, "hello process");
+        let args = vec!["--version".to_string()];
+        let stdout = super::process_run_stdout("cargo", &args).expect("cargo should run");
+        assert!(stdout.contains("cargo"), "{stdout}");
 
         let error = super::process_run_stdout("__rsscript_missing_process__", &[])
             .expect_err("missing command should fail");

@@ -1,0 +1,8 @@
+[[tests]]
+name = "examples run"
+kind = "command_for_each_file"
+directory = "examples"
+extension = ".rss"
+recursive = false
+command = "target/debug/rss"
+args = ["run"]

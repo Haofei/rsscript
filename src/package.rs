@@ -42,6 +42,7 @@ fn relative_path(base: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .display()
         .to_string()
+        .replace('\\', "/")
 }
 
 fn collect_regular_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {

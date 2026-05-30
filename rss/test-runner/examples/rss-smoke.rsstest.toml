@@ -17,8 +17,8 @@ path = "rss/package-manager/main.rss"
 contains = "rss package manager"
 
 [[tests]]
-name = "rss binary checks rayon wrapper package"
+name = "test runner captures cargo stdout"
 kind = "command_stdout_contains"
-command = "target/debug/rss"
-args = ["pkg", "check", "--json", "rss/rayon"]
-contains = "\"ok\":true"
+command = "cargo"
+args = ["--version"]
+contains = "cargo"

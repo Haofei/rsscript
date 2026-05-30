@@ -1,0 +1,26 @@
+[[tests]]
+name = "core interfaces lint"
+kind = "command_for_each_file"
+directory = "core"
+extension = ".rssi"
+recursive = true
+command = "target/debug/rss"
+args = ["lint", "--no-core"]
+
+[[tests]]
+name = "examples lint"
+kind = "command_for_each_file"
+directory = "examples"
+extension = ".rss"
+recursive = false
+command = "target/debug/rss"
+args = ["lint"]
+
+[[tests]]
+name = "passing root fixtures lint"
+kind = "command_for_each_file"
+directory = "tests/fixtures/pass"
+extension = ".rss"
+recursive = false
+command = "target/debug/rss"
+args = ["lint", "--no-core"]
