@@ -70,8 +70,9 @@ src/checks/*.rs        large semantic checker implementations
 2. Split package code by responsibility:
 
    ```text
-   src/package/manifest.rs
    src/package/source_set.rs
+   src/package/native.rs
+   src/package/types.rs
    src/package/graph.rs
    src/package/review.rs
    src/package/lock.rs
@@ -79,6 +80,15 @@ src/checks/*.rs        large semantic checker implementations
    src/package/publish.rs
    src/package/vendor.rs
    src/package/format.rs
+   ```
+
+   Current completed package splits:
+
+   ```text
+   src/package/types.rs       public package/review/lock data shapes
+   src/package/format.rs      JSON/TOML/human output formatting
+   src/package/source_set.rs  rsspkg.toml loading and source/interface selection
+   src/package/native.rs      native binding metadata and native Rust risk checks
    ```
 
 3. Split lowering by backend responsibility:
