@@ -19,7 +19,7 @@ fn register(registry: mut Registry, file: read File) -> Unit
 }
 
 fn bad_retain(registry: mut Registry, path: read Path) -> Unit {
-    with File.open(path: read path) as file {
+    with File.open(path: read path)? as file {
         register(registry: mut registry, file: read file)
     }
 }

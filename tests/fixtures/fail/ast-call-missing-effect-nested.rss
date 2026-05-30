@@ -1,7 +1,7 @@
 // expect: RS0202
 
 fn bad_nested(path: read Path) -> Result<Unit, IOError> {
-    with File.open_write(path: read path) as file {
+    with File.open_write(path: read path)? as file {
         File.write(file: file, data: read "hello")?
     }
 

@@ -15,10 +15,10 @@ fn main() -> Result<Unit, FileError> {
     let first_data = Bytes.from_string(value: read "alpha\nbeta\n")
     let second_data = Bytes.from_string(value: read "gamma\n")
 
-    with File.open_write(path: read first) as file {
+    with File.open_write(path: read first)? as file {
         File.write(file: mut file, data: read first_data)?
     }
-    with File.open_write(path: read second) as file {
+    with File.open_write(path: read second)? as file {
         File.write(file: mut file, data: read second_data)?
     }
 

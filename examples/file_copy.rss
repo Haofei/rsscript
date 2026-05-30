@@ -1,6 +1,6 @@
 pub fn copy_file(input: read Path, output: read Path) -> Result<Unit, FileError> {
-    with File.open_read(path: read input) as reader {
-        with File.open_write(path: read output) as writer {
+    with File.open_read(path: read input)? as reader {
+        with File.open_write(path: read output)? as writer {
             let bytes = File.read_all(file: mut reader)?
             File.write(file: mut writer, data: read bytes)?
         }
@@ -13,7 +13,7 @@ fn main() -> Result<Unit, FileError> {
     let output = Path.from_string(value: read "rsscript-file-copy-output.txt")
     let data = Bytes.from_string(value: read "file copy ran")
 
-    with File.open_write(path: read input) as file {
+    with File.open_write(path: read input)? as file {
         File.write(file: mut file, data: read data)?
     }
 

@@ -4,11 +4,11 @@ fn main() -> Result<Unit, FileError> {
     let path = Path.from_string(value: read "rsscript-buffer-consume.txt")
     let data = Bytes.from_string(value: read "consume buffer")
 
-    with File.open_write(path: read path) as file {
+    with File.open_write(path: read path)? as file {
         File.write(file: mut file, data: read data)?
     }
 
-    with File.open_read(path: read path) as file {
+    with File.open_read(path: read path)? as file {
         local buffer = Buffer.new(size: 64)
         File.read_into(file: mut file, buffer: mut buffer)?
         Buffer.consume(buffer: take buffer)

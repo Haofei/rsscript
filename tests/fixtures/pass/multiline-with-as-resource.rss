@@ -6,7 +6,7 @@ resource File {
 fn read_file(path: read Path) -> Result<fresh Bytes, FileError> {
     with File.open_read(
         path: read path
-    ) as file {
+    )? as file {
         return File.read_all(file: mut file)
     }
 }

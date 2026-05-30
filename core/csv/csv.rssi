@@ -4,6 +4,8 @@ struct Row
 
 pub fn RowBuffer.new(size: Int) -> fresh RowBuffer
 
+pub fn Csv.open_read(path: read Path) -> Result<File, CsvError>
+
 pub fn Csv.read_into(
     file: mut File,
     buffer: mut RowBuffer,

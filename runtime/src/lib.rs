@@ -1016,6 +1016,10 @@ pub fn csv_read_into(file: &mut File, buffer: &mut RowBuffer) -> Result<(), CsvE
     Ok(())
 }
 
+pub fn csv_open_read<P: RuntimePath + ?Sized>(path: &P) -> Result<File, CsvError> {
+    file_open_read(path).map_err(CsvError::from)
+}
+
 pub fn csv_parse_row(buffer: &RowBuffer) -> Result<Row, CsvError> {
     let text = std::str::from_utf8(&buffer.bytes)?;
     let Some(line) = text

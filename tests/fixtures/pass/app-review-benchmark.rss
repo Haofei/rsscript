@@ -98,7 +98,7 @@ fn build_work_item(request: read Request, owner_id: read String) -> Result<fresh
 fn load_request_row(path: read Path) -> Result<fresh Row, CsvError> {
     local buffer = RowBuffer.new(size: 8192)
 
-    with File.open_read(path: read path) as file {
+    with Csv.open_read(path: read path)? as file {
         Csv.read_into(file: mut file, buffer: mut buffer)?
     }
 
@@ -209,7 +209,7 @@ fn save_audit_record(cache: mut Cache, record: read AuditRecord) -> Unit {
 
 fn write_response_file(path: read Path, text: read String) -> Result<Unit, FileError> {
     let bytes = Bytes.from_string(value: read text)
-    with File.open_write(path: read path) as file {
+    with File.open_write(path: read path)? as file {
         File.write(file: mut file, data: read bytes)?
     }
 

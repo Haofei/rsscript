@@ -76,7 +76,7 @@ fn build_work_item(request: read Request, owner_id: read String) -> Result<fresh
 fn load_first_row(path: read Path) -> Result<fresh Row, CsvError> {
     local buffer = RowBuffer.new(size: 8192)
 
-    with File.open_read(path: read path) as file {
+    with Csv.open_read(path: read path)? as file {
         Csv.read_into(file: mut file, buffer: mut buffer)?
     }
 

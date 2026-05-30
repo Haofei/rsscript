@@ -323,7 +323,7 @@ fn consume_file(file: take File) -> Unit {
 }
 
 fn bad_take(path: read Path) -> Unit {
-    with File.open(path: read path) as file {
+    with File.open(path: read path)? as file {
         consume_file(file: take file)
     }
 }
@@ -2545,8 +2545,8 @@ fn main() -> Unit {
 fn rust_lowering_maps_file_core_calls_to_runtime_hooks() {
     let source = r#"
 fn copy_file(input: read Path, output: read Path) -> Result<Unit, FileError> {
-    with File.open_read(path: read input) as reader {
-        with File.open_write(path: read output) as writer {
+    with File.open_read(path: read input)? as reader {
+        with File.open_write(path: read output)? as writer {
             let bytes = File.read_all(file: mut reader)?
             let text = File.read_all_string(file: mut reader)?
             File.write(file: mut writer, data: read bytes)?
@@ -2571,7 +2571,7 @@ fn rust_lowering_maps_path_construction_to_runtime_hook() {
 fn main() -> Result<Unit, FileError> {
     let path = Path.from_string(value: read "rsscript-path.txt")
     let data = Bytes.from_string(value: read "path hook ran")
-    with File.open_write(path: read path) as file {
+    with File.open_write(path: read path)? as file {
         File.write(file: mut file, data: read data)?
     }
     return Ok(Unit)
@@ -2592,8 +2592,8 @@ features: local
 
 fn copy_file(input: read Path, output: read Path) -> Result<Unit, FileError> {
     local buffer = Buffer.new(size: 8192)
-    with File.open_read(path: read input) as reader {
-        with File.open_write(path: read output) as writer {
+    with File.open_read(path: read input)? as reader {
+        with File.open_write(path: read output)? as writer {
             while File.read_into(file: mut reader, buffer: mut buffer)? {
                 File.write_buffer(file: mut writer, buffer: read buffer)?
                 Buffer.clear(buffer: mut buffer)
@@ -2671,7 +2671,7 @@ features: local
 
 fn read_name(path: read Path) -> Result<String, CsvError> {
     local buffer = RowBuffer.new(size: 4096)
-    with File.open_read(path: read path) as file {
+    with Csv.open_read(path: read path)? as file {
         Csv.read_into(file: mut file, buffer: mut buffer)?
         let row = Csv.parse_row(buffer: read buffer)?
         return Row.field_string(row: read row, index: 0)
@@ -2682,6 +2682,7 @@ fn read_name(path: read Path) -> Result<String, CsvError> {
 
     assert!(rust.contains("-> Result<String, rsscript_runtime::CsvError>"));
     assert!(rust.contains("let mut buffer = rsscript_runtime::row_buffer_new(4096);"));
+    assert!(rust.contains("let mut file = rsscript_runtime::csv_open_read(&path)?;"));
     assert!(rust.contains("rsscript_runtime::csv_read_into(&mut file, &mut buffer)?;"));
     assert!(rust.contains("let row = rsscript_runtime::csv_parse_row(&buffer)?;"));
     assert!(rust.contains("return rsscript_runtime::row_field_string(&row, 0);"));
@@ -3214,7 +3215,7 @@ pub fn make_session(id: Int) -> Unit {
 fn rust_lowering_maps_with_resource_drop_points() {
     let source = r#"
 fn copy(path: read Path) -> Result<Unit, FileError> {
-    with File.open_read(path: read path) as file {
+    with File.open_read(path: read path)? as file {
         File.read_all(file: mut file)?
     }
 
@@ -4888,7 +4889,7 @@ fn missing_as(path: read Path) -> Unit {
 }
 
 fn missing_binding(path: read Path) -> Unit {
-    with File.open(path: read path) as {
+    with File.open(path: read path)? as {
         return Unit
     }
 }
@@ -7699,6 +7700,41 @@ fn write_line<W: Writer>(
 }
 
 #[test]
+fn checker_rejects_self_parameter_outside_method_receiver_position() {
+    let source = r#"
+fn bad(self: read String) -> Unit {
+    return Unit
+}
+
+fn Logger.write(message: read String, self: mut Logger) -> Unit {
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("self-param.rss", source);
+    let invalid_self_count = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "RS0028")
+        .count();
+    assert_eq!(invalid_self_count, 2, "{diagnostics:#?}");
+}
+
+#[test]
+fn checker_requires_protocol_methods_to_declare_self_first() {
+    let source = r#"
+protocol Writer {
+    fn write(message: read String) -> Unit
+}
+"#;
+    let diagnostics = analyze_source("protocol-self.rss", source);
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS0028"
+            && diagnostic
+                .summary
+                .contains("invalid `self` parameter in `Writer.write`")
+    }));
+}
+
+#[test]
 fn checker_requires_protocol_bounds_to_name_declared_protocols() {
     let source = r#"
 fn write_line<W: MissingWriter>(
@@ -8423,6 +8459,41 @@ fn resource_pool_core_signatures_use_typed_noescape_factories() {
             .map(|return_ty| return_ty.name.as_str()),
         Some("Result")
     );
+}
+
+#[test]
+fn file_core_resource_producers_return_result_contracts() {
+    let program = core_interfaces()
+        .iter()
+        .find_map(|(file, source)| (file.contains("file.rssi")).then(|| parse_source(file, source)))
+        .expect("File interface should be available");
+    let functions = program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(function) => Some(function),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    for name in ["File.open", "File.open_read", "File.open_write"] {
+        let return_ty = functions
+            .iter()
+            .find(|function| function.name == name)
+            .and_then(|function| function.return_ty.as_ref())
+            .unwrap_or_else(|| panic!("{name} should have a return type"));
+        assert_eq!(return_ty.name, "Result", "{name}");
+        assert_eq!(
+            return_ty.args.first().map(|arg| arg.name.as_str()),
+            Some("File"),
+            "{name}"
+        );
+        assert_eq!(
+            return_ty.args.get(1).map(|arg| arg.name.as_str()),
+            Some("FileError"),
+            "{name}"
+        );
+    }
 }
 
 #[test]

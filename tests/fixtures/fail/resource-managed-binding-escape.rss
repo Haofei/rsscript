@@ -10,7 +10,7 @@ resource File {
 }
 
 fn bad_binding(path: read Path) -> Unit {
-    with File.open(path: read path) as file {
+    with File.open(path: read path)? as file {
         let saved = file
     }
 }

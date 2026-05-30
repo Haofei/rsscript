@@ -1,10 +1,10 @@
 resource File
 
-pub fn File.open(path: read Path) -> File
+pub fn File.open(path: read Path) -> Result<File, FileError>
 
-pub fn File.open_read(path: read Path) -> File
+pub fn File.open_read(path: read Path) -> Result<File, FileError>
 
-pub fn File.open_write(path: read Path) -> File
+pub fn File.open_write(path: read Path) -> Result<File, FileError>
 
 pub fn File.read_all(file: mut File) -> Result<fresh Bytes, FileError>
 

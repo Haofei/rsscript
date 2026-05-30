@@ -72,7 +72,7 @@ features: local
 fn fill_scratch(path: read Path) -> Result<Unit, FileError> {
     local scratch = Buffer.new(size: 4096)
 
-    with File.open(path: read path) as file {
+    with File.open(path: read path)? as file {
         File.read_into(file: mut file, buffer: mut scratch)?
     }
 
@@ -146,8 +146,8 @@ features: local
 fn copy_file(input: read Path, output: read Path) -> Result<Unit, FileError> {
     local buffer = Buffer.new(size: 8192)
 
-    with File.open_read(path: read input) as reader {
-        with File.open_write(path: read output) as writer {
+    with File.open_read(path: read input)? as reader {
+        with File.open_write(path: read output)? as writer {
             while File.read_into(file: mut reader, buffer: mut buffer)? {
                 File.write(file: mut writer, data: read buffer)?
                 Buffer.clear(buffer: mut buffer)

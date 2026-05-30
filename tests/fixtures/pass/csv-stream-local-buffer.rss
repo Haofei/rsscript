@@ -8,7 +8,7 @@ fn sum_csv(path: read Path) -> Result<Int, CsvError> {
     local buffer = RowBuffer.new(size: 4096)
     let total = 0
 
-    with File.open_read(path: read path) as file {
+    with Csv.open_read(path: read path)? as file {
         Csv.read_into(file: mut file, buffer: mut buffer)?
         let row = Csv.parse_row(buffer: read buffer)?
         let amount = Row.field_string(row: read row, index: 1)?

@@ -17,7 +17,7 @@ fn main() -> Result<Unit, FileError> {
     let path = Path.from_string(value: read "rsscript-image-input.bin")
     let data = Bytes.from_string(value: read "raw image bytes")
 
-    with File.open_write(path: read path) as file {
+    with File.open_write(path: read path)? as file {
         File.write(file: mut file, data: read data)?
     }
 

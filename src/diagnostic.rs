@@ -28,6 +28,7 @@ pub mod code {
     pub const UNKNOWN_FIELD: &str = "RS0025";
     pub const UNKNOWN_BINDING: &str = "RS0026";
     pub const UNKNOWN_PROTOCOL: &str = "RS0027";
+    pub const INVALID_SELF_PARAMETER: &str = "RS0028";
     pub const FEATURE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
@@ -391,6 +392,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::UNKNOWN_PROTOCOL,
         title: "unknown protocol",
         explanation: "Protocol bounds and protocol implementations must name a declared RSScript protocol. Protocols are nominal capability contracts, not structural matches inferred from function names.",
+    },
+    DiagnosticExplanation {
+        code: code::INVALID_SELF_PARAMETER,
+        title: "invalid self parameter",
+        explanation: "`self` is reserved for explicit method/protocol receiver contracts. It may only appear as the first parameter of a qualified method signature, and protocol methods must declare `self: read|mut|take Self` first.",
     },
     DiagnosticExplanation {
         code: code::FEATURE_VIOLATION,

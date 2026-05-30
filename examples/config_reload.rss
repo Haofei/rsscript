@@ -16,10 +16,10 @@ fn main() -> Result<Unit, FileError> {
     let initial = Bytes.from_string(value: read "initial\n")
     let reloaded = Bytes.from_string(value: read "reloaded\n")
 
-    with File.open_write(path: read first) as file {
+    with File.open_write(path: read first)? as file {
         File.write(file: mut file, data: read initial)?
     }
-    with File.open_write(path: read second) as file {
+    with File.open_write(path: read second)? as file {
         File.write(file: mut file, data: read reloaded)?
     }
 

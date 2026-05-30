@@ -10,8 +10,8 @@ use crate::interfaces::CORE_INTERFACES;
 use crate::lexer::{Token, lex};
 use crate::syntax::ast::merge_programs;
 use crate::syntax::ast::{
-    Block, Callee, DataEffect, EffectDecl, Expr, GenericBound, GenericParam, Item, MatchPattern,
-    Stmt, TypeKind, TypeRef,
+    Block, Callee, DataEffect, EffectDecl, Expr, FunctionDecl, GenericBound, GenericParam, Item,
+    MatchPattern, Param, Stmt, TypeKind, TypeRef,
 };
 use crate::syntax::parse_source;
 
@@ -628,6 +628,12 @@ impl Analyzer<'_> {
 
     fn check_signature_explicitness(&mut self) {
         let items = self.syntax_program.items.clone();
+        let protocol_names = self
+            .syntax_program
+            .protocols
+            .iter()
+            .map(|protocol| protocol.name.clone())
+            .collect::<HashSet<_>>();
         for item in &items {
             let Item::Function(function) = item else {
                 continue;
@@ -645,7 +651,19 @@ impl Analyzer<'_> {
                 );
             }
 
-            for param in &function.params {
+            let is_qualified_method = function.name.contains('.');
+            let is_protocol_method = function
+                .name
+                .split_once('.')
+                .is_some_and(|(namespace, _)| protocol_names.contains(namespace));
+            for (index, param) in function.params.iter().enumerate() {
+                if param.name == "self" && (!is_qualified_method || index != 0) {
+                    self.invalid_self_parameter_diagnostic(
+                        function,
+                        param,
+                        "`self` may only be the first parameter of a qualified method signature.",
+                    );
+                }
                 if param.ty.name.is_empty() {
                     self.diagnostics.push(
                         Diagnostic::error(
@@ -711,6 +729,37 @@ impl Analyzer<'_> {
                             "manual",
                         ),
                     );
+                }
+            }
+
+            if is_protocol_method {
+                match function.params.first() {
+                    Some(param)
+                        if param.name == "self"
+                            && param.ty.name == "Self"
+                            && param.effect.is_some() => {}
+                    Some(param) => self.invalid_self_parameter_diagnostic(
+                        function,
+                        param,
+                        "Protocol methods must declare `self: read|mut|take Self` as their first parameter.",
+                    ),
+                    None => self.diagnostics.push(
+                        Diagnostic::error(
+                            code::INVALID_SELF_PARAMETER,
+                            format!(
+                                "protocol method `{}` must declare an explicit `self` parameter.",
+                                function.name
+                            ),
+                            function.span.clone(),
+                            "missing protocol self parameter",
+                        )
+                        .with_cause("Protocol calls are explicit capability calls, so the receiver must be review-visible as `self: read|mut|take Self`.")
+                        .with_fix(
+                            "add_protocol_self",
+                            "Add `self: read Self`, `self: mut Self`, or `self: take Self` as the first parameter.",
+                            "manual",
+                        ),
+                    ),
                 }
             }
 
@@ -925,6 +974,28 @@ impl Analyzer<'_> {
                 }
             }
         }
+    }
+
+    fn invalid_self_parameter_diagnostic(
+        &mut self,
+        function: &FunctionDecl,
+        param: &Param,
+        cause: impl Into<String>,
+    ) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::INVALID_SELF_PARAMETER,
+                format!("invalid `self` parameter in `{}`.", function.name),
+                param.span.clone(),
+                "invalid self parameter",
+            )
+            .with_cause(cause)
+            .with_fix(
+                "fix_self_parameter",
+                "Use a different parameter name, or make this the first parameter of an explicit method/protocol signature.",
+                "manual",
+            ),
+        );
     }
 
     fn check_generic_constraints(&mut self) {
