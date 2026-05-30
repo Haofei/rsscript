@@ -304,9 +304,10 @@ bash scripts/run_examples.sh
 bash scripts/run_selfhost.sh
 ```
 
-Development discipline is documented in [DEVELOPMENT.md](DEVELOPMENT.md): spec
-prerequisites first, self-hosted validation as the main pressure test, no fixture-only
-shortcuts, and a broad-first testing loop.
+Development discipline is documented in [DEVELOPMENT.md](DEVELOPMENT.md), and
+the module boundaries are tracked in [ARCHITECTURE.md](ARCHITECTURE.md): spec
+prerequisites first, self-hosted validation as the main pressure test,
+no fixture-only shortcuts, and a broad-first testing loop.
 
 The package manager should be implemented in RSScript as the language core becomes
 capable enough. Rust remains the lowering backend and native-wrapper language,
