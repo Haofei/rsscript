@@ -6821,6 +6821,68 @@ fn run(callback: read Fn(Int) -> Result<String, BuildError>) -> Unit {
 }
 
 #[test]
+fn rss_verify_rust_accepts_plain_fn_result_direct_call() {
+    let temp_dir = unique_temp_dir("rsscript-verify-plain-fn-result-call");
+    let source_path = temp_dir.join("fn_result_call.rss");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    fs::write(
+        &source_path,
+        r#"struct BuildError {
+    message: String
+}
+
+fn run(callback: read Fn(Int) -> Result<String, BuildError>) -> Result<String, BuildError> {
+    return callback(41)
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("verify-rust")
+        .arg("--json")
+        .arg(&source_path)
+        .arg("--out-dir")
+        .arg(temp_dir.join("out"))
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss verify-rust should execute");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: Value = serde_json::from_str(&stdout).expect("stdout should be diagnostics JSON");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert!(json.as_array().is_some_and(|diagnostics| {
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic["severity"] != "error")
+    }));
+}
+
+#[test]
+fn checker_reports_plain_fn_callback_call_argument_type_mismatch() {
+    let source = r#"
+struct BuildError {
+    message: String
+}
+
+fn run(callback: read Fn(Int) -> Result<String, BuildError>) -> Result<String, BuildError> {
+    return callback("bad")
+}
+"#;
+    let diagnostics = analyze_source("plain-fn-callback-arg.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0207"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn rss_run_accepts_dogfood_classifier() {
     let temp_dir = unique_temp_dir("rsscript-dogfood-run-generated-review-map");
     let Some(fixture_dir) = prepare_dogfood_run_dir(&temp_dir) else {

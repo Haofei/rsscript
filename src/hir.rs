@@ -1509,7 +1509,14 @@ fn infer_hir_expr_type(
                 infer_signature_return_type(hir, &signature, callee, args, value_types)
                     .or(signature.return_type)
             }
-            CallResolution::EnumVariant | CallResolution::Unknown => None,
+            CallResolution::Unknown => match callee {
+                Callee::Name(name) => value_types
+                    .get(name)
+                    .and_then(|type_name| fn_return_type(type_name))
+                    .map(str::to_string),
+                Callee::Qualified { .. } => None,
+            },
+            CallResolution::EnumVariant => None,
         },
         Expr::Field { base, name, .. } => {
             let base_type = infer_hir_expr_type(hir, base, value_types)?;
@@ -1780,12 +1787,22 @@ fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str>> {
     }
 }
 
-fn noescape_return_type(type_name: &str) -> Option<&str> {
+fn fn_return_type(type_name: &str) -> Option<&str> {
+    let type_name = type_name.trim();
     type_name
-        .strip_prefix("noescape Fn(")
+        .strip_prefix("noescape ")
+        .unwrap_or(type_name)
+        .strip_prefix("Fn(")
         .and_then(|rest| rest.split_once(')'))
         .and_then(|(_, rest)| rest.trim_start().strip_prefix("->"))
         .map(str::trim)
+}
+
+fn noescape_return_type(type_name: &str) -> Option<&str> {
+    type_name
+        .trim()
+        .strip_prefix("noescape ")
+        .and_then(fn_return_type)
 }
 
 fn is_noescape_fn_type(type_name: &str) -> bool {

@@ -1589,10 +1589,20 @@ impl<'a> RustLowerer<'a> {
 
     fn expr_returns_result(&self, expr: &Expr) -> bool {
         match expr {
-            Expr::Call { callee, .. } => self
-                .function_return_types
-                .get(&native_boundary_callee_key(callee))
-                .is_some_and(is_result_type),
+            Expr::Call { callee, .. } => {
+                self.function_return_types
+                    .get(&native_boundary_callee_key(callee))
+                    .is_some_and(is_result_type)
+                    || matches!(
+                        callee,
+                        Callee::Name(name)
+                            if self
+                                .value_types
+                                .get(name)
+                                .and_then(fn_type_return)
+                                .is_some_and(is_result_type)
+                    )
+            }
             Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
                 self.expr_returns_result(value)
             }
@@ -1617,6 +1627,10 @@ impl<'a> RustLowerer<'a> {
                 fn_return: None,
                 span: span.clone(),
             }),
+            Expr::Call {
+                callee: Callee::Name(name),
+                ..
+            } => self.value_types.get(name).and_then(fn_type_return).cloned(),
             Expr::Manage { value, .. } | Expr::Try { value, .. } => self.infer_expr_type(value),
             _ => None,
         }
@@ -1897,6 +1911,14 @@ fn lower_weak_upgrade_call(lowerer: &mut RustLowerer<'_>, args: &[CallArg]) -> S
 
 fn is_result_type(ty: &TypeRef) -> bool {
     ty.name == "Result" && ty.args.len() == 2
+}
+
+fn fn_type_return(ty: &TypeRef) -> Option<&TypeRef> {
+    if ty.name == "Fn" {
+        ty.fn_return.as_deref()
+    } else {
+        None
+    }
 }
 
 fn list_element_type_ref(ty: &TypeRef) -> Option<TypeRef> {
