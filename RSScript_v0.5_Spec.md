@@ -2705,6 +2705,7 @@ return type mismatch
 function fallthrough return type mismatch
 control-flow type mismatch
 match variant family mismatch
+invalid standard variant form
 operator type mismatch
 same-call place conflict
 constructor/variant call-like conflict

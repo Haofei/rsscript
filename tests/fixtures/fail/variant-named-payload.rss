@@ -1,0 +1,9 @@
+// expect: RS0015
+
+class BuildError {
+    code: Int
+}
+
+fn bad() -> Result<Int, BuildError> {
+    return Ok(value: 1)
+}

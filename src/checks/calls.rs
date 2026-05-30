@@ -932,7 +932,13 @@ fn enum_variant_payload(expr: &HirExpr) -> Option<(&'static str, Option<&HirExpr
         "None" => "None",
         _ => return None,
     };
-    Some((variant, args.first().map(|arg| &arg.value)))
+    match variant {
+        "Ok" | "Err" | "Some" if args.len() == 1 && args[0].name.is_none() => {
+            Some((variant, Some(&args[0].value)))
+        }
+        "None" if args.is_empty() => Some((variant, None)),
+        _ => None,
+    }
 }
 
 fn expected_variant_payload_type(expected_type: &str, variant: &str) -> Option<String> {
@@ -1011,6 +1017,7 @@ fn check_call_args(
         return;
     }
     if matches!(resolution, CallResolution::EnumVariant) {
+        check_enum_variant_form(analyzer, callee, args, call_span);
         return;
     }
 
@@ -1251,6 +1258,49 @@ fn check_call_args(
             LocalClosureEscapeContext::Pass { callee: &call_name },
         );
     }
+}
+
+fn check_enum_variant_form(
+    analyzer: &mut Analyzer<'_>,
+    callee: &Callee,
+    args: &[HirCallArg],
+    call_span: &Span,
+) {
+    let variant = callee_name(callee);
+    let valid = match variant.as_str() {
+        "Ok" | "Err" | "Some" => args.len() == 1 && args[0].name.is_none(),
+        "None" => args.is_empty(),
+        _ => true,
+    };
+    if valid {
+        return;
+    }
+
+    let form = match variant.as_str() {
+        "Ok" => "`Ok(value)`",
+        "Err" => "`Err(error)`",
+        "Some" => "`Some(value)`",
+        "None" => "`None`",
+        _ => "the conventional variant form",
+    };
+    let span = args
+        .first()
+        .map(|arg| arg.span.clone())
+        .unwrap_or_else(|| call_span.clone());
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::UNSUPPORTED_SYNTAX,
+            format!("variant `{variant}` must use its conventional RSScript form."),
+            span,
+            "unsupported variant form",
+        )
+        .with_cause("Standard Result and Option variants are call-like for checker purposes, but they are not ordinary named-argument calls.")
+        .with_fix(
+            "use_conventional_variant_form",
+            format!("Write this variant as {form}."),
+            "manual",
+        ),
+    );
 }
 
 fn call_type_param_substitutions(

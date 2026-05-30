@@ -1,0 +1,5 @@
+// expect: RS0015
+
+fn bad() -> Option<Int> {
+    return None(1)
+}
