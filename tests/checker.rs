@@ -10898,6 +10898,64 @@ fn package_diff_marks_noescape_callback_contract_changes_high_risk() {
 }
 
 #[test]
+fn package_diff_marks_protocol_impl_mapping_changes_high_risk() {
+    let old_dir = unique_temp_dir("rsscript-package-protocol-impl-old");
+    let new_dir = unique_temp_dir("rsscript-package-protocol-impl-new");
+    let old_interface = r#"protocol Writer {
+    fn write(self: mut Self, message: read String) -> Unit
+        effects(retains(message))
+}
+
+struct BufferWriter
+
+pub fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit
+    effects(retains(message))
+pub fn BufferWriter.audit_write(self: mut BufferWriter, message: read String) -> Unit
+    effects(retains(message))
+
+impl Writer for BufferWriter {
+    write = BufferWriter.write
+}
+"#;
+    let new_interface = r#"protocol Writer {
+    fn write(self: mut Self, message: read String) -> Unit
+        effects(retains(message))
+}
+
+struct BufferWriter
+
+pub fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit
+    effects(retains(message))
+pub fn BufferWriter.audit_write(self: mut BufferWriter, message: read String) -> Unit
+    effects(retains(message))
+
+impl Writer for BufferWriter {
+    write = BufferWriter.audit_write
+}
+"#;
+    write_named_package_fixture(&old_dir, "rss-protocol-diff", "0.1.0", "", old_interface);
+    write_named_package_fixture(&new_dir, "rss-protocol-diff", "0.1.0", "", new_interface);
+
+    let diff = diff_package_dirs(&old_dir, &new_dir).expect("package diff should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_diff_json(&diff))
+        .expect("package diff JSON should parse");
+    let _ = fs::remove_dir_all(&old_dir);
+    let _ = fs::remove_dir_all(&new_dir);
+
+    assert_eq!(json["risk"], "high");
+    assert!(json["interface_changes"].as_array().is_some_and(|changes| {
+        changes.iter().any(|change| {
+            change["file"] == "interface/lib.rssi"
+                && change["change"] == "modified"
+                && change["risk"] == "high"
+                && change["findings"].as_array().is_some_and(|findings| {
+                    findings.iter().any(|finding| finding["code"] == "RSR016")
+                })
+        })
+    }));
+}
+
+#[test]
 fn package_diff_preserves_callback_result_contract_types() {
     let old_dir = unique_temp_dir("rsscript-package-fn-result-interface-old");
     let new_dir = unique_temp_dir("rsscript-package-fn-result-interface-new");

@@ -5481,6 +5481,12 @@ fn package_diff_risk(
 }
 
 fn interface_change_risk(findings: &[ReviewFinding]) -> PackageRisk {
+    if findings
+        .iter()
+        .any(|finding| finding.code == code::REVIEW_PROTOCOL_IMPL_CHANGED)
+    {
+        return PackageRisk::High;
+    }
     if findings.iter().any(|finding| {
         matches!(
             finding.risk,
