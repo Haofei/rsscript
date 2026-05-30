@@ -93,6 +93,7 @@ src/checks/*.rs        large semantic checker implementations
    src/package/contract.rs    .rssi public contract extraction and comparison
    src/package/lock.rs        semantic lockfile, package archive, and hash logic
    src/package/graph.rs       dependency tree and package graph validation
+   src/package/vendor.rs      path dependency vendoring and vendor metadata
    ```
 
 3. Split lowering by backend responsibility:
