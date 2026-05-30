@@ -1205,6 +1205,22 @@ pub fn json_is_object(value: &JsonValue) -> bool {
     value.inner.is_object()
 }
 
+pub fn json_object_len(value: &JsonValue) -> Result<i64, JsonError> {
+    let Some(fields) = value.inner.as_object() else {
+        return Err(JsonError::new("JSON value is not an object"));
+    };
+    Ok(fields.len() as i64)
+}
+
+pub fn json_object_keys(value: &JsonValue) -> Result<Vec<String>, JsonError> {
+    let Some(fields) = value.inner.as_object() else {
+        return Err(JsonError::new("JSON value is not an object"));
+    };
+    let mut keys = fields.keys().cloned().collect::<Vec<_>>();
+    keys.sort();
+    Ok(keys)
+}
+
 pub fn json_array_len(value: &JsonValue) -> Result<i64, JsonError> {
     let Some(items) = value.inner.as_array() else {
         return Err(JsonError::new("JSON value is not an array"));
@@ -2091,6 +2107,8 @@ mod tests {
         let active_again =
             super::json_as_bool(&active_value).expect("active value should be a boolean");
         let profile_is_object = super::json_is_object(&profile);
+        let profile_object_len = super::json_object_len(&profile).unwrap();
+        let profile_object_keys = super::json_object_keys(&profile).unwrap();
         let profiles_is_array = super::json_is_array(&profiles);
         let profile_name_is_null = super::json_is_null(&profile_name_value);
         let reasons =
@@ -2145,6 +2163,11 @@ mod tests {
         assert_eq!(age_again, 1);
         assert!(active_again);
         assert!(profile_is_object);
+        assert_eq!(profile_object_len, 3);
+        assert_eq!(
+            profile_object_keys,
+            vec!["active".to_string(), "age".to_string(), "name".to_string()]
+        );
         assert!(profiles_is_array);
         assert!(!profile_name_is_null);
         assert_eq!(

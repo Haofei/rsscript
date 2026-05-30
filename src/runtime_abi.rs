@@ -258,6 +258,8 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Json", "is_array", "rsscript_runtime::json_is_array"),
     runtime_intrinsic("Json", "is_null", "rsscript_runtime::json_is_null"),
     runtime_intrinsic("Json", "is_object", "rsscript_runtime::json_is_object"),
+    runtime_intrinsic("Json", "object_keys", "rsscript_runtime::json_object_keys"),
+    runtime_intrinsic("Json", "object_len", "rsscript_runtime::json_object_len"),
     runtime_intrinsic("Json", "parse", "rsscript_runtime::json_parse"),
     runtime_intrinsic("Json", "parse_file", "rsscript_runtime::json_parse_file"),
     runtime_intrinsic(

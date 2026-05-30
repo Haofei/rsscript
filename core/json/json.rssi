@@ -42,6 +42,10 @@ pub fn Json.is_array(value: read JsonValue) -> Bool
 pub fn Json.is_object(value: read JsonValue) -> Bool
     effects(pure)
 
+pub fn Json.object_len(value: read JsonValue) -> Result<Int, JsonError>
+
+pub fn Json.object_keys(value: read JsonValue) -> Result<fresh List<String>, JsonError>
+
 pub fn Json.array_len(value: read JsonValue) -> Result<Int, JsonError>
 
 pub fn Json.array_get(

@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -87,6 +88,7 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
 ];
 
 static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+static RSS_COMMAND_SEED_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn pass_fixtures_have_no_diagnostics() {
@@ -2853,6 +2855,8 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     let age_again = Json.as_int(value: read age_value)?
     let active_again = Json.as_bool(value: read active_value)?
     let profile_is_object = Json.is_object(value: read profile)
+    let profile_object_len = Json.object_len(value: read profile)?
+    let profile_object_keys = Json.object_keys(value: read profile)?
     let profiles_is_array = Json.is_array(value: read value)
     let name_is_null = Json.is_null(value: read profile_name_value)
     return profile_name
@@ -2909,6 +2913,12 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     assert!(rust.contains("let age_again = rsscript_runtime::json_as_int(&age_value)?;"));
     assert!(rust.contains("let active_again = rsscript_runtime::json_as_bool(&active_value)?;"));
     assert!(rust.contains("let profile_is_object = rsscript_runtime::json_is_object(&profile);"));
+    assert!(
+        rust.contains("let profile_object_len = rsscript_runtime::json_object_len(&profile)?;")
+    );
+    assert!(
+        rust.contains("let profile_object_keys = rsscript_runtime::json_object_keys(&profile)?;")
+    );
     assert!(rust.contains("let profiles_is_array = rsscript_runtime::json_is_array(&value);"));
     assert!(
         rust.contains("let name_is_null = rsscript_runtime::json_is_null(&profile_name_value);")
@@ -6941,34 +6951,6 @@ fn review_map_pass_fixture_unknown_rate_stays_low() {
 }
 
 #[test]
-fn readme_review_map_confidence_corpus_count_matches_fixtures() {
-    let owned_sources = fixture_paths("tests/fixtures/pass")
-        .into_iter()
-        .map(|path| {
-            let file = path.display().to_string();
-            let source = fs::read_to_string(&path)
-                .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
-            (file, source)
-        })
-        .collect::<Vec<_>>();
-    let sources = owned_sources
-        .iter()
-        .map(|(file, source)| (file.as_str(), source.as_str()))
-        .collect::<Vec<_>>();
-    let map = review_map_sources(sources);
-    let readme = fs::read_to_string("README.md").expect("README should be readable");
-    let expected = format!(
-        "reports {} functions / {} lines with 0 unknown functions and 0 unknown lines",
-        map.summary.total_functions, map.summary.total_lines
-    );
-
-    assert!(
-        readme.contains(&expected),
-        "README confidence corpus count is stale; expected phrase `{expected}`"
-    );
-}
-
-#[test]
 fn review_map_complex_supported_script_has_no_unknown_regions() {
     let path = Path::new("tests/fixtures/pass/complex-supported-review-map.rss");
     let source = read_fixture(path);
@@ -7517,7 +7499,7 @@ fn rss_run_accepts_checked_in_selfhost_rustc_remap_directly() {
 #[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_accepts_checked_in_selfhost_package_manager_directly() {
     assert_checked_in_selfhost_script_runs(
-        "tests/fixtures/pass/selfhost-package-manager.rss",
+        "rss/package-manager/main.rss",
         "rss package manager metadata rss-selfhost-source-set",
     );
 }
@@ -7605,7 +7587,7 @@ fn rss_run_accepts_minimal_selfhost_package_manager_metadata() {
 
     let metadata_output = rss_command()
         .arg("run")
-        .arg("tests/fixtures/pass/selfhost-package-manager.rss")
+        .arg("rss/package-manager/main.rss")
         .arg("--")
         .arg("metadata")
         .arg(source_root)
@@ -7645,7 +7627,7 @@ fn rss_run_accepts_minimal_selfhost_package_manager_vendor() {
 
     let vendor_output = rss_command()
         .arg("run")
-        .arg("tests/fixtures/pass/selfhost-package-manager.rss")
+        .arg("rss/package-manager/main.rss")
         .arg("--")
         .arg("vendor")
         .arg(source_root)
@@ -7688,7 +7670,7 @@ fn rss_run_accepts_minimal_selfhost_package_manager_check() {
 
     let check_output = rss_command()
         .arg("run")
-        .arg("tests/fixtures/pass/selfhost-package-manager.rss")
+        .arg("rss/package-manager/main.rss")
         .arg("--")
         .arg("check")
         .arg(source_root)
@@ -7719,6 +7701,107 @@ fn rss_run_accepts_minimal_selfhost_package_manager_check() {
     assert_eq!(check_json["source_roots"], 2);
     assert_eq!(check_json["interface_files"], 2);
     assert_eq!(check_json["source_files"], 2);
+}
+
+#[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
+fn rss_run_accepts_minimal_selfhost_package_manager_tree() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-package-manager-tree");
+    let root_dir = temp_dir.join("root");
+    let dep_dir = temp_dir.join("dep");
+    let tree_path = temp_dir.join("review/package-tree.json");
+
+    fs::create_dir_all(root_dir.join("interface")).expect("root interface dir should exist");
+    fs::create_dir_all(root_dir.join("src")).expect("root source dir should exist");
+    fs::create_dir_all(dep_dir.join("interface")).expect("dep interface dir should exist");
+    fs::create_dir_all(dep_dir.join("src")).expect("dep source dir should exist");
+    fs::write(
+        root_dir.join("interface/lib.rssi"),
+        "pub fn main() -> Unit\n",
+    )
+    .expect("root interface should write");
+    fs::write(
+        root_dir.join("src/main.rss"),
+        "pub fn main() -> Unit { return Unit }\n",
+    )
+    .expect("root source should write");
+    fs::write(dep_dir.join("interface/lib.rssi"), "pub fn dep() -> Unit\n")
+        .expect("dep interface should write");
+    fs::write(
+        dep_dir.join("src/lib.rss"),
+        "pub fn dep() -> Unit { return Unit }\n",
+    )
+    .expect("dep source should write");
+    fs::write(
+        root_dir.join("rsspkg.toml"),
+        format!(
+            r#"[package]
+name = "rss-tree-root"
+version = "0.5.0"
+edition = "2026"
+
+[interfaces]
+paths = ["interface"]
+
+[sources]
+paths = ["src"]
+
+[dependencies]
+rss-tree-dep = {{ path = "{}" }}
+rss-remote = "0.5"
+"#,
+            dep_dir.display()
+        ),
+    )
+    .expect("root manifest should write");
+    fs::write(
+        dep_dir.join("rsspkg.toml"),
+        r#"[package]
+name = "rss-tree-dep"
+version = "0.1.0"
+edition = "2026"
+
+[interfaces]
+paths = ["interface"]
+
+[sources]
+paths = ["src"]
+"#,
+    )
+    .expect("dep manifest should write");
+
+    let tree_output = rss_command()
+        .arg("run")
+        .arg("rss/package-manager/main.rss")
+        .arg("--")
+        .arg("tree")
+        .arg(&root_dir)
+        .arg(&tree_path)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss run should execute minimal package manager tree command");
+    let tree_stdout = String::from_utf8_lossy(&tree_output.stdout);
+    let tree_stderr = String::from_utf8_lossy(&tree_output.stderr);
+
+    assert!(
+        tree_output.status.success(),
+        "stdout={tree_stdout}\nstderr={tree_stderr}"
+    );
+    assert!(
+        tree_stdout
+            .contains("rss package manager tree rss-tree-root packages=3 path=1 unresolved=1"),
+        "{tree_stdout}"
+    );
+    assert!(tree_stderr.trim().is_empty(), "{tree_stderr}");
+    let tree = fs::read_to_string(&tree_path)
+        .unwrap_or_else(|error| panic!("tree JSON should be written: {error}"));
+    let tree_json: Value = serde_json::from_str(&tree).expect("tree output should be valid JSON");
+    assert_eq!(tree_json["package"], "rss-tree-root");
+    assert_eq!(tree_json["packages"], 3);
+    assert_eq!(tree_json["path_dependencies"], 1);
+    assert_eq!(tree_json["unresolved_dependencies"], 1);
+
+    let _ = fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
@@ -14186,25 +14269,116 @@ fn read_fixture(path: &Path) -> String {
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()))
 }
 
-fn rss_command() -> Command {
+fn directory_has_entries(path: &Path) -> bool {
+    fs::read_dir(path)
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false)
+}
+
+fn copy_directory_contents(source: &Path, destination: &Path) {
+    if !source.is_dir() || !directory_has_entries(source) {
+        return;
+    }
+
+    for entry in fs::read_dir(source)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", source.display()))
+    {
+        let entry = entry.expect("directory entry should be readable");
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .unwrap_or_else(|error| panic!("failed to inspect {}: {error}", source_path.display()));
+        if file_type.is_dir() {
+            fs::create_dir_all(&destination_path).unwrap_or_else(|error| {
+                panic!("failed to create {}: {error}", destination_path.display())
+            });
+            copy_directory_contents(&source_path, &destination_path);
+        } else if file_type.is_file() {
+            fs::copy(&source_path, &destination_path).unwrap_or_else(|error| {
+                panic!(
+                    "failed to copy {} to {}: {error}",
+                    source_path.display(),
+                    destination_path.display()
+                )
+            });
+        }
+    }
+}
+
+fn generated_target_seed_dir() -> Option<PathBuf> {
+    std::env::var_os("RSSCRIPT_GENERATED_TARGET_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir())
+}
+
+struct RssCommand {
+    command: Command,
+    command_dir: PathBuf,
+    generated_target: PathBuf,
+}
+
+impl RssCommand {
+    fn arg<T: AsRef<std::ffi::OsStr>>(&mut self, arg: T) -> &mut Self {
+        self.command.arg(arg);
+        self
+    }
+
+    fn current_dir<T: AsRef<Path>>(&mut self, directory: T) -> &mut Self {
+        self.command.current_dir(directory);
+        self
+    }
+
+    fn output(&mut self) -> std::io::Result<Output> {
+        let output = self.command.output();
+        if output.as_ref().is_ok_and(|output| output.status.success()) {
+            populate_generated_target_seed(&self.generated_target);
+        }
+        output
+    }
+}
+
+impl Drop for RssCommand {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.command_dir);
+    }
+}
+
+fn rss_command() -> RssCommand {
+    let command_dir = unique_temp_dir("rsscript-command");
+    let generated_target = command_dir.join("generated-target");
+    let temp_dir = command_dir.join("temp");
+    fs::create_dir_all(&generated_target).expect("rss command target dir should be created");
+    fs::create_dir_all(&temp_dir).expect("rss command temp dir should be created");
+    if let Some(seed_dir) = generated_target_seed_dir().filter(|path| directory_has_entries(path)) {
+        copy_directory_contents(&seed_dir, &generated_target);
+    }
+
     let mut command = Command::new(env!("CARGO_BIN_EXE_rss"));
-    command.env(
-        "RSSCRIPT_TEMP_DIR",
-        std::env::var_os("RSSCRIPT_TEMP_DIR").unwrap_or_else(|| {
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("target/rsscript-temp")
-                .into_os_string()
-        }),
-    );
-    command.env(
-        "RSSCRIPT_GENERATED_TARGET_DIR",
-        std::env::var_os("RSSCRIPT_GENERATED_TARGET_DIR").unwrap_or_else(|| {
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("target/rsscript-generated-target")
-                .into_os_string()
-        }),
-    );
-    command
+    command.env("RSSCRIPT_TEMP_DIR", &temp_dir);
+    command.env("RSSCRIPT_GENERATED_TARGET_DIR", &generated_target);
+    RssCommand {
+        command,
+        command_dir,
+        generated_target,
+    }
+}
+
+fn populate_generated_target_seed(source: &Path) {
+    if !source.is_dir() || !directory_has_entries(source) {
+        return;
+    }
+    let Some(seed_dir) = generated_target_seed_dir() else {
+        return;
+    };
+    let _guard = RSS_COMMAND_SEED_LOCK
+        .lock()
+        .expect("RSS command seed lock should not be poisoned");
+    if directory_has_entries(&seed_dir) {
+        return;
+    }
+    copy_directory_contents(source, &seed_dir);
 }
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {

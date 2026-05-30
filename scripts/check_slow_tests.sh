@@ -5,10 +5,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 threshold="${RSSCRIPT_SLOW_TEST_THRESHOLD:-10}"
-pattern="${RSSCRIPT_SLOW_TEST_PATTERN:-rss_run|rss_verify_rust}"
-export RSSCRIPT_GENERATED_TARGET_DIR="${RSSCRIPT_GENERATED_TARGET_DIR:-$ROOT/target/rsscript-generated-target}"
-export RSSCRIPT_TEMP_DIR="${RSSCRIPT_TEMP_DIR:-$ROOT/target/rsscript-temp}"
-mkdir -p "$RSSCRIPT_TEMP_DIR"
+pattern="${RSSCRIPT_SLOW_TEST_PATTERN:-.*}"
+source "$ROOT/scripts/ramdisk_env.sh"
 
 detect_jobs() {
   if [[ -n "${RSSCRIPT_JOBS:-}" ]]; then
@@ -16,7 +14,24 @@ detect_jobs() {
     return
   fi
 
-  echo 1
+  local cpus
+  if command -v getconf >/dev/null 2>&1; then
+    cpus="$(getconf _NPROCESSORS_ONLN)"
+  elif command -v sysctl >/dev/null 2>&1; then
+    cpus="$(sysctl -n hw.ncpu)"
+  else
+    cpus=4
+  fi
+
+  if ! [[ "$cpus" =~ ^[0-9]+$ ]] || (( cpus < 1 )); then
+    cpus=4
+  fi
+
+  if (( cpus > 4 )); then
+    cpus=4
+  fi
+
+  echo "$cpus"
 }
 
 jobs="$(detect_jobs)"
@@ -34,7 +49,7 @@ fi
 tmp_dir="$(mktemp -d "${RSSCRIPT_TEMP_DIR:-${TMPDIR:-/tmp}}/rsscript-slow-tests.XXXXXX")"
 trap 'rm -rf "$tmp_dir"' EXIT
 
-"$checker_bin" --list | awk -F: -v pattern="$pattern" '$1 ~ pattern {print $1}' \
+"$checker_bin" --list | awk -F: -v pattern="$pattern" '$2 ~ /test/ && $1 ~ pattern {print $1}' \
   > "$tmp_dir/tests.txt"
 
 if [[ ! -s "$tmp_dir/tests.txt" ]]; then
@@ -46,7 +61,7 @@ export checker_bin
 export threshold
 export tmp_dir
 
-printf 'slow checker test audit: jobs=%s threshold=%ss pattern=%s\n' "$jobs" "$threshold" "$pattern"
+printf 'checker test duration gate: jobs=%s threshold=%ss pattern=%s\n' "$jobs" "$threshold" "$pattern"
 
 xargs -n1 -P "$jobs" bash -c '
   set -euo pipefail
@@ -66,9 +81,9 @@ xargs -n1 -P "$jobs" bash -c '
 cat "$tmp_dir"/*.time | sort -nr | tee "$tmp_dir/times.txt"
 
 if awk -v threshold="$threshold" '$1 + 0 > threshold {found = 1} END {exit found ? 0 : 1}' "$tmp_dir/times.txt"; then
-  echo "slow checker tests over ${threshold}s:" >&2
+  echo "checker tests over ${threshold}s; refactor, split, or move expensive work out of the test:" >&2
   awk -v threshold="$threshold" '$1 + 0 > threshold {print}' "$tmp_dir/times.txt" >&2
   exit 1
 fi
 
-echo "slow checker test audit passed: no matched test exceeded ${threshold}s"
+echo "checker test duration gate passed: no matched test exceeded ${threshold}s"

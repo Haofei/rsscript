@@ -13,7 +13,7 @@ selfhost_scripts=(
   tests/fixtures/pass/selfhost-package-exports.rss
   tests/fixtures/pass/selfhost-package-diff.rss
   tests/fixtures/pass/selfhost-package-lock-diff.rss
-  tests/fixtures/pass/selfhost-package-manager.rss
+  rss/package-manager/main.rss
   tests/fixtures/pass/selfhost-rustc-remap.rss
 )
 
@@ -50,9 +50,7 @@ if [[ ! -x "$RSS_BIN" ]]; then
   RSS_BIN="$ROOT/target/debug/rss"
 fi
 export RSS_BIN
-export RSSCRIPT_GENERATED_TARGET_DIR="${RSSCRIPT_GENERATED_TARGET_DIR:-$ROOT/target/rsscript-generated-target}"
-export RSSCRIPT_TEMP_DIR="${RSSCRIPT_TEMP_DIR:-$ROOT/target/rsscript-temp}"
-mkdir -p "$RSSCRIPT_TEMP_DIR"
+source "$ROOT/scripts/ramdisk_env.sh"
 
 printf '%s\0' "${selfhost_scripts[@]}" | xargs -0 -n1 -P "$jobs" bash -c '
   set -euo pipefail

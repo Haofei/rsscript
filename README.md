@@ -242,8 +242,6 @@ The spec includes a semantic guarantee table that marks each promise as `static`
 - **Control flow:** `if`, `while`, `loop`, `break`, `continue`, and statement-form `match` for the current `Option<T>` / `Result<T, E>` shapes. A `match` must cover `Some`/`None`, `Ok`/`Err`, or include `_`; non-exhaustive matches are diagnostics before lowering.
 - **Closures:** `noescape Fn()` parameters allow temporary callbacks that may use local values without becoming managed closures.
 
-The `tests/fixtures/pass` corpus is the review-map confidence baseline: it currently reports 394 functions / 4798 lines with 0 unknown functions and 0 unknown lines. Tests fail if this known-good corpus regresses to unknown or if the documented count drifts from the actual corpus.
-
 ---
 
 ## CLI

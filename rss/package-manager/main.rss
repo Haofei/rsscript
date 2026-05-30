@@ -23,6 +23,13 @@ struct PackageCheckFacts {
     source_files: Int
 }
 
+struct PackageTreeFacts {
+    package_name: String
+    packages: Int
+    path_dependencies: Int
+    unresolved_dependencies: Int
+}
+
 fn json_error(prefix: read String, error: read JsonError) -> fresh String {
     let message = JsonError.message(error: read error)
     let first = String.concat(left: read prefix, right: read ": ")
@@ -116,6 +123,17 @@ fn json_array_strings_result(value: read JsonValue) -> Result<List<String>, Stri
         }
         Err(error) => {
             return Err(json_error(prefix: read "manifest array strings", error: read error))
+        }
+    }
+}
+
+fn json_object_keys_result(value: read JsonValue) -> Result<List<String>, String> {
+    match Json.object_keys(value: read value) {
+        Ok(items) => {
+            return Ok(items)
+        }
+        Err(error) => {
+            return Err(json_error(prefix: read "manifest object keys", error: read error))
         }
     }
 }
@@ -368,6 +386,136 @@ fn package_check_json(facts: read PackageCheckFacts) -> fresh String {
     return StringBuilder.finish(builder: take builder)
 }
 
+fn empty_package_tree_facts(package_name: read String) -> fresh PackageTreeFacts {
+    return PackageTreeFacts(
+        package_name: read package_name,
+        packages: 1,
+        path_dependencies: 0,
+        unresolved_dependencies: 0,
+    )
+}
+
+fn add_unresolved_dependency(facts: read PackageTreeFacts) -> fresh PackageTreeFacts {
+    return PackageTreeFacts(
+        package_name: read facts.package_name,
+        packages: facts.packages + 1,
+        path_dependencies: facts.path_dependencies,
+        unresolved_dependencies: facts.unresolved_dependencies + 1,
+    )
+}
+
+fn add_path_dependency(
+    facts: read PackageTreeFacts,
+    dependency: read PackageTreeFacts,
+) -> fresh PackageTreeFacts {
+    return PackageTreeFacts(
+        package_name: read facts.package_name,
+        packages: facts.packages + dependency.packages,
+        path_dependencies: facts.path_dependencies + dependency.path_dependencies + 1,
+        unresolved_dependencies: facts.unresolved_dependencies + dependency.unresolved_dependencies,
+    )
+}
+
+fn package_tree_json(facts: read PackageTreeFacts) -> fresh String {
+    local builder = StringBuilder.new()
+    StringBuilder.push(builder: mut builder, value: read "{\n")
+    StringBuilder.push(builder: mut builder, value: read "  \"package\": ")
+    let package_name = Json.quote_string(value: read facts.package_name)
+    StringBuilder.push(builder: mut builder, value: read package_name)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"packages\": ")
+    let packages = String.from_int(value: facts.packages)
+    StringBuilder.push(builder: mut builder, value: read packages)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"path_dependencies\": ")
+    let path_dependencies = String.from_int(value: facts.path_dependencies)
+    StringBuilder.push(builder: mut builder, value: read path_dependencies)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"unresolved_dependencies\": ")
+    let unresolved = String.from_int(value: facts.unresolved_dependencies)
+    StringBuilder.push(builder: mut builder, value: read unresolved)
+    StringBuilder.push(builder: mut builder, value: read "\n}\n")
+
+    return StringBuilder.finish(builder: take builder)
+}
+
+fn manifest_dependencies(manifest: read JsonValue) -> Result<Option<JsonValue>, String> {
+    match Json.field(value: read manifest, name: read "dependencies") {
+        Ok(dependencies) => {
+            return Ok(Some(dependencies))
+        }
+        Err(_) => {
+            return Ok(None)
+        }
+    }
+}
+
+fn add_dependency_tree(
+    root: read Path,
+    dependencies: read JsonValue,
+    facts: read PackageTreeFacts,
+    name: read String,
+) -> Result<fresh PackageTreeFacts, String> {
+    let spec = json_field_result(value: read dependencies, name: read name)?
+
+    if Json.is_object(value: read spec) {
+        match Json.field_string(value: read spec, name: read "path") {
+            Ok(path) => {
+                let dependency_root = Path.join(base: read root, child: read path)
+                let dependency_facts = package_tree_facts(root: read dependency_root)?
+
+                return add_path_dependency(
+                    facts: read facts,
+                    dependency: read dependency_facts,
+                )
+            }
+            Err(_) => {
+                return add_unresolved_dependency(facts: read facts)
+            }
+        }
+    }
+
+    return add_unresolved_dependency(facts: read facts)
+}
+
+fn add_dependencies_tree(
+    root: read Path,
+    dependencies: read JsonValue,
+    facts: read PackageTreeFacts,
+) -> Result<fresh PackageTreeFacts, String> {
+    let names = json_object_keys_result(value: read dependencies)?
+
+    return List.try_fold<String, PackageTreeFacts, String>(
+        list: read names,
+        initial: read facts,
+        folder: |state, name| {
+            return add_dependency_tree(
+                root: read root,
+                dependencies: read dependencies,
+                facts: read state,
+                name: read name,
+            )
+        },
+    )
+}
+
+fn package_tree_facts(root: read Path) -> Result<fresh PackageTreeFacts, String> {
+    let manifest = parse_toml_result(path: read manifest_path(root: read root))?
+    let package = json_field_result(value: read manifest, name: read "package")?
+    let package_name = json_field_string_result(value: read package, name: read "name")?
+    local facts = empty_package_tree_facts(package_name: read package_name)
+
+    match manifest_dependencies(manifest: read manifest)? {
+        Some(dependencies) => {
+            return add_dependencies_tree(
+                root: read root,
+                dependencies: read dependencies,
+                facts: read facts,
+            )
+        }
+        None => {
+            return Ok(facts)
+        }
+    }
+}
+
 fn empty_vendor_facts() -> fresh VendorCopyFacts {
     return VendorCopyFacts(
         copied_files: 0,
@@ -521,6 +669,29 @@ fn run_check(root: read Path, output: read Path) -> Result<Unit, String> {
     return Ok(Unit)
 }
 
+fn run_tree(root: read Path, output: read Path) -> Result<Unit, String> {
+    let facts = package_tree_facts(root: read root)?
+    let text = package_tree_json(facts: read facts)
+    write_text_result(path: read output, text: read text)?
+
+    local builder = StringBuilder.new()
+    StringBuilder.push(builder: mut builder, value: read "rss package manager tree ")
+    StringBuilder.push(builder: mut builder, value: read facts.package_name)
+    StringBuilder.push(builder: mut builder, value: read " packages=")
+    let packages = String.from_int(value: facts.packages)
+    StringBuilder.push(builder: mut builder, value: read packages)
+    StringBuilder.push(builder: mut builder, value: read " path=")
+    let path_dependencies = String.from_int(value: facts.path_dependencies)
+    StringBuilder.push(builder: mut builder, value: read path_dependencies)
+    StringBuilder.push(builder: mut builder, value: read " unresolved=")
+    let unresolved = String.from_int(value: facts.unresolved_dependencies)
+    StringBuilder.push(builder: mut builder, value: read unresolved)
+    let message = StringBuilder.finish(builder: take builder)
+    Log.write(message: read message)
+
+    return Ok(Unit)
+}
+
 pub fn main() -> Result<Unit, String> {
     let command = Args.get_or_default(index: 0, default: read "metadata")
     let root = root_path()
@@ -536,6 +707,10 @@ pub fn main() -> Result<Unit, String> {
 
     if command == "check" {
         return run_check(root: read root, output: read output)
+    }
+
+    if command == "tree" {
+        return run_tree(root: read root, output: read output)
     }
 
     let message = String.concat(left: read "unknown package command: ", right: read command)
