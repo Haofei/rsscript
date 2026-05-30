@@ -919,6 +919,15 @@ pub fn json_parse_file<P: RuntimePath + ?Sized>(path: &P) -> Result<JsonValue, J
     json_parse(&text)
 }
 
+pub fn toml_parse_file<P: RuntimePath + ?Sized>(path: &P) -> Result<JsonValue, JsonError> {
+    let text = std::fs::read_to_string(path.as_path())?;
+    let value = text
+        .parse::<toml::Value>()
+        .map_err(|error| JsonError::new(error.to_string()))?;
+    let inner = serde_json::to_value(value)?;
+    Ok(JsonValue { inner })
+}
+
 pub fn json_field(value: &JsonValue, name: &str) -> Result<JsonValue, JsonError> {
     let Some(field) = value.inner.get(name) else {
         return Err(JsonError::new(format!("missing JSON field `{name}`")));

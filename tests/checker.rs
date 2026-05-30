@@ -7072,6 +7072,10 @@ fn rss_run_accepts_checked_in_dogfood_scripts_directly() {
             "dogfood package risk cases=5 mismatches=0 unmodeled_reasons=0",
         ),
         (
+            "tests/fixtures/pass/dogfood-package-manifest.rss",
+            "dogfood package manifest name=rss-dogfood-manifest version=0.5.0",
+        ),
+        (
             "tests/fixtures/pass/dogfood-package-exports.rss",
             "dogfood package exports types=2 functions=3 apis=5",
         ),
@@ -7106,6 +7110,55 @@ fn rss_run_accepts_checked_in_dogfood_scripts_directly() {
         assert!(stdout.contains(expected), "{script}\n{stdout}");
         assert!(stderr.trim().is_empty(), "{script}\n{stderr}");
     }
+}
+
+#[test]
+fn rss_run_accepts_dogfood_package_manifest_parser_with_input_path() {
+    let temp_dir = unique_temp_dir("rsscript-dogfood-package-manifest");
+    let Some(_fixture_dir) = prepare_dogfood_run_dir_for(&temp_dir, "dogfood-package-manifest.rss")
+    else {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return;
+    };
+    let package_dir = temp_dir.join("package");
+    fs::create_dir_all(&package_dir).expect("package directory should be created");
+    fs::write(
+        package_dir.join("rsspkg.toml"),
+        r#"[package]
+name = "rss-dogfood-manifest"
+version = "0.5.0"
+edition = "2024"
+
+[interfaces]
+paths = ["interface"]
+
+[dependencies]
+rss-core = "0.5"
+
+[features]
+native-tls = ["native"]
+"#,
+    )
+    .expect("manifest should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("tests/fixtures/pass/dogfood-package-manifest.rss")
+        .arg("--")
+        .arg("package/rsspkg.toml")
+        .current_dir(&temp_dir)
+        .output()
+        .expect("rss run should execute dogfood package manifest parser");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "dogfood package manifest name=rss-dogfood-manifest version=0.5.0 edition=2024 interface_paths=1 dep=0.5 feature_members=1"
+    );
+    assert!(stderr.trim().is_empty(), "{stderr}");
 }
 
 #[test]

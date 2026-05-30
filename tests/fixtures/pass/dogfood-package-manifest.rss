@@ -1,0 +1,71 @@
+features: local
+
+struct PackageManifestFacts {
+    package_name: String
+    version: String
+    edition: String
+    interface_paths: Int
+    dependency_version: String
+    feature_members: Int
+}
+
+fn dogfood_manifest_path() -> fresh Path {
+    let input = Args.get_or_default(
+        index: 0,
+        default: read "tests/fixtures/pass/dogfood-package-manifest.toml",
+    )
+
+    return Path.from_string(value: read input)
+}
+
+fn dogfood_manifest_facts() -> Result<fresh PackageManifestFacts, JsonError> {
+    let manifest = Toml.parse_file(path: read dogfood_manifest_path())?
+    let package = Json.field(value: read manifest, name: read "package")?
+    let interfaces = Json.field(value: read manifest, name: read "interfaces")?
+    let interface_paths = Json.field(value: read interfaces, name: read "paths")?
+    let dependencies = Json.field(value: read manifest, name: read "dependencies")?
+    let features = Json.field(value: read manifest, name: read "features")?
+    let native_tls = Json.field(value: read features, name: read "native-tls")?
+
+    return PackageManifestFacts(
+        package_name: Json.field_string(value: read package, name: read "name")?,
+        version: Json.field_string(value: read package, name: read "version")?,
+        edition: Json.field_string(value: read package, name: read "edition")?,
+        interface_paths: Json.array_len(value: read interface_paths)?,
+        dependency_version: Json.field_string(value: read dependencies, name: read "rss-core")?,
+        feature_members: Json.array_len(value: read native_tls)?,
+    )
+}
+
+fn dogfood_manifest_summary_line(facts: read PackageManifestFacts) -> fresh String {
+    let first = String.concat(left: read "dogfood package manifest name=", right: read facts.package_name)
+    let second = String.concat(left: read first, right: read " version=")
+    let third = String.concat(left: read second, right: read facts.version)
+    let fourth = String.concat(left: read third, right: read " edition=")
+    let fifth = String.concat(left: read fourth, right: read facts.edition)
+    let sixth = String.concat(left: read fifth, right: read " interface_paths=")
+    let paths = String.from_int(value: facts.interface_paths)
+    let seventh = String.concat(left: read sixth, right: read paths)
+    let eighth = String.concat(left: read seventh, right: read " dep=")
+    let ninth = String.concat(left: read eighth, right: read facts.dependency_version)
+    let tenth = String.concat(left: read ninth, right: read " feature_members=")
+    let members = String.from_int(value: facts.feature_members)
+
+    return String.concat(left: read tenth, right: read members)
+}
+
+pub fn main() -> Result<Unit, JsonError> {
+    let facts = dogfood_manifest_facts()?
+    let summary = dogfood_manifest_summary_line(facts: read facts)
+
+    Log.write(message: read summary)
+
+    Assert.equal(left: read facts.package_name, right: read "rss-dogfood-manifest")
+    Assert.equal(left: read facts.version, right: read "0.5.0")
+    Assert.equal(left: read facts.edition, right: read "2024")
+    Assert.equal_int(left: facts.interface_paths, right: 1)
+    Assert.equal(left: read facts.dependency_version, right: read "0.5")
+    Assert.equal_int(left: facts.feature_members, right: 1)
+
+    return Ok(Unit)
+}

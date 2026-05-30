@@ -1,0 +1,13 @@
+[package]
+name = "rss-dogfood-manifest"
+version = "0.5.0"
+edition = "2024"
+
+[interfaces]
+paths = ["interface"]
+
+[dependencies]
+rss-core = "0.5"
+
+[features]
+native-tls = ["native"]

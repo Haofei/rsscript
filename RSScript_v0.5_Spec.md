@@ -2937,6 +2937,9 @@ Map<K,V>
 Set<T>
 Path
 File
+JsonValue
+Json
+Toml
 ResourcePool<T: Resource>
 Diagnostic
 Span

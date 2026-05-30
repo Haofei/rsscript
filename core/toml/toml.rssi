@@ -1,0 +1,4 @@
+features: native
+
+pub native fn Toml.parse_file(path: read Path) -> Result<fresh JsonValue, JsonError>
+    effects(native)

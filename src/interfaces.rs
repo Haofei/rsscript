@@ -72,6 +72,10 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         "core/test/assert.rssi",
         include_str!("../core/test/assert.rssi"),
     ),
+    (
+        "core/toml/toml.rssi",
+        include_str!("../core/toml/toml.rssi"),
+    ),
     ("core/url/url.rssi", include_str!("../core/url/url.rssi")),
     (
         "core/weak/weak.rssi",

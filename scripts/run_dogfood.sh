@@ -7,6 +7,7 @@ cd "$ROOT"
 dogfood_scripts=(
   tests/fixtures/pass/dogfood-review-classifier.rss
   tests/fixtures/pass/dogfood-package-risk.rss
+  tests/fixtures/pass/dogfood-package-manifest.rss
   tests/fixtures/pass/dogfood-package-exports.rss
   tests/fixtures/pass/dogfood-package-diff.rss
   tests/fixtures/pass/dogfood-package-lock-diff.rss
