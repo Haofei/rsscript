@@ -33,11 +33,12 @@ fn diagnose_remap_item(item: read JsonValue, facts: read RemapFacts) -> Result<f
     let causes = Json.field(value: read item, name: read "causes")?
     let span = Json.array_get(value: read spans, index: 0)?
     let file = Json.field_string(value: read span, name: read "file")?
+    let normalized_file = String.replace(value: read file, from: read "\\", to: read "/")
     let line = Json.field_int(value: read span, name: read "line")?
     let column = Json.field_int(value: read span, name: read "column")?
     let is_mapped_error = code == "RS1101" && severity == "error"
     let has_rustc_code = Json.array_contains_string(value: read causes, item: read "rustc code: E0308")?
-    let has_source_file = String.ends_with(value: read file, suffix: read "src/main.rss")
+    let has_source_file = String.ends_with(value: read normalized_file, suffix: read "src/main.rss")
     let has_source_line = line == 4
     let has_source_column = column == 31
 

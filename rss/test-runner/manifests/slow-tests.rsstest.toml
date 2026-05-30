@@ -2,4 +2,4 @@
 name = "checker e2e tests pass"
 kind = "command_success"
 command = "cargo"
-args = ["test", "--test", "checker", "--", "--include-ignored"]
+args = ["test", "--test", "checker", "--", "--ignored"]

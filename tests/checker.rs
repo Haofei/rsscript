@@ -8512,7 +8512,12 @@ fn prepare_selfhost_run_dir_for(temp_dir: &Path, script_name: &str) -> Option<Pa
     }
     #[cfg(not(unix))]
     {
-        return None;
+        let runtime_dir = temp_dir.join("runtime");
+        fs::create_dir_all(&runtime_dir).expect("runtime crate directory should be created");
+        copy_directory_contents(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime"),
+            &runtime_dir,
+        );
     }
     let fixture_dir = temp_dir.join("tests/fixtures/pass");
     fs::create_dir_all(&fixture_dir).expect("fixture directory should be created");
@@ -14760,7 +14765,27 @@ fn generated_target_seed_dir() -> Option<PathBuf> {
     std::env::var_os("RSSCRIPT_GENERATED_TARGET_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("RSSCRIPT_RAMDISK_PATH")
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .map(|root| root.join("rsscript-generated-target"))
+        })
         .filter(|path| path.is_dir())
+}
+
+fn shared_generated_target_dir() -> Option<PathBuf> {
+    let path = std::env::var_os("RSSCRIPT_GENERATED_TARGET_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("RSSCRIPT_RAMDISK_PATH")
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .map(|root| root.join("rsscript-generated-target"))
+        })?;
+    fs::create_dir_all(&path).expect("shared generated target dir should be created");
+    Some(path)
 }
 
 struct RssCommand {
@@ -14797,13 +14822,18 @@ impl Drop for RssCommand {
 
 fn rss_command() -> RssCommand {
     let command_dir = unique_temp_dir("rsscript-command");
-    let generated_target = command_dir.join("generated-target");
     let temp_dir = command_dir.join("temp");
-    fs::create_dir_all(&generated_target).expect("rss command target dir should be created");
     fs::create_dir_all(&temp_dir).expect("rss command temp dir should be created");
-    if let Some(seed_dir) = generated_target_seed_dir().filter(|path| directory_has_entries(path)) {
-        copy_directory_contents(&seed_dir, &generated_target);
-    }
+    let generated_target = shared_generated_target_dir().unwrap_or_else(|| {
+        let generated_target = command_dir.join("generated-target");
+        fs::create_dir_all(&generated_target).expect("rss command target dir should be created");
+        if let Some(seed_dir) =
+            generated_target_seed_dir().filter(|path| directory_has_entries(path))
+        {
+            copy_directory_contents(&seed_dir, &generated_target);
+        }
+        generated_target
+    });
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_rss"));
     command.env("RSSCRIPT_TEMP_DIR", &temp_dir);
