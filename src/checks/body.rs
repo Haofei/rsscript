@@ -1180,12 +1180,9 @@ fn check_call_place_conflicts(
     }
 
     // Field splitting (treating distinct inline fields of one base as disjoint)
-    // is a local-only capability: a local exclusive value is provably one owner,
-    // so two inline fields are separate. A managed object (a class, a container,
-    // or a managed binding) is a single runtime value behind one write guard, so
-    // two mutable accesses to its inline fields conflict even when the field
-    // paths differ. Note a `mut`/`take` parameter is locally exclusive only when
-    // its type is a value type, not a managed object type.
+    // is a local-only capability. `local` bindings and `take` parameters are
+    // provably exclusive; `mut` parameters are not, because a caller may pass a
+    // managed-backed value.
     for access in &mut accesses {
         access.base_is_local = base_allows_field_split(analyzer, state, &access.path.base);
     }
@@ -1750,11 +1747,11 @@ fn check_place_pair_conflict(
 }
 
 /// A base supports field splitting (distinct inline fields treated as disjoint)
-/// only when it is a locally exclusive value. A managed binding, or a `mut`/`take`
-/// parameter whose type is a class or container, is a single managed object and
-/// does not support splitting.
+/// only when it is a locally exclusive value. `mut` parameters are not
+/// splittable even when their declared type is a struct: the call site may pass
+/// a managed-backed value, so the callee cannot assume field disjointness.
 fn base_allows_field_split(analyzer: &Analyzer<'_>, state: &BodyState, base: &str) -> bool {
-    if !state.is_local(base) {
+    if !state.allows_field_split(base) {
         return false;
     }
     match state.value_type(base) {

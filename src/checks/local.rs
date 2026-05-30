@@ -12,6 +12,7 @@ use super::body::Flow;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct BodyState {
     pub(crate) locals: HashSet<String>,
+    pub(crate) field_splittable_locals: HashSet<String>,
     pub(crate) clean_locals: HashSet<String>,
     pub(crate) managed: HashSet<String>,
     pub(crate) resources: HashSet<String>,
@@ -2191,6 +2192,12 @@ fn merge_flow_states(left: &BodyState, right: &BodyState) -> BodyState {
         .intersection(&right.locals)
         .cloned()
         .collect::<HashSet<_>>();
+    let field_splittable_locals = left
+        .field_splittable_locals
+        .intersection(&right.field_splittable_locals)
+        .filter(|name| locals.contains(*name))
+        .cloned()
+        .collect::<HashSet<_>>();
     let managed = left
         .managed
         .intersection(&right.managed)
@@ -2235,6 +2242,7 @@ fn merge_flow_states(left: &BodyState, right: &BodyState) -> BodyState {
 
     BodyState {
         locals,
+        field_splittable_locals,
         clean_locals,
         managed,
         resources,
@@ -2420,7 +2428,11 @@ impl BodyState {
                 self.record_type(binding.name.clone(), type_name.clone());
             }
             if matches!(binding.effect, Some(ParamEffect::Mut | ParamEffect::Take)) {
-                self.bind_local(binding.name.clone());
+                if binding.effect == Some(ParamEffect::Take) {
+                    self.bind_local(binding.name.clone());
+                } else {
+                    self.bind_local_without_field_split(binding.name.clone());
+                }
             }
         }
     }
@@ -2438,6 +2450,13 @@ impl BodyState {
     }
 
     pub(crate) fn bind_local(&mut self, name: impl Into<String>) {
+        let name = name.into();
+        self.locals.insert(name.clone());
+        self.field_splittable_locals.insert(name.clone());
+        self.clean_locals.insert(name);
+    }
+
+    fn bind_local_without_field_split(&mut self, name: impl Into<String>) {
         let name = name.into();
         self.locals.insert(name.clone());
         self.clean_locals.insert(name);
@@ -2465,6 +2484,10 @@ impl BodyState {
 
     pub(crate) fn is_local(&self, name: &str) -> bool {
         self.locals.contains(name)
+    }
+
+    pub(crate) fn allows_field_split(&self, name: &str) -> bool {
+        self.field_splittable_locals.contains(name)
     }
 
     pub(crate) fn is_managed(&self, name: &str) -> bool {
@@ -2597,6 +2620,7 @@ pub(crate) fn merge_loop_state(
     }
 
     state.locals = base.locals.clone();
+    state.field_splittable_locals = base.field_splittable_locals.clone();
     state.managed = base.managed.clone();
     state.resources = base.resources.clone();
     state.value_types = base.value_types.clone();
@@ -2627,6 +2651,7 @@ fn fallthrough_projection(base: &BodyState, branch: &BodyState) -> BodyState {
 
     BodyState {
         locals: base.locals.clone(),
+        field_splittable_locals: base.field_splittable_locals.clone(),
         managed: base.managed.clone(),
         resources: base.resources.clone(),
         value_types: base.value_types.clone(),
@@ -2655,6 +2680,7 @@ fn merge_fallthrough_states(base: &BodyState, left: &BodyState, right: &BodyStat
 
     BodyState {
         locals: base.locals.clone(),
+        field_splittable_locals: base.field_splittable_locals.clone(),
         managed: base.managed.clone(),
         resources: base.resources.clone(),
         value_types: base.value_types.clone(),

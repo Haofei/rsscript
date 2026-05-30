@@ -1334,13 +1334,9 @@ function*:
 ```
 
 The earlier "value type ⇒ splittable" reading was wrong: a struct is a value
-type but a `mut` struct parameter can still be managed-backed.
-
-*Implementation note (non-normative): the v0.5 checker keys splittability off
-"local in checker state plus a non-class, non-container type," which over-permits
-a `mut` struct parameter whose caller-side value is managed. That unsound case is
-still caught dynamically (a managed write conflict at runtime); tightening the
-static check to exclude `mut` parameters is a tracked refinement.*
+type but a `mut` struct parameter can still be managed-backed. The v0.5 checker
+therefore tracks field-splittable local exclusivity separately from ordinary
+`mut` parameter access.
 
 ---
 
