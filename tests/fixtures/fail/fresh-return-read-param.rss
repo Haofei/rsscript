@@ -1,0 +1,9 @@
+// expect: RS0601
+
+struct Boxed {
+    value: Int
+}
+
+fn bad(value: read Boxed) -> fresh Boxed {
+    return value
+}

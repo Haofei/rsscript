@@ -1,0 +1,13 @@
+// expect: RS0601
+
+struct Boxed {
+    value: Int
+}
+
+class BuildError {
+    code: Int
+}
+
+fn bad(value: read Boxed) -> Result<fresh Boxed, BuildError> {
+    return Ok(value)
+}

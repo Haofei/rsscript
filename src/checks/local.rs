@@ -2427,6 +2427,14 @@ impl BodyState {
             if let Some(type_name) = &binding.type_name {
                 self.record_type(binding.name.clone(), type_name.clone());
             }
+            if matches!(binding.effect, Some(ParamEffect::Read))
+                && binding
+                    .type_name
+                    .as_deref()
+                    .is_none_or(|type_name| !is_copy_type_name(type_name))
+            {
+                self.bind_managed(binding.name.clone());
+            }
             if matches!(binding.effect, Some(ParamEffect::Mut | ParamEffect::Take)) {
                 if binding.effect == Some(ParamEffect::Take) {
                     self.bind_local(binding.name.clone());
@@ -2557,6 +2565,31 @@ impl BodyState {
             }
         }
     }
+}
+
+fn is_copy_type_name(type_name: &str) -> bool {
+    let type_name = type_name.trim();
+    !type_name.contains('<')
+        && matches!(
+            type_name.strip_prefix("fresh ").unwrap_or(type_name),
+            "Bool"
+                | "Byte"
+                | "Char"
+                | "Float"
+                | "Float32"
+                | "Float64"
+                | "Int"
+                | "Int8"
+                | "Int16"
+                | "Int32"
+                | "Int64"
+                | "UInt"
+                | "UInt8"
+                | "UInt16"
+                | "UInt32"
+                | "UInt64"
+                | "Unit"
+        )
 }
 
 pub(crate) fn merge_if_state(
