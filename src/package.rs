@@ -21,7 +21,7 @@ use crate::review::{
 use crate::rust_lower::NativeRustDependency;
 use crate::syntax::ast::{
     DataEffect, EffectDecl, FieldDecl, FileFeature, FunctionDecl, GenericBound, GenericParam, Item,
-    Param, Program, TypeDecl, TypeKind, TypeRef,
+    Param, Program, ProtocolImpl, TypeDecl, TypeKind, TypeRef,
 };
 use crate::syntax::parse_source;
 
@@ -557,6 +557,20 @@ struct PackageFunctionContract {
     returns_fresh: bool,
     effects: BTreeSet<String>,
     span: crate::diagnostic::Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PackageProtocolImplContract {
+    protocol: String,
+    type_name: String,
+    mappings: Vec<PackageProtocolImplMappingContract>,
+    span: crate::diagnostic::Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct PackageProtocolImplMappingContract {
+    method: String,
+    target: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2306,6 +2320,10 @@ fn package_interface_contract_diagnostics(
         collect_package_function_contracts(sources, PackageReviewFileKind::Source);
     let interface_function_contracts =
         collect_package_function_contracts(sources, PackageReviewFileKind::Interface);
+    let source_protocol_impl_contracts =
+        collect_package_protocol_impl_contracts(sources, PackageReviewFileKind::Source);
+    let interface_protocol_impl_contracts =
+        collect_package_protocol_impl_contracts(sources, PackageReviewFileKind::Interface);
     let mut diagnostics = Vec::new();
 
     for (name, interface_contract) in interface_type_contracts {
@@ -2394,6 +2412,50 @@ fn package_interface_contract_diagnostics(
                 .with_fix(
                     "align_interface_and_source",
                     "Update the `.rssi` contract or the source implementation so their public signatures match exactly.",
+                    "manual",
+                ),
+            );
+        }
+    }
+
+    for (name, interface_contract) in interface_protocol_impl_contracts {
+        let Some(source_contract) = source_protocol_impl_contracts.get(&name) else {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_INTERFACE_MISMATCH,
+                    format!("package interface protocol implementation `{name}` has no source declaration."),
+                    interface_contract.span.clone(),
+                    "missing source protocol implementation",
+                )
+                .with_cause("Package `.rssi` files are the public semantic contract; every explicit protocol implementation must be declared by package source.")
+                .with_fix(
+                    "implement_protocol_impl",
+                    format!("Add `{}` to the package source, or remove it from the interface.", package_protocol_impl_contract_label(&interface_contract)),
+                    "manual",
+                ),
+            );
+            continue;
+        };
+
+        if !package_protocol_impl_contracts_match(&interface_contract, source_contract) {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_INTERFACE_MISMATCH,
+                    format!("package interface protocol implementation `{name}` does not match its source declaration."),
+                    interface_contract.span.clone(),
+                    "interface/source protocol implementation mismatch",
+                )
+                .with_cause(format!(
+                    "interface: {}",
+                    package_protocol_impl_contract_label(&interface_contract)
+                ))
+                .with_cause(format!(
+                    "source: {}",
+                    package_protocol_impl_contract_label(source_contract)
+                ))
+                .with_fix(
+                    "align_protocol_impl",
+                    "Update the `.rssi` contract or the source `impl` mapping so their protocol implementation contracts match exactly.",
                     "manual",
                 ),
             );
@@ -2588,6 +2650,15 @@ fn package_function_contracts_match(
         && interface.effects == source.effects
 }
 
+fn package_protocol_impl_contracts_match(
+    interface: &PackageProtocolImplContract,
+    source: &PackageProtocolImplContract,
+) -> bool {
+    interface.protocol == source.protocol
+        && interface.type_name == source.type_name
+        && interface.mappings == source.mappings
+}
+
 fn collect_package_type_contracts(
     sources: &[PackageSource],
     kind: PackageReviewFileKind,
@@ -2619,6 +2690,24 @@ fn collect_package_function_contracts(
             if kind == PackageReviewFileKind::Interface || function.is_public {
                 contracts.insert(function.name.clone(), package_function_contract(&function));
             }
+        }
+    }
+    contracts
+}
+
+fn collect_package_protocol_impl_contracts(
+    sources: &[PackageSource],
+    kind: PackageReviewFileKind,
+) -> BTreeMap<String, PackageProtocolImplContract> {
+    let mut contracts = BTreeMap::new();
+    for source in sources.iter().filter(|source| source.kind == kind) {
+        let program = parse_source(&source.path, &source.contents);
+        for protocol_impl in &program.protocol_impls {
+            let contract = package_protocol_impl_contract(protocol_impl);
+            contracts.insert(
+                package_protocol_impl_contract_key(&contract.protocol, &contract.type_name),
+                contract,
+            );
         }
     }
     contracts
@@ -2761,6 +2850,16 @@ fn package_review_exports(
     } else {
         &interface_function_contracts
     };
+    let interface_protocol_impl_contracts =
+        collect_package_protocol_impl_contracts(sources, PackageReviewFileKind::Interface);
+    let source_protocol_impl_contracts;
+    let protocol_impl_contracts = if interface_protocol_impl_contracts.is_empty() {
+        source_protocol_impl_contracts =
+            collect_package_protocol_impl_contracts(sources, PackageReviewFileKind::Source);
+        &source_protocol_impl_contracts
+    } else {
+        &interface_protocol_impl_contracts
+    };
     let resource_types = type_contracts
         .values()
         .filter(|contract| contract.kind == TypeKind::Resource)
@@ -2773,6 +2872,11 @@ fn package_review_exports(
         function_contracts
             .values()
             .map(|contract| package_function_review_export(contract, &resource_types, review_map)),
+    );
+    exports.extend(
+        protocol_impl_contracts
+            .values()
+            .map(package_protocol_impl_review_export),
     );
     exports.sort_by(|left, right| {
         left.kind
@@ -2903,6 +3007,30 @@ fn package_function_review_export(
     }
 }
 
+fn package_protocol_impl_review_export(
+    contract: &PackageProtocolImplContract,
+) -> PackageReviewExport {
+    let mut reasons = vec![
+        "protocol implementation".to_string(),
+        format!("protocol `{}`", contract.protocol),
+        format!("type `{}`", contract.type_name),
+    ];
+    reasons.extend(
+        contract
+            .mappings
+            .iter()
+            .map(|mapping| format!("{} = {}", mapping.method, mapping.target)),
+    );
+    reasons.sort();
+    reasons.dedup();
+    PackageReviewExport {
+        name: package_protocol_impl_contract_key(&contract.protocol, &contract.type_name),
+        kind: "protocol_impl".to_string(),
+        classification: "review_if_changed".to_string(),
+        reasons,
+    }
+}
+
 fn package_review_map_function_is_unknown(function: &str, review_map: &ReviewMap) -> bool {
     review_map.files.iter().any(|file| {
         file.regions.iter().any(|region| {
@@ -2965,6 +3093,24 @@ fn package_function_contract(function: &FunctionDecl) -> PackageFunctionContract
     }
 }
 
+fn package_protocol_impl_contract(protocol_impl: &ProtocolImpl) -> PackageProtocolImplContract {
+    let mut mappings = protocol_impl
+        .mappings
+        .iter()
+        .map(|mapping| PackageProtocolImplMappingContract {
+            method: mapping.method.clone(),
+            target: mapping.target.clone(),
+        })
+        .collect::<Vec<_>>();
+    mappings.sort();
+    PackageProtocolImplContract {
+        protocol: protocol_impl.protocol.clone(),
+        type_name: protocol_impl.type_name.clone(),
+        mappings,
+        span: protocol_impl.span.clone(),
+    }
+}
+
 fn package_generic_contract(param: &GenericParam) -> PackageGenericContract {
     PackageGenericContract {
         name: param.name.clone(),
@@ -3011,6 +3157,10 @@ fn package_effect_name(effect: &EffectDecl) -> String {
         EffectDecl::Name(name) => name.clone(),
         EffectDecl::Retains(param) => format!("retains({param})"),
     }
+}
+
+fn package_protocol_impl_contract_key(protocol: &str, type_name: &str) -> String {
+    format!("{protocol} for {type_name}")
 }
 
 fn package_type_name(ty: &TypeRef) -> String {
@@ -3135,6 +3285,19 @@ fn package_function_contract_label(contract: &PackageFunctionContract) -> String
         ));
     }
     label
+}
+
+fn package_protocol_impl_contract_label(contract: &PackageProtocolImplContract) -> String {
+    let mappings = contract
+        .mappings
+        .iter()
+        .map(|mapping| format!("{} = {}", mapping.method, mapping.target))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "impl {} for {} {{ {} }}",
+        contract.protocol, contract.type_name, mappings
+    )
 }
 
 fn dedup_diagnostics(diagnostics: &mut Vec<Diagnostic>) {

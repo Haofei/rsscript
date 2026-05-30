@@ -9889,6 +9889,116 @@ pub fn Cache.store(conn: mut DbConnection, image: read Image) -> Unit
 }
 
 #[test]
+fn package_review_exports_protocol_impl_contracts() {
+    let temp_dir = unique_temp_dir("rsscript-package-review-protocol-impl-export");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-protocol-export",
+        "0.1.0",
+        "",
+        r#"protocol Writer {
+    fn write(self: mut Self, message: read String) -> Unit
+        effects(retains(message))
+}
+
+struct BufferWriter
+
+pub fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit
+    effects(retains(message))
+
+impl Writer for BufferWriter {
+    write = BufferWriter.write
+}
+"#,
+    );
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(json["exports"].as_array().is_some_and(|exports| {
+        exports.iter().any(|export| {
+            export["name"] == "Writer for BufferWriter"
+                && export["kind"] == "protocol_impl"
+                && export["classification"] == "review_if_changed"
+                && export["reasons"].as_array().is_some_and(|reasons| {
+                    reasons
+                        .iter()
+                        .any(|reason| reason == "write = BufferWriter.write")
+                })
+        })
+    }));
+}
+
+#[test]
+fn package_review_reports_protocol_impl_contract_mismatch() {
+    let temp_dir = unique_temp_dir("rsscript-package-review-protocol-impl-mismatch");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-protocol-mismatch",
+        "0.1.0",
+        "",
+        r#"protocol Writer {
+    fn write(self: mut Self, message: read String) -> Unit
+        effects(retains(message))
+}
+
+struct BufferWriter
+
+pub fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit
+    effects(retains(message))
+pub fn BufferWriter.audit_write(self: mut BufferWriter, message: read String) -> Unit
+    effects(retains(message))
+
+impl Writer for BufferWriter {
+    write = BufferWriter.write
+}
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("src/lib.rss"),
+        r#"protocol Writer {
+    fn write(self: mut Self, message: read String) -> Unit
+        effects(retains(message))
+}
+
+struct BufferWriter
+
+pub fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit
+    effects(retains(message))
+{
+    Log.write(message: read message)
+}
+
+pub fn BufferWriter.audit_write(self: mut BufferWriter, message: read String) -> Unit
+    effects(retains(message))
+{
+    Log.write(message: read message)
+}
+
+impl Writer for BufferWriter {
+    write = BufferWriter.audit_write
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(review.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS1301"
+            && diagnostic.label == "interface/source protocol implementation mismatch"
+            && diagnostic
+                .causes
+                .iter()
+                .any(|cause| cause.contains("impl Writer for BufferWriter"))
+    }));
+}
+
+#[test]
 fn package_review_json_counts_public_apis_with_unknown_review_regions() {
     let temp_dir = unique_temp_dir("rsscript-package-review-unknown-api");
     write_package_fixture(
