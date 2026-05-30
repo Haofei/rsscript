@@ -273,9 +273,9 @@ A few details worth knowing:
 - `rss pkg review` reads `rsspkg.toml`, treats `.rssi` files as the public semantic contract, reports package feature names, summarizes public type/function/API counts plus mutating, retaining, resource, fresh-returning, native, unsafe, and unknown APIs, emits per-export review classifications, counts frontend errors in `.rssi` contracts as unknown contract exports, and raises risk for native Rust wrappers, build scripts, proc macros, unsafe policy, external links, frontend diagnostics, and unknown review-map regions.
 - `rss pkg review update` compares two `rsspkg.lock` files and reports package version, source, checksum, `.rssi` interface, review metadata, native wrapper, and feature-selection changes.
 - `rss pkg lock` emits semantic lock metadata for the root package and local path dependency graph, with SHA-256 hashes for public `.rssi` contracts, review metadata, package contents, and native Rust wrapper contents when enabled.
-- `rss pkg tree` shows the dependency graph with review risk. Local path dependencies are expanded recursively; unresolved registry or git dependencies are classified as unknown.
+- `rss pkg tree` shows the dependency graph with review risk. Local path dependencies are expanded recursively; unresolved registry dependencies are classified as unknown. Git dependency sources are outside the v0.5 accepted dependency-source grammar and should be rejected with a stable unsupported-source diagnostic.
 - `rss pkg publish --dry-run` runs pre-publish checks without uploading anything: package consistency, dependency graph review, semver shape, review risk classification, native metadata, a reproducible archive manifest with per-file checksums, and a registry index entry. Unknown package review risk blocks publish readiness instead of being treated as safe. `--registry <directory>` reports the local registry index and archive-manifest paths that would be written.
-- `rss pkg vendor` copies local path dependencies into `vendor/<name>-<version>/` and writes `vendor/rss-vendor.json`; unresolved registry or git dependencies stay unknown.
+- `rss pkg vendor` copies local path dependencies into `vendor/<name>-<version>/` and writes `vendor/rss-vendor.json`; unresolved registry dependencies stay unknown, while git dependency sources remain unsupported in v0.5.
 - `rss pkg metadata` writes `review/package-review.json` using the local package review result; `--dry-run` reports the metadata path without writing. Unknown review risk is preserved in the metadata and makes the command result not ok.
 - `rss pkg diff` compares two local package directories and reports package version changes, RSScript dependency changes, package feature changes, native Rust wrapper metadata changes, and public `.rssi` semantic contract changes.
 - `rss run` lowers a single file, or a package directory with `src/main.rss`, to a temporary Rust package and delegates to `cargo run`; package lowering carries enabled `[native.rust]` wrappers through as generated Cargo path dependencies and maps `native/bindings.rssbind.toml` call bindings into generated Rust calls. `--out-dir` keeps the generated package around for inspection. Diagnostics support `--json`; program stdout stays the program's own.
@@ -320,9 +320,11 @@ The supported closure surface includes `noescape Fn()` parameters for temporary 
 
 ## Roadmap
 
-Near term: checker prototype → real AST parser → HIR and symbol table → semantic checker → Rust lowering contract → runtime crate type surface → Rust source generation with source maps → rustc diagnostic mapping → core library signatures → runnable MVP through rustc.
+Near term for v0.5 hardening: close remaining static-checker gaps against the spec, keep `.rssi` normalization compiler-owned, tighten package/source/interface consistency checks, expand dogfood that exercises review and package tooling, and keep Rust lowering, source maps, and runtime diagnostics aligned with the documented semantic guarantee table.
 
-Longer term: deeper semantic review tooling, a larger core library, agent and runtime examples, stronger optimization paths, and an experimental self-hosted frontend.
+Package-management hardening: keep implemented commands documented under their actual `--json` surface, treat dependency updates as review events, preserve unknown risk instead of downgrading it, and land design-only graph-audit/native-ABI/semver workflows only after their underlying interface and native facts are available without weakening review semantics.
+
+Longer term: deeper semantic review tooling, a larger core library, agent and runtime examples, stronger optimization paths, optional native ABI adapter checks, graph-level audit-surface reporting, and an experimental self-hosted frontend.
 
 Post-v0.5 design directions (see spec §20.1) build on the single-isolate, non-`Send` managed model, which is what lets async stay ergonomic without exposing Rust's `Pin`/`Poll`/`Waker`:
 

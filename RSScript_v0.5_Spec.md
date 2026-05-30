@@ -2386,7 +2386,7 @@ use the same fully-qualified canonical names as source files:
 ```rust
 opaque struct Json.JsonValue
 
-pub fn Json.parse(text: read String) -> Result<fresh Json.JsonValue, JsonError>
+pub fn Json.parse(text: read String) -> Result<fresh Json.JsonValue, Json.JsonError>
 ```
 
 The compiler must reject namespace shorthands instead of normalizing them.
@@ -2412,7 +2412,7 @@ compiler-validated `.rssi` contract.
 
 A file without a `features:` declaration is managed-only.
 
-Recognized v0.5 review-relevant file features:
+Recognized v0.5 active capability gates:
 
 ```text
 local
@@ -2421,7 +2421,7 @@ unsafe
 async
 ```
 
-Reserved future features:
+Reserved v0.5 review markers:
 
 ```text
 device
@@ -2429,7 +2429,10 @@ ffi
 reflection
 ```
 
-Feature names are semantic capability gates, not library categories. `Json`, `HTTP`, `Image`, and `Regex` are not file features.
+The reserved markers may be parsed and reported as review risk, but they do not
+unlock syntax, lowering, runtime behavior, or package-manager semantics in v0.5.
+Feature names are semantic capability gates or reserved review markers, not
+library categories. `Json`, `HTTP`, `Image`, and `Regex` are not file features.
 
 Each feature may appear at most once. Duplicate features are diagnostics.
 
@@ -2812,6 +2815,34 @@ If a diagnostic originates from a user-originating lowered construct and cannot 
 
 Raw rustc diagnostics may be attached under a verbose flag but must not be the primary user diagnostic.
 
+### 17.5 Semantic guarantee table
+
+This table records the enforcement tier for the main v0.5 promises. The tier is
+part of the specification contract: implementations must not present a
+`review-only` or `unsupported` fact as a static safety guarantee.
+
+| Promise / behavior | v0.5 tier | Enforcement source |
+|---|---:|---|
+| Named arguments and required `read` / `mut` / `take` data effects | static | frontend checker |
+| Same-call conflict roots, including constructor and variant call-like forms | static | frontend checker |
+| Local move/use-after-`take` and use-after-`manage` | static | frontend checker |
+| Managed-to-local demotion rejection | static | frontend checker |
+| Passing local values to retaining APIs, including nested wrappers | static | frontend checker |
+| Managed closure capture of local values or resources | static | frontend checker |
+| Managed closure capture of managed values as synthetic retention | review-only + static classification | frontend review metadata |
+| Fresh return preservation for `fresh T`, `Result<fresh T, E>`, and `Option<fresh T>` | static | frontend checker |
+| Resource escape, resource-in-container rejection, and `with` scope boundaries | static | frontend checker |
+| Deterministic resource drop on ordinary control-flow exits | dynamic | generated Rust/runtime lowering contract |
+| Resource cleanup after isolate abort or runtime termination | unsupported | no v0.5 guarantee |
+| `ResourcePool<T>` local-only materialization, eager/noescape factory, and positive literal `max_size` | static | frontend checker |
+| Exhausted `ResourcePool.borrow` | dynamic defensive diagnostic | runtime, for non-conforming or future multi-borrow cases |
+| Weak field target kind and explicit upgrade requirement | static | frontend checker |
+| Managed alias conflicts not visible from source roots | dynamic | runtime managed-access diagnostics |
+| `no_panic`, `noalloc`, `no_block`, and `pure` over RSScript-known calls | static over known constructs; review-only over native/runtime internals | frontend checker + trusted signatures |
+| Native wrapper semantic behavior beyond declared `.rssi` effects | review-only | package/native metadata, audits, and policy |
+| Executable `async` bodies, `await`, and `spawn` | unsupported | frontend diagnostic before lowering |
+| Rust build scripts, proc macros, native links, and transitive native facts | package review-only unless specifically scanned or checked | package metadata and policy |
+
 ---
 
 ## 18. Standard Library and Package Boundary
@@ -2986,34 +3017,37 @@ fn run_queries(url: read Url, queries: read List<Query>) -> Result<Unit, DbError
 
 ## 20. Implementation Roadmap
 
-v0.5 follows a Rust-lowering roadmap.
+v0.5 follows a Rust-lowering roadmap, but the roadmap is now a hardening plan
+rather than a list of not-yet-started components. The prototype already has the
+front-end parser/checker path, deterministic formatting for the supported AST
+surface, review metadata, Rust source lowering, source maps, rustc diagnostic
+remapping, a small single-isolate runtime, and core `.rssi` interface loading.
+
+Remaining v0.5 work should preserve this dependency order:
 
 ```text
-0.5.0  real AST parser
-0.5.1  HIR + symbol table
-0.5.2  semantic checker complete enough for examples
-0.5.3  lowering shape contract + runtime type surface
-0.5.4  Rust source lowering with source maps
-0.5.5  rustc diagnostic mapping
-0.5.6  runtime crate implementation for managed core
-0.5.7  resource/with lowering and runtime
-0.5.8  local/fresh/manage lowering and runtime
-0.5.9  core .rssi signatures + native core stubs
-0.5.10 runnable MVP via rustc
+spec invariant
+  -> frontend checker fact
+  -> lowering/source-map shape
+  -> runtime behavior when static enforcement is impossible
+  -> review metadata and dogfood coverage
+  -> package metadata only after the underlying language fact is stable
 ```
 
-Correct dependency order:
+Implementation priorities:
 
 ```text
-runtime type surface
-  -> lowering target shapes
-  -> Rust source lowering + source maps
-  -> rustc diagnostic mapping
-  -> runtime implementation fill-in
-  -> runnable MVP
+0.5.x  close known static-checker gaps against Chapters 5, 5A, 8, 9, 10, 12, and 17
+0.5.x  keep `.rssi` parsing and normalization compiler-owned
+0.5.x  keep source maps complete for every user-originating lowered construct
+0.5.x  preserve RSScript diagnostics before Rust lowering for unsupported syntax
+0.5.x  expand dogfood programs that exercise review maps, package contracts, and diagnostics
+0.5.x  keep package-manager features behind stable language facts and normalized interfaces
 ```
 
-Do not implement lowering before defining the runtime target surface. Do not defer source mapping until after lowering.
+Do not add package-manager shortcuts, lowering placeholders, or compatibility
+aliases that contradict the semantic model. Do not defer source mapping until
+after lowering.
 
 ### 20.1 Post-v0.5 design directions
 

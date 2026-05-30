@@ -46,6 +46,15 @@ reviewing and eventually implementing its own core tooling.
    all tests, examples, specs, and dogfood to it. Do not keep legacy aliases
    unless there is a current external compatibility contract.
 
+7. Keep documents synchronized with the language model.
+
+   The language specification is the authority for RSScript syntax and semantics;
+   package-manager design documents consume that model instead of redefining it.
+   README status sections should describe implemented commands, while future or
+   design-only commands must be labeled as such. Prefer the canonical spellings
+   used by the current tooling, including `--json` for machine-readable output
+   and fully qualified `.rssi` symbols instead of namespace shorthands.
+
 ## Priority Order
 
 1. Core spec invariants: features gating, named arguments, `read`/`mut`/`take`,
