@@ -234,6 +234,7 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     ),
     runtime_intrinsic("OS", "close", "rsscript_runtime::os_close"),
     runtime_intrinsic("Path", "from_string", "rsscript_runtime::path_from_string"),
+    runtime_intrinsic("Path", "join", "rsscript_runtime::path_join"),
     runtime_intrinsic("Request", "new", "rsscript_runtime::request_new"),
     runtime_intrinsic("Request", "path", "rsscript_runtime::request_path"),
     runtime_intrinsic("Response", "body", "rsscript_runtime::response_body"),

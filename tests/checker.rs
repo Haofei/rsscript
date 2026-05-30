@@ -7076,6 +7076,10 @@ fn rss_run_accepts_checked_in_dogfood_scripts_directly() {
             "dogfood package manifest name=rss-dogfood-manifest version=0.5.0",
         ),
         (
+            "tests/fixtures/pass/dogfood-package-root-manifest.rss",
+            "dogfood package root manifest name=rss-dogfood-source-set version=0.5.0",
+        ),
+        (
             "tests/fixtures/pass/dogfood-package-sources.rss",
             "dogfood package sources total=3 manifests=1 interfaces=1 sources=1",
         ),

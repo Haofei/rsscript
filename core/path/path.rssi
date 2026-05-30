@@ -1,1 +1,3 @@
 pub fn Path.from_string(value: read String) -> fresh Path
+
+pub fn Path.join(base: read Path, child: read String) -> fresh Path

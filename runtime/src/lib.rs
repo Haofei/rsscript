@@ -399,6 +399,10 @@ pub fn path_from_string(value: &str) -> PathBuf {
     PathBuf::from(value)
 }
 
+pub fn path_join<P: RuntimePath + ?Sized>(base: &P, child: &str) -> PathBuf {
+    base.as_path().join(child)
+}
+
 pub trait RuntimeBytes {
     fn as_bytes_slice(&self) -> &[u8];
 }

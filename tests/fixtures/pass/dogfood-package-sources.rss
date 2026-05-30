@@ -64,22 +64,34 @@ fn count_source_set_from(
     )
 }
 
-fn empty_source_set_facts() -> fresh PackageSourceSetFacts {
-    return PackageSourceSetFacts(
-        total_files: 0,
-        manifest_files: 0,
+fn dogfood_source_set_facts() -> Result<fresh PackageSourceSetFacts, FileError> {
+    let root = dogfood_source_root()
+    let interface_root = Path.join(
+        base: read root,
+        child: read "interface",
+    )
+    let source_root = Path.join(
+        base: read root,
+        child: read "src",
+    )
+    let interface_paths = Directory.list_files(path: read interface_root)?
+    let source_paths = Directory.list_files(path: read source_root)?
+    let manifest = PackageSourceSetFacts(
+        total_files: 1,
+        manifest_files: 1,
         interface_files: 0,
         source_files: 0,
     )
-}
-
-fn dogfood_source_set_facts() -> Result<fresh PackageSourceSetFacts, FileError> {
-    let paths = Directory.list_files(path: read dogfood_source_root())?
+    let with_interfaces = count_source_set_from(
+        paths: read interface_paths,
+        index: 0,
+        facts: read manifest,
+    )
 
     return count_source_set_from(
-        paths: read paths,
+        paths: read source_paths,
         index: 0,
-        facts: read empty_source_set_facts(),
+        facts: read with_interfaces,
     )
 }
 
