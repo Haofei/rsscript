@@ -1,0 +1,927 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::analyzer::analyze_source_with_interfaces;
+use crate::diagnostic::{Diagnostic, code};
+use crate::review::{ReviewMap, ReviewMapClassification};
+use crate::syntax::ast::{
+    DataEffect, EffectDecl, FieldDecl, FunctionDecl, GenericBound, GenericParam, Item, Param,
+    ProtocolImpl, TypeDecl, TypeKind, TypeRef,
+};
+use crate::syntax::parse_source;
+
+use super::{PackageReviewExport, PackageReviewFileKind, PackageSource};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PackageFunctionContract {
+    pub(super) name: String,
+    pub(super) params: Vec<PackageParamContract>,
+    pub(super) return_type: Option<String>,
+    pub(super) returns_fresh: bool,
+    pub(super) effects: BTreeSet<String>,
+    pub(super) span: crate::diagnostic::Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PackageProtocolImplContract {
+    pub(super) protocol: String,
+    pub(super) type_name: String,
+    pub(super) mappings: Vec<PackageProtocolImplMappingContract>,
+    pub(super) span: crate::diagnostic::Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct PackageProtocolImplMappingContract {
+    pub(super) method: String,
+    pub(super) target: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PackageParamContract {
+    pub(super) name: String,
+    pub(super) effect: Option<&'static str>,
+    pub(super) type_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PackageTypeContract {
+    pub(super) name: String,
+    pub(super) kind: TypeKind,
+    pub(super) is_opaque: bool,
+    pub(super) type_params: Vec<PackageGenericContract>,
+    pub(super) fields: Vec<PackageFieldContract>,
+    pub(super) span: crate::diagnostic::Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PackageGenericContract {
+    pub(super) name: String,
+    pub(super) bound: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PackageFieldContract {
+    pub(super) name: String,
+    pub(super) type_name: String,
+    pub(super) is_handle: bool,
+    pub(super) is_weak: bool,
+}
+
+pub(super) fn package_interface_environment_diagnostics(
+    interfaces: &[(&str, &str)],
+) -> Vec<Diagnostic> {
+    analyze_source_with_interfaces("<package-interface-environment>", "", interfaces)
+        .into_iter()
+        .filter(|diagnostic| diagnostic.code == code::DUPLICATE_DECLARATION)
+        .collect()
+}
+
+pub(super) fn package_interface_contract_diagnostics(
+    sources: &[PackageSource],
+    native_bindings: &BTreeMap<String, String>,
+) -> Vec<Diagnostic> {
+    if !sources
+        .iter()
+        .any(|source| source.kind == PackageReviewFileKind::Source)
+    {
+        return Vec::new();
+    }
+    let source_type_contracts =
+        collect_package_type_contracts(sources, PackageReviewFileKind::Source);
+    let interface_type_contracts =
+        collect_package_type_contracts(sources, PackageReviewFileKind::Interface);
+    let source_function_contracts =
+        collect_package_function_contracts(sources, PackageReviewFileKind::Source);
+    let interface_function_contracts =
+        collect_package_function_contracts(sources, PackageReviewFileKind::Interface);
+    let source_protocol_impl_contracts =
+        collect_package_protocol_impl_contracts(sources, PackageReviewFileKind::Source);
+    let interface_protocol_impl_contracts =
+        collect_package_protocol_impl_contracts(sources, PackageReviewFileKind::Interface);
+    let mut diagnostics = Vec::new();
+
+    for (name, interface_contract) in interface_type_contracts {
+        let Some(source_contract) = source_type_contracts.get(&name) else {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_INTERFACE_MISMATCH,
+                    format!("package interface type `{name}` has no source declaration."),
+                    interface_contract.span.clone(),
+                    "missing source declaration",
+                )
+                .with_cause("Package `.rssi` files are the public semantic contract; every interface type must be declared by package source.")
+                .with_fix(
+                    "implement_interface_type",
+                    format!("Add `{}` to the package source, or remove it from the interface.", package_type_contract_label(&interface_contract)),
+                    "manual",
+                ),
+            );
+            continue;
+        };
+
+        if !package_type_contracts_match(&interface_contract, source_contract) {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_INTERFACE_MISMATCH,
+                    format!(
+                        "package interface type `{name}` does not match its source declaration."
+                    ),
+                    interface_contract.span.clone(),
+                    "interface/source type mismatch",
+                )
+                .with_cause(format!(
+                    "interface: {}",
+                    package_type_contract_label(&interface_contract)
+                ))
+                .with_cause(format!(
+                    "source: {}",
+                    package_type_contract_label(source_contract)
+                ))
+                .with_fix(
+                    "align_interface_and_source",
+                    "Update the `.rssi` contract or the source declaration so their public type contracts match exactly.",
+                    "manual",
+                ),
+            );
+        }
+    }
+
+    for (name, interface_contract) in interface_function_contracts {
+        let Some(source_contract) = source_function_contracts.get(&name) else {
+            if interface_contract.effects.contains("native") && native_bindings.contains_key(&name)
+            {
+                continue;
+            }
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_INTERFACE_MISMATCH,
+                    format!(
+                        "package interface function `{name}` has no public source implementation."
+                    ),
+                    interface_contract.span.clone(),
+                    "missing source implementation",
+                )
+                .with_cause("Package `.rssi` files are the public semantic contract; every public interface function must be implemented by package source.")
+                .with_fix(
+                    "implement_interface_function",
+                    format!("Add `pub fn {name}` with the declared signature, or remove it from the interface."),
+                    "manual",
+                ),
+            );
+            continue;
+        };
+
+        if !package_function_contracts_match(&interface_contract, source_contract) {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_INTERFACE_MISMATCH,
+                    format!(
+                        "package interface function `{name}` does not match its source implementation."
+                    ),
+                    interface_contract.span.clone(),
+                    "interface/source signature mismatch",
+                )
+                .with_cause(format!(
+                    "interface: {}",
+                    package_function_contract_label(&interface_contract)
+                ))
+                .with_cause(format!(
+                    "source: {}",
+                    package_function_contract_label(source_contract)
+                ))
+                .with_fix(
+                    "align_interface_and_source",
+                    "Update the `.rssi` contract or the source implementation so their public signatures match exactly.",
+                    "manual",
+                ),
+            );
+        }
+    }
+
+    for (name, interface_contract) in interface_protocol_impl_contracts {
+        let Some(source_contract) = source_protocol_impl_contracts.get(&name) else {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_INTERFACE_MISMATCH,
+                    format!(
+                        "package interface protocol implementation `{name}` has no source declaration."
+                    ),
+                    interface_contract.span.clone(),
+                    "missing source protocol implementation",
+                )
+                .with_cause("Package `.rssi` files are the public semantic contract; every explicit protocol implementation must be declared by package source.")
+                .with_fix(
+                    "implement_protocol_impl",
+                    format!("Add `{}` to the package source, or remove it from the interface.", package_protocol_impl_contract_label(&interface_contract)),
+                    "manual",
+                ),
+            );
+            continue;
+        };
+
+        if !package_protocol_impl_contracts_match(&interface_contract, source_contract) {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_INTERFACE_MISMATCH,
+                    format!(
+                        "package interface protocol implementation `{name}` does not match its source declaration."
+                    ),
+                    interface_contract.span.clone(),
+                    "interface/source protocol implementation mismatch",
+                )
+                .with_cause(format!(
+                    "interface: {}",
+                    package_protocol_impl_contract_label(&interface_contract)
+                ))
+                .with_cause(format!(
+                    "source: {}",
+                    package_protocol_impl_contract_label(source_contract)
+                ))
+                .with_fix(
+                    "align_protocol_impl",
+                    "Update the `.rssi` contract or the source `impl` mapping so their protocol implementation contracts match exactly.",
+                    "manual",
+                ),
+            );
+        }
+    }
+
+    diagnostics
+}
+
+pub(super) fn package_type_contracts_match(
+    interface: &PackageTypeContract,
+    source: &PackageTypeContract,
+) -> bool {
+    interface.name == source.name
+        && interface.kind == source.kind
+        && interface.type_params == source.type_params
+        && (interface.is_opaque || interface.fields == source.fields)
+}
+
+pub(super) fn package_function_contracts_match(
+    interface: &PackageFunctionContract,
+    source: &PackageFunctionContract,
+) -> bool {
+    interface.name == source.name
+        && interface.params == source.params
+        && interface.return_type == source.return_type
+        && interface.returns_fresh == source.returns_fresh
+        && interface.effects == source.effects
+}
+
+fn package_protocol_impl_contracts_match(
+    interface: &PackageProtocolImplContract,
+    source: &PackageProtocolImplContract,
+) -> bool {
+    interface.protocol == source.protocol
+        && interface.type_name == source.type_name
+        && interface.mappings == source.mappings
+}
+
+pub(super) fn collect_package_type_contracts(
+    sources: &[PackageSource],
+    kind: PackageReviewFileKind,
+) -> BTreeMap<String, PackageTypeContract> {
+    let mut contracts = BTreeMap::new();
+    for source in sources.iter().filter(|source| source.kind == kind) {
+        let program = parse_source(&source.path, &source.contents);
+        for item in program.items {
+            let Item::Type(type_decl) = item else {
+                continue;
+            };
+            contracts.insert(type_decl.name.clone(), package_type_contract(&type_decl));
+        }
+    }
+    contracts
+}
+
+pub(super) fn collect_package_function_contracts(
+    sources: &[PackageSource],
+    kind: PackageReviewFileKind,
+) -> BTreeMap<String, PackageFunctionContract> {
+    let mut contracts = BTreeMap::new();
+    for source in sources.iter().filter(|source| source.kind == kind) {
+        let program = parse_source(&source.path, &source.contents);
+        for item in program.items {
+            let Item::Function(function) = item else {
+                continue;
+            };
+            if kind == PackageReviewFileKind::Interface || function.is_public {
+                contracts.insert(function.name.clone(), package_function_contract(&function));
+            }
+        }
+    }
+    contracts
+}
+
+pub(super) fn collect_package_protocol_impl_contracts(
+    sources: &[PackageSource],
+    kind: PackageReviewFileKind,
+) -> BTreeMap<String, PackageProtocolImplContract> {
+    let mut contracts = BTreeMap::new();
+    for source in sources.iter().filter(|source| source.kind == kind) {
+        let program = parse_source(&source.path, &source.contents);
+        for protocol_impl in &program.protocol_impls {
+            let contract = package_protocol_impl_contract(protocol_impl);
+            contracts.insert(
+                package_protocol_impl_contract_key(&contract.protocol, &contract.type_name),
+                contract,
+            );
+        }
+    }
+    contracts
+}
+
+pub(super) fn package_interface_diagnostic_exports(
+    sources: &[PackageSource],
+    diagnostics: &[Diagnostic],
+) -> Vec<PackageReviewExport> {
+    let interface_paths = sources
+        .iter()
+        .filter(|source| source.kind == PackageReviewFileKind::Interface)
+        .map(|source| (source.path.as_str(), source.relative_path.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let mut seen = BTreeSet::new();
+    let mut exports = Vec::new();
+
+    for diagnostic in diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity.is_error())
+    {
+        let Some(relative_path) = interface_paths.get(diagnostic.span.file.as_str()) else {
+            continue;
+        };
+        let name = format!(
+            "{}:{}:{}",
+            relative_path, diagnostic.span.line, diagnostic.span.column
+        );
+        let key = (
+            name.clone(),
+            diagnostic.code.clone(),
+            diagnostic.label.clone(),
+        );
+        if !seen.insert(key) {
+            continue;
+        }
+        exports.push(PackageReviewExport {
+            name,
+            kind: "contract_diagnostic".to_string(),
+            classification: "unknown".to_string(),
+            reasons: vec![
+                format!("frontend error {}", diagnostic.code),
+                diagnostic.label.clone(),
+            ],
+        });
+    }
+
+    exports
+}
+
+pub(super) fn package_review_exports(
+    sources: &[PackageSource],
+    review_map: &ReviewMap,
+) -> Vec<PackageReviewExport> {
+    let interface_type_contracts =
+        collect_package_type_contracts(sources, PackageReviewFileKind::Interface);
+    let source_type_contracts;
+    let type_contracts = if interface_type_contracts.is_empty() {
+        source_type_contracts =
+            collect_package_type_contracts(sources, PackageReviewFileKind::Source);
+        &source_type_contracts
+    } else {
+        &interface_type_contracts
+    };
+    let interface_function_contracts =
+        collect_package_function_contracts(sources, PackageReviewFileKind::Interface);
+    let source_function_contracts;
+    let function_contracts = if interface_function_contracts.is_empty() {
+        source_function_contracts =
+            collect_package_function_contracts(sources, PackageReviewFileKind::Source);
+        &source_function_contracts
+    } else {
+        &interface_function_contracts
+    };
+    let interface_protocol_impl_contracts =
+        collect_package_protocol_impl_contracts(sources, PackageReviewFileKind::Interface);
+    let source_protocol_impl_contracts;
+    let protocol_impl_contracts = if interface_protocol_impl_contracts.is_empty() {
+        source_protocol_impl_contracts =
+            collect_package_protocol_impl_contracts(sources, PackageReviewFileKind::Source);
+        &source_protocol_impl_contracts
+    } else {
+        &interface_protocol_impl_contracts
+    };
+    let resource_types = type_contracts
+        .values()
+        .filter(|contract| contract.kind == TypeKind::Resource)
+        .map(|contract| contract.name.as_str())
+        .collect::<BTreeSet<_>>();
+
+    let mut exports = Vec::new();
+    exports.extend(type_contracts.values().map(package_type_review_export));
+    exports.extend(
+        function_contracts
+            .values()
+            .map(|contract| package_function_review_export(contract, &resource_types, review_map)),
+    );
+    exports.extend(
+        protocol_impl_contracts
+            .values()
+            .map(package_protocol_impl_review_export),
+    );
+    exports.sort_by(|left, right| {
+        left.kind
+            .cmp(&right.kind)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    exports
+}
+
+fn package_type_review_export(contract: &PackageTypeContract) -> PackageReviewExport {
+    let mut reasons = vec![format!(
+        "public {} type",
+        package_type_kind_label(contract.kind)
+    )];
+    if contract.kind == TypeKind::Resource {
+        reasons.push("resource type".to_string());
+    }
+    if contract.fields.iter().any(|field| field.is_handle) {
+        reasons.push("handle field".to_string());
+    }
+    if contract.fields.iter().any(|field| field.is_weak) {
+        reasons.push("weak field".to_string());
+    }
+    PackageReviewExport {
+        name: contract.name.clone(),
+        kind: "type".to_string(),
+        classification: "review_if_changed".to_string(),
+        reasons,
+    }
+}
+
+fn package_function_review_export(
+    contract: &PackageFunctionContract,
+    resource_types: &BTreeSet<&str>,
+    review_map: &ReviewMap,
+) -> PackageReviewExport {
+    let mut reasons = vec!["public function".to_string()];
+    for param in &contract.params {
+        if matches!(param.effect, Some("mut" | "take")) {
+            reasons.push(format!(
+                "{} parameter `{}`",
+                param.effect.expect("effect matched"),
+                param.name
+            ));
+        }
+        if package_type_name_has_resource_boundary(&param.type_name, resource_types) {
+            reasons.push(format!("resource parameter `{}`", param.name));
+        }
+    }
+    if contract.return_type.as_ref().is_some_and(|return_type| {
+        package_type_name_has_resource_boundary(return_type, resource_types)
+    }) {
+        reasons.push("resource return type".to_string());
+    }
+    if contract.returns_fresh {
+        reasons.push("returns fresh value".to_string());
+    }
+    for effect in &contract.effects {
+        if effect.starts_with("retains(") {
+            reasons.push(effect.clone());
+        } else if matches!(effect.as_str(), "native" | "unsafe") {
+            reasons.push(format!("{effect} boundary"));
+        } else if matches!(
+            effect.as_str(),
+            "no_panic" | "noalloc" | "no_block" | "pure"
+        ) {
+            reasons.push(format!("guarantee `{effect}`"));
+        }
+    }
+    let classification = if package_review_map_function_is_unknown(&contract.name, review_map) {
+        reasons.push("unknown review-map region".to_string());
+        "unknown"
+    } else {
+        "review_if_changed"
+    };
+    reasons.sort();
+    reasons.dedup();
+    PackageReviewExport {
+        name: contract.name.clone(),
+        kind: "function".to_string(),
+        classification: classification.to_string(),
+        reasons,
+    }
+}
+
+fn package_protocol_impl_review_export(
+    contract: &PackageProtocolImplContract,
+) -> PackageReviewExport {
+    let mut reasons = vec![
+        "protocol implementation".to_string(),
+        format!("protocol `{}`", contract.protocol),
+        format!("type `{}`", contract.type_name),
+    ];
+    reasons.extend(
+        contract
+            .mappings
+            .iter()
+            .map(|mapping| format!("{} = {}", mapping.method, mapping.target)),
+    );
+    reasons.sort();
+    reasons.dedup();
+    PackageReviewExport {
+        name: package_protocol_impl_contract_key(&contract.protocol, &contract.type_name),
+        kind: "protocol_impl".to_string(),
+        classification: "review_if_changed".to_string(),
+        reasons,
+    }
+}
+
+fn package_review_map_function_is_unknown(function: &str, review_map: &ReviewMap) -> bool {
+    review_map.files.iter().any(|file| {
+        file.regions.iter().any(|region| {
+            region.function == function && region.classification == ReviewMapClassification::Unknown
+        })
+    })
+}
+
+pub(super) fn package_contract_has_resource_boundary(
+    contract: &PackageFunctionContract,
+    resource_types: &BTreeSet<&str>,
+) -> bool {
+    contract
+        .params
+        .iter()
+        .any(|param| package_type_name_has_resource_boundary(&param.type_name, resource_types))
+        || contract.return_type.as_ref().is_some_and(|return_type| {
+            package_type_name_has_resource_boundary(return_type, resource_types)
+        })
+}
+
+pub(super) fn package_type_name_has_resource_boundary(
+    type_name: &str,
+    resource_types: &BTreeSet<&str>,
+) -> bool {
+    type_name
+        .split(|character: char| {
+            !(character.is_ascii_alphanumeric() || character == '_' || character == '.')
+        })
+        .any(|part| part == "ResourcePool" || resource_types.contains(part))
+}
+
+fn package_type_contract(type_decl: &TypeDecl) -> PackageTypeContract {
+    PackageTypeContract {
+        name: type_decl.name.clone(),
+        kind: type_decl.kind,
+        is_opaque: type_decl.is_opaque,
+        type_params: type_decl
+            .type_params
+            .iter()
+            .map(package_generic_contract)
+            .collect(),
+        fields: type_decl
+            .fields
+            .iter()
+            .map(package_field_contract)
+            .collect(),
+        span: type_decl.span.clone(),
+    }
+}
+
+fn package_function_contract(function: &FunctionDecl) -> PackageFunctionContract {
+    PackageFunctionContract {
+        name: function.name.clone(),
+        params: function.params.iter().map(package_param_contract).collect(),
+        return_type: function.return_ty.as_ref().map(package_type_name),
+        returns_fresh: function.returns_fresh,
+        effects: function.effects.iter().map(package_effect_name).collect(),
+        span: function.span.clone(),
+    }
+}
+
+fn package_protocol_impl_contract(protocol_impl: &ProtocolImpl) -> PackageProtocolImplContract {
+    let mut mappings = protocol_impl
+        .mappings
+        .iter()
+        .map(|mapping| PackageProtocolImplMappingContract {
+            method: mapping.method.clone(),
+            target: mapping.target.clone(),
+        })
+        .collect::<Vec<_>>();
+    mappings.sort();
+    PackageProtocolImplContract {
+        protocol: protocol_impl.protocol.clone(),
+        type_name: protocol_impl.type_name.clone(),
+        mappings,
+        span: protocol_impl.span.clone(),
+    }
+}
+
+fn package_generic_contract(param: &GenericParam) -> PackageGenericContract {
+    PackageGenericContract {
+        name: param.name.clone(),
+        bound: param.bound.as_ref().map(package_generic_bound_label),
+    }
+}
+
+fn package_generic_bound_label(bound: &GenericBound) -> String {
+    match bound {
+        GenericBound::Managed => "Managed".to_string(),
+        GenericBound::Struct => "Struct".to_string(),
+        GenericBound::Resource => "Resource".to_string(),
+        GenericBound::Protocol(name) => name.clone(),
+    }
+}
+
+fn package_field_contract(field: &FieldDecl) -> PackageFieldContract {
+    PackageFieldContract {
+        name: field.name.clone(),
+        type_name: package_type_name(&field.ty),
+        is_handle: field.is_handle,
+        is_weak: field.is_weak,
+    }
+}
+
+fn package_param_contract(param: &Param) -> PackageParamContract {
+    PackageParamContract {
+        name: param.name.clone(),
+        effect: param.effect.map(package_effect_label),
+        type_name: package_type_name(&param.ty),
+    }
+}
+
+fn package_effect_label(effect: DataEffect) -> &'static str {
+    match effect {
+        DataEffect::Read => "read",
+        DataEffect::Mut => "mut",
+        DataEffect::Take => "take",
+    }
+}
+
+fn package_effect_name(effect: &EffectDecl) -> String {
+    match effect {
+        EffectDecl::Name(name) => name.clone(),
+        EffectDecl::Retains(param) => format!("retains({param})"),
+    }
+}
+
+pub(super) fn package_protocol_impl_contract_key(protocol: &str, type_name: &str) -> String {
+    format!("{protocol} for {type_name}")
+}
+
+fn package_type_name(ty: &TypeRef) -> String {
+    let base = if ty.name == "Fn" {
+        let params = ty
+            .fn_params
+            .iter()
+            .map(package_type_name)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let return_ty = ty
+            .fn_return
+            .as_ref()
+            .map(|return_ty| format!(" -> {}", package_type_name(return_ty)))
+            .unwrap_or_default();
+        format!("Fn({params}){return_ty}")
+    } else if ty.args.is_empty() {
+        ty.name.clone()
+    } else {
+        let args = ty
+            .args
+            .iter()
+            .map(package_type_name)
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{}<{args}>", ty.name)
+    };
+    let name = if ty.is_noescape {
+        format!("noescape {base}")
+    } else {
+        base
+    };
+    if ty.is_fresh {
+        format!("fresh {name}")
+    } else {
+        name
+    }
+}
+
+fn package_type_kind_label(kind: TypeKind) -> &'static str {
+    match kind {
+        TypeKind::Class => "class",
+        TypeKind::Struct => "struct",
+        TypeKind::Resource => "resource",
+    }
+}
+
+fn package_type_contract_label(contract: &PackageTypeContract) -> String {
+    let type_params = if contract.type_params.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<{}>",
+            contract
+                .type_params
+                .iter()
+                .map(|param| match &param.bound {
+                    Some(bound) => format!("{}: {bound}", param.name),
+                    None => param.name.clone(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    let fields = if contract.fields.is_empty() {
+        if contract.is_opaque {
+            "<opaque>".to_string()
+        } else {
+            "<none>".to_string()
+        }
+    } else {
+        contract
+            .fields
+            .iter()
+            .map(|field| {
+                if field.is_weak {
+                    format!("{}: weak {}", field.name, field.type_name)
+                } else if field.is_handle {
+                    format!("{}: handle {}", field.name, field.type_name)
+                } else {
+                    format!("{}: {}", field.name, field.type_name)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!(
+        "{}{} {}{type_params} {{ {fields} }}",
+        if contract.is_opaque { "opaque " } else { "" },
+        package_type_kind_label(contract.kind),
+        contract.name
+    )
+}
+
+pub(super) fn package_function_contract_label(contract: &PackageFunctionContract) -> String {
+    let params = contract
+        .params
+        .iter()
+        .map(|param| match param.effect {
+            Some(effect) => format!("{}: {} {}", param.name, effect, param.type_name),
+            None => format!("{}: {}", param.name, param.type_name),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut label = format!("pub fn {}({params})", contract.name);
+    if let Some(return_type) = &contract.return_type {
+        if contract.returns_fresh {
+            label.push_str(&format!(" -> fresh {return_type}"));
+        } else {
+            label.push_str(&format!(" -> {return_type}"));
+        }
+    }
+    if !contract.effects.is_empty() {
+        label.push_str(&format!(
+            " effects({})",
+            contract
+                .effects
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    label
+}
+
+fn package_protocol_impl_contract_label(contract: &PackageProtocolImplContract) -> String {
+    let mappings = contract
+        .mappings
+        .iter()
+        .map(|mapping| format!("{} = {}", mapping.method, mapping.target))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "impl {} for {} {{ {} }}",
+        contract.protocol, contract.type_name, mappings
+    )
+}
+
+pub(super) fn package_type_contracts_for_source(
+    source: &PackageSource,
+) -> BTreeMap<String, PackageTypeContract> {
+    parse_source(&source.path, &source.contents)
+        .items
+        .into_iter()
+        .filter_map(|item| match item {
+            Item::Type(type_decl) => {
+                Some((type_decl.name.clone(), package_type_contract(&type_decl)))
+            }
+            Item::Function(_) => None,
+        })
+        .collect()
+}
+
+pub(super) fn package_function_contracts_for_source(
+    source: &PackageSource,
+) -> BTreeMap<String, PackageFunctionContract> {
+    parse_source(&source.path, &source.contents)
+        .items
+        .into_iter()
+        .filter_map(|item| match item {
+            Item::Function(function) => {
+                Some((function.name.clone(), package_function_contract(&function)))
+            }
+            Item::Type(_) => None,
+        })
+        .collect()
+}
+
+pub(super) fn package_added_type_contract_is_high_risk(contract: &PackageTypeContract) -> bool {
+    contract.kind == TypeKind::Resource
+        || contract
+            .fields
+            .iter()
+            .any(|field| field.is_handle || field.is_weak)
+}
+
+pub(super) fn package_type_contract_boundary_changed(
+    old: &PackageTypeContract,
+    new: &PackageTypeContract,
+) -> bool {
+    old.kind != new.kind
+        || old.fields.iter().zip(new.fields.iter()).any(|(old, new)| {
+            old.name != new.name || old.is_handle != new.is_handle || old.is_weak != new.is_weak
+        })
+        || old.fields.len() != new.fields.len()
+}
+
+pub(super) fn package_added_function_contract_is_high_risk(
+    contract: &PackageFunctionContract,
+    resource_types: &BTreeSet<&str>,
+) -> bool {
+    contract
+        .params
+        .iter()
+        .any(|param| matches!(param.effect, Some("mut" | "take")))
+        || contract.effects.iter().any(|effect| {
+            effect.starts_with("retains(") || matches!(effect.as_str(), "native" | "unsafe")
+        })
+        || package_contract_has_resource_boundary(contract, resource_types)
+}
+
+pub(super) fn package_function_contract_boundary_changed(
+    old: &PackageFunctionContract,
+    new: &PackageFunctionContract,
+    resource_types: &BTreeSet<&str>,
+) -> bool {
+    function_contract_adds_mut_or_take_effect(old, new)
+        || function_contract_noescape_boundary_changed(old, new)
+        || function_contract_resource_boundary_changed(old, new, resource_types)
+}
+
+fn function_contract_adds_mut_or_take_effect(
+    old: &PackageFunctionContract,
+    new: &PackageFunctionContract,
+) -> bool {
+    old.params
+        .iter()
+        .zip(new.params.iter())
+        .any(|(old, new)| old.effect != new.effect && matches!(new.effect, Some("mut" | "take")))
+        || new.params.len() > old.params.len()
+            && new
+                .params
+                .iter()
+                .skip(old.params.len())
+                .any(|param| matches!(param.effect, Some("mut" | "take")))
+}
+
+fn function_contract_noescape_boundary_changed(
+    old: &PackageFunctionContract,
+    new: &PackageFunctionContract,
+) -> bool {
+    old.params.iter().zip(new.params.iter()).any(|(old, new)| {
+        old.type_name != new.type_name && param_noescape_boundary_changed(old, new)
+    }) || old.params.len() != new.params.len()
+        && old
+            .params
+            .iter()
+            .chain(new.params.iter())
+            .any(param_is_noescape_boundary)
+}
+
+fn param_noescape_boundary_changed(old: &PackageParamContract, new: &PackageParamContract) -> bool {
+    param_is_noescape_boundary(old) != param_is_noescape_boundary(new)
+}
+
+fn param_is_noescape_boundary(param: &PackageParamContract) -> bool {
+    param.type_name.starts_with("noescape ")
+}
+
+fn function_contract_resource_boundary_changed(
+    old: &PackageFunctionContract,
+    new: &PackageFunctionContract,
+    resource_types: &BTreeSet<&str>,
+) -> bool {
+    package_contract_has_resource_boundary(old, resource_types)
+        != package_contract_has_resource_boundary(new, resource_types)
+}
