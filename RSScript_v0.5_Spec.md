@@ -723,6 +723,8 @@ exhaustive: it covers `Some`/`None`, `Ok`/`Err`, or includes `_`; a
 non-exhaustive match is a diagnostic before lowering. Arm rules:
 
 ```text
+- payload variants may bind the payload (`Some(value)`, `Ok(value)`) or ignore it
+  with payload wildcard syntax (`Some(_)`, `Ok(_)`, `Err(_)`).
 - a variant payload binding obeys the same data-effect, move, and resource rules
   as any other binding; a payload that is a resource cannot escape its arm.
 - a `with` resource opened inside an arm drops at that arm's exit.
@@ -2954,6 +2956,17 @@ Span
 Log
 Test
 Assert
+```
+
+The minimum `List<T>` core surface includes indexed access plus a noescape
+predicate helper for tool-style reductions that should not hand-roll recursive
+index walkers:
+
+```rust
+pub fn List.count_where<T>(
+    list: read List<T>,
+    predicate: noescape Fn(T) -> Bool,
+) -> Int
 ```
 
 The minimum `String` core surface includes pure current-value inspection helpers

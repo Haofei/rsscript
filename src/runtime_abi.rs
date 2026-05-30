@@ -236,6 +236,7 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "rsscript_runtime::json_error_message",
     ),
     runtime_intrinsic("List", "consume", "rsscript_runtime::list_consume"),
+    runtime_intrinsic("List", "count_where", "rsscript_runtime::list_count_where"),
     runtime_intrinsic("List", "get", "rsscript_runtime::list_get"),
     runtime_intrinsic("List", "len", "rsscript_runtime::list_len"),
     runtime_intrinsic("List", "new", "rsscript_runtime::list_new"),

@@ -2544,8 +2544,15 @@ fn main() -> Unit {
     List.push(list: mut list, value: read 10)
     let count = List.len(list: read list)
     let first = List.get(list: read list, index: 0)
+    let matching = List.count_where(
+        list: read list,
+        predicate: |item| {
+            return item == 10
+        },
+    )
     Assert.equal_int(left: count, right: 1)
     Assert.equal_int(left: first, right: 10)
+    Assert.equal_int(left: matching, right: 1)
     return Unit
 }
 "#;
@@ -2555,6 +2562,8 @@ fn main() -> Unit {
     assert!(rust.contains("rsscript_runtime::list_push(&mut list, &10);"));
     assert!(rust.contains("let count = rsscript_runtime::list_len(&list);"));
     assert!(rust.contains("let first = rsscript_runtime::list_get(&list, 0);"));
+    assert!(rust.contains("let matching = rsscript_runtime::list_count_where(&list, |item| {"));
+    assert!(rust.contains("return item == 10;"));
 }
 
 #[test]

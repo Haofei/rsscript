@@ -1055,7 +1055,7 @@ fn check_call_args(
         }
     }
 
-    let type_param_substitutions = call_type_param_substitutions(analyzer, callee, signature);
+    let type_param_substitutions = call_type_param_substitutions(analyzer, callee, args, signature);
 
     for arg in args {
         let Some(name) = &arg.name else {
@@ -1190,6 +1190,7 @@ fn check_enum_variant_form(
 fn call_type_param_substitutions(
     analyzer: &Analyzer<'_>,
     callee: &Callee,
+    args: &[HirCallArg],
     signature: &FunctionSig,
 ) -> HashMap<String, String> {
     let mut substitutions = HashMap::new();
@@ -1198,31 +1199,116 @@ fn call_type_param_substitutions(
         .iter()
         .map(String::as_str)
         .collect::<HashSet<_>>();
-    let Callee::Qualified { namespace, .. } = callee else {
+    if generic_params.is_empty() {
         return substitutions;
-    };
-    let root = type_root_name(namespace);
-    let Some(namespace_args) = type_arg_names(namespace) else {
-        return substitutions;
-    };
-    let params = analyzer
-        .hir
-        .type_info(root)
-        .map(|type_info| {
-            type_info
-                .type_params
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-        })
-        .or_else(|| builtin_generic_type_params(root))
-        .unwrap_or_default();
-    for (param, actual) in params.into_iter().zip(namespace_args) {
-        if generic_params.contains(param) {
-            substitutions.insert(param.to_string(), actual.to_string());
+    }
+    if let Callee::Qualified { namespace, .. } = callee
+        && let Some(namespace_args) = type_arg_names(namespace)
+    {
+        let root = type_root_name(namespace);
+        let params = analyzer
+            .hir
+            .type_info(root)
+            .map(|type_info| {
+                type_info
+                    .type_params
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+            })
+            .or_else(|| builtin_generic_type_params(root))
+            .unwrap_or_default();
+        for (param, actual) in params.into_iter().zip(namespace_args) {
+            if generic_params.contains(param) {
+                substitutions.insert(param.to_string(), actual.to_string());
+            }
         }
     }
+    collect_call_arg_type_param_substitutions(args, signature, &generic_params, &mut substitutions);
     substitutions
+}
+
+fn collect_call_arg_type_param_substitutions(
+    args: &[HirCallArg],
+    signature: &FunctionSig,
+    generic_params: &HashSet<&str>,
+    substitutions: &mut HashMap<String, String>,
+) {
+    for (index, arg) in args.iter().enumerate() {
+        let Some(param) = arg
+            .name
+            .as_deref()
+            .and_then(|name| signature.params.iter().find(|param| param.name == name))
+            .or_else(|| signature.params.get(index))
+        else {
+            continue;
+        };
+        let Some(actual_type) = hir_expr_type_name(&arg.value) else {
+            continue;
+        };
+        collect_type_param_substitutions(
+            &param.type_name,
+            actual_type,
+            generic_params,
+            substitutions,
+        );
+    }
+}
+
+fn collect_type_param_substitutions(
+    pattern: &str,
+    actual: &str,
+    generic_params: &HashSet<&str>,
+    substitutions: &mut HashMap<String, String>,
+) {
+    let pattern = pattern.trim();
+    let actual = actual.trim();
+    if actual == "?" {
+        return;
+    }
+    if generic_params.contains(pattern) {
+        substitutions
+            .entry(pattern.to_string())
+            .or_insert_with(|| actual.to_string());
+        return;
+    }
+    if is_noescape_fn_type(pattern) && is_noescape_fn_type(actual) {
+        for (pattern_param, actual_param) in noescape_param_types(pattern)
+            .into_iter()
+            .zip(noescape_param_types(actual))
+        {
+            collect_type_param_substitutions(
+                pattern_param,
+                actual_param,
+                generic_params,
+                substitutions,
+            );
+        }
+        if let (Some(pattern_return), Some(actual_return)) =
+            (noescape_return_type(pattern), noescape_return_type(actual))
+        {
+            collect_type_param_substitutions(
+                pattern_return,
+                actual_return,
+                generic_params,
+                substitutions,
+            );
+        }
+        return;
+    }
+    let Some(pattern_args) = type_arg_names(pattern) else {
+        return;
+    };
+    let Some(actual_args) = type_arg_names(actual) else {
+        return;
+    };
+    if type_root_name(pattern) != type_root_name(actual) || pattern_args.len() != actual_args.len()
+    {
+        return;
+    }
+    for (pattern_arg, actual_arg) in pattern_args.into_iter().zip(actual_args) {
+        collect_type_param_substitutions(pattern_arg, actual_arg, generic_params, substitutions);
+    }
 }
 
 fn substitute_type_params(type_name: &str, substitutions: &HashMap<String, String>) -> String {
@@ -1917,7 +2003,7 @@ fn check_callback_resolved_call_argument_types(
     contract: &CallbackContract<'_>,
 ) {
     let call_name = callee_display(callee);
-    let type_param_substitutions = call_type_param_substitutions(analyzer, callee, signature);
+    let type_param_substitutions = call_type_param_substitutions(analyzer, callee, args, signature);
     for arg in args {
         let Some(name) = &arg.name else {
             continue;

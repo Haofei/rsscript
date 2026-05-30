@@ -133,51 +133,6 @@ fn read_file_text_result(path: read Path) -> Result<String, FileError> {
     }
 }
 
-fn source_content_facts_from_lines(
-    lines: read List<String>,
-    index: Int,
-    facts: read PackageSourceContentFacts,
-) -> fresh PackageSourceContentFacts {
-    if index >= List.len(list: read lines) {
-        return PackageSourceContentFacts(
-            public_functions: facts.public_functions,
-            api_symbols: facts.api_symbols,
-            tool_symbols: facts.tool_symbols,
-        )
-    }
-
-    let line = List.get(list: read lines, index: index)
-
-    match public_function_symbol(line: read line) {
-        Some(symbol) => {
-            let next = PackageSourceContentFacts(
-                public_functions: facts.public_functions + 1,
-                api_symbols: add_bool(
-                    value: facts.api_symbols,
-                    condition: symbol == "Api.run",
-                ),
-                tool_symbols: add_bool(
-                    value: facts.tool_symbols,
-                    condition: symbol == "Tool.run",
-                ),
-            )
-
-            return source_content_facts_from_lines(
-                lines: read lines,
-                index: index + 1,
-                facts: read next,
-            )
-        }
-        None => {
-            return source_content_facts_from_lines(
-                lines: read lines,
-                index: index + 1,
-                facts: read facts,
-            )
-        }
-    }
-}
-
 fn public_function_symbol(line: read String) -> Option<String> {
     match String.strip_prefix(value: read line, prefix: read "pub fn ") {
         Some(rest) => {
@@ -191,15 +146,50 @@ fn public_function_symbol(line: read String) -> Option<String> {
 
 fn source_content_facts(contents: read String) -> fresh PackageSourceContentFacts {
     let lines = String.lines(value: read contents)
+    let public_functions = List.count_where(
+        list: read lines,
+        predicate: |line| {
+            match public_function_symbol(line: read line) {
+                Some(_) => {
+                    return true
+                }
+                None => {
+                    return false
+                }
+            }
+        },
+    )
+    let api_symbols = List.count_where(
+        list: read lines,
+        predicate: |line| {
+            match public_function_symbol(line: read line) {
+                Some(symbol) => {
+                    return symbol == "Api.run"
+                }
+                None => {
+                    return false
+                }
+            }
+        },
+    )
+    let tool_symbols = List.count_where(
+        list: read lines,
+        predicate: |line| {
+            match public_function_symbol(line: read line) {
+                Some(symbol) => {
+                    return symbol == "Tool.run"
+                }
+                None => {
+                    return false
+                }
+            }
+        },
+    )
 
-    return source_content_facts_from_lines(
-        lines: read lines,
-        index: 0,
-        facts: read PackageSourceContentFacts(
-            public_functions: 0,
-            api_symbols: 0,
-            tool_symbols: 0,
-        ),
+    return PackageSourceContentFacts(
+        public_functions: public_functions,
+        api_symbols: api_symbols,
+        tool_symbols: tool_symbols,
     )
 }
 

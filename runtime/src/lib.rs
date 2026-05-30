@@ -546,6 +546,12 @@ pub fn list_get<T: Clone>(list: &[T], index: i64) -> T {
     list[index as usize].clone()
 }
 
+pub fn list_count_where<T: Clone>(list: &[T], mut predicate: impl FnMut(T) -> bool) -> i64 {
+    list.iter()
+        .filter(|item| predicate((*item).clone()))
+        .count() as i64
+}
+
 pub fn list_consume<T>(list: Vec<T>) {
     drop(list);
 }
@@ -1844,6 +1850,15 @@ mod tests {
         super::list_consume(vec![1_i64, 2, 3]);
         super::buffer_consume(b"bytes".to_vec());
         super::os_close(0);
+    }
+
+    #[test]
+    fn list_runtime_hooks_count_with_predicate() {
+        let values = vec![1_i64, 2, 3, 4];
+
+        let even = super::list_count_where(&values, |value| value % 2 == 0);
+
+        assert_eq!(even, 2);
     }
 
     #[test]

@@ -2389,6 +2389,9 @@ fn lower_match_pattern(pattern: &MatchPattern) -> String {
             binding: Some(binding),
             ..
         } => format!("{}({})", rust_ident(name), rust_ident(binding)),
+        MatchPattern::Variant { name, .. } if matches!(name.as_str(), "Some" | "Ok" | "Err") => {
+            format!("{}(_)", rust_ident(name))
+        }
         MatchPattern::Variant { name, .. } => rust_ident(name),
     }
 }

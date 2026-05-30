@@ -15,4 +15,9 @@ pub fn List.get<T>(
     index: Int,
 ) -> T
 
+pub fn List.count_where<T>(
+    list: read List<T>,
+    predicate: noescape Fn(T) -> Bool,
+) -> Int
+
 pub fn List.consume<T>(list: take List<T>) -> Unit
