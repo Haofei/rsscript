@@ -16,7 +16,33 @@ selfhost_scripts=(
   tests/fixtures/pass/selfhost-rustc-remap.rss
 )
 
-for script in "${selfhost_scripts[@]}"; do
+detect_jobs() {
+  if [[ -n "${RSSCRIPT_JOBS:-}" ]]; then
+    echo "$RSSCRIPT_JOBS"
+  elif command -v getconf >/dev/null 2>&1; then
+    getconf _NPROCESSORS_ONLN
+  elif command -v sysctl >/dev/null 2>&1; then
+    sysctl -n hw.ncpu
+  else
+    echo 4
+  fi
+}
+
+jobs="$(detect_jobs)"
+if [[ -z "$jobs" || "$jobs" -lt 1 ]]; then
+  jobs=1
+fi
+
+RSS_BIN="${RSS_BIN:-$ROOT/target/debug/rss}"
+if [[ ! -x "$RSS_BIN" ]]; then
+  cargo build --quiet --bin rss
+  RSS_BIN="$ROOT/target/debug/rss"
+fi
+export RSS_BIN
+
+printf '%s\0' "${selfhost_scripts[@]}" | xargs -0 -n1 -P "$jobs" bash -c '
+  set -euo pipefail
+  script="$1"
   echo "selfhost $script"
-  cargo run --quiet -- run "$script"
-done
+  "$RSS_BIN" run "$script"
+' _

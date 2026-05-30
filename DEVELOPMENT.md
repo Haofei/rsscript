@@ -98,9 +98,15 @@ For a release-like verification, use:
 RSSCRIPT_FULL_TESTS=1 bash scripts/check.sh
 ```
 
-Avoid running multiple Cargo commands in parallel. Cargo's build lock makes that
-slower and noisier. Use parallel shell reads/searches freely, but keep Cargo
-verification sequential.
+The RSScript script runners default to CPU-count parallelism for independent
+`.rss` checks and runs. Set `RSSCRIPT_JOBS=N` when you need to cap the fan-out
+or reproduce a parallel-run issue.
+
+Avoid running multiple workspace Cargo commands in parallel. Cargo's build lock
+makes that slower and noisier. Independent RSScript script checks may run in
+parallel after `rss` has been built; those jobs use isolated generated packages.
+Use parallel shell reads/searches freely, but keep workspace Cargo verification
+sequential.
 
 ## Why Not Always Run One Test First?
 

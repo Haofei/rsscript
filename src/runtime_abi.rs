@@ -261,6 +261,11 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Json", "parse", "rsscript_runtime::json_parse"),
     runtime_intrinsic("Json", "parse_file", "rsscript_runtime::json_parse_file"),
     runtime_intrinsic(
+        "Json",
+        "quote_string",
+        "rsscript_runtime::json_quote_string",
+    ),
+    runtime_intrinsic(
         "JsonError",
         "message",
         "rsscript_runtime::json_error_message",

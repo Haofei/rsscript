@@ -1,0 +1,372 @@
+features: local
+
+struct PackageManifestFacts {
+    package_name: String
+    version: String
+    edition: String
+    interface_paths: Int
+    source_paths: Int
+}
+
+struct VendorCopyFacts {
+    copied_files: Int
+    interface_files: Int
+    source_files: Int
+    manifest_files: Int
+}
+
+fn json_error(prefix: read String, error: read JsonError) -> fresh String {
+    let message = JsonError.message(error: read error)
+    let first = String.concat(left: read prefix, right: read ": ")
+
+    return String.concat(left: read first, right: read message)
+}
+
+fn file_error(prefix: read String, error: read FileError) -> fresh String {
+    let message = FileError.message(error: read error)
+    let first = String.concat(left: read prefix, right: read ": ")
+
+    return String.concat(left: read first, right: read message)
+}
+
+fn root_path() -> fresh Path {
+    let input = Args.get_or_default(
+        index: 1,
+        default: read "tests/fixtures/pass/selfhost-package-source-set",
+    )
+
+    return Path.from_string(value: read input)
+}
+
+fn output_path() -> fresh Path {
+    let input = Args.get_or_default(
+        index: 2,
+        default: read "target/rsscript-selfhost-package-manager-output",
+    )
+
+    return Path.from_string(value: read input)
+}
+
+fn manifest_path(root: read Path) -> fresh Path {
+    return Path.join(base: read root, child: read "rsspkg.toml")
+}
+
+fn parse_toml_result(path: read Path) -> Result<JsonValue, String> {
+    match Toml.parse_file(path: read path) {
+        Ok(value) => {
+            return Ok(value)
+        }
+        Err(error) => {
+            return Err(json_error(prefix: read "manifest parse", error: read error))
+        }
+    }
+}
+
+fn json_field_result(
+    value: read JsonValue,
+    name: read String,
+) -> Result<JsonValue, String> {
+    match Json.field(value: read value, name: read name) {
+        Ok(field) => {
+            return Ok(field)
+        }
+        Err(error) => {
+            return Err(json_error(prefix: read "manifest field", error: read error))
+        }
+    }
+}
+
+fn json_field_string_result(
+    value: read JsonValue,
+    name: read String,
+) -> Result<String, String> {
+    match Json.field_string(value: read value, name: read name) {
+        Ok(text) => {
+            return Ok(text)
+        }
+        Err(error) => {
+            return Err(json_error(prefix: read "manifest string", error: read error))
+        }
+    }
+}
+
+fn json_array_len_result(value: read JsonValue) -> Result<Int, String> {
+    match Json.array_len(value: read value) {
+        Ok(length) => {
+            return Ok(length)
+        }
+        Err(error) => {
+            return Err(json_error(prefix: read "manifest array length", error: read error))
+        }
+    }
+}
+
+fn package_manifest_facts(root: read Path) -> Result<fresh PackageManifestFacts, String> {
+    let manifest = parse_toml_result(path: read manifest_path(root: read root))?
+    let package = json_field_result(value: read manifest, name: read "package")?
+    let interfaces = json_field_result(value: read manifest, name: read "interfaces")?
+    let interface_paths = json_field_result(value: read interfaces, name: read "paths")?
+    let sources = json_field_result(value: read manifest, name: read "sources")?
+    let source_paths = json_field_result(value: read sources, name: read "paths")?
+
+    return PackageManifestFacts(
+        package_name: json_field_string_result(value: read package, name: read "name")?,
+        version: json_field_string_result(value: read package, name: read "version")?,
+        edition: json_field_string_result(value: read package, name: read "edition")?,
+        interface_paths: json_array_len_result(value: read interface_paths)?,
+        source_paths: json_array_len_result(value: read source_paths)?,
+    )
+}
+
+fn ensure_parent_directory(path: read Path) -> Result<Unit, String> {
+    match Path.parent(path: read path) {
+        Some(parent) => {
+            match Directory.create_all(path: read parent) {
+                Ok(_) => {
+                }
+                Err(error) => {
+                    return Err(file_error(prefix: read "create parent", error: read error))
+                }
+            }
+        }
+        None => {
+        }
+    }
+
+    return Ok(Unit)
+}
+
+fn write_text_file(path: read Path, text: read String) -> Result<Unit, FileError> {
+    with File.open_write(path: read path)? as file {
+        File.write_string(file: mut file, text: read text)?
+    }
+
+    return Ok(Unit)
+}
+
+fn write_text_result(path: read Path, text: read String) -> Result<Unit, String> {
+    ensure_parent_directory(path: read path)?
+
+    match write_text_file(path: read path, text: read text) {
+        Ok(_) => {
+            return Ok(Unit)
+        }
+        Err(error) => {
+            return Err(file_error(prefix: read "write file", error: read error))
+        }
+    }
+}
+
+fn read_text_file(path: read Path) -> Result<String, FileError> {
+    with File.open_read(path: read path)? as file {
+        let text = File.read_all_string(file: mut file)?
+
+        return Ok(text)
+    }
+}
+
+fn read_text_result(path: read Path) -> Result<String, String> {
+    match read_text_file(path: read path) {
+        Ok(text) => {
+            return Ok(text)
+        }
+        Err(error) => {
+            return Err(file_error(prefix: read "read file", error: read error))
+        }
+    }
+}
+
+fn list_files_result(path: read Path) -> Result<List<String>, String> {
+    match Directory.list_files(path: read path) {
+        Ok(files) => {
+            return Ok(files)
+        }
+        Err(error) => {
+            return Err(file_error(prefix: read "list files", error: read error))
+        }
+    }
+}
+
+fn create_dir_result(path: read Path) -> Result<Unit, String> {
+    match Directory.create_all(path: read path) {
+        Ok(_) => {
+            return Ok(Unit)
+        }
+        Err(error) => {
+            return Err(file_error(prefix: read "create directory", error: read error))
+        }
+    }
+}
+
+fn package_metadata_json(facts: read PackageManifestFacts) -> fresh String {
+    local builder = StringBuilder.new()
+    StringBuilder.push(builder: mut builder, value: read "{\n")
+    StringBuilder.push(builder: mut builder, value: read "  \"package\": ")
+    let package_name = Json.quote_string(value: read facts.package_name)
+    StringBuilder.push(builder: mut builder, value: read package_name)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"version\": ")
+    let version = Json.quote_string(value: read facts.version)
+    StringBuilder.push(builder: mut builder, value: read version)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"edition\": ")
+    let edition = Json.quote_string(value: read facts.edition)
+    StringBuilder.push(builder: mut builder, value: read edition)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"interface_paths\": ")
+    let interface_paths = String.from_int(value: facts.interface_paths)
+    StringBuilder.push(builder: mut builder, value: read interface_paths)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"source_paths\": ")
+    let source_paths = String.from_int(value: facts.source_paths)
+    StringBuilder.push(builder: mut builder, value: read source_paths)
+    StringBuilder.push(builder: mut builder, value: read "\n}\n")
+
+    return StringBuilder.finish(builder: take builder)
+}
+
+fn empty_vendor_facts() -> fresh VendorCopyFacts {
+    return VendorCopyFacts(
+        copied_files: 0,
+        interface_files: 0,
+        source_files: 0,
+        manifest_files: 0,
+    )
+}
+
+fn bool_count(value: Bool) -> Int {
+    if value {
+        return 1
+    }
+
+    return 0
+}
+
+fn add_file_facts(facts: read VendorCopyFacts, relative_path: read String) -> fresh VendorCopyFacts {
+    let is_interface = String.ends_with(value: read relative_path, suffix: read ".rssi")
+    let is_source = String.ends_with(value: read relative_path, suffix: read ".rss")
+    let is_manifest = relative_path == "rsspkg.toml"
+
+    return VendorCopyFacts(
+        copied_files: facts.copied_files + 1,
+        interface_files: facts.interface_files + bool_count(value: is_interface),
+        source_files: facts.source_files + bool_count(value: is_source),
+        manifest_files: facts.manifest_files + bool_count(value: is_manifest),
+    )
+}
+
+fn copy_relative_file(
+    source: read Path,
+    vendor: read Path,
+    facts: read VendorCopyFacts,
+    relative_path: read String,
+) -> Result<fresh VendorCopyFacts, String> {
+    let input = Path.join(base: read source, child: read relative_path)
+    let output = Path.join(base: read vendor, child: read relative_path)
+    let contents = read_text_result(path: read input)?
+    write_text_result(path: read output, text: read contents)?
+
+    return add_file_facts(facts: read facts, relative_path: read relative_path)
+}
+
+fn copy_package_tree(
+    source: read Path,
+    vendor: read Path,
+    files: read List<String>,
+) -> Result<fresh VendorCopyFacts, String> {
+    return List.try_fold<String, VendorCopyFacts, String>(
+        list: read files,
+        initial: read empty_vendor_facts(),
+        folder: |facts, relative_path| {
+            return copy_relative_file(
+                source: read source,
+                vendor: read vendor,
+                facts: read facts,
+                relative_path: read relative_path,
+            )
+        },
+    )
+}
+
+fn vendor_metadata_json(
+    manifest: read PackageManifestFacts,
+    facts: read VendorCopyFacts,
+) -> fresh String {
+    local builder = StringBuilder.new()
+    StringBuilder.push(builder: mut builder, value: read "{\n")
+    StringBuilder.push(builder: mut builder, value: read "  \"package\": ")
+    let package_name = Json.quote_string(value: read manifest.package_name)
+    StringBuilder.push(builder: mut builder, value: read package_name)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"version\": ")
+    let version = Json.quote_string(value: read manifest.version)
+    StringBuilder.push(builder: mut builder, value: read version)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"copied_files\": ")
+    let copied = String.from_int(value: facts.copied_files)
+    StringBuilder.push(builder: mut builder, value: read copied)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"interface_files\": ")
+    let interfaces = String.from_int(value: facts.interface_files)
+    StringBuilder.push(builder: mut builder, value: read interfaces)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"source_files\": ")
+    let sources = String.from_int(value: facts.source_files)
+    StringBuilder.push(builder: mut builder, value: read sources)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"manifest_files\": ")
+    let manifests = String.from_int(value: facts.manifest_files)
+    StringBuilder.push(builder: mut builder, value: read manifests)
+    StringBuilder.push(builder: mut builder, value: read "\n}\n")
+
+    return StringBuilder.finish(builder: take builder)
+}
+
+fn run_metadata(root: read Path, output: read Path) -> Result<Unit, String> {
+    let facts = package_manifest_facts(root: read root)?
+    let text = package_metadata_json(facts: read facts)
+    write_text_result(path: read output, text: read text)?
+    let message = String.concat(
+        left: read "rss package manager metadata ",
+        right: read facts.package_name,
+    )
+    Log.write(message: read message)
+
+    return Ok(Unit)
+}
+
+fn run_vendor(root: read Path, vendor: read Path) -> Result<Unit, String> {
+    create_dir_result(path: read vendor)?
+    let manifest = package_manifest_facts(root: read root)?
+    let files = list_files_result(path: read root)?
+    let facts = copy_package_tree(source: read root, vendor: read vendor, files: read files)?
+    let metadata_path = Path.join(base: read vendor, child: read "rss-vendor.json")
+    let metadata = vendor_metadata_json(manifest: read manifest, facts: read facts)
+    write_text_result(path: read metadata_path, text: read metadata)?
+
+    local builder = StringBuilder.new()
+    StringBuilder.push(builder: mut builder, value: read "rss package manager vendor copied=")
+    let copied = String.from_int(value: facts.copied_files)
+    StringBuilder.push(builder: mut builder, value: read copied)
+    StringBuilder.push(builder: mut builder, value: read " interfaces=")
+    let interfaces = String.from_int(value: facts.interface_files)
+    StringBuilder.push(builder: mut builder, value: read interfaces)
+    StringBuilder.push(builder: mut builder, value: read " sources=")
+    let sources = String.from_int(value: facts.source_files)
+    StringBuilder.push(builder: mut builder, value: read sources)
+    StringBuilder.push(builder: mut builder, value: read " manifests=")
+    let manifests = String.from_int(value: facts.manifest_files)
+    StringBuilder.push(builder: mut builder, value: read manifests)
+    let message = StringBuilder.finish(builder: take builder)
+    Log.write(message: read message)
+
+    return Ok(Unit)
+}
+
+pub fn main() -> Result<Unit, String> {
+    let command = Args.get_or_default(index: 0, default: read "metadata")
+    let root = root_path()
+    let output = output_path()
+
+    if command == "metadata" {
+        return run_metadata(root: read root, output: read output)
+    }
+
+    if command == "vendor" {
+        return run_vendor(root: read root, vendor: read output)
+    }
+
+    let message = String.concat(left: read "unknown package command: ", right: read command)
+    return Err(message)
+}

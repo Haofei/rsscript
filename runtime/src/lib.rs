@@ -1120,6 +1120,10 @@ pub fn json_parse_file<P: RuntimePath + ?Sized>(path: &P) -> Result<JsonValue, J
     json_parse(&text)
 }
 
+pub fn json_quote_string(value: &str) -> String {
+    serde_json::to_string(value).expect("serializing a string to JSON cannot fail")
+}
+
 pub fn toml_parse_file<P: RuntimePath + ?Sized>(path: &P) -> Result<JsonValue, JsonError> {
     let text = std::fs::read_to_string(path.as_path())?;
     let value = text
@@ -2066,6 +2070,7 @@ mod tests {
 
         let value = super::json_parse(json_text).expect("JSON should parse");
         let value_from_file = super::json_parse_file(&path).expect("JSON file should parse");
+        let quoted = super::json_quote_string("RSScript \"review\"");
         let profiles_from_file =
             super::json_field(&value_from_file, "profiles").expect("profiles should exist");
         let file_len =
@@ -2131,6 +2136,7 @@ mod tests {
         let built = super::string_builder_finish(builder);
 
         assert_eq!(file_len, 1);
+        assert_eq!(quoted, "\"RSScript \\\"review\\\"\"");
         assert_eq!(len, 1);
         assert_eq!(name, "RSScript");
         assert_eq!(profile_name, "RSScript");

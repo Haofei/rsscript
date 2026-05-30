@@ -4,6 +4,9 @@ pub fn Json.parse(text: read String) -> Result<fresh JsonValue, JsonError>
 
 pub fn Json.parse_file(path: read Path) -> Result<fresh JsonValue, JsonError>
 
+pub fn Json.quote_string(value: read String) -> fresh String
+    effects(pure)
+
 pub fn Json.field(
     value: read JsonValue,
     name: read String,

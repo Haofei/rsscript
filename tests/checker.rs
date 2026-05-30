@@ -2813,6 +2813,7 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     let value = Json.parse(text: read text)?
     let path = Path.from_string(value: read "profile.json")
     let value_from_file = Json.parse_file(path: read path)?
+    let quoted = Json.quote_string(value: read "RSScript \"review\"")
     let count = Json.array_len(value: read value)?
     let first = Json.array_get(value: read value, index: 0)?
     let strings = Json.array_strings(value: read value)?
@@ -2862,6 +2863,9 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     assert!(rust.contains("-> Result<String, rsscript_runtime::JsonError>"));
     assert!(rust.contains("let value = rsscript_runtime::json_parse(&text)?;"));
     assert!(rust.contains("let value_from_file = rsscript_runtime::json_parse_file(&path)?;"));
+    assert!(rust.contains(
+        "let quoted = rsscript_runtime::json_quote_string(&\"RSScript \\\"review\\\"\".to_string());"
+    ));
     assert!(rust.contains(
         "let profile = rsscript_runtime::json_field(&value, &\"profile\".to_string())?;"
     ));
@@ -7477,12 +7481,14 @@ fn rss_run_accepts_selfhost_package_metadata_writer() {
 
     let metadata = fs::read_to_string(&output_path)
         .unwrap_or_else(|error| panic!("metadata file should be written: {error}"));
-    assert!(metadata.contains("package=rss-selfhost-written"));
-    assert!(metadata.contains("version=0.5.1"));
-    assert!(metadata.contains("edition=2024"));
-    assert!(metadata.contains("public_apis=5"));
-    assert!(metadata.contains("native_apis=1"));
-    assert!(metadata.contains("unknown_apis=0"));
+    let metadata_json: Value =
+        serde_json::from_str(&metadata).expect("metadata file should be valid JSON");
+    assert_eq!(metadata_json["package"], "rss-selfhost-written");
+    assert_eq!(metadata_json["version"], "0.5.1");
+    assert_eq!(metadata_json["edition"], "2024");
+    assert_eq!(metadata_json["public_apis"], 5);
+    assert_eq!(metadata_json["native_apis"], 1);
+    assert_eq!(metadata_json["unknown_apis"], 0);
 }
 
 #[test]
@@ -7517,6 +7523,81 @@ fn rss_run_accepts_selfhost_package_vendor_copy() {
     let manifest = fs::read_to_string(vendor_dir.join("rsspkg.toml"))
         .expect("vendored manifest should be readable");
     assert!(manifest.contains("rss-selfhost-source-set"));
+}
+
+#[test]
+fn rss_run_accepts_minimal_selfhost_package_manager() {
+    let temp_dir = unique_temp_dir("rsscript-selfhost-package-manager");
+    let metadata_path = temp_dir.join("review/package-review.json");
+    let vendor_dir = temp_dir.join("vendor/rss-selfhost-source-set-0.5.0");
+    let source_root = "tests/fixtures/pass/selfhost-package-source-set";
+
+    let metadata_output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("tests/fixtures/pass/selfhost-package-manager.rss")
+        .arg("--")
+        .arg("metadata")
+        .arg(source_root)
+        .arg(&metadata_path)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss run should execute minimal package manager metadata command");
+    let metadata_stdout = String::from_utf8_lossy(&metadata_output.stdout);
+    let metadata_stderr = String::from_utf8_lossy(&metadata_output.stderr);
+
+    assert!(
+        metadata_output.status.success(),
+        "stdout={metadata_stdout}\nstderr={metadata_stderr}"
+    );
+    assert!(
+        metadata_stdout.contains("rss package manager metadata rss-selfhost-source-set"),
+        "{metadata_stdout}"
+    );
+    assert!(metadata_stderr.trim().is_empty(), "{metadata_stderr}");
+    let metadata = fs::read_to_string(&metadata_path)
+        .unwrap_or_else(|error| panic!("metadata JSON should be written: {error}"));
+    let metadata_json: Value =
+        serde_json::from_str(&metadata).expect("metadata output should be valid JSON");
+    assert_eq!(metadata_json["package"], "rss-selfhost-source-set");
+    assert_eq!(metadata_json["version"], "0.5.0");
+    assert_eq!(metadata_json["edition"], "2024");
+    assert_eq!(metadata_json["interface_paths"], 2);
+    assert_eq!(metadata_json["source_paths"], 2);
+
+    let vendor_output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg("tests/fixtures/pass/selfhost-package-manager.rss")
+        .arg("--")
+        .arg("vendor")
+        .arg(source_root)
+        .arg(&vendor_dir)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss run should execute minimal package manager vendor command");
+    let vendor_stdout = String::from_utf8_lossy(&vendor_output.stdout);
+    let vendor_stderr = String::from_utf8_lossy(&vendor_output.stderr);
+
+    assert!(
+        vendor_output.status.success(),
+        "stdout={vendor_stdout}\nstderr={vendor_stderr}"
+    );
+    assert!(
+        vendor_stdout
+            .contains("rss package manager vendor copied=5 interfaces=2 sources=2 manifests=1"),
+        "{vendor_stdout}"
+    );
+    assert!(vendor_stderr.trim().is_empty(), "{vendor_stderr}");
+    assert!(vendor_dir.join("rsspkg.toml").is_file());
+    assert!(vendor_dir.join("interface/lib.rssi").is_file());
+    assert!(vendor_dir.join("contracts/tool.rssi").is_file());
+    assert!(vendor_dir.join("src/main.rss").is_file());
+    assert!(vendor_dir.join("tools/check.rss").is_file());
+    let vendor_metadata = fs::read_to_string(vendor_dir.join("rss-vendor.json"))
+        .expect("vendor metadata should be written");
+    let vendor_json: Value =
+        serde_json::from_str(&vendor_metadata).expect("vendor metadata should be valid JSON");
+    assert_eq!(vendor_json["package"], "rss-selfhost-source-set");
+    assert_eq!(vendor_json["copied_files"], 5);
 }
 
 #[test]

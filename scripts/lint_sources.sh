@@ -12,11 +12,37 @@ if [[ "${#sources[@]}" == "0" ]]; then
   exit 1
 fi
 
-for source in "${sources[@]}"; do
+detect_jobs() {
+  if [[ -n "${RSSCRIPT_JOBS:-}" ]]; then
+    echo "$RSSCRIPT_JOBS"
+  elif command -v getconf >/dev/null 2>&1; then
+    getconf _NPROCESSORS_ONLN
+  elif command -v sysctl >/dev/null 2>&1; then
+    sysctl -n hw.ncpu
+  else
+    echo 4
+  fi
+}
+
+jobs="$(detect_jobs)"
+if [[ -z "$jobs" || "$jobs" -lt 1 ]]; then
+  jobs=1
+fi
+
+RSS_BIN="${RSS_BIN:-$ROOT/target/debug/rss}"
+if [[ ! -x "$RSS_BIN" ]]; then
+  cargo build --quiet --bin rss
+  RSS_BIN="$ROOT/target/debug/rss"
+fi
+export RSS_BIN
+
+printf '%s\0' "${sources[@]}" | xargs -0 -n1 -P "$jobs" bash -c '
+  set -euo pipefail
+  source="$1"
   echo "lint $source"
   if [[ "$source" == core/* || "$source" == tests/fixtures/pass/* ]]; then
-    cargo run --quiet -- lint --no-core "$source"
+    "$RSS_BIN" lint --no-core "$source"
   else
-    cargo run --quiet -- lint "$source"
+    "$RSS_BIN" lint "$source"
   fi
-done
+' _
