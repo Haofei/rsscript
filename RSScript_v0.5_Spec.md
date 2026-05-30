@@ -641,6 +641,11 @@ explicit, named call, never an implicit backend conversion. It is described here
 in prose because the closure-parameter syntax it would need is not part of the
 v0.5 surface.
 
+Core error types may expose explicit lossy message conversion helpers, for
+example `JsonError.message(error: read e)` or `FileError.message(error: read e)`.
+Using those helpers inside an `Err` arm is still an ordinary visible function
+call; it does not relax the rule that `?` performs no implicit error conversion.
+
 `?` is the only implicit control transfer in RSScript, and it is visible in the
 source as the `?` token.
 
@@ -2940,7 +2945,9 @@ Directory
 File
 JsonValue
 Json
+JsonError
 Toml
+FileError
 ResourcePool<T: Resource>
 Diagnostic
 Span

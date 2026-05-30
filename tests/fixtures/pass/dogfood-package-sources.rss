@@ -7,6 +7,11 @@ struct PackageSourceSetFacts {
     source_files: Int
 }
 
+struct PackageSourceRoots {
+    interface_path: String
+    source_path: String
+}
+
 fn dogfood_source_root() -> fresh Path {
     let input = Args.get_or_default(
         index: 0,
@@ -14,6 +19,107 @@ fn dogfood_source_root() -> fresh Path {
     )
 
     return Path.from_string(value: read input)
+}
+
+fn json_error(prefix: read String, error: read JsonError) -> fresh String {
+    let message = JsonError.message(error: read error)
+    let first = String.concat(left: read prefix, right: read ": ")
+
+    return String.concat(left: read first, right: read message)
+}
+
+fn file_error(prefix: read String, error: read FileError) -> fresh String {
+    let message = FileError.message(error: read error)
+    let first = String.concat(left: read prefix, right: read ": ")
+
+    return String.concat(left: read first, right: read message)
+}
+
+fn parse_toml_result(path: read Path) -> Result<JsonValue, String> {
+    match Toml.parse_file(path: read path) {
+        Ok(value) => {
+            return Ok(value)
+        }
+        Err(error) => {
+            return Err(json_error(prefix: read "manifest parse", error: read error))
+        }
+    }
+}
+
+fn json_field_result(
+    value: read JsonValue,
+    name: read String,
+) -> Result<JsonValue, String> {
+    match Json.field(value: read value, name: read name) {
+        Ok(field) => {
+            return Ok(field)
+        }
+        Err(error) => {
+            return Err(json_error(prefix: read "manifest field", error: read error))
+        }
+    }
+}
+
+fn json_string_result(value: read JsonValue) -> Result<String, String> {
+    match Json.as_string(value: read value) {
+        Ok(text) => {
+            return Ok(text)
+        }
+        Err(error) => {
+            return Err(json_error(prefix: read "manifest string", error: read error))
+        }
+    }
+}
+
+fn json_array_item_result(
+    value: read JsonValue,
+    index: Int,
+) -> Result<JsonValue, String> {
+    match Json.array_get(value: read value, index: index) {
+        Ok(item) => {
+            return Ok(item)
+        }
+        Err(error) => {
+            return Err(json_error(prefix: read "manifest array item", error: read error))
+        }
+    }
+}
+
+fn json_array_string_result(
+    value: read JsonValue,
+    index: Int,
+) -> Result<String, String> {
+    let item = json_array_item_result(value: read value, index: index)?
+
+    return json_string_result(value: read item)
+}
+
+fn list_files_result(path: read Path) -> Result<List<String>, String> {
+    match Directory.list_files(path: read path) {
+        Ok(paths) => {
+            return Ok(paths)
+        }
+        Err(error) => {
+            return Err(file_error(prefix: read "source listing", error: read error))
+        }
+    }
+}
+
+fn package_source_roots(root: read Path) -> Result<fresh PackageSourceRoots, String> {
+    let manifest_path = Path.join(
+        base: read root,
+        child: read "rsspkg.toml",
+    )
+    let manifest = parse_toml_result(path: read manifest_path)?
+    let interfaces = json_field_result(value: read manifest, name: read "interfaces")?
+    let interface_paths = json_field_result(value: read interfaces, name: read "paths")?
+    let sources = json_field_result(value: read manifest, name: read "sources")?
+    let source_paths = json_field_result(value: read sources, name: read "paths")?
+
+    return PackageSourceRoots(
+        interface_path: json_array_string_result(value: read interface_paths, index: 0)?,
+        source_path: json_array_string_result(value: read source_paths, index: 0)?,
+    )
 }
 
 fn add_source_path(
@@ -64,18 +170,19 @@ fn count_source_set_from(
     )
 }
 
-fn dogfood_source_set_facts() -> Result<fresh PackageSourceSetFacts, FileError> {
+fn dogfood_source_set_facts() -> Result<fresh PackageSourceSetFacts, String> {
     let root = dogfood_source_root()
+    let roots = package_source_roots(root: read root)?
     let interface_root = Path.join(
         base: read root,
-        child: read "interface",
+        child: read roots.interface_path,
     )
     let source_root = Path.join(
         base: read root,
-        child: read "src",
+        child: read roots.source_path,
     )
-    let interface_paths = Directory.list_files(path: read interface_root)?
-    let source_paths = Directory.list_files(path: read source_root)?
+    let interface_paths = list_files_result(path: read interface_root)?
+    let source_paths = list_files_result(path: read source_root)?
     let manifest = PackageSourceSetFacts(
         total_files: 1,
         manifest_files: 1,
@@ -110,7 +217,7 @@ fn source_set_summary_line(facts: read PackageSourceSetFacts) -> fresh String {
     return String.concat(left: read sixth, right: read sources)
 }
 
-pub fn main() -> Result<Unit, FileError> {
+pub fn main() -> Result<Unit, String> {
     let facts = dogfood_source_set_facts()?
     let summary = source_set_summary_line(facts: read facts)
 

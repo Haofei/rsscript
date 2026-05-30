@@ -150,6 +150,11 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "write_buffer",
         "rsscript_runtime::file_write_buffer",
     ),
+    runtime_intrinsic(
+        "FileError",
+        "message",
+        "rsscript_runtime::file_error_message",
+    ),
     runtime_intrinsic_with_handles(
         "FunctionObject",
         "has_closure",
@@ -220,6 +225,11 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     ),
     runtime_intrinsic("Json", "parse", "rsscript_runtime::json_parse"),
     runtime_intrinsic("Json", "parse_file", "rsscript_runtime::json_parse_file"),
+    runtime_intrinsic(
+        "JsonError",
+        "message",
+        "rsscript_runtime::json_error_message",
+    ),
     runtime_intrinsic("List", "consume", "rsscript_runtime::list_consume"),
     runtime_intrinsic("List", "get", "rsscript_runtime::list_get"),
     runtime_intrinsic("List", "len", "rsscript_runtime::list_len"),

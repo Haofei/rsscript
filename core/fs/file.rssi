@@ -15,3 +15,6 @@ pub fn File.read_into(file: mut File, buffer: mut Buffer) -> Result<Bool, FileEr
 pub fn File.write(file: mut File, data: read Bytes) -> Result<Unit, FileError>
 
 pub fn File.write_buffer(file: mut File, buffer: read Buffer) -> Result<Unit, FileError>
+
+pub fn FileError.message(error: read FileError) -> String
+    effects(pure)

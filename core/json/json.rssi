@@ -47,3 +47,6 @@ pub fn Json.array_contains_prefix(
     value: read JsonValue,
     prefix: read String,
 ) -> Result<Bool, JsonError>
+
+pub fn JsonError.message(error: read JsonError) -> String
+    effects(pure)

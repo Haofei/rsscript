@@ -324,6 +324,14 @@ impl From<std::io::Error> for JsonError {
     }
 }
 
+pub fn json_error_message(error: &JsonError) -> String {
+    error.to_string()
+}
+
+pub fn file_error_message(error: &std::io::Error) -> String {
+    error.to_string()
+}
+
 #[derive(Debug, Clone)]
 pub struct RowBuffer {
     bytes: Vec<u8>,
