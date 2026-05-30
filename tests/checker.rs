@@ -5754,6 +5754,63 @@ fn render(path: take Path) -> fresh Image
 }
 
 #[test]
+fn review_reports_protocol_impl_mapping_changes() {
+    let old_source = r#"
+protocol Writer {
+    fn write(self: mut Self, message: read String) -> Unit
+        effects(retains(message))
+}
+
+struct BufferWriter
+
+fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit
+    effects(retains(message))
+
+fn BufferWriter.audit_write(self: mut BufferWriter, message: read String) -> Unit
+    effects(retains(message))
+
+impl Writer for BufferWriter {
+    write = BufferWriter.write
+}
+"#;
+    let new_source = r#"
+protocol Writer {
+    fn write(self: mut Self, message: read String) -> Unit
+        effects(retains(message))
+}
+
+struct BufferWriter
+
+fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit
+    effects(retains(message))
+
+fn BufferWriter.audit_write(self: mut BufferWriter, message: read String) -> Unit
+    effects(retains(message))
+
+impl Writer for BufferWriter {
+    write = BufferWriter.audit_write
+}
+"#;
+
+    let findings = review_sources("old.rss", old_source, "new.rss", new_source);
+    let finding = findings
+        .iter()
+        .find(|finding| finding.code == "RSR016")
+        .expect("protocol impl mapping change should be reported");
+
+    assert_eq!(finding.risk, ReviewRisk::Api);
+    assert_eq!(
+        finding.before.as_deref(),
+        Some("impl Writer for BufferWriter { write = BufferWriter.write }")
+    );
+    assert_eq!(
+        finding.after.as_deref(),
+        Some("impl Writer for BufferWriter { write = BufferWriter.audit_write }")
+    );
+    assert!(format_review_human(&findings).contains("RSR016[api]:"));
+}
+
+#[test]
 fn syntax_parser_accepts_all_fixtures() {
     let mut paths = fixture_paths("tests/fixtures/pass");
     paths.extend(fixture_paths("tests/fixtures/fail"));

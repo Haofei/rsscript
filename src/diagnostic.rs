@@ -101,6 +101,7 @@ pub mod code {
     pub const REVIEW_GUARANTEE_REMOVED: &str = "RSR013";
     pub const REVIEW_FUNCTION_KIND_CHANGED: &str = "RSR014";
     pub const REVIEW_NATIVE_ADDED: &str = "RSR015";
+    pub const REVIEW_PROTOCOL_IMPL_CHANGED: &str = "RSR016";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -9,7 +9,7 @@ use crate::hir::{
 };
 use crate::syntax::ast::{
     Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature, FunctionDecl,
-    Item, LetKind, Param, Stmt, TypeDecl, TypeKind, TypeRef,
+    Item, LetKind, Param, ProtocolImpl, Stmt, TypeDecl, TypeKind, TypeRef,
 };
 use crate::syntax::parse_source;
 
@@ -238,6 +238,50 @@ pub fn review_sources(
             )),
             (Some(old), Some(new)) => compare_function(old, new, &mut findings),
             (None, None) => {}
+        }
+    }
+
+    let old_protocol_impls = collect_protocol_impl_sigs(&old_program.protocol_impls);
+    let new_protocol_impls = collect_protocol_impl_sigs(&new_program.protocol_impls);
+    let protocol_impl_names: BTreeSet<_> = old_protocol_impls
+        .keys()
+        .chain(new_protocol_impls.keys())
+        .cloned()
+        .collect();
+    for name in protocol_impl_names {
+        match (old_protocol_impls.get(&name), new_protocol_impls.get(&name)) {
+            (Some(old), None) => findings.push(review_finding(
+                code::REVIEW_PROTOCOL_IMPL_CHANGED,
+                ReviewRisk::Api,
+                format!("protocol implementation `{name}` was removed."),
+                vec![review_span(&old.span, "removed protocol impl")],
+                Some(protocol_impl_contract(old)),
+                None,
+            )),
+            (None, Some(new)) => findings.push(review_finding(
+                code::REVIEW_PROTOCOL_IMPL_CHANGED,
+                ReviewRisk::Api,
+                format!("protocol implementation `{name}` was added."),
+                vec![review_span(&new.span, "added protocol impl")],
+                None,
+                Some(protocol_impl_contract(new)),
+            )),
+            (Some(old), Some(new)) if old.mappings != new.mappings => {
+                findings.push(review_finding(
+                    code::REVIEW_PROTOCOL_IMPL_CHANGED,
+                    ReviewRisk::Api,
+                    format!("protocol implementation `{name}` mappings changed."),
+                    paired_spans(
+                        &old.span,
+                        &new.span,
+                        "old protocol impl",
+                        "new protocol impl",
+                    ),
+                    Some(protocol_impl_contract(old)),
+                    Some(protocol_impl_contract(new)),
+                ));
+            }
+            (Some(_), Some(_)) | (None, None) => {}
         }
     }
 
@@ -1855,6 +1899,10 @@ fn review_fixes(code: &str) -> Vec<ReviewFix> {
             "review_function_kind",
             "Review callers and scheduling assumptions for the changed function kind.",
         ),
+        code::REVIEW_PROTOCOL_IMPL_CHANGED => (
+            "review_protocol_impl",
+            "Review the changed protocol implementation mapping and dispatch target.",
+        ),
         _ => ("review_change", "Review this source-level contract change."),
     };
     vec![ReviewFix {
@@ -1917,6 +1965,14 @@ struct FieldSig {
     is_weak: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProtocolImplSig {
+    protocol: String,
+    type_name: String,
+    mappings: BTreeMap<String, String>,
+    span: Span,
+}
+
 fn collect_type_sigs(items: &[Item]) -> BTreeMap<String, TypeSig> {
     items
         .iter()
@@ -1946,6 +2002,33 @@ fn field_sig(field: &FieldDecl) -> FieldSig {
         is_handle: field.is_handle,
         is_weak: field.is_weak,
     }
+}
+
+fn collect_protocol_impl_sigs(impls: &[ProtocolImpl]) -> BTreeMap<String, ProtocolImplSig> {
+    impls
+        .iter()
+        .map(|protocol_impl| {
+            let sig = protocol_impl_sig(protocol_impl);
+            (protocol_impl_key(&sig.protocol, &sig.type_name), sig)
+        })
+        .collect()
+}
+
+fn protocol_impl_sig(protocol_impl: &ProtocolImpl) -> ProtocolImplSig {
+    ProtocolImplSig {
+        protocol: protocol_impl.protocol.clone(),
+        type_name: protocol_impl.type_name.clone(),
+        mappings: protocol_impl
+            .mappings
+            .iter()
+            .map(|mapping| (mapping.method.clone(), mapping.target.clone()))
+            .collect(),
+        span: protocol_impl.span.clone(),
+    }
+}
+
+fn protocol_impl_key(protocol: &str, type_name: &str) -> String {
+    format!("{protocol} for {type_name}")
 }
 
 fn collect_function_sigs(items: &[Item]) -> BTreeMap<String, FunctionSig> {
@@ -2298,6 +2381,19 @@ fn type_contract(ty: &TypeSig) -> String {
         type_kind_label(ty.kind),
         ty.name,
         fields_contract(&ty.fields)
+    )
+}
+
+fn protocol_impl_contract(protocol_impl: &ProtocolImplSig) -> String {
+    let mappings = protocol_impl
+        .mappings
+        .iter()
+        .map(|(method, target)| format!("{method} = {target}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "impl {} for {} {{ {} }}",
+        protocol_impl.protocol, protocol_impl.type_name, mappings
     )
 }
 

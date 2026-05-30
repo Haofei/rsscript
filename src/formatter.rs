@@ -1,7 +1,7 @@
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature,
-    FunctionDecl, GenericBound, GenericParam, Item, LetKind, MatchPattern, Param, Program, Stmt,
-    TypeDecl, TypeKind, TypeRef,
+    FunctionDecl, GenericBound, GenericParam, Item, LetKind, MatchPattern, Param, Program,
+    ProtocolImpl, Stmt, TypeDecl, TypeKind, TypeRef,
 };
 use crate::syntax::parse_source;
 
@@ -35,14 +35,35 @@ impl Formatter {
             self.out.push_str("\n\n");
         }
 
-        for (index, item) in program.items.iter().enumerate() {
-            if index > 0 {
+        let mut wrote_item = false;
+        for protocol in &program.protocols {
+            if wrote_item {
+                self.out.push_str("\n\n");
+            }
+            self.protocol_decl(program, &protocol.name);
+            wrote_item = true;
+        }
+
+        for item in &program.items {
+            if item_is_protocol_method(item, program) {
+                continue;
+            }
+            if wrote_item {
                 self.out.push_str("\n\n");
             }
             match item {
                 Item::Type(ty) => self.type_decl(ty),
                 Item::Function(function) => self.function_decl(function),
             }
+            wrote_item = true;
+        }
+
+        for protocol_impl in &program.protocol_impls {
+            if wrote_item {
+                self.out.push_str("\n\n");
+            }
+            self.protocol_impl(protocol_impl);
+            wrote_item = true;
         }
 
         if !self.out.is_empty() && !self.out.ends_with('\n') {
@@ -77,6 +98,66 @@ impl Formatter {
             self.block(drop_body, 2);
             self.indent(1);
             self.out.push_str("}\n");
+        }
+        self.out.push('}');
+    }
+
+    fn protocol_decl(&mut self, program: &Program, name: &str) {
+        self.out.push_str("protocol ");
+        self.out.push_str(name);
+        self.out.push_str(" {\n");
+        let methods = protocol_methods(program, name);
+        for (index, method) in methods.iter().enumerate() {
+            if index > 0 {
+                self.out.push('\n');
+            }
+            self.indent(1);
+            self.protocol_method_decl(method);
+            self.out.push('\n');
+        }
+        self.out.push('}');
+    }
+
+    fn protocol_method_decl(&mut self, function: &FunctionDecl) {
+        if function.is_async {
+            self.out.push_str("async ");
+        }
+        self.out.push_str("fn ");
+        self.out.push_str(protocol_method_name(&function.name));
+        let visible_type_params = function
+            .type_params
+            .iter()
+            .filter(|param| param.name != "Self")
+            .cloned()
+            .collect::<Vec<_>>();
+        self.generic_params(&visible_type_params);
+        self.params(&function.params);
+        if let Some(return_ty) = &function.return_ty {
+            self.out.push_str(" -> ");
+            if function.returns_fresh {
+                self.out.push_str("fresh ");
+            }
+            self.type_ref(return_ty);
+        }
+        if !function.effects.is_empty() {
+            self.out.push('\n');
+            self.indent(2);
+            self.effects(&function.effects);
+        }
+    }
+
+    fn protocol_impl(&mut self, protocol_impl: &ProtocolImpl) {
+        self.out.push_str("impl ");
+        self.out.push_str(&protocol_impl.protocol);
+        self.out.push_str(" for ");
+        self.out.push_str(&protocol_impl.type_name);
+        self.out.push_str(" {\n");
+        for mapping in &protocol_impl.mappings {
+            self.indent(1);
+            self.out.push_str(&mapping.method);
+            self.out.push_str(" = ");
+            self.out.push_str(&mapping.target);
+            self.out.push('\n');
         }
         self.out.push('}');
     }
@@ -560,6 +641,42 @@ fn binary_precedence(op: BinaryOp) -> u8 {
     }
 }
 
+fn item_is_protocol_method(item: &Item, program: &Program) -> bool {
+    let Item::Function(function) = item else {
+        return false;
+    };
+    program
+        .protocols
+        .iter()
+        .any(|protocol| is_protocol_method(function, &protocol.name))
+}
+
+fn protocol_methods<'a>(program: &'a Program, protocol: &str) -> Vec<&'a FunctionDecl> {
+    program
+        .items
+        .iter()
+        .filter_map(|item| {
+            let Item::Function(function) = item else {
+                return None;
+            };
+            is_protocol_method(function, protocol).then_some(function)
+        })
+        .collect()
+}
+
+fn is_protocol_method(function: &FunctionDecl, protocol: &str) -> bool {
+    function
+        .name
+        .rsplit_once('.')
+        .is_some_and(|(namespace, _)| namespace == protocol)
+}
+
+fn protocol_method_name(name: &str) -> &str {
+    name.rsplit_once('.')
+        .map(|(_, method)| method)
+        .unwrap_or(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::format_source;
@@ -642,6 +759,50 @@ return Unit
             format_source("fn-type.rss", source),
             r#"fn schedule(callback: Fn(Int) -> Result<String, BuildError>) -> Unit {
     return Unit
+}
+"#
+        );
+    }
+
+    #[test]
+    fn preserves_protocol_declarations_and_impl_mappings() {
+        let source = r#"protocol Writer {
+fn write(self:mut Self,message:read String)->Unit
+effects(retains(message))
+}
+struct BufferWriter
+fn BufferWriter.write(self:mut BufferWriter,message:read String)->Unit
+effects(retains(message)){
+Log.write(message:read message)
+}
+impl Writer for BufferWriter {
+write=BufferWriter.write
+}
+fn write_line<W:Writer>(writer:mut W,message:read String)->Unit{
+Writer.write(self:mut writer,message:read message)
+}
+"#;
+
+        assert_eq!(
+            format_source("protocol.rss", source),
+            r#"protocol Writer {
+    fn write(self: mut Self, message: read String) -> Unit
+        effects(retains(message))
+}
+
+struct BufferWriter
+
+fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit
+    effects(retains(message)) {
+    Log.write(message: read message)
+}
+
+fn write_line<W: Writer>(writer: mut W, message: read String) -> Unit {
+    Writer.write(self: mut writer, message: read message)
+}
+
+impl Writer for BufferWriter {
+    write = BufferWriter.write
 }
 "#
         );
