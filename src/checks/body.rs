@@ -518,6 +518,7 @@ fn check_expr_semantics_with_context(
             check_resource_pool_new_factory_contract(analyzer, callee, args);
             check_resource_pool_try_new_factory_contract(analyzer, callee, args);
             check_resource_pool_constructor_max_size_contract(analyzer, callee, args);
+            check_resource_pool_factory_resource_captures(analyzer, callee, args, state);
             let weak_upgrade = is_weak_upgrade_callee(callee);
             for arg in args {
                 check_expr_semantics_with_context(
@@ -2644,6 +2645,236 @@ fn check_resource_pool_constructor_max_size_contract(
     }
 }
 
+fn check_resource_pool_factory_resource_captures(
+    analyzer: &mut Analyzer<'_>,
+    callee: &Callee,
+    args: &[HirCallArg],
+    state: &BodyState,
+) {
+    if !is_resource_pool_constructor(callee) {
+        return;
+    }
+    let Some(create) = args
+        .iter()
+        .find(|arg| arg.name.as_deref() == Some("create"))
+        .or_else(|| args.first())
+    else {
+        return;
+    };
+    let mut captures = Vec::new();
+    collect_resource_pool_factory_resource_captures(&create.value, state, &mut captures);
+    for (name, span) in captures {
+        resource_pool_factory_resource_capture_diagnostic(analyzer, &name, span);
+    }
+}
+
+fn collect_resource_pool_factory_resource_captures(
+    expr: &HirExpr,
+    state: &BodyState,
+    captures: &mut Vec<(String, Span)>,
+) {
+    if let HirExpr::Closure { params, body, .. } = expr {
+        let mut bound = params.iter().cloned().collect::<HashSet<_>>();
+        collect_resource_pool_factory_resource_captures_block(body, state, &mut bound, captures);
+    }
+}
+
+fn collect_resource_pool_factory_resource_captures_block(
+    block: &HirBlock,
+    state: &BodyState,
+    bound: &mut HashSet<String>,
+    captures: &mut Vec<(String, Span)>,
+) {
+    for statement in &block.statements {
+        collect_resource_pool_factory_resource_captures_stmt(statement, state, bound, captures);
+    }
+}
+
+fn collect_resource_pool_factory_resource_captures_stmt(
+    statement: &HirStmt,
+    state: &BodyState,
+    bound: &mut HashSet<String>,
+    captures: &mut Vec<(String, Span)>,
+) {
+    match statement {
+        HirStmt::Let {
+            name,
+            value: Some(value),
+            ..
+        } => {
+            collect_resource_pool_factory_resource_captures_expr(value, state, bound, captures);
+            bound.insert(name.clone());
+        }
+        HirStmt::Let {
+            name, value: None, ..
+        } => {
+            bound.insert(name.clone());
+        }
+        HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => {
+            collect_resource_pool_factory_resource_captures_expr(value, state, bound, captures);
+        }
+        HirStmt::With {
+            resource,
+            binding,
+            body,
+            ..
+        } => {
+            collect_resource_pool_factory_resource_captures_expr(resource, state, bound, captures);
+            let mut scoped = bound.clone();
+            scoped.insert(binding.clone());
+            collect_resource_pool_factory_resource_captures_block(
+                body,
+                state,
+                &mut scoped,
+                captures,
+            );
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            collect_resource_pool_factory_resource_captures_expr(condition, state, bound, captures);
+            collect_resource_pool_factory_resource_captures_block(
+                then_body,
+                state,
+                &mut bound.clone(),
+                captures,
+            );
+            if let Some(else_body) = else_body {
+                collect_resource_pool_factory_resource_captures_block(
+                    else_body,
+                    state,
+                    &mut bound.clone(),
+                    captures,
+                );
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                collect_resource_pool_factory_resource_captures_expr(
+                    condition, state, bound, captures,
+                );
+            }
+            collect_resource_pool_factory_resource_captures_block(
+                body,
+                state,
+                &mut bound.clone(),
+                captures,
+            );
+        }
+        HirStmt::For {
+            binding,
+            iterable,
+            body,
+            ..
+        } => {
+            collect_resource_pool_factory_resource_captures_expr(iterable, state, bound, captures);
+            let mut scoped = bound.clone();
+            scoped.insert(binding.clone());
+            collect_resource_pool_factory_resource_captures_block(
+                body,
+                state,
+                &mut scoped,
+                captures,
+            );
+        }
+        HirStmt::Match { value, arms, .. } => {
+            collect_resource_pool_factory_resource_captures_expr(value, state, bound, captures);
+            for arm in arms {
+                let mut scoped = bound.clone();
+                if let MatchPattern::Variant {
+                    binding: Some(binding),
+                    ..
+                } = &arm.pattern
+                {
+                    scoped.insert(binding.clone());
+                }
+                collect_resource_pool_factory_resource_captures_block(
+                    &arm.body,
+                    state,
+                    &mut scoped,
+                    captures,
+                );
+            }
+        }
+        HirStmt::Return { value: None, .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn collect_resource_pool_factory_resource_captures_expr(
+    expr: &HirExpr,
+    state: &BodyState,
+    bound: &HashSet<String>,
+    captures: &mut Vec<(String, Span)>,
+) {
+    match expr {
+        HirExpr::Ident { name, span, .. } => {
+            if !bound.contains(name) && state.is_resource(name) {
+                push_resource_pool_factory_capture(captures, name.clone(), span.clone());
+            }
+        }
+        HirExpr::Field { base, .. } => {
+            collect_resource_pool_factory_resource_captures_expr(base, state, bound, captures);
+        }
+        HirExpr::Index { base, index, .. } => {
+            collect_resource_pool_factory_resource_captures_expr(base, state, bound, captures);
+            collect_resource_pool_factory_resource_captures_expr(index, state, bound, captures);
+        }
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                collect_resource_pool_factory_resource_captures_expr(
+                    &arg.value, state, bound, captures,
+                );
+            }
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. } => {
+            collect_resource_pool_factory_resource_captures_expr(value, state, bound, captures);
+        }
+        HirExpr::Binary { left, right, .. } => {
+            collect_resource_pool_factory_resource_captures_expr(left, state, bound, captures);
+            collect_resource_pool_factory_resource_captures_expr(right, state, bound, captures);
+        }
+        HirExpr::Closure { params, body, .. } => {
+            let mut scoped = bound.clone();
+            scoped.extend(params.iter().cloned());
+            collect_resource_pool_factory_resource_captures_block(
+                body,
+                state,
+                &mut scoped,
+                captures,
+            );
+        }
+        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn push_resource_pool_factory_capture(
+    captures: &mut Vec<(String, Span)>,
+    name: String,
+    span: Span,
+) {
+    if !captures
+        .iter()
+        .any(|(existing_name, existing_span)| existing_name == &name && existing_span == &span)
+    {
+        captures.push((name, span));
+    }
+}
+
 fn resource_pool_borrow_pool_path(expr: &HirExpr) -> Option<PlacePath> {
     match expr {
         HirExpr::Call { callee, args, .. } if is_resource_pool_borrow(callee) => args
@@ -3275,6 +3506,27 @@ fn resource_pool_invalid_max_size_diagnostic(
         .with_fix(
             "use_positive_literal_max_size",
             "Pass a positive integer literal such as `max_size: 1`.",
+            "manual",
+        ),
+    );
+}
+
+fn resource_pool_factory_resource_capture_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    binding: &str,
+    span: crate::diagnostic::Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::RESOURCE_ESCAPE,
+            format!("ResourcePool factory cannot capture resource `{binding}`."),
+            span,
+            "resource captured by ResourcePool factory",
+        )
+        .with_cause("ResourcePool factories are eager and noescape in v0.5, but they still must not close over with-bound resources.")
+        .with_fix(
+            "avoid_resource_capture",
+            "Create the pooled resource directly inside the factory, or pass ordinary managed configuration into the factory.",
             "manual",
         ),
     );
