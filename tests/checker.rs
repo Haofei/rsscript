@@ -751,9 +751,9 @@ fn diagnostic_explanations_are_available_by_code() {
 #[test]
 fn checker_reports_call_argument_type_mismatch_before_backend_lowering() {
     let source = r#"
-fn main() -> Unit {
+fn main() -> Result<Unit, JsonError> {
     Log.write(message: read 42)
-    return Unit
+    return Ok(Unit)
 }
 "#;
     let diagnostics = analyze_source_with_core("arg-type.rss", source);
@@ -794,9 +794,9 @@ fn build() -> User {
 #[test]
 fn rust_lowering_rejects_call_argument_type_mismatch_before_rustc() {
     let source = r#"
-fn main() -> Unit {
+fn main() -> Result<Unit, JsonError> {
     Log.write(message: read 42)
-    return Unit
+    return Ok(Unit)
 }
 "#;
     let diagnostics = lower_source_to_rust("arg-type.rss", source)
@@ -2539,7 +2539,11 @@ fn main() -> Unit {
 #[test]
 fn rust_lowering_maps_list_core_calls_to_runtime_hooks() {
     let source = r#"
-fn main() -> Unit {
+struct CountBox {
+    value: Int
+}
+
+fn main() -> Result<Unit, JsonError> {
     let list = List<Int>.new()
     List.push(list: mut list, value: read 10)
     let count = List.len(list: read list)
@@ -2550,10 +2554,68 @@ fn main() -> Unit {
             return item == 10
         },
     )
+    let any_match = List.any(
+        list: read list,
+        predicate: |item| {
+            return item == 10
+        },
+    )
+    let all_match = List.all(
+        list: read list,
+        predicate: |item| {
+            return item >= 10
+        },
+    )
+    let found = List.find(
+        list: read list,
+        predicate: |item| {
+            return item == 10
+        },
+    )
+    let filtered = List.filter(
+        list: read list,
+        predicate: |item| {
+            return item == 10
+        },
+    )
+    let mapped = List.map<Int, Int>(
+        list: read list,
+        mapper: |item| {
+            return item + 1
+        },
+    )
+    let folded = List.fold<Int, CountBox>(
+        list: read list,
+        initial: read CountBox(value: 0),
+        folder: |state, item| {
+            return CountBox(value: state.value + item)
+        },
+    )
+    let try_folded = List.try_fold<Int, CountBox, JsonError>(
+        list: read list,
+        initial: read CountBox(value: 0),
+        folder: |state, item| {
+            return Ok(CountBox(value: state.value + item))
+        },
+    )?
     Assert.equal_int(left: count, right: 1)
     Assert.equal_int(left: first, right: 10)
     Assert.equal_int(left: matching, right: 1)
-    return Unit
+    Assert.equal_bool(left: any_match, right: true)
+    Assert.equal_bool(left: all_match, right: true)
+    match found {
+        Some(value) => {
+            Assert.equal_int(left: value, right: 10)
+        }
+        None => {
+            Assert.equal_bool(left: false, right: true)
+        }
+    }
+    Assert.equal_int(left: List.len(list: read filtered), right: 1)
+    Assert.equal_int(left: List.get(list: read mapped, index: 0), right: 11)
+    Assert.equal_int(left: folded.value, right: 10)
+    Assert.equal_int(left: try_folded.value, right: 10)
+    return Ok(Unit)
 }
 "#;
     let rust = lower_source_to_rust("list.rss", source).expect("source should lower");
@@ -2563,7 +2625,103 @@ fn main() -> Unit {
     assert!(rust.contains("let count = rsscript_runtime::list_len(&list);"));
     assert!(rust.contains("let first = rsscript_runtime::list_get(&list, 0);"));
     assert!(rust.contains("let matching = rsscript_runtime::list_count_where(&list, |item| {"));
+    assert!(rust.contains("let any_match = rsscript_runtime::list_any(&list, |item| {"));
+    assert!(rust.contains("let all_match = rsscript_runtime::list_all(&list, |item| {"));
+    assert!(rust.contains("let found = rsscript_runtime::list_find(&list, |item| {"));
+    assert!(rust.contains("let filtered = rsscript_runtime::list_filter(&list, |item| {"));
+    assert!(rust.contains("let mapped = rsscript_runtime::list_map(&list, |item| {"));
     assert!(rust.contains("return item == 10;"));
+    assert!(rust.contains(
+        "let folded = rsscript_runtime::list_fold(&list, &CountBox { value: 0 }, |state, item| {"
+    ));
+    assert!(rust.contains(
+        "let try_folded = rsscript_runtime::list_try_fold(&list, &CountBox { value: 0 }, |state, item| {"
+    ));
+}
+
+#[test]
+fn rust_lowering_maps_map_and_set_core_calls_to_runtime_hooks() {
+    let source = r#"
+fn main() -> Unit {
+    let map = Map<String, Int>.new()
+    Map.insert(map: mut map, key: read "one", value: read 1)
+    let map_len = Map.len(map: read map)
+    let has_one = Map.contains_key(map: read map, key: read "one")
+    let first = Map.get(map: read map, key: read "one")
+    let removed = Map.remove(map: mut map, key: read "one")
+    let map_empty = Map.is_empty(map: read map)
+    Map.clear(map: mut map)
+
+    let set = Set<String>.new()
+    let inserted = Set.insert(set: mut set, value: read "one")
+    let has_set_one = Set.contains(set: read set, value: read "one")
+    let set_len = Set.len(set: read set)
+    let removed_set_one = Set.remove(set: mut set, value: read "one")
+    let set_empty = Set.is_empty(set: read set)
+    Set.clear(set: mut set)
+
+    Assert.equal_int(left: map_len, right: 1)
+    Assert.equal_bool(left: has_one, right: true)
+    match first {
+        Some(value) => {
+            Assert.equal_int(left: value, right: 1)
+        }
+        None => {
+            Assert.equal_bool(left: false, right: true)
+        }
+    }
+    match removed {
+        Some(value) => {
+            Assert.equal_int(left: value, right: 1)
+        }
+        None => {
+            Assert.equal_bool(left: false, right: true)
+        }
+    }
+    Assert.equal_bool(left: map_empty, right: true)
+    Assert.equal_bool(left: inserted, right: true)
+    Assert.equal_bool(left: has_set_one, right: true)
+    Assert.equal_int(left: set_len, right: 1)
+    Assert.equal_bool(left: removed_set_one, right: true)
+    Assert.equal_bool(left: set_empty, right: true)
+    return Unit
+}
+"#;
+    let rust = lower_source_to_rust("map-set.rss", source).expect("source should lower");
+
+    assert!(rust.contains("let mut map = rsscript_runtime::map_new();"));
+    assert!(rust.contains("rsscript_runtime::map_insert(&mut map, &\"one\".to_string(), &1);"));
+    assert!(rust.contains("let map_len = rsscript_runtime::map_len(&map);"));
+    assert!(
+        rust.contains(
+            "let has_one = rsscript_runtime::map_contains_key(&map, &\"one\".to_string());"
+        )
+    );
+    assert!(rust.contains("let first = rsscript_runtime::map_get(&map, &\"one\".to_string());"));
+    assert!(
+        rust.contains(
+            "let removed = rsscript_runtime::map_remove(&mut map, &\"one\".to_string());"
+        )
+    );
+    assert!(rust.contains("let map_empty = rsscript_runtime::map_is_empty(&map);"));
+    assert!(rust.contains("rsscript_runtime::map_clear(&mut map);"));
+    assert!(rust.contains("let mut set = rsscript_runtime::set_new();"));
+    assert!(
+        rust.contains(
+            "let inserted = rsscript_runtime::set_insert(&mut set, &\"one\".to_string());"
+        )
+    );
+    assert!(
+        rust.contains(
+            "let has_set_one = rsscript_runtime::set_contains(&set, &\"one\".to_string());"
+        )
+    );
+    assert!(rust.contains("let set_len = rsscript_runtime::set_len(&set);"));
+    assert!(rust.contains(
+        "let removed_set_one = rsscript_runtime::set_remove(&mut set, &\"one\".to_string());"
+    ));
+    assert!(rust.contains("let set_empty = rsscript_runtime::set_is_empty(&set);"));
+    assert!(rust.contains("rsscript_runtime::set_clear(&mut set);"));
 }
 
 #[test]
@@ -2594,7 +2752,11 @@ fn copy_file(input: read Path, output: read Path) -> Result<Unit, FileError> {
 fn rust_lowering_maps_path_construction_to_runtime_hook() {
     let source = r#"
 fn main() -> Result<Unit, FileError> {
-    let path = Path.from_string(value: read "rsscript-path.txt")
+    let path = Path.from_string(value: read "fixtures/rsscript-path.txt")
+    let text = Path.to_string(path: read path)
+    let file_name = Path.file_name(path: read path)
+    let extension = Path.extension(path: read path)
+    let parent = Path.parent(path: read path)
     let data = Bytes.from_string(value: read "path hook ran")
     with File.open_write(path: read path)? as file {
         File.write(file: mut file, data: read data)?
@@ -2605,8 +2767,12 @@ fn main() -> Result<Unit, FileError> {
     let rust = lower_source_to_rust("path.rss", source).expect("source should lower");
 
     assert!(rust.contains(
-        "let path = rsscript_runtime::path_from_string(&\"rsscript-path.txt\".to_string());"
+        "let path = rsscript_runtime::path_from_string(&\"fixtures/rsscript-path.txt\".to_string());"
     ));
+    assert!(rust.contains("let text = rsscript_runtime::path_to_string(&path);"));
+    assert!(rust.contains("let file_name = rsscript_runtime::path_file_name(&path);"));
+    assert!(rust.contains("let extension = rsscript_runtime::path_extension(&path);"));
+    assert!(rust.contains("let parent = rsscript_runtime::path_parent(&path);"));
     assert!(rust.contains("let mut file = rsscript_runtime::file_open_write(&path)?;"));
 }
 
@@ -2676,6 +2842,13 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     let profile_name = Json.as_string(value: read profile_name_value)?
     let active = Json.field_bool(value: read profile, name: read "active")?
     let age = Json.field_int(value: read profile, name: read "age")?
+    let age_value = Json.field(value: read profile, name: read "age")?
+    let active_value = Json.field(value: read profile, name: read "active")?
+    let age_again = Json.as_int(value: read age_value)?
+    let active_again = Json.as_bool(value: read active_value)?
+    let profile_is_object = Json.is_object(value: read profile)
+    let profiles_is_array = Json.is_array(value: read value)
+    let name_is_null = Json.is_null(value: read profile_name_value)
     return profile_name
 }
 "#;
@@ -2720,6 +2893,13 @@ fn read_name(text: read String) -> Result<String, JsonError> {
         rust.contains(
             "let age = rsscript_runtime::json_field_int(&profile, &\"age\".to_string())?;"
         )
+    );
+    assert!(rust.contains("let age_again = rsscript_runtime::json_as_int(&age_value)?;"));
+    assert!(rust.contains("let active_again = rsscript_runtime::json_as_bool(&active_value)?;"));
+    assert!(rust.contains("let profile_is_object = rsscript_runtime::json_is_object(&profile);"));
+    assert!(rust.contains("let profiles_is_array = rsscript_runtime::json_is_array(&value);"));
+    assert!(
+        rust.contains("let name_is_null = rsscript_runtime::json_is_null(&profile_name_value);")
     );
     assert!(rust.contains("return Ok(profile_name);"));
 }
@@ -3045,6 +3225,13 @@ fn main() -> Unit {
     let joined = String.join(parts: read lines, separator: read ",")
     let stripped = String.strip_prefix(value: read "pub fn Api.run()", prefix: read "pub fn ")
     let before = String.before(value: read "Api.run() -> Unit", delimiter: read "(")
+    let after = String.after(value: read "Api.run() -> Unit", delimiter: read "-> ")
+    let empty = String.is_empty(value: read "")
+    let trimmed = String.trim(value: read "  review  ")
+    let lower = String.to_lowercase(value: read "Review")
+    let upper = String.to_uppercase(value: read "review")
+    let replaced = String.replace(value: read "review map", from: read "map", to: read "plan")
+    let split = String.split(value: read "review,map", delimiter: read ",")
     local builder = StringBuilder.new()
     StringBuilder.push(builder: mut builder, value: read "hello")
     StringBuilder.push(builder: mut builder, value: read " builder")
@@ -3083,6 +3270,29 @@ fn main() -> Unit {
     ));
     assert!(rust.contains(
         "let before = rsscript_runtime::string_before(&\"Api.run() -> Unit\".to_string(), &\"(\".to_string());"
+    ));
+    assert!(rust.contains(
+        "let after = rsscript_runtime::string_after(&\"Api.run() -> Unit\".to_string(), &\"-> \".to_string());"
+    ));
+    assert!(rust.contains("let empty = rsscript_runtime::string_is_empty(&\"\".to_string());"));
+    assert!(
+        rust.contains("let trimmed = rsscript_runtime::string_trim(&\"  review  \".to_string());")
+    );
+    assert!(
+        rust.contains(
+            "let lower = rsscript_runtime::string_to_lowercase(&\"Review\".to_string());"
+        )
+    );
+    assert!(
+        rust.contains(
+            "let upper = rsscript_runtime::string_to_uppercase(&\"review\".to_string());"
+        )
+    );
+    assert!(rust.contains(
+        "let replaced = rsscript_runtime::string_replace(&\"review map\".to_string(), &\"map\".to_string(), &\"plan\".to_string());"
+    ));
+    assert!(rust.contains(
+        "let split = rsscript_runtime::string_split(&\"review,map\".to_string(), &\",\".to_string());"
     ));
     assert!(rust.contains("let mut builder = rsscript_runtime::string_builder_new();"));
     assert!(

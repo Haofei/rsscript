@@ -26,6 +26,19 @@ pub fn Json.field_bool(
 
 pub fn Json.as_string(value: read JsonValue) -> Result<String, JsonError>
 
+pub fn Json.as_int(value: read JsonValue) -> Result<Int, JsonError>
+
+pub fn Json.as_bool(value: read JsonValue) -> Result<Bool, JsonError>
+
+pub fn Json.is_null(value: read JsonValue) -> Bool
+    effects(pure)
+
+pub fn Json.is_array(value: read JsonValue) -> Bool
+    effects(pure)
+
+pub fn Json.is_object(value: read JsonValue) -> Bool
+    effects(pure)
+
 pub fn Json.array_len(value: read JsonValue) -> Result<Int, JsonError>
 
 pub fn Json.array_get(

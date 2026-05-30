@@ -2984,6 +2984,43 @@ pub fn List.count_where<T>(
     list: read List<T>,
     predicate: noescape Fn(T) -> Bool,
 ) -> Int
+
+pub fn List.any<T>(
+    list: read List<T>,
+    predicate: noescape Fn(T) -> Bool,
+) -> Bool
+
+pub fn List.all<T>(
+    list: read List<T>,
+    predicate: noescape Fn(T) -> Bool,
+) -> Bool
+
+pub fn List.find<T>(
+    list: read List<T>,
+    predicate: noescape Fn(T) -> Bool,
+) -> Option<T>
+
+pub fn List.filter<T>(
+    list: read List<T>,
+    predicate: noescape Fn(T) -> Bool,
+) -> fresh List<T>
+
+pub fn List.map<T, U>(
+    list: read List<T>,
+    mapper: noescape Fn(T) -> U,
+) -> fresh List<U>
+
+pub fn List.fold<T, U: Struct>(
+    list: read List<T>,
+    initial: read U,
+    folder: noescape Fn(U, T) -> fresh U,
+) -> fresh U
+
+pub fn List.try_fold<T, U: Struct, E>(
+    list: read List<T>,
+    initial: read U,
+    folder: noescape Fn(U, T) -> Result<fresh U, E>,
+) -> Result<fresh U, E>
 ```
 
 The minimum `String` core surface includes pure current-value inspection helpers
@@ -2995,6 +3032,21 @@ features: local
 struct StringBuilder
 
 pub fn String.len(value: read String) -> Int
+    effects(pure)
+
+pub fn String.is_empty(value: read String) -> Bool
+    effects(pure)
+
+pub fn String.trim(value: read String) -> fresh String
+    effects(pure)
+
+pub fn String.to_lowercase(value: read String) -> fresh String
+    effects(pure)
+
+pub fn String.to_uppercase(value: read String) -> fresh String
+    effects(pure)
+
+pub fn String.replace(value: read String, from: read String, to: read String) -> fresh String
     effects(pure)
 
 pub fn String.starts_with(value: read String, prefix: read String) -> Bool
@@ -3018,6 +3070,12 @@ pub fn String.strip_prefix(value: read String, prefix: read String) -> Option<St
 pub fn String.before(value: read String, delimiter: read String) -> Option<String>
     effects(pure)
 
+pub fn String.after(value: read String, delimiter: read String) -> Option<String>
+    effects(pure)
+
+pub fn String.split(value: read String, delimiter: read String) -> fresh List<String>
+    effects(pure)
+
 pub fn StringBuilder.new() -> fresh StringBuilder
 
 pub fn StringBuilder.push(builder: mut StringBuilder, value: read String) -> Unit
@@ -3031,6 +3089,37 @@ noescape predicate helper used by review tooling and package dogfood:
 ```rust
 struct JsonValue
 
+pub fn Json.parse(text: read String) -> Result<fresh JsonValue, JsonError>
+
+pub fn Json.parse_file(path: read Path) -> Result<fresh JsonValue, JsonError>
+
+pub fn Json.field(value: read JsonValue, name: read String) -> Result<fresh JsonValue, JsonError>
+
+pub fn Json.field_string(value: read JsonValue, name: read String) -> Result<String, JsonError>
+
+pub fn Json.field_int(value: read JsonValue, name: read String) -> Result<Int, JsonError>
+
+pub fn Json.field_bool(value: read JsonValue, name: read String) -> Result<Bool, JsonError>
+
+pub fn Json.as_string(value: read JsonValue) -> Result<String, JsonError>
+
+pub fn Json.as_int(value: read JsonValue) -> Result<Int, JsonError>
+
+pub fn Json.as_bool(value: read JsonValue) -> Result<Bool, JsonError>
+
+pub fn Json.is_null(value: read JsonValue) -> Bool
+    effects(pure)
+
+pub fn Json.is_array(value: read JsonValue) -> Bool
+    effects(pure)
+
+pub fn Json.is_object(value: read JsonValue) -> Bool
+    effects(pure)
+
+pub fn Json.array_len(value: read JsonValue) -> Result<Int, JsonError>
+
+pub fn Json.array_get(value: read JsonValue, index: Int) -> Result<fresh JsonValue, JsonError>
+
 pub fn Json.array_count_where(
     value: read JsonValue,
     predicate: noescape Fn(JsonValue) -> Result<Bool, JsonError>,
@@ -3041,6 +3130,64 @@ pub fn Json.array_fold<T: Struct>(
     initial: read T,
     folder: noescape Fn(T, JsonValue) -> Result<fresh T, JsonError>,
 ) -> Result<fresh T, JsonError>
+```
+
+The minimum `Path`, `Map`, and `Set` core surfaces cover package-manager-style
+path inspection and ordinary keyed/indexed working sets. `Map` and `Set` retain
+inserted non-Copy values by contract:
+
+```rust
+pub fn Path.from_string(value: read String) -> fresh Path
+
+pub fn Path.join(base: read Path, child: read String) -> fresh Path
+
+pub fn Path.to_string(path: read Path) -> fresh String
+    effects(pure)
+
+pub fn Path.file_name(path: read Path) -> Option<String>
+    effects(pure)
+
+pub fn Path.extension(path: read Path) -> Option<String>
+    effects(pure)
+
+pub fn Path.parent(path: read Path) -> Option<Path>
+    effects(pure)
+
+struct Map<K, V>
+
+pub fn Map.new<K, V>() -> fresh Map<K, V>
+
+pub fn Map.len<K, V>(map: read Map<K, V>) -> Int
+
+pub fn Map.is_empty<K, V>(map: read Map<K, V>) -> Bool
+
+pub fn Map.contains_key<K, V>(map: read Map<K, V>, key: read K) -> Bool
+
+pub fn Map.get<K, V>(map: read Map<K, V>, key: read K) -> Option<V>
+
+pub fn Map.insert<K, V>(map: mut Map<K, V>, key: read K, value: read V) -> Unit
+    effects(retains(key), retains(value))
+
+pub fn Map.remove<K, V>(map: mut Map<K, V>, key: read K) -> Option<V>
+
+pub fn Map.clear<K, V>(map: mut Map<K, V>) -> Unit
+
+struct Set<T>
+
+pub fn Set.new<T>() -> fresh Set<T>
+
+pub fn Set.len<T>(set: read Set<T>) -> Int
+
+pub fn Set.is_empty<T>(set: read Set<T>) -> Bool
+
+pub fn Set.contains<T>(set: read Set<T>, value: read T) -> Bool
+
+pub fn Set.insert<T>(set: mut Set<T>, value: read T) -> Bool
+    effects(retains(value))
+
+pub fn Set.remove<T>(set: mut Set<T>, value: read T) -> Bool
+
+pub fn Set.clear<T>(set: mut Set<T>) -> Unit
 ```
 
 Agent, GPU, HTTP, networking, and model-client packages are use-case libraries, not language core.

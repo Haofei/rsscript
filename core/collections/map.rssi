@@ -1,9 +1,31 @@
 struct Map<K, V>
 
+pub fn Map.new<K, V>() -> fresh Map<K, V>
+
+pub fn Map.len<K, V>(map: read Map<K, V>) -> Int
+
+pub fn Map.is_empty<K, V>(map: read Map<K, V>) -> Bool
+
+pub fn Map.contains_key<K, V>(
+    map: read Map<K, V>,
+    key: read K,
+) -> Bool
+
+pub fn Map.get<K, V>(
+    map: read Map<K, V>,
+    key: read K,
+) -> Option<V>
+
 pub fn Map.insert<K, V>(
     map: mut Map<K, V>,
     key: read K,
     value: read V,
 ) -> Unit
-    effects(retains(value))
+    effects(retains(key), retains(value))
 
+pub fn Map.remove<K, V>(
+    map: mut Map<K, V>,
+    key: read K,
+) -> Option<V>
+
+pub fn Map.clear<K, V>(map: mut Map<K, V>) -> Unit

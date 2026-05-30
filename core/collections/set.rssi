@@ -1,0 +1,25 @@
+struct Set<T>
+
+pub fn Set.new<T>() -> fresh Set<T>
+
+pub fn Set.len<T>(set: read Set<T>) -> Int
+
+pub fn Set.is_empty<T>(set: read Set<T>) -> Bool
+
+pub fn Set.contains<T>(
+    set: read Set<T>,
+    value: read T,
+) -> Bool
+
+pub fn Set.insert<T>(
+    set: mut Set<T>,
+    value: read T,
+) -> Bool
+    effects(retains(value))
+
+pub fn Set.remove<T>(
+    set: mut Set<T>,
+    value: read T,
+) -> Bool
+
+pub fn Set.clear<T>(set: mut Set<T>) -> Unit

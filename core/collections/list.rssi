@@ -20,4 +20,41 @@ pub fn List.count_where<T>(
     predicate: noescape Fn(T) -> Bool,
 ) -> Int
 
+pub fn List.any<T>(
+    list: read List<T>,
+    predicate: noescape Fn(T) -> Bool,
+) -> Bool
+
+pub fn List.all<T>(
+    list: read List<T>,
+    predicate: noescape Fn(T) -> Bool,
+) -> Bool
+
+pub fn List.find<T>(
+    list: read List<T>,
+    predicate: noescape Fn(T) -> Bool,
+) -> Option<T>
+
+pub fn List.filter<T>(
+    list: read List<T>,
+    predicate: noescape Fn(T) -> Bool,
+) -> fresh List<T>
+
+pub fn List.map<T, U>(
+    list: read List<T>,
+    mapper: noescape Fn(T) -> U,
+) -> fresh List<U>
+
+pub fn List.fold<T, U: Struct>(
+    list: read List<T>,
+    initial: read U,
+    folder: noescape Fn(U, T) -> fresh U,
+) -> fresh U
+
+pub fn List.try_fold<T, U: Struct, E>(
+    list: read List<T>,
+    initial: read U,
+    folder: noescape Fn(U, T) -> Result<fresh U, E>,
+) -> Result<fresh U, E>
+
 pub fn List.consume<T>(list: take List<T>) -> Unit

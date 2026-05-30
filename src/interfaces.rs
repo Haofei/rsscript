@@ -24,6 +24,10 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../core/collections/map.rssi"),
     ),
     (
+        "core/collections/set.rssi",
+        include_str!("../core/collections/set.rssi"),
+    ),
+    (
         "core/config/config.rssi",
         include_str!("../core/config/config.rssi"),
     ),

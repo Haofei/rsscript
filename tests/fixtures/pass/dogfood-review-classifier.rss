@@ -676,37 +676,18 @@ fn add_decision(
     )
 }
 
-fn summarize_list_from(
-    items: read List<ReviewFacts>,
-    index: Int,
-    summary: read ReviewSummary,
-) -> fresh ReviewSummary {
-    if index >= List.len(list: read items) {
-        return ReviewSummary(
-            total_functions: summary.total_functions,
-            must_review_functions: summary.must_review_functions,
-            low_risk_functions: summary.low_risk_functions,
-            unknown_functions: summary.unknown_functions,
-            suggested_lines: summary.suggested_lines,
-        )
-    }
-
-    let facts = List.get(list: read items, index: index)
+fn add_fact_to_summary(summary: read ReviewSummary, facts: read ReviewFacts) -> fresh ReviewSummary {
     let decision_value = classify_function(facts: read facts)
-    let next = add_decision(summary: read summary, decision_value: read decision_value)
-
-    return summarize_list_from(
-        items: read items,
-        index: index + 1,
-        summary: read next,
-    )
+    return add_decision(summary: read summary, decision_value: read decision_value)
 }
 
 fn summarize_list(items: read List<ReviewFacts>) -> fresh ReviewSummary {
-    return summarize_list_from(
-        items: read items,
-        index: 0,
-        summary: read empty_summary(),
+    return List.fold<ReviewFacts, ReviewSummary>(
+        list: read items,
+        initial: read empty_summary(),
+        folder: |summary, facts| {
+            return add_fact_to_summary(summary: read summary, facts: read facts)
+        },
     )
 }
 

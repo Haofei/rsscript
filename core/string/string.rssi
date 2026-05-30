@@ -14,6 +14,25 @@ pub fn String.from_bool(value: Bool) -> fresh String
 pub fn String.len(value: read String) -> Int
     effects(pure)
 
+pub fn String.is_empty(value: read String) -> Bool
+    effects(pure)
+
+pub fn String.trim(value: read String) -> fresh String
+    effects(pure)
+
+pub fn String.to_lowercase(value: read String) -> fresh String
+    effects(pure)
+
+pub fn String.to_uppercase(value: read String) -> fresh String
+    effects(pure)
+
+pub fn String.replace(
+    value: read String,
+    from: read String,
+    to: read String,
+) -> fresh String
+    effects(pure)
+
 pub fn String.starts_with(
     value: read String,
     prefix: read String,
@@ -51,6 +70,18 @@ pub fn String.before(
     value: read String,
     delimiter: read String,
 ) -> Option<String>
+    effects(pure)
+
+pub fn String.after(
+    value: read String,
+    delimiter: read String,
+) -> Option<String>
+    effects(pure)
+
+pub fn String.split(
+    value: read String,
+    delimiter: read String,
+) -> fresh List<String>
     effects(pure)
 
 pub fn StringBuilder.new() -> fresh StringBuilder

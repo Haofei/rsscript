@@ -1501,13 +1501,17 @@ impl<'a> RustLowerer<'a> {
                     .map(|param| rust_ident(param))
                     .collect::<Vec<_>>()
                     .join(", ");
+                let previous_return_type = self.current_return_type.take();
                 if let [Stmt::Expr(value)] = body.statements.as_slice() {
-                    return format!("|{lowered_params}| {}", self.lower_expr(value));
+                    let lowered = format!("|{lowered_params}| {}", self.lower_expr(value));
+                    self.current_return_type = previous_return_type;
+                    return lowered;
                 }
                 let mut out = String::new();
                 out.push_str(&format!("|{lowered_params}| {{\n"));
                 self.lower_block(body, &mut out, 1);
                 out.push('}');
+                self.current_return_type = previous_return_type;
                 out
             }
             Expr::Unknown(span) => unreachable_lowering("expression", span),

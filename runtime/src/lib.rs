@@ -1,8 +1,9 @@
 #![forbid(unsafe_code)]
 
 use std::cell::{BorrowError, BorrowMutError, Ref, RefCell, RefMut};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
+use std::hash::Hash;
 use std::io::{Read, Write};
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
@@ -411,6 +412,26 @@ pub fn path_join<P: RuntimePath + ?Sized>(base: &P, child: &str) -> PathBuf {
     base.as_path().join(child)
 }
 
+pub fn path_to_string<P: RuntimePath + ?Sized>(path: &P) -> String {
+    path.as_path().to_string_lossy().to_string()
+}
+
+pub fn path_file_name<P: RuntimePath + ?Sized>(path: &P) -> Option<String> {
+    path.as_path()
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+}
+
+pub fn path_extension<P: RuntimePath + ?Sized>(path: &P) -> Option<String> {
+    path.as_path()
+        .extension()
+        .map(|extension| extension.to_string_lossy().to_string())
+}
+
+pub fn path_parent<P: RuntimePath + ?Sized>(path: &P) -> Option<PathBuf> {
+    path.as_path().parent().map(PathBuf::from)
+}
+
 pub trait RuntimeBytes {
     fn as_bytes_slice(&self) -> &[u8];
 }
@@ -552,8 +573,115 @@ pub fn list_count_where<T: Clone>(list: &[T], mut predicate: impl FnMut(T) -> bo
         .count() as i64
 }
 
+pub fn list_any<T: Clone>(list: &[T], mut predicate: impl FnMut(T) -> bool) -> bool {
+    list.iter().any(|item| predicate(item.clone()))
+}
+
+pub fn list_all<T: Clone>(list: &[T], mut predicate: impl FnMut(T) -> bool) -> bool {
+    list.iter().all(|item| predicate(item.clone()))
+}
+
+pub fn list_find<T: Clone>(list: &[T], mut predicate: impl FnMut(T) -> bool) -> Option<T> {
+    list.iter().find(|item| predicate((*item).clone())).cloned()
+}
+
+pub fn list_filter<T: Clone>(list: &[T], mut predicate: impl FnMut(T) -> bool) -> Vec<T> {
+    list.iter()
+        .filter(|item| predicate((*item).clone()))
+        .cloned()
+        .collect()
+}
+
+pub fn list_map<T: Clone, U>(list: &[T], mapper: impl FnMut(T) -> U) -> Vec<U> {
+    list.iter().cloned().map(mapper).collect()
+}
+
+pub fn list_fold<T: Clone, U: Clone>(
+    list: &[T],
+    initial: &U,
+    mut folder: impl FnMut(U, T) -> U,
+) -> U {
+    let mut state = initial.clone();
+    for item in list.iter().cloned() {
+        state = folder(state, item);
+    }
+    state
+}
+
+pub fn list_try_fold<T: Clone, U: Clone, E>(
+    list: &[T],
+    initial: &U,
+    mut folder: impl FnMut(U, T) -> Result<U, E>,
+) -> Result<U, E> {
+    let mut state = initial.clone();
+    for item in list.iter().cloned() {
+        state = folder(state, item)?;
+    }
+    Ok(state)
+}
+
 pub fn list_consume<T>(list: Vec<T>) {
     drop(list);
+}
+
+pub fn map_new<K, V>() -> HashMap<K, V> {
+    HashMap::new()
+}
+
+pub fn map_len<K, V>(map: &HashMap<K, V>) -> i64 {
+    map.len() as i64
+}
+
+pub fn map_is_empty<K, V>(map: &HashMap<K, V>) -> bool {
+    map.is_empty()
+}
+
+pub fn map_contains_key<K: Eq + Hash, V>(map: &HashMap<K, V>, key: &K) -> bool {
+    map.contains_key(key)
+}
+
+pub fn map_get<K: Eq + Hash, V: Clone>(map: &HashMap<K, V>, key: &K) -> Option<V> {
+    map.get(key).cloned()
+}
+
+pub fn map_insert<K: Eq + Hash + Clone, V: Clone>(map: &mut HashMap<K, V>, key: &K, value: &V) {
+    map.insert(key.clone(), value.clone());
+}
+
+pub fn map_remove<K: Eq + Hash, V>(map: &mut HashMap<K, V>, key: &K) -> Option<V> {
+    map.remove(key)
+}
+
+pub fn map_clear<K, V>(map: &mut HashMap<K, V>) {
+    map.clear();
+}
+
+pub fn set_new<T>() -> HashSet<T> {
+    HashSet::new()
+}
+
+pub fn set_len<T>(set: &HashSet<T>) -> i64 {
+    set.len() as i64
+}
+
+pub fn set_is_empty<T>(set: &HashSet<T>) -> bool {
+    set.is_empty()
+}
+
+pub fn set_contains<T: Eq + Hash>(set: &HashSet<T>, value: &T) -> bool {
+    set.contains(value)
+}
+
+pub fn set_insert<T: Eq + Hash + Clone>(set: &mut HashSet<T>, value: &T) -> bool {
+    set.insert(value.clone())
+}
+
+pub fn set_remove<T: Eq + Hash>(set: &mut HashSet<T>, value: &T) -> bool {
+    set.remove(value)
+}
+
+pub fn set_clear<T>(set: &mut HashSet<T>) {
+    set.clear();
 }
 
 pub fn buffer_new(size: i64) -> Vec<u8> {
@@ -1027,6 +1155,32 @@ pub fn json_as_string(value: &JsonValue) -> Result<String, JsonError> {
     Ok(text.to_string())
 }
 
+pub fn json_as_int(value: &JsonValue) -> Result<i64, JsonError> {
+    let Some(number) = value.inner.as_i64() else {
+        return Err(JsonError::new("JSON value is not an integer"));
+    };
+    Ok(number)
+}
+
+pub fn json_as_bool(value: &JsonValue) -> Result<bool, JsonError> {
+    let Some(flag) = value.inner.as_bool() else {
+        return Err(JsonError::new("JSON value is not a boolean"));
+    };
+    Ok(flag)
+}
+
+pub fn json_is_null(value: &JsonValue) -> bool {
+    value.inner.is_null()
+}
+
+pub fn json_is_array(value: &JsonValue) -> bool {
+    value.inner.is_array()
+}
+
+pub fn json_is_object(value: &JsonValue) -> bool {
+    value.inner.is_object()
+}
+
 pub fn json_array_len(value: &JsonValue) -> Result<i64, JsonError> {
     let Some(items) = value.inner.as_array() else {
         return Err(JsonError::new("JSON value is not an array"));
@@ -1305,6 +1459,10 @@ pub fn string_len(value: &str) -> i64 {
     value.len() as i64
 }
 
+pub fn string_is_empty(value: &str) -> bool {
+    value.is_empty()
+}
+
 pub fn string_starts_with(value: &str, prefix: &str) -> bool {
     value.starts_with(prefix)
 }
@@ -1332,6 +1490,31 @@ pub fn string_strip_prefix(value: &str, prefix: &str) -> Option<String> {
 pub fn string_before(value: &str, delimiter: &str) -> Option<String> {
     let index = value.find(delimiter)?;
     Some(value[..index].to_string())
+}
+
+pub fn string_after(value: &str, delimiter: &str) -> Option<String> {
+    let (_, right) = value.split_once(delimiter)?;
+    Some(right.to_string())
+}
+
+pub fn string_trim(value: &str) -> String {
+    value.trim().to_string()
+}
+
+pub fn string_to_lowercase(value: &str) -> String {
+    value.to_lowercase()
+}
+
+pub fn string_to_uppercase(value: &str) -> String {
+    value.to_uppercase()
+}
+
+pub fn string_replace(value: &str, from: &str, to: &str) -> String {
+    value.replace(from, to)
+}
+
+pub fn string_split(value: &str, delimiter: &str) -> Vec<String> {
+    value.split(delimiter).map(str::to_string).collect()
 }
 
 pub fn string_builder_new() -> String {
@@ -1679,9 +1862,24 @@ mod tests {
 
     #[test]
     fn path_runtime_hook_builds_pathbuf_from_string() {
-        let path = super::path_from_string("rsscript-path.txt");
+        let path = super::path_from_string("fixtures/rsscript-path.txt");
 
-        assert_eq!(path, std::path::PathBuf::from("rsscript-path.txt"));
+        assert_eq!(path, std::path::PathBuf::from("fixtures/rsscript-path.txt"));
+        assert_eq!(
+            super::path_to_string(&path),
+            std::path::PathBuf::from("fixtures/rsscript-path.txt")
+                .to_string_lossy()
+                .to_string()
+        );
+        assert_eq!(
+            super::path_file_name(&path).as_deref(),
+            Some("rsscript-path.txt")
+        );
+        assert_eq!(super::path_extension(&path).as_deref(), Some("txt"));
+        assert_eq!(
+            super::path_parent(&path),
+            Some(std::path::PathBuf::from("fixtures"))
+        );
     }
 
     #[test]
@@ -1787,8 +1985,17 @@ mod tests {
             super::json_field_string(&profile, "name").expect("name field should be a string");
         let profile_name =
             super::json_as_string(&super::json_field(&profile, "name").unwrap()).unwrap();
+        let profile_name_value = super::json_field(&profile, "name").unwrap();
         let age = super::json_field_int(&profile, "age").expect("age should be an integer");
         let active = super::json_field_bool(&profile, "active").expect("active should be a bool");
+        let age_value = super::json_field(&profile, "age").unwrap();
+        let active_value = super::json_field(&profile, "active").unwrap();
+        let age_again = super::json_as_int(&age_value).expect("age value should be an integer");
+        let active_again =
+            super::json_as_bool(&active_value).expect("active value should be a boolean");
+        let profile_is_object = super::json_is_object(&profile);
+        let profiles_is_array = super::json_is_array(&profiles);
+        let profile_name_is_null = super::json_is_null(&profile_name_value);
         let reasons =
             super::json_parse(r#"["public entry point","error handling boundary"]"#).unwrap();
         let has_public = super::json_array_contains_string(&reasons, "public entry point").unwrap();
@@ -1814,6 +2021,13 @@ mod tests {
         let joined = super::string_join(&lines, " | ");
         let stripped = super::string_strip_prefix("pub fn Api.run() -> Unit", "pub fn ");
         let before_args = super::string_before("Api.run() -> Unit", "(");
+        let after_return = super::string_after("Api.run() -> Unit", "-> ");
+        let empty = super::string_is_empty("");
+        let trimmed = super::string_trim("  review  ");
+        let lower = super::string_to_lowercase("Review");
+        let upper = super::string_to_uppercase("review");
+        let replaced = super::string_replace("review map", "map", "plan");
+        let split = super::string_split("review,map", ",");
         let mut builder = super::string_builder_new();
         super::string_builder_push(&mut builder, "dogfood ");
         super::string_builder_push(&mut builder, "summary");
@@ -1825,6 +2039,11 @@ mod tests {
         assert_eq!(profile_name, "RSScript");
         assert_eq!(age, 1);
         assert!(active);
+        assert_eq!(age_again, 1);
+        assert!(active_again);
+        assert!(profile_is_object);
+        assert!(profiles_is_array);
+        assert!(!profile_name_is_null);
         assert!(has_public);
         assert!(!has_native);
         assert!(has_error);
@@ -1839,6 +2058,13 @@ mod tests {
         assert_eq!(joined, "pub fn Api.run() | return Unit");
         assert_eq!(stripped.as_deref(), Some("Api.run() -> Unit"));
         assert_eq!(before_args.as_deref(), Some("Api.run"));
+        assert_eq!(after_return.as_deref(), Some("Unit"));
+        assert!(empty);
+        assert_eq!(trimmed, "review");
+        assert_eq!(lower, "review");
+        assert_eq!(upper, "REVIEW");
+        assert_eq!(replaced, "review plan");
+        assert_eq!(split, vec!["review", "map"]);
         assert_eq!(built, "dogfood summary");
         let _ = std::fs::remove_file(path);
     }
@@ -1885,8 +2111,56 @@ mod tests {
         let values = vec![1_i64, 2, 3, 4];
 
         let even = super::list_count_where(&values, |value| value % 2 == 0);
+        let any_gt_three = super::list_any(&values, |value| value > 3);
+        let all_positive = super::list_all(&values, |value| value > 0);
+        let found_three = super::list_find(&values, |value| value == 3);
+        let filtered = super::list_filter(&values, |value| value > 2);
+        let mapped = super::list_map(&values, |value| value + 10);
+        let sum = super::list_fold(&values, &0_i64, |state, value| state + value);
+        let try_sum = super::list_try_fold(
+            &values,
+            &0_i64,
+            |state, value| -> Result<i64, super::JsonError> { Ok(state + value) },
+        )
+        .unwrap();
 
         assert_eq!(even, 2);
+        assert!(any_gt_three);
+        assert!(all_positive);
+        assert_eq!(found_three, Some(3));
+        assert_eq!(filtered, vec![3, 4]);
+        assert_eq!(mapped, vec![11, 12, 13, 14]);
+        assert_eq!(sum, 10);
+        assert_eq!(try_sum, 10);
+    }
+
+    #[test]
+    fn map_and_set_runtime_hooks_cover_common_operations() {
+        let mut map = super::map_new::<String, i64>();
+        let key = "one".to_string();
+
+        assert!(super::map_is_empty(&map));
+        super::map_insert(&mut map, &key, &1);
+        assert_eq!(super::map_len(&map), 1);
+        assert!(super::map_contains_key(&map, &key));
+        assert_eq!(super::map_get(&map, &key), Some(1));
+        assert_eq!(super::map_remove(&mut map, &key), Some(1));
+        assert!(super::map_is_empty(&map));
+        super::map_insert(&mut map, &key, &2);
+        super::map_clear(&mut map);
+        assert!(super::map_is_empty(&map));
+
+        let mut set = super::set_new::<String>();
+
+        assert!(super::set_is_empty(&set));
+        assert!(super::set_insert(&mut set, &key));
+        assert_eq!(super::set_len(&set), 1);
+        assert!(super::set_contains(&set, &key));
+        assert!(super::set_remove(&mut set, &key));
+        assert!(super::set_is_empty(&set));
+        assert!(super::set_insert(&mut set, &key));
+        super::set_clear(&mut set);
+        assert!(super::set_is_empty(&set));
     }
 
     #[test]
