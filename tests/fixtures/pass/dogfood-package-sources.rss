@@ -224,23 +224,11 @@ fn dogfood_source_set_facts() -> Result<fresh PackageSourceSetFacts, String> {
         interface_files: 0,
         source_files: 0,
     )
-    let first_interface_path = json_array_string_result(value: read paths.interface_paths, index: 0)?
-    let first_interface_root = Path.join(
-        base: read root,
-        child: read first_interface_path,
-    )
-    let first_interface_paths = list_files_result(path: read first_interface_root)?
-    let with_interfaces = count_source_set_from(
-        paths: read first_interface_paths,
-        index: 0,
-        facts: read manifest,
-    )
-
     let all_interfaces = count_root_paths_from(
         root: read root,
         roots: read paths.interface_paths,
-        index: 1,
-        facts: read with_interfaces,
+        index: 0,
+        facts: read manifest,
     )?
 
     return count_root_paths_from(
