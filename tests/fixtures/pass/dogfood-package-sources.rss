@@ -5,6 +5,8 @@ struct PackageSourceSetFacts {
     manifest_files: Int
     interface_files: Int
     source_files: Int
+    public_interface_files: Int
+    public_source_files: Int
 }
 
 struct PackageSourcePathSets {
@@ -113,6 +115,14 @@ fn list_files_result(path: read Path) -> Result<List<String>, String> {
     }
 }
 
+fn read_file_text_result(path: read Path) -> Result<String, FileError> {
+    with File.open_read(path: read path)? as file {
+        let text = File.read_all_string(file: mut file)?
+
+        return Ok(text)
+    }
+}
+
 fn package_source_path_sets(root: read Path) -> Result<fresh PackageSourcePathSets, String> {
     let manifest_path = Path.join(
         base: read root,
@@ -133,16 +143,26 @@ fn package_source_path_sets(root: read Path) -> Result<fresh PackageSourcePathSe
 fn add_source_path(
     facts: read PackageSourceSetFacts,
     path: read String,
+    contents: read String,
 ) -> fresh PackageSourceSetFacts {
     let is_manifest = path == "rsspkg.toml"
     let is_interface = String.ends_with(value: read path, suffix: read ".rssi")
     let is_source = String.ends_with(value: read path, suffix: read ".rss")
+    let has_public_function = String.contains(value: read contents, needle: read "pub fn ")
 
     return PackageSourceSetFacts(
         total_files: facts.total_files + 1,
         manifest_files: add_bool(value: facts.manifest_files, condition: is_manifest),
         interface_files: add_bool(value: facts.interface_files, condition: is_interface),
         source_files: add_bool(value: facts.source_files, condition: is_source),
+        public_interface_files: add_bool(
+            value: facts.public_interface_files,
+            condition: is_interface && has_public_function,
+        ),
+        public_source_files: add_bool(
+            value: facts.public_source_files,
+            condition: is_source && has_public_function,
+        ),
     )
 }
 
@@ -155,27 +175,47 @@ fn add_bool(value: Int, condition: Bool) -> Int {
 }
 
 fn count_source_set_from(
+    root: read Path,
     paths: read List<String>,
     index: Int,
     facts: read PackageSourceSetFacts,
-) -> fresh PackageSourceSetFacts {
+) -> Result<fresh PackageSourceSetFacts, String> {
     if index >= List.len(list: read paths) {
-        return PackageSourceSetFacts(
+        return Ok(PackageSourceSetFacts(
             total_files: facts.total_files,
             manifest_files: facts.manifest_files,
             interface_files: facts.interface_files,
             source_files: facts.source_files,
-        )
+            public_interface_files: facts.public_interface_files,
+            public_source_files: facts.public_source_files,
+        ))
     }
 
-    let path = List.get(list: read paths, index: index)
-    let next = add_source_path(facts: read facts, path: read path)
-
-    return count_source_set_from(
-        paths: read paths,
-        index: index + 1,
-        facts: read next,
+    let relative_path = List.get(list: read paths, index: index)
+    let file_path = Path.join(
+        base: read root,
+        child: read relative_path,
     )
+
+    match read_file_text_result(path: read file_path) {
+        Ok(contents) => {
+            let next = add_source_path(
+                facts: read facts,
+                path: read relative_path,
+                contents: read contents,
+            )
+
+            return count_source_set_from(
+                root: read root,
+                paths: read paths,
+                index: index + 1,
+                facts: read next,
+            )
+        }
+        Err(error) => {
+            return Err(file_error(prefix: read "source read", error: read error))
+        }
+    }
 }
 
 fn count_root_paths_from(
@@ -192,6 +232,8 @@ fn count_root_paths_from(
             manifest_files: facts.manifest_files,
             interface_files: facts.interface_files,
             source_files: facts.source_files,
+            public_interface_files: facts.public_interface_files,
+            public_source_files: facts.public_source_files,
         ))
     }
 
@@ -202,10 +244,11 @@ fn count_root_paths_from(
     )
     let paths = list_files_result(path: read source_root)?
     let next = count_source_set_from(
+        root: read source_root,
         paths: read paths,
         index: 0,
         facts: read facts,
-    )
+    )?
 
     return count_root_paths_from(
         root: read root,
@@ -223,6 +266,8 @@ fn dogfood_source_set_facts() -> Result<fresh PackageSourceSetFacts, String> {
         manifest_files: 1,
         interface_files: 0,
         source_files: 0,
+        public_interface_files: 0,
+        public_source_files: 0,
     )
     let all_interfaces = count_root_paths_from(
         root: read root,
@@ -244,14 +289,20 @@ fn source_set_summary_line(facts: read PackageSourceSetFacts) -> fresh String {
     let manifests = String.from_int(value: facts.manifest_files)
     let interfaces = String.from_int(value: facts.interface_files)
     let sources = String.from_int(value: facts.source_files)
+    let public_interfaces = String.from_int(value: facts.public_interface_files)
+    let public_sources = String.from_int(value: facts.public_source_files)
     let first = String.concat(left: read "dogfood package sources total=", right: read total)
     let second = String.concat(left: read first, right: read " manifests=")
     let third = String.concat(left: read second, right: read manifests)
     let fourth = String.concat(left: read third, right: read " interfaces=")
     let fifth = String.concat(left: read fourth, right: read interfaces)
     let sixth = String.concat(left: read fifth, right: read " sources=")
+    let seventh = String.concat(left: read sixth, right: read sources)
+    let eighth = String.concat(left: read seventh, right: read " public_interfaces=")
+    let ninth = String.concat(left: read eighth, right: read public_interfaces)
+    let tenth = String.concat(left: read ninth, right: read " public_sources=")
 
-    return String.concat(left: read sixth, right: read sources)
+    return String.concat(left: read tenth, right: read public_sources)
 }
 
 pub fn main() -> Result<Unit, String> {
@@ -264,6 +315,8 @@ pub fn main() -> Result<Unit, String> {
     Assert.equal_int(left: facts.manifest_files, right: 1)
     Assert.equal_int(left: facts.interface_files, right: 2)
     Assert.equal_int(left: facts.source_files, right: 2)
+    Assert.equal_int(left: facts.public_interface_files, right: 2)
+    Assert.equal_int(left: facts.public_source_files, right: 2)
 
     return Ok(Unit)
 }

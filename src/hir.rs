@@ -1913,6 +1913,9 @@ fn classify_return_expr(hir: &Hir, expr: &Expr) -> HirReturnProof {
     match expr {
         Expr::Ident(name, _) => HirReturnProof::Ident { name: name.clone() },
         Expr::Call { callee, args, .. } => {
+            if matches!(callee_name(callee), "Err" | "None") {
+                return HirReturnProof::NoValue;
+            }
             if matches!(callee_name(callee), "Ok" | "Some")
                 && let Some(arg) = args.first()
             {

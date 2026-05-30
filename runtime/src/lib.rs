@@ -1269,6 +1269,10 @@ pub fn string_ends_with(value: &str, suffix: &str) -> bool {
     value.ends_with(suffix)
 }
 
+pub fn string_contains(value: &str, needle: &str) -> bool {
+    value.contains(needle)
+}
+
 pub fn assert_equal(left: &str, right: &str) {
     assert_eq!(left, right);
 }
@@ -1721,6 +1725,7 @@ mod tests {
         let has_public_prefix = super::json_array_contains_prefix(&reasons, "public").unwrap();
         let name_starts_with_rss = super::string_starts_with(&name, "RSS");
         let name_ends_with_script = super::string_ends_with(&name, "Script");
+        let name_contains_script = super::string_contains(&name, "Script");
 
         assert_eq!(file_len, 1);
         assert_eq!(len, 1);
@@ -1735,6 +1740,7 @@ mod tests {
         assert!(has_public_prefix);
         assert!(name_starts_with_rss);
         assert!(name_ends_with_script);
+        assert!(name_contains_script);
         let _ = std::fs::remove_file(path);
     }
 

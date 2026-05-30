@@ -2956,6 +2956,23 @@ Test
 Assert
 ```
 
+The minimum `String` core surface includes pure current-value inspection helpers
+needed by review tooling and package dogfood:
+
+```rust
+pub fn String.len(value: read String) -> Int
+    effects(pure)
+
+pub fn String.starts_with(value: read String, prefix: read String) -> Bool
+    effects(pure)
+
+pub fn String.ends_with(value: read String, suffix: read String) -> Bool
+    effects(pure)
+
+pub fn String.contains(value: read String, needle: read String) -> Bool
+    effects(pure)
+```
+
 Agent, GPU, HTTP, networking, and model-client packages are use-case libraries, not language core.
 
 ### 18.3 Package manager boundary

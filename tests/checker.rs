@@ -2994,6 +2994,7 @@ fn main() -> Unit {
     let length = String.len(value: read message)
     let starts = String.starts_with(value: read message, prefix: read "hello")
     let ends = String.ends_with(value: read message, suffix: read "world")
+    let contains = String.contains(value: read message, needle: read "lo wo")
     Log.write(message: read message)
     Log.write(message: read count)
     Log.write(message: read ok)
@@ -3013,6 +3014,9 @@ fn main() -> Unit {
     ));
     assert!(rust.contains(
         "let ends = rsscript_runtime::string_ends_with(&message, &\"world\".to_string());"
+    ));
+    assert!(rust.contains(
+        "let contains = rsscript_runtime::string_contains(&message, &\"lo wo\".to_string());"
     ));
     assert!(rust.contains("rsscript_runtime::log_write(&message);"));
 }
@@ -7115,7 +7119,7 @@ fn rss_run_accepts_checked_in_dogfood_scripts_directly() {
         ),
         (
             "tests/fixtures/pass/dogfood-package-sources.rss",
-            "dogfood package sources total=5 manifests=1 interfaces=2 sources=2",
+            "dogfood package sources total=5 manifests=1 interfaces=2 sources=2 public_interfaces=2 public_sources=2",
         ),
         (
             "tests/fixtures/pass/dogfood-package-exports.rss",
@@ -7267,7 +7271,7 @@ paths = ["src", "tools"]
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
     assert_eq!(
         stdout.trim(),
-        "dogfood package sources total=5 manifests=1 interfaces=2 sources=2"
+        "dogfood package sources total=5 manifests=1 interfaces=2 sources=2 public_interfaces=2 public_sources=2"
     );
     assert!(stderr.trim().is_empty(), "{stderr}");
 }

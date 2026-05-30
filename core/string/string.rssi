@@ -21,3 +21,9 @@ pub fn String.ends_with(
     suffix: read String,
 ) -> Bool
     effects(pure)
+
+pub fn String.contains(
+    value: read String,
+    needle: read String,
+) -> Bool
+    effects(pure)
