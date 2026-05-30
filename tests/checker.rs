@@ -3520,6 +3520,71 @@ fn main() -> Result<Unit, DbError> {
 }
 
 #[test]
+fn rss_run_accepts_protocol_static_dispatch() {
+    let temp_dir = unique_temp_dir("rsscript-run-protocol-static-dispatch");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    let source_path = temp_dir.join("protocol_dispatch.rss");
+    fs::write(
+        &source_path,
+        r#"features: local
+
+protocol Writer {
+    fn write(
+        self: mut Self,
+        message: read String,
+    ) -> Unit
+        effects(retains(message))
+}
+
+struct BufferWriter {
+    count: Int
+}
+
+fn BufferWriter.write(
+    self: mut BufferWriter,
+    message: read String,
+) -> Unit
+    effects(retains(message))
+{
+    Log.write(message: read message)
+}
+
+impl Writer for BufferWriter {
+    write = BufferWriter.write
+}
+
+fn write_line<W: Writer>(
+    writer: mut W,
+    message: read String,
+) -> Unit {
+    Writer.write(self: mut writer, message: read message)
+}
+
+fn main() -> Unit {
+    local writer = BufferWriter(count: 0)
+    write_line(writer: mut writer, message: read "protocol dispatch ran")
+    return Unit
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("run")
+        .arg(&source_path)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss run should execute");
+    let _ = fs::remove_dir_all(&temp_dir);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert_eq!(stdout, "protocol dispatch ran\n");
+}
+
+#[test]
 fn rss_run_accepts_non_consuming_noescape_callback() {
     let temp_dir = unique_temp_dir("rsscript-run-noescape-fnmut");
     fs::create_dir_all(&temp_dir).expect("temp dir should be created");
@@ -4035,6 +4100,51 @@ fn render(name: read String) -> fresh User {
     assert!(rust.contains("return User_lookup(&name);"));
     assert!(!rust.contains("fn User.lookup"));
     assert!(!rust.contains("User::lookup"));
+}
+
+#[test]
+fn rust_lowering_maps_protocol_static_dispatch_to_rust_traits() {
+    let source = r#"
+protocol Writer {
+    fn write(
+        self: mut Self,
+        message: read String,
+    ) -> Unit
+        effects(retains(message))
+}
+
+struct BufferWriter {
+    count: Int
+}
+
+fn BufferWriter.write(
+    self: mut BufferWriter,
+    message: read String,
+) -> Unit
+    effects(retains(message))
+{
+    Log.write(message: read message)
+}
+
+impl Writer for BufferWriter {
+    write = BufferWriter.write
+}
+
+fn write_line<W: Writer>(
+    writer: mut W,
+    message: read String,
+) -> Unit {
+    Writer.write(self: mut writer, message: read message)
+}
+"#;
+    let rust = lower_source_to_rust("protocol-lower.rss", source).expect("source should lower");
+
+    assert!(rust.contains("pub trait Writer"));
+    assert!(rust.contains("impl Writer for BufferWriter"));
+    assert!(rust.contains("fn write_line<W: Writer>(writer: &mut W, message: &String)"));
+    assert!(rust.contains("Writer::write(writer, &message);"));
+    assert!(rust.contains("BufferWriter_write(self, message);"));
+    assert!(!rust.contains("fn Writer_write"));
 }
 
 #[test]

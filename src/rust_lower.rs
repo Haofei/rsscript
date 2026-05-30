@@ -285,11 +285,15 @@ fn lower_program_to_rust_with_map_with_native_bindings(
 fn validate_executable_declarations(program: &Program) -> Vec<Diagnostic> {
     let mut implemented = BTreeSet::new();
     let mut bodyless = BTreeMap::new();
+    let protocol_method_keys = protocol_method_keys(program);
     for item in &program.items {
         let Item::Function(function) = item else {
             continue;
         };
         let key = executable_declaration_function_key(&function.name);
+        if protocol_method_keys.contains(&key) {
+            continue;
+        }
         if function.body.statements.is_empty() {
             if !function.is_native {
                 bodyless.insert(key, function.name.clone());
@@ -587,6 +591,7 @@ pub fn check_generated_rust_package(package_dir: &Path) -> Result<RustBackendChe
 struct RustLowerer<'a> {
     program: &'a Program,
     type_kinds: BTreeMap<String, TypeKind>,
+    protocol_names: BTreeSet<String>,
     native_boundary_callees: BTreeSet<String>,
     native_bindings: BTreeMap<String, String>,
     function_return_types: BTreeMap<String, TypeRef>,
@@ -612,12 +617,18 @@ impl<'a> RustLowerer<'a> {
             })
             .collect();
         let native_boundary_callees = collect_native_boundary_callees(program);
+        let protocol_names = program
+            .protocols
+            .iter()
+            .map(|protocol| protocol.name.clone())
+            .collect();
         let function_return_types = collect_function_return_types(program);
         let retained_params_by_callee = collect_function_retained_params(program);
 
         Self {
             program,
             type_kinds,
+            protocol_names,
             native_boundary_callees,
             native_bindings,
             function_return_types,
@@ -651,22 +662,116 @@ impl<'a> RustLowerer<'a> {
         }
         out.push('\n');
 
-        for (index, item) in self.program.items.iter().enumerate() {
+        for item in &self.program.items {
+            if let Item::Type(ty) = item {
+                self.lower_type_decl(ty, &mut out);
+                out.push('\n');
+            }
+        }
+        self.lower_protocol_traits(&mut out);
+        for item in &self.program.items {
             match item {
-                Item::Type(ty) => self.lower_type_decl(ty, &mut out),
+                Item::Type(_) => {}
                 Item::Function(function) if !function.body.statements.is_empty() => {
-                    self.lower_function(function, &mut out)
+                    self.lower_function(function, &mut out);
+                    out.push('\n');
                 }
                 Item::Function(_) => {}
             }
-            if index + 1 < self.program.items.len() {
-                out.push('\n');
-            }
+        }
+        self.lower_protocol_impls(&mut out);
+        while out.ends_with("\n\n") {
+            out.pop();
         }
 
         LoweredRust {
             rust_source: out,
             source_map: self.source_map,
+        }
+    }
+
+    fn lower_protocol_traits(&mut self, out: &mut String) {
+        for protocol in &self.program.protocols {
+            self.record_source_marker(out, 0, "protocol", &protocol.span);
+            out.push_str(&format!("pub trait {} {{\n", rust_ident(&protocol.name)));
+            for method in protocol_methods(self.program, &protocol.name) {
+                out.push_str("    fn ");
+                out.push_str(&rust_ident(protocol_method_name(&method.name)));
+                out.push('(');
+                out.push_str(&self.lower_protocol_trait_params(method));
+                out.push(')');
+                if let Some(return_ty) = &method.return_ty {
+                    out.push_str(" -> ");
+                    out.push_str(&self.lower_return_type(return_ty, method.returns_fresh));
+                }
+                out.push_str(";\n");
+            }
+            out.push_str("}\n\n");
+        }
+    }
+
+    fn lower_protocol_trait_params(&self, method: &FunctionDecl) -> String {
+        method
+            .params
+            .iter()
+            .map(|param| {
+                if param.name == "self" {
+                    return match param.effect {
+                        Some(DataEffect::Read) => "&self".to_string(),
+                        Some(DataEffect::Mut) => "&mut self".to_string(),
+                        Some(DataEffect::Take) | None => "self".to_string(),
+                    };
+                }
+                self.lower_param(param)
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn lower_protocol_impls(&mut self, out: &mut String) {
+        for protocol_impl in &self.program.protocol_impls {
+            out.push_str(&format!(
+                "impl {} for {} {{\n",
+                rust_ident(&protocol_impl.protocol),
+                rust_ident(&protocol_impl.type_name)
+            ));
+            for mapping in &protocol_impl.mappings {
+                let Some(method) =
+                    protocol_method(self.program, &protocol_impl.protocol, &mapping.method)
+                else {
+                    continue;
+                };
+                out.push_str("    fn ");
+                out.push_str(&rust_ident(&mapping.method));
+                out.push('(');
+                out.push_str(&self.lower_protocol_trait_params(method));
+                out.push(')');
+                if let Some(return_ty) = &method.return_ty {
+                    out.push_str(" -> ");
+                    out.push_str(&self.lower_return_type(return_ty, method.returns_fresh));
+                }
+                out.push_str(" {\n        ");
+                if method
+                    .return_ty
+                    .as_ref()
+                    .is_none_or(|return_ty| return_ty.name != "Unit")
+                {
+                    out.push_str("return ");
+                }
+                out.push_str(&rust_function_ident(&mapping.target));
+                out.push('(');
+                out.push_str(
+                    &method
+                        .params
+                        .iter()
+                        .map(protocol_impl_forward_arg)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                );
+                out.push_str(");\n");
+                out.push_str("    }\n");
+            }
+            out.push_str("}\n\n");
         }
     }
 
@@ -839,7 +944,7 @@ impl<'a> RustLowerer<'a> {
             Some(DataEffect::Mut) => format!("&mut {ty}"),
             Some(DataEffect::Take) | None => ty,
         };
-        let name = rust_ident(&param.name);
+        let name = rust_value_ident(&param.name);
         if param.ty.is_noescape && param.ty.name == "Fn" {
             format!("mut {name}: {rust_ty}")
         } else {
@@ -1179,7 +1284,7 @@ impl<'a> RustLowerer<'a> {
                 } else {
                     lower_builtin_value_ident(name)
                         .map(str::to_string)
-                        .unwrap_or_else(|| rust_ident(name))
+                        .unwrap_or_else(|| rust_value_ident(name))
                 }
             }
             Expr::Number(value, _) => value.clone(),
@@ -1299,6 +1404,16 @@ impl<'a> RustLowerer<'a> {
                 if is_resource_pool_try_new_callee(callee) {
                     return lower_resource_pool_try_new_call(self, args, span);
                 }
+                if self.is_protocol_callee(callee) {
+                    let lowered_callee = lower_protocol_callee(callee);
+                    let args = args
+                        .iter()
+                        .enumerate()
+                        .map(|(index, arg)| self.lower_call_arg_for_callee(callee, arg, index))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return format!("{lowered_callee}({args})");
+                }
                 let is_resource_pool_borrow = is_resource_pool_borrow_callee(callee);
                 let lowered_callee = if is_resource_pool_borrow {
                     "rsscript_runtime::ResourcePool::borrow_at".to_string()
@@ -1336,7 +1451,7 @@ impl<'a> RustLowerer<'a> {
                     if let Expr::Ident(name, _) = &**value
                         && self.param_effects.get(name) == Some(&DataEffect::Mut)
                     {
-                        rust_ident(name)
+                        rust_value_ident(name)
                     } else if self
                         .infer_expr_type(value)
                         .is_some_and(|ty| self.is_class_type(&ty))
@@ -1441,6 +1556,10 @@ impl<'a> RustLowerer<'a> {
         self.retained_params_by_callee
             .get(&native_boundary_callee_key(callee))
             .is_some_and(|retained| retained.contains(name))
+    }
+
+    fn is_protocol_callee(&self, callee: &Callee) -> bool {
+        matches!(callee, Callee::Qualified { namespace, .. } if self.protocol_names.contains(namespace))
     }
 
     fn lower_return_expr(&mut self, expr: &Expr) -> String {
@@ -2305,7 +2424,9 @@ fn lower_generic_params(params: &[GenericParam]) -> String {
                 Some(GenericBound::Managed) => format!("{name}: rsscript_runtime::ManagedValue"),
                 Some(GenericBound::Struct) => name,
                 Some(GenericBound::Resource) => format!("{name}: rsscript_runtime::Resource"),
-                Some(GenericBound::Protocol(_)) => name,
+                Some(GenericBound::Protocol(protocol)) => {
+                    format!("{name}: {}", rust_ident(protocol))
+                }
                 None => name,
             }
         })
@@ -2325,7 +2446,7 @@ fn lower_generic_args(params: &[GenericParam]) -> String {
 
     let args = params
         .iter()
-        .map(|param| rust_ident(&param.name))
+        .map(|param| rust_value_ident(&param.name))
         .collect::<Vec<_>>()
         .join(", ");
     format!("<{args}>")
@@ -2347,6 +2468,74 @@ fn lower_callee(callee: &Callee) -> String {
         }
         Callee::Qualified { namespace, name } => rust_qualified_function_ident(namespace, name),
     }
+}
+
+fn lower_protocol_callee(callee: &Callee) -> String {
+    match callee {
+        Callee::Qualified { namespace, name } => {
+            format!("{}::{}", rust_ident(namespace), rust_ident(name))
+        }
+        Callee::Name(name) => rust_ident(name),
+    }
+}
+
+fn protocol_impl_forward_arg(param: &Param) -> String {
+    if param.name == "self" {
+        return match param.effect {
+            Some(DataEffect::Read) => "self".to_string(),
+            Some(DataEffect::Mut) => "self".to_string(),
+            Some(DataEffect::Take) | None => "self".to_string(),
+        };
+    }
+    rust_value_ident(&param.name)
+}
+
+fn protocol_method_keys(program: &Program) -> BTreeSet<String> {
+    program
+        .protocols
+        .iter()
+        .flat_map(|protocol| {
+            protocol_methods(program, &protocol.name)
+                .into_iter()
+                .map(|method| executable_declaration_function_key(&method.name))
+        })
+        .collect()
+}
+
+fn protocol_methods<'a>(program: &'a Program, protocol: &str) -> Vec<&'a FunctionDecl> {
+    program
+        .items
+        .iter()
+        .filter_map(|item| {
+            let Item::Function(function) = item else {
+                return None;
+            };
+            is_protocol_method(function, protocol).then_some(function)
+        })
+        .collect()
+}
+
+fn protocol_method<'a>(
+    program: &'a Program,
+    protocol: &str,
+    method_name: &str,
+) -> Option<&'a FunctionDecl> {
+    protocol_methods(program, protocol)
+        .into_iter()
+        .find(|method| protocol_method_name(&method.name) == method_name)
+}
+
+fn is_protocol_method(function: &FunctionDecl, protocol: &str) -> bool {
+    function
+        .name
+        .rsplit_once('.')
+        .is_some_and(|(namespace, _)| namespace == protocol)
+}
+
+fn protocol_method_name(name: &str) -> &str {
+    name.rsplit_once('.')
+        .map(|(_, method)| method)
+        .unwrap_or(name)
 }
 
 fn runtime_intrinsic_target(callee: &Callee) -> Option<&'static str> {
@@ -2547,6 +2736,14 @@ fn rust_ident(name: &str) -> String {
         format!("r#{name}")
     } else {
         name.to_string()
+    }
+}
+
+fn rust_value_ident(name: &str) -> String {
+    if name == "self" {
+        "rss_self".to_string()
+    } else {
+        rust_ident(name)
     }
 }
 
