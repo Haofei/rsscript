@@ -2995,6 +2995,18 @@ pub fn StringBuilder.push(builder: mut StringBuilder, value: read String) -> Uni
 pub fn StringBuilder.finish(builder: take StringBuilder) -> fresh String
 ```
 
+The minimum `Json` core surface includes field access, array access, and a
+noescape predicate helper used by review tooling and package dogfood:
+
+```rust
+struct JsonValue
+
+pub fn Json.array_count_where(
+    value: read JsonValue,
+    predicate: noescape Fn(JsonValue) -> Result<Bool, JsonError>,
+) -> Result<Int, JsonError>
+```
+
 Agent, GPU, HTTP, networking, and model-client packages are use-case libraries, not language core.
 
 ### 18.3 Package manager boundary

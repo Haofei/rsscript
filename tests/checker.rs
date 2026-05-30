@@ -2639,6 +2639,13 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     let has_profile = Json.array_contains_string(value: read value, item: read "profile")?
     let has_profile_prefix = Json.array_contains_substring(value: read value, text: read "prof")?
     let has_profile_named_prefix = Json.array_contains_prefix(value: read value, prefix: read "pro")?
+    let matching = Json.array_count_where(
+        value: read value,
+        predicate: |item| {
+            let text = Json.as_string(value: read item)?
+            return Ok(String.starts_with(value: read text, prefix: read "pro"))
+        },
+    )?
     let profile = Json.field(value: read value, name: read "profile")?
     let profile_name_value = Json.field(value: read profile, name: read "name")?
     let profile_name = Json.as_string(value: read profile_name_value)?
@@ -2666,6 +2673,15 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     assert!(rust.contains(
         "let has_profile_named_prefix = rsscript_runtime::json_array_contains_prefix(&value, &\"pro\".to_string())?;"
     ));
+    assert!(
+        rust.contains("let matching = rsscript_runtime::json_array_count_where(&value, |item| {")
+    );
+    assert!(rust.contains("let text = rsscript_runtime::json_as_string(&item)?;"));
+    assert!(
+        rust.contains(
+            "return Ok(rsscript_runtime::string_starts_with(&text, &\"pro\".to_string()));"
+        )
+    );
     assert!(rust.contains(
         "let active = rsscript_runtime::json_field_bool(&profile, &\"active\".to_string())?;"
     ));

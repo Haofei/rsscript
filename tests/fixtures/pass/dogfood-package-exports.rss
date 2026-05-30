@@ -74,37 +74,17 @@ fn export_reason_is_modeled(reason: read String) -> Bool {
     return false
 }
 
-fn count_unmodeled_export_reasons_from(
-    reasons: read JsonValue,
-    index: Int,
-    limit: Int,
-) -> Result<Int, JsonError> {
-    if index >= limit {
-        return Ok(0)
-    }
-
-    let item = Json.array_get(value: read reasons, index: index)?
-    let reason = Json.as_string(value: read item)?
-    let rest = count_unmodeled_export_reasons_from(
-        reasons: read reasons,
-        index: index + 1,
-        limit: limit,
-    )?
-
-    if export_reason_is_modeled(reason: read reason) {
-        return Ok(rest)
-    }
-
-    return Ok(rest + 1)
-}
-
 fn count_unmodeled_export_reasons(reasons: read JsonValue) -> Result<Int, JsonError> {
-    let limit = Json.array_len(value: read reasons)?
+    return Json.array_count_where(
+        value: read reasons,
+        predicate: |item| {
+            let reason = Json.as_string(value: read item)?
+            if export_reason_is_modeled(reason: read reason) {
+                return Ok(false)
+            }
 
-    return count_unmodeled_export_reasons_from(
-        reasons: read reasons,
-        index: 0,
-        limit: limit,
+            return Ok(true)
+        },
     )
 }
 

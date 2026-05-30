@@ -48,5 +48,10 @@ pub fn Json.array_contains_prefix(
     prefix: read String,
 ) -> Result<Bool, JsonError>
 
+pub fn Json.array_count_where(
+    value: read JsonValue,
+    predicate: noescape Fn(JsonValue) -> Result<Bool, JsonError>,
+) -> Result<Int, JsonError>
+
 pub fn JsonError.message(error: read JsonError) -> String
     effects(pure)
