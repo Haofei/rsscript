@@ -1059,6 +1059,13 @@ impl Analyzer<'_> {
                     }
                 }
                 Item::Function(function) => {
+                    if function_body_belongs_to_protocol(function, &protocol_names) {
+                        self.unsupported_syntax(
+                            function.span.clone(),
+                            "unsupported protocol method body",
+                            "Protocols are effect-carrying capability contracts in v0.5. Protocol methods are bodyless signatures; default method bodies are not part of the RSScript protocol model.",
+                        );
+                    }
                     for param in &function.type_params {
                         self.check_protocol_bound(param, &protocol_names);
                     }
@@ -2583,6 +2590,16 @@ fn protocol_method_names(items: &[Item], protocol: &str) -> HashSet<String> {
             (namespace.as_deref() == Some(protocol)).then(|| method.to_string())
         })
         .collect()
+}
+
+fn function_body_belongs_to_protocol(
+    function: &FunctionDecl,
+    protocol_names: &HashSet<String>,
+) -> bool {
+    !function.body.statements.is_empty()
+        && split_qualified_name(&function.name)
+            .0
+            .is_some_and(|namespace| protocol_names.contains(&namespace))
 }
 
 fn protocol_signature_mismatch(
