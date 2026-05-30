@@ -1,0 +1,4 @@
+features: native
+
+native fn Rayon.sum_squares(values: read List<Int>) -> Int
+    effects(native)

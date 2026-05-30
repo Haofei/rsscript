@@ -14,9 +14,13 @@ use crate::syntax::ast::{EffectDecl, FileFeature, Item, Program};
 use crate::syntax::parse_source;
 
 use super::contract::collect_package_function_contracts;
+use super::dependency::package_dependency_spec;
+use super::source_set::{
+    load_package_manifest, load_package_with_features, resolve_package_features,
+};
 use super::{
     Manifest, ManifestNativeRust, PackageNativeRustCheck, PackageNativeRustReview,
-    PackageReviewFileKind, PackageRisk, PackageSource,
+    PackageReviewFileKind, PackageRisk, PackageSource, canonical_path_label,
 };
 
 #[derive(Debug, Deserialize)]
@@ -42,6 +46,55 @@ struct NativeBindingsManifest {
 }
 
 pub(super) fn package_native_rust_dependencies(
+    package_dir: &Path,
+    manifest: &Manifest,
+) -> Result<Vec<NativeRustDependency>, String> {
+    let mut visited = BTreeSet::new();
+    let mut dependencies = Vec::new();
+    collect_package_native_rust_dependencies(
+        package_dir,
+        manifest,
+        &mut visited,
+        &mut dependencies,
+    )?;
+    dedup_native_rust_dependencies(dependencies)
+}
+
+fn collect_package_native_rust_dependencies(
+    package_dir: &Path,
+    manifest: &Manifest,
+    visited: &mut BTreeSet<String>,
+    dependencies: &mut Vec<NativeRustDependency>,
+) -> Result<(), String> {
+    let canonical = canonical_path_label(package_dir);
+    if !visited.insert(canonical) {
+        return Ok(());
+    }
+    dependencies.extend(package_own_native_rust_dependencies(package_dir, manifest)?);
+    for (name, value) in &manifest.dependencies {
+        let spec = package_dependency_spec(name, value);
+        let Some(path) = &spec.path else {
+            continue;
+        };
+        let dependency_dir = package_dir.join(path);
+        if !dependency_dir.join("rsspkg.toml").exists() {
+            continue;
+        }
+        let dependency_manifest = load_package_manifest(&dependency_dir)?;
+        let selected_features = resolve_package_features(&dependency_manifest, &spec.features);
+        let dependency_package =
+            load_package_with_features(&dependency_dir, Some(&selected_features.selected))?;
+        collect_package_native_rust_dependencies(
+            &dependency_dir,
+            &dependency_package.manifest,
+            visited,
+            dependencies,
+        )?;
+    }
+    Ok(())
+}
+
+fn package_own_native_rust_dependencies(
     package_dir: &Path,
     manifest: &Manifest,
 ) -> Result<Vec<NativeRustDependency>, String> {
@@ -73,6 +126,27 @@ pub(super) fn package_native_rust_dependencies(
             .to_string(),
         bindings,
     }])
+}
+
+fn dedup_native_rust_dependencies(
+    dependencies: Vec<NativeRustDependency>,
+) -> Result<Vec<NativeRustDependency>, String> {
+    let mut by_crate = BTreeMap::new();
+    let mut deduped = Vec::new();
+    for dependency in dependencies {
+        if let Some(existing_path) = by_crate.get(&dependency.crate_name) {
+            if existing_path != &dependency.path {
+                return Err(format!(
+                    "native Rust dependency crate `{}` is provided by both `{}` and `{}`.",
+                    dependency.crate_name, existing_path, dependency.path
+                ));
+            }
+            continue;
+        }
+        by_crate.insert(dependency.crate_name.clone(), dependency.path.clone());
+        deduped.push(dependency);
+    }
+    Ok(deduped)
 }
 
 fn absolute_package_path(package_dir: &Path) -> PathBuf {

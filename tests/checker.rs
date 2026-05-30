@@ -4106,6 +4106,57 @@ fn rss_run_accepts_multi_file_package_directory() {
 
 #[test]
 #[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
+fn rss_run_accepts_checked_in_rayon_wrapper_package_dependency() {
+    let temp_dir = unique_temp_dir("rsscript-run-rayon-package-cli");
+    let rayon_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("rss/rayon");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-run-rayon-package",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-rayon = {{ path = "{}" }}
+"#,
+            rayon_dir.display()
+        ),
+        "",
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("src/main.rss"),
+        r#"features: native
+
+fn main() -> Unit {
+    let values = List<Int>.new()
+    List.push(list: mut values, value: read 1)
+    List.push(list: mut values, value: read 2)
+    List.push(list: mut values, value: read 3)
+    let sum = Rayon.sum_squares(values: read values)
+    Assert.equal_int(left: sum, right: 14)
+    Log.write(message: read "rayon wrapper sum_squares=14")
+    return Unit
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let output = rss_command()
+        .arg("run")
+        .arg(&temp_dir)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss run package directory should execute");
+    let _ = fs::remove_dir_all(&temp_dir);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert!(stdout.contains("rayon wrapper sum_squares=14"), "{stdout}");
+}
+
+#[test]
+#[ignore = "expensive RSScript e2e; run scripts/check_slow_tests.sh"]
 fn rss_run_json_remaps_rustc_compile_errors() {
     let temp_dir = unique_temp_dir("rsscript-run-rustc-remap");
     write_named_package_fixture(
@@ -12975,6 +13026,33 @@ fn rss_pkg_check_json_reports_consistent_package() {
 }
 
 #[test]
+fn rss_pkg_check_json_accepts_checked_in_rayon_wrapper_package() {
+    let output = rss_command()
+        .arg("pkg")
+        .arg("check")
+        .arg("--json")
+        .arg("rss/rayon")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("rss pkg check should execute for checked-in rayon wrapper");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: Value = serde_json::from_str(&stdout).expect("stdout should be package check JSON");
+
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stderr.trim().is_empty(), "{stderr}");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["package"]["name"], "rss-rayon");
+    assert_eq!(json["lock"]["matches"], true);
+    assert_eq!(
+        json["native_rust"]["cargo_package_name"],
+        "rss_rayon_native"
+    );
+    assert_eq!(json["native_rust"]["cargo_metadata_ok"], true);
+    assert_eq!(json["native_rust"]["unsafe_detected"], false);
+}
+
+#[test]
 fn rss_check_json_accepts_package_directory() {
     let temp_dir = unique_temp_dir("rsscript-check-package-cli");
     write_named_package_fixture(
@@ -13826,6 +13904,169 @@ unsafe = "forbid"
             .cargo_toml
             .contains("\"rss_json_native\" = { path = ")
     );
+}
+
+#[test]
+fn package_lowering_input_records_path_dependency_native_wrapper_dependency() {
+    let root_dir = unique_temp_dir("rsscript-package-native-dep-root");
+    let dep_dir = unique_temp_dir("rsscript-package-native-dep-wrapper");
+    write_named_package_fixture(
+        &dep_dir,
+        "rss-native-dep",
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_dep_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+        r#"features: native
+
+native fn Native.echo(message: read String) -> String
+    effects(native)
+"#,
+    );
+    fs::create_dir_all(dep_dir.join("native/rust/src")).expect("native src dir should be created");
+    fs::create_dir_all(dep_dir.join("native")).expect("native dir should be created");
+    fs::write(
+        dep_dir.join("native/bindings.rssbind.toml"),
+        r#"[bindings]
+"Native.echo" = "rss_dep_native::echo"
+"#,
+    )
+    .expect("native bindings should be written");
+    fs::write(
+        dep_dir.join("native/rust/Cargo.toml"),
+        "[package]\nname = \"rss_dep_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("native Cargo.toml should be written");
+    fs::write(
+        dep_dir.join("native/rust/src/lib.rs"),
+        "pub fn echo(message: &String) -> String { message.clone() }\n",
+    )
+    .expect("native source should be written");
+
+    write_named_package_fixture(
+        &root_dir,
+        "rss-native-root",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-native-dep = {{ path = "{}" }}
+"#,
+            dep_dir.display()
+        ),
+        "",
+    );
+    fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        root_dir.join("src/main.rss"),
+        r#"features: native
+
+fn main() -> Unit {
+    let message = Native.echo(message: read "hello dep native")
+    Log.write(message: read message)
+    return Unit
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let input = package_lowering_input(&root_dir).expect("package should lower");
+    let package = lower_sources_to_rust_package_with_options(
+        &input.sources,
+        &input.package.name,
+        "/workspace/rsscript/runtime",
+        &input.interfaces,
+        &input.native_dependencies,
+    )
+    .expect("package source should lower with dependency native binding");
+    let _ = fs::remove_dir_all(&root_dir);
+    let _ = fs::remove_dir_all(&dep_dir);
+
+    assert_eq!(input.native_dependencies.len(), 1);
+    assert_eq!(input.native_dependencies[0].crate_name, "rss_dep_native");
+    assert!(
+        input.native_dependencies[0]
+            .bindings
+            .get("Native.echo")
+            .is_some_and(|target| target == "rss_dep_native::echo")
+    );
+    assert!(
+        input
+            .interfaces
+            .iter()
+            .any(|(_, source)| source.contains("Native.echo"))
+    );
+    assert!(
+        package
+            .cargo_toml
+            .contains("\"rss_dep_native\" = { path = ")
+    );
+    assert!(package.lib_rs.contains("rss_dep_native::echo"));
+}
+
+#[test]
+fn package_lowering_input_records_checked_in_rayon_wrapper_dependency() {
+    let root_dir = unique_temp_dir("rsscript-package-rust-rayon-root");
+    let rayon_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("rss/rayon");
+    write_named_package_fixture(
+        &root_dir,
+        "rss-rayon-app",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-rayon = {{ path = "{}" }}
+"#,
+            rayon_dir.display()
+        ),
+        "",
+    );
+    fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        root_dir.join("src/main.rss"),
+        r#"features: native
+
+fn main() -> Unit {
+    let values = List<Int>.new()
+    List.push(list: mut values, value: read 1)
+    List.push(list: mut values, value: read 2)
+    List.push(list: mut values, value: read 3)
+    let sum = Rayon.sum_squares(values: read values)
+    Assert.equal_int(left: sum, right: 14)
+    return Unit
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let input = package_lowering_input(&root_dir).expect("package should lower");
+    let package = lower_sources_to_rust_package_with_options(
+        &input.sources,
+        &input.package.name,
+        "/workspace/rsscript/runtime",
+        &input.interfaces,
+        &input.native_dependencies,
+    )
+    .expect("package source should lower with rayon native binding");
+    let _ = fs::remove_dir_all(&root_dir);
+
+    assert_eq!(input.native_dependencies.len(), 1);
+    assert_eq!(input.native_dependencies[0].crate_name, "rss_rayon_native");
+    assert!(
+        input.native_dependencies[0]
+            .bindings
+            .get("Rayon.sum_squares")
+            .is_some_and(|target| target == "rss_rayon_native::sum_squares")
+    );
+    assert!(
+        package
+            .cargo_toml
+            .contains("\"rss_rayon_native\" = { path = ")
+    );
+    assert!(package.lib_rs.contains("rss_rayon_native::sum_squares"));
 }
 
 #[test]

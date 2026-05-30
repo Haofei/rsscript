@@ -1,0 +1,2 @@
+[bindings]
+"Rayon.sum_squares" = "rss_rayon_native::sum_squares"

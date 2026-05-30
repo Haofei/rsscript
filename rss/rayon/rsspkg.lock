@@ -1,0 +1,15 @@
+version = 1
+
+[[package]]
+name = "rss-rayon"
+version = "0.1.0"
+source = "path+rss/rayon"
+checksum = "sha256:2fe4b0125fbf79f25dc6724177bbf68a8d90e80745e933fc79a6b8ee21f9b30b"
+interface_hash = "sha256:68c0144670f889ccf4872a8cf385d7c4c6c305f9ea1d5a54c4ddfbcd3ef94dea"
+review_hash = "sha256:9ffed2899d2fa0eaf3c1a697d873eeabe3885484e0c86998d29e80017156c395"
+native_hash = "sha256:e60dae308acbc46d45de0ba6b33b0754f625bf60c8d359f28418ffee066b07d2"
+features = []
+
+[metadata]
+rss_version = "0.1.0"
+created_by = "rsscript pkg lock"
