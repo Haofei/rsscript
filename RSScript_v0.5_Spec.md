@@ -2974,6 +2974,12 @@ pub fn String.contains(value: read String, needle: read String) -> Bool
 
 pub fn String.lines(value: read String) -> fresh List<String>
     effects(pure)
+
+pub fn String.strip_prefix(value: read String, prefix: read String) -> Option<String>
+    effects(pure)
+
+pub fn String.before(value: read String, delimiter: read String) -> Option<String>
+    effects(pure)
 ```
 
 Agent, GPU, HTTP, networking, and model-client packages are use-case libraries, not language core.

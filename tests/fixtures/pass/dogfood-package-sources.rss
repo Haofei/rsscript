@@ -147,29 +147,46 @@ fn source_content_facts_from_lines(
     }
 
     let line = List.get(list: read lines, index: index)
-    let has_public_function = String.starts_with(value: read line, prefix: read "pub fn ")
-    let has_api_run = String.starts_with(value: read line, prefix: read "pub fn Api.run")
-    let has_tool_run = String.starts_with(value: read line, prefix: read "pub fn Tool.run")
-    let next = PackageSourceContentFacts(
-        public_functions: add_bool(
-            value: facts.public_functions,
-            condition: has_public_function,
-        ),
-        api_symbols: add_bool(
-            value: facts.api_symbols,
-            condition: has_api_run,
-        ),
-        tool_symbols: add_bool(
-            value: facts.tool_symbols,
-            condition: has_tool_run,
-        ),
-    )
 
-    return source_content_facts_from_lines(
-        lines: read lines,
-        index: index + 1,
-        facts: read next,
-    )
+    match public_function_symbol(line: read line) {
+        Some(symbol) => {
+            let next = PackageSourceContentFacts(
+                public_functions: facts.public_functions + 1,
+                api_symbols: add_bool(
+                    value: facts.api_symbols,
+                    condition: symbol == "Api.run",
+                ),
+                tool_symbols: add_bool(
+                    value: facts.tool_symbols,
+                    condition: symbol == "Tool.run",
+                ),
+            )
+
+            return source_content_facts_from_lines(
+                lines: read lines,
+                index: index + 1,
+                facts: read next,
+            )
+        }
+        None => {
+            return source_content_facts_from_lines(
+                lines: read lines,
+                index: index + 1,
+                facts: read facts,
+            )
+        }
+    }
+}
+
+fn public_function_symbol(line: read String) -> Option<String> {
+    match String.strip_prefix(value: read line, prefix: read "pub fn ") {
+        Some(rest) => {
+            return String.before(value: read rest, delimiter: read "(")
+        }
+        None => {
+            return None
+        }
+    }
 }
 
 fn source_content_facts(contents: read String) -> fresh PackageSourceContentFacts {

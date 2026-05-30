@@ -258,11 +258,17 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "rsscript_runtime::rule_loader_load_rules",
     ),
     runtime_intrinsic("String", "contains", "rsscript_runtime::string_contains"),
+    runtime_intrinsic("String", "before", "rsscript_runtime::string_before"),
     runtime_intrinsic("String", "ends_with", "rsscript_runtime::string_ends_with"),
     runtime_intrinsic("String", "from_bool", "rsscript_runtime::string_from_bool"),
     runtime_intrinsic("String", "from_int", "rsscript_runtime::string_from_int"),
     runtime_intrinsic("String", "len", "rsscript_runtime::string_len"),
     runtime_intrinsic("String", "lines", "rsscript_runtime::string_lines"),
+    runtime_intrinsic(
+        "String",
+        "strip_prefix",
+        "rsscript_runtime::string_strip_prefix",
+    ),
     runtime_intrinsic(
         "String",
         "starts_with",
