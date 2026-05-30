@@ -91,6 +91,7 @@ src/checks/*.rs        large semantic checker implementations
    src/package/source_set.rs  rsspkg.toml loading and source/interface selection
    src/package/native.rs      native binding metadata and native Rust risk checks
    src/package/policy.rs      review policy parsing and enforcement helpers
+   src/package/review.rs      package review aggregation, API summary, and risk scoring
    src/package/contract.rs    .rssi public contract extraction and comparison
    src/package/lock.rs        semantic lockfile, package archive, and hash logic
    src/package/graph.rs       dependency tree and package graph validation

@@ -2,6 +2,7 @@ use std::path::Path;
 
 use crate::diagnostic::{Diagnostic, code};
 
+use super::contract::collect_package_function_contracts;
 use super::source_set::ManifestReviewPolicy;
 use super::{
     Manifest, PackageNativeRustCheck, PackageReview, PackageReviewFileKind, PackageRisk,
@@ -151,11 +152,11 @@ fn package_signature_policy_diagnostics(
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     let interface_contracts =
-        super::collect_package_function_contracts(sources, PackageReviewFileKind::Interface);
+        collect_package_function_contracts(sources, PackageReviewFileKind::Interface);
     let source_contracts;
     let contracts = if interface_contracts.is_empty() {
         source_contracts =
-            super::collect_package_function_contracts(sources, PackageReviewFileKind::Source);
+            collect_package_function_contracts(sources, PackageReviewFileKind::Source);
         &source_contracts
     } else {
         &interface_contracts

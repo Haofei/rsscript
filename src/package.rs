@@ -2,13 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::analyzer::{
-    analyze_source_with_interfaces, analyze_sources_with_interfaces, core_interfaces,
-};
 use crate::diagnostic::{Diagnostic, code};
-use crate::lint::lint_source;
-use crate::review::{ReviewMap, ReviewMapClassification, review_map_sources};
-use crate::syntax::ast::TypeKind;
 
 mod check;
 mod contract;
@@ -20,30 +14,23 @@ mod metadata;
 mod native;
 mod policy;
 mod publish;
+mod review;
 mod source_set;
 mod types;
 mod vendor;
 
 pub use check::check_package_dir;
-use contract::{
-    PackageFunctionContract, collect_package_function_contracts, collect_package_type_contracts,
-    package_contract_has_resource_boundary, package_interface_contract_diagnostics,
-    package_interface_diagnostic_exports, package_interface_environment_diagnostics,
-    package_review_exports,
-};
 pub use diff::diff_package_dirs;
 pub use format::*;
 pub use graph::package_tree;
 pub use lock::{diff_package_locks, lock_package_dir};
 pub use metadata::{package_lowering_input, package_metadata};
-use native::{
-    manifest_native_enabled, manifest_native_unsafe_boundary, native_binding_interface_sources,
-    native_effective_build_policy, package_native_binding_diagnostics, package_native_bindings,
-};
+use native::{manifest_native_enabled, manifest_native_unsafe_boundary};
 pub use publish::{publish_package_dry_run, publish_package_dry_run_with_registry};
+pub use review::review_package_dir;
 use source_set::{
-    LoadedPackage, Manifest, ManifestNativeRust, PackageSource, load_package,
-    load_package_manifest, load_package_with_features, resolve_package_features,
+    LoadedPackage, Manifest, ManifestNativeRust, PackageSource, load_package_manifest,
+    load_package_with_features, resolve_package_features,
 };
 pub use types::*;
 pub use vendor::vendor_package_dir;
@@ -55,197 +42,6 @@ struct PackageDependencySpec {
     path: Option<String>,
     git: Option<String>,
     features: Vec<String>,
-}
-
-pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
-    let package = load_package(package_dir)?;
-    let manifest = &package.manifest;
-    let sources = &package.sources;
-    let dependency_interfaces = collect_dependency_interface_sources(package_dir, manifest)?;
-    let native_bindings = package_native_bindings(package_dir)?;
-    let native_binding_interfaces = native_binding_interface_sources(sources, &native_bindings);
-
-    let interface_refs = sources
-        .iter()
-        .filter(|source| source.kind == PackageReviewFileKind::Interface)
-        .map(|source| (source.path.as_str(), source.contents.as_str()))
-        .collect::<Vec<_>>();
-    let dependency_interface_refs = dependency_interfaces
-        .iter()
-        .map(|source| (source.path.as_str(), source.contents.as_str()))
-        .collect::<Vec<_>>();
-    let core_interface_refs = core_interfaces().to_vec();
-    let contract_external_interfaces = dependency_interface_refs.clone();
-    let mut external_interfaces = core_interface_refs;
-    external_interfaces.extend(dependency_interface_refs);
-    let mut combined_interfaces = contract_external_interfaces.clone();
-    combined_interfaces.extend(interface_refs.clone());
-    let native_binding_interface_refs = native_binding_interfaces
-        .iter()
-        .map(|source| (source.path.as_str(), source.contents.as_str()))
-        .collect::<Vec<_>>();
-    let mut source_interfaces = external_interfaces.clone();
-    source_interfaces.extend(native_binding_interface_refs);
-    let source_refs = sources
-        .iter()
-        .filter(|source| source.kind == PackageReviewFileKind::Source)
-        .map(|source| (source.path.as_str(), source.contents.as_str()))
-        .collect::<Vec<_>>();
-    let interface_frontend_diagnostics = interface_refs
-        .iter()
-        .flat_map(|(path, contents)| {
-            analyze_source_with_interfaces(path, contents, &contract_external_interfaces)
-        })
-        .collect::<Vec<_>>();
-    let interface_diagnostic_exports =
-        package_interface_diagnostic_exports(sources, &interface_frontend_diagnostics);
-    let mut diagnostics = package_interface_environment_diagnostics(&combined_interfaces);
-    diagnostics.extend(package_feature_resolution_diagnostics(
-        package_dir,
-        manifest,
-    )?);
-    diagnostics.extend(interface_frontend_diagnostics);
-    diagnostics.extend(analyze_sources_with_interfaces(
-        &source_refs,
-        &source_interfaces,
-    ));
-    diagnostics.extend(package_interface_contract_diagnostics(
-        sources,
-        &native_bindings,
-    ));
-    diagnostics.extend(package_native_binding_diagnostics(
-        package_dir,
-        sources,
-        &native_bindings,
-        manifest
-            .native
-            .as_ref()
-            .and_then(|native| native.rust.as_ref()),
-    ));
-    diagnostics.extend(package_lint_diagnostics(sources));
-    dedup_diagnostics(&mut diagnostics);
-    let review_map = review_map_sources(
-        sources
-            .iter()
-            .map(|source| (source.path.as_str(), source.contents.as_str()))
-            .collect(),
-    );
-
-    let native_rust = manifest
-        .native
-        .as_ref()
-        .and_then(|native| native.rust.as_ref())
-        .filter(|native| native.enabled)
-        .map(|native| PackageNativeRustReview {
-            path: native
-                .path
-                .clone()
-                .unwrap_or_else(|| "native/rust".to_string()),
-            crate_name: native.crate_name.clone(),
-            build_scripts: native_effective_build_policy(manifest, native.build_scripts.as_deref()),
-            proc_macros: native_effective_build_policy(manifest, native.proc_macros.as_deref()),
-            unsafe_policy: native.unsafe_policy.clone(),
-            links: native.links.clone(),
-        });
-
-    let mut reasons = Vec::new();
-    collect_manifest_review_reasons(manifest, &mut reasons);
-    collect_native_reasons(native_rust.as_ref(), &mut reasons);
-    collect_review_map_reasons(&review_map, &mut reasons);
-    if diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.severity.is_error())
-    {
-        reasons.push("package contains frontend errors".to_string());
-    } else if !diagnostics.is_empty() {
-        reasons.push("package contains frontend warnings".to_string());
-    }
-    if !interface_diagnostic_exports.is_empty() {
-        reasons.push("public .rssi contract contains frontend errors".to_string());
-    }
-    reasons.sort();
-    reasons.dedup();
-
-    let api_summary = package_api_effect_summary(sources, &review_map);
-    let risk = if interface_diagnostic_exports.is_empty() {
-        package_risk(
-            manifest,
-            native_rust.as_ref(),
-            &review_map,
-            &diagnostics,
-            api_summary.native_apis,
-        )
-    } else {
-        PackageRisk::Unknown
-    };
-    let summary = PackageReviewSummary {
-        interface_files: sources
-            .iter()
-            .filter(|source| source.kind == PackageReviewFileKind::Interface)
-            .count(),
-        source_files: sources
-            .iter()
-            .filter(|source| source.kind == PackageReviewFileKind::Source)
-            .count(),
-        diagnostics: diagnostics.len(),
-        errors: diagnostics
-            .iter()
-            .filter(|diagnostic| diagnostic.severity.is_error())
-            .count(),
-        dependencies: manifest.dependencies.len(),
-        dev_dependencies: manifest.dev_dependencies.len(),
-        package_features: manifest.features.len(),
-        public_types: api_summary.public_types,
-        public_functions: api_summary.public_functions,
-        public_apis: api_summary.public_apis,
-        mutating_apis: api_summary.mutating_apis,
-        retaining_apis: api_summary.retaining_apis,
-        resource_apis: api_summary.resource_apis,
-        fresh_returning_apis: api_summary.fresh_returning_apis,
-        native_apis: api_summary.native_apis,
-        unsafe_apis: api_summary.unsafe_apis,
-        unknown_apis: api_summary.unknown_apis + interface_diagnostic_exports.len(),
-    };
-    let files = sources
-        .iter()
-        .map(|source| PackageReviewFile {
-            path: source.path.clone(),
-            kind: source.kind,
-        })
-        .collect();
-    let features = manifest.features.keys().cloned().collect::<Vec<_>>();
-    let mut exports = package_review_exports(sources, &review_map);
-    exports.extend(interface_diagnostic_exports);
-    exports.sort_by(|left, right| {
-        left.kind
-            .cmp(&right.kind)
-            .then_with(|| left.name.cmp(&right.name))
-    });
-
-    Ok(PackageReview {
-        package: PackageIdentity {
-            name: manifest.package.name.clone(),
-            version: manifest.package.version.clone(),
-            edition: manifest.package.edition.clone(),
-        },
-        manifest_path: package.manifest_path.display().to_string(),
-        risk,
-        reasons,
-        features,
-        summary,
-        files,
-        exports,
-        native_rust,
-        review_map,
-        diagnostics,
-    })
-}
-
-fn package_lint_diagnostics(sources: &[PackageSource]) -> Vec<Diagnostic> {
-    sources
-        .iter()
-        .flat_map(|source| lint_source(&source.path, &source.contents))
-        .collect()
 }
 
 fn collect_dependency_interface_sources(
@@ -455,119 +251,6 @@ fn should_skip_vendor_copy_entry(name: &str) -> bool {
     matches!(name, ".git" | "target" | "vendor")
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct PackageApiSummary {
-    public_types: usize,
-    public_functions: usize,
-    public_apis: usize,
-    mutating_apis: usize,
-    retaining_apis: usize,
-    resource_apis: usize,
-    fresh_returning_apis: usize,
-    native_apis: usize,
-    unsafe_apis: usize,
-    unknown_apis: usize,
-}
-
-fn package_api_effect_summary(
-    sources: &[PackageSource],
-    review_map: &ReviewMap,
-) -> PackageApiSummary {
-    let interface_contracts =
-        collect_package_function_contracts(sources, PackageReviewFileKind::Interface);
-    let interface_type_contracts =
-        collect_package_type_contracts(sources, PackageReviewFileKind::Interface);
-    let source_contracts;
-    let source_type_contracts;
-    let contracts = if interface_contracts.is_empty() {
-        source_contracts =
-            collect_package_function_contracts(sources, PackageReviewFileKind::Source);
-        &source_contracts
-    } else {
-        &interface_contracts
-    };
-    let type_contracts = if interface_type_contracts.is_empty() {
-        source_type_contracts =
-            collect_package_type_contracts(sources, PackageReviewFileKind::Source);
-        &source_type_contracts
-    } else {
-        &interface_type_contracts
-    };
-    let resource_types = type_contracts
-        .values()
-        .filter(|contract| contract.kind == TypeKind::Resource)
-        .map(|contract| contract.name.as_str())
-        .collect::<BTreeSet<_>>();
-
-    PackageApiSummary {
-        public_types: type_contracts.len(),
-        public_functions: contracts.len(),
-        public_apis: type_contracts.len() + contracts.len(),
-        mutating_apis: contracts
-            .values()
-            .filter(|contract| {
-                contract
-                    .params
-                    .iter()
-                    .any(|param| param.effect == Some("mut"))
-            })
-            .count(),
-        retaining_apis: contracts
-            .values()
-            .filter(|contract| {
-                contract
-                    .effects
-                    .iter()
-                    .any(|effect| effect.starts_with("retains("))
-            })
-            .count(),
-        resource_apis: contracts
-            .values()
-            .filter(|contract| package_contract_has_resource_boundary(contract, &resource_types))
-            .count(),
-        fresh_returning_apis: contracts
-            .values()
-            .filter(|contract| contract.returns_fresh)
-            .count(),
-        native_apis: contracts
-            .values()
-            .filter(|contract| {
-                contract
-                    .effects
-                    .iter()
-                    .any(|effect| effect.as_str() == "native")
-            })
-            .count(),
-        unsafe_apis: contracts
-            .values()
-            .filter(|contract| {
-                contract
-                    .effects
-                    .iter()
-                    .any(|effect| effect.as_str() == "unsafe")
-            })
-            .count(),
-        unknown_apis: package_unknown_api_count(contracts, review_map),
-    }
-}
-
-fn package_unknown_api_count(
-    contracts: &BTreeMap<String, PackageFunctionContract>,
-    review_map: &ReviewMap,
-) -> usize {
-    contracts
-        .keys()
-        .filter(|function| {
-            review_map.files.iter().any(|file| {
-                file.regions.iter().any(|region| {
-                    &region.function == *function
-                        && region.classification == ReviewMapClassification::Unknown
-                })
-            })
-        })
-        .count()
-}
-
 pub(super) fn dedup_diagnostics(diagnostics: &mut Vec<Diagnostic>) {
     let mut seen = BTreeSet::new();
     diagnostics.retain(|diagnostic| {
@@ -655,27 +338,6 @@ fn is_rsscript_source_path(path: &Path) -> bool {
         .is_some_and(|extension| matches!(extension, "rss" | "rssi"))
 }
 
-fn collect_manifest_review_reasons(manifest: &Manifest, reasons: &mut Vec<String>) {
-    if !manifest.features.is_empty() {
-        reasons.push("package declares selectable package features".to_string());
-    }
-    collect_package_feature_boundary_reasons(&manifest.features, reasons);
-    if let Some(review) = &manifest.review {
-        if review.expect.risk.as_deref() == Some("unknown") {
-            reasons.push("manifest declares unknown package risk".to_string());
-        }
-        if review.policy.deny_unknown == Some(true) {
-            reasons.push("package policy denies unknown review risk".to_string());
-        }
-        if review.policy.deny_native == Some(true) {
-            reasons.push("package policy denies native boundaries".to_string());
-        }
-        if review.policy.deny_unsafe_apis == Some(true) {
-            reasons.push("package policy denies unsafe APIs".to_string());
-        }
-    }
-}
-
 fn package_manifest_key_span(package_dir: &Path, key: &str) -> crate::diagnostic::Span {
     let path = package_dir.join("rsspkg.toml");
     let file = path.display().to_string();
@@ -729,46 +391,6 @@ fn package_feature_token_is_boundary_risk(token: &str) -> bool {
         .any(|marker| normalized.contains(marker))
 }
 
-fn collect_native_reasons(native: Option<&PackageNativeRustReview>, reasons: &mut Vec<String>) {
-    let Some(native) = native else {
-        return;
-    };
-    reasons.push("native Rust wrapper enabled".to_string());
-    if native
-        .build_scripts
-        .as_deref()
-        .is_some_and(|policy| policy != "forbid")
-    {
-        reasons.push("native Rust build scripts require review".to_string());
-    }
-    if native
-        .proc_macros
-        .as_deref()
-        .is_some_and(|policy| policy != "forbid")
-    {
-        reasons.push("native Rust proc macros require review".to_string());
-    }
-    if native
-        .unsafe_policy
-        .as_deref()
-        .is_some_and(|policy| policy != "forbid")
-    {
-        reasons.push("native Rust unsafe policy requires review".to_string());
-    }
-    if !native.links.is_empty() {
-        reasons.push("native Rust links external libraries".to_string());
-    }
-}
-
-fn collect_review_map_reasons(review_map: &ReviewMap, reasons: &mut Vec<String>) {
-    if review_map.summary.unknown.functions > 0 {
-        reasons.push("review map contains unknown functions".to_string());
-    }
-    if review_map.summary.review_required.functions > 0 {
-        reasons.push("review map contains must-review functions".to_string());
-    }
-}
-
 fn package_identity(manifest: &Manifest) -> PackageIdentity {
     PackageIdentity {
         name: manifest.package.name.clone(),
@@ -786,73 +408,6 @@ fn feature_values_label(values: &[String]) -> String {
         "[]".to_string()
     } else {
         values.join(", ")
-    }
-}
-
-fn package_risk(
-    manifest: &Manifest,
-    native: Option<&PackageNativeRustReview>,
-    review_map: &ReviewMap,
-    diagnostics: &[Diagnostic],
-    native_apis: usize,
-) -> PackageRisk {
-    if manifest
-        .review
-        .as_ref()
-        .and_then(|review| review.expect.risk.as_deref())
-        == Some("unknown")
-        || review_map.summary.unknown.functions > 0
-    {
-        return PackageRisk::Unknown;
-    }
-    if diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.severity.is_error())
-    {
-        return PackageRisk::High;
-    }
-    if manifest
-        .features
-        .iter()
-        .any(|(name, values)| package_feature_may_change_boundary_risk(name, values))
-    {
-        return PackageRisk::High;
-    }
-    if let Some(native) = native
-        && (native
-            .build_scripts
-            .as_deref()
-            .is_some_and(|policy| policy != "forbid")
-            || native
-                .proc_macros
-                .as_deref()
-                .is_some_and(|policy| policy != "forbid")
-            || native
-                .unsafe_policy
-                .as_deref()
-                .is_some_and(|policy| policy != "forbid")
-            || !native.links.is_empty())
-    {
-        return PackageRisk::High;
-    }
-    if native_apis > 0 {
-        return package_native_api_risk(manifest);
-    }
-    if native.is_some() || review_map.summary.review_required.functions > 0 {
-        return PackageRisk::Elevated;
-    }
-    PackageRisk::Low
-}
-
-fn package_native_api_risk(manifest: &Manifest) -> PackageRisk {
-    match manifest
-        .review
-        .as_ref()
-        .and_then(|review| review.policy.native_api_risk.as_deref())
-    {
-        Some("high") => PackageRisk::High,
-        Some("elevated") => PackageRisk::Elevated,
-        _ => PackageRisk::High,
     }
 }
 

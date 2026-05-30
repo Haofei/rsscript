@@ -13,6 +13,7 @@ use crate::rust_lower::NativeRustDependency;
 use crate::syntax::ast::{EffectDecl, FileFeature, Item, Program};
 use crate::syntax::parse_source;
 
+use super::contract::collect_package_function_contracts;
 use super::{
     Manifest, ManifestNativeRust, PackageNativeRustCheck, PackageNativeRustReview,
     PackageReviewFileKind, PackageRisk, PackageSource,
@@ -173,7 +174,7 @@ pub(super) fn package_native_binding_diagnostics(
         return Vec::new();
     }
     let interface_function_contracts =
-        super::collect_package_function_contracts(sources, PackageReviewFileKind::Interface);
+        collect_package_function_contracts(sources, PackageReviewFileKind::Interface);
     let crate_name = native
         .and_then(|native| native.crate_name.as_deref())
         .map(str::trim)
