@@ -65,8 +65,8 @@ pub fn main() -> Result<Unit, JsonError> {
     Assert.equal(left: read facts.package_name, right: read "rss-dogfood-source-set")
     Assert.equal(left: read facts.version, right: read "0.5.0")
     Assert.equal(left: read facts.edition, right: read "2024")
-    Assert.equal_int(left: facts.interface_paths, right: 1)
-    Assert.equal_int(left: facts.source_paths, right: 1)
+    Assert.equal_int(left: facts.interface_paths, right: 2)
+    Assert.equal_int(left: facts.source_paths, right: 2)
 
     return Ok(Unit)
 }

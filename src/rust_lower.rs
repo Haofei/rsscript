@@ -1355,6 +1355,20 @@ impl<'a> RustLowerer<'a> {
                                     "{field}: {}",
                                     self.lower_explicit_weak_field_value(&arg.value)
                                 ));
+                            } else if arg.name.as_deref().is_some_and(|field_name| {
+                                self.is_runtime_handle_field(name, field_name)
+                            }) {
+                                let field_name =
+                                    arg.name.as_deref().unwrap_or_default().to_string();
+                                fields.push(format!(
+                                    "{field}: {}",
+                                    self.lower_runtime_handle_field_value(
+                                        name,
+                                        &field_name,
+                                        &arg.value,
+                                        &arg.span
+                                    )
+                                ));
                             } else {
                                 let value = self.lower_owned_expr(&arg.value);
                                 fields.push(format!("{field}: {value}"));
@@ -1613,6 +1627,13 @@ impl<'a> RustLowerer<'a> {
     fn infer_expr_type(&self, expr: &Expr) -> Option<TypeRef> {
         match expr {
             Expr::Ident(name, _) => self.value_types.get(name).cloned(),
+            Expr::Field { base, name, span } => {
+                let base_ty = self.infer_expr_type(base)?;
+                self.field_type(&base_ty.name, name).map(|ty| TypeRef {
+                    span: span.clone(),
+                    ..ty
+                })
+            }
             Expr::Call {
                 callee: Callee::Name(name),
                 span,
@@ -1630,8 +1651,24 @@ impl<'a> RustLowerer<'a> {
             Expr::Call {
                 callee: Callee::Name(name),
                 ..
-            } => self.value_types.get(name).and_then(fn_type_return).cloned(),
-            Expr::Manage { value, .. } | Expr::Try { value, .. } => self.infer_expr_type(value),
+            } => self
+                .value_types
+                .get(name)
+                .and_then(fn_type_return)
+                .cloned()
+                .or_else(|| {
+                    self.function_return_types
+                        .get(&native_boundary_callee_key(&Callee::Name(name.clone())))
+                        .cloned()
+                }),
+            Expr::Call { callee, .. } => self
+                .function_return_types
+                .get(&native_boundary_callee_key(callee))
+                .cloned(),
+            Expr::Manage { value, .. } => self.infer_expr_type(value),
+            Expr::Try { value, .. } => self
+                .infer_expr_type(value)
+                .and_then(|ty| result_ok_type_ref(&ty)),
             _ => None,
         }
     }
@@ -1639,6 +1676,9 @@ impl<'a> RustLowerer<'a> {
     fn expr_lowers_to_managed_handle(&self, expr: &Expr) -> bool {
         match expr {
             Expr::Ident(name, _) => self.managed_bindings.contains(name),
+            Expr::Field { base, name, .. } => self
+                .infer_expr_type(base)
+                .is_some_and(|base_ty| self.is_runtime_handle_field(&base_ty.name, name)),
             Expr::Manage { .. } => true,
             Expr::Call {
                 callee: Callee::Name(name),
@@ -1835,6 +1875,50 @@ impl<'a> RustLowerer<'a> {
                 .any(|field| field.name == field_name && field.is_weak),
             _ => false,
         })
+    }
+
+    fn is_runtime_handle_field(&self, type_name: &str, field_name: &str) -> bool {
+        self.program.items.iter().any(|item| match item {
+            Item::Type(ty) if ty.name == type_name => ty.fields.iter().any(|field| {
+                field.name == field_name
+                    && !field.is_weak
+                    && (field.is_handle
+                        || matches!(self.type_kinds.get(&field.ty.name), Some(TypeKind::Class)))
+            }),
+            _ => false,
+        })
+    }
+
+    fn field_type(&self, type_name: &str, field_name: &str) -> Option<TypeRef> {
+        self.program.items.iter().find_map(|item| match item {
+            Item::Type(ty) if ty.name == type_name => ty
+                .fields
+                .iter()
+                .find(|field| field.name == field_name)
+                .map(|field| field.ty.clone()),
+            _ => None,
+        })
+    }
+
+    fn lower_runtime_handle_field_value(
+        &mut self,
+        type_name: &str,
+        field_name: &str,
+        expr: &Expr,
+        span: &Span,
+    ) -> String {
+        let value = self.lower_owned_expr(expr);
+        if self
+            .field_type(type_name, field_name)
+            .is_some_and(|ty| self.is_class_type(&ty))
+        {
+            value
+        } else {
+            format!(
+                "rsscript_runtime::manage_at({value}, {})",
+                lower_source_span(span)
+            )
+        }
     }
 
     fn lower_explicit_weak_field_value(&mut self, expr: &Expr) -> String {
@@ -2904,6 +2988,15 @@ fn unreachable_lowering(kind: &str, span: &Span) -> ! {
         "internal RSScript lowering error: unsupported {kind} reached Rust lowering at {}:{}:{}",
         span.file, span.line, span.column
     )
+}
+
+fn result_ok_type_ref(ty: &TypeRef) -> Option<TypeRef> {
+    if ty.name != "Result" {
+        return None;
+    }
+    let mut ok_ty = ty.args.first()?.clone();
+    ok_ty.is_fresh = false;
+    Some(ok_ty)
 }
 
 fn cargo_crate_name(package_name: &str) -> String {

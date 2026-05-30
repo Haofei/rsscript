@@ -4202,6 +4202,40 @@ struct Session {
 }
 
 #[test]
+fn rust_lowering_wraps_and_reads_non_class_handle_fields() {
+    let source = r#"
+struct Boxed {
+    value: Int
+}
+
+struct Holder {
+    boxed: handle Boxed
+}
+
+fn read_boxed(boxed: read Boxed) -> Int {
+    return boxed.value
+}
+
+fn make_holder() -> fresh Holder {
+    let boxed = Boxed(value: 7)
+    return Holder(boxed: read boxed)
+}
+
+fn call() -> Int {
+    let holder = make_holder()
+    return read_boxed(boxed: read holder.boxed)
+}
+"#;
+    let rust = lower_source_to_rust("handle-boxed.rss", source).expect("source should lower");
+
+    assert!(rust.contains("pub boxed: rsscript_runtime::Managed<Boxed>"));
+    assert!(rust.contains("boxed: rsscript_runtime::manage_at(boxed.clone()"));
+    assert!(
+        rust.contains("read_boxed(&*rsscript_runtime::unwrap_runtime(holder.boxed.try_read_at(")
+    );
+}
+
+#[test]
 fn rust_lowering_maps_weak_class_fields_to_runtime_weak_handles() {
     let source = r#"
 class User {
@@ -7081,7 +7115,7 @@ fn rss_run_accepts_checked_in_dogfood_scripts_directly() {
         ),
         (
             "tests/fixtures/pass/dogfood-package-sources.rss",
-            "dogfood package sources total=3 manifests=1 interfaces=1 sources=1",
+            "dogfood package sources total=5 manifests=1 interfaces=2 sources=2",
         ),
         (
             "tests/fixtures/pass/dogfood-package-exports.rss",
@@ -7179,7 +7213,9 @@ fn rss_run_accepts_dogfood_package_source_set_with_input_path() {
     };
     let package_dir = temp_dir.join("package");
     fs::create_dir_all(package_dir.join("interface")).expect("interface directory should exist");
+    fs::create_dir_all(package_dir.join("contracts")).expect("contracts directory should exist");
     fs::create_dir_all(package_dir.join("src")).expect("source directory should exist");
+    fs::create_dir_all(package_dir.join("tools")).expect("tools directory should exist");
     fs::write(
         package_dir.join("rsspkg.toml"),
         r#"[package]
@@ -7188,10 +7224,10 @@ version = "0.5.0"
 edition = "2024"
 
 [interfaces]
-paths = ["interface"]
+paths = ["interface", "contracts"]
 
 [sources]
-paths = ["src"]
+paths = ["src", "tools"]
 "#,
     )
     .expect("manifest should be written");
@@ -7201,10 +7237,20 @@ paths = ["src"]
     )
     .expect("interface should be written");
     fs::write(
+        package_dir.join("contracts/tool.rssi"),
+        "pub fn Tool.run() -> Unit\n",
+    )
+    .expect("second interface should be written");
+    fs::write(
         package_dir.join("src/main.rss"),
         "pub fn Api.run() -> Unit {\n    return Unit\n}\n",
     )
     .expect("source should be written");
+    fs::write(
+        package_dir.join("tools/check.rss"),
+        "pub fn Tool.run() -> Unit {\n    return Unit\n}\n",
+    )
+    .expect("second source should be written");
 
     let output = Command::new(env!("CARGO_BIN_EXE_rss"))
         .arg("run")
@@ -7221,7 +7267,7 @@ paths = ["src"]
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
     assert_eq!(
         stdout.trim(),
-        "dogfood package sources total=3 manifests=1 interfaces=1 sources=1"
+        "dogfood package sources total=5 manifests=1 interfaces=2 sources=2"
     );
     assert!(stderr.trim().is_empty(), "{stderr}");
 }

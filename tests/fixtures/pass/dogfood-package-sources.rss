@@ -7,9 +7,9 @@ struct PackageSourceSetFacts {
     source_files: Int
 }
 
-struct PackageSourceRoots {
-    interface_path: String
-    source_path: String
+struct PackageSourcePathSets {
+    interface_paths: handle JsonValue
+    source_paths: handle JsonValue
 }
 
 fn dogfood_source_root() -> fresh Path {
@@ -85,13 +85,21 @@ fn json_array_item_result(
     }
 }
 
-fn json_array_string_result(
-    value: read JsonValue,
-    index: Int,
-) -> Result<String, String> {
+fn json_array_string_result(value: read JsonValue, index: Int) -> Result<String, String> {
     let item = json_array_item_result(value: read value, index: index)?
 
     return json_string_result(value: read item)
+}
+
+fn json_array_len_result(value: read JsonValue) -> Result<Int, String> {
+    match Json.array_len(value: read value) {
+        Ok(length) => {
+            return Ok(length)
+        }
+        Err(error) => {
+            return Err(json_error(prefix: read "manifest array length", error: read error))
+        }
+    }
 }
 
 fn list_files_result(path: read Path) -> Result<List<String>, String> {
@@ -105,7 +113,7 @@ fn list_files_result(path: read Path) -> Result<List<String>, String> {
     }
 }
 
-fn package_source_roots(root: read Path) -> Result<fresh PackageSourceRoots, String> {
+fn package_source_path_sets(root: read Path) -> Result<fresh PackageSourcePathSets, String> {
     let manifest_path = Path.join(
         base: read root,
         child: read "rsspkg.toml",
@@ -116,9 +124,9 @@ fn package_source_roots(root: read Path) -> Result<fresh PackageSourceRoots, Str
     let sources = json_field_result(value: read manifest, name: read "sources")?
     let source_paths = json_field_result(value: read sources, name: read "paths")?
 
-    return PackageSourceRoots(
-        interface_path: json_array_string_result(value: read interface_paths, index: 0)?,
-        source_path: json_array_string_result(value: read source_paths, index: 0)?,
+    return PackageSourcePathSets(
+        interface_paths: read interface_paths,
+        source_paths: read source_paths,
     )
 }
 
@@ -170,35 +178,76 @@ fn count_source_set_from(
     )
 }
 
-fn dogfood_source_set_facts() -> Result<fresh PackageSourceSetFacts, String> {
-    let root = dogfood_source_root()
-    let roots = package_source_roots(root: read root)?
-    let interface_root = Path.join(
-        base: read root,
-        child: read roots.interface_path,
-    )
+fn count_root_paths_from(
+    root: read Path,
+    roots: read JsonValue,
+    index: Int,
+    facts: read PackageSourceSetFacts,
+) -> Result<fresh PackageSourceSetFacts, String> {
+    let limit = json_array_len_result(value: read roots)?
+
+    if index >= limit {
+        return Ok(PackageSourceSetFacts(
+            total_files: facts.total_files,
+            manifest_files: facts.manifest_files,
+            interface_files: facts.interface_files,
+            source_files: facts.source_files,
+        ))
+    }
+
+    let child = json_array_string_result(value: read roots, index: index)?
     let source_root = Path.join(
         base: read root,
-        child: read roots.source_path,
+        child: read child,
     )
-    let interface_paths = list_files_result(path: read interface_root)?
-    let source_paths = list_files_result(path: read source_root)?
+    let paths = list_files_result(path: read source_root)?
+    let next = count_source_set_from(
+        paths: read paths,
+        index: 0,
+        facts: read facts,
+    )
+
+    return count_root_paths_from(
+        root: read root,
+        roots: read roots,
+        index: index + 1,
+        facts: read next,
+    )
+}
+
+fn dogfood_source_set_facts() -> Result<fresh PackageSourceSetFacts, String> {
+    let root = dogfood_source_root()
+    let paths = package_source_path_sets(root: read root)?
     let manifest = PackageSourceSetFacts(
         total_files: 1,
         manifest_files: 1,
         interface_files: 0,
         source_files: 0,
     )
+    let first_interface_path = json_array_string_result(value: read paths.interface_paths, index: 0)?
+    let first_interface_root = Path.join(
+        base: read root,
+        child: read first_interface_path,
+    )
+    let first_interface_paths = list_files_result(path: read first_interface_root)?
     let with_interfaces = count_source_set_from(
-        paths: read interface_paths,
+        paths: read first_interface_paths,
         index: 0,
         facts: read manifest,
     )
 
-    return count_source_set_from(
-        paths: read source_paths,
-        index: 0,
+    let all_interfaces = count_root_paths_from(
+        root: read root,
+        roots: read paths.interface_paths,
+        index: 1,
         facts: read with_interfaces,
+    )?
+
+    return count_root_paths_from(
+        root: read root,
+        roots: read paths.source_paths,
+        index: 0,
+        facts: read all_interfaces,
     )
 }
 
@@ -223,10 +272,10 @@ pub fn main() -> Result<Unit, String> {
 
     Log.write(message: read summary)
 
-    Assert.equal_int(left: facts.total_files, right: 3)
+    Assert.equal_int(left: facts.total_files, right: 5)
     Assert.equal_int(left: facts.manifest_files, right: 1)
-    Assert.equal_int(left: facts.interface_files, right: 1)
-    Assert.equal_int(left: facts.source_files, right: 1)
+    Assert.equal_int(left: facts.interface_files, right: 2)
+    Assert.equal_int(left: facts.source_files, right: 2)
 
     return Ok(Unit)
 }
