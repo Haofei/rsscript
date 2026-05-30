@@ -26,102 +26,16 @@ use crate::syntax::ast::{
 use crate::syntax::parse_source;
 
 mod format;
+mod source_set;
 mod types;
 
 pub use format::*;
+use source_set::{
+    LoadedPackage, Manifest, ManifestNativeRust, ManifestReviewPolicy, PackageSource, load_package,
+    load_package_manifest, load_package_with_features, resolve_package_features,
+    selected_root_package_features,
+};
 pub use types::*;
-
-#[derive(Debug, Deserialize)]
-struct Manifest {
-    package: ManifestPackage,
-    #[serde(default)]
-    interfaces: ManifestPathSection,
-    #[serde(default)]
-    sources: ManifestPathSection,
-    #[serde(default)]
-    dependencies: BTreeMap<String, toml::Value>,
-    #[serde(default, rename = "dev-dependencies")]
-    dev_dependencies: BTreeMap<String, toml::Value>,
-    #[serde(default)]
-    features: BTreeMap<String, Vec<String>>,
-    #[serde(default)]
-    review: Option<ManifestReview>,
-    #[serde(default)]
-    native: Option<ManifestNative>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ManifestPackage {
-    name: String,
-    version: String,
-    edition: String,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct ManifestPathSection {
-    #[serde(default)]
-    paths: Vec<String>,
-    #[serde(default)]
-    exports: Vec<String>,
-    #[serde(default)]
-    features: BTreeMap<String, ManifestFeaturePathSection>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct ManifestFeaturePathSection {
-    #[serde(default)]
-    paths: Vec<String>,
-    #[serde(default)]
-    exports: Vec<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ManifestReview {
-    #[serde(default)]
-    policy: ManifestReviewPolicy,
-    #[serde(default)]
-    expect: ManifestReviewExpect,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ManifestReviewPolicy {
-    deny_unknown: Option<bool>,
-    deny_native: Option<bool>,
-    deny_unsafe_apis: Option<bool>,
-    max_public_params: Option<usize>,
-    max_nested_type_depth: Option<usize>,
-    native_api_risk: Option<String>,
-    build_execution_default: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ManifestReviewExpect {
-    risk: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ManifestNative {
-    #[serde(default)]
-    rust: Option<ManifestNativeRust>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ManifestNativeRust {
-    #[serde(default)]
-    enabled: bool,
-    path: Option<String>,
-    #[serde(rename = "crate")]
-    crate_name: Option<String>,
-    build_scripts: Option<String>,
-    proc_macros: Option<String>,
-    #[serde(rename = "unsafe")]
-    unsafe_policy: Option<String>,
-    #[serde(default)]
-    links: Vec<String>,
-}
 
 #[derive(Debug, Deserialize)]
 struct CargoMetadata {
@@ -146,26 +60,12 @@ struct NativeBindingsManifest {
 }
 
 #[derive(Debug, Clone)]
-struct PackageSource {
-    path: String,
-    relative_path: String,
-    contents: String,
-    kind: PackageReviewFileKind,
-}
-
-#[derive(Debug, Clone)]
 struct PackageDependencySpec {
     name: String,
     requirement: Option<String>,
     path: Option<String>,
     git: Option<String>,
     features: Vec<String>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct ResolvedPackageFeatures {
-    selected: Vec<String>,
-    unknown: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1074,189 +974,6 @@ pub fn diff_package_locks(old_path: &Path, new_path: &Path) -> Result<PackageLoc
     })
 }
 
-struct LoadedPackage {
-    manifest_path: PathBuf,
-    manifest_source: String,
-    manifest: Manifest,
-    sources: Vec<PackageSource>,
-}
-
-fn load_package(package_dir: &Path) -> Result<LoadedPackage, String> {
-    load_package_with_features(package_dir, None)
-}
-
-fn load_package_with_features(
-    package_dir: &Path,
-    selected_features: Option<&[String]>,
-) -> Result<LoadedPackage, String> {
-    let manifest_path = package_dir.join("rsspkg.toml");
-    let manifest_source = fs::read_to_string(&manifest_path)
-        .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
-    let manifest: Manifest = toml::from_str(&manifest_source)
-        .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
-
-    let selected_features = selected_features
-        .map(|features| resolve_package_features(&manifest, features).selected)
-        .unwrap_or_else(|| selected_root_package_features(&manifest));
-    let base_interface_roots = default_paths(&manifest.interfaces.paths, "interface");
-    let selected_feature_interface_roots =
-        selected_interface_feature_paths(&manifest, &selected_features);
-    let excluded_feature_interface_roots = all_interface_feature_paths(&manifest);
-    let source_roots = default_paths(&manifest.sources.paths, "src");
-    let mut sources = Vec::new();
-    sources.extend(read_package_sources_excluding(
-        package_dir,
-        &base_interface_roots,
-        &excluded_feature_interface_roots,
-        PackageReviewFileKind::Interface,
-    )?);
-    sources.extend(read_package_sources(
-        package_dir,
-        &selected_feature_interface_roots,
-        PackageReviewFileKind::Interface,
-    )?);
-    sources.extend(read_package_sources(
-        package_dir,
-        &source_roots,
-        PackageReviewFileKind::Source,
-    )?);
-    sources.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(LoadedPackage {
-        manifest_path,
-        manifest_source,
-        manifest,
-        sources,
-    })
-}
-
-fn load_package_manifest(package_dir: &Path) -> Result<Manifest, String> {
-    let manifest_path = package_dir.join("rsspkg.toml");
-    let manifest_source = fs::read_to_string(&manifest_path)
-        .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
-    toml::from_str(&manifest_source)
-        .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))
-}
-
-fn selected_root_package_features(manifest: &Manifest) -> Vec<String> {
-    let requested = manifest.features.keys().cloned().collect::<Vec<_>>();
-    resolve_package_features(manifest, &requested).selected
-}
-
-fn resolve_package_features(
-    manifest: &Manifest,
-    requested_features: &[String],
-) -> ResolvedPackageFeatures {
-    let mut selected = BTreeSet::new();
-    let mut unknown = BTreeSet::new();
-    for feature in requested_features {
-        if manifest.features.contains_key(feature) {
-            resolve_package_feature(manifest, feature, &mut selected);
-        } else {
-            unknown.insert(feature.clone());
-        }
-    }
-    ResolvedPackageFeatures {
-        selected: selected.into_iter().collect(),
-        unknown: unknown.into_iter().collect(),
-    }
-}
-
-fn resolve_package_feature(manifest: &Manifest, feature: &str, selected: &mut BTreeSet<String>) {
-    if !selected.insert(feature.to_string()) {
-        return;
-    }
-    let Some(dependencies) = manifest.features.get(feature) else {
-        return;
-    };
-    for dependency in dependencies {
-        if manifest.features.contains_key(dependency) {
-            resolve_package_feature(manifest, dependency, selected);
-        }
-    }
-}
-
-fn selected_interface_feature_paths(
-    manifest: &Manifest,
-    selected_features: &[String],
-) -> Vec<String> {
-    let mut roots = Vec::new();
-    let _ = &manifest.interfaces.exports;
-    for feature in selected_features {
-        let Some(section) = manifest.interfaces.features.get(feature) else {
-            continue;
-        };
-        roots.extend(section.paths.iter().cloned());
-        let _ = &section.exports;
-    }
-    dedup_strings(&mut roots);
-    roots
-}
-
-fn all_interface_feature_paths(manifest: &Manifest) -> Vec<String> {
-    let mut roots = manifest
-        .interfaces
-        .features
-        .values()
-        .flat_map(|section| section.paths.iter().cloned())
-        .collect::<Vec<_>>();
-    dedup_strings(&mut roots);
-    roots
-}
-
-fn dedup_strings(values: &mut Vec<String>) {
-    let mut seen = BTreeSet::new();
-    values.retain(|value| seen.insert(value.clone()));
-}
-
-fn default_paths(paths: &[String], default: &str) -> Vec<String> {
-    if paths.is_empty() {
-        vec![default.to_string()]
-    } else {
-        paths.to_vec()
-    }
-}
-
-fn read_package_sources(
-    package_dir: &Path,
-    roots: &[String],
-    kind: PackageReviewFileKind,
-) -> Result<Vec<PackageSource>, String> {
-    read_package_sources_excluding(package_dir, roots, &[], kind)
-}
-
-fn read_package_sources_excluding(
-    package_dir: &Path,
-    roots: &[String],
-    excluded_roots: &[String],
-    kind: PackageReviewFileKind,
-) -> Result<Vec<PackageSource>, String> {
-    let mut sources = Vec::new();
-    let excluded_roots = excluded_roots
-        .iter()
-        .map(|root| package_dir.join(root))
-        .collect::<Vec<_>>();
-    for root in roots {
-        let root_path = package_dir.join(root);
-        if !root_path.exists() {
-            continue;
-        }
-        let mut files = Vec::new();
-        collect_rsscript_files_excluding(&root_path, &excluded_roots, &mut files)?;
-        files.sort();
-        for file in files {
-            let contents = fs::read_to_string(&file)
-                .map_err(|error| format!("failed to read {}: {error}", file.display()))?;
-            sources.push(PackageSource {
-                path: file.display().to_string(),
-                relative_path: relative_path(package_dir, &file),
-                contents,
-                kind,
-            });
-        }
-    }
-    Ok(sources)
-}
-
 fn select_package_runnable_source<'a>(
     source_files: &[&'a PackageSource],
 ) -> Result<&'a PackageSource, String> {
@@ -1428,35 +1145,6 @@ fn relative_path(base: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .display()
         .to_string()
-}
-
-fn collect_rsscript_files_excluding(
-    path: &Path,
-    excluded_roots: &[PathBuf],
-    files: &mut Vec<PathBuf>,
-) -> Result<(), String> {
-    if excluded_roots.iter().any(|root| path == root) {
-        return Ok(());
-    }
-    if path.is_file() {
-        if is_rsscript_source_path(path) {
-            files.push(path.to_path_buf());
-        }
-        return Ok(());
-    }
-    let entries = fs::read_dir(path)
-        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-    for entry in entries {
-        let entry = entry
-            .map_err(|error| format!("failed to read entry in {}: {error}", path.display()))?;
-        let path = entry.path();
-        if path.is_dir() {
-            collect_rsscript_files_excluding(&path, excluded_roots, files)?;
-        } else if is_rsscript_source_path(&path) {
-            files.push(path);
-        }
-    }
-    Ok(())
 }
 
 fn collect_regular_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
