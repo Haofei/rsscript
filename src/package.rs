@@ -15,6 +15,7 @@ use crate::syntax::ast::TypeKind;
 
 mod contract;
 mod format;
+mod graph;
 mod lock;
 mod native;
 mod policy;
@@ -32,6 +33,8 @@ use contract::{
     package_type_contracts_match,
 };
 pub use format::*;
+use graph::check_package_graph;
+pub use graph::package_tree;
 use lock::{
     compare_locked_packages, lock_package_entry, package_archive_files, package_archive_hash,
     package_checksum, package_lock_diff_reasons, package_native_hash, read_package_lock,
@@ -476,19 +479,6 @@ pub fn check_package_dir(package_dir: &Path) -> Result<PackageCheck, String> {
         native_rust,
         diagnostics,
     })
-}
-
-pub fn package_tree(package_dir: &Path) -> Result<PackageTree, String> {
-    let mut visiting = BTreeSet::new();
-    let root = package_tree_node(
-        package_dir,
-        PackageDependencyKind::Root,
-        None,
-        &mut visiting,
-    )?;
-    let mut summary = PackageTreeSummary::default();
-    collect_package_tree_summary(&root, &mut summary);
-    Ok(PackageTree { root, summary })
 }
 
 pub fn publish_package_dry_run(package_dir: &Path) -> Result<PackagePublishDryRun, String> {
@@ -1127,156 +1117,6 @@ fn check_package_lock(
     })
 }
 
-fn check_package_graph(package_dir: &Path) -> Result<PackageGraphCheck, String> {
-    let tree = package_tree(package_dir)?;
-    let mut packages_by_name: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    collect_package_graph_identities(&tree.root, &mut packages_by_name);
-
-    let mut reasons = Vec::new();
-    if tree.summary.unresolved_dependencies > 0 {
-        reasons.push(format!(
-            "dependency graph contains {} unresolved dependencies",
-            tree.summary.unresolved_dependencies
-        ));
-    }
-    for (name, identities) in packages_by_name {
-        if identities.len() > 1 {
-            reasons.push(format!(
-                "dependency `{name}` resolves to multiple package identities: {}",
-                identities.into_iter().collect::<Vec<_>>().join(", ")
-            ));
-        }
-    }
-    reasons.sort();
-    reasons.dedup();
-
-    let ok = reasons.is_empty();
-    let risk = if ok {
-        PackageRisk::Low
-    } else if tree.summary.unresolved_dependencies > 0 {
-        PackageRisk::Unknown
-    } else {
-        PackageRisk::High
-    };
-
-    Ok(PackageGraphCheck { ok, risk, reasons })
-}
-
-fn collect_package_graph_identities(
-    node: &PackageTreeNode,
-    packages_by_name: &mut BTreeMap<String, BTreeSet<String>>,
-) {
-    if let Some(version) = &node.version {
-        packages_by_name
-            .entry(node.name.clone())
-            .or_default()
-            .insert(format!("{version} {}", node.source));
-    }
-    for dependency in &node.dependencies {
-        collect_package_graph_identities(dependency, packages_by_name);
-    }
-}
-
-fn package_tree_node(
-    package_dir: &Path,
-    dependency_kind: PackageDependencyKind,
-    selected_features: Option<&[String]>,
-    visiting: &mut BTreeSet<String>,
-) -> Result<PackageTreeNode, String> {
-    let package = load_package_with_features(package_dir, selected_features)?;
-    let review = review_package_dir(package_dir)?;
-    let features = selected_features
-        .map(|features| features.to_vec())
-        .unwrap_or_else(|| selected_root_package_features(&package.manifest));
-    let identity = package_identity(&package.manifest);
-    let visit_key = canonical_path_label(package_dir);
-    if !visiting.insert(visit_key.clone()) {
-        return Ok(PackageTreeNode {
-            name: identity.name,
-            version: Some(identity.version),
-            requirement: None,
-            source: format!("path+{}", package_dir.display()),
-            risk: PackageRisk::Elevated,
-            features,
-            native: review.native_rust.is_some(),
-            dependency_kind,
-            reasons: vec!["dependency cycle truncated".to_string()],
-            dependencies: Vec::new(),
-        });
-    }
-
-    let mut dependencies = Vec::new();
-    dependencies.extend(package_tree_dependencies(
-        package_dir,
-        &package.manifest.dependencies,
-        PackageDependencyKind::Normal,
-        visiting,
-    )?);
-    dependencies.extend(package_tree_dependencies(
-        package_dir,
-        &package.manifest.dev_dependencies,
-        PackageDependencyKind::Dev,
-        visiting,
-    )?);
-    visiting.remove(&visit_key);
-
-    Ok(PackageTreeNode {
-        name: identity.name,
-        version: Some(identity.version),
-        requirement: None,
-        source: format!("path+{}", package_dir.display()),
-        risk: review.risk,
-        features,
-        native: review.native_rust.is_some(),
-        dependency_kind,
-        reasons: review.reasons,
-        dependencies,
-    })
-}
-
-fn package_tree_dependencies(
-    package_dir: &Path,
-    dependencies: &BTreeMap<String, toml::Value>,
-    dependency_kind: PackageDependencyKind,
-    visiting: &mut BTreeSet<String>,
-) -> Result<Vec<PackageTreeNode>, String> {
-    let mut nodes = Vec::new();
-    for (name, value) in dependencies {
-        let spec = package_dependency_spec(name, value);
-        if let Some(path) = &spec.path {
-            let dependency_dir = package_dir.join(path);
-            if dependency_dir.join("rsspkg.toml").exists() {
-                let dependency_manifest = load_package_manifest(&dependency_dir)?;
-                let selected_features =
-                    resolve_package_features(&dependency_manifest, &spec.features);
-                let mut node = package_tree_node(
-                    &dependency_dir,
-                    dependency_kind,
-                    Some(&selected_features.selected),
-                    visiting,
-                )?;
-                node.requirement = spec.requirement.clone();
-                node.features = selected_features.selected;
-                node.source = format!("path+{}", dependency_dir.display());
-                nodes.push(node);
-            } else {
-                nodes.push(unresolved_dependency_node(
-                    spec,
-                    dependency_kind,
-                    vec!["path dependency manifest missing".to_string()],
-                ));
-            }
-        } else {
-            nodes.push(unresolved_dependency_node(
-                spec,
-                dependency_kind,
-                vec!["dependency resolver not implemented for this source".to_string()],
-            ));
-        }
-    }
-    Ok(nodes)
-}
-
 fn collect_vendor_dependencies(
     package_dir: &Path,
     dependencies: &BTreeMap<String, toml::Value>,
@@ -1390,32 +1230,6 @@ fn package_dependency_spec(name: &str, value: &toml::Value) -> PackageDependency
                     .collect()
             })
             .unwrap_or_default(),
-    }
-}
-
-fn unresolved_dependency_node(
-    spec: PackageDependencySpec,
-    dependency_kind: PackageDependencyKind,
-    reasons: Vec<String>,
-) -> PackageTreeNode {
-    let source = if let Some(path) = &spec.path {
-        format!("path+{path}")
-    } else if let Some(git) = &spec.git {
-        format!("git+{git}")
-    } else {
-        "registry".to_string()
-    };
-    PackageTreeNode {
-        name: spec.name,
-        version: None,
-        requirement: spec.requirement,
-        source,
-        risk: PackageRisk::Unknown,
-        features: spec.features,
-        native: false,
-        dependency_kind,
-        reasons,
-        dependencies: Vec::new(),
     }
 }
 
@@ -1549,28 +1363,6 @@ fn canonical_path_label(path: &Path) -> String {
         .unwrap_or_else(|_| path.to_path_buf())
         .display()
         .to_string()
-}
-
-fn collect_package_tree_summary(node: &PackageTreeNode, summary: &mut PackageTreeSummary) {
-    summary.packages += 1;
-    if node.source.starts_with("path+") && node.dependency_kind != PackageDependencyKind::Root {
-        summary.path_dependencies += 1;
-    }
-    if node.risk == PackageRisk::Unknown {
-        summary.unknown_risk_packages += 1;
-    }
-    if node.risk == PackageRisk::High {
-        summary.high_risk_packages += 1;
-    }
-    if node.version.is_none() {
-        summary.unresolved_dependencies += 1;
-    }
-    if node.native {
-        summary.native_packages += 1;
-    }
-    for dependency in &node.dependencies {
-        collect_package_tree_summary(dependency, summary);
-    }
 }
 
 fn is_rsscript_source_path(path: &Path) -> bool {

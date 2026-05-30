@@ -89,6 +89,10 @@ src/checks/*.rs        large semantic checker implementations
    src/package/format.rs      JSON/TOML/human output formatting
    src/package/source_set.rs  rsspkg.toml loading and source/interface selection
    src/package/native.rs      native binding metadata and native Rust risk checks
+   src/package/policy.rs      review policy parsing and enforcement helpers
+   src/package/contract.rs    .rssi public contract extraction and comparison
+   src/package/lock.rs        semantic lockfile, package archive, and hash logic
+   src/package/graph.rs       dependency tree and package graph validation
    ```
 
 3. Split lowering by backend responsibility:
