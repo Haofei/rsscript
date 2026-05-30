@@ -94,6 +94,7 @@ src/checks/*.rs        large semantic checker implementations
    src/package/lock.rs        semantic lockfile, package archive, and hash logic
    src/package/graph.rs       dependency tree and package graph validation
    src/package/diff.rs        manifest/interface semantic diff and risk rules
+   src/package/metadata.rs    package review metadata and lowering input assembly
    src/package/vendor.rs      path dependency vendoring and vendor metadata
    src/package/publish.rs     publish dry-runs, registry index, and archive targets
    ```
