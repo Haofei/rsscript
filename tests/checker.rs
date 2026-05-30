@@ -7119,7 +7119,7 @@ fn rss_run_accepts_checked_in_dogfood_scripts_directly() {
         ),
         (
             "tests/fixtures/pass/dogfood-package-sources.rss",
-            "dogfood package sources total=5 manifests=1 interfaces=2 sources=2 public_interfaces=2 public_sources=2",
+            "dogfood package sources total=5 manifests=1 interfaces=2 sources=2 public_interfaces=2 public_sources=2 api=1/1 tool=1/1",
         ),
         (
             "tests/fixtures/pass/dogfood-package-exports.rss",
@@ -7271,7 +7271,7 @@ paths = ["src", "tools"]
     assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
     assert_eq!(
         stdout.trim(),
-        "dogfood package sources total=5 manifests=1 interfaces=2 sources=2 public_interfaces=2 public_sources=2"
+        "dogfood package sources total=5 manifests=1 interfaces=2 sources=2 public_interfaces=2 public_sources=2 api=1/1 tool=1/1"
     );
     assert!(stderr.trim().is_empty(), "{stderr}");
 }

@@ -7,6 +7,10 @@ struct PackageSourceSetFacts {
     source_files: Int
     public_interface_files: Int
     public_source_files: Int
+    api_interface_symbols: Int
+    api_source_symbols: Int
+    tool_interface_symbols: Int
+    tool_source_symbols: Int
 }
 
 struct PackageSourcePathSets {
@@ -149,6 +153,8 @@ fn add_source_path(
     let is_interface = String.ends_with(value: read path, suffix: read ".rssi")
     let is_source = String.ends_with(value: read path, suffix: read ".rss")
     let has_public_function = String.contains(value: read contents, needle: read "pub fn ")
+    let has_api_run = String.contains(value: read contents, needle: read "pub fn Api.run")
+    let has_tool_run = String.contains(value: read contents, needle: read "pub fn Tool.run")
 
     return PackageSourceSetFacts(
         total_files: facts.total_files + 1,
@@ -162,6 +168,22 @@ fn add_source_path(
         public_source_files: add_bool(
             value: facts.public_source_files,
             condition: is_source && has_public_function,
+        ),
+        api_interface_symbols: add_bool(
+            value: facts.api_interface_symbols,
+            condition: is_interface && has_api_run,
+        ),
+        api_source_symbols: add_bool(
+            value: facts.api_source_symbols,
+            condition: is_source && has_api_run,
+        ),
+        tool_interface_symbols: add_bool(
+            value: facts.tool_interface_symbols,
+            condition: is_interface && has_tool_run,
+        ),
+        tool_source_symbols: add_bool(
+            value: facts.tool_source_symbols,
+            condition: is_source && has_tool_run,
         ),
     )
 }
@@ -188,6 +210,10 @@ fn count_source_set_from(
             source_files: facts.source_files,
             public_interface_files: facts.public_interface_files,
             public_source_files: facts.public_source_files,
+            api_interface_symbols: facts.api_interface_symbols,
+            api_source_symbols: facts.api_source_symbols,
+            tool_interface_symbols: facts.tool_interface_symbols,
+            tool_source_symbols: facts.tool_source_symbols,
         ))
     }
 
@@ -234,6 +260,10 @@ fn count_root_paths_from(
             source_files: facts.source_files,
             public_interface_files: facts.public_interface_files,
             public_source_files: facts.public_source_files,
+            api_interface_symbols: facts.api_interface_symbols,
+            api_source_symbols: facts.api_source_symbols,
+            tool_interface_symbols: facts.tool_interface_symbols,
+            tool_source_symbols: facts.tool_source_symbols,
         ))
     }
 
@@ -268,6 +298,10 @@ fn dogfood_source_set_facts() -> Result<fresh PackageSourceSetFacts, String> {
         source_files: 0,
         public_interface_files: 0,
         public_source_files: 0,
+        api_interface_symbols: 0,
+        api_source_symbols: 0,
+        tool_interface_symbols: 0,
+        tool_source_symbols: 0,
     )
     let all_interfaces = count_root_paths_from(
         root: read root,
@@ -291,6 +325,10 @@ fn source_set_summary_line(facts: read PackageSourceSetFacts) -> fresh String {
     let sources = String.from_int(value: facts.source_files)
     let public_interfaces = String.from_int(value: facts.public_interface_files)
     let public_sources = String.from_int(value: facts.public_source_files)
+    let api_interfaces = String.from_int(value: facts.api_interface_symbols)
+    let api_sources = String.from_int(value: facts.api_source_symbols)
+    let tool_interfaces = String.from_int(value: facts.tool_interface_symbols)
+    let tool_sources = String.from_int(value: facts.tool_source_symbols)
     let first = String.concat(left: read "dogfood package sources total=", right: read total)
     let second = String.concat(left: read first, right: read " manifests=")
     let third = String.concat(left: read second, right: read manifests)
@@ -301,8 +339,16 @@ fn source_set_summary_line(facts: read PackageSourceSetFacts) -> fresh String {
     let eighth = String.concat(left: read seventh, right: read " public_interfaces=")
     let ninth = String.concat(left: read eighth, right: read public_interfaces)
     let tenth = String.concat(left: read ninth, right: read " public_sources=")
+    let eleventh = String.concat(left: read tenth, right: read public_sources)
+    let twelfth = String.concat(left: read eleventh, right: read " api=")
+    let thirteenth = String.concat(left: read twelfth, right: read api_interfaces)
+    let fourteenth = String.concat(left: read thirteenth, right: read "/")
+    let fifteenth = String.concat(left: read fourteenth, right: read api_sources)
+    let sixteenth = String.concat(left: read fifteenth, right: read " tool=")
+    let seventeenth = String.concat(left: read sixteenth, right: read tool_interfaces)
+    let eighteenth = String.concat(left: read seventeenth, right: read "/")
 
-    return String.concat(left: read tenth, right: read public_sources)
+    return String.concat(left: read eighteenth, right: read tool_sources)
 }
 
 pub fn main() -> Result<Unit, String> {
@@ -317,6 +363,10 @@ pub fn main() -> Result<Unit, String> {
     Assert.equal_int(left: facts.source_files, right: 2)
     Assert.equal_int(left: facts.public_interface_files, right: 2)
     Assert.equal_int(left: facts.public_source_files, right: 2)
+    Assert.equal_int(left: facts.api_interface_symbols, right: 1)
+    Assert.equal_int(left: facts.api_source_symbols, right: 1)
+    Assert.equal_int(left: facts.tool_interface_symbols, right: 1)
+    Assert.equal_int(left: facts.tool_source_symbols, right: 1)
 
     return Ok(Unit)
 }
