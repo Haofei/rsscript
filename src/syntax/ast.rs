@@ -202,6 +202,8 @@ pub enum Stmt {
     MalformedIf(Span),
     Loop(LoopStmt),
     MalformedLoop(Span),
+    For(ForStmt),
+    MalformedFor(Span),
     Match(MatchStmt),
     MalformedMatch(Span),
     Break(Span),
@@ -251,6 +253,14 @@ pub struct IfStmt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoopStmt {
     pub condition: Option<Expr>,
+    pub body: Block,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForStmt {
+    pub binding: String,
+    pub iterable: Expr,
     pub body: Block,
     pub span: Span,
 }

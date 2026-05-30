@@ -405,6 +405,15 @@ impl Analyzer<'_> {
                 "malformed loop statement",
                 "`loop` statements must use `loop { ... }`; `while` statements must use `while condition { ... }`.",
             ),
+            Stmt::For(stmt) => {
+                self.check_unsupported_syntax_expr(&stmt.iterable);
+                self.check_unsupported_syntax_block(&stmt.body);
+            }
+            Stmt::MalformedFor(span) => self.unsupported_syntax(
+                span.clone(),
+                "malformed for statement",
+                "`for` statements must use `for name in iterable { ... }`.",
+            ),
             Stmt::Match(stmt) => {
                 self.check_unsupported_syntax_expr(&stmt.value);
                 for span in &stmt.malformed_arm_spans {
@@ -548,6 +557,10 @@ impl Analyzer<'_> {
                 }
                 self.check_match_exhaustiveness_block(&stmt.body);
             }
+            Stmt::For(stmt) => {
+                self.check_match_exhaustiveness_expr(&stmt.iterable);
+                self.check_match_exhaustiveness_block(&stmt.body);
+            }
             Stmt::Match(stmt) => {
                 self.check_match_exhaustiveness_expr(&stmt.value);
                 for arm in &stmt.arms {
@@ -578,6 +591,7 @@ impl Analyzer<'_> {
             | Stmt::MalformedWith(_)
             | Stmt::MalformedIf(_)
             | Stmt::MalformedLoop(_)
+            | Stmt::MalformedFor(_)
             | Stmt::MalformedMatch(_)
             | Stmt::Unknown(_) => {}
         }
@@ -1105,6 +1119,17 @@ impl Analyzer<'_> {
                 let mut body_visible = visible.clone();
                 self.check_unknown_bindings_in_block(body, &mut body_visible);
             }
+            HirStmt::For {
+                binding,
+                iterable,
+                body,
+                ..
+            } => {
+                self.check_unknown_bindings_in_expr(iterable, visible);
+                let mut body_visible = visible.clone();
+                body_visible.insert(binding.clone());
+                self.check_unknown_bindings_in_block(body, &mut body_visible);
+            }
             HirStmt::Match { value, arms, .. } => {
                 self.check_unknown_bindings_in_expr(value, visible);
                 for arm in arms {
@@ -1348,6 +1373,10 @@ impl Analyzer<'_> {
                 }
                 self.check_runtime_guarantee_block(guarantee, function_name, &stmt.body);
             }
+            Stmt::For(stmt) => {
+                self.check_runtime_guarantee_expr(guarantee, function_name, &stmt.iterable);
+                self.check_runtime_guarantee_block(guarantee, function_name, &stmt.body);
+            }
             Stmt::Match(stmt) => {
                 self.check_runtime_guarantee_expr(guarantee, function_name, &stmt.value);
                 for arm in &stmt.arms {
@@ -1359,6 +1388,7 @@ impl Analyzer<'_> {
             | Stmt::MalformedWith(_)
             | Stmt::MalformedIf(_)
             | Stmt::MalformedLoop(_)
+            | Stmt::MalformedFor(_)
             | Stmt::MalformedMatch(_)
             | Stmt::Unknown(_) => {}
         }
@@ -1695,6 +1725,10 @@ impl Analyzer<'_> {
                 }
                 self.check_resource_pool_calls_in_block(&stmt.body);
             }
+            Stmt::For(stmt) => {
+                self.check_resource_pool_calls_in_expr(&stmt.iterable);
+                self.check_resource_pool_calls_in_block(&stmt.body);
+            }
             Stmt::Match(stmt) => {
                 self.check_resource_pool_calls_in_expr(&stmt.value);
                 for arm in &stmt.arms {
@@ -1706,6 +1740,7 @@ impl Analyzer<'_> {
             | Stmt::MalformedWith(_)
             | Stmt::MalformedIf(_)
             | Stmt::MalformedLoop(_)
+            | Stmt::MalformedFor(_)
             | Stmt::MalformedMatch(_)
             | Stmt::Unknown(_) => {}
         }
@@ -1788,6 +1823,10 @@ impl Analyzer<'_> {
                 }
                 self.check_resource_generic_calls_in_block(&stmt.body);
             }
+            Stmt::For(stmt) => {
+                self.check_resource_generic_calls_in_expr(&stmt.iterable);
+                self.check_resource_generic_calls_in_block(&stmt.body);
+            }
             Stmt::Match(stmt) => {
                 self.check_resource_generic_calls_in_expr(&stmt.value);
                 for arm in &stmt.arms {
@@ -1799,6 +1838,7 @@ impl Analyzer<'_> {
             | Stmt::MalformedWith(_)
             | Stmt::MalformedIf(_)
             | Stmt::MalformedLoop(_)
+            | Stmt::MalformedFor(_)
             | Stmt::MalformedMatch(_)
             | Stmt::Unknown(_) => {}
         }

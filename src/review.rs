@@ -714,6 +714,10 @@ fn collect_review_map_local_closure_bindings_stmt(stmt: &Stmt, bindings: &mut BT
             }
             collect_review_map_local_closure_bindings_block(&stmt.body, bindings);
         }
+        Stmt::For(stmt) => {
+            collect_review_map_local_closure_bindings_expr(&stmt.iterable, bindings);
+            collect_review_map_local_closure_bindings_block(&stmt.body, bindings);
+        }
         Stmt::Match(stmt) => {
             collect_review_map_local_closure_bindings_expr(&stmt.value, bindings);
             for arm in &stmt.arms {
@@ -726,6 +730,7 @@ fn collect_review_map_local_closure_bindings_stmt(stmt: &Stmt, bindings: &mut BT
         | Stmt::MalformedWith(_)
         | Stmt::MalformedIf(_)
         | Stmt::MalformedLoop(_)
+        | Stmt::MalformedFor(_)
         | Stmt::MalformedMatch(_)
         | Stmt::Unknown(_) => {}
     }
@@ -873,6 +878,22 @@ fn collect_review_map_facts_stmt(
                 facts,
             );
         }
+        Stmt::For(stmt) => {
+            collect_review_map_facts_expr(
+                &stmt.iterable,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
+            collect_review_map_facts_block(
+                &stmt.body,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
+        }
         Stmt::Match(stmt) => {
             collect_review_map_facts_expr(
                 &stmt.value,
@@ -899,6 +920,7 @@ fn collect_review_map_facts_stmt(
         | Stmt::MalformedWith(_)
         | Stmt::MalformedIf(_)
         | Stmt::MalformedLoop(_)
+        | Stmt::MalformedFor(_)
         | Stmt::MalformedMatch(_)
         | Stmt::Unknown(_) => {}
     }
@@ -1151,6 +1173,12 @@ fn collect_spawn_capture_names_from_stmt(stmt: &Stmt, captures: &mut BTreeSet<St
                 collect_spawn_capture_names_from_stmt(statement, captures);
             }
         }
+        Stmt::For(stmt) => {
+            collect_spawn_capture_names(&stmt.iterable, captures);
+            for statement in &stmt.body.statements {
+                collect_spawn_capture_names_from_stmt(statement, captures);
+            }
+        }
         Stmt::Match(stmt) => {
             collect_spawn_capture_names(&stmt.value, captures);
             for arm in &stmt.arms {
@@ -1164,6 +1192,7 @@ fn collect_spawn_capture_names_from_stmt(stmt: &Stmt, captures: &mut BTreeSet<St
         | Stmt::MalformedWith(_)
         | Stmt::MalformedIf(_)
         | Stmt::MalformedLoop(_)
+        | Stmt::MalformedFor(_)
         | Stmt::MalformedMatch(_)
         | Stmt::Unknown(_) => {}
     }
@@ -1255,6 +1284,10 @@ fn collect_review_map_hir_facts_stmt(
             if let Some(condition) = condition {
                 collect_review_map_hir_facts_expr(condition, local_bindings, facts);
             }
+            collect_review_map_hir_facts_block(body, local_bindings, facts);
+        }
+        HirStmt::For { iterable, body, .. } => {
+            collect_review_map_hir_facts_expr(iterable, local_bindings, facts);
             collect_review_map_hir_facts_block(body, local_bindings, facts);
         }
         HirStmt::Match { value, arms, .. } => {
@@ -1466,6 +1499,27 @@ fn collect_managed_closure_capture_names_block(
                     );
                 }
                 let mut body_locals = closure_locals.clone();
+                collect_managed_closure_capture_names_block(
+                    body,
+                    local_bindings,
+                    &mut body_locals,
+                    facts,
+                );
+            }
+            HirStmt::For {
+                binding,
+                iterable,
+                body,
+                ..
+            } => {
+                collect_managed_closure_capture_names_expr(
+                    iterable,
+                    local_bindings,
+                    closure_locals,
+                    facts,
+                );
+                let mut body_locals = closure_locals.clone();
+                body_locals.insert(binding.clone());
                 collect_managed_closure_capture_names_block(
                     body,
                     local_bindings,
@@ -2361,6 +2415,10 @@ fn collect_boundary_stmt(statement: &Stmt, path: &str, boundary: &mut BoundarySi
             }
             collect_boundary_block(&stmt.body, &format!("{path}.loop"), boundary);
         }
+        Stmt::For(stmt) => {
+            collect_boundary_expr(&stmt.iterable, &format!("{path}.iterable"), boundary);
+            collect_boundary_block(&stmt.body, &format!("{path}.for"), boundary);
+        }
         Stmt::Match(stmt) => {
             collect_boundary_expr(&stmt.value, &format!("{path}.match"), boundary);
             for (index, arm) in stmt.arms.iter().enumerate() {
@@ -2373,6 +2431,7 @@ fn collect_boundary_stmt(statement: &Stmt, path: &str, boundary: &mut BoundarySi
         | Stmt::MalformedWith(_)
         | Stmt::MalformedIf(_)
         | Stmt::MalformedLoop(_)
+        | Stmt::MalformedFor(_)
         | Stmt::MalformedMatch(_)
         | Stmt::Unknown(_) => {}
     }

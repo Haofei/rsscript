@@ -1,5 +1,5 @@
-// expect: RS0015
-fn run(items: read List<Int>) -> Unit {
+// expect: RS0209
+fn run(items: read String) -> Unit {
     for item in items {
         Log.write(message: read "x")
     }

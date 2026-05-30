@@ -112,6 +112,7 @@ fn statement_may_fall_through(statement: &HirStmt) -> bool {
             else_body: None, ..
         }
         | HirStmt::Loop { .. }
+        | HirStmt::For { .. }
         | HirStmt::Match { .. }
         | HirStmt::Unknown(_) => true,
     }
@@ -147,6 +148,7 @@ fn collect_local_closure_bindings(block: &HirBlock, bindings: &mut HashMap<Strin
                 }
             }
             HirStmt::Loop { body, .. } => collect_local_closure_bindings(body, bindings),
+            HirStmt::For { body, .. } => collect_local_closure_bindings(body, bindings),
             HirStmt::Match { arms, .. } => {
                 for arm in arms {
                     collect_local_closure_bindings(&arm.body, bindings);
@@ -288,6 +290,21 @@ fn check_block(
                         local_closure_bindings,
                     );
                 }
+                check_block(
+                    analyzer,
+                    function,
+                    body,
+                    noescape_bindings,
+                    local_closure_bindings,
+                );
+            }
+            HirStmt::For { iterable, body, .. } => {
+                check_expr(
+                    analyzer,
+                    iterable,
+                    noescape_bindings,
+                    local_closure_bindings,
+                );
                 check_block(
                     analyzer,
                     function,
@@ -618,6 +635,20 @@ fn check_expr_block_without_return_contract(
                         local_closure_bindings,
                     );
                 }
+                check_expr_block_without_return_contract(
+                    analyzer,
+                    body,
+                    noescape_bindings,
+                    local_closure_bindings,
+                );
+            }
+            HirStmt::For { iterable, body, .. } => {
+                check_expr(
+                    analyzer,
+                    iterable,
+                    noescape_bindings,
+                    local_closure_bindings,
+                );
                 check_expr_block_without_return_contract(
                     analyzer,
                     body,
@@ -1447,6 +1478,10 @@ fn collect_closure_binding_sets(
             HirStmt::With { body, .. } | HirStmt::Loop { body, .. } => {
                 collect_closure_binding_sets(body, local_bindings, managed_bindings);
             }
+            HirStmt::For { binding, body, .. } => {
+                managed_bindings.insert(binding.clone());
+                collect_closure_binding_sets(body, local_bindings, managed_bindings);
+            }
             HirStmt::If {
                 then_body,
                 else_body,
@@ -1508,6 +1543,7 @@ fn collect_explicit_return_sites<'a>(statement: &'a HirStmt, returns: &mut Vec<C
         HirStmt::Loop { body, .. } | HirStmt::With { body, .. } => {
             collect_explicit_return_sites_from_block(body, returns);
         }
+        HirStmt::For { body, .. } => collect_explicit_return_sites_from_block(body, returns),
         HirStmt::Match { arms, .. } => {
             for arm in arms {
                 collect_explicit_return_sites_from_block(&arm.body, returns);
@@ -1553,6 +1589,7 @@ fn collect_implicit_closure_return_sites<'a>(
         | HirStmt::With { .. }
         | HirStmt::If { .. }
         | HirStmt::Loop { .. }
+        | HirStmt::For { .. }
         | HirStmt::Match { .. }
         | HirStmt::Break(_)
         | HirStmt::Continue(_)
@@ -1596,6 +1633,10 @@ fn check_callback_body_call_argument_types(
                 if let Some(condition) = condition {
                     check_callback_call_argument_types(analyzer, condition, contract);
                 }
+                check_callback_body_call_argument_types(analyzer, body, contract);
+            }
+            HirStmt::For { iterable, body, .. } => {
+                check_callback_call_argument_types(analyzer, iterable, contract);
                 check_callback_body_call_argument_types(analyzer, body, contract);
             }
             HirStmt::Match { value, arms, .. } => {
@@ -2773,6 +2814,12 @@ fn noescape_any_use_in_stmt<'a>(
                     .iter()
                     .find_map(|statement| noescape_any_use_in_stmt(statement, noescape_bindings))
             }),
+        HirStmt::For { iterable, body, .. } => noescape_any_use(iterable, noescape_bindings)
+            .or_else(|| {
+                body.statements
+                    .iter()
+                    .find_map(|statement| noescape_any_use_in_stmt(statement, noescape_bindings))
+            }),
         HirStmt::Match { value, arms, .. } => {
             noescape_any_use(value, noescape_bindings).or_else(|| {
                 arms.iter().find_map(|arm| {
@@ -2877,6 +2924,13 @@ fn local_closure_any_use_in_stmt<'a>(
                     local_closure_any_use_in_stmt(statement, local_closure_bindings)
                 })
             }),
+        HirStmt::For { iterable, body, .. } => {
+            local_closure_any_use(iterable, local_closure_bindings).or_else(|| {
+                body.statements.iter().find_map(|statement| {
+                    local_closure_any_use_in_stmt(statement, local_closure_bindings)
+                })
+            })
+        }
         HirStmt::Match { value, arms, .. } => local_closure_any_use(value, local_closure_bindings)
             .or_else(|| {
                 arms.iter().find_map(|arm| {

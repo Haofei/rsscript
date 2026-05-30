@@ -361,6 +361,10 @@ fn validate_executable_declarations_in_stmt(
             }
             validate_executable_declarations_in_block(&stmt.body, bodyless, diagnostics);
         }
+        Stmt::For(stmt) => {
+            validate_executable_declarations_in_expr(&stmt.iterable, bodyless, diagnostics);
+            validate_executable_declarations_in_block(&stmt.body, bodyless, diagnostics);
+        }
         Stmt::Match(stmt) => {
             validate_executable_declarations_in_expr(&stmt.value, bodyless, diagnostics);
             for arm in &stmt.arms {
@@ -373,6 +377,7 @@ fn validate_executable_declarations_in_stmt(
         | Stmt::MalformedWith(_)
         | Stmt::MalformedIf(_)
         | Stmt::MalformedLoop(_)
+        | Stmt::MalformedFor(_)
         | Stmt::MalformedMatch(_)
         | Stmt::Unknown(_) => {}
     }
@@ -943,6 +948,42 @@ impl<'a> RustLowerer<'a> {
                 self.lower_block(&stmt.body, out, indent + 1);
                 out.push_str(&format!("{pad}}}\n"));
             }
+            Stmt::For(stmt) => {
+                let iterable = self.lower_expr(&stmt.iterable);
+                let previous_type = self.value_types.get(&stmt.binding).cloned();
+                let previous_managed = self.managed_bindings.contains(&stmt.binding);
+                if let Some(item_type) = self
+                    .infer_expr_type(&stmt.iterable)
+                    .as_ref()
+                    .and_then(list_element_type_ref)
+                {
+                    if self.is_class_type(&item_type) {
+                        self.managed_bindings.insert(stmt.binding.clone());
+                    } else {
+                        self.managed_bindings.remove(&stmt.binding);
+                    }
+                    self.value_types.insert(stmt.binding.clone(), item_type);
+                }
+                out.push_str(&format!(
+                    "{pad}for {} in ({iterable}).iter().cloned() {{\n",
+                    rust_ident(&stmt.binding)
+                ));
+                self.lower_block(&stmt.body, out, indent + 1);
+                out.push_str(&format!("{pad}}}\n"));
+                match previous_type {
+                    Some(ty) => {
+                        self.value_types.insert(stmt.binding.clone(), ty);
+                    }
+                    None => {
+                        self.value_types.remove(&stmt.binding);
+                    }
+                }
+                if previous_managed {
+                    self.managed_bindings.insert(stmt.binding.clone());
+                } else {
+                    self.managed_bindings.remove(&stmt.binding);
+                }
+            }
             Stmt::Match(stmt) => {
                 out.push_str(&format!("{pad}match {} {{\n", self.lower_expr(&stmt.value)));
                 for arm in &stmt.arms {
@@ -962,6 +1003,7 @@ impl<'a> RustLowerer<'a> {
             Stmt::MalformedWith(span)
             | Stmt::MalformedIf(span)
             | Stmt::MalformedLoop(span)
+            | Stmt::MalformedFor(span)
             | Stmt::MalformedMatch(span)
             | Stmt::Unknown(span) => unreachable_lowering("statement", span),
         }
@@ -1013,6 +1055,10 @@ impl<'a> RustLowerer<'a> {
                 }
                 self.record_block_source_map(&stmt.body, generated);
             }
+            Stmt::For(stmt) => {
+                self.record_expr_source_map(&stmt.iterable, generated);
+                self.record_block_source_map(&stmt.body, generated);
+            }
             Stmt::Match(stmt) => {
                 self.record_expr_source_map(&stmt.value, generated);
                 for arm in &stmt.arms {
@@ -1025,6 +1071,7 @@ impl<'a> RustLowerer<'a> {
             | Stmt::MalformedWith(_)
             | Stmt::MalformedIf(_)
             | Stmt::MalformedLoop(_)
+            | Stmt::MalformedFor(_)
             | Stmt::MalformedMatch(_)
             | Stmt::Unknown(_) => {}
         }
@@ -1720,6 +1767,14 @@ fn is_result_type(ty: &TypeRef) -> bool {
     ty.name == "Result" && ty.args.len() == 2
 }
 
+fn list_element_type_ref(ty: &TypeRef) -> Option<TypeRef> {
+    if ty.name == "List" && ty.args.len() == 1 {
+        ty.args.first().cloned()
+    } else {
+        None
+    }
+}
+
 fn is_result_constructor_expr(expr: &Expr) -> bool {
     match expr {
         Expr::Call {
@@ -1862,6 +1917,10 @@ fn collect_mutated_bindings_from_stmt(statement: &Stmt, names: &mut BTreeSet<Str
             }
             collect_mutated_bindings_from_block(&stmt.body, names);
         }
+        Stmt::For(stmt) => {
+            collect_mutated_bindings_from_expr(&stmt.iterable, names);
+            collect_mutated_bindings_from_block(&stmt.body, names);
+        }
         Stmt::Match(stmt) => {
             collect_mutated_bindings_from_expr(&stmt.value, names);
             for arm in &stmt.arms {
@@ -1874,6 +1933,7 @@ fn collect_mutated_bindings_from_stmt(statement: &Stmt, names: &mut BTreeSet<Str
         | Stmt::MalformedWith(_)
         | Stmt::MalformedIf(_)
         | Stmt::MalformedLoop(_)
+        | Stmt::MalformedFor(_)
         | Stmt::MalformedMatch(_)
         | Stmt::Unknown(_) => {}
     }
@@ -1940,6 +2000,10 @@ fn collect_closure_bound_names_from_block(block: &Block, names: &mut BTreeSet<St
                 }
             }
             Stmt::Loop(stmt) => collect_closure_bound_names_from_block(&stmt.body, names),
+            Stmt::For(stmt) => {
+                names.insert(stmt.binding.clone());
+                collect_closure_bound_names_from_block(&stmt.body, names);
+            }
             Stmt::Match(stmt) => {
                 for arm in &stmt.arms {
                     collect_closure_bound_names_from_block(&arm.body, names);
@@ -1952,6 +2016,7 @@ fn collect_closure_bound_names_from_block(block: &Block, names: &mut BTreeSet<St
             | Stmt::MalformedWith(_)
             | Stmt::MalformedIf(_)
             | Stmt::MalformedLoop(_)
+            | Stmt::MalformedFor(_)
             | Stmt::MalformedMatch(_)
             | Stmt::Unknown(_) => {}
         }
@@ -1993,6 +2058,10 @@ fn closure_stmt_mutates_unbound_name(statement: &Stmt, bound: &BTreeSet<String>)
                 .is_some_and(|condition| closure_expr_mutates_unbound_name(condition, bound))
                 || closure_block_mutates_unbound_name(&stmt.body, bound)
         }
+        Stmt::For(stmt) => {
+            closure_expr_mutates_unbound_name(&stmt.iterable, bound)
+                || closure_block_mutates_unbound_name(&stmt.body, bound)
+        }
         Stmt::Match(stmt) => {
             closure_expr_mutates_unbound_name(&stmt.value, bound)
                 || stmt
@@ -2006,6 +2075,7 @@ fn closure_stmt_mutates_unbound_name(statement: &Stmt, bound: &BTreeSet<String>)
         | Stmt::MalformedWith(_)
         | Stmt::MalformedIf(_)
         | Stmt::MalformedLoop(_)
+        | Stmt::MalformedFor(_)
         | Stmt::MalformedMatch(_)
         | Stmt::Unknown(_) => false,
     }
@@ -2058,12 +2128,14 @@ fn stmt_span(statement: &Stmt) -> &Span {
         Stmt::With(stmt) => &stmt.span,
         Stmt::If(stmt) => &stmt.span,
         Stmt::Loop(stmt) => &stmt.span,
+        Stmt::For(stmt) => &stmt.span,
         Stmt::Match(stmt) => &stmt.span,
         Stmt::Break(span)
         | Stmt::Continue(span)
         | Stmt::MalformedWith(span)
         | Stmt::MalformedIf(span)
         | Stmt::MalformedLoop(span)
+        | Stmt::MalformedFor(span)
         | Stmt::MalformedMatch(span)
         | Stmt::Unknown(span) => span,
         Stmt::Expr(expr) => expr.span(),

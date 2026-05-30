@@ -8167,24 +8167,20 @@ fn pick() -> Int {
 }
 
 #[test]
-fn checker_reports_for_as_unsupported_until_iteration_lowering_exists() {
+fn checker_accepts_and_lowers_list_for_loop() {
     let source = r#"
 fn run(items: read List<Int>) -> Unit {
     for item in items {
-        Log.write(message: read "x")
+        let copy = item
     }
 }
 "#;
     let diagnostics = analyze_source("for.rss", source);
+    assert_eq!(diagnostics, Vec::new());
 
-    assert!(diagnostics.iter().any(
-        |diagnostic| diagnostic.code == "RS0015" && diagnostic.label == "unsupported statement"
-    ));
-    assert!(
-        diagnostics
-            .iter()
-            .all(|diagnostic| diagnostic.code != "RS0206")
-    );
+    let lowered = lower_source_to_rust("for.rss", source).expect("for should lower");
+    assert!(lowered.contains("for item in (items).iter().cloned()"));
+    assert!(lowered.contains("let copy = item;"));
 }
 
 #[test]

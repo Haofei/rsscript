@@ -174,6 +174,10 @@ fn check_operator_overload_attempts_in_stmt(analyzer: &mut Analyzer<'_>, stateme
             }
             check_operator_overload_attempts_in_block(analyzer, body);
         }
+        HirStmt::For { iterable, body, .. } => {
+            check_operator_overload_attempts_in_expr(analyzer, iterable);
+            check_operator_overload_attempts_in_block(analyzer, body);
+        }
         HirStmt::Match { value, arms, .. } => {
             check_operator_overload_attempts_in_expr(analyzer, value);
             for arm in arms {

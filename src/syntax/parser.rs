@@ -3,9 +3,9 @@ use std::collections::HashSet;
 use crate::lexer::{Token, TokenKind, lex};
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, DataEffect, DuplicateFileFeature, EffectDecl, Expr,
-    FieldDecl, FileFeature, FunctionDecl, GenericBound, GenericParam, IfStmt, Item, LetKind,
-    LetStmt, LoopStmt, MatchArm, MatchPattern, MatchStmt, Param, Program, ReturnStmt, Stmt,
-    TypeDecl, TypeKind, TypeRef, UnknownFileFeature, WithStmt,
+    FieldDecl, FileFeature, ForStmt, FunctionDecl, GenericBound, GenericParam, IfStmt, Item,
+    LetKind, LetStmt, LoopStmt, MatchArm, MatchPattern, MatchStmt, Param, Program, ReturnStmt,
+    Stmt, TypeDecl, TypeKind, TypeRef, UnknownFileFeature, WithStmt,
 };
 
 pub fn parse_source(file: &str, source: &str) -> Program {
@@ -743,7 +743,7 @@ fn parse_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
         return parse_match_stmt(tokens, start, limit);
     }
     if tokens[start].is_ident_text("for") {
-        return parse_unsupported_control_stmt(tokens, start, limit);
+        return parse_for_stmt(tokens, start, limit);
     }
     if tokens[start].is_ident_text("break") {
         return (
@@ -901,13 +901,6 @@ fn parse_if_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) 
     )
 }
 
-fn parse_unsupported_control_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
-    let next = find_control_body_open(tokens, start, limit)
-        .and_then(|open| find_matching(tokens, open, "{", "}").map(|close| close + 1))
-        .unwrap_or_else(|| statement_end(tokens, start, limit));
-    (Stmt::Unknown(tokens[start].span.clone()), next)
-}
-
 fn parse_loop_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
     let Some(open) = find_control_body_open(tokens, start, limit) else {
         return (
@@ -933,6 +926,40 @@ fn parse_loop_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize
     (
         Stmt::Loop(LoopStmt {
             condition,
+            body: parse_block(tokens, open, close),
+            span: tokens[start].span.clone(),
+        }),
+        close + 1,
+    )
+}
+
+fn parse_for_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
+    let Some(open) = find_control_body_open(tokens, start, limit) else {
+        return (
+            Stmt::MalformedFor(tokens[start].span.clone()),
+            statement_end(tokens, start, limit),
+        );
+    };
+    let Some(close) = find_matching(tokens, open, "{", "}") else {
+        return (Stmt::MalformedFor(tokens[start].span.clone()), limit);
+    };
+    let Some(binding) = tokens.get(start + 1).and_then(ident_name) else {
+        return (Stmt::MalformedFor(tokens[start].span.clone()), close + 1);
+    };
+    if !tokens
+        .get(start + 2)
+        .is_some_and(|token| token.is_ident_text("in"))
+    {
+        return (Stmt::MalformedFor(tokens[start].span.clone()), close + 1);
+    }
+    let Some(iterable) = parse_expr(tokens, start + 3, open) else {
+        return (Stmt::MalformedFor(tokens[start].span.clone()), close + 1);
+    };
+
+    (
+        Stmt::For(ForStmt {
+            binding: binding.to_string(),
+            iterable,
             body: parse_block(tokens, open, close),
             span: tokens[start].span.clone(),
         }),

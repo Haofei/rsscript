@@ -227,6 +227,14 @@ pub enum HirStmt {
         body: HirBlock,
         span: Span,
     },
+    For {
+        binding: String,
+        iterable: HirExpr,
+        iterable_type_name: Option<String>,
+        item_type_name: Option<String>,
+        body: HirBlock,
+        span: Span,
+    },
     Match {
         value: HirExpr,
         arms: Vec<HirMatchArm>,
@@ -851,6 +859,22 @@ fn lower_hir_stmt(
             },
             span: stmt.span.clone(),
         },
+        Stmt::For(stmt) => {
+            let iterable_type = infer_hir_expr_type(hir, &stmt.iterable, value_types);
+            let item_type = iterable_type.as_deref().and_then(list_element_type);
+            let mut body_types = value_types.clone();
+            if let Some(item_type) = &item_type {
+                body_types.insert(stmt.binding.clone(), item_type.clone());
+            }
+            HirStmt::For {
+                binding: stmt.binding.clone(),
+                iterable: lower_hir_expr(hir, function_name, &stmt.iterable, value_types),
+                iterable_type_name: iterable_type,
+                item_type_name: item_type,
+                body: lower_hir_block(hir, function_name, &stmt.body, &mut body_types),
+                span: stmt.span.clone(),
+            }
+        }
         Stmt::Match(stmt) => {
             let value_type = infer_hir_expr_type(hir, &stmt.value, value_types);
             let value = lower_hir_expr(hir, function_name, &stmt.value, value_types);
@@ -883,6 +907,7 @@ fn lower_hir_stmt(
         Stmt::MalformedWith(span)
         | Stmt::MalformedIf(span)
         | Stmt::MalformedLoop(span)
+        | Stmt::MalformedFor(span)
         | Stmt::MalformedMatch(span)
         | Stmt::Unknown(span) => HirStmt::Unknown(span.clone()),
     }
@@ -1184,6 +1209,24 @@ fn collect_body_facts_in_stmt(
             }
             collect_body_facts_in_block(hir, function_name, &stmt.body, value_types, facts);
         }
+        Stmt::For(stmt) => {
+            collect_body_facts_in_expr(hir, function_name, &stmt.iterable, value_types, facts);
+            let iterable_type = infer_hir_expr_type(hir, &stmt.iterable, value_types);
+            let item_type = iterable_type.as_deref().and_then(list_element_type);
+            let mut body_types = value_types.clone();
+            if let Some(item_type) = item_type {
+                facts.bindings.push(HirBinding {
+                    function_name: function_name.to_string(),
+                    name: stmt.binding.clone(),
+                    kind: HirBindingKind::ManagedLet,
+                    effect: None,
+                    span: stmt.span.clone(),
+                    type_name: Some(item_type.clone()),
+                });
+                body_types.insert(stmt.binding.clone(), item_type);
+            }
+            collect_body_facts_in_block(hir, function_name, &stmt.body, &mut body_types, facts);
+        }
         Stmt::Match(stmt) => {
             collect_body_facts_in_expr(hir, function_name, &stmt.value, value_types, facts);
             let value_type = infer_hir_expr_type(hir, &stmt.value, value_types);
@@ -1213,6 +1256,7 @@ fn collect_body_facts_in_stmt(
         | Stmt::MalformedWith(_)
         | Stmt::MalformedIf(_)
         | Stmt::MalformedLoop(_)
+        | Stmt::MalformedFor(_)
         | Stmt::MalformedMatch(_)
         | Stmt::Unknown(_) => {}
     }
@@ -1605,12 +1649,14 @@ fn infer_closure_return_type(
             Stmt::With { .. }
             | Stmt::If { .. }
             | Stmt::Loop { .. }
+            | Stmt::For(_)
             | Stmt::Match { .. }
             | Stmt::Break(_)
             | Stmt::Continue(_)
             | Stmt::MalformedWith(_)
             | Stmt::MalformedIf(_)
             | Stmt::MalformedLoop(_)
+            | Stmt::MalformedFor(_)
             | Stmt::MalformedMatch(_)
             | Stmt::Unknown(_) => return None,
         }
@@ -1775,6 +1821,16 @@ fn result_ok_type(type_name: &str) -> Option<String> {
         .into_iter()
         .next()
         .map(strip_fresh_type)
+        .map(str::to_string)
+}
+
+fn list_element_type(type_name: &str) -> Option<String> {
+    let inner = type_name
+        .strip_prefix("List<")
+        .and_then(|rest| rest.strip_suffix('>'))?;
+    split_top_level_type_args(inner)
+        .into_iter()
+        .next()
         .map(str::to_string)
 }
 

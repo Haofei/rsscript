@@ -822,7 +822,13 @@ fn first_classification_mismatch_from(
 }
 
 fn first_classification_mismatch(items: read List<ReviewFacts>) -> String {
-    return first_classification_mismatch_from(items: read items, index: 0)
+    for facts in items {
+        if classification_matches_region(facts: read facts) == false {
+            return mismatch_detail(facts: read facts)
+        }
+    }
+
+    return "none"
 }
 
 fn dogfood_fact_list() -> Result<fresh List<ReviewFacts>, JsonError> {

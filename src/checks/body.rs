@@ -261,6 +261,37 @@ fn check_stmt_semantics(
                 condition.is_some(),
             )
         }
+        HirStmt::For {
+            binding,
+            iterable,
+            iterable_type_name,
+            item_type_name,
+            body,
+            ..
+        } => {
+            check_for_iterable_type(analyzer, iterable, iterable_type_name.as_deref());
+            check_expr_semantics(analyzer, local_analysis, iterable, state);
+            if check_resource_contexts {
+                check_resource_pool_lease_expr(analyzer, iterable, false);
+                check_resource_producer_expr(analyzer, iterable, false);
+            }
+            apply_expr_effects(iterable, state);
+
+            let base_state = state.clone();
+            let mut body_state = base_state.clone();
+            body_state.bind_managed(binding.clone());
+            if let Some(item_type_name) = item_type_name {
+                body_state.record_type(binding.clone(), item_type_name.clone());
+            }
+            let body_flow = check_block(
+                analyzer,
+                local_analysis,
+                body,
+                &mut body_state,
+                check_resource_contexts,
+            );
+            merge_loop_state(state, &base_state, body_state, body_flow, true)
+        }
         HirStmt::Match { value, arms, .. } => {
             check_match_scrutinee_type(analyzer, value);
             check_match_patterns_match_scrutinee(analyzer, value, arms);
@@ -335,6 +366,7 @@ fn apply_stmt_effects(statement: &HirStmt, state: &mut BodyState) {
         }
         HirStmt::If { .. } => {}
         HirStmt::Loop { .. } => {}
+        HirStmt::For { iterable, .. } => apply_expr_effects(iterable, state),
         HirStmt::Match { value, .. } => apply_expr_effects(value, state),
         HirStmt::Expr(expr) => apply_expr_effects(expr, state),
         HirStmt::Break(_) | HirStmt::Continue(_) => {}
@@ -369,6 +401,29 @@ fn check_bool_condition(analyzer: &mut Analyzer<'_>, expr: &HirExpr, construct: 
         .with_fix(
             "use_bool_condition",
             "Compare explicitly or call a function that returns `Bool`.",
+            "manual",
+        ),
+    );
+}
+
+fn check_for_iterable_type(analyzer: &mut Analyzer<'_>, expr: &HirExpr, type_name: Option<&str>) {
+    let Some(type_name) = type_name else {
+        return;
+    };
+    if list_element_type(type_name).is_some() {
+        return;
+    }
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::CONTROL_FLOW_TYPE_MISMATCH,
+            format!("for iterable has type `{type_name}`, expected `List<T>`."),
+            hir_expr_span(expr).clone(),
+            "control-flow type mismatch",
+        )
+        .with_cause("RSScript v0.5 `for` iteration is limited to `List<T>` so loop ownership and review metadata stay explicit.")
+        .with_fix(
+            "iterate_list",
+            "Iterate a `List<T>` value or convert the input to a List before the loop.",
             "manual",
         ),
     );
@@ -776,6 +831,12 @@ fn weak_field_access_requiring_upgrade_in_stmt(
                     .iter()
                     .find_map(weak_field_access_requiring_upgrade_in_stmt)
             }),
+        HirStmt::For { iterable, body, .. } => weak_field_access_requiring_upgrade(iterable)
+            .or_else(|| {
+                body.statements
+                    .iter()
+                    .find_map(weak_field_access_requiring_upgrade_in_stmt)
+            }),
         HirStmt::Match { value, arms, .. } => {
             weak_field_access_requiring_upgrade(value).or_else(|| {
                 arms.iter().find_map(|arm| {
@@ -1054,6 +1115,12 @@ fn collect_spawn_capture_idents_from_stmt(statement: &HirStmt, captures: &mut Ve
                 collect_spawn_capture_idents_from_stmt(statement, captures);
             }
         }
+        HirStmt::For { iterable, body, .. } => {
+            collect_spawn_capture_idents(iterable, captures);
+            for statement in &body.statements {
+                collect_spawn_capture_idents_from_stmt(statement, captures);
+            }
+        }
         HirStmt::Match { value, arms, .. } => {
             collect_spawn_capture_idents(value, captures);
             for arm in arms {
@@ -1172,6 +1239,10 @@ fn collect_closure_bound_names(block: &HirBlock, bound: &mut HashSet<String>) {
                 }
             }
             HirStmt::Loop { body, .. } => collect_closure_bound_names(body, bound),
+            HirStmt::For { binding, body, .. } => {
+                bound.insert(binding.clone());
+                collect_closure_bound_names(body, bound);
+            }
             HirStmt::Match { arms, .. } => {
                 for arm in arms {
                     collect_closure_bound_names(&arm.body, bound);
@@ -1222,6 +1293,10 @@ fn collect_closure_effect_accesses_block(
                 if let Some(condition) = condition {
                     collect_closure_effect_accesses_expr(condition, bound, out);
                 }
+                collect_closure_effect_accesses_block(body, bound, out);
+            }
+            HirStmt::For { iterable, body, .. } => {
+                collect_closure_effect_accesses_expr(iterable, bound, out);
                 collect_closure_effect_accesses_block(body, bound, out);
             }
             HirStmt::Match { value, arms, .. } => {
@@ -1421,6 +1496,10 @@ fn check_try_error_types_stmt(
             if let Some(condition) = condition {
                 check_try_error_types_expr(analyzer, condition, function_error_type);
             }
+            check_try_error_types(analyzer, body, function_error_type);
+        }
+        HirStmt::For { iterable, body, .. } => {
+            check_try_error_types_expr(analyzer, iterable, function_error_type);
             check_try_error_types(analyzer, body, function_error_type);
         }
         HirStmt::Match { value, arms, .. } => {
@@ -2465,6 +2544,12 @@ fn check_resource_producer_stmt(analyzer: &mut Analyzer<'_>, statement: &HirStmt
                 check_resource_producer_stmt(analyzer, statement);
             }
         }
+        HirStmt::For { iterable, body, .. } => {
+            check_resource_producer_expr(analyzer, iterable, false);
+            for statement in &body.statements {
+                check_resource_producer_stmt(analyzer, statement);
+            }
+        }
         HirStmt::Match { value, arms, .. } => {
             check_resource_producer_expr(analyzer, value, false);
             for arm in arms {
@@ -2634,6 +2719,7 @@ fn resource_pool_fallible_factory_stmt(statement: &HirStmt) -> Option<&HirExpr> 
         HirStmt::Loop { body, .. } | HirStmt::With { body, .. } => {
             resource_pool_fallible_factory_block(body)
         }
+        HirStmt::For { body, .. } => resource_pool_fallible_factory_block(body),
         HirStmt::Match { arms, .. } => arms
             .iter()
             .find_map(|arm| resource_pool_fallible_factory_block(&arm.body)),
@@ -2682,6 +2768,12 @@ fn check_resource_pool_factory_stmt(analyzer: &mut Analyzer<'_>, statement: &Hir
             if let Some(condition) = condition {
                 check_resource_producer_expr(analyzer, condition, false);
             }
+            for statement in &body.statements {
+                check_resource_pool_factory_stmt(analyzer, statement);
+            }
+        }
+        HirStmt::For { iterable, body, .. } => {
+            check_resource_producer_expr(analyzer, iterable, false);
             for statement in &body.statements {
                 check_resource_pool_factory_stmt(analyzer, statement);
             }
@@ -2745,6 +2837,13 @@ fn result_error_type_name(type_name: &str) -> Option<&str> {
     split_top_level_type_args(inner).get(1).copied()
 }
 
+fn list_element_type(type_name: &str) -> Option<&str> {
+    let inner = type_name
+        .strip_prefix("List<")
+        .and_then(|type_name| type_name.strip_suffix('>'))?;
+    split_top_level_type_args(inner).into_iter().next()
+}
+
 fn split_top_level_type_args(args: &str) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut start = 0usize;
@@ -2803,6 +2902,12 @@ fn check_resource_pool_lease_stmt(analyzer: &mut Analyzer<'_>, statement: &HirSt
             if let Some(condition) = condition {
                 check_resource_pool_lease_expr(analyzer, condition, false);
             }
+            for statement in &body.statements {
+                check_resource_pool_lease_stmt(analyzer, statement);
+            }
+        }
+        HirStmt::For { iterable, body, .. } => {
+            check_resource_pool_lease_expr(analyzer, iterable, false);
             for statement in &body.statements {
                 check_resource_pool_lease_stmt(analyzer, statement);
             }
@@ -2870,6 +2975,10 @@ fn check_resource_pool_active_lease_stmt(
             if let Some(condition) = condition {
                 check_resource_pool_active_lease_expr(analyzer, active_pool, condition);
             }
+            check_resource_pool_active_lease_block(analyzer, active_pool, body);
+        }
+        HirStmt::For { iterable, body, .. } => {
+            check_resource_pool_active_lease_expr(analyzer, active_pool, iterable);
             check_resource_pool_active_lease_block(analyzer, active_pool, body);
         }
         HirStmt::Match { value, arms, .. } => {

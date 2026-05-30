@@ -341,6 +341,10 @@ fn collect_stmt_take_handle_fields(statement: &HirStmt, fields: &mut Vec<TakeHan
             }
             collect_block_take_handle_fields(body, fields);
         }
+        HirStmt::For { iterable, body, .. } => {
+            collect_expr_take_handle_fields(iterable, fields);
+            collect_block_take_handle_fields(body, fields);
+        }
         HirStmt::Match { value, arms, .. } => {
             collect_expr_take_handle_fields(value, fields);
             for arm in arms {
@@ -439,6 +443,9 @@ fn collect_fresh_return_issues_from_stmt(
             }
         }
         HirStmt::Loop { body, .. } => {
+            collect_fresh_return_issues_from_block(body, entry_states, issues);
+        }
+        HirStmt::For { body, .. } => {
             collect_fresh_return_issues_from_block(body, entry_states, issues);
         }
         HirStmt::Match { arms, .. } => {
@@ -627,6 +634,12 @@ fn collect_ordered_moved_uses_from_stmt(
             }
             collect_ordered_moved_uses_from_block(body, entry_states, moved_uses);
         }
+        HirStmt::For { iterable, body, .. } => {
+            if let Some(mut state) = entry_state {
+                collect_ordered_moved_uses_from_expr(iterable, &mut state, moved_uses);
+            }
+            collect_ordered_moved_uses_from_block(body, entry_states, moved_uses);
+        }
         HirStmt::Match { value, arms, .. } => {
             if let Some(mut state) = entry_state {
                 collect_ordered_moved_uses_from_expr(value, &mut state, moved_uses);
@@ -762,6 +775,10 @@ fn collect_closure_local_moved_uses_from_stmt(statement: &HirStmt, moved_uses: &
             }
             collect_closure_local_moved_uses_from_block(body, moved_uses);
         }
+        HirStmt::For { iterable, body, .. } => {
+            collect_closure_local_moved_uses_from_expr(iterable, moved_uses);
+            collect_closure_local_moved_uses_from_block(body, moved_uses);
+        }
         HirStmt::Match { value, arms, .. } => {
             collect_closure_local_moved_uses_from_expr(value, moved_uses);
             for arm in arms {
@@ -885,6 +902,12 @@ fn collect_retained_closure_captures_from_stmt(
         } => {
             if let (Some(condition), Some(state)) = (condition, entry_state) {
                 collect_retained_closure_captures_from_expr(condition, state, captures);
+            }
+            collect_retained_closure_captures_from_block(body, entry_states, captures);
+        }
+        HirStmt::For { iterable, body, .. } => {
+            if let Some(state) = entry_state {
+                collect_retained_closure_captures_from_expr(iterable, state, captures);
             }
             collect_retained_closure_captures_from_block(body, entry_states, captures);
         }
@@ -1102,6 +1125,10 @@ fn collect_block_resource_escapes(
                 }
                 collect_block_resource_escapes(body, escapes_by_with_span);
             }
+            HirStmt::For { iterable, body, .. } => {
+                collect_expr_resource_escapes(iterable, escapes_by_with_span);
+                collect_block_resource_escapes(body, escapes_by_with_span);
+            }
             HirStmt::Match { value, arms, .. } => {
                 collect_expr_resource_escapes(value, escapes_by_with_span);
                 for arm in arms {
@@ -1196,6 +1223,10 @@ fn collect_resource_escapes_in_block(
                 if let Some(condition) = condition {
                     collect_resource_escapes_in_expr(binding, condition, escapes);
                 }
+                collect_resource_escapes_in_block(binding, body, escapes);
+            }
+            HirStmt::For { iterable, body, .. } => {
+                collect_resource_escapes_in_expr(binding, iterable, escapes);
                 collect_resource_escapes_in_block(binding, body, escapes);
             }
             HirStmt::Match { value, arms, .. } => {
@@ -1390,6 +1421,10 @@ fn collect_stmt_managed_closure_uses(
             }
             collect_block_managed_closure_uses(body, closures);
         }
+        HirStmt::For { iterable, body, .. } => {
+            collect_expr_managed_closure_uses(iterable, closures);
+            collect_block_managed_closure_uses(body, closures);
+        }
         HirStmt::Match { value, arms, .. } => {
             collect_expr_managed_closure_uses(value, closures);
             for arm in arms {
@@ -1454,6 +1489,7 @@ fn collect_hir_block_idents(block: &HirBlock, uses: &mut Vec<(String, Span)>) {
                 }
             }
             HirStmt::Loop { body, .. } => collect_hir_block_idents(body, uses),
+            HirStmt::For { body, .. } => collect_hir_block_idents(body, uses),
             HirStmt::Match { arms, .. } => {
                 for arm in arms {
                     collect_hir_block_idents(&arm.body, uses);
@@ -1484,6 +1520,7 @@ fn collect_hir_stmt_idents(statement: &HirStmt, uses: &mut Vec<(String, Span)>) 
             condition: Some(condition),
             ..
         } => collect_hir_expr_idents(condition, uses),
+        HirStmt::For { iterable, .. } => collect_hir_expr_idents(iterable, uses),
         HirStmt::Match { value, .. } => collect_hir_expr_idents(value, uses),
         HirStmt::Let { value: None, .. }
         | HirStmt::Return { value: None, .. }
@@ -1511,6 +1548,7 @@ fn collect_hir_stmt_effect_events(statement: &HirStmt, events: &mut Vec<HirEffec
             condition: Some(condition),
             ..
         } => collect_hir_expr_effect_events(condition, events),
+        HirStmt::For { iterable, .. } => collect_hir_expr_effect_events(iterable, events),
         HirStmt::Match { value, .. } => collect_hir_expr_effect_events(value, events),
         HirStmt::Let { value: None, .. }
         | HirStmt::Return { value: None, .. }
@@ -1614,6 +1652,7 @@ fn collect_hir_block_inline_capture_uses(block: &HirBlock, uses: &mut Vec<(Strin
                 }
             }
             HirStmt::Loop { body, .. } => collect_hir_block_inline_capture_uses(body, uses),
+            HirStmt::For { body, .. } => collect_hir_block_inline_capture_uses(body, uses),
             HirStmt::Match { arms, .. } => {
                 for arm in arms {
                     collect_hir_block_inline_capture_uses(&arm.body, uses);
@@ -1644,6 +1683,7 @@ fn collect_hir_stmt_inline_capture_uses(statement: &HirStmt, uses: &mut Vec<(Str
             condition: Some(condition),
             ..
         } => collect_hir_expr_inline_capture_uses(condition, uses),
+        HirStmt::For { iterable, .. } => collect_hir_expr_inline_capture_uses(iterable, uses),
         HirStmt::Match { value, .. } => collect_hir_expr_inline_capture_uses(value, uses),
         HirStmt::Let { value: None, .. }
         | HirStmt::Return { value: None, .. }
@@ -1777,6 +1817,7 @@ fn collect_stmt_local_flow(
         HirStmt::Loop {
             condition, body, ..
         } => collect_loop_local_flow(steps, node, condition.is_some(), body),
+        HirStmt::For { body, .. } => collect_loop_local_flow(steps, node, true, body),
         HirStmt::Match { arms, .. } => collect_match_local_flow(steps, node, arms),
         HirStmt::With { binding, body, .. } => collect_scoped_body_flow(steps, node, binding, body),
         HirStmt::Return { .. } => LocalFlowFragment {
@@ -1980,6 +2021,9 @@ fn collect_stmt_managed_closure_capture_names(statement: &HirStmt, captures: &mu
             ..
         } => {
             collect_expr_managed_closure_capture_names(condition, captures);
+        }
+        HirStmt::For { iterable, .. } => {
+            collect_expr_managed_closure_capture_names(iterable, captures);
         }
         HirStmt::Match { value, .. } => {
             collect_expr_managed_closure_capture_names(value, captures);
@@ -2205,6 +2249,7 @@ fn local_flow_step_kind(statement: &HirStmt) -> LocalFlowStepKind {
         HirStmt::If { .. } => LocalFlowStepKind::Branch,
         HirStmt::Match { .. } => LocalFlowStepKind::Branch,
         HirStmt::Loop { .. } => LocalFlowStepKind::Loop,
+        HirStmt::For { .. } => LocalFlowStepKind::Loop,
         HirStmt::Return { .. } => LocalFlowStepKind::Return,
         HirStmt::Break(_) => LocalFlowStepKind::Break,
         HirStmt::Continue(_) => LocalFlowStepKind::Continue,
@@ -2234,6 +2279,7 @@ fn local_flow_step_binding(statement: &HirStmt) -> Option<LocalFlowBinding> {
         | HirStmt::If { .. }
         | HirStmt::Match { .. }
         | HirStmt::Loop { .. }
+        | HirStmt::For { .. }
         | HirStmt::Break(_)
         | HirStmt::Continue(_)
         | HirStmt::Expr(_)
@@ -2322,6 +2368,7 @@ fn local_flow_step_resource_binding(statement: &HirStmt) -> Option<LocalFlowReso
         | HirStmt::If { .. }
         | HirStmt::Match { .. }
         | HirStmt::Loop { .. }
+        | HirStmt::For { .. }
         | HirStmt::Break(_)
         | HirStmt::Continue(_)
         | HirStmt::Expr(_)
@@ -2355,6 +2402,7 @@ fn hir_stmt_span(statement: &HirStmt) -> &Span {
         | HirStmt::If { span, .. }
         | HirStmt::Match { span, .. }
         | HirStmt::Loop { span, .. }
+        | HirStmt::For { span, .. }
         | HirStmt::Break(span)
         | HirStmt::Continue(span)
         | HirStmt::Unknown(span) => span,

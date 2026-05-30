@@ -206,6 +206,16 @@ impl Formatter {
                 self.indent(indent);
                 self.out.push('}');
             }
+            Stmt::For(stmt) => {
+                self.out.push_str("for ");
+                self.out.push_str(&stmt.binding);
+                self.out.push_str(" in ");
+                self.expr(&stmt.iterable, 0);
+                self.out.push_str(" {\n");
+                self.block(&stmt.body, indent + 1);
+                self.indent(indent);
+                self.out.push('}');
+            }
             Stmt::Match(stmt) => {
                 self.out.push_str("match ");
                 self.expr(&stmt.value, 0);
@@ -227,6 +237,7 @@ impl Formatter {
             Stmt::MalformedWith(_)
             | Stmt::MalformedIf(_)
             | Stmt::MalformedLoop(_)
+            | Stmt::MalformedFor(_)
             | Stmt::MalformedMatch(_)
             | Stmt::Unknown(_) => self.out.push_str("/* unsupported */"),
         }
