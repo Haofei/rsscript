@@ -258,7 +258,7 @@ impl Analyzer<'_> {
                     self.unsupported_syntax(
                         span.clone(),
                         "malformed generic parameter declaration",
-                        "Generic parameters must use `T`, `T: Managed`, `T: Struct`, or `T: Resource`.",
+                        "Generic parameters must use `T`, `T: Managed`, `T: Struct`, `T: Resource`, or a single protocol bound such as `T: Writer`.",
                     );
                 }
                 if function.is_async && !function.body.statements.is_empty() {
@@ -302,7 +302,7 @@ impl Analyzer<'_> {
                     self.unsupported_syntax(
                         span.clone(),
                         "malformed generic parameter declaration",
-                        "Generic parameters must use `T`, `T: Managed`, `T: Struct`, or `T: Resource`.",
+                        "Generic parameters must use `T`, `T: Managed`, `T: Struct`, `T: Resource`, or a single protocol bound such as `T: Writer`.",
                     );
                 }
                 for span in &type_decl.malformed_field_spans {
@@ -1192,7 +1192,7 @@ impl Analyzer<'_> {
     ) {
         let target = fresh_return_target_type(return_ty);
         if bounds.contains_key(&target.name)
-            && bounds.get(&target.name).copied().flatten() != Some(GenericBound::Struct)
+            && bounds.get(&target.name).and_then(Option::as_ref) != Some(&GenericBound::Struct)
         {
             self.diagnostics.push(
                 Diagnostic::error(
@@ -1222,7 +1222,7 @@ impl Analyzer<'_> {
         if ty.name == "ResourcePool"
             && let Some(arg) = ty.args.first()
             && let Some(bound) = bounds.get(&arg.name)
-            && *bound != Some(GenericBound::Resource)
+            && bound.as_ref() != Some(&GenericBound::Resource)
         {
             self.invalid_resource_pool_type_diagnostic(
                 format!(
@@ -1245,7 +1245,7 @@ impl Analyzer<'_> {
     ) {
         let next_in_resource_pool = in_resource_pool || ty.name == "ResourcePool";
         if !next_in_resource_pool
-            && bounds.get(&ty.name).copied().flatten() == Some(GenericBound::Resource)
+            && bounds.get(&ty.name).and_then(Option::as_ref) == Some(&GenericBound::Resource)
         {
             self.generic_resource_argument_diagnostic(
                 &ty.name,
@@ -2329,7 +2329,7 @@ fn effect_display(effect: &EffectDecl) -> String {
 fn generic_bounds(params: &[GenericParam]) -> HashMap<String, Option<GenericBound>> {
     params
         .iter()
-        .map(|param| (param.name.clone(), param.bound))
+        .map(|param| (param.name.clone(), param.bound.clone()))
         .collect()
 }
 

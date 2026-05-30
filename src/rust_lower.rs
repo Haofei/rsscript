@@ -2301,10 +2301,11 @@ fn lower_generic_params(params: &[GenericParam]) -> String {
         .iter()
         .map(|param| {
             let name = rust_ident(&param.name);
-            match param.bound {
+            match &param.bound {
                 Some(GenericBound::Managed) => format!("{name}: rsscript_runtime::ManagedValue"),
                 Some(GenericBound::Struct) => name,
                 Some(GenericBound::Resource) => format!("{name}: rsscript_runtime::Resource"),
+                Some(GenericBound::Protocol(_)) => name,
                 None => name,
             }
         })

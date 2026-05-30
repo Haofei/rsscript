@@ -61,6 +61,22 @@ impl Parser<'_> {
                     malformed_declaration_spans.push(self.tokens[start].span.clone());
                     self.index = skip_unknown_top_level(self.tokens, start);
                 }
+            } else if self.at_ident("protocol") {
+                let start = self.index;
+                if let Some(functions) = self.parse_protocol_decl() {
+                    items.extend(functions.into_iter().map(Item::Function));
+                } else {
+                    malformed_declaration_spans.push(self.tokens[start].span.clone());
+                    self.index = skip_unknown_top_level(self.tokens, start);
+                }
+            } else if self.at_ident("native") && self.peek_ident(1, "module") {
+                let start = self.index;
+                if let Some(functions) = self.parse_native_module_decl() {
+                    items.extend(functions.into_iter().map(Item::Function));
+                } else {
+                    malformed_declaration_spans.push(self.tokens[start].span.clone());
+                    self.index = skip_unknown_top_level(self.tokens, start);
+                }
             } else if self.at_ident("pub")
                 || self.at_ident("async")
                 || self.at_ident("native")
@@ -187,6 +203,12 @@ impl Parser<'_> {
         })
     }
 
+    fn peek_ident(&self, offset: usize, text: &str) -> bool {
+        self.tokens
+            .get(self.index + offset)
+            .is_some_and(|token| token.is_ident_text(text))
+    }
+
     fn parse_function_decl(&mut self) -> Option<FunctionDecl> {
         let span = self.current()?.span.clone();
         let mut is_public = false;
@@ -289,6 +311,90 @@ impl Parser<'_> {
             body,
             span,
         })
+    }
+
+    fn parse_protocol_decl(&mut self) -> Option<Vec<FunctionDecl>> {
+        self.index += 1;
+        let protocol = self.take_ident_name()?;
+        if !self.at_symbol("{") {
+            return None;
+        }
+        let open = self.index;
+        let close = find_matching(self.tokens, open, "{", "}")?;
+        self.index = open + 1;
+        let mut methods = Vec::new();
+        while self.index < close {
+            if is_trivia_boundary(self.current()?) {
+                self.index += 1;
+                continue;
+            }
+            let start = self.index;
+            let Some(mut method) = self.parse_function_decl() else {
+                self.index = skip_unknown_top_level(self.tokens, start).min(close);
+                continue;
+            };
+            method.name = if method.name.contains('.') {
+                method.name
+            } else {
+                format!("{protocol}.{}", method.name)
+            };
+            method.is_public = true;
+            if !method.type_params.iter().any(|param| param.name == "Self") {
+                method.type_params.insert(
+                    0,
+                    GenericParam {
+                        name: "Self".to_string(),
+                        bound: Some(GenericBound::Managed),
+                        span: method.span.clone(),
+                    },
+                );
+            }
+            methods.push(method);
+        }
+        self.index = close + 1;
+        Some(methods)
+    }
+
+    fn parse_native_module_decl(&mut self) -> Option<Vec<FunctionDecl>> {
+        self.index += 2;
+        let module = self.take_ident_name()?;
+        if !self.at_symbol("{") {
+            return None;
+        }
+        let open = self.index;
+        let close = find_matching(self.tokens, open, "{", "}")?;
+        self.index = open + 1;
+        let mut functions = Vec::new();
+        while self.index < close {
+            if is_trivia_boundary(self.current()?) {
+                self.index += 1;
+                continue;
+            }
+            let start = self.index;
+            let Some(mut function) = self.parse_function_decl() else {
+                self.index = skip_unknown_top_level(self.tokens, start).min(close);
+                continue;
+            };
+            function.name = if function.name.contains('.') {
+                function.name
+            } else {
+                format!("{module}.{}", function.name)
+            };
+            function.is_public = true;
+            function.is_native = true;
+            if !function
+                .effects
+                .iter()
+                .any(|effect| matches!(effect, EffectDecl::Name(name) if name == "native"))
+            {
+                function
+                    .effects
+                    .push(EffectDecl::Name("native".to_string()));
+            }
+            functions.push(function);
+        }
+        self.index = close + 1;
+        Some(functions)
     }
 
     fn current(&self) -> Option<&Token> {
@@ -467,6 +573,9 @@ fn function_signature_end(tokens: &[Token], start: usize) -> usize {
         if depth == 0 && token.symbol("{") {
             return index;
         }
+        if depth == 0 && token.symbol("}") {
+            return index;
+        }
         if index > start && depth == 0 && starts_top_level_item(tokens, index) {
             return index;
         }
@@ -498,6 +607,7 @@ fn starts_top_level_item(tokens: &[Token], index: usize) -> bool {
         || token.is_ident_text("pub")
         || token.is_ident_text("async")
         || token.is_ident_text("native")
+        || token.is_ident_text("protocol")
 }
 
 fn parse_params(tokens: &[Token], start: usize, end: usize) -> ParsedParams {
@@ -693,7 +803,7 @@ fn parse_generic_bound(token: &Token) -> Option<GenericBound> {
     } else if token.is_ident_text("Resource") {
         Some(GenericBound::Resource)
     } else {
-        None
+        ident_name(token).map(|name| GenericBound::Protocol(name.to_string()))
     }
 }
 

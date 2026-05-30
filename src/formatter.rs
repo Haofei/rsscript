@@ -444,7 +444,7 @@ fn format_call_arg(arg: &CallArg) -> String {
 }
 
 fn format_generic_param(param: &GenericParam) -> String {
-    match param.bound {
+    match param.bound.as_ref() {
         Some(bound) => format!("{}: {}", param.name, generic_bound_name(bound)),
         None => param.name.clone(),
     }
@@ -511,11 +511,12 @@ fn type_kind_name(kind: TypeKind) -> &'static str {
     }
 }
 
-fn generic_bound_name(bound: GenericBound) -> &'static str {
+fn generic_bound_name(bound: &GenericBound) -> &str {
     match bound {
         GenericBound::Managed => "Managed",
         GenericBound::Struct => "Struct",
         GenericBound::Resource => "Resource",
+        GenericBound::Protocol(name) => name,
     }
 }
 

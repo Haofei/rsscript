@@ -2248,9 +2248,9 @@ Consequences:
   types never satisfy Managed or Struct and never enter ordinary containers.
 ```
 
-### 14.6 Protocols are future capability contracts
+### 14.6 Protocols are capability contracts
 
-Terminology note: the future capability-contract feature is named **`protocol`**,
+Terminology note: the capability-contract feature is named **`protocol`**,
 not `interface` and not `trait`. The word "interface" in RSScript refers only to
 `.rssi` semantic-contract files (the public signature surface). A `protocol` is a
 language-level capability that a type can satisfy. The two are related — a
@@ -2258,8 +2258,11 @@ language-level capability that a type can satisfy. The two are related — a
 contracts raised to the type level — but they are not the same thing, and the
 shared word must not be reused for the language feature.
 
-A `protocol` is an app-layer capability contract, not a general trait system. It
-is not part of the v0.5 executable MVP.
+A `protocol` is an app-layer capability contract, not a general trait system.
+The v0.5 MVP supports the static contract surface: protocol declarations,
+protocol method signatures, protocol generic bounds, and explicit
+`Protocol.method(...)` calls checked against those signatures. Dynamic dispatch
+is a future extension described below.
 
 #### Positive model (what a protocol is)
 
@@ -2308,6 +2311,14 @@ A protocol is usable as a generic bound, monomorphized, with no hidden
 indirection:
 
 ```rust
+protocol Writer {
+    fn write(
+        self: mut Self,
+        message: read String,
+    ) -> Unit
+        effects(retains(message))
+}
+
 fn write_line<W: Writer>(writer: mut W, message: read String) -> Unit
 ```
 
@@ -2316,10 +2327,10 @@ This covers "write code against a capability" and is fully review-resolvable.
 #### Dynamic dispatch (admitted, in a reviewable form)
 
 RSScript admits protocol-typed dynamic dispatch (an open set of implementing
-types chosen at runtime). It is a future feature, not part of the v0.5 executable
-MVP, but the design decision is settled: dynamic dispatch is supported, because
-forbidding it makes users write timidly around capabilities that the review
-model can in fact express safely. The constraints below are what make it
+types chosen at runtime) as a future feature, not part of the v0.5 executable
+MVP. The design decision is settled: dynamic dispatch is supported eventually,
+because forbidding it makes users write timidly around capabilities that the
+review model can in fact express safely. The constraints below are what make it
 reviewable; they are normative for the eventual implementation, not open
 questions.
 
@@ -2458,6 +2469,19 @@ features: native
 
 native fn File.open(path: read Path) -> Result<File, IOError>
     effects(native)
+```
+
+A native module declaration is shorthand for native declarations under one
+namespace. Each method in the module is bodyless, is treated as `native`, and
+gets `effects(native)` if the effect is omitted:
+
+```rust
+features: native
+
+native module File {
+    fn open(path: read Path) -> Result<File, IOError>
+    fn open_write(path: read Path) -> Result<File, IOError>
+}
 ```
 
 `native fn` declarations are bodyless in v0.5. A function with an RSScript body may be marked `effects(native)` only when its contract crosses a native boundary through calls or package wrapper bindings.

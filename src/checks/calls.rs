@@ -3197,6 +3197,9 @@ fn argument_type_matches(expected: &str, actual: &str) -> bool {
     if expected == actual {
         return true;
     }
+    if expected == "Self" {
+        return true;
+    }
     if strip_fresh_type(expected) == strip_fresh_type(actual) {
         return true;
     }

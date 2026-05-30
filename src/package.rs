@@ -579,7 +579,7 @@ struct PackageTypeContract {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PackageGenericContract {
     name: String,
-    bound: Option<&'static str>,
+    bound: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2966,15 +2966,16 @@ fn package_function_contract(function: &FunctionDecl) -> PackageFunctionContract
 fn package_generic_contract(param: &GenericParam) -> PackageGenericContract {
     PackageGenericContract {
         name: param.name.clone(),
-        bound: param.bound.map(package_generic_bound_label),
+        bound: param.bound.as_ref().map(package_generic_bound_label),
     }
 }
 
-fn package_generic_bound_label(bound: GenericBound) -> &'static str {
+fn package_generic_bound_label(bound: &GenericBound) -> String {
     match bound {
-        GenericBound::Managed => "Managed",
-        GenericBound::Struct => "Struct",
-        GenericBound::Resource => "Resource",
+        GenericBound::Managed => "Managed".to_string(),
+        GenericBound::Struct => "Struct".to_string(),
+        GenericBound::Resource => "Resource".to_string(),
+        GenericBound::Protocol(name) => name.clone(),
     }
 }
 
@@ -3064,7 +3065,7 @@ fn package_type_contract_label(contract: &PackageTypeContract) -> String {
             contract
                 .type_params
                 .iter()
-                .map(|param| match param.bound {
+                .map(|param| match &param.bound {
                     Some(bound) => format!("{}: {bound}", param.name),
                     None => param.name.clone(),
                 })

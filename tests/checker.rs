@@ -4656,7 +4656,7 @@ fn trailing_comma(path: read Path,) -> Unit {
 #[test]
 fn checker_reports_malformed_generic_parameters_as_unsupported() {
     let source = r#"
-struct Box<T: Unknown> {
+struct Box<T: Unknown + Other> {
     value: handle T
 }
 
@@ -7504,6 +7504,55 @@ pub fn field_string(
         matches!(&program.items[3], Item::Function(function) if function.name == "field_string" && function.is_public && function.body.statements.is_empty())
     );
     assert!(analyze_source("json.rssi", source).is_empty());
+}
+
+#[test]
+fn parser_accepts_protocol_contracts_as_qualified_call_signatures() {
+    let source = r#"
+protocol Writer {
+    fn write(
+        self: mut Self,
+        message: read String,
+    ) -> Unit
+        effects(retains(message))
+}
+
+struct BufferWriter
+
+fn write_line<W: Writer>(
+    writer: mut W,
+    message: read String,
+) -> Unit {
+    Writer.write(self: mut writer, message: read message)
+}
+"#;
+    let diagnostics = analyze_source("protocol.rss", source);
+    assert_eq!(diagnostics, Vec::new());
+}
+
+#[test]
+fn parser_expands_native_module_declarations_to_native_functions() {
+    let source = r#"
+features: native
+
+struct Path
+resource File
+struct IOError
+
+native module File {
+    fn open(path: read Path) -> Result<File, IOError>
+}
+"#;
+    let diagnostics = analyze_source("native-module.rss", source);
+    assert_eq!(diagnostics, Vec::new());
+
+    let map = review_map_sources(vec![("native-module.rss", source)]);
+    assert!(map.files[0].regions.iter().any(|region| {
+        region
+            .reasons
+            .iter()
+            .any(|reason| reason == "native boundary")
+    }));
 }
 
 #[test]
