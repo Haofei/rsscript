@@ -313,6 +313,20 @@ impl Analyzer<'_> {
                         "Type fields must use `name: Type`, `name: handle Type`, or `name: weak Type`.",
                     );
                 }
+                if type_decl.is_opaque && !type_decl.fields.is_empty() {
+                    self.unsupported_syntax(
+                        type_decl.span.clone(),
+                        "unsupported opaque type body",
+                        "Opaque interface types hide their representation. Declare `opaque struct Name`, `opaque class Name`, or `opaque resource Name` without fields.",
+                    );
+                }
+                if type_decl.is_opaque && type_decl.drop_body.is_some() {
+                    self.unsupported_syntax(
+                        type_decl.span.clone(),
+                        "unsupported opaque type body",
+                        "Opaque resource contracts hide their implementation details, including drop bodies. Resource cleanup belongs to the implementation, not the `.rssi` contract.",
+                    );
+                }
                 for field in &type_decl.fields {
                     self.check_unsupported_syntax_type_ref(&field.ty, false);
                 }
@@ -708,6 +722,7 @@ impl Analyzer<'_> {
                     && !param.ty.name.is_empty()
                     && param.ty.name != "share"
                     && !type_ref_is_noescape(&param.ty)
+                    && !type_ref_is_closure_effect_exempt(&param.ty)
                     && !type_ref_has_surface_reference(&param.ty, self.tokens)
                     && !type_ref_contains_name(&param.ty, "Fd")
                     && !is_copy_type(&param.ty)
@@ -2793,7 +2808,6 @@ fn is_copy_type(ty: &TypeRef) -> bool {
                 | "UInt16"
                 | "UInt32"
                 | "UInt64"
-                | "Closure"
                 | "Unit"
         )
 }
@@ -2912,6 +2926,10 @@ fn type_ref_name(ty: &TypeRef) -> String {
 
 fn type_ref_is_noescape(ty: &TypeRef) -> bool {
     ty.is_noescape || ty.args.iter().any(type_ref_is_noescape)
+}
+
+fn type_ref_is_closure_effect_exempt(ty: &TypeRef) -> bool {
+    ty.args.is_empty() && !ty.is_noescape && ty.name == "Closure"
 }
 
 fn type_ref_has_surface_reference(ty: &TypeRef, tokens: &[Token]) -> bool {

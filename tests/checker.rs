@@ -631,6 +631,22 @@ fn bad_config() -> fresh Config {
 }
 
 #[test]
+fn checker_accepts_closure_parameter_without_treating_closure_as_data_effect_param() {
+    let source = r#"
+fn Scheduler.run(callback: Closure) -> Unit
+    effects(retains(callback))
+"#;
+    let diagnostics = analyze_source("closure-param.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "RS0008"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn resource_pool_read_parameter_must_be_local_capability() {
     let source = r#"
 features: local

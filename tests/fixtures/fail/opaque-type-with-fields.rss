@@ -1,0 +1,8 @@
+// expect: RS0015
+opaque struct JsonValue {
+    text: String
+}
+
+fn main() -> Unit {
+    return Unit
+}
