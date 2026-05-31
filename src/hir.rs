@@ -4,8 +4,8 @@ use crate::diagnostic::Span;
 use crate::interfaces::builtin_interfaces;
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl,
-    GenericBound, Item, LetKind, MatchPattern, Param, Program as SyntaxProgram, Stmt, TypeDecl,
-    TypeKind, TypeRef,
+    GenericBound, Item, LetKind, MatchPattern, Param, Program as SyntaxProgram, ProtocolImpl, Stmt,
+    TypeDecl, TypeKind, TypeRef,
 };
 use crate::syntax::parse_source;
 
@@ -101,6 +101,9 @@ pub enum CallResolution {
         kind: ResolvedCalleeKind,
     },
     EnumVariant,
+    Ambiguous {
+        candidates: Vec<String>,
+    },
     Unknown,
 }
 
@@ -369,6 +372,7 @@ pub struct Hir {
     returns: Vec<HirReturn>,
     feature_uses: Vec<HirFeatureUse>,
     function_bodies: HashMap<String, HirFunctionBody>,
+    protocol_impls: Vec<ProtocolImpl>,
 }
 
 impl Hir {
@@ -406,8 +410,10 @@ impl Hir {
         let mut type_symbols: HashMap<String, (DuplicateSymbolKind, Span)> = HashMap::new();
         let mut callable_symbols: HashMap<String, (DuplicateSymbolKind, Span)> = HashMap::new();
         for interface in interfaces {
+            hir.protocol_impls.extend(interface.protocol_impls.clone());
             hir.collect_item_signatures(interface, &mut type_symbols, &mut callable_symbols);
         }
+        hir.protocol_impls.extend(program.protocol_impls.clone());
         hir.collect_item_signatures(program, &mut type_symbols, &mut callable_symbols);
         hir.normalize_class_typed_handle_fields();
         hir.collect_body_facts(program);
@@ -604,35 +610,74 @@ impl Hir {
         method: &str,
         value_types: &HashMap<String, String>,
     ) -> (CallResolution, Option<String>) {
-        let receiver_root = type_root_name(receiver_type);
-
-        // Try inherent method: Type.method
-        if let Some(sig) = self.resolve_function(Some(receiver_root), method) {
+        let candidates = self.receiver_call_candidates(receiver_type, method, value_types);
+        if candidates.is_empty() {
+            return (CallResolution::Unknown, None);
+        }
+        if candidates.len() > 1 {
             return (
-                CallResolution::Resolved {
-                    signature: sig.clone(),
-                    kind: function_kind(sig),
+                CallResolution::Ambiguous {
+                    candidates: candidates
+                        .iter()
+                        .map(|(namespace, _)| format!("{namespace}.{method}"))
+                        .collect(),
                 },
-                Some(receiver_root.to_string()),
+                None,
             );
         }
+        let (namespace, sig) = &candidates[0];
+        (
+            CallResolution::Resolved {
+                signature: sig.clone(),
+                kind: function_kind(sig),
+            },
+            Some(namespace.clone()),
+        )
+    }
 
-        // Try protocol bounds: if receiver is a generic param T: Protocol,
-        // look for Protocol.method using the convention key
+    fn receiver_call_candidates(
+        &self,
+        receiver_type: &str,
+        method: &str,
+        value_types: &HashMap<String, String>,
+    ) -> Vec<(String, FunctionSig)> {
+        let receiver_root = type_root_name(receiver_type);
+        let mut candidates = Vec::new();
+
+        if let Some(sig) = self.resolve_function(Some(receiver_root), method) {
+            candidates.push((receiver_root.to_string(), sig.clone()));
+        }
+
         let bound_key = format!("__protocol_bound__{receiver_root}");
         if let Some(protocol) = value_types.get(&bound_key) {
             if let Some(sig) = self.resolve_function(Some(protocol), method) {
-                return (
-                    CallResolution::Resolved {
-                        signature: sig.clone(),
-                        kind: function_kind(sig),
-                    },
-                    Some(protocol.clone()),
-                );
+                candidates.push((protocol.clone(), sig.clone()));
             }
         }
 
-        (CallResolution::Unknown, None)
+        for protocol_impl in &self.protocol_impls {
+            if protocol_impl.type_name != receiver_root {
+                continue;
+            }
+            if !protocol_impl
+                .mappings
+                .iter()
+                .any(|mapping| mapping.method == method)
+            {
+                continue;
+            }
+            if let Some(sig) = self.resolve_function(Some(&protocol_impl.protocol), method) {
+                let namespace = protocol_impl.protocol.clone();
+                if !candidates
+                    .iter()
+                    .any(|(candidate_namespace, _)| candidate_namespace == &namespace)
+                {
+                    candidates.push((namespace, sig.clone()));
+                }
+            }
+        }
+
+        candidates
     }
 
     fn insert_function(&mut self, signature: FunctionSig) {
@@ -1809,7 +1854,7 @@ fn infer_hir_expr_type(
                     infer_signature_return_type(hir, &signature, callee, args, value_types)
                         .or(signature.return_type)
                 }
-                CallResolution::Unknown => match callee {
+                CallResolution::Ambiguous { .. } | CallResolution::Unknown => match callee {
                     Callee::Name(name) => value_types
                         .get(name)
                         .and_then(|type_name| fn_return_type(type_name))
@@ -2297,6 +2342,7 @@ fn classify_return_expr(hir: &Hir, expr: &Expr) -> HirReturnProof {
                 } => HirReturnProof::StructConstructor,
                 CallResolution::Resolved { .. }
                 | CallResolution::EnumVariant
+                | CallResolution::Ambiguous { .. }
                 | CallResolution::Unknown => HirReturnProof::Unknown,
             }
         }

@@ -1,7 +1,40 @@
-# RSScript (Reviewable System Script) Language Specification v0.5
+# RSScript (Reviewable System Script) Language Specification v0.6
 
 Audience: language designers, compiler implementers, standard-library authors, review-tool authors
-Architecture note: v0.5 uses **RSScript frontend -> Rust source lowering -> rustc backend**.
+Architecture note: v0.6 uses **RSScript frontend -> Rust source lowering -> rustc backend**.
+
+### Changes from v0.5
+
+```text
+Language features implemented:
+  - Receiver-call shorthand (§14.6.1): `mut cache.put(key: read k, value: read v)`
+    with mandatory effect keyword, unique resolution, and ambiguity rejection.
+  - Match expressions in expression position: `let x = match v { ... }`
+    with same exhaustiveness and payload-binding rules as statement form.
+  - Extended collection pipeline (§18.2): List.sort_by, List.group_by,
+    List.partition, List.flat_map, List.take, List.skip, List.first,
+    List.last, List.join; Map.map_values, Map.filter, Map.try_fold,
+    Map.fold, Map.merge.
+  - Error composition APIs (§18.2): Result.map_error, Result.and_then,
+    Result.map; Option.map, Option.and_then, Option.ok_or,
+    Option.unwrap_or_else.
+  - Receiver-call ambiguity detection: multiple candidates → rejection.
+  - Missing-argument diagnostics no longer suppressed by unnamed args.
+
+Spec documentation expanded:
+  - Post-v0.6 design directions (§20.1) expanded to items G–N:
+    capability objects, Stream<T>/await-for, scoped views/slices,
+    noescape pipeline principle, explicit error composition principle,
+    compiler-owned derives, module visibility hardening, native boundary
+    contracts.
+  - Sum type hardening (E) updated to reflect match expression implementation.
+
+Package/REIR integration:
+  - REIR adapter layer connects compiler review facts to evidence IR.
+  - S3 IAM capability-binding scenarios exercise REIR proof/reconciliation.
+  - Package review now tracks capability-binding chains with call-graph
+    propagation.
+```
 
 ---
 
@@ -128,7 +161,7 @@ freshness guarantees
 native/unsafe boundaries
 ```
 
-v0.5 makes one implementation decision normative for the MVP:
+v0.6 makes one implementation decision normative for the MVP:
 
 ```text
 RSScript lowers to Rust source.
@@ -298,11 +331,11 @@ its single canonical form.
 
 ---
 
-## 3. v0.5 Scope
+## 3. v0.6 Scope
 
 ### 3.1 Executable MVP
 
-v0.5 executable support is limited to:
+v0.6 executable support covers:
 
 ```text
 managed application code
@@ -313,35 +346,43 @@ resource values through with
 ResourcePool<T: Resource>
 bodyless native declarations through package binding metadata
 restricted executable async bodies and direct await
+receiver-call shorthand with unique resolution
+match expressions in expression position
+extended collection pipeline (List/Map noescape operations)
+error composition APIs (Result.map_error, Option.map, etc.)
 Rust source lowering with source maps
 review map / review diff metadata
+REIR adapter for capability-binding evidence
 ```
 
-### 3.2 Review-visible but not executable in v0.5
+### 3.2 Review-visible but not executable in v0.6
 
-The following may be parsed and surfaced for review but are not executable lowering targets in v0.5:
+The following may be parsed and surfaced for review but are not executable lowering targets in v0.6:
 
 ```text
 spawn
 future task runtime
 Rust-style open enum machinery beyond sealed RSScript sum types
 general user FFI
-advanced protocol/dynamic dispatch model
+advanced protocol/dynamic dispatch model (capability objects)
+Stream<T> / await-for
+scoped views / slices
+compiler-owned derives
 ```
 
-`async fn` signatures are review-visible contracts. v0.5 admits a restricted
+`async fn` signatures are review-visible contracts. v0.6 admits a restricted
 executable async MVP: `await` may appear only inside an `async fn`, and it must
 directly consume an async call. RSScript does not expose `Future`, `Pin`, `Poll`,
 `Waker`, Rust executor internals, or task handles as source-level types.
 
-The v0.5 execution target is single-isolate and cooperative. `await` is a
+The v0.6 execution target is single-isolate and cooperative. `await` is a
 suspension boundary in the async function frame: Copy values and managed handles
 may cross it, but local values, resources, with-bound resource leases, runtime
 read/write guards, noescape closure frames, and unmanaged native borrows must
 not. `await` inside an ordinary closure is not in the surrounding async frame and
 is rejected unless a future async-closure form is explicitly introduced.
 
-`spawn` remains review-visible but not executable in v0.5. It is reserved for a
+`spawn` remains review-visible but not executable in v0.6. It is reserved for a
 future structured task API and must be rejected before lowering.
 
 Future task support must follow the same single-isolate model: `spawn` means
@@ -410,7 +451,7 @@ rules). Lowering is a separate stage defined by a backend-agnostic shape
 contract (section 4.3). The same contract could be satisfied against another
 systems backend — for example Zig or C — without changing RSScript semantics.
 
-Targeting Rust in v0.5 is an engineering decision, not an identity. rustc, LLVM,
+Targeting Rust in v0.6 is an engineering decision, not an identity. rustc, LLVM,
 Cargo, and the crate ecosystem supply a mature backend — codegen, optimization,
 platform support, linking, libraries, and a type-checking backstop for generated
 code — that would otherwise take years to build. Reusing it lets RSScript spend
@@ -458,7 +499,7 @@ source-span hooks
 native function registry
 ```
 
-For v0.5, `Managed<T>` is part of the single-isolate ABI: it is non-atomic,
+For v0.6, `Managed<T>` is part of the single-isolate ABI: it is non-atomic,
 intentionally `!Send` and `!Sync`, and valid only inside one RSScript isolate.
 Generated Rust must not require or promise ordinary Rust thread sharing for
 managed handles.
@@ -474,7 +515,7 @@ rssc 0.5.x -> rss_rt 0.5.x
 
 ### 4.5 Managed runtime reference model
 
-Managed values are runtime-mediated handles. The reference v0.5 implementation
+Managed values are runtime-mediated handles. The reference v0.6 implementation
 is single-isolate and `Rc<RefCell<T>>`-like:
 
 ```text
@@ -482,7 +523,7 @@ read x  acquires a shared runtime read view
 mut x   acquires an exclusive runtime write view
 ```
 
-RSScript v0.5 exposes a single-isolate source model. Within that model,
+RSScript v0.6 exposes a single-isolate source model. Within that model,
 frontend-visible conflicts such as same-call `read`/`mut`/`take`/`manage`
 overlap are static diagnostics. Managed handles are intentionally not `Send` or
 `Sync`; Rust's type system must prevent them from being moved to ordinary
@@ -492,7 +533,7 @@ failures; they must become RSScript runtime diagnostics with source spans, not
 raw Rust panics or deadlocks.
 
 Waiting or serializing ordinary contention is a future cross-thread or
-cross-isolate runtime behavior, not a v0.5 source-level promise.
+cross-isolate runtime behavior, not a v0.6 source-level promise.
 
 Alternative runtimes may optimize internally only if they preserve RSScript-observable semantics:
 
@@ -502,7 +543,7 @@ read/mut do not expose backend-specific borrow errors
 runtime failures are reported as RSScript diagnostics
 ```
 
-RSScript v0.5 has a single-isolate model. Managed handles do not cross isolates.
+RSScript v0.6 has a single-isolate model. Managed handles do not cross isolates.
 Future cross-thread or cross-isolate transfer requires explicit message or
 channel capabilities rather than implicit shared managed handles.
 
@@ -578,14 +619,14 @@ without renumbering later chapters. It is a primary semantic-boundary chapter: i
 defines where resources drop, where local-move and freshness state change, and
 where source maps mark boundaries.
 
-This chapter defines the v0.5 executable statement and control-flow surface. It
+This chapter defines the v0.6 executable statement and control-flow surface. It
 is normative for where resources drop, where freshness and local-move state
 change, and where source maps mark boundaries; the Rust lowering must preserve
 these semantics.
 
 ### Statements
 
-The v0.5 statement forms are:
+The v0.6 statement forms are:
 
 ```text
 let binding
@@ -611,12 +652,12 @@ Ordering operators require numeric operands. Logical `&&` and `||` require
 `Bool` operands. RSScript has no implicit conversion or user-defined operator
 overload resolution.
 
-RSScript v0.5 has **no assignment statement** other than these initialization
+RSScript v0.6 has **no assignment statement** other than these initialization
 bindings: there is no `x = y`, `obj.field = y`, or `list[i] = y`. All mutation is
 expressed through explicit `mut` API calls (`Map.insert(map: mut m, ...)`), so
 mutation always participates in call-like effect, conflict-root, and resource
 checking. If assignment is added later it must itself become a call-like,
-effect-checked construct; v0.5 deliberately omits it.
+effect-checked construct; v0.6 deliberately omits it.
 
 `?` is the failure-propagation operator.
 
@@ -652,7 +693,7 @@ A future version may add an explicit `Result.map_err` API for this in canonical
 call form (`Result.map_err(result: ..., mapper: ...)`); it would still be an
 explicit, named call, never an implicit backend conversion. It is described here
 in prose because the closure-parameter syntax it would need is not part of the
-v0.5 surface.
+v0.6 surface.
 
 Core error types may expose explicit lossy message conversion helpers, for
 example `JsonError.message(error: read e)` or `FileError.message(error: read e)`.
@@ -664,7 +705,7 @@ source as the `?` token.
 
 This is the one implicit control transfer RSScript allows, and it lowers to
 Rust's `?`, whose default behavior is exactly the `From` conversion Article III
-forbids. The sound v0.5 rule has two obligations:
+forbids. The sound v0.6 rule has two obligations:
 
 ```text
 1. RSScript lowering emits no `From`/`Into` conversions for error types. With
@@ -727,7 +768,7 @@ resource opened in the body drops at the end of each iteration. `break` and
 match <value> { <arm> => { ... } ... }
 ```
 
-In v0.5, `match` is over the standard `Option<T>` / `Result<T, E>` variant
+In v0.6, `match` is over the standard `Option<T>` / `Result<T, E>` variant
 shapes and declared RSScript `sum` types. The scrutinee must have type
 `Option<T>`, `Result<T, E>`, or a declared sum type. Arm variants must match the
 scrutinee family: `Option<T>` arms may use `Some`/`None`, `Result<T, E>` arms may
@@ -985,7 +1026,7 @@ do not keep the target object alive
 terminate local-inline paths
 cannot be taken as inline local fields
 must target a class type: a weak field whose type is not a class is a
-  diagnostic (RS0902). v0.5 weak references break managed cycles only between
+  diagnostic (RS0902). v0.6 weak references break managed cycles only between
   class identities; a weak struct/container field is not permitted.
 must be explicitly upgraded before use
 must be initialized from an explicit weak-handle expression
@@ -1032,9 +1073,9 @@ Use `with` or `ResourcePool<T: Resource>`.
 
 `Copy` is a core distinction: Copy parameters do not require a data effect
 (§10.5), Copy fields are inline (§6.5), and managed containers and closures may
-hold Copy values freely. v0.5 therefore fixes the Copy set explicitly.
+hold Copy values freely. v0.6 therefore fixes the Copy set explicitly.
 
-The Copy types in v0.5 are exactly the compiler-declared scalar primitives:
+The Copy types in v0.6 are exactly the compiler-declared scalar primitives:
 
 ```text
 Bool
@@ -1049,7 +1090,7 @@ Two further types are **exempt from data-effect syntax** but are **not Copy** �
 do not read this as "freely copyable":
 
 ```text
-Fd       a descriptor handle. Fd is not a user-facing ordinary value in v0.5: it
+Fd       a descriptor handle. Fd is not a user-facing ordinary value in v0.6: it
          appears only inside native/resource implementations such as File, and is
          exempt from data effects only in trusted native/resource internals, not
          as a general public API type. Copying an Fd value is not a sanctioned
@@ -1060,7 +1101,7 @@ closure  closure-typed parameters do not use read/mut/take syntax, but closures
          retention (§10.8) is unchanged.
 ```
 
-The sized and unsized scalar names are **distinct types in v0.5, not aliases**:
+The sized and unsized scalar names are **distinct types in v0.6, not aliases**:
 `Int` is not an alias for `Int64`, `Byte` is not an alias for `UInt8`, and so on.
 There is no implicit conversion between them (§2.4); width changes are explicit
 through a `T.from` constructor (`let n: Int64 = Int64.from(value: x)`). Whether
@@ -2931,7 +2972,7 @@ unsafe usage makes line-level locality worth its cost. Its fixed contract:
 ```
 
 When this lands, §15.4.1 gains the marker rules; until then those rules are not
-enforced and must not be, so v0.5 code never writes `unsafe` at a call site.
+enforced and must not be, so v0.6 code never writes `unsafe` at a call site.
 
 ---
 
@@ -2958,7 +2999,7 @@ low_semantic_risk
 unknown
 ```
 
-The old skip-safety label is not a v0.5 review-map category. Implementations
+The old skip-safety label is not a v0.6 review-map category. Implementations
 must emit `low_semantic_risk`.
 
 A region carries exactly one **classification** plus a list of **reasons**.
@@ -2982,7 +3023,7 @@ Reasons are a list and never collapse: a region may report
 `["public_api", "unresolved_call"]` with classification `unknown`. This keeps the
 single displayed category deterministic while preserving why.
 
-*v0.5 implementation status: the checker emits `must_review`, `low_semantic_risk`,
+*v0.6 implementation status: the checker emits `must_review`, `low_semantic_risk`,
 and `unknown` as classifications, reports `entry_point` as a marker, and folds
 `review_if_changed` into `must_review`; `unknown` propagates to any region that
 calls an `unknown` region. A future version may split out `review_if_changed`
@@ -3134,7 +3175,7 @@ native boundary violation
 
 Diagnostic codes are `RSnnnn` and stable. They are allocated by range so codes
 are not invented ad hoc; new codes join the range matching their concern. This is
-the v0.5 allocation (it reflects the implemented codes, not an idealized scheme):
+the v0.6 allocation (it reflects the implemented codes, not an idealized scheme):
 
 ```text
 RS00xx  signature / declaration / syntax / effect validity, match exhaustiveness,
@@ -3237,7 +3278,7 @@ Raw rustc diagnostics may be attached under a verbose flag but must not be the p
 
 ### 17.5 Semantic guarantee table
 
-This table records the enforcement tier for the main v0.5 promises. The tier is
+This table records the enforcement tier for the main v0.6 promises. The tier is
 part of the specification contract: implementations must not present a
 `review-only` or `unsupported` fact as a static safety guarantee.
 
@@ -3253,7 +3294,7 @@ part of the specification contract: implementations must not present a
 | Fresh return preservation for `fresh T`, `Result<fresh T, E>`, and `Option<fresh T>` | static | frontend checker |
 | Resource escape, resource-in-container rejection, and `with` scope boundaries | static | frontend checker |
 | Deterministic resource drop on ordinary control-flow exits | dynamic | generated Rust/runtime lowering contract |
-| Resource cleanup after isolate abort or runtime termination | unsupported | no v0.5 guarantee |
+| Resource cleanup after isolate abort or runtime termination | unsupported | no v0.6 guarantee |
 | `ResourcePool<T>` local-only materialization, eager/noescape factory, and positive literal `max_size` | static | frontend checker |
 | Exhausted `ResourcePool.borrow` | dynamic defensive diagnostic | runtime, for non-conforming or future multi-borrow cases |
 | Weak field target kind and explicit upgrade requirement | static | frontend checker |
@@ -3897,13 +3938,14 @@ Writer.write(self: mut writer, message: read message)
 
 ## 20. Implementation Roadmap
 
-v0.5 follows a Rust-lowering roadmap, but the roadmap is now a hardening plan
-rather than a list of not-yet-started components. The prototype already has the
-front-end parser/checker path, deterministic formatting for the supported AST
-surface, review metadata, Rust source lowering, source maps, rustc diagnostic
-remapping, a small single-isolate runtime, and core `.rssi` interface loading.
+v0.6 continues the Rust-lowering roadmap as a hardening and expansion plan.
+The prototype has the full front-end parser/checker path, deterministic
+formatting, review metadata, Rust source lowering, source maps, rustc diagnostic
+remapping, a single-isolate runtime, core `.rssi` interface loading, receiver-call
+shorthand, match expressions, extended collection/error APIs, and REIR adapter
+integration.
 
-Remaining v0.5 work should preserve this dependency order:
+Remaining v0.6 work preserves this dependency order:
 
 ```text
 spec invariant
@@ -3912,26 +3954,27 @@ spec invariant
   -> runtime behavior when static enforcement is impossible
   -> review metadata and self-hosted validation coverage
   -> package metadata only after the underlying language fact is stable
+  -> REIR evidence derivation from compiler-owned semantic facts
 ```
 
 Implementation priorities:
 
 ```text
-0.5.x  close known static-checker gaps against Chapters 5, 5A, 8, 9, 10, 12, and 17
-0.5.x  keep `.rssi` parsing and normalization compiler-owned
-0.5.x  keep source maps complete for every user-originating lowered construct
-0.5.x  preserve RSScript diagnostics before Rust lowering for unsupported syntax
-0.5.x  expand self-hosted validation programs that exercise review maps, package contracts, and diagnostics
-0.5.x  keep package-manager features behind stable language facts and normalized interfaces
+0.6.x  harden source-map completeness (match patterns, closure params, binary ops)
+0.6.x  replace package native text-scanning with structured adapter metadata
+0.6.x  expand REIR adapter coverage to all package-review capability categories
+0.6.x  close receiver-call edge cases (nested generics, aliased types)
+0.6.x  expand self-hosted validation to exercise REIR capability-binding scenarios
+0.6.x  keep package-manager features behind stable language facts and normalized interfaces
 ```
 
 Do not add package-manager shortcuts, lowering placeholders, or compatibility
 aliases that contradict the semantic model. Do not defer source mapping until
 after lowering.
 
-### 20.1 Post-v0.5 design directions
+### 20.1 Post-v0.6 design directions
 
-These directions are not part of the v0.5 executable MVP. They are recorded
+These directions are not part of the v0.6 executable surface. They are recorded
 because they have high future value and are consistent with RSScript's
 review-first, no-hidden-machinery model. Several are influenced by Dart, which
 demonstrates that an ergonomic managed application surface can be built without
@@ -3944,7 +3987,7 @@ across threads either, so RSScript can expose ergonomic async boundaries without
 Rust's `Pin`/`Poll`/`Waker` machinery leaking into source.
 
 ```text
-A. Extended async surface beyond the v0.5 MVP
+A. Extended async surface beyond the v0.6 MVP
    - Async operation/task handles, if exposed, are isolate-local managed handles,
      not a user-facing Future/Pin/Poll type system.
    - async closures and a stream / "await for" async-sequence form.
@@ -3972,7 +4015,7 @@ D. Structured-fix tooling and analysis server
      serving both human editors and AI repair agents as first-class consumers.
 
 E. Sum type hardening
-   - v0.5 has closed RSScript `sum` declarations with exhaustive match checking,
+   - v0.6 has closed RSScript `sum` declarations with exhaustive match checking,
      including match expressions in expression position.
    - future work: named payload fields in variants (`Authorized(id: String)`),
      package/interface contract metadata for sum variants, and semantic diff
@@ -4041,7 +4084,7 @@ I. Scoped views and slices (zero-copy borrowed regions)
    - not adopted: general lifetime annotations, lifetime elision rules,
      self-referential structs, or Pin/Unpin for views.
 
-J. Noescape collection pipeline (design principle — v0.5 implemented)
+J. Noescape collection pipeline (design principle — v0.6 implemented)
    - collection operations (List.map, List.filter, Map.fold, etc.) use noescape
      closures by contract: captured values cannot be retained, control flow is
      bounded, and effect side-channels are statically computable.
@@ -4051,7 +4094,7 @@ J. Noescape collection pipeline (design principle — v0.5 implemented)
    - not adopted: lazy iterators, iterator adaptors with hidden state,
      custom Iterator protocol for user types, or open-ended trait composition.
 
-K. Explicit error composition (design principle — v0.5 implemented)
+K. Explicit error composition (design principle — v0.6 implemented)
    - error mapping across type boundaries uses explicit Result.map_error at
      each crossing, keeping error-boundary changes visible to review.
    - the `?` operator propagates within a single error type; crossing error
@@ -4073,7 +4116,7 @@ L. Compiler-owned derives (restricted code generation)
      suppress review facts.
 
 M. Module visibility and re-export hardening
-   - modules and visibility are already part of v0.5 (.rssi files, pub markers).
+   - modules and visibility are already part of v0.6 (.rssi files, pub markers).
    - future work: semantic diff for public API changes (added/removed/modified),
      re-export chains tracked in review metadata, and package contract validation
      that public surface matches declared .rssi.
@@ -4109,7 +4152,7 @@ implicit flow promotion       any record-like form must use named fields
 
 ## 21. Non-goals
 
-RSScript v0.5 does not attempt to support:
+RSScript v0.6 does not attempt to support:
 
 ```text
 custom VM as primary execution target
@@ -4136,20 +4179,20 @@ auto method resolution, object safety rules, and type-erased dispatch with no
 effect contract. The receiver-call shorthand (§14.6.1) is not auto method
 resolution: it requires a mandatory effect keyword at the call site, resolves
 only when exactly one candidate exists, and expands to a single canonical
-qualified call. Protocol-typed dynamic dispatch is also not part of v0.5; any
+qualified call. Protocol-typed dynamic dispatch is also not part of v0.6; any
 future explicit, effect-carrying form must be admitted as a separate feature
 with source, checker, lowering, package-review, and REIR support (section 14.6).
 
 ### 21.1 Deferred, not excluded: managed memory strategy
 
-The v0.5 managed runtime is single-isolate reference counted
+The v0.6 managed runtime is single-isolate reference counted
 (`Rc`/`RefCell`-like). Reference counting does not collect reference cycles on
-its own, so v0.5 requires `weak` fields to break managed cycles, the same way
-Swift does. This is an accepted v0.5 limitation, not a permanent language
+its own, so v0.6 requires `weak` fields to break managed cycles, the same way
+Swift does. This is an accepted v0.6 limitation, not a permanent language
 guarantee.
 
 A future major version may add a tracing or moving collector for managed memory
-as an alternative backend. The following are therefore **deferred beyond v0.5,
+as an alternative backend. The following are therefore **deferred beyond v0.6,
 not permanent non-goals**:
 
 ```text
@@ -4171,7 +4214,7 @@ to reference counting and this option would close.
 
 ## 22. Reviewer Checklist
 
-Reviewers should evaluate v0.5 by asking:
+Reviewers should evaluate v0.6 by asking:
 
 ```text
 1. Is RSScript still managed-first?

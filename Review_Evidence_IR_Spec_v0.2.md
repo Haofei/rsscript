@@ -1,10 +1,25 @@
-# Review Evidence IR (REIR) Specification v0.1
+# Review Evidence IR (REIR) Specification v0.2
 
-Status: Draft / cross-layer review evidence core candidate  
-Version: 0.1  
-Audience: REIR implementers, adapter authors, RSScript compiler/package-tooling authors, infrastructure/IaC tool authors, CI/review-platform authors, IDE authors, AI review-agent authors, security and platform engineering teams  
-Scope: language-neutral review evidence model; semantic facts; evidence; confidence, acquisition, and precision; subject identity chains; capability ontology; required/granted/observed capability reconciliation; flow edges; slices; semantic diffs; exceptions; adapter profiles for RSScript, RSScript package metadata, K8s/IaC/IAM, runtime observation, and future systems-language producers  
+Status: Implementation-aligned / cross-layer review evidence core
+Version: 0.2
+Audience: REIR implementers, adapter authors, RSScript compiler/package-tooling authors, infrastructure/IaC tool authors, CI/review-platform authors, IDE authors, AI review-agent authors, security and platform engineering teams
+Scope: language-neutral review evidence model; semantic facts; evidence; confidence, acquisition, and precision; subject identity chains; capability ontology; required/granted/observed capability reconciliation; flow edges; slices; semantic diffs; exceptions; adapter profiles for RSScript, RSScript package metadata, K8s/IaC/IAM, runtime observation, and future systems-language producers
 Non-scope: RSScript language semantics, RSScript package dependency resolution, Kubernetes semantics, Terraform semantics, cloud-provider IAM semantics, executable workflow DSLs, full runtime sandbox implementation, formal business-specification language, arbitrary program verification, replacement for SBOM/SLSA/provenance standards
+
+### Changes from v0.1
+
+```text
+- RSScript adapter implemented and integrated into package review pipeline.
+- Capability-binding call-graph propagation now produces REIR required-capability
+  facts for each reachable API path.
+- S3 IAM scenario demonstrates end-to-end: code requires → IAM grants →
+  reconciliation proof → review summary.
+- Evidence bundle format includes reconciliation result (pass/fail/partial)
+  with per-capability detail.
+- Adapter profile for RSScript package metadata now emits structured
+  capability-binding facts rather than heuristic text annotations.
+- Unknown-reason field added to capability facts for incomplete analysis paths.
+```
 
 ---
 
@@ -136,7 +151,7 @@ REIR therefore has four design goals:
 
 ### 0.5 Non-goals
 
-REIR v0.1 does not attempt to provide:
+REIR v0.2 does not attempt to provide:
 
 ```text
 an executable workflow language
@@ -158,7 +173,7 @@ evidence sources. It does not replace their native formats or authorities.
 
 ## 1. REIR Core Model
 
-REIR v0.1 has a small object model:
+REIR v0.2 has a small object model:
 
 ```text
 Subject             the thing a fact or edge is about
@@ -281,7 +296,7 @@ Minimal subject:
 
 ### 2.1 Subject kinds
 
-REIR v0.1 recognizes these subject families:
+REIR v0.2 recognizes these subject families:
 
 ```text
 application
@@ -339,7 +354,7 @@ unknown
 ```
 
 Adapters may emit extension subject kinds using reverse-DNS or tool-qualified
-names, but core review engines are required to understand only the v0.1 core
+names, but core review engines are required to understand only the v0.2 core
 families.
 
 ### 2.2 SubjectChain
@@ -2117,7 +2132,7 @@ security and runtime drift detection.
 
 ## 20. CLI and Integration Surface (Design Target)
 
-REIR v0.1 does not require a specific CLI. The current prototype CLI supports
+REIR v0.2 does not require a specific CLI. The current prototype CLI supports
 `collect --producer rsscript`, `reconcile`, `diff`, `slice`, `merge`, and `show`
 over existing REIR bundle JSON. The RSScript collector accepts `--review-map`
 JSON from `rss review --map --json`, `--package-review` JSON from

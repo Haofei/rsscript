@@ -1,11 +1,23 @@
-# RSScript Package Manager Design — Final Review-Graph Draft
+# RSScript Package Manager Design — v0.6
 
-Status: Draft / implementation-aligned ecosystem design consolidation candidate  
-Version: 0.5-final-review-graph  
-Based on: RSScript v0.5 language model and package-manager design drafts  
-Audience: RSScript compiler implementers, package authors, native binding authors, registry implementers, CI/review-tool authors, AI coding-tool authors  
-Scope: package model, dependency resolution, Cargo integration, semantic dependency review, graph risk summary, native wrappers, review metadata, registry protocol direction  
+Status: Implementation-aligned / review-graph ecosystem design
+Version: 0.6
+Based on: RSScript v0.6 language model, REIR v0.2 evidence specification
+Audience: RSScript compiler implementers, package authors, native binding authors, registry implementers, CI/review-tool authors, AI coding-tool authors
+Scope: package model, dependency resolution, Cargo integration, semantic dependency review, graph risk summary, native wrappers, review metadata, registry protocol direction, REIR capability-binding integration
 Non-scope: RSScript core language semantics, full public registry product design, sandbox implementation, centralized trust policy, app-level specification DSL
+
+### Changes from v0.5
+
+```text
+- Package review now tracks capability-binding chains via call-graph propagation.
+- REIR adapter layer connects package review facts to evidence IR proofs.
+- Capability bindings support unknown-reason tracking for incomplete analysis.
+- S3 IAM scenarios validate the full review→evidence→reconciliation pipeline.
+- Package review risk assessment integrates unknown-capability-binding count.
+- Native risk detection targets structured adapter metadata (text scanning
+  remains as fallback but is documented as heuristic, not semantic authority).
+```
 
 ---
 
@@ -39,7 +51,7 @@ Implementation alignment note: the README's `Current CLI` section is the
 authority for commands implemented by the current prototype. This design also
 contains planned package-management commands and flags; those are labeled as
 design targets or future extensions where they go beyond the implemented surface.
-The canonical machine-readable-output flag for v0.5 documentation is `--json`.
+The canonical machine-readable-output flag for v0.6 documentation is `--json`.
 
 ### 0.1 Five package-management principles
 
@@ -512,11 +524,11 @@ serde_json crate
 The raw Rust crate API is not automatically exposed to RSScript. Only `.rssi`
 APIs are visible.
 
-v0.5 first-class native build integration is Rust/Cargo. Non-Rust libraries may
+v0.6 first-class native build integration is Rust/Cargo. Non-Rust libraries may
 be wrapped through Rust native wrappers and must be surfaced through native/FFI,
 native-link, build-script, system-library, or foreign-runtime facts when known.
 The RSScript package manager does not resolve npm, pip, Go modules, system
-package managers, or arbitrary foreign dependency graphs in v0.5.
+package managers, or arbitrary foreign dependency graphs in v0.6.
 
 ### 4.6 Review metadata
 
@@ -908,13 +920,13 @@ version requirement from registry or local index
 local path dependency
 ```
 
-Unsupported v0.5 dependency source forms:
+Unsupported v0.6 dependency source forms:
 
 ```toml
 my-git = { git = "https://example.org/my-git", rev = "abc123" }
 ```
 
-Git dependencies are not part of the v0.5 accepted dependency-source grammar. If
+Git dependencies are not part of the v0.6 accepted dependency-source grammar. If
 such a key appears, tooling must reject it with a stable "unsupported dependency
 source" diagnostic rather than attempting partial support or silently accepting a
 future-looking manifest.
@@ -964,7 +976,7 @@ A feature veto is not a request to silently remove the feature. If the graph
 cannot be resolved without the denied feature, resolution is review-rejected and
 must be changed by selecting another package, selected feature set, or provider.
 
-No package override, feature-pinning, or patch mechanism is defined in v0.5. A
+No package override, feature-pinning, or patch mechanism is defined in v0.6. A
 future override mechanism may be added only if it preserves feature visibility,
 lockfile determinism, and review metadata for the unified graph.
 
@@ -1106,7 +1118,7 @@ Rules:
    registry-only matching must reject the provider for that request. Local
    tooling may recheck the provider against the requested interface contract and
    accept it only if the recheck succeeds.
-6. v0.5 does not define a way for a provider to declare "any
+6. v0.6 does not define a way for a provider to declare "any
    contract-compatible hash". Compatibility ranges for provider declarations are
    future work.
 7. A provider may implement multiple interface packages, but each implementation
@@ -1161,7 +1173,7 @@ Workspace support should be implemented after local path dependencies.
 
 Every RSScript-facing public API must be declared in `.rssi`.
 
-v0.5 package-interface syntax uses fully qualified public symbols and opaque
+v0.6 package-interface syntax uses fully qualified public symbols and opaque
 interface types. There is no package-level `namespace` shorthand: package tooling
 follows the compiler frontend's normalizer and must reject shorthand forms rather
 than normalizing them.
@@ -1279,7 +1291,7 @@ The compiler frontend emits a canonical normalized interface IR for the selected
 `.rssi` files. Package tooling hashes that canonical IR; it must not hash source
 text directly.
 
-Normative hashing rules for v0.5:
+Normative hashing rules for v0.6:
 
 ```text
 algorithm: SHA-256
@@ -2325,7 +2337,7 @@ may experiment, but they must report raw facts separately from any score.
 
 ### 12.1 `rss pkg check`
 
-Canonical command namespace is `rss pkg`. v0.5 does not define command aliases.
+Canonical command namespace is `rss pkg`. v0.6 does not define command aliases.
 
 Default `rss pkg check` runs:
 

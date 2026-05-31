@@ -1310,7 +1310,9 @@ fn expr_is_fresh_shell(expr: &HirExpr) -> bool {
                     },
             } => signature.returns_fresh,
             CallResolution::Resolved { signature, .. } => signature.returns_fresh,
-            CallResolution::EnumVariant | CallResolution::Unknown => false,
+            CallResolution::EnumVariant
+            | CallResolution::Ambiguous { .. }
+            | CallResolution::Unknown => false,
         },
         HirExpr::Try { value, .. } | HirExpr::Effect { value, .. } => expr_is_fresh_shell(value),
         HirExpr::Ident { .. }
@@ -1667,7 +1669,9 @@ fn constructor_arg_uses_managed_inline_value(
                         && analyzer.hir.type_kind(type_name).is_some()
                 })
             }
-            CallResolution::EnumVariant | CallResolution::Unknown => false,
+            CallResolution::EnumVariant
+            | CallResolution::Ambiguous { .. }
+            | CallResolution::Unknown => false,
         },
         HirExpr::Binary { .. }
         | HirExpr::Match { .. }

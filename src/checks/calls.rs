@@ -962,6 +962,29 @@ fn check_call_args(
             );
             return;
         }
+        CallResolution::Ambiguous { candidates } => {
+            analyzer.diagnostics.push(
+                Diagnostic::error(
+                    code::UNKNOWN_CALLEE,
+                    format!(
+                        "receiver-call `{}` is ambiguous between {}.",
+                        callee_display(callee),
+                        candidates.join(", ")
+                    ),
+                    call_span.clone(),
+                    "ambiguous receiver call",
+                )
+                .with_cause(
+                    "Receiver-call shorthand is only allowed when exactly one inherent or protocol method candidate is visible.",
+                )
+                .with_fix(
+                    "use_canonical_call",
+                    "Write the canonical qualified call explicitly.",
+                    "manual",
+                ),
+            );
+            return;
+        }
         CallResolution::EnumVariant => return,
     };
     check_receiver_call_self_effect(analyzer, callee, &signature, call_span);
@@ -1034,32 +1057,29 @@ fn check_call_args(
         }
     }
 
-    if args.iter().all(|arg| arg.name.is_some()) {
-        let provided_names: HashSet<&str> =
-            args.iter().filter_map(|arg| arg.name.as_deref()).collect();
-        for param in &signature_params {
-            if !provided_names.contains(param.name.as_str()) {
-                analyzer.diagnostics.push(
-                    Diagnostic::error(
-                        code::MISSING_ARGUMENT,
-                        format!(
-                            "call to `{call_name}` is missing required argument `{}`.",
-                            param.name
-                        ),
-                        call_span.clone(),
-                        "missing argument",
-                    )
-                    .with_cause(format!(
-                        "`{call_name}` requires a named argument `{}`.",
+    let provided_names: HashSet<&str> = args.iter().filter_map(|arg| arg.name.as_deref()).collect();
+    for param in &signature_params {
+        if !provided_names.contains(param.name.as_str()) {
+            analyzer.diagnostics.push(
+                Diagnostic::error(
+                    code::MISSING_ARGUMENT,
+                    format!(
+                        "call to `{call_name}` is missing required argument `{}`.",
                         param.name
-                    ))
-                    .with_fix(
-                        "add_argument",
-                        format!("Add `{}: ...` to the call.", param.name),
-                        "manual",
                     ),
-                );
-            }
+                    call_span.clone(),
+                    "missing argument",
+                )
+                .with_cause(format!(
+                    "`{call_name}` requires a named argument `{}`.",
+                    param.name
+                ))
+                .with_fix(
+                    "add_argument",
+                    format!("Add `{}: ...` to the call.", param.name),
+                    "manual",
+                ),
+            );
         }
     }
 

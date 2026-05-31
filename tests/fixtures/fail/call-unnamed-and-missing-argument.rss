@@ -1,0 +1,11 @@
+// expect: RS0201 RS0204
+features: local
+
+fn combine(left: read String, middle: read String, right: read String) -> fresh String {
+    return String.concat(left: read left, right: read right)
+}
+
+fn main() -> Unit {
+    let value = combine(read "a", middle: read "b")
+    Log.write(message: read value)
+}

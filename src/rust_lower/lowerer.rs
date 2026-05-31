@@ -962,7 +962,14 @@ impl<'a> RustLowerer<'a> {
 
     fn record_expr_source_map(&mut self, expr: &Expr, generated: &Span) {
         match expr {
-            Expr::Binary { left, right, .. } => {
+            Expr::Binary {
+                left, right, span, ..
+            } => {
+                self.source_map.push(RustSourceMapEntry {
+                    kind: "binary".to_string(),
+                    source: span.clone(),
+                    generated: generated.clone(),
+                });
                 self.record_expr_source_map(left, generated);
                 self.record_expr_source_map(right, generated);
             }
@@ -1033,10 +1040,22 @@ impl<'a> RustLowerer<'a> {
                 });
                 self.record_expr_source_map(value, generated);
             }
-            Expr::Closure { body, .. } => self.record_block_source_map(body, generated),
+            Expr::Closure { body, span, .. } => {
+                self.source_map.push(RustSourceMapEntry {
+                    kind: "closure".to_string(),
+                    source: span.clone(),
+                    generated: generated.clone(),
+                });
+                self.record_block_source_map(body, generated);
+            }
             Expr::Match { value, arms, .. } => {
                 self.record_expr_source_map(value, generated);
                 for arm in arms {
+                    self.source_map.push(RustSourceMapEntry {
+                        kind: "match_pattern".to_string(),
+                        source: match_pattern_span(&arm.pattern),
+                        generated: generated.clone(),
+                    });
                     self.record_block_source_map(&arm.body, generated);
                 }
             }
@@ -1250,7 +1269,12 @@ impl<'a> RustLowerer<'a> {
                         format!("{lowered_receiver}, {lowered_args}")
                     };
                     let callee_str = if is_protocol {
-                        format!("{}::{}", rust_ident(&namespace), rust_ident(method))
+                        format!(
+                            "<{} as {}>::{}",
+                            rust_ident(&receiver_type_name),
+                            rust_ident(&namespace),
+                            rust_ident(method)
+                        )
                     } else {
                         rust_qualified_function_ident(&namespace, method)
                     };
@@ -1959,6 +1983,12 @@ impl<'a> RustLowerer<'a> {
             }
         }
         None
+    }
+}
+
+fn match_pattern_span(pattern: &MatchPattern) -> Span {
+    match pattern {
+        MatchPattern::Variant { span, .. } | MatchPattern::Wildcard(span) => span.clone(),
     }
 }
 

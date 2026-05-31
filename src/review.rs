@@ -1279,7 +1279,7 @@ fn collect_review_map_facts_expr(
                             facts.user_calls.insert(function_sig_key(&signature));
                         }
                     }
-                    CallResolution::Unknown => {
+                    CallResolution::Ambiguous { .. } | CallResolution::Unknown => {
                         facts.unresolved_calls.insert(review_callee_display(callee));
                     }
                     CallResolution::EnumVariant => {}

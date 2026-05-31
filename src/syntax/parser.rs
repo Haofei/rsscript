@@ -1598,14 +1598,8 @@ fn parse_match_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usiz
 
 fn parse_match_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
     // match <value> { arms... }
-    // Find the opening brace within our expression range
-    let mut brace_start = start + 1;
-    while brace_start < end && !tokens[brace_start].symbol("{") {
-        brace_start += 1;
-    }
-    if brace_start >= end {
-        return None;
-    }
+    // The arms block is the top-level brace group whose close ends the expression.
+    let brace_start = find_match_expr_arms_open(tokens, start + 1, end)?;
     let Some(close) = find_matching(tokens, brace_start, "{", "}") else {
         return None;
     };
@@ -1623,6 +1617,28 @@ fn parse_match_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> 
         arms: parsed_arms.arms,
         span: tokens[start].span.clone(),
     })
+}
+
+fn find_match_expr_arms_open(tokens: &[Token], start: usize, end: usize) -> Option<usize> {
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    for index in start..end {
+        let token = &tokens[index];
+        if token.symbol("(") {
+            paren_depth += 1;
+        } else if token.symbol(")") {
+            paren_depth = paren_depth.saturating_sub(1);
+        } else if token.symbol("[") {
+            bracket_depth += 1;
+        } else if token.symbol("]") {
+            bracket_depth = bracket_depth.saturating_sub(1);
+        } else if paren_depth == 0 && bracket_depth == 0 && token.symbol("{") {
+            if find_matching(tokens, index, "{", "}").is_some_and(|close| close + 1 == end) {
+                return Some(index);
+            }
+        }
+    }
+    None
 }
 
 struct ParsedMatchArms {

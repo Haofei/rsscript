@@ -1436,6 +1436,51 @@ pub fn run() -> Unit {
 }
 
 #[test]
+fn rust_lowering_source_map_covers_match_patterns_closures_and_binary_exprs() {
+    let source = r#"
+fn maybe() -> Option<Int> {
+    return Some(1)
+}
+
+fn inspect() -> Int {
+    let values = List<Int>.new()
+    List.push(list: mut values, value: read 1)
+    let count = List.count_where(
+        list: read values,
+        predicate: |item| {
+            return item + 1 == 2
+        },
+    )
+    let value = maybe()
+    return match value {
+        Some(result) => { read result + count }
+        None => { 0 }
+    }
+}
+"#;
+    let lowered =
+        lower_source_to_rust_with_map("source-map.rss", source).expect("source should lower");
+
+    assert!(
+        lowered.source_map.iter().any(|entry| {
+            entry.kind == "match_pattern" && entry.source.file == "source-map.rss"
+        })
+    );
+    assert!(
+        lowered
+            .source_map
+            .iter()
+            .any(|entry| { entry.kind == "closure" && entry.source.file == "source-map.rss" })
+    );
+    assert!(
+        lowered
+            .source_map
+            .iter()
+            .any(|entry| { entry.kind == "binary" && entry.source.file == "source-map.rss" })
+    );
+}
+
+#[test]
 fn rustc_diagnostics_map_back_to_rsscript_source_spans() {
     let source = r#"
 features: local
@@ -1664,6 +1709,36 @@ fn write_line<W: Writer>(
     assert!(rust.contains("Writer::write(writer, &message);"));
     assert!(rust.contains("BufferWriter_write(self, message);"));
     assert!(!rust.contains("fn Writer_write"));
+}
+
+#[test]
+fn rust_lowering_uses_trait_qualified_ufcs_for_receiver_protocol_calls() {
+    let source = r#"
+protocol Writer {
+    fn write(self: mut Self, message: read String) -> Unit
+}
+
+struct BufferWriter {
+    count: Int
+}
+
+fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit {
+    Log.write(message: read message)
+}
+
+impl Writer for BufferWriter {
+    write = BufferWriter.write
+}
+
+fn write_line<W: Writer>(writer: mut W, message: read String) -> Unit {
+    mut writer.write(message: read message)
+}
+"#;
+    let rust =
+        lower_source_to_rust("receiver-protocol-lower.rss", source).expect("source should lower");
+
+    assert!(rust.contains("<W as Writer>::write(&mut writer, &message);"));
+    assert!(!rust.contains("Writer::write(&mut writer, &message);"));
 }
 
 #[test]

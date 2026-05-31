@@ -2194,7 +2194,9 @@ impl Analyzer<'_> {
                             );
                         }
                     }
-                    CallResolution::EnumVariant | CallResolution::Unknown => {}
+                    CallResolution::EnumVariant
+                    | CallResolution::Ambiguous { .. }
+                    | CallResolution::Unknown => {}
                 }
                 for arg in args {
                     self.check_runtime_guarantee_expr(guarantee, function_name, &arg.value);
