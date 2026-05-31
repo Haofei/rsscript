@@ -12,9 +12,16 @@ const DEFAULT_ADDR: &str = "127.0.0.1:39090";
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<(), Box<dyn Error>> {
     let addr = env::var("RSS_S3_DEMO_ADDR").unwrap_or_else(|_| DEFAULT_ADDR.to_string());
+    let delay_ms = env::var("RSS_S3_DEMO_SERVER_DELAY_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(150);
     let listener = TcpListener::bind(&addr).await?;
-    let state = Arc::new(ServerState::default());
-    println!("mock s3 server listening on {addr}");
+    let state = Arc::new(ServerState {
+        delay: Duration::from_millis(delay_ms),
+        ..ServerState::default()
+    });
+    println!("mock s3 server listening on {addr} delay_ms={delay_ms}");
 
     loop {
         let (stream, _) = listener.accept().await?;
@@ -31,6 +38,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 struct ServerState {
     total: AtomicUsize,
     in_flight: AtomicUsize,
+    delay: Duration,
 }
 
 async fn handle_connection(
@@ -39,7 +47,7 @@ async fn handle_connection(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let current = state.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
     let request = read_http_request(&mut stream).await?;
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    tokio::time::sleep(state.delay).await;
 
     let total = state.total.fetch_add(1, Ordering::SeqCst) + 1;
     println!(

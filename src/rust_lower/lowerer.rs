@@ -1069,6 +1069,7 @@ impl<'a> RustLowerer<'a> {
         is_async_runtime_intrinsic_callee(callee)
             || (self.async_native_boundary_callees.contains(&key)
                 && self.native_bindings.contains_key(&key))
+            || self.native_bindings.contains_key(&key)
     }
 
     pub(super) fn lower_expr(&mut self, expr: &Expr) -> String {

@@ -8,8 +8,23 @@ This demo shows the core REIR loop:
 4. REIR reconciles required code capabilities against mock IAM grants before deploy.
 
 The RSS source does not write `effects(requires(...))`. The capability binding is declared once at the package boundary.
-`src/s3.rss` is the mock native S3 boundary. `src/upload.rss` is ordinary RSS async business code; it is not a native implementation.
+`interface/s3.rssi` is the mock native S3 boundary. `src/upload.rss` is ordinary RSS async business code; it is not a native implementation.
 The runtime path is also executable: `rsscript-runtime` owns the Tokio-backed native async executor, while the demo native wrapper only starts HTTP IO futures.
+
+## Run the full demo flow
+
+```sh
+demos/s3-iam-reir/scripts/run-full-demo.sh
+```
+
+Expected flow:
+
+1. REIR fails before deploy because mock IAM grants `s3:GetObject`, not `s3:PutObject`.
+2. The fixed IAM mock grants `s3:PutObject`, and REIR passes.
+3. The RSS async uploader sends six 256 KiB objects through `rsscript-runtime::spawn_tokio_native`.
+4. A blocking sync client uploads the same number and size of objects sequentially.
+
+The default mock server adds 250 ms of per-request latency. The async client should finish close to one latency window, while the sync client pays that latency once per object. Tune with `RSS_S3_DEMO_OBJECTS`, `RSS_S3_DEMO_PAYLOAD_BYTES`, and `RSS_S3_DEMO_SERVER_DELAY_MS`.
 
 ## Run the concurrent runtime demo
 
@@ -17,7 +32,7 @@ The runtime path is also executable: `rsscript-runtime` owns the Tokio-backed na
 demos/s3-iam-reir/scripts/run-runtime-demo.sh
 ```
 
-Expected result: the script starts a Tokio multi-thread mock S3 HTTP server, lowers the RSS package, and runs three `task_group` uploads concurrently through `rsscript-runtime::spawn_tokio_native`.
+Expected result: the script starts a Tokio multi-thread mock S3 HTTP server, lowers the RSS package, and runs six `task_group` uploads concurrently through `rsscript-runtime::spawn_tokio_native`.
 The mock server log is written to `demos/s3-iam-reir/review/mock-s3-server.log`; the `in_flight` values should show overlapping requests.
 
 ## Run the failing deployment check
