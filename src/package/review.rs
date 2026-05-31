@@ -623,8 +623,8 @@ fn package_review_capabilities(
     }
 
     let call_graph = collect_package_call_graph(sources);
-    let mut capabilities = Vec::new();
-    let mut seen = BTreeSet::new();
+    let mut capabilities = BTreeMap::new();
+    let mut best_chain_lengths = BTreeMap::new();
     for binding in &review.capability_bindings {
         let mut queue = vec![(
             binding.symbol.clone(),
@@ -632,22 +632,34 @@ fn package_review_capabilities(
             call_graph.function_spans.get(&binding.symbol).cloned(),
         )];
         while let Some((function, call_chain, span)) = queue.pop() {
-            if !seen.insert((binding.symbol.clone(), function.clone())) {
+            let key = (binding.symbol.clone(), function.clone());
+            let chain_len = call_chain.len();
+            if best_chain_lengths
+                .get(&key)
+                .is_some_and(|best_len| *best_len >= chain_len)
+            {
                 continue;
             }
-            capabilities.push(PackageReviewCapability {
-                function: function.clone(),
-                binding_symbol: binding.symbol.clone(),
-                category: binding.category.clone(),
-                provider: binding.provider.clone(),
-                service: binding.service.clone(),
-                action: binding.action.clone(),
-                resource: binding.resource.clone(),
-                call_chain: call_chain.clone(),
-                span,
-            });
+            best_chain_lengths.insert(key.clone(), chain_len);
+            capabilities.insert(
+                key,
+                PackageReviewCapability {
+                    function: function.clone(),
+                    binding_symbol: binding.symbol.clone(),
+                    category: binding.category.clone(),
+                    provider: binding.provider.clone(),
+                    service: binding.service.clone(),
+                    action: binding.action.clone(),
+                    resource: binding.resource.clone(),
+                    call_chain: call_chain.clone(),
+                    span,
+                },
+            );
             if let Some(callers) = call_graph.reverse_calls.get(&function) {
                 for caller in callers.iter().rev() {
+                    if call_chain.contains(&caller.function) {
+                        continue;
+                    }
                     let mut caller_chain = Vec::with_capacity(call_chain.len() + 1);
                     caller_chain.push(caller.function.clone());
                     caller_chain.extend(call_chain.iter().cloned());
@@ -660,6 +672,7 @@ fn package_review_capabilities(
             }
         }
     }
+    let mut capabilities = capabilities.into_values().collect::<Vec<_>>();
     capabilities.sort_by(|left, right| {
         left.binding_symbol
             .cmp(&right.binding_symbol)

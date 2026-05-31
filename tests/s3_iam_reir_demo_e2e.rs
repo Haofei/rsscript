@@ -16,6 +16,7 @@ use rsscript::{
     lower_sources_to_rust_package_with_options, package_lowering_input, review_package_dir,
     write_generated_rust_package,
 };
+use serde::Deserialize;
 
 const OBJECTS: usize = 6;
 const PAYLOAD_BYTES: usize = 256 * 1024;
@@ -41,7 +42,7 @@ fn s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain() {
 
     let missing_reconciliations = reir::reconcile_capabilities_for_target(
         &required_facts,
-        &mock_deployment_grants("s3:GetObject"),
+        &deployment_grants_from_fixtures(&demo_dir, "mock-iam-missing.json"),
         Some("prod"),
     );
     assert!(missing_reconciliations.iter().any(|reconciliation| {
@@ -74,10 +75,25 @@ fn s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain() {
                 .as_deref()
                 .is_some_and(|reason| reason.contains("upload_report -> S3.put_object"))
     }));
+    let upload_batch_requirement = required_facts
+        .iter()
+        .find(|fact| {
+            fact.subject.id == "rss-s3-uploader::function::Reports.upload_batch"
+                && fact
+                    .capability
+                    .as_ref()
+                    .is_some_and(|capability| capability.action.as_deref() == Some("s3:PutObject"))
+        })
+        .expect("Reports.upload_batch should carry propagated S3 PutObject requirement");
+    assert!(upload_batch_requirement.evidence.iter().any(|evidence| {
+        evidence.reason.as_deref().is_some_and(|reason| {
+            reason.contains("Reports.upload_batch -> upload_report -> S3.put_object")
+        })
+    }));
 
     let fixed_reconciliations = reir::reconcile_capabilities_for_target(
         &required_facts,
-        &mock_deployment_grants("s3:PutObject"),
+        &deployment_grants_from_fixtures(&demo_dir, "mock-iam-fixed.json"),
         Some("prod"),
     );
     assert!(
@@ -139,54 +155,104 @@ fn s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain() {
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
-fn mock_deployment_grants(s3_action: &str) -> Vec<Fact> {
-    vec![
-        capability_grant(
-            "fact.mock_runtime.native_allowed",
-            Capability {
-                category: CapabilityCategory::RuntimeNative,
-                provider: Some("rsscript".to_string()),
-                service: None,
-                action: None,
-                resource: None,
-                constraints: HashMap::new(),
-            },
-        ),
-        capability_grant(
-            "fact.mock_runtime.network_client_allowed",
-            Capability {
-                category: CapabilityCategory::NetworkClient,
-                provider: None,
-                service: None,
-                action: None,
-                resource: None,
-                constraints: HashMap::new(),
-            },
-        ),
-        capability_grant(
-            "fact.mock_iam.report_uploader",
-            Capability {
-                category: CapabilityCategory::ObjectStorageWrite,
-                provider: Some("aws".to_string()),
-                service: Some("s3".to_string()),
-                action: Some(s3_action.to_string()),
-                resource: Some("arn:aws:s3:::reports-prod/*".to_string()),
-                constraints: HashMap::new(),
-            },
-        ),
-    ]
+#[derive(Deserialize)]
+struct RuntimeFixture {
+    service: String,
+    grants: Vec<GrantFixture>,
 }
 
-fn capability_grant(id: &str, capability: Capability) -> Fact {
+#[derive(Deserialize)]
+struct IamFixture {
+    role: String,
+    grants: Vec<GrantFixture>,
+}
+
+#[derive(Deserialize)]
+struct GrantFixture {
+    category: String,
+    provider: Option<String>,
+    service: Option<String>,
+    action: Option<String>,
+    resource: Option<String>,
+}
+
+fn deployment_grants_from_fixtures(demo_dir: &Path, iam_file: &str) -> Vec<Fact> {
+    let runtime_path = demo_dir.join("infra/mock-runtime.json");
+    let iam_path = demo_dir.join("infra").join(iam_file);
+    let runtime: RuntimeFixture = read_json(&runtime_path);
+    let iam: IamFixture = read_json(&iam_path);
+
+    let mut facts = runtime
+        .grants
+        .into_iter()
+        .enumerate()
+        .map(|(index, grant)| {
+            capability_grant(
+                &format!("fact.mock_runtime.{index}"),
+                SubjectKind::Service,
+                &runtime.service,
+                "report-uploader",
+                capability_from_grant(grant),
+                AcquisitionMode::RenderedManifest,
+                EvidenceKind::RenderedManifestPointer,
+                "infra/mock-runtime.json",
+            )
+        })
+        .collect::<Vec<_>>();
+    facts.extend(iam.grants.into_iter().enumerate().map(|(index, grant)| {
+        capability_grant(
+            &format!("fact.mock_iam.{index}"),
+            SubjectKind::CloudRole,
+            &iam.role,
+            "report-uploader",
+            capability_from_grant(grant),
+            AcquisitionMode::CloudPolicy,
+            EvidenceKind::CloudPolicyPointer,
+            &format!("infra/{iam_file}"),
+        )
+    }));
+    facts
+}
+
+fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> T {
+    let contents = fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+    serde_json::from_str(&contents)
+        .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()))
+}
+
+fn capability_from_grant(grant: GrantFixture) -> Capability {
+    Capability {
+        category: CapabilityCategory::try_from(grant.category)
+            .expect("capability category conversion should be infallible"),
+        provider: grant.provider,
+        service: grant.service,
+        action: grant.action,
+        resource: grant.resource,
+        constraints: HashMap::new(),
+    }
+}
+
+fn capability_grant(
+    id: &str,
+    subject_kind: SubjectKind,
+    subject_id: &str,
+    subject_name: &str,
+    capability: Capability,
+    acquisition_mode: AcquisitionMode,
+    evidence_kind: EvidenceKind,
+    evidence_file: &str,
+) -> Fact {
+    let action = capability.action.clone();
     Fact {
         schema: "reir.fact.v0.1".to_string(),
         id: id.to_string(),
         kind: FactKind::Capability,
         role: Some(FactRole::Granted),
         subject: Subject {
-            kind: SubjectKind::Service,
-            id: "prod/report-uploader".to_string(),
-            name: Some("report-uploader".to_string()),
+            kind: subject_kind,
+            id: subject_id.to_string(),
+            name: Some(subject_name.to_string()),
             package: None,
         },
         capability: Some(capability),
@@ -195,11 +261,11 @@ fn capability_grant(id: &str, capability: Capability) -> Fact {
             level: ConfidenceLevel::Authoritative,
             source: Some("mock_deployment".to_string()),
         },
-        acquisition_mode: AcquisitionMode::RenderedManifest,
+        acquisition_mode,
         precision: Precision::Category,
         evidence: vec![Evidence {
-            kind: EvidenceKind::RenderedManifestPointer,
-            file: Some("test-runner/mock-deployment".to_string()),
+            kind: evidence_kind,
+            file: Some(evidence_file.to_string()),
             line: None,
             column: None,
             length: None,
@@ -217,7 +283,7 @@ fn capability_grant(id: &str, capability: Capability) -> Fact {
             account: None,
             policy_arn: None,
             statement_index: None,
-            action: None,
+            action,
         }],
         unknown_reason: None,
     }

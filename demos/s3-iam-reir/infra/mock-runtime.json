@@ -1,0 +1,12 @@
+{
+  "service": "prod/report-uploader",
+  "grants": [
+    {
+      "category": "runtime.native",
+      "provider": "rsscript"
+    },
+    {
+      "category": "network.client"
+    }
+  ]
+}

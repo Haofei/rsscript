@@ -26,54 +26,20 @@ Expected flow:
 
 The test runner starts the Tokio mock S3 server, builds the generated RSS package, times a warmed async upload, times the blocking sync client, and asserts that the server saw overlapping async requests. It does not use shell scripts.
 
-## Run the failing deployment check
+## What the preflight proves
 
-From the repository root:
+The e2e test reads these fixture files directly:
 
-```sh
-mkdir -p demos/s3-iam-reir/review
+- `infra/mock-iam-missing.json`
+- `infra/mock-iam-fixed.json`
+- `infra/mock-runtime.json`
 
-cargo run --bin rss -- pkg review --reir demos/s3-iam-reir \
-  > demos/s3-iam-reir/review/rsscript.json
-
-demos/s3-iam-reir/scripts/mock-iam-to-reir.sh missing \
-  > demos/s3-iam-reir/review/iam-missing.json
-
-cargo run -p reir -- merge \
-  demos/s3-iam-reir/review/rsscript.json \
-  demos/s3-iam-reir/review/iam-missing.json \
-  --out demos/s3-iam-reir/review/system-missing.json
-
-cargo run -p reir -- reconcile \
-  --target prod \
-  --out demos/s3-iam-reir/review/system-missing-reconciled.json \
-  demos/s3-iam-reir/review/system-missing.json
-```
-
-Expected result: reconciliation fails because mock IAM grants `s3:GetObject`, while the RSS package requires `s3:PutObject`.
+The missing case fails because mock IAM grants `s3:GetObject`, while the RSS package requires `s3:PutObject`.
 The mock runtime grants still cover `runtime.native` and `network.client`, so the failure is isolated to the missing S3 IAM action.
 
-The missing capability evidence points back to the RSS call site, for example `src/upload.rss` inside `upload_report`, with the propagated call chain `upload_report -> S3.put_object`.
-
-## Run the fixed deployment check
-
-```sh
-demos/s3-iam-reir/scripts/mock-iam-to-reir.sh fixed \
-  > demos/s3-iam-reir/review/iam-fixed.json
-
-cargo run -p reir -- merge \
-  demos/s3-iam-reir/review/rsscript.json \
-  demos/s3-iam-reir/review/iam-fixed.json \
-  --out demos/s3-iam-reir/review/system-fixed.json
-
-cargo run -p reir -- reconcile \
-  --target prod \
-  --out demos/s3-iam-reir/review/system-fixed-reconciled.json \
-  demos/s3-iam-reir/review/system-fixed.json
-```
-
-Expected result: the `s3:PutObject` requirement is covered.
+The missing capability evidence points back to RSS call sites, including `Reports.upload_batch -> upload_report -> S3.put_object` and `upload_report -> S3.put_object`.
+The fixed case grants `s3:PutObject`, and the REIR reconciliation has no missing capabilities.
 
 ## Async note
 
-`Reports.upload_batch` uses `task_group` with multiple `async let` uploads. This is structured RSScript concurrency. RSScript source does not expose Tokio, Future, Pin, Poll, or Waker; those remain runtime implementation details.
+`Reports.upload_batch` first calls `upload_report` to show ordinary RSS call graph propagation, then uses `task_group` with multiple `async let` uploads to demonstrate structured concurrency. RSScript source does not expose Tokio, Future, Pin, Poll, or Waker; those remain runtime implementation details.
