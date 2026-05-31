@@ -59,6 +59,11 @@ impl Parser<'_> {
                 || self.at_ident("struct")
                 || self.at_ident("resource")
                 || self.at_ident("opaque")
+                || (self.at_ident("pub")
+                    && (self.peek_ident(1, "class")
+                        || self.peek_ident(1, "struct")
+                        || self.peek_ident(1, "resource")
+                        || self.peek_ident(1, "opaque")))
             {
                 let start = self.index;
                 if let Some(item) = self.parse_type_decl() {
@@ -67,9 +72,7 @@ impl Parser<'_> {
                     malformed_declaration_spans.push(self.tokens[start].span.clone());
                     self.index = skip_unknown_top_level(self.tokens, start);
                 }
-            } else if self.at_ident("sum")
-                || (self.at_ident("pub") && self.peek_ident(1, "sum"))
-            {
+            } else if self.at_ident("sum") || (self.at_ident("pub") && self.peek_ident(1, "sum")) {
                 let start = self.index;
                 if let Some(item) = self.parse_sum_type_decl() {
                     items.push(Item::SumType(item));
@@ -102,8 +105,7 @@ impl Parser<'_> {
                     malformed_declaration_spans.push(self.tokens[start].span.clone());
                     self.index = skip_unknown_top_level(self.tokens, start);
                 }
-            } else if self.at_ident("type")
-                || (self.at_ident("pub") && self.peek_ident(1, "type"))
+            } else if self.at_ident("type") || (self.at_ident("pub") && self.peek_ident(1, "type"))
             {
                 let start = self.index;
                 if let Some(alias) = self.parse_type_alias_decl() {
@@ -318,11 +320,7 @@ impl Parser<'_> {
             }
             self.index = close + 1;
         }
-        Some(SumVariant {
-            name,
-            fields,
-            span,
-        })
+        Some(SumVariant { name, fields, span })
     }
 
     // const NAME: Type = value
@@ -373,6 +371,10 @@ impl Parser<'_> {
 
     fn parse_type_decl(&mut self) -> Option<TypeDecl> {
         let span = self.current()?.span.clone();
+        let is_public = self.at_ident("pub");
+        if is_public {
+            self.index += 1;
+        }
         let is_opaque = self.at_ident("opaque");
         if is_opaque {
             self.index += 1;
@@ -417,6 +419,7 @@ impl Parser<'_> {
         Some(TypeDecl {
             kind,
             name,
+            is_public,
             is_opaque,
             type_params,
             malformed_generic_param_spans,
@@ -1191,7 +1194,9 @@ fn parse_block(tokens: &[Token], open: usize, close: usize) -> Block {
 fn parse_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
     // async let x = expr
     if tokens[start].is_ident_text("async")
-        && tokens.get(start + 1).is_some_and(|t| t.is_ident_text("let"))
+        && tokens
+            .get(start + 1)
+            .is_some_and(|t| t.is_ident_text("let"))
     {
         return parse_async_let_stmt(tokens, start, limit);
     }
@@ -1548,7 +1553,10 @@ fn parse_task_group_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt,
     // task_group { body }
     let open = start + 1;
     if open >= limit || !tokens[open].symbol("{") {
-        return (Stmt::Unknown(tokens[start].span.clone()), statement_end(tokens, start, limit));
+        return (
+            Stmt::Unknown(tokens[start].span.clone()),
+            statement_end(tokens, start, limit),
+        );
     }
     let Some(close) = find_matching(tokens, open, "{", "}") else {
         return (Stmt::Unknown(tokens[start].span.clone()), limit);

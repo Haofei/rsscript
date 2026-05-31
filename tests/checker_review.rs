@@ -33,6 +33,34 @@ pub fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
 }
 
 #[test]
+fn review_map_json_carries_module_and_use_declarations() {
+    let source = r#"
+module rss.package.review
+
+use rss.package.contract.PackageContract
+use rss.review.ReviewMap
+
+pub fn PackageReview.ready() -> Unit {
+    return ()
+}
+"#;
+    let map = review_map_sources(vec![("package-review.rss", source)]);
+    let json: Value =
+        serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
+
+    assert_eq!(json["modules"][0]["file"], "package-review.rss");
+    assert_eq!(json["modules"][0]["module_path"], "rss.package.review");
+    assert_eq!(
+        json["modules"][0]["uses"][0]["path"],
+        "rss.package.contract.PackageContract"
+    );
+    assert_eq!(
+        json["modules"][0]["uses"][1]["path"],
+        "rss.review.ReviewMap"
+    );
+}
+
+#[test]
 fn review_map_marks_unknown_qualified_calls_unknown() {
     let source = r#"
 fn delegated(value: read Int) -> Int {
@@ -581,8 +609,48 @@ fn main() -> Unit {
 "#;
     let findings = rsscript::review_sources("old.rss", old_source, "new.rss", new_source);
     assert!(
-        findings.iter().any(|f| f.code == "RSR018" && f.summary.contains("Color")),
+        findings
+            .iter()
+            .any(|f| f.code == "RSR018" && f.summary.contains("Color")),
         "should detect sum type addition: {findings:?}"
+    );
+}
+
+#[test]
+fn review_diff_detects_sum_type_variant_field_changed() {
+    let old_source = r#"
+sum PackageError {
+    Io(path: String)
+    Invalid(code: Int)
+}
+
+fn main() -> Unit {
+    return Unit
+}
+"#;
+    let new_source = r#"
+sum PackageError {
+    Io(path: Path)
+    Invalid(code: Int)
+}
+
+fn main() -> Unit {
+    return Unit
+}
+"#;
+    let findings = rsscript::review_sources("old.rss", old_source, "new.rss", new_source);
+    let finding = findings
+        .iter()
+        .find(|finding| finding.code == "RSR018" && finding.summary.contains("PackageError"))
+        .unwrap_or_else(|| panic!("should detect sum type variant field change: {findings:?}"));
+
+    assert_eq!(
+        finding.before.as_deref(),
+        Some("variants: Io(path: String), Invalid(code: Int)")
+    );
+    assert_eq!(
+        finding.after.as_deref(),
+        Some("variants: Io(path: Path), Invalid(code: Int)")
     );
 }
 
@@ -602,7 +670,9 @@ fn main() -> Unit {
 "#;
     let findings = rsscript::review_sources("old.rss", old_source, "new.rss", new_source);
     assert!(
-        findings.iter().any(|f| f.code == "RSR019" && f.summary.contains("MAX_SIZE")),
+        findings
+            .iter()
+            .any(|f| f.code == "RSR019" && f.summary.contains("MAX_SIZE")),
         "should detect const addition: {findings:?}"
     );
 }
@@ -623,7 +693,9 @@ fn main() -> Unit {
 "#;
     let findings = rsscript::review_sources("old.rss", old_source, "new.rss", new_source);
     assert!(
-        findings.iter().any(|f| f.code == "RSR020" && f.summary.contains("Name")),
+        findings
+            .iter()
+            .any(|f| f.code == "RSR020" && f.summary.contains("Name")),
         "should detect type alias addition: {findings:?}"
     );
 }

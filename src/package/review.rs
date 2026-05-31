@@ -12,10 +12,11 @@ use crate::syntax::ast::{Block, Callee, Expr, Item, MatchPattern, Stmt, TypeKind
 use crate::syntax::parse_source;
 
 use super::contract::{
-    PackageFunctionContract, collect_package_function_contracts, collect_package_type_contracts,
-    package_contract_has_resource_boundary, package_interface_contract_diagnostics,
-    package_interface_diagnostic_exports, package_interface_environment_diagnostics,
-    package_review_exports,
+    PackageFunctionContract, collect_package_const_contracts, collect_package_function_contracts,
+    collect_package_sum_type_contracts, collect_package_type_alias_contracts,
+    collect_package_type_contracts, package_contract_has_resource_boundary,
+    package_interface_contract_diagnostics, package_interface_diagnostic_exports,
+    package_interface_environment_diagnostics, package_review_exports,
 };
 use super::native::{
     native_binding_interface_sources, package_native_binding_diagnostics, package_native_bindings,
@@ -23,10 +24,11 @@ use super::native::{
 };
 use super::source_set::{Manifest, PackageSource, load_package};
 use super::{
-    PackageNativeRustReview, PackageProviderImplementation, PackageReview,
-    PackageReviewAwaitBoundary, PackageReviewAwaitSite, PackageReviewFile, PackageReviewFileKind,
-    PackageReviewSummary, PackageRisk, collect_dependency_interface_sources, dedup_diagnostics,
-    package_feature_may_change_boundary_risk, package_feature_resolution_diagnostics,
+    PackageDependencyKind, PackageNativeRustReview, PackageProviderImplementation, PackageReview,
+    PackageReviewAwaitBoundary, PackageReviewAwaitSite, PackageReviewDependency, PackageReviewFile,
+    PackageReviewFileKind, PackageReviewSummary, PackageRisk, collect_dependency_interface_sources,
+    dedup_diagnostics, package_dependency_spec, package_feature_may_change_boundary_risk,
+    package_feature_resolution_diagnostics,
 };
 
 pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
@@ -164,6 +166,9 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         dev_dependencies: manifest.dev_dependencies.len(),
         package_features: manifest.features.len(),
         public_types: api_summary.public_types,
+        public_sum_types: api_summary.public_sum_types,
+        public_type_aliases: api_summary.public_type_aliases,
+        public_consts: api_summary.public_consts,
         public_functions: api_summary.public_functions,
         public_apis: api_summary.public_apis,
         mutating_apis: api_summary.mutating_apis,
@@ -188,6 +193,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         .collect();
     let features = manifest.features.keys().cloned().collect::<Vec<_>>();
     let implements = package_provider_implementations(manifest);
+    let dependencies = package_review_dependencies(manifest);
     let mut exports = package_review_exports(sources, &review_map);
     exports.extend(interface_diagnostic_exports);
     exports.sort_by(|left, right| {
@@ -203,6 +209,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         reasons,
         features,
         implements,
+        dependencies,
         summary,
         files,
         exports,
@@ -211,6 +218,49 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         review_map,
         diagnostics,
     })
+}
+
+fn package_review_dependencies(manifest: &Manifest) -> Vec<PackageReviewDependency> {
+    let mut dependencies = manifest
+        .dependencies
+        .iter()
+        .map(|(name, value)| package_review_dependency(name, value, PackageDependencyKind::Normal))
+        .chain(manifest.dev_dependencies.iter().map(|(name, value)| {
+            package_review_dependency(name, value, PackageDependencyKind::Dev)
+        }))
+        .collect::<Vec<_>>();
+    dependencies.sort_by(|left, right| {
+        left.dependency_kind
+            .cmp(&right.dependency_kind)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    dependencies
+}
+
+fn package_review_dependency(
+    name: &str,
+    value: &toml::Value,
+    dependency_kind: PackageDependencyKind,
+) -> PackageReviewDependency {
+    let spec = package_dependency_spec(name, value);
+    let source = if let Some(path) = &spec.path {
+        format!("path+{path}")
+    } else if let Some(git) = &spec.git {
+        format!("git+{git}")
+    } else {
+        "registry".to_string()
+    };
+
+    PackageReviewDependency {
+        name: spec.name,
+        requirement: spec.requirement,
+        source,
+        features: spec.features,
+        dependency_kind,
+        compile_only: spec.compile_only,
+        test_only: spec.test_only,
+        platform_provided: spec.platform_provided,
+    }
 }
 
 fn package_lint_diagnostics(sources: &[PackageSource]) -> Vec<Diagnostic> {
@@ -387,6 +437,9 @@ fn collect_review_map_reasons(review_map: &ReviewMap, reasons: &mut Vec<String>)
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct PackageApiSummary {
     public_types: usize,
+    public_sum_types: usize,
+    public_type_aliases: usize,
+    public_consts: usize,
     public_functions: usize,
     public_apis: usize,
     mutating_apis: usize,
@@ -412,8 +465,17 @@ fn package_api_effect_summary(
         collect_package_function_contracts(sources, PackageReviewFileKind::Interface);
     let interface_type_contracts =
         collect_package_type_contracts(sources, PackageReviewFileKind::Interface);
+    let interface_sum_type_contracts =
+        collect_package_sum_type_contracts(sources, PackageReviewFileKind::Interface);
+    let interface_type_alias_contracts =
+        collect_package_type_alias_contracts(sources, PackageReviewFileKind::Interface);
+    let interface_const_contracts =
+        collect_package_const_contracts(sources, PackageReviewFileKind::Interface);
     let source_contracts;
     let source_type_contracts;
+    let source_sum_type_contracts;
+    let source_type_alias_contracts;
+    let source_const_contracts;
     let contracts = if interface_contracts.is_empty() {
         source_contracts =
             collect_package_function_contracts(sources, PackageReviewFileKind::Source);
@@ -428,6 +490,27 @@ fn package_api_effect_summary(
     } else {
         &interface_type_contracts
     };
+    let sum_type_contracts = if interface_sum_type_contracts.is_empty() {
+        source_sum_type_contracts =
+            collect_package_sum_type_contracts(sources, PackageReviewFileKind::Source);
+        &source_sum_type_contracts
+    } else {
+        &interface_sum_type_contracts
+    };
+    let type_alias_contracts = if interface_type_alias_contracts.is_empty() {
+        source_type_alias_contracts =
+            collect_package_type_alias_contracts(sources, PackageReviewFileKind::Source);
+        &source_type_alias_contracts
+    } else {
+        &interface_type_alias_contracts
+    };
+    let const_contracts = if interface_const_contracts.is_empty() {
+        source_const_contracts =
+            collect_package_const_contracts(sources, PackageReviewFileKind::Source);
+        &source_const_contracts
+    } else {
+        &interface_const_contracts
+    };
     let resource_types = type_contracts
         .values()
         .filter(|contract| contract.kind == TypeKind::Resource)
@@ -436,8 +519,15 @@ fn package_api_effect_summary(
 
     PackageApiSummary {
         public_types: type_contracts.len(),
+        public_sum_types: sum_type_contracts.len(),
+        public_type_aliases: type_alias_contracts.len(),
+        public_consts: const_contracts.len(),
         public_functions: contracts.len(),
-        public_apis: type_contracts.len() + contracts.len(),
+        public_apis: type_contracts.len()
+            + sum_type_contracts.len()
+            + type_alias_contracts.len()
+            + const_contracts.len()
+            + contracts.len(),
         mutating_apis: contracts
             .values()
             .filter(|contract| {
@@ -542,7 +632,11 @@ fn collect_package_await_sites(sources: &[PackageSource]) -> Vec<PackageReviewAw
                             )
                         })
                     }
-                    Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => Vec::new(),
+                    Item::Module(_)
+                    | Item::Use(_)
+                    | Item::SumType(_)
+                    | Item::TypeAlias(_)
+                    | Item::Const(_) => Vec::new(),
                 })
                 .map(|mut site| {
                     site.span.file = source.relative_path.clone();
@@ -602,6 +696,7 @@ fn collect_await_sites_in_block(
         block,
         &BTreeSet::new(),
         &BTreeSet::new(),
+        &BTreeMap::new(),
         context,
         &mut sites,
     );
@@ -613,6 +708,7 @@ fn collect_await_sites_from_stmt(
     statement: &Stmt,
     live_after: &BTreeSet<String>,
     scoped_live: &BTreeSet<String>,
+    pending_callees: &BTreeMap<String, String>,
     context: &AwaitSiteContext,
     sites: &mut Vec<PackageReviewAwaitSite>,
 ) {
@@ -624,6 +720,7 @@ fn collect_await_sites_from_stmt(
                     value,
                     live_after,
                     scoped_live,
+                    pending_callees,
                     context,
                     sites,
                 );
@@ -636,6 +733,7 @@ fn collect_await_sites_from_stmt(
                     value,
                     live_after,
                     scoped_live,
+                    pending_callees,
                     context,
                     sites,
                 );
@@ -647,6 +745,7 @@ fn collect_await_sites_from_stmt(
                 &stmt.resource,
                 live_after,
                 scoped_live,
+                pending_callees,
                 context,
                 sites,
             );
@@ -657,6 +756,7 @@ fn collect_await_sites_from_stmt(
                 &stmt.body,
                 live_after,
                 &body_scoped_live,
+                pending_callees,
                 context,
                 sites,
             );
@@ -667,6 +767,7 @@ fn collect_await_sites_from_stmt(
                 &stmt.condition,
                 live_after,
                 scoped_live,
+                pending_callees,
                 context,
                 sites,
             );
@@ -675,6 +776,7 @@ fn collect_await_sites_from_stmt(
                 &stmt.then_body,
                 live_after,
                 scoped_live,
+                pending_callees,
                 context,
                 sites,
             );
@@ -684,6 +786,7 @@ fn collect_await_sites_from_stmt(
                     else_body,
                     live_after,
                     scoped_live,
+                    pending_callees,
                     context,
                     sites,
                 );
@@ -696,6 +799,7 @@ fn collect_await_sites_from_stmt(
                     condition,
                     live_after,
                     scoped_live,
+                    pending_callees,
                     context,
                     sites,
                 );
@@ -705,6 +809,7 @@ fn collect_await_sites_from_stmt(
                 &stmt.body,
                 live_after,
                 scoped_live,
+                pending_callees,
                 context,
                 sites,
             );
@@ -715,6 +820,7 @@ fn collect_await_sites_from_stmt(
                 &stmt.iterable,
                 live_after,
                 scoped_live,
+                pending_callees,
                 context,
                 sites,
             );
@@ -725,16 +831,20 @@ fn collect_await_sites_from_stmt(
                 &stmt.body,
                 live_after,
                 &body_scoped_live,
+                pending_callees,
                 context,
                 sites,
             );
         }
         Stmt::TaskGroup(stmt) => {
+            let mut task_group_pending_callees = pending_callees.clone();
+            collect_task_group_async_let_callees(&stmt.body, &mut task_group_pending_callees);
             collect_await_sites_from_block(
                 function,
                 &stmt.body,
                 live_after,
                 scoped_live,
+                &task_group_pending_callees,
                 context,
                 sites,
             );
@@ -745,6 +855,7 @@ fn collect_await_sites_from_stmt(
                 &stmt.value,
                 live_after,
                 scoped_live,
+                pending_callees,
                 context,
                 sites,
             );
@@ -762,6 +873,7 @@ fn collect_await_sites_from_stmt(
                     &arm.body,
                     live_after,
                     &arm_scoped_live,
+                    pending_callees,
                     context,
                     sites,
                 );
@@ -773,6 +885,7 @@ fn collect_await_sites_from_stmt(
                 &stmt.value,
                 live_after,
                 scoped_live,
+                pending_callees,
                 context,
                 sites,
             );
@@ -781,13 +894,20 @@ fn collect_await_sites_from_stmt(
                 &stmt.else_body,
                 live_after,
                 scoped_live,
+                pending_callees,
                 context,
                 sites,
             );
         }
-        Stmt::Expr(expr) => {
-            collect_await_sites_from_expr(function, expr, live_after, scoped_live, context, sites)
-        }
+        Stmt::Expr(expr) => collect_await_sites_from_expr(
+            function,
+            expr,
+            live_after,
+            scoped_live,
+            pending_callees,
+            context,
+            sites,
+        ),
         Stmt::Break(_)
         | Stmt::Continue(_)
         | Stmt::MalformedWith(_)
@@ -804,6 +924,7 @@ fn collect_await_sites_from_block(
     block: &Block,
     continuation_uses: &BTreeSet<String>,
     scoped_live: &BTreeSet<String>,
+    pending_callees: &BTreeMap<String, String>,
     context: &AwaitSiteContext,
     sites: &mut Vec<PackageReviewAwaitSite>,
 ) {
@@ -812,7 +933,15 @@ fn collect_await_sites_from_block(
         let live_after = live_after_statements
             .get(index)
             .unwrap_or(continuation_uses);
-        collect_await_sites_from_stmt(function, statement, live_after, scoped_live, context, sites);
+        collect_await_sites_from_stmt(
+            function,
+            statement,
+            live_after,
+            scoped_live,
+            pending_callees,
+            context,
+            sites,
+        );
     }
 }
 
@@ -821,6 +950,7 @@ fn collect_await_sites_from_expr(
     expr: &Expr,
     live_after: &BTreeSet<String>,
     scoped_live: &BTreeSet<String>,
+    pending_callees: &BTreeMap<String, String>,
     context: &AwaitSiteContext,
     sites: &mut Vec<PackageReviewAwaitSite>,
 ) {
@@ -829,7 +959,7 @@ fn collect_await_sites_from_expr(
             let mut live_across_await = scoped_live.clone();
             live_across_await.extend(live_after.iter().cloned());
             collect_expr_uses(value, &mut live_across_await);
-            let callee = awaited_callee(value);
+            let callee = awaited_callee(value, pending_callees);
             sites.push(PackageReviewAwaitSite {
                 function: function.to_string(),
                 boundary: await_boundary(callee.as_deref(), context),
@@ -837,14 +967,28 @@ fn collect_await_sites_from_expr(
                 live_across_await: live_across_await.into_iter().collect(),
                 span: span.clone(),
             });
-            collect_await_sites_from_expr(function, value, live_after, scoped_live, context, sites);
+            collect_await_sites_from_expr(
+                function,
+                value,
+                live_after,
+                scoped_live,
+                pending_callees,
+                context,
+                sites,
+            );
         }
         Expr::Effect { value, .. }
         | Expr::Manage { value, .. }
         | Expr::Spawn { value, .. }
-        | Expr::Try { value, .. } => {
-            collect_await_sites_from_expr(function, value, live_after, scoped_live, context, sites)
-        }
+        | Expr::Try { value, .. } => collect_await_sites_from_expr(
+            function,
+            value,
+            live_after,
+            scoped_live,
+            pending_callees,
+            context,
+            sites,
+        ),
         Expr::Binary { left, right, .. } => {
             let mut left_live_after = live_after.clone();
             collect_expr_uses(right, &mut left_live_after);
@@ -853,14 +997,29 @@ fn collect_await_sites_from_expr(
                 left,
                 &left_live_after,
                 scoped_live,
+                pending_callees,
                 context,
                 sites,
             );
-            collect_await_sites_from_expr(function, right, live_after, scoped_live, context, sites);
+            collect_await_sites_from_expr(
+                function,
+                right,
+                live_after,
+                scoped_live,
+                pending_callees,
+                context,
+                sites,
+            );
         }
-        Expr::Field { base, .. } => {
-            collect_await_sites_from_expr(function, base, live_after, scoped_live, context, sites)
-        }
+        Expr::Field { base, .. } => collect_await_sites_from_expr(
+            function,
+            base,
+            live_after,
+            scoped_live,
+            pending_callees,
+            context,
+            sites,
+        ),
         Expr::Index { base, index, .. } => {
             let mut base_live_after = live_after.clone();
             collect_expr_uses(index, &mut base_live_after);
@@ -869,10 +1028,19 @@ fn collect_await_sites_from_expr(
                 base,
                 &base_live_after,
                 scoped_live,
+                pending_callees,
                 context,
                 sites,
             );
-            collect_await_sites_from_expr(function, index, live_after, scoped_live, context, sites);
+            collect_await_sites_from_expr(
+                function,
+                index,
+                live_after,
+                scoped_live,
+                pending_callees,
+                context,
+                sites,
+            );
         }
         Expr::Call { args, .. } => {
             let mut arg_live_after = live_after.clone();
@@ -882,6 +1050,7 @@ fn collect_await_sites_from_expr(
                     &arg.value,
                     &arg_live_after,
                     scoped_live,
+                    pending_callees,
                     context,
                     sites,
                 );
@@ -893,6 +1062,7 @@ fn collect_await_sites_from_expr(
             body,
             &BTreeSet::new(),
             &BTreeSet::new(),
+            &BTreeMap::new(),
             context,
             sites,
         ),
@@ -912,6 +1082,21 @@ fn block_live_after_statements(
         remove_stmt_bindings(statement, &mut used);
     }
     live_after
+}
+
+fn collect_task_group_async_let_callees(
+    block: &Block,
+    pending_callees: &mut BTreeMap<String, String>,
+) {
+    for statement in &block.statements {
+        if let Stmt::Let(stmt) = statement
+            && stmt.is_async
+            && let Some(value) = &stmt.value
+            && let Some(callee) = awaited_callee(value, pending_callees)
+        {
+            pending_callees.insert(stmt.name.clone(), callee);
+        }
+    }
 }
 
 fn collect_stmt_uses(statement: &Stmt, uses: &mut BTreeSet<String>) {
@@ -1082,10 +1267,13 @@ fn remove_stmt_bindings(statement: &Stmt, uses: &mut BTreeSet<String>) {
     }
 }
 
-fn awaited_callee(expr: &Expr) -> Option<String> {
+fn awaited_callee(expr: &Expr, pending_callees: &BTreeMap<String, String>) -> Option<String> {
     match expr {
         Expr::Call { callee, .. } => Some(callee_label(callee)),
-        Expr::Effect { value, .. } | Expr::Try { value, .. } => awaited_callee(value),
+        Expr::Ident(name, _) => pending_callees.get(name).cloned(),
+        Expr::Effect { value, .. } | Expr::Try { value, .. } => {
+            awaited_callee(value, pending_callees)
+        }
         _ => None,
     }
 }

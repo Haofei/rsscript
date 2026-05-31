@@ -40,7 +40,11 @@ impl<'a> RustLowerer<'a> {
             .filter_map(|item| match item {
                 Item::Type(ty) => Some((ty.name.clone(), ty.kind)),
                 Item::SumType(_) => None, // sum types don't contribute to type_kinds map
-                Item::Function(_) | Item::TypeAlias(_) | Item::Const(_) | Item::Module(_) | Item::Use(_) => None,
+                Item::Function(_)
+                | Item::TypeAlias(_)
+                | Item::Const(_)
+                | Item::Module(_)
+                | Item::Use(_) => None,
             })
             .collect();
         let native_boundary_callees = collect_native_boundary_callees(program);
@@ -122,7 +126,12 @@ impl<'a> RustLowerer<'a> {
         self.lower_protocol_traits(&mut out);
         for item in &self.program.items {
             match item {
-                Item::Type(_) | Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => {}
+                Item::Type(_)
+                | Item::Module(_)
+                | Item::Use(_)
+                | Item::SumType(_)
+                | Item::TypeAlias(_)
+                | Item::Const(_) => {}
                 Item::Function(function) if !function.body.statements.is_empty() => {
                     self.lower_function(function, &mut out);
                     out.push('\n');
@@ -432,7 +441,7 @@ impl<'a> RustLowerer<'a> {
         self.current_return_type = function.return_ty.clone();
         self.current_async_executor = ((function.is_async && block_has_await(&function.body))
             || block_has_task_group(&function.body))
-            .then(|| "__rsscript_async_executor".to_string());
+        .then(|| "__rsscript_async_executor".to_string());
         self.record_source_marker(out, 0, "function", &function.span);
         let is_public = function.is_public || is_runnable_main(function);
         out.push_str(&format!(
@@ -595,9 +604,7 @@ impl<'a> RustLowerer<'a> {
     ) -> Option<String> {
         match expr {
             Expr::Await { value, .. } => match value.as_ref() {
-                Expr::Ident(name, _) if async_let_names.contains(name) => {
-                    Some(rust_ident(name))
-                }
+                Expr::Ident(name, _) if async_let_names.contains(name) => Some(rust_ident(name)),
                 Expr::Effect { value, .. } => {
                     // await read x / await take x
                     if let Expr::Ident(name, _) = value.as_ref() {
@@ -751,7 +758,9 @@ impl<'a> RustLowerer<'a> {
             }
             Stmt::TaskGroup(stmt) => {
                 // Structured concurrency scope
-                out.push_str(&format!("{pad}// task_group: structured concurrency scope\n"));
+                out.push_str(&format!(
+                    "{pad}// task_group: structured concurrency scope\n"
+                ));
                 out.push_str(&format!("{pad}{{\n"));
                 self.lower_task_group_block(&stmt.body, out, indent + 1);
                 out.push_str(&format!("{pad}}}\n"));
@@ -766,11 +775,7 @@ impl<'a> RustLowerer<'a> {
                     } else {
                         lower_match_pattern(&arm.pattern)
                     };
-                    out.push_str(&format!(
-                        "{}{} => {{\n",
-                        "    ".repeat(indent + 1),
-                        pattern
-                    ));
+                    out.push_str(&format!("{}{} => {{\n", "    ".repeat(indent + 1), pattern));
                     self.lower_block(&arm.body, out, indent + 2);
                     out.push_str(&format!("{}}},\n", "    ".repeat(indent + 1)));
                 }
@@ -788,12 +793,14 @@ impl<'a> RustLowerer<'a> {
                             name,
                             binding: Some(_),
                             ..
-                        } => self.infer_expr_type(&stmt.value).and_then(|ty| match name.as_str() {
-                            "Some" if ty.name == "Option" => ty.args.first().cloned(),
-                            "Ok" if ty.name == "Result" => ty.args.first().cloned(),
-                            "Err" if ty.name == "Result" => ty.args.get(1).cloned(),
-                            _ => None,
-                        }),
+                        } => self
+                            .infer_expr_type(&stmt.value)
+                            .and_then(|ty| match name.as_str() {
+                                "Some" if ty.name == "Option" => ty.args.first().cloned(),
+                                "Ok" if ty.name == "Result" => ty.args.first().cloned(),
+                                "Err" if ty.name == "Result" => ty.args.get(1).cloned(),
+                                _ => None,
+                            }),
                         _ => None,
                     };
                     if let Some(binding_type) = binding_type {
@@ -1593,10 +1600,17 @@ impl<'a> RustLowerer<'a> {
             "Environment" => "rsscript_runtime::Environment".to_string(),
             "FunctionObject" => "rsscript_runtime::FunctionObject".to_string(),
             "Counter" => "rsscript_runtime::Counter".to_string(),
+            "Instant" => "rsscript_runtime::RssInstant".to_string(),
+            "Duration" => "rsscript_runtime::RssDuration".to_string(),
+            "Regex" => "rsscript_runtime::RssRegex".to_string(),
+            "RegexError" => "rsscript_runtime::RegexError".to_string(),
+            "TempDir" => "rsscript_runtime::TempDir".to_string(),
             "File" => "rsscript_runtime::File".to_string(),
+            "FileMetadata" => "rsscript_runtime::FileMetadata".to_string(),
             "FileError" | "IOError" => "std::io::Error".to_string(),
             "Request" => "rsscript_runtime::Request".to_string(),
             "Response" => "rsscript_runtime::Response".to_string(),
+            "HttpResponse" => "rsscript_runtime::Response".to_string(),
             "HttpError" => "rsscript_runtime::HttpError".to_string(),
             "TimerError" => "rsscript_runtime::TimerError".to_string(),
             "ConfigValue" => "rsscript_runtime::ConfigValue".to_string(),
@@ -1823,7 +1837,9 @@ fn infer_const_type(expr: &Expr) -> String {
 fn lower_const_value(expr: &Expr) -> String {
     match expr {
         Expr::Number(value, _) => value.clone(),
-        Expr::String(value, _) => format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"")),
+        Expr::String(value, _) => {
+            format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+        }
         Expr::Ident(name, _) if name == "true" || name == "false" => name.clone(),
         _ => "()".to_string(), // unsupported const expression
     }

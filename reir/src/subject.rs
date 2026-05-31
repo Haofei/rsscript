@@ -60,6 +60,8 @@ string_enum! {
         CodeFile => "code.file",
         #[serde(rename = "code.region")]
         CodeRegion => "code.region",
+        #[serde(rename = "code.module")]
+        CodeModule => "code.module",
         #[serde(rename = "code.function")]
         CodeFunction => "code.function",
         #[serde(rename = "code.public_api")]

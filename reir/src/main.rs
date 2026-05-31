@@ -1,16 +1,24 @@
-use reir::{
-    Bundle, Capability, Diff, DiffItem, DiffItemKind, Evidence, Fact, Reconciliation,
-    ReconciliationKind, ReconciliationStatus, Slice, SliceKind, compute_diff,
-    reconcile_capabilities, slice_by_kind,
+use reir::adapters::rsscript::{
+    rsscript_check_json_to_bundle, rsscript_json_to_bundle, rsscript_lock_diff_json_to_bundle,
+    rsscript_lock_json_to_bundle, rsscript_metadata_json_to_bundle,
+    rsscript_publish_json_to_bundle, rsscript_tree_json_to_bundle, rsscript_vendor_json_to_bundle,
 };
+use reir::{
+    Bundle, Capability, Diff, DiffItem, DiffItemKind, Evidence, Fact, FactRole, Reconciliation,
+    ReconciliationKind, ReconciliationStatus, Slice, SliceKind, compute_diff,
+    reconcile_capabilities_for_target, slice_by_kind,
+};
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::process::ExitCode;
 
 const USAGE: &str = "Usage:
-  reir reconcile --required required.json --granted granted.json [--json]
-  reir diff --baseline baseline.json --current current.json [--json]
-  reir slice --bundle bundle.json [--kind missing_capability] [--json]
+  reir collect --producer rsscript [--review-map review-map.json] [--package-review package-review.json] [--package-check check.json] [--package-lock lock.json] [--lock-update lock-diff.json] [--package-tree tree.json] [--package-publish publish.json] [--package-metadata metadata.json] [--package-vendor vendor.json] [--package-name name] [--out bundle.json] [--json]
+  reir reconcile --required required.json --granted granted.json [--target name] [--json]
+  reir reconcile [--bundle bundle.json] [--target name] [--out reconciled.json] [--json]
+  reir diff --baseline baseline.json --current current.json [--json] [--fail-on-change]
+  reir slice --bundle bundle.json [--kind <slice-kind>] [--json]
   reir merge file1.json file2.json [...] --out merged.json
   reir show bundle.json [--json]";
 
@@ -22,6 +30,7 @@ fn main() -> ExitCode {
     };
 
     match command {
+        "collect" => run_collect(&args[2..]),
         "reconcile" => run_reconcile(&args[2..]),
         "diff" => run_diff(&args[2..]),
         "slice" => run_slice(&args[2..]),
@@ -62,6 +71,139 @@ fn run_reconcile(args: &[String]) -> ExitCode {
     }
 }
 
+fn run_collect(args: &[String]) -> ExitCode {
+    match try_run_collect(args) {
+        Ok(code) => code,
+        Err(error) => report_error(error),
+    }
+}
+
+fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
+    if wants_help(args) {
+        print_usage();
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let mut producer = None;
+    let mut review_map = None;
+    let mut package_review = None;
+    let mut package_check = None;
+    let mut package_lock = None;
+    let mut lock_update = None;
+    let mut package_tree = None;
+    let mut package_publish = None;
+    let mut package_metadata = None;
+    let mut package_vendor = None;
+    let mut package_name = None;
+    let mut from = None;
+    let mut out = None;
+    let mut json = false;
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--producer" => producer = Some(take_value(args, &mut index, "--producer")?),
+            "--review-map" => review_map = Some(take_value(args, &mut index, "--review-map")?),
+            "--package-review" => {
+                package_review = Some(take_value(args, &mut index, "--package-review")?)
+            }
+            "--package-check" => {
+                package_check = Some(take_value(args, &mut index, "--package-check")?)
+            }
+            "--package-lock" => {
+                package_lock = Some(take_value(args, &mut index, "--package-lock")?)
+            }
+            "--lock-update" => lock_update = Some(take_value(args, &mut index, "--lock-update")?),
+            "--package-tree" => {
+                package_tree = Some(take_value(args, &mut index, "--package-tree")?)
+            }
+            "--package-publish" => {
+                package_publish = Some(take_value(args, &mut index, "--package-publish")?)
+            }
+            "--package-metadata" => {
+                package_metadata = Some(take_value(args, &mut index, "--package-metadata")?)
+            }
+            "--package-vendor" => {
+                package_vendor = Some(take_value(args, &mut index, "--package-vendor")?)
+            }
+            "--package-name" => {
+                package_name = Some(take_value(args, &mut index, "--package-name")?)
+            }
+            "--from" => from = Some(take_value(args, &mut index, "--from")?),
+            "--out" => out = Some(take_value(args, &mut index, "--out")?),
+            "--json" => json = true,
+            other => {
+                return Err(CliError::usage(format!(
+                    "unknown collect argument: {other}"
+                )));
+            }
+        }
+        index += 1;
+    }
+
+    let producer = producer.ok_or_else(|| CliError::usage("missing --producer <name>"))?;
+    if producer != "rsscript" {
+        return Err(CliError::usage(format!(
+            "`reir collect --producer {producer}` is planned; this build only supports `--producer rsscript`."
+        )));
+    }
+    if from.is_some() {
+        return Err(CliError::usage(
+            "`--from` is only supported by planned non-RSScript collect producers; use RSScript JSON input flags with `--producer rsscript`.",
+        ));
+    }
+    if review_map.is_none()
+        && package_review.is_none()
+        && package_check.is_none()
+        && package_lock.is_none()
+        && lock_update.is_none()
+        && package_tree.is_none()
+        && package_publish.is_none()
+        && package_metadata.is_none()
+        && package_vendor.is_none()
+    {
+        return Err(CliError::usage(
+            "collect requires at least one RSScript JSON input",
+        ));
+    }
+
+    let review_map_json = read_optional_text(review_map.as_deref())?;
+    let package_review_json = read_optional_text(package_review.as_deref())?;
+    let package_check_json = read_optional_text(package_check.as_deref())?;
+    let package_lock_json = read_optional_text(package_lock.as_deref())?;
+    let lock_update_json = read_optional_text(lock_update.as_deref())?;
+    let package_tree_json = read_optional_text(package_tree.as_deref())?;
+    let package_publish_json = read_optional_text(package_publish.as_deref())?;
+    let package_metadata_json = read_optional_text(package_metadata.as_deref())?;
+    let package_vendor_json = read_optional_text(package_vendor.as_deref())?;
+    let bundle = collect_rsscript_bundle(RsscriptCollectInputs {
+        review_map_json: review_map_json.as_deref(),
+        package_review_json: package_review_json.as_deref(),
+        package_check_json: package_check_json.as_deref(),
+        package_lock_json: package_lock_json.as_deref(),
+        package_lock_path: package_lock.as_deref(),
+        lock_update_json: lock_update_json.as_deref(),
+        package_tree_json: package_tree_json.as_deref(),
+        package_publish_json: package_publish_json.as_deref(),
+        package_metadata_json: package_metadata_json.as_deref(),
+        package_vendor_json: package_vendor_json.as_deref(),
+        package_name: package_name.as_deref(),
+    })?;
+
+    if let Some(out_path) = &out {
+        write_json_file(out_path, &bundle)?;
+        if !json {
+            println!("collected rsscript evidence into {out_path}");
+            print_bundle_summary(&bundle);
+        }
+    }
+    if json || out.is_none() {
+        print_json(&bundle)?;
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
 fn try_run_reconcile(args: &[String]) -> Result<ExitCode, CliError> {
     if wants_help(args) {
         print_usage();
@@ -70,6 +212,9 @@ fn try_run_reconcile(args: &[String]) -> Result<ExitCode, CliError> {
 
     let mut required = None;
     let mut granted = None;
+    let mut bundle = None;
+    let mut out = None;
+    let mut target = None;
     let mut json = false;
     let mut index = 0;
 
@@ -77,14 +222,52 @@ fn try_run_reconcile(args: &[String]) -> Result<ExitCode, CliError> {
         match args[index].as_str() {
             "--required" => required = Some(take_value(args, &mut index, "--required")?),
             "--granted" => granted = Some(take_value(args, &mut index, "--granted")?),
+            "--bundle" => bundle = Some(take_value(args, &mut index, "--bundle")?),
+            "--target" => target = Some(take_value(args, &mut index, "--target")?),
+            "--out" => out = Some(take_value(args, &mut index, "--out")?),
             "--json" => json = true,
-            other => {
+            value if value.starts_with('-') => {
                 return Err(CliError::usage(format!(
-                    "unknown reconcile argument: {other}"
+                    "unknown reconcile argument: {value}"
                 )));
+            }
+            value => {
+                if bundle.replace(value.to_owned()).is_some() {
+                    return Err(CliError::usage("reconcile accepts a single bundle file"));
+                }
             }
         }
         index += 1;
+    }
+
+    if let Some(bundle_path) = bundle {
+        if required.is_some() || granted.is_some() {
+            return Err(CliError::usage(
+                "reconcile bundle mode cannot be combined with --required/--granted",
+            ));
+        }
+        let mut bundle = read_bundle(&bundle_path)?;
+        reconcile_bundle(&mut bundle, target.as_deref());
+
+        if let Some(out_path) = &out {
+            write_json_file(out_path, &bundle)?;
+            if !json {
+                println!("wrote reconciled bundle to {out_path}");
+            }
+        }
+        if json {
+            print_json(&bundle)?;
+        } else {
+            print_reconciliation_text(&bundle.reconciliations, &bundle, &bundle);
+        }
+
+        return Ok(exit_for_reconciliations(&bundle.reconciliations));
+    }
+
+    if out.is_some() {
+        return Err(CliError::usage(
+            "--out is only supported for reconcile bundle mode",
+        ));
     }
 
     let required_path = required.ok_or_else(|| CliError::usage("missing --required <file>"))?;
@@ -92,7 +275,11 @@ fn try_run_reconcile(args: &[String]) -> Result<ExitCode, CliError> {
 
     let required_bundle = read_bundle(&required_path)?;
     let granted_bundle = read_bundle(&granted_path)?;
-    let reconciliations = reconcile_capabilities(&required_bundle.facts, &granted_bundle.facts);
+    let reconciliations = reconcile_capabilities_for_target(
+        &required_bundle.facts,
+        &granted_bundle.facts,
+        target.as_deref(),
+    );
 
     if json {
         print_json(&reconciliations)?;
@@ -100,16 +287,7 @@ fn try_run_reconcile(args: &[String]) -> Result<ExitCode, CliError> {
         print_reconciliation_text(&reconciliations, &required_bundle, &granted_bundle);
     }
 
-    Ok(
-        if reconciliations
-            .iter()
-            .any(|reconciliation| reconciliation.status == ReconciliationStatus::Fail)
-        {
-            ExitCode::from(1)
-        } else {
-            ExitCode::SUCCESS
-        },
-    )
+    Ok(exit_for_reconciliations(&reconciliations))
 }
 
 fn run_diff(args: &[String]) -> ExitCode {
@@ -128,6 +306,7 @@ fn try_run_diff(args: &[String]) -> Result<ExitCode, CliError> {
     let mut baseline = None;
     let mut current = None;
     let mut json = false;
+    let mut fail_on_change = false;
     let mut index = 0;
 
     while index < args.len() {
@@ -135,6 +314,7 @@ fn try_run_diff(args: &[String]) -> Result<ExitCode, CliError> {
             "--baseline" => baseline = Some(take_value(args, &mut index, "--baseline")?),
             "--current" => current = Some(take_value(args, &mut index, "--current")?),
             "--json" => json = true,
+            "--fail-on-change" => fail_on_change = true,
             other => return Err(CliError::usage(format!("unknown diff argument: {other}"))),
         }
         index += 1;
@@ -153,7 +333,7 @@ fn try_run_diff(args: &[String]) -> Result<ExitCode, CliError> {
         print_diff_text(&diff);
     }
 
-    Ok(ExitCode::SUCCESS)
+    Ok(exit_for_diff(&diff, fail_on_change))
 }
 
 fn run_slice(args: &[String]) -> ExitCode {
@@ -313,6 +493,122 @@ fn read_bundle(path: &str) -> Result<Bundle, CliError> {
         .map_err(|error| CliError::runtime(format!("failed to parse {path}: {error}")))
 }
 
+fn read_optional_text(path: Option<&str>) -> Result<Option<String>, CliError> {
+    path.map(|path| {
+        fs::read_to_string(path)
+            .map_err(|error| CliError::runtime(format!("failed to read {path}: {error}")))
+    })
+    .transpose()
+}
+
+struct RsscriptCollectInputs<'a> {
+    review_map_json: Option<&'a str>,
+    package_review_json: Option<&'a str>,
+    package_check_json: Option<&'a str>,
+    package_lock_json: Option<&'a str>,
+    package_lock_path: Option<&'a str>,
+    lock_update_json: Option<&'a str>,
+    package_tree_json: Option<&'a str>,
+    package_publish_json: Option<&'a str>,
+    package_metadata_json: Option<&'a str>,
+    package_vendor_json: Option<&'a str>,
+    package_name: Option<&'a str>,
+}
+
+fn collect_rsscript_bundle(inputs: RsscriptCollectInputs<'_>) -> Result<Bundle, CliError> {
+    let mut bundles = Vec::new();
+    if inputs.review_map_json.is_some() || inputs.package_review_json.is_some() {
+        bundles.push(
+            rsscript_json_to_bundle(
+                inputs.review_map_json,
+                inputs.package_review_json,
+                inputs.package_name,
+            )
+            .map_err(|error| {
+                CliError::runtime(format!(
+                    "failed to collect RSScript review evidence: {error}"
+                ))
+            })?,
+        );
+    }
+    if let Some(json) = inputs.package_check_json {
+        bundles.push(rsscript_check_json_to_bundle(json).map_err(|error| {
+            CliError::runtime(format!(
+                "failed to collect RSScript check evidence: {error}"
+            ))
+        })?);
+    }
+    if let Some(json) = inputs.package_lock_json {
+        let lock_json = package_lock_json_with_path(json, inputs.package_lock_path)?;
+        bundles.push(rsscript_lock_json_to_bundle(&lock_json).map_err(|error| {
+            CliError::runtime(format!("failed to collect RSScript lock evidence: {error}"))
+        })?);
+    }
+    if let Some(json) = inputs.lock_update_json {
+        bundles.push(rsscript_lock_diff_json_to_bundle(json).map_err(|error| {
+            CliError::runtime(format!(
+                "failed to collect RSScript lock-update evidence: {error}"
+            ))
+        })?);
+    }
+    if let Some(json) = inputs.package_tree_json {
+        bundles.push(rsscript_tree_json_to_bundle(json).map_err(|error| {
+            CliError::runtime(format!("failed to collect RSScript tree evidence: {error}"))
+        })?);
+    }
+    if let Some(json) = inputs.package_publish_json {
+        bundles.push(rsscript_publish_json_to_bundle(json).map_err(|error| {
+            CliError::runtime(format!(
+                "failed to collect RSScript publish evidence: {error}"
+            ))
+        })?);
+    }
+    if let Some(json) = inputs.package_metadata_json {
+        bundles.push(rsscript_metadata_json_to_bundle(json).map_err(|error| {
+            CliError::runtime(format!(
+                "failed to collect RSScript metadata evidence: {error}"
+            ))
+        })?);
+    }
+    if let Some(json) = inputs.package_vendor_json {
+        bundles.push(rsscript_vendor_json_to_bundle(json).map_err(|error| {
+            CliError::runtime(format!(
+                "failed to collect RSScript vendor evidence: {error}"
+            ))
+        })?);
+    }
+    if bundles.is_empty() {
+        return Err(CliError::usage(
+            "collect requires at least one RSScript JSON input",
+        ));
+    }
+    merge_bundle_values(bundles)
+}
+
+fn package_lock_json_with_path(json: &str, path: Option<&str>) -> Result<String, CliError> {
+    let Some(path) = path else {
+        return Ok(json.to_owned());
+    };
+    let mut value: serde_json::Value = serde_json::from_str(json).map_err(|error| {
+        CliError::runtime(format!("failed to parse RSScript lock evidence: {error}"))
+    })?;
+    if value
+        .get("lockfile_path")
+        .and_then(serde_json::Value::as_str)
+        .is_none()
+    {
+        value
+            .as_object_mut()
+            .ok_or_else(|| CliError::runtime("RSScript lock evidence must be a JSON object"))?
+            .insert("lockfile_path".to_owned(), path.to_owned().into());
+    }
+    serde_json::to_string(&value).map_err(|error| {
+        CliError::runtime(format!(
+            "failed to prepare RSScript lock evidence with path: {error}"
+        ))
+    })
+}
+
 fn write_json_file(path: &str, bundle: &Bundle) -> Result<(), CliError> {
     let json = serde_json::to_string_pretty(bundle)
         .map_err(|error| CliError::runtime(format!("failed to serialize bundle: {error}")))?;
@@ -328,26 +624,141 @@ fn print_json<T: serde::Serialize>(value: &T) -> Result<(), CliError> {
 }
 
 fn merge_bundles(paths: &[String]) -> Result<Bundle, CliError> {
-    let mut bundles = paths
+    let bundles = paths
         .iter()
         .map(|path| read_bundle(path))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let mut merged = bundles.drain(..).next().unwrap_or_default();
+    merge_bundle_values(bundles)
+}
+
+fn merge_bundle_values(bundles: Vec<Bundle>) -> Result<Bundle, CliError> {
+    let mut bundles = bundles.into_iter();
+    let mut merged = bundles.next().unwrap_or_default();
+    let mut input_slices = merged.slices.clone();
     for bundle in bundles {
+        if bundle.schema != merged.schema {
+            return Err(CliError::runtime(format!(
+                "cannot merge bundle with schema {} into {}",
+                bundle.schema, merged.schema
+            )));
+        }
+        if bundle.ontology != merged.ontology {
+            return Err(CliError::runtime(format!(
+                "cannot merge bundle with ontology {} into {}",
+                bundle.ontology, merged.ontology
+            )));
+        }
         merged.producers.extend(bundle.producers);
         merged.subjects.extend(bundle.subjects);
         merged.subject_chains.extend(bundle.subject_chains);
         merged.facts.extend(bundle.facts);
         merged.edges.extend(bundle.edges);
         merged.reconciliations.extend(bundle.reconciliations);
-        merged.slices.extend(bundle.slices);
+        input_slices.extend(bundle.slices);
         merged.policy_results.extend(bundle.policy_results);
+        merged.profiles.extend(bundle.profiles);
         merged.diffs.extend(bundle.diffs);
         merged.exceptions.extend(bundle.exceptions);
     }
 
+    dedupe_bundle(&mut merged);
+    rebuild_subject_index(&mut merged);
+    merged.slices = merged_slices(input_slices, &merged);
     Ok(merged)
+}
+
+fn reconcile_bundle(bundle: &mut Bundle, target: Option<&str>) {
+    let required = bundle
+        .facts
+        .iter()
+        .filter(|fact| fact.role == Some(FactRole::Required))
+        .cloned()
+        .collect::<Vec<_>>();
+    let granted = bundle
+        .facts
+        .iter()
+        .filter(|fact| fact.role == Some(FactRole::Granted))
+        .cloned()
+        .collect::<Vec<_>>();
+    bundle.reconciliations = reconcile_capabilities_for_target(&required, &granted, target);
+    bundle.slices = slice_by_kind(bundle);
+}
+
+fn exit_for_reconciliations(reconciliations: &[Reconciliation]) -> ExitCode {
+    if reconciliations
+        .iter()
+        .any(|reconciliation| reconciliation.status == ReconciliationStatus::Fail)
+    {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn exit_for_diff(diff: &Diff, fail_on_change: bool) -> ExitCode {
+    if fail_on_change && !diff.items.is_empty() {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn dedupe_bundle(bundle: &mut Bundle) {
+    dedupe_by_key(&mut bundle.producers, producer_key);
+    dedupe_by_key(&mut bundle.subject_chains, |chain| chain.id.clone());
+    dedupe_by_key(&mut bundle.facts, |fact| fact.id.clone());
+    dedupe_by_key(&mut bundle.edges, |edge| edge.id.clone());
+    dedupe_by_key(&mut bundle.reconciliations, |reconciliation| {
+        reconciliation.id.clone()
+    });
+    dedupe_by_key(&mut bundle.policy_results, |result| result.id.clone());
+    dedupe_by_key(&mut bundle.profiles, |profile| profile.kind.clone());
+    dedupe_by_key(&mut bundle.diffs, |diff| diff.id.clone());
+    dedupe_by_key(&mut bundle.exceptions, |exception| exception.id.clone());
+}
+
+fn rebuild_subject_index(bundle: &mut Bundle) {
+    let mut subjects = BTreeMap::new();
+    for subject in &bundle.subjects {
+        subjects.insert(subject.id.clone(), subject.clone());
+    }
+    for fact in &bundle.facts {
+        subjects.insert(fact.subject.id.clone(), fact.subject.clone());
+    }
+    for edge in &bundle.edges {
+        subjects.insert(edge.from.id.clone(), edge.from.clone());
+        subjects.insert(edge.to.id.clone(), edge.to.clone());
+    }
+    for chain in &bundle.subject_chains {
+        for subject in &chain.nodes {
+            subjects.insert(subject.id.clone(), subject.clone());
+        }
+    }
+    bundle.subjects = subjects.into_values().collect();
+}
+
+fn merged_slices(input_slices: Vec<Slice>, bundle: &Bundle) -> Vec<Slice> {
+    let mut slices = BTreeMap::new();
+    for slice in input_slices {
+        slices.insert(slice.id.clone(), slice);
+    }
+    for slice in slice_by_kind(bundle) {
+        slices.insert(slice.id.clone(), slice);
+    }
+    slices.into_values().collect()
+}
+
+fn dedupe_by_key<T>(items: &mut Vec<T>, key: impl Fn(&T) -> String) {
+    let mut unique = BTreeMap::new();
+    for item in items.drain(..) {
+        unique.entry(key(&item)).or_insert(item);
+    }
+    *items = unique.into_values().collect();
+}
+
+fn producer_key(producer: &reir::subject::Producer) -> String {
+    serde_json::to_string(producer).expect("producer should serialize")
 }
 
 fn print_reconciliation_text(
@@ -366,6 +777,9 @@ fn print_reconciliation_text(
     for reconciliation in reconciliations {
         println!();
         println!("{}:", reconciliation_kind_label(&reconciliation.kind));
+        if let Some(target) = &reconciliation.target {
+            println!("  target: {target}");
+        }
         if let Some(capability) = &reconciliation.capability {
             println!("  {}", display_capability(capability));
         }
@@ -475,6 +889,7 @@ fn print_bundle_summary(bundle: &Bundle) {
     println!("reconciliations: {}", bundle.reconciliations.len());
     println!("slices: {}", bundle.slices.len());
     println!("policy_results: {}", bundle.policy_results.len());
+    println!("profiles: {}", bundle.profiles.len());
     println!("diffs: {}", bundle.diffs.len());
     println!("exceptions: {}", bundle.exceptions.len());
 }
@@ -567,13 +982,25 @@ fn diff_item_kind_label(kind: &DiffItemKind) -> String {
         DiffItemKind::EdgeRemoved => "edge removed".to_owned(),
         DiffItemKind::EdgeChanged => "edge changed".to_owned(),
         DiffItemKind::SubjectChainAdded => "subject chain added".to_owned(),
+        DiffItemKind::SubjectChainRemoved => "subject chain removed".to_owned(),
         DiffItemKind::SubjectChainChanged => "subject chain changed".to_owned(),
         DiffItemKind::ReconciliationAdded => "reconciliation added".to_owned(),
         DiffItemKind::ReconciliationRemoved => "reconciliation removed".to_owned(),
         DiffItemKind::ReconciliationChanged => "reconciliation changed".to_owned(),
+        DiffItemKind::SliceAdded => "slice added".to_owned(),
+        DiffItemKind::SliceRemoved => "slice removed".to_owned(),
+        DiffItemKind::SliceChanged => "slice changed".to_owned(),
+        DiffItemKind::DiffAdded => "diff added".to_owned(),
+        DiffItemKind::DiffRemoved => "diff removed".to_owned(),
+        DiffItemKind::DiffChanged => "diff changed".to_owned(),
+        DiffItemKind::PolicyResultAdded => "policy result added".to_owned(),
+        DiffItemKind::PolicyResultRemoved => "policy result removed".to_owned(),
+        DiffItemKind::PolicyResultChanged => "policy result changed".to_owned(),
         DiffItemKind::ProfileRuleChanged => "profile rule changed".to_owned(),
         DiffItemKind::ExceptionAdded => "exception added".to_owned(),
         DiffItemKind::ExceptionExpired => "exception expired".to_owned(),
+        DiffItemKind::ExceptionChanged => "exception changed".to_owned(),
+        DiffItemKind::SchemaChanged => "schema changed".to_owned(),
         DiffItemKind::ProducerChanged => "producer changed".to_owned(),
         DiffItemKind::OntologyChanged => "ontology changed".to_owned(),
         DiffItemKind::Extension(value) => value.replace('_', " "),
@@ -590,6 +1017,16 @@ fn slice_kind_label(kind: &SliceKind) -> String {
         SliceKind::ObjectStorageSlice => "object_storage".to_owned(),
         SliceKind::DatabaseSlice => "database".to_owned(),
         SliceKind::SecretSlice => "secret".to_owned(),
+        SliceKind::EnvSlice => "env".to_owned(),
+        SliceKind::TimeSlice => "time".to_owned(),
+        SliceKind::RandomnessSlice => "randomness".to_owned(),
+        SliceKind::ComputeSlice => "compute".to_owned(),
+        SliceKind::TelemetrySlice => "telemetry".to_owned(),
+        SliceKind::ProcessSlice => "process".to_owned(),
+        SliceKind::AsyncSlice => "async".to_owned(),
+        SliceKind::DiagnosticSlice => "diagnostic".to_owned(),
+        SliceKind::PackageFeatureSlice => "package_feature".to_owned(),
+        SliceKind::ProviderImplementationSlice => "provider_implementation".to_owned(),
         SliceKind::FilesystemSlice => "filesystem".to_owned(),
         SliceKind::IdentitySlice => "identity".to_owned(),
         SliceKind::RbacSlice => "rbac".to_owned(),
@@ -617,6 +1054,18 @@ fn parse_slice_kind(value: &str) -> Result<SliceKind, CliError> {
         "object_storage" | "object_storage_slice" => Ok(SliceKind::ObjectStorageSlice),
         "database" | "database_slice" => Ok(SliceKind::DatabaseSlice),
         "secret" | "secret_slice" => Ok(SliceKind::SecretSlice),
+        "env" | "env_slice" => Ok(SliceKind::EnvSlice),
+        "time" | "time_slice" => Ok(SliceKind::TimeSlice),
+        "randomness" | "randomness_slice" => Ok(SliceKind::RandomnessSlice),
+        "compute" | "compute_slice" => Ok(SliceKind::ComputeSlice),
+        "telemetry" | "telemetry_slice" => Ok(SliceKind::TelemetrySlice),
+        "process" | "process_slice" => Ok(SliceKind::ProcessSlice),
+        "async" | "async_slice" => Ok(SliceKind::AsyncSlice),
+        "diagnostic" | "diagnostic_slice" => Ok(SliceKind::DiagnosticSlice),
+        "package_feature" | "package_feature_slice" => Ok(SliceKind::PackageFeatureSlice),
+        "provider_implementation" | "provider_implementation_slice" => {
+            Ok(SliceKind::ProviderImplementationSlice)
+        }
         "filesystem" | "filesystem_slice" => Ok(SliceKind::FilesystemSlice),
         "identity" | "identity_slice" => Ok(SliceKind::IdentitySlice),
         "rbac" | "rbac_slice" => Ok(SliceKind::RbacSlice),
@@ -648,4 +1097,501 @@ fn report_error(error: CliError) -> ExitCode {
 
 fn print_usage() {
     println!("{USAGE}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reir::{
+        AcquisitionMode, CapabilityCategory, Confidence, ConfidenceLevel, Edge, EdgeKind, FactKind,
+        FactRole, FactValue, Precision, Profile, ProfileBudget, Subject, SubjectKind,
+    };
+    use std::collections::HashMap;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn subject(id: &str) -> Subject {
+        Subject {
+            kind: SubjectKind::Package,
+            id: id.to_owned(),
+            name: Some(id.to_owned()),
+            package: None,
+        }
+    }
+
+    fn confidence() -> Confidence {
+        Confidence {
+            level: ConfidenceLevel::Computed,
+            source: Some("test".to_owned()),
+        }
+    }
+
+    fn package_risk_fact(id: &str, subject: Subject) -> Fact {
+        Fact {
+            schema: "reir.fact.v0.1".to_owned(),
+            id: id.to_owned(),
+            kind: FactKind::PackageRisk,
+            role: Some(FactRole::Observed),
+            subject,
+            capability: None,
+            value: FactValue::True,
+            confidence: confidence(),
+            acquisition_mode: AcquisitionMode::PackageMetadata,
+            precision: Precision::Exact,
+            evidence: Vec::new(),
+            unknown_reason: None,
+        }
+    }
+
+    fn capability_fact(id: &str, role: FactRole, subject: Subject, action: &str) -> Fact {
+        Fact {
+            schema: "reir.fact.v0.1".to_owned(),
+            id: id.to_owned(),
+            kind: FactKind::Capability,
+            role: Some(role),
+            subject,
+            capability: Some(Capability {
+                category: CapabilityCategory::ObjectStorageWrite,
+                provider: Some("aws".to_owned()),
+                service: Some("s3".to_owned()),
+                action: Some(action.to_owned()),
+                resource: Some("arn:aws:s3:::reports-prod/*".to_owned()),
+                constraints: std::collections::HashMap::new(),
+            }),
+            value: FactValue::True,
+            confidence: confidence(),
+            acquisition_mode: AcquisitionMode::PackageMetadata,
+            precision: Precision::ResourceScoped,
+            evidence: Vec::new(),
+            unknown_reason: None,
+        }
+    }
+
+    fn edge(id: &str, from: Subject, to: Subject) -> Edge {
+        Edge {
+            schema: "reir.edge.v0.1".to_owned(),
+            id: id.to_owned(),
+            kind: EdgeKind::DependsOn,
+            from,
+            to,
+            confidence: confidence(),
+            acquisition_mode: AcquisitionMode::PackageMetadata,
+            precision: Precision::Exact,
+            evidence: Vec::new(),
+        }
+    }
+
+    fn unique_temp_dir(name: &str) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        path.push(format!("reir-{name}-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&path).expect("temp dir should be created");
+        path
+    }
+
+    #[test]
+    fn merge_bundle_values_dedupes_and_rebuilds_subject_index_and_slices() {
+        let package = subject("pkg-a@0.1.0");
+        let dependency = subject("pkg-b@0.1.0");
+        let risk = package_risk_fact("fact.package_risk.pkg-a", package.clone());
+        let dependency_edge = edge(
+            "edge.depends.pkg-a.pkg-b",
+            package.clone(),
+            dependency.clone(),
+        );
+
+        let mut first = Bundle::new();
+        first.producers.push(reir::subject::Producer {
+            name: "rsscript".to_owned(),
+            version: "0.1.0".to_owned(),
+            adapter: Some("rsscript".to_owned()),
+            adapter_version: None,
+            source: None,
+        });
+        first.subjects.push(package.clone());
+        first.facts.push(risk.clone());
+        first.profiles.push(Profile {
+            kind: "prod".to_owned(),
+            allow: HashMap::new(),
+            budget: Some(ProfileBudget {
+                max_missing_capabilities: 0,
+                max_unknown_coverage: 0,
+                max_excess_grants: 1,
+            }),
+        });
+        first.slices.push(Slice {
+            schema: "reir.slice.v0.1".to_owned(),
+            id: "slice.package_risk".to_owned(),
+            kind: SliceKind::PackageRiskSlice,
+            facts: vec!["stale.fact".to_owned()],
+            edges: Vec::new(),
+            reconciliations: Vec::new(),
+            evidence: Vec::new(),
+        });
+
+        let mut second = Bundle::new();
+        second.producers = first.producers.clone();
+        second.subjects.push(package.clone());
+        second.facts.push(risk);
+        second.profiles = first.profiles.clone();
+        second.edges.push(dependency_edge);
+
+        let merged = merge_bundle_values(vec![first, second]).expect("merge should succeed");
+
+        assert_eq!(merged.producers.len(), 1);
+        assert_eq!(merged.facts.len(), 1);
+        assert_eq!(merged.edges.len(), 1);
+        assert_eq!(merged.profiles.len(), 1);
+        assert_eq!(merged.profiles[0].kind, "prod");
+        assert!(
+            merged
+                .subjects
+                .iter()
+                .any(|subject| subject.id == package.id)
+        );
+        assert!(
+            merged
+                .subjects
+                .iter()
+                .any(|subject| subject.id == dependency.id)
+        );
+        assert_eq!(merged.subjects.len(), 2);
+
+        let package_slice = merged
+            .slices
+            .iter()
+            .find(|slice| slice.kind == SliceKind::PackageRiskSlice)
+            .expect("package risk slice should be recomputed");
+        assert_eq!(
+            package_slice.facts,
+            vec!["fact.package_risk.pkg-a".to_owned()]
+        );
+        assert!(!package_slice.facts.contains(&"stale.fact".to_owned()));
+    }
+
+    #[test]
+    fn collect_rsscript_bundle_merges_package_manager_inputs() {
+        let package_review = r#"{
+            "package": { "name": "demo", "version": "0.1.0" },
+            "risk": "low",
+            "summary": {
+                "public_apis": 1,
+                "mutating_apis": 0,
+                "retaining_apis": 0,
+                "resource_apis": 0,
+                "native_apis": 0,
+                "unsafe_apis": 0,
+                "unknown_apis": 0
+            },
+            "exports": [
+                { "name": "Api.run", "kind": "function", "classification": "low_semantic_risk" }
+            ]
+        }"#;
+        let package_check = r#"{
+            "package": { "name": "demo", "version": "0.1.0", "edition": "2026" },
+            "package_dir": "/tmp/demo",
+            "ok": false,
+            "risk": "elevated",
+            "reasons": ["rsspkg.lock missing"],
+            "summary": { "diagnostics": 0, "errors": 0, "dependencies": 0 },
+            "graph": { "ok": true, "risk": "low", "reasons": [] },
+            "lock": {
+                "path": "/tmp/demo/rsspkg.lock",
+                "present": false,
+                "matches": false,
+                "risk": "elevated",
+                "reasons": ["rsspkg.lock missing"],
+                "package_changes": []
+            },
+            "diagnostics": []
+        }"#;
+        let package_lock = r#"{
+            "version": 1,
+            "package": [
+                {
+                    "name": "demo",
+                    "version": "0.1.0",
+                    "source": "path+/tmp/demo",
+                    "checksum": "sha256:pkg",
+                    "interface_hash": "sha256:interface",
+                    "review_hash": "sha256:review",
+                    "features": []
+                }
+            ]
+        }"#;
+
+        let bundle = collect_rsscript_bundle(RsscriptCollectInputs {
+            review_map_json: None,
+            package_review_json: Some(package_review),
+            package_check_json: Some(package_check),
+            package_lock_json: Some(package_lock),
+            package_lock_path: None,
+            lock_update_json: None,
+            package_tree_json: None,
+            package_publish_json: None,
+            package_metadata_json: None,
+            package_vendor_json: None,
+            package_name: None,
+        })
+        .expect("RSScript package-manager JSON should collect");
+
+        assert_eq!(bundle.producers.len(), 3);
+        assert!(bundle.facts.iter().any(|fact| {
+            fact.id == "fact.package.demo_0_1_0.risk" && fact.kind == FactKind::PackageRisk
+        }));
+        assert!(bundle.facts.iter().any(|fact| {
+            fact.id == "fact.package_check.demo_0_1_0.status" && fact.kind == FactKind::PolicyResult
+        }));
+        assert!(bundle.facts.iter().any(|fact| {
+            fact.id == "fact.lockfile.demo_0_1_0.effective_interface_hash"
+                && fact.kind == FactKind::SupplyChain
+        }));
+        assert!(bundle.slices.iter().any(|slice| {
+            slice.kind == SliceKind::PackageRiskSlice
+                && slice
+                    .facts
+                    .contains(&"fact.lockfile.demo_0_1_0.effective_interface_hash".to_owned())
+        }));
+    }
+
+    #[test]
+    fn collect_rsscript_cli_reads_package_manager_inputs_and_writes_bundle() {
+        let temp_dir = unique_temp_dir("collect-rsscript-cli");
+        let review_path = temp_dir.join("package-review.json");
+        let check_path = temp_dir.join("package-check.json");
+        let lock_path = temp_dir.join("rsspkg.lock.json");
+        let out_path = temp_dir.join("bundle.json");
+        std::fs::write(
+            &review_path,
+            r#"{
+                "package": { "name": "demo", "version": "0.1.0" },
+                "risk": "low",
+                "summary": {
+                    "public_apis": 1,
+                    "mutating_apis": 0,
+                    "retaining_apis": 0,
+                    "resource_apis": 0,
+                    "native_apis": 0,
+                    "unsafe_apis": 0,
+                    "unknown_apis": 0
+                },
+                "exports": [
+                    {
+                        "name": "Api.run",
+                        "kind": "function",
+                        "classification": "low_semantic_risk"
+                    }
+                ]
+            }"#,
+        )
+        .expect("package review fixture should be written");
+        std::fs::write(
+            &check_path,
+            r#"{
+                "package": { "name": "demo", "version": "0.1.0", "edition": "2026" },
+                "package_dir": "/tmp/demo",
+                "ok": false,
+                "risk": "elevated",
+                "reasons": ["rsspkg.lock missing"],
+                "summary": { "diagnostics": 0, "errors": 0, "dependencies": 0 },
+                "graph": { "ok": true, "risk": "low", "reasons": [] },
+                "lock": {
+                    "path": "/tmp/demo/rsspkg.lock",
+                    "present": false,
+                    "matches": false,
+                    "risk": "elevated",
+                    "reasons": ["rsspkg.lock missing"],
+                    "package_changes": []
+                },
+                "diagnostics": []
+            }"#,
+        )
+        .expect("package check fixture should be written");
+        std::fs::write(
+            &lock_path,
+            r#"{
+                "version": 1,
+                "package": [
+                    {
+                        "name": "demo",
+                        "version": "0.1.0",
+                        "source": "path+/tmp/demo",
+                        "checksum": "sha256:pkg",
+                        "interface_hash": "sha256:interface",
+                        "review_hash": "sha256:review",
+                        "features": []
+                    }
+                ]
+            }"#,
+        )
+        .expect("package lock fixture should be written");
+
+        let args = vec![
+            "--producer".to_owned(),
+            "rsscript".to_owned(),
+            "--package-review".to_owned(),
+            review_path.to_string_lossy().into_owned(),
+            "--package-check".to_owned(),
+            check_path.to_string_lossy().into_owned(),
+            "--package-lock".to_owned(),
+            lock_path.to_string_lossy().into_owned(),
+            "--out".to_owned(),
+            out_path.to_string_lossy().into_owned(),
+            "--json".to_owned(),
+        ];
+
+        let code = try_run_collect(&args).expect("collect command should succeed");
+        assert_eq!(code, ExitCode::SUCCESS);
+
+        let bundle_json =
+            std::fs::read_to_string(&out_path).expect("collect command should write bundle");
+        let bundle = Bundle::from_json(&bundle_json).expect("written bundle should parse");
+        assert_eq!(bundle.producers.len(), 3);
+        assert!(bundle.facts.iter().any(|fact| {
+            fact.id == "fact.package.demo_0_1_0.risk" && fact.kind == FactKind::PackageRisk
+        }));
+        assert!(bundle.facts.iter().any(|fact| {
+            fact.id == "fact.package_check.demo_0_1_0.status" && fact.kind == FactKind::PolicyResult
+        }));
+        assert!(bundle.facts.iter().any(|fact| {
+            fact.id == "fact.lockfile.demo_0_1_0.effective_interface_hash"
+                && fact.kind == FactKind::SupplyChain
+                && fact.evidence[0].file.as_deref() == Some(lock_path.to_string_lossy().as_ref())
+        }));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn collect_cli_rejects_planned_non_rsscript_producers() {
+        let args = vec![
+            "--producer".to_owned(),
+            "k8s".to_owned(),
+            "--from".to_owned(),
+            "rendered/prod".to_owned(),
+        ];
+
+        let error = try_run_collect(&args).expect_err("planned producer should fail");
+
+        match error {
+            CliError::Usage(message) => assert_eq!(
+                message,
+                "`reir collect --producer k8s` is planned; this build only supports `--producer rsscript`."
+            ),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn collect_cli_rejects_from_for_rsscript_producer() {
+        let args = vec![
+            "--producer".to_owned(),
+            "rsscript".to_owned(),
+            "--from".to_owned(),
+            "review".to_owned(),
+        ];
+
+        let error = try_run_collect(&args).expect_err("--from should not be a RSScript input");
+
+        match error {
+            CliError::Usage(message) => assert_eq!(
+                message,
+                "`--from` is only supported by planned non-RSScript collect producers; use RSScript JSON input flags with `--producer rsscript`."
+            ),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn usage_documents_reconcile_target_for_both_modes() {
+        assert!(USAGE.contains(
+            "reir reconcile --required required.json --granted granted.json [--target name] [--json]"
+        ));
+        assert!(USAGE.contains(
+            "reir reconcile [--bundle bundle.json] [--target name] [--out reconciled.json] [--json]"
+        ));
+    }
+
+    #[test]
+    fn usage_documents_generic_slice_kind_filter() {
+        assert!(USAGE.contains("reir slice --bundle bundle.json [--kind <slice-kind>] [--json]"));
+        assert!(matches!(
+            parse_slice_kind("package_risk"),
+            Ok(SliceKind::PackageRiskSlice)
+        ));
+        assert!(matches!(
+            parse_slice_kind("native_unsafe_slice"),
+            Ok(SliceKind::NativeUnsafeSlice)
+        ));
+    }
+
+    #[test]
+    fn merge_bundle_values_rejects_mismatched_ontology() {
+        let first = Bundle::new();
+        let mut second = Bundle::new();
+        second.ontology = "reir.other_ontology.v0".to_owned();
+
+        let error =
+            merge_bundle_values(vec![first, second]).expect_err("ontology mismatch should fail");
+
+        assert!(
+            matches!(error, CliError::Runtime(message) if message.contains("cannot merge bundle with ontology"))
+        );
+    }
+
+    #[test]
+    fn reconcile_bundle_records_reconciliations_and_rebuilds_slices() {
+        let required = capability_fact(
+            "fact.required.report_upload",
+            FactRole::Required,
+            subject("report-uploader"),
+            "s3:PutObject",
+        );
+        let unrelated_grant = capability_fact(
+            "fact.granted.report_read",
+            FactRole::Granted,
+            subject("report-reader"),
+            "s3:GetObject",
+        );
+        let mut bundle = Bundle {
+            facts: vec![required.clone(), unrelated_grant],
+            ..Bundle::new()
+        };
+
+        reconcile_bundle(&mut bundle, Some("prod"));
+
+        assert!(bundle.reconciliations.iter().any(|reconciliation| {
+            reconciliation.kind == ReconciliationKind::MissingCapability
+                && reconciliation.required_fact.as_deref() == Some(required.id.as_str())
+                && reconciliation.target.as_deref() == Some("prod")
+        }));
+        assert!(bundle.slices.iter().any(|slice| {
+            slice.kind == SliceKind::MissingCapabilitySlice && slice.facts.contains(&required.id)
+        }));
+    }
+
+    #[test]
+    fn exit_for_diff_fails_only_when_requested() {
+        let unchanged = Diff {
+            schema: "reir.diff.v0.1".to_owned(),
+            id: "diff.empty".to_owned(),
+            items: Vec::new(),
+        };
+        let changed = Diff {
+            schema: "reir.diff.v0.1".to_owned(),
+            id: "diff.changed".to_owned(),
+            items: vec![DiffItem {
+                kind: DiffItemKind::FactAdded,
+                id: "fact.added".to_owned(),
+                subject: None,
+                description: None,
+                evidence: Vec::new(),
+            }],
+        };
+
+        assert_eq!(exit_for_diff(&unchanged, true), ExitCode::SUCCESS);
+        assert_eq!(exit_for_diff(&changed, false), ExitCode::SUCCESS);
+        assert_eq!(exit_for_diff(&changed, true), ExitCode::from(1));
+    }
 }

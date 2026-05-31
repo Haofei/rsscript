@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Bundle, Evidence, Reconciliation, Subject};
+use crate::{Bundle, Evidence, Profile, Reconciliation, Subject};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Diff {
@@ -34,13 +34,25 @@ pub enum DiffItemKind {
     EdgeRemoved,
     EdgeChanged,
     SubjectChainAdded,
+    SubjectChainRemoved,
     SubjectChainChanged,
     ReconciliationAdded,
     ReconciliationRemoved,
     ReconciliationChanged,
+    SliceAdded,
+    SliceRemoved,
+    SliceChanged,
+    DiffAdded,
+    DiffRemoved,
+    DiffChanged,
+    PolicyResultAdded,
+    PolicyResultRemoved,
+    PolicyResultChanged,
     ProfileRuleChanged,
     ExceptionAdded,
     ExceptionExpired,
+    ExceptionChanged,
+    SchemaChanged,
     ProducerChanged,
     OntologyChanged,
     Extension(String),
@@ -49,128 +61,131 @@ pub enum DiffItemKind {
 pub fn compute_diff(baseline: &Bundle, current: &Bundle) -> Diff {
     let mut items = Vec::new();
 
-    let baseline_facts = baseline
-        .facts
-        .iter()
-        .map(|fact| (fact.id.as_str(), fact))
-        .collect::<BTreeMap<_, _>>();
-    let current_facts = current
-        .facts
-        .iter()
-        .map(|fact| (fact.id.as_str(), fact))
-        .collect::<BTreeMap<_, _>>();
+    push_indexed_diffs(
+        &mut items,
+        &baseline.facts,
+        &current.facts,
+        IndexedDiffSpec {
+            added: DiffItemKind::FactAdded,
+            removed: DiffItemKind::FactRemoved,
+            changed: DiffItemKind::FactChanged,
+            noun: "fact",
+        },
+        |fact| fact.id.as_str(),
+        |fact| Some(fact.subject.clone()),
+        |fact| fact.evidence.clone(),
+    );
 
-    for (id, fact) in &current_facts {
-        match baseline_facts.get(id) {
-            None => items.push(DiffItem {
-                kind: DiffItemKind::FactAdded,
-                id: (*id).to_string(),
-                subject: Some(fact.subject.clone()),
-                description: Some("fact added".to_string()),
-                evidence: fact.evidence.clone(),
-            }),
-            Some(previous) if *previous != *fact => items.push(DiffItem {
-                kind: DiffItemKind::FactChanged,
-                id: (*id).to_string(),
-                subject: Some(fact.subject.clone()),
-                description: Some("fact changed".to_string()),
-                evidence: fact.evidence.clone(),
-            }),
-            Some(_) => {}
-        }
-    }
+    push_indexed_diffs(
+        &mut items,
+        &baseline.edges,
+        &current.edges,
+        IndexedDiffSpec {
+            added: DiffItemKind::EdgeAdded,
+            removed: DiffItemKind::EdgeRemoved,
+            changed: DiffItemKind::EdgeChanged,
+            noun: "edge",
+        },
+        |edge| edge.id.as_str(),
+        |_| None,
+        |edge| edge.evidence.clone(),
+    );
 
-    for (id, fact) in &baseline_facts {
-        if !current_facts.contains_key(id) {
-            items.push(DiffItem {
-                kind: DiffItemKind::FactRemoved,
-                id: (*id).to_string(),
-                subject: Some(fact.subject.clone()),
-                description: Some("fact removed".to_string()),
-                evidence: fact.evidence.clone(),
-            });
-        }
-    }
-
-    let baseline_edges = baseline
-        .edges
-        .iter()
-        .map(|edge| (edge.id.as_str(), edge))
-        .collect::<BTreeMap<_, _>>();
-    let current_edges = current
-        .edges
-        .iter()
-        .map(|edge| (edge.id.as_str(), edge))
-        .collect::<BTreeMap<_, _>>();
-
-    for (id, edge) in &current_edges {
-        match baseline_edges.get(id) {
-            None => items.push(DiffItem {
-                kind: DiffItemKind::EdgeAdded,
-                id: (*id).to_string(),
-                subject: None,
-                description: Some("edge added".to_string()),
-                evidence: edge.evidence.clone(),
-            }),
-            Some(previous) if *previous != *edge => items.push(DiffItem {
-                kind: DiffItemKind::EdgeChanged,
-                id: (*id).to_string(),
-                subject: None,
-                description: Some("edge changed".to_string()),
-                evidence: edge.evidence.clone(),
-            }),
-            Some(_) => {}
-        }
-    }
-
-    for (id, edge) in &baseline_edges {
-        if !current_edges.contains_key(id) {
-            items.push(DiffItem {
-                kind: DiffItemKind::EdgeRemoved,
-                id: (*id).to_string(),
-                subject: None,
-                description: Some("edge removed".to_string()),
-                evidence: edge.evidence.clone(),
-            });
-        }
-    }
-
-    let baseline_chains = baseline
-        .subject_chains
-        .iter()
-        .map(|chain| (chain.id.as_str(), chain))
-        .collect::<BTreeMap<_, _>>();
-    let current_chains = current
-        .subject_chains
-        .iter()
-        .map(|chain| (chain.id.as_str(), chain))
-        .collect::<BTreeMap<_, _>>();
-
-    for (id, chain) in &current_chains {
-        match baseline_chains.get(id) {
-            None => items.push(DiffItem {
-                kind: DiffItemKind::SubjectChainAdded,
-                id: (*id).to_string(),
-                subject: None,
-                description: Some("subject chain added".to_string()),
-                evidence: chain.evidence.clone(),
-            }),
-            Some(previous) if *previous != *chain => items.push(DiffItem {
-                kind: DiffItemKind::SubjectChainChanged,
-                id: (*id).to_string(),
-                subject: None,
-                description: Some("subject chain changed".to_string()),
-                evidence: chain.evidence.clone(),
-            }),
-            Some(_) => {}
-        }
-    }
+    push_indexed_diffs(
+        &mut items,
+        &baseline.subject_chains,
+        &current.subject_chains,
+        IndexedDiffSpec {
+            added: DiffItemKind::SubjectChainAdded,
+            removed: DiffItemKind::SubjectChainRemoved,
+            changed: DiffItemKind::SubjectChainChanged,
+            noun: "subject chain",
+        },
+        |chain| chain.id.as_str(),
+        |_| None,
+        |chain| chain.evidence.clone(),
+    );
 
     push_reconciliation_diffs(
         &mut items,
         &baseline.reconciliations,
         &current.reconciliations,
     );
+
+    push_indexed_diffs(
+        &mut items,
+        &baseline.slices,
+        &current.slices,
+        IndexedDiffSpec {
+            added: DiffItemKind::SliceAdded,
+            removed: DiffItemKind::SliceRemoved,
+            changed: DiffItemKind::SliceChanged,
+            noun: "slice",
+        },
+        |slice| slice.id.as_str(),
+        |_| None,
+        |slice| slice.evidence.clone(),
+    );
+
+    push_indexed_diffs(
+        &mut items,
+        &baseline.diffs,
+        &current.diffs,
+        IndexedDiffSpec {
+            added: DiffItemKind::DiffAdded,
+            removed: DiffItemKind::DiffRemoved,
+            changed: DiffItemKind::DiffChanged,
+            noun: "diff",
+        },
+        |diff| diff.id.as_str(),
+        |_| None,
+        |_| Vec::new(),
+    );
+
+    push_indexed_diffs(
+        &mut items,
+        &baseline.policy_results,
+        &current.policy_results,
+        IndexedDiffSpec {
+            added: DiffItemKind::PolicyResultAdded,
+            removed: DiffItemKind::PolicyResultRemoved,
+            changed: DiffItemKind::PolicyResultChanged,
+            noun: "policy result",
+        },
+        |result| result.id.as_str(),
+        |result| result.subject.clone(),
+        |result| result.evidence.clone(),
+    );
+
+    push_profile_diffs(&mut items, &baseline.profiles, &current.profiles);
+
+    push_indexed_diffs(
+        &mut items,
+        &baseline.exceptions,
+        &current.exceptions,
+        IndexedDiffSpec {
+            added: DiffItemKind::ExceptionAdded,
+            removed: DiffItemKind::ExceptionExpired,
+            changed: DiffItemKind::ExceptionChanged,
+            noun: "exception",
+        },
+        |exception| exception.id.as_str(),
+        |_| None,
+        |exception| exception.evidence.clone(),
+    );
+
+    if baseline.schema != current.schema {
+        items.push(DiffItem {
+            kind: DiffItemKind::SchemaChanged,
+            id: "schema".to_string(),
+            subject: None,
+            description: Some(format!(
+                "schema changed from {} to {}",
+                baseline.schema, current.schema
+            )),
+            evidence: Vec::new(),
+        });
+    }
 
     if baseline.producers != current.producers {
         items.push(DiffItem {
@@ -199,6 +214,103 @@ pub fn compute_diff(baseline: &Bundle, current: &Bundle) -> Diff {
         schema: "reir.diff.v0.1".to_string(),
         id: "diff.bundle".to_string(),
         items,
+    }
+}
+
+struct IndexedDiffSpec {
+    added: DiffItemKind,
+    removed: DiffItemKind,
+    changed: DiffItemKind,
+    noun: &'static str,
+}
+
+fn push_indexed_diffs<T>(
+    items: &mut Vec<DiffItem>,
+    baseline: &[T],
+    current: &[T],
+    spec: IndexedDiffSpec,
+    id: impl Fn(&T) -> &str,
+    subject: impl Fn(&T) -> Option<Subject>,
+    evidence: impl Fn(&T) -> Vec<Evidence>,
+) where
+    T: PartialEq,
+{
+    let baseline_items = baseline
+        .iter()
+        .map(|item| (id(item), item))
+        .collect::<BTreeMap<_, _>>();
+    let current_items = current
+        .iter()
+        .map(|item| (id(item), item))
+        .collect::<BTreeMap<_, _>>();
+
+    for (item_id, item) in &current_items {
+        match baseline_items.get(item_id) {
+            None => items.push(DiffItem {
+                kind: spec.added.clone(),
+                id: (*item_id).to_string(),
+                subject: subject(item),
+                description: Some(format!("{} added", spec.noun)),
+                evidence: evidence(item),
+            }),
+            Some(previous) if *previous != *item => items.push(DiffItem {
+                kind: spec.changed.clone(),
+                id: (*item_id).to_string(),
+                subject: subject(item),
+                description: Some(format!("{} changed", spec.noun)),
+                evidence: evidence(item),
+            }),
+            Some(_) => {}
+        }
+    }
+
+    for (item_id, item) in &baseline_items {
+        if !current_items.contains_key(item_id) {
+            items.push(DiffItem {
+                kind: spec.removed.clone(),
+                id: (*item_id).to_string(),
+                subject: subject(item),
+                description: Some(format!("{} removed", spec.noun)),
+                evidence: evidence(item),
+            });
+        }
+    }
+}
+
+fn push_profile_diffs(items: &mut Vec<DiffItem>, baseline: &[Profile], current: &[Profile]) {
+    let baseline_profiles = baseline
+        .iter()
+        .map(|profile| (profile.kind.as_str(), profile))
+        .collect::<BTreeMap<_, _>>();
+    let current_profiles = current
+        .iter()
+        .map(|profile| (profile.kind.as_str(), profile))
+        .collect::<BTreeMap<_, _>>();
+
+    for (kind, profile) in &current_profiles {
+        match baseline_profiles.get(kind) {
+            None => items.push(profile_diff_item(kind, "profile rule added")),
+            Some(previous) if *previous != *profile => {
+                items.push(profile_diff_item(kind, "profile rule changed"));
+            }
+            Some(_) => {}
+        }
+    }
+
+    for kind in baseline_profiles.keys() {
+        if !current_profiles.contains_key(kind) {
+            items.push(profile_diff_item(kind, "profile rule removed"));
+        }
+    }
+}
+
+fn profile_diff_item(kind: &str, description: &str) -> DiffItem {
+    DiffItem {
+        kind: DiffItemKind::ProfileRuleChanged,
+        id: format!("profile.{kind}"),
+        subject: None,
+        description: Some(description.to_owned()),
+        evidence: Vec::new(),
     }
 }
 

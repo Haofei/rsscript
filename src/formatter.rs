@@ -138,6 +138,9 @@ impl Formatter {
     }
 
     fn type_decl(&mut self, ty: &TypeDecl) {
+        if ty.is_public {
+            self.out.push_str("pub ");
+        }
         if ty.is_opaque {
             self.out.push_str("opaque ");
         }

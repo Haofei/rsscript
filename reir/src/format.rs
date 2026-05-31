@@ -28,6 +28,9 @@ pub fn format_reconciliations_human(reconciliations: &[Reconciliation]) -> Strin
 
     for reconciliation in &missing {
         writeln!(output, "missing capability:").unwrap();
+        if let Some(target) = reconciliation.target.as_deref() {
+            writeln!(output, "  target: {target}").unwrap();
+        }
         writeln!(
             output,
             "  {}",
@@ -49,6 +52,9 @@ pub fn format_reconciliations_human(reconciliations: &[Reconciliation]) -> Strin
 
     for reconciliation in &excess {
         writeln!(output, "excess capability:").unwrap();
+        if let Some(target) = reconciliation.target.as_deref() {
+            writeln!(output, "  target: {target}").unwrap();
+        }
         writeln!(
             output,
             "  {}",
@@ -184,6 +190,9 @@ pub fn format_reconciliation_report(
             .and_then(|subject_chain_id| subject_chains_by_id.get(subject_chain_id).copied());
 
         writeln!(output, "missing capability:").unwrap();
+        if let Some(target) = reconciliation.target.as_deref() {
+            writeln!(output, "  target: {target}").unwrap();
+        }
         writeln!(
             output,
             "  {}\n",
@@ -261,6 +270,9 @@ pub fn format_reconciliation_report(
             .and_then(|subject_chain_id| subject_chains_by_id.get(subject_chain_id).copied());
 
         writeln!(output, "excess capability:").unwrap();
+        if let Some(target) = reconciliation.target.as_deref() {
+            writeln!(output, "  target: {target}").unwrap();
+        }
         writeln!(
             output,
             "  {}",
@@ -308,6 +320,8 @@ pub fn format_bundle_summary(bundle: &Bundle) -> String {
     writeln!(output, "reconciliations: {}", bundle.reconciliations.len()).unwrap();
     writeln!(output, "slices: {}", bundle.slices.len()).unwrap();
     writeln!(output, "policy results: {}", bundle.policy_results.len()).unwrap();
+    writeln!(output, "profiles: {}", bundle.profiles.len()).unwrap();
+    writeln!(output, "diffs: {}", bundle.diffs.len()).unwrap();
     writeln!(output, "exceptions: {}", bundle.exceptions.len()).unwrap();
     output
 }
@@ -439,16 +453,28 @@ fn diff_item_prefix(kind: &DiffItemKind) -> &'static str {
         | DiffItemKind::EdgeAdded
         | DiffItemKind::SubjectChainAdded
         | DiffItemKind::ReconciliationAdded
+        | DiffItemKind::SliceAdded
+        | DiffItemKind::DiffAdded
+        | DiffItemKind::PolicyResultAdded
         | DiffItemKind::ExceptionAdded => "+ ",
         DiffItemKind::FactRemoved
         | DiffItemKind::EdgeRemoved
+        | DiffItemKind::SubjectChainRemoved
         | DiffItemKind::ReconciliationRemoved
+        | DiffItemKind::SliceRemoved
+        | DiffItemKind::DiffRemoved
+        | DiffItemKind::PolicyResultRemoved
         | DiffItemKind::ExceptionExpired => "- ",
         DiffItemKind::FactChanged
         | DiffItemKind::EdgeChanged
         | DiffItemKind::SubjectChainChanged
         | DiffItemKind::ReconciliationChanged
+        | DiffItemKind::SliceChanged
+        | DiffItemKind::DiffChanged
+        | DiffItemKind::PolicyResultChanged
         | DiffItemKind::ProfileRuleChanged
+        | DiffItemKind::ExceptionChanged
+        | DiffItemKind::SchemaChanged
         | DiffItemKind::ProducerChanged
         | DiffItemKind::OntologyChanged
         | DiffItemKind::Extension(_) => "~ ",
@@ -459,15 +485,25 @@ fn diff_group_rank(kind: &DiffItemKind) -> u8 {
     match kind {
         DiffItemKind::FactAdded | DiffItemKind::FactRemoved | DiffItemKind::FactChanged => 0,
         DiffItemKind::EdgeAdded | DiffItemKind::EdgeRemoved | DiffItemKind::EdgeChanged => 1,
-        DiffItemKind::SubjectChainAdded | DiffItemKind::SubjectChainChanged => 2,
+        DiffItemKind::SubjectChainAdded
+        | DiffItemKind::SubjectChainRemoved
+        | DiffItemKind::SubjectChainChanged => 2,
         DiffItemKind::ReconciliationAdded
         | DiffItemKind::ReconciliationRemoved
         | DiffItemKind::ReconciliationChanged => 3,
-        DiffItemKind::ProfileRuleChanged => 4,
-        DiffItemKind::ExceptionAdded | DiffItemKind::ExceptionExpired => 5,
-        DiffItemKind::ProducerChanged => 6,
-        DiffItemKind::OntologyChanged => 7,
-        DiffItemKind::Extension(_) => 8,
+        DiffItemKind::SliceAdded | DiffItemKind::SliceRemoved | DiffItemKind::SliceChanged => 4,
+        DiffItemKind::DiffAdded | DiffItemKind::DiffRemoved | DiffItemKind::DiffChanged => 5,
+        DiffItemKind::PolicyResultAdded
+        | DiffItemKind::PolicyResultRemoved
+        | DiffItemKind::PolicyResultChanged
+        | DiffItemKind::ProfileRuleChanged => 6,
+        DiffItemKind::ExceptionAdded
+        | DiffItemKind::ExceptionExpired
+        | DiffItemKind::ExceptionChanged => 7,
+        DiffItemKind::SchemaChanged => 8,
+        DiffItemKind::ProducerChanged => 9,
+        DiffItemKind::OntologyChanged => 10,
+        DiffItemKind::Extension(_) => 11,
     }
 }
 
@@ -497,6 +533,16 @@ fn slice_kind_heading(kind: &SliceKind) -> String {
         SliceKind::ObjectStorageSlice => "object_storage_slice",
         SliceKind::DatabaseSlice => "database_slice",
         SliceKind::SecretSlice => "secret_slice",
+        SliceKind::EnvSlice => "env_slice",
+        SliceKind::TimeSlice => "time_slice",
+        SliceKind::RandomnessSlice => "randomness_slice",
+        SliceKind::ComputeSlice => "compute_slice",
+        SliceKind::TelemetrySlice => "telemetry_slice",
+        SliceKind::ProcessSlice => "process_slice",
+        SliceKind::AsyncSlice => "async_slice",
+        SliceKind::DiagnosticSlice => "diagnostic_slice",
+        SliceKind::PackageFeatureSlice => "package_feature_slice",
+        SliceKind::ProviderImplementationSlice => "provider_implementation_slice",
         SliceKind::FilesystemSlice => "filesystem_slice",
         SliceKind::IdentitySlice => "identity_slice",
         SliceKind::RbacSlice => "rbac_slice",
@@ -771,6 +817,7 @@ mod tests {
             id: "recon.missing.upload".to_string(),
             kind: ReconciliationKind::MissingCapability,
             status: ReconciliationStatus::Fail,
+            target: None,
             subject_chain: Some("chain.checkout.upload".to_string()),
             required_fact: Some("fact.req.upload".to_string()),
             granted_facts: vec![],
@@ -822,6 +869,7 @@ mod tests {
             id: "recon.excess.role".to_string(),
             kind: ReconciliationKind::ExcessCapability,
             status: ReconciliationStatus::Warn,
+            target: None,
             subject_chain: None,
             required_fact: None,
             granted_facts: vec!["role/checkout-prod".to_string()],
@@ -842,6 +890,7 @@ mod tests {
             id: "recon.covered.upload".to_string(),
             kind: ReconciliationKind::Covered,
             status: ReconciliationStatus::Pass,
+            target: None,
             subject_chain: None,
             required_fact: Some("fact.req.covered".to_string()),
             granted_facts: vec!["fact.grant.covered".to_string()],
@@ -897,6 +946,53 @@ mod tests {
         };
 
         let expected = "REIR DIFF\n\n+ required capability\n  code: ReportUploader.upload\n  capability: aws.s3.PutObject on arn:aws:s3:::reports-prod/exports/*\n  evidence: src/report_upload.rs:88\n\n+ reconciliation failure\n  kind: missing_capability\n  target: prod checkout-api\n  chain: ReportUploader.upload -> checkout-api image -> Deployment/prod/checkout-api -> ServiceAccount/checkout-api -> IAM role checkout-prod\n  reason: role does not grant s3:PutObject\n\nreview result:\n  fail\n";
+
+        assert_eq!(format_diff_human(&diff), expected);
+    }
+
+    #[test]
+    fn formats_diff_metadata_and_embedded_diff_changes() {
+        let diff = Diff {
+            schema: "reir.diff.v0.1".to_string(),
+            id: "diff.bundle".to_string(),
+            items: vec![
+                DiffItem {
+                    kind: DiffItemKind::OntologyChanged,
+                    id: "ontology".to_string(),
+                    subject: None,
+                    description: Some(
+                        "ontology changed from reir.capability_ontology.v0.1 to reir.capability_ontology.v0.2"
+                            .to_string(),
+                    ),
+                    evidence: vec![],
+                },
+                DiffItem {
+                    kind: DiffItemKind::SchemaChanged,
+                    id: "schema".to_string(),
+                    subject: None,
+                    description: Some(
+                        "schema changed from reir.bundle.v0.1 to reir.bundle.v0.2".to_string(),
+                    ),
+                    evidence: vec![],
+                },
+                DiffItem {
+                    kind: DiffItemKind::ProfileRuleChanged,
+                    id: "profile.prod".to_string(),
+                    subject: None,
+                    description: Some("profile rule changed".to_string()),
+                    evidence: vec![],
+                },
+                DiffItem {
+                    kind: DiffItemKind::DiffChanged,
+                    id: "diff.accepted".to_string(),
+                    subject: None,
+                    description: Some("diff changed".to_string()),
+                    evidence: vec![],
+                },
+            ],
+        };
+
+        let expected = "REIR DIFF\n\n~ diff changed\n\n~ profile rule changed\n\n~ schema changed from reir.bundle.v0.1 to reir.bundle.v0.2\n\n~ ontology changed from reir.capability_ontology.v0.1 to reir.capability_ontology.v0.2\n\nreview result:\n  fail\n";
 
         assert_eq!(format_diff_human(&diff), expected);
     }
@@ -971,7 +1067,16 @@ mod tests {
                 reason: Some("max_missing_capabilities exceeded: 1 > 0".to_string()),
                 evidence: vec![],
             }],
-            diffs: vec![],
+            profiles: vec![Profile {
+                kind: "web-service".to_string(),
+                allow: HashMap::new(),
+                budget: None,
+            }],
+            diffs: vec![Diff {
+                schema: "reir.diff.v0.1".to_string(),
+                id: "diff.bundle".to_string(),
+                items: vec![],
+            }],
             exceptions: vec![Exception {
                 id: "ex-1".to_string(),
                 accepted_by: "reviewer@example.com".to_string(),
@@ -984,7 +1089,7 @@ mod tests {
 
         assert_eq!(
             format_bundle_summary(&bundle),
-            "REIR BUNDLE SUMMARY\nproducers: 1\nsubjects: 1\nsubject chains: 1\nfacts: 0\nedges: 0\nreconciliations: 1\nslices: 1\npolicy results: 1\nexceptions: 1\n"
+            "REIR BUNDLE SUMMARY\nproducers: 1\nsubjects: 1\nsubject chains: 1\nfacts: 0\nedges: 0\nreconciliations: 1\nslices: 1\npolicy results: 1\nprofiles: 1\ndiffs: 1\nexceptions: 1\n"
         );
         assert_eq!(
             format_policy_results_human(&bundle.policy_results),

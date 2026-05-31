@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Bundle, Evidence, ReconciliationKind};
+use crate::{Bundle, CapabilityCategory, EdgeKind, Evidence, FactKind, ReconciliationKind};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Slice {
@@ -30,6 +30,16 @@ pub enum SliceKind {
     ObjectStorageSlice,
     DatabaseSlice,
     SecretSlice,
+    EnvSlice,
+    TimeSlice,
+    RandomnessSlice,
+    ComputeSlice,
+    TelemetrySlice,
+    ProcessSlice,
+    AsyncSlice,
+    DiagnosticSlice,
+    PackageFeatureSlice,
+    ProviderImplementationSlice,
     FilesystemSlice,
     IdentitySlice,
     RbacSlice,
@@ -53,17 +63,7 @@ pub fn slice_by_kind(bundle: &Bundle) -> Vec<Slice> {
             continue;
         };
 
-        let key = slice_kind_key(&slice_kind).to_string();
-        let entry = grouped.entry(key.clone()).or_insert_with(|| Slice {
-            schema: "reir.slice.v0.1".to_string(),
-            id: format!("slice.{}", key),
-            kind: slice_kind.clone(),
-            facts: Vec::new(),
-            edges: Vec::new(),
-            reconciliations: Vec::new(),
-            evidence: Vec::new(),
-        });
-
+        let entry = slice_entry(&mut grouped, slice_kind);
         if let Some(required_fact) = &reconciliation.required_fact {
             entry.facts.push(required_fact.clone());
         }
@@ -75,6 +75,24 @@ pub fn slice_by_kind(bundle: &Bundle) -> Vec<Slice> {
         }
         entry.reconciliations.push(reconciliation.id.clone());
         entry.evidence.extend(reconciliation.evidence.clone());
+    }
+
+    for fact in &bundle.facts {
+        let Some(slice_kind) = fact_slice_kind(fact) else {
+            continue;
+        };
+        let entry = slice_entry(&mut grouped, slice_kind);
+        entry.facts.push(fact.id.clone());
+        entry.evidence.extend(fact.evidence.clone());
+    }
+
+    for edge in &bundle.edges {
+        let Some(slice_kind) = edge_slice_kind(&edge.kind) else {
+            continue;
+        };
+        let entry = slice_entry(&mut grouped, slice_kind);
+        entry.edges.push(edge.id.clone());
+        entry.evidence.extend(edge.evidence.clone());
     }
 
     grouped
@@ -89,6 +107,19 @@ pub fn slice_by_kind(bundle: &Bundle) -> Vec<Slice> {
             slice
         })
         .collect()
+}
+
+fn slice_entry(grouped: &mut BTreeMap<String, Slice>, slice_kind: SliceKind) -> &mut Slice {
+    let key = slice_kind_key(&slice_kind).to_string();
+    grouped.entry(key.clone()).or_insert_with(|| Slice {
+        schema: "reir.slice.v0.1".to_string(),
+        id: format!("slice.{}", key),
+        kind: slice_kind,
+        facts: Vec::new(),
+        edges: Vec::new(),
+        reconciliations: Vec::new(),
+        evidence: Vec::new(),
+    })
 }
 
 fn reconciliation_slice_kind(kind: &ReconciliationKind) -> Option<SliceKind> {
@@ -108,6 +139,95 @@ fn reconciliation_slice_kind(kind: &ReconciliationKind) -> Option<SliceKind> {
     }
 }
 
+fn fact_slice_kind(fact: &crate::Fact) -> Option<SliceKind> {
+    match fact.kind {
+        FactKind::PackageRisk | FactKind::DependencyRisk | FactKind::SupplyChain => {
+            Some(SliceKind::PackageRiskSlice)
+        }
+        FactKind::PackageFeature => Some(SliceKind::PackageFeatureSlice),
+        FactKind::ProviderImplementation => Some(SliceKind::ProviderImplementationSlice),
+        FactKind::NativeBoundary
+        | FactKind::UnsafeBoundary
+        | FactKind::NativeModuleDeclaration
+        | FactKind::NativeCargoFeature => Some(SliceKind::NativeUnsafeSlice),
+        FactKind::BuildTimeExecution => Some(SliceKind::BuildTimeSlice),
+        FactKind::NetworkExposure => Some(SliceKind::NetworkSlice),
+        FactKind::AsyncBoundary => Some(SliceKind::AsyncSlice),
+        FactKind::Diagnostic => Some(SliceKind::DiagnosticSlice),
+        FactKind::SecretAccess => Some(SliceKind::SecretSlice),
+        FactKind::StorageAccess => Some(SliceKind::StorageSlice),
+        FactKind::Identity => Some(SliceKind::IdentitySlice),
+        FactKind::Authorization => Some(SliceKind::RbacSlice),
+        FactKind::Unknown => Some(SliceKind::UnknownSlice),
+        FactKind::Capability => fact
+            .capability
+            .as_ref()
+            .and_then(|capability| capability_slice_kind(&capability.category)),
+        _ => None,
+    }
+}
+
+fn capability_slice_kind(category: &CapabilityCategory) -> Option<SliceKind> {
+    match category {
+        CapabilityCategory::RuntimeNative | CapabilityCategory::RuntimeUnsafe => {
+            Some(SliceKind::NativeUnsafeSlice)
+        }
+        CapabilityCategory::BuildExecute | CapabilityCategory::BuildNetwork => {
+            Some(SliceKind::BuildTimeSlice)
+        }
+        CapabilityCategory::NetworkClient
+        | CapabilityCategory::NetworkServer
+        | CapabilityCategory::NetworkEgress => Some(SliceKind::NetworkSlice),
+        CapabilityCategory::NetworkPublicIngress => Some(SliceKind::PublicIngressSlice),
+        CapabilityCategory::FilesystemRead | CapabilityCategory::FilesystemWrite => {
+            Some(SliceKind::FilesystemSlice)
+        }
+        CapabilityCategory::ObjectStorageRead | CapabilityCategory::ObjectStorageWrite => {
+            Some(SliceKind::ObjectStorageSlice)
+        }
+        CapabilityCategory::DatabaseRead | CapabilityCategory::DatabaseWrite => {
+            Some(SliceKind::DatabaseSlice)
+        }
+        CapabilityCategory::SecretRead | CapabilityCategory::SecretWrite => {
+            Some(SliceKind::SecretSlice)
+        }
+        CapabilityCategory::EnvRead | CapabilityCategory::EnvWrite => Some(SliceKind::EnvSlice),
+        CapabilityCategory::TimeRead => Some(SliceKind::TimeSlice),
+        CapabilityCategory::RandomRead => Some(SliceKind::RandomnessSlice),
+        CapabilityCategory::ComputeHash | CapabilityCategory::ComputeRegex => {
+            Some(SliceKind::ComputeSlice)
+        }
+        CapabilityCategory::TelemetryEmit => Some(SliceKind::TelemetrySlice),
+        CapabilityCategory::ProcessArgs | CapabilityCategory::ProcessSpawn => {
+            Some(SliceKind::ProcessSlice)
+        }
+        CapabilityCategory::IdentityAssume | CapabilityCategory::IdentityGrant => {
+            Some(SliceKind::IdentitySlice)
+        }
+        CapabilityCategory::K8sRbacGrant => Some(SliceKind::RbacSlice),
+        CapabilityCategory::StoragePersistentRead | CapabilityCategory::StoragePersistentWrite => {
+            Some(SliceKind::StorageSlice)
+        }
+        CapabilityCategory::Unknown | CapabilityCategory::Extension(_) => {
+            Some(SliceKind::UnknownSlice)
+        }
+        _ => None,
+    }
+}
+
+fn edge_slice_kind(kind: &EdgeKind) -> Option<SliceKind> {
+    match kind {
+        EdgeKind::CrossesNative | EdgeKind::CrossesUnsafe | EdgeKind::NormalizesToNativeFn => {
+            Some(SliceKind::NativeUnsafeSlice)
+        }
+        EdgeKind::MountsSecret => Some(SliceKind::SecretSlice),
+        EdgeKind::MountsVolume => Some(SliceKind::StorageSlice),
+        EdgeKind::HasRbacBinding | EdgeKind::HasPolicyAttachment => Some(SliceKind::RbacSlice),
+        EdgeKind::UnknownEdge => Some(SliceKind::UnknownSlice),
+        _ => None,
+    }
+}
+
 fn slice_kind_key(kind: &SliceKind) -> &'static str {
     match kind {
         SliceKind::MissingCapabilitySlice => "missing_capability",
@@ -118,6 +238,16 @@ fn slice_kind_key(kind: &SliceKind) -> &'static str {
         SliceKind::ObjectStorageSlice => "object_storage",
         SliceKind::DatabaseSlice => "database",
         SliceKind::SecretSlice => "secret",
+        SliceKind::EnvSlice => "env",
+        SliceKind::TimeSlice => "time",
+        SliceKind::RandomnessSlice => "randomness",
+        SliceKind::ComputeSlice => "compute",
+        SliceKind::TelemetrySlice => "telemetry",
+        SliceKind::ProcessSlice => "process",
+        SliceKind::AsyncSlice => "async",
+        SliceKind::DiagnosticSlice => "diagnostic",
+        SliceKind::PackageFeatureSlice => "package_feature",
+        SliceKind::ProviderImplementationSlice => "provider_implementation",
         SliceKind::FilesystemSlice => "filesystem",
         SliceKind::IdentitySlice => "identity",
         SliceKind::RbacSlice => "rbac",

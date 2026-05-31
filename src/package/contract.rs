@@ -4,8 +4,9 @@ use crate::analyzer::analyze_source_with_interfaces;
 use crate::diagnostic::{Diagnostic, code};
 use crate::review::{ReviewMap, ReviewMapClassification};
 use crate::syntax::ast::{
-    DataEffect, EffectDecl, FieldDecl, FunctionDecl, GenericBound, GenericParam, Item, Param,
-    ProtocolImpl, TypeDecl, TypeKind, TypeRef,
+    ConstDecl, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl, GenericBound, GenericParam,
+    Item, Param, ProtocolDecl, ProtocolImpl, SumTypeDecl, SumVariant, TypeAliasDecl, TypeDecl,
+    TypeKind, TypeRef,
 };
 use crate::syntax::parse_source;
 
@@ -37,6 +38,19 @@ pub(super) struct PackageProtocolImplMappingContract {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PackageProtocolContract {
+    pub(super) name: String,
+    pub(super) methods: Vec<PackageProtocolMethodContract>,
+    pub(super) span: crate::diagnostic::Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PackageProtocolMethodContract {
+    pub(super) name: String,
+    pub(super) contract: PackageFunctionContract,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PackageParamContract {
     pub(super) name: String,
     pub(super) effect: Option<&'static str>,
@@ -50,6 +64,36 @@ pub(super) struct PackageTypeContract {
     pub(super) is_opaque: bool,
     pub(super) type_params: Vec<PackageGenericContract>,
     pub(super) fields: Vec<PackageFieldContract>,
+    pub(super) span: crate::diagnostic::Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PackageSumTypeContract {
+    pub(super) name: String,
+    pub(super) type_params: Vec<PackageGenericContract>,
+    pub(super) variants: Vec<PackageSumVariantContract>,
+    pub(super) span: crate::diagnostic::Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PackageSumVariantContract {
+    pub(super) name: String,
+    pub(super) fields: Vec<PackageFieldContract>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PackageTypeAliasContract {
+    pub(super) name: String,
+    pub(super) type_params: Vec<PackageGenericContract>,
+    pub(super) target: String,
+    pub(super) span: crate::diagnostic::Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PackageConstContract {
+    pub(super) name: String,
+    pub(super) type_annotation: Option<String>,
+    pub(super) value: Expr,
     pub(super) span: crate::diagnostic::Span,
 }
 
@@ -98,6 +142,22 @@ pub(super) fn package_interface_contract_diagnostics(
         collect_package_protocol_impl_contracts(sources, PackageReviewFileKind::Source);
     let interface_protocol_impl_contracts =
         collect_package_protocol_impl_contracts(sources, PackageReviewFileKind::Interface);
+    let source_protocol_contracts =
+        collect_package_protocol_contracts(sources, PackageReviewFileKind::Source);
+    let interface_protocol_contracts =
+        collect_package_protocol_contracts(sources, PackageReviewFileKind::Interface);
+    let source_sum_type_contracts =
+        collect_package_sum_type_contracts(sources, PackageReviewFileKind::Source);
+    let interface_sum_type_contracts =
+        collect_package_sum_type_contracts(sources, PackageReviewFileKind::Interface);
+    let source_type_alias_contracts =
+        collect_package_type_alias_contracts(sources, PackageReviewFileKind::Source);
+    let interface_type_alias_contracts =
+        collect_package_type_alias_contracts(sources, PackageReviewFileKind::Interface);
+    let source_const_contracts =
+        collect_package_const_contracts(sources, PackageReviewFileKind::Source);
+    let interface_const_contracts =
+        collect_package_const_contracts(sources, PackageReviewFileKind::Interface);
     let mut diagnostics = Vec::new();
 
     for (name, interface_contract) in interface_type_contracts {
@@ -198,6 +258,139 @@ pub(super) fn package_interface_contract_diagnostics(
         }
     }
 
+    for (name, interface_contract) in interface_sum_type_contracts {
+        let Some(source_contract) = source_sum_type_contracts.get(&name) else {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_INTERFACE_MISMATCH,
+                    format!("package interface sum type `{name}` has no source declaration."),
+                    interface_contract.span.clone(),
+                    "missing source declaration",
+                )
+                .with_cause("Package `.rssi` files are the public semantic contract; every interface sum type must be declared by package source.")
+                .with_fix(
+                    "implement_interface_sum_type",
+                    format!("Add `{}` to the package source, or remove it from the interface.", package_sum_type_contract_label(&interface_contract)),
+                    "manual",
+                ),
+            );
+            continue;
+        };
+
+        if !package_sum_type_contracts_match(&interface_contract, source_contract) {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_INTERFACE_MISMATCH,
+                    format!(
+                        "package interface sum type `{name}` does not match its source declaration."
+                    ),
+                    interface_contract.span.clone(),
+                    "interface/source sum type mismatch",
+                )
+                .with_cause(format!(
+                    "interface: {}",
+                    package_sum_type_contract_label(&interface_contract)
+                ))
+                .with_cause(format!(
+                    "source: {}",
+                    package_sum_type_contract_label(source_contract)
+                ))
+                .with_fix(
+                    "align_interface_and_source",
+                    "Update the `.rssi` contract or the source declaration so their public sum type contracts match exactly.",
+                    "manual",
+                ),
+            );
+        }
+    }
+
+    for (name, interface_contract) in interface_type_alias_contracts {
+        let Some(source_contract) = source_type_alias_contracts.get(&name) else {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_INTERFACE_MISMATCH,
+                    format!("package interface type alias `{name}` has no source declaration."),
+                    interface_contract.span.clone(),
+                    "missing source declaration",
+                )
+                .with_cause("Package `.rssi` files are the public semantic contract; every interface type alias must be declared by package source.")
+                .with_fix(
+                    "implement_interface_type_alias",
+                    format!("Add `{}` to the package source, or remove it from the interface.", package_type_alias_contract_label(&interface_contract)),
+                    "manual",
+                ),
+            );
+            continue;
+        };
+
+        if !package_type_alias_contracts_match(&interface_contract, source_contract) {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_INTERFACE_MISMATCH,
+                    format!(
+                        "package interface type alias `{name}` does not match its source declaration."
+                    ),
+                    interface_contract.span.clone(),
+                    "interface/source type alias mismatch",
+                )
+                .with_cause(format!(
+                    "interface: {}",
+                    package_type_alias_contract_label(&interface_contract)
+                ))
+                .with_cause(format!(
+                    "source: {}",
+                    package_type_alias_contract_label(source_contract)
+                ))
+                .with_fix(
+                    "align_interface_and_source",
+                    "Update the `.rssi` contract or the source declaration so their public type alias contracts match exactly.",
+                    "manual",
+                ),
+            );
+        }
+    }
+
+    for (name, interface_contract) in interface_const_contracts {
+        let Some(source_contract) = source_const_contracts.get(&name) else {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_INTERFACE_MISMATCH,
+                    format!("package interface const `{name}` has no source declaration."),
+                    interface_contract.span.clone(),
+                    "missing source declaration",
+                )
+                .with_cause("Package `.rssi` files are the public semantic contract; every interface const must be declared by package source.")
+                .with_fix(
+                    "implement_interface_const",
+                    format!("Add `{}` to the package source, or remove it from the interface.", package_const_contract_label(&interface_contract)),
+                    "manual",
+                ),
+            );
+            continue;
+        };
+
+        if !package_const_contracts_match(&interface_contract, source_contract) {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_INTERFACE_MISMATCH,
+                    format!("package interface const `{name}` does not match its source declaration."),
+                    interface_contract.span.clone(),
+                    "interface/source const mismatch",
+                )
+                .with_cause(format!(
+                    "interface: {}",
+                    package_const_contract_label(&interface_contract)
+                ))
+                .with_cause(format!("source: {}", package_const_contract_label(source_contract)))
+                .with_fix(
+                    "align_interface_and_source",
+                    "Update the `.rssi` contract or the source declaration so their public const contracts match exactly.",
+                    "manual",
+                ),
+            );
+        }
+    }
+
     for (name, interface_contract) in interface_protocol_impl_contracts {
         let Some(source_contract) = source_protocol_impl_contracts.get(&name) else {
             diagnostics.push(
@@ -246,6 +439,52 @@ pub(super) fn package_interface_contract_diagnostics(
         }
     }
 
+    for (name, interface_contract) in interface_protocol_contracts {
+        let Some(source_contract) = source_protocol_contracts.get(&name) else {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_INTERFACE_MISMATCH,
+                    format!("package interface protocol `{name}` has no source declaration."),
+                    interface_contract.span.clone(),
+                    "missing source protocol declaration",
+                )
+                .with_cause("Package `.rssi` files are the public semantic contract; every interface protocol must be declared by package source.")
+                .with_fix(
+                    "implement_interface_protocol",
+                    format!("Add `{}` to the package source, or remove it from the interface.", package_protocol_contract_label(&interface_contract)),
+                    "manual",
+                ),
+            );
+            continue;
+        };
+
+        if !package_protocol_contracts_match(&interface_contract, source_contract) {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_INTERFACE_MISMATCH,
+                    format!(
+                        "package interface protocol `{name}` does not match its source declaration."
+                    ),
+                    interface_contract.span.clone(),
+                    "interface/source protocol mismatch",
+                )
+                .with_cause(format!(
+                    "interface: {}",
+                    package_protocol_contract_label(&interface_contract)
+                ))
+                .with_cause(format!(
+                    "source: {}",
+                    package_protocol_contract_label(source_contract)
+                ))
+                .with_fix(
+                    "align_interface_protocol",
+                    "Update the `.rssi` contract or the source protocol declaration so their method contracts match exactly.",
+                    "manual",
+                ),
+            );
+        }
+    }
+
     diagnostics
 }
 
@@ -271,6 +510,141 @@ pub(super) fn package_function_contracts_match(
         && interface.effects == source.effects
 }
 
+fn package_sum_type_contracts_match(
+    interface: &PackageSumTypeContract,
+    source: &PackageSumTypeContract,
+) -> bool {
+    interface.name == source.name
+        && interface.type_params == source.type_params
+        && interface.variants == source.variants
+}
+
+fn package_type_alias_contracts_match(
+    interface: &PackageTypeAliasContract,
+    source: &PackageTypeAliasContract,
+) -> bool {
+    interface.name == source.name
+        && interface.type_params == source.type_params
+        && interface.target == source.target
+}
+
+fn package_const_contracts_match(
+    interface: &PackageConstContract,
+    source: &PackageConstContract,
+) -> bool {
+    interface.name == source.name
+        && interface.type_annotation == source.type_annotation
+        && package_expr_contracts_match(&interface.value, &source.value)
+}
+
+fn package_expr_contracts_match(interface: &Expr, source: &Expr) -> bool {
+    match (interface, source) {
+        (Expr::Ident(left, _), Expr::Ident(right, _))
+        | (Expr::Number(left, _), Expr::Number(right, _))
+        | (Expr::String(left, _), Expr::String(right, _)) => left == right,
+        (
+            Expr::Binary {
+                op: left_op,
+                left: left_left,
+                right: left_right,
+                ..
+            },
+            Expr::Binary {
+                op: right_op,
+                left: right_left,
+                right: right_right,
+                ..
+            },
+        ) => {
+            left_op == right_op
+                && package_expr_contracts_match(left_left, right_left)
+                && package_expr_contracts_match(left_right, right_right)
+        }
+        (
+            Expr::Field {
+                base: left_base,
+                name: left_name,
+                ..
+            },
+            Expr::Field {
+                base: right_base,
+                name: right_name,
+                ..
+            },
+        ) => left_name == right_name && package_expr_contracts_match(left_base, right_base),
+        (
+            Expr::Index {
+                base: left_base,
+                index: left_index,
+                ..
+            },
+            Expr::Index {
+                base: right_base,
+                index: right_index,
+                ..
+            },
+        ) => {
+            package_expr_contracts_match(left_base, right_base)
+                && package_expr_contracts_match(left_index, right_index)
+        }
+        (
+            Expr::Call {
+                callee: left_callee,
+                args: left_args,
+                ..
+            },
+            Expr::Call {
+                callee: right_callee,
+                args: right_args,
+                ..
+            },
+        ) => {
+            left_callee == right_callee
+                && left_args.len() == right_args.len()
+                && left_args
+                    .iter()
+                    .zip(right_args.iter())
+                    .all(|(left, right)| {
+                        left.name == right.name
+                            && left.malformed == right.malformed
+                            && package_expr_contracts_match(&left.value, &right.value)
+                    })
+        }
+        (
+            Expr::Effect {
+                effect: left_effect,
+                value: left_value,
+                ..
+            },
+            Expr::Effect {
+                effect: right_effect,
+                value: right_value,
+                ..
+            },
+        ) => left_effect == right_effect && package_expr_contracts_match(left_value, right_value),
+        (Expr::Manage { value: left, .. }, Expr::Manage { value: right, .. })
+        | (Expr::Spawn { value: left, .. }, Expr::Spawn { value: right, .. })
+        | (Expr::Await { value: left, .. }, Expr::Await { value: right, .. })
+        | (Expr::Try { value: left, .. }, Expr::Try { value: right, .. }) => {
+            package_expr_contracts_match(left, right)
+        }
+        (
+            Expr::Closure {
+                params: left_params,
+                body: left_body,
+                ..
+            },
+            Expr::Closure {
+                params: right_params,
+                body: right_body,
+                ..
+            },
+        ) => left_params == right_params && left_body == right_body,
+        (Expr::Unknown(_), Expr::Unknown(_)) => true,
+        _ => false,
+    }
+}
+
 fn package_protocol_impl_contracts_match(
     interface: &PackageProtocolImplContract,
     source: &PackageProtocolImplContract,
@@ -278,6 +652,25 @@ fn package_protocol_impl_contracts_match(
     interface.protocol == source.protocol
         && interface.type_name == source.type_name
         && interface.mappings == source.mappings
+}
+
+fn package_protocol_contracts_match(
+    interface: &PackageProtocolContract,
+    source: &PackageProtocolContract,
+) -> bool {
+    interface.name == source.name
+        && interface.methods.len() == source.methods.len()
+        && interface
+            .methods
+            .iter()
+            .zip(&source.methods)
+            .all(|(interface_method, source_method)| {
+                interface_method.name == source_method.name
+                    && package_function_contracts_match(
+                        &interface_method.contract,
+                        &source_method.contract,
+                    )
+            })
 }
 
 pub(super) fn collect_package_type_contracts(
@@ -291,7 +684,9 @@ pub(super) fn collect_package_type_contracts(
             let Item::Type(type_decl) = item else {
                 continue;
             };
-            contracts.insert(type_decl.name.clone(), package_type_contract(&type_decl));
+            if kind == PackageReviewFileKind::Interface || type_decl.is_public {
+                contracts.insert(type_decl.name.clone(), package_type_contract(&type_decl));
+            }
         }
     }
     contracts
@@ -316,6 +711,63 @@ pub(super) fn collect_package_function_contracts(
     contracts
 }
 
+pub(super) fn collect_package_sum_type_contracts(
+    sources: &[PackageSource],
+    kind: PackageReviewFileKind,
+) -> BTreeMap<String, PackageSumTypeContract> {
+    let mut contracts = BTreeMap::new();
+    for source in sources.iter().filter(|source| source.kind == kind) {
+        let program = parse_source(&source.path, &source.contents);
+        for item in program.items {
+            let Item::SumType(sum_type) = item else {
+                continue;
+            };
+            if kind == PackageReviewFileKind::Interface || sum_type.is_public {
+                contracts.insert(sum_type.name.clone(), package_sum_type_contract(&sum_type));
+            }
+        }
+    }
+    contracts
+}
+
+pub(super) fn collect_package_type_alias_contracts(
+    sources: &[PackageSource],
+    kind: PackageReviewFileKind,
+) -> BTreeMap<String, PackageTypeAliasContract> {
+    let mut contracts = BTreeMap::new();
+    for source in sources.iter().filter(|source| source.kind == kind) {
+        let program = parse_source(&source.path, &source.contents);
+        for item in program.items {
+            let Item::TypeAlias(alias) = item else {
+                continue;
+            };
+            if kind == PackageReviewFileKind::Interface || alias.is_public {
+                contracts.insert(alias.name.clone(), package_type_alias_contract(&alias));
+            }
+        }
+    }
+    contracts
+}
+
+pub(super) fn collect_package_const_contracts(
+    sources: &[PackageSource],
+    kind: PackageReviewFileKind,
+) -> BTreeMap<String, PackageConstContract> {
+    let mut contracts = BTreeMap::new();
+    for source in sources.iter().filter(|source| source.kind == kind) {
+        let program = parse_source(&source.path, &source.contents);
+        for item in program.items {
+            let Item::Const(const_decl) = item else {
+                continue;
+            };
+            if kind == PackageReviewFileKind::Interface || const_decl.is_public {
+                contracts.insert(const_decl.name.clone(), package_const_contract(&const_decl));
+            }
+        }
+    }
+    contracts
+}
+
 pub(super) fn collect_package_protocol_impl_contracts(
     sources: &[PackageSource],
     kind: PackageReviewFileKind,
@@ -329,6 +781,21 @@ pub(super) fn collect_package_protocol_impl_contracts(
                 package_protocol_impl_contract_key(&contract.protocol, &contract.type_name),
                 contract,
             );
+        }
+    }
+    contracts
+}
+
+pub(super) fn collect_package_protocol_contracts(
+    sources: &[PackageSource],
+    kind: PackageReviewFileKind,
+) -> BTreeMap<String, PackageProtocolContract> {
+    let mut contracts = BTreeMap::new();
+    for source in sources.iter().filter(|source| source.kind == kind) {
+        let program = parse_source(&source.path, &source.contents);
+        for protocol in &program.protocols {
+            let contract = package_protocol_contract(protocol, &program.items);
+            contracts.insert(contract.name.clone(), contract);
         }
     }
     contracts
@@ -415,14 +882,65 @@ pub(super) fn package_review_exports(
     } else {
         &interface_protocol_impl_contracts
     };
+    let interface_protocol_contracts =
+        collect_package_protocol_contracts(sources, PackageReviewFileKind::Interface);
+    let source_protocol_contracts;
+    let protocol_contracts = if interface_protocol_contracts.is_empty() {
+        source_protocol_contracts =
+            collect_package_protocol_contracts(sources, PackageReviewFileKind::Source);
+        &source_protocol_contracts
+    } else {
+        &interface_protocol_contracts
+    };
     let resource_types = type_contracts
         .values()
         .filter(|contract| contract.kind == TypeKind::Resource)
         .map(|contract| contract.name.as_str())
         .collect::<BTreeSet<_>>();
+    let interface_sum_type_contracts =
+        collect_package_sum_type_contracts(sources, PackageReviewFileKind::Interface);
+    let source_sum_type_contracts;
+    let sum_type_contracts = if interface_sum_type_contracts.is_empty() {
+        source_sum_type_contracts =
+            collect_package_sum_type_contracts(sources, PackageReviewFileKind::Source);
+        &source_sum_type_contracts
+    } else {
+        &interface_sum_type_contracts
+    };
+    let interface_type_alias_contracts =
+        collect_package_type_alias_contracts(sources, PackageReviewFileKind::Interface);
+    let source_type_alias_contracts;
+    let type_alias_contracts = if interface_type_alias_contracts.is_empty() {
+        source_type_alias_contracts =
+            collect_package_type_alias_contracts(sources, PackageReviewFileKind::Source);
+        &source_type_alias_contracts
+    } else {
+        &interface_type_alias_contracts
+    };
+    let interface_const_contracts =
+        collect_package_const_contracts(sources, PackageReviewFileKind::Interface);
+    let source_const_contracts;
+    let const_contracts = if interface_const_contracts.is_empty() {
+        source_const_contracts =
+            collect_package_const_contracts(sources, PackageReviewFileKind::Source);
+        &source_const_contracts
+    } else {
+        &interface_const_contracts
+    };
 
     let mut exports = Vec::new();
     exports.extend(type_contracts.values().map(package_type_review_export));
+    exports.extend(
+        sum_type_contracts
+            .values()
+            .map(package_sum_type_review_export),
+    );
+    exports.extend(
+        type_alias_contracts
+            .values()
+            .map(package_type_alias_review_export),
+    );
+    exports.extend(const_contracts.values().map(package_const_review_export));
     exports.extend(
         function_contracts
             .values()
@@ -432,6 +950,11 @@ pub(super) fn package_review_exports(
         protocol_impl_contracts
             .values()
             .map(package_protocol_impl_review_export),
+    );
+    exports.extend(
+        protocol_contracts
+            .values()
+            .map(package_protocol_review_export),
     );
     exports.sort_by(|left, right| {
         left.kind
@@ -458,6 +981,60 @@ fn package_type_review_export(contract: &PackageTypeContract) -> PackageReviewEx
     PackageReviewExport {
         name: contract.name.clone(),
         kind: "type".to_string(),
+        classification: "review_if_changed".to_string(),
+        reasons,
+        function_kind: None,
+        normalized_effects: Vec::new(),
+    }
+}
+
+fn package_sum_type_review_export(contract: &PackageSumTypeContract) -> PackageReviewExport {
+    let mut reasons = vec![
+        "public sum type".to_string(),
+        format!("variants: {}", contract.variants.len()),
+    ];
+    reasons.extend(
+        contract
+            .variants
+            .iter()
+            .map(|variant| format!("variant `{}`", variant.name)),
+    );
+    reasons.sort();
+    reasons.dedup();
+    PackageReviewExport {
+        name: contract.name.clone(),
+        kind: "sum_type".to_string(),
+        classification: "review_if_changed".to_string(),
+        reasons,
+        function_kind: None,
+        normalized_effects: Vec::new(),
+    }
+}
+
+fn package_type_alias_review_export(contract: &PackageTypeAliasContract) -> PackageReviewExport {
+    PackageReviewExport {
+        name: contract.name.clone(),
+        kind: "type_alias".to_string(),
+        classification: "review_if_changed".to_string(),
+        reasons: vec![
+            "public type alias".to_string(),
+            format!("target `{}`", contract.target),
+        ],
+        function_kind: None,
+        normalized_effects: Vec::new(),
+    }
+}
+
+fn package_const_review_export(contract: &PackageConstContract) -> PackageReviewExport {
+    let mut reasons = vec!["public const".to_string()];
+    if let Some(type_annotation) = &contract.type_annotation {
+        reasons.push(format!("type `{type_annotation}`"));
+    } else {
+        reasons.push("inferred type".to_string());
+    }
+    PackageReviewExport {
+        name: contract.name.clone(),
+        kind: "const".to_string(),
         classification: "review_if_changed".to_string(),
         reasons,
         function_kind: None,
@@ -567,6 +1144,27 @@ fn package_protocol_impl_review_export(
     }
 }
 
+fn package_protocol_review_export(contract: &PackageProtocolContract) -> PackageReviewExport {
+    let mut reasons = vec!["protocol declaration".to_string()];
+    for method in &contract.methods {
+        reasons.push(format!("method `{}`", method.name));
+        reasons.push(format!(
+            "method contract `{}`",
+            package_protocol_method_contract_label(method)
+        ));
+    }
+    reasons.sort();
+    reasons.dedup();
+    PackageReviewExport {
+        name: contract.name.clone(),
+        kind: "protocol".to_string(),
+        classification: "review_if_changed".to_string(),
+        reasons,
+        function_kind: None,
+        normalized_effects: Vec::new(),
+    }
+}
+
 fn is_guarantee_effect(effect: &str) -> bool {
     matches!(effect, "no_panic" | "noalloc" | "no_block" | "pure")
 }
@@ -619,6 +1217,52 @@ fn package_type_contract(type_decl: &TypeDecl) -> PackageTypeContract {
             .map(package_field_contract)
             .collect(),
         span: type_decl.span.clone(),
+    }
+}
+
+fn package_sum_type_contract(sum_type: &SumTypeDecl) -> PackageSumTypeContract {
+    PackageSumTypeContract {
+        name: sum_type.name.clone(),
+        type_params: sum_type
+            .type_params
+            .iter()
+            .map(package_generic_contract)
+            .collect(),
+        variants: sum_type
+            .variants
+            .iter()
+            .map(package_sum_variant_contract)
+            .collect(),
+        span: sum_type.span.clone(),
+    }
+}
+
+fn package_sum_variant_contract(variant: &SumVariant) -> PackageSumVariantContract {
+    PackageSumVariantContract {
+        name: variant.name.clone(),
+        fields: variant.fields.iter().map(package_field_contract).collect(),
+    }
+}
+
+fn package_type_alias_contract(alias: &TypeAliasDecl) -> PackageTypeAliasContract {
+    PackageTypeAliasContract {
+        name: alias.name.clone(),
+        type_params: alias
+            .type_params
+            .iter()
+            .map(package_generic_contract)
+            .collect(),
+        target: package_type_name(&alias.target),
+        span: alias.span.clone(),
+    }
+}
+
+fn package_const_contract(const_decl: &ConstDecl) -> PackageConstContract {
+    PackageConstContract {
+        name: const_decl.name.clone(),
+        type_annotation: const_decl.type_annotation.as_ref().map(package_type_name),
+        value: const_decl.value.clone(),
+        span: const_decl.span.clone(),
     }
 }
 
@@ -697,6 +1341,34 @@ fn package_effect_name(effect: &EffectDecl) -> String {
     match effect {
         EffectDecl::Name(name) => name.clone(),
         EffectDecl::Retains(param) => format!("retains({param})"),
+    }
+}
+
+fn package_protocol_contract(protocol: &ProtocolDecl, items: &[Item]) -> PackageProtocolContract {
+    let prefix = format!("{}.", protocol.name);
+    let mut methods = items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(function) => function.name.strip_prefix(&prefix).map(|method_name| {
+                PackageProtocolMethodContract {
+                    name: method_name.to_string(),
+                    contract: package_function_contract(function),
+                }
+            }),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    methods.sort_by(|left, right| {
+        left.name.cmp(&right.name).then_with(|| {
+            package_function_contract_label(&left.contract)
+                .cmp(&package_function_contract_label(&right.contract))
+        })
+    });
+    methods.dedup_by(|left, right| left.name == right.name && left.contract == right.contract);
+    PackageProtocolContract {
+        name: protocol.name.clone(),
+        methods,
+        span: protocol.span.clone(),
     }
 }
 
@@ -796,6 +1468,66 @@ fn package_type_contract_label(contract: &PackageTypeContract) -> String {
     )
 }
 
+fn package_sum_type_contract_label(contract: &PackageSumTypeContract) -> String {
+    let type_params = package_generic_params_label(&contract.type_params);
+    let variants = if contract.variants.is_empty() {
+        "<none>".to_string()
+    } else {
+        contract
+            .variants
+            .iter()
+            .map(|variant| {
+                if variant.fields.is_empty() {
+                    variant.name.clone()
+                } else {
+                    format!(
+                        "{}({})",
+                        variant.name,
+                        variant
+                            .fields
+                            .iter()
+                            .map(|field| format!("{}: {}", field.name, field.type_name))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!("sum {}{type_params} {{ {variants} }}", contract.name)
+}
+
+fn package_type_alias_contract_label(contract: &PackageTypeAliasContract) -> String {
+    let type_params = package_generic_params_label(&contract.type_params);
+    format!("type {}{type_params} = {}", contract.name, contract.target)
+}
+
+fn package_const_contract_label(contract: &PackageConstContract) -> String {
+    match &contract.type_annotation {
+        Some(type_annotation) => format!("const {}: {type_annotation} = <expr>", contract.name),
+        None => format!("const {} = <expr>", contract.name),
+    }
+}
+
+fn package_generic_params_label(params: &[PackageGenericContract]) -> String {
+    if params.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<{}>",
+            params
+                .iter()
+                .map(|param| match &param.bound {
+                    Some(bound) => format!("{}: {bound}", param.name),
+                    None => param.name.clone(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
 pub(super) fn package_function_contract_label(contract: &PackageFunctionContract) -> String {
     let params = contract
         .params
@@ -842,6 +1574,25 @@ fn package_protocol_impl_contract_label(contract: &PackageProtocolImplContract) 
     )
 }
 
+fn package_protocol_contract_label(contract: &PackageProtocolContract) -> String {
+    let methods = if contract.methods.is_empty() {
+        "<none>".to_string()
+    } else {
+        contract
+            .methods
+            .iter()
+            .map(package_protocol_method_contract_label)
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    format!("protocol {} {{ {} }}", contract.name, methods)
+}
+
+fn package_protocol_method_contract_label(method: &PackageProtocolMethodContract) -> String {
+    let label = package_function_contract_label(&method.contract);
+    label.strip_prefix("pub ").unwrap_or(&label).to_string()
+}
+
 pub(super) fn package_type_contracts_for_source(
     source: &PackageSource,
 ) -> BTreeMap<String, PackageTypeContract> {
@@ -852,7 +1603,12 @@ pub(super) fn package_type_contracts_for_source(
             Item::Type(type_decl) => {
                 Some((type_decl.name.clone(), package_type_contract(&type_decl)))
             }
-            Item::Function(_) | Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => None,
+            Item::Function(_)
+            | Item::Module(_)
+            | Item::Use(_)
+            | Item::SumType(_)
+            | Item::TypeAlias(_)
+            | Item::Const(_) => None,
         })
         .collect()
 }
@@ -867,7 +1623,12 @@ pub(super) fn package_function_contracts_for_source(
             Item::Function(function) => {
                 Some((function.name.clone(), package_function_contract(&function)))
             }
-            Item::Type(_) | Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => None,
+            Item::Type(_)
+            | Item::Module(_)
+            | Item::Use(_)
+            | Item::SumType(_)
+            | Item::TypeAlias(_)
+            | Item::Const(_) => None,
         })
         .collect()
 }

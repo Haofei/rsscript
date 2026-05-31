@@ -1,8 +1,10 @@
+use std::path::Path;
+
 use crate::package::{
     PackageCheck, PackageDependencyKind, PackageDiff, PackageLock, PackageLockDiff,
     PackageMetadataReport, PackagePublishDryRun, PackageReview, PackageReviewAwaitBoundary,
-    PackageReviewAwaitSite, PackageReviewExport, PackageTree, PackageTreeNode, PackageVendorReport,
-    package_risk_label,
+    PackageReviewAwaitSite, PackageReviewDependency, PackageReviewExport, PackageTree,
+    PackageTreeNode, PackageVendorReport, package_risk_label,
 };
 use crate::review::format_review_human;
 
@@ -10,8 +12,40 @@ pub fn format_package_review_json(review: &PackageReview) -> String {
     serde_json::to_string(review).expect("package review JSON serialization should not fail")
 }
 
+pub fn format_package_review_reir_json(review: &PackageReview) -> String {
+    let package_review_json = format_package_review_json(review);
+    let bundle =
+        reir::adapters::rsscript::rsscript_json_to_bundle(None, Some(&package_review_json), None)
+            .expect("package review JSON should convert to REIR");
+    serde_json::to_string(&bundle).expect("REIR package review JSON serialization should not fail")
+}
+
+pub fn format_package_review_reir_diff_json(
+    baseline: &PackageReview,
+    current: &PackageReview,
+) -> String {
+    let baseline_json = format_package_review_json(baseline);
+    let current_json = format_package_review_json(current);
+    let baseline_bundle =
+        reir::adapters::rsscript::rsscript_json_to_bundle(None, Some(&baseline_json), None)
+            .expect("baseline package review JSON should convert to REIR");
+    let current_bundle =
+        reir::adapters::rsscript::rsscript_json_to_bundle(None, Some(&current_json), None)
+            .expect("current package review JSON should convert to REIR");
+    let diff = reir::compute_diff(&baseline_bundle, &current_bundle);
+    serde_json::to_string(&diff).expect("REIR package diff JSON serialization should not fail")
+}
+
 pub fn format_package_metadata_json(metadata: &PackageMetadataReport) -> String {
     serde_json::to_string(metadata).expect("package metadata JSON serialization should not fail")
+}
+
+pub fn format_package_metadata_reir_json(metadata: &PackageMetadataReport) -> String {
+    let metadata_json = format_package_metadata_json(metadata);
+    let bundle = reir::adapters::rsscript::rsscript_metadata_json_to_bundle(&metadata_json)
+        .expect("package metadata JSON should convert to REIR");
+    serde_json::to_string(&bundle)
+        .expect("REIR package metadata JSON serialization should not fail")
 }
 
 pub fn format_package_diff_json(diff: &PackageDiff) -> String {
@@ -22,20 +56,71 @@ pub fn format_package_check_json(check: &PackageCheck) -> String {
     serde_json::to_string(check).expect("package check JSON serialization should not fail")
 }
 
+pub fn format_package_check_reir_json(check: &PackageCheck) -> String {
+    let check_json = format_package_check_json(check);
+    let bundle = reir::adapters::rsscript::rsscript_check_json_to_bundle(&check_json)
+        .expect("package check JSON should convert to REIR");
+    serde_json::to_string(&bundle).expect("REIR package check JSON serialization should not fail")
+}
+
 pub fn format_package_tree_json(tree: &PackageTree) -> String {
     serde_json::to_string(tree).expect("package tree JSON serialization should not fail")
+}
+
+pub fn format_package_tree_reir_json(tree: &PackageTree) -> String {
+    let tree_json = format_package_tree_json(tree);
+    let bundle = reir::adapters::rsscript::rsscript_tree_json_to_bundle(&tree_json)
+        .expect("package tree JSON should convert to REIR");
+    serde_json::to_string(&bundle).expect("REIR package tree JSON serialization should not fail")
 }
 
 pub fn format_package_publish_json(publish: &PackagePublishDryRun) -> String {
     serde_json::to_string(publish).expect("package publish JSON serialization should not fail")
 }
 
+pub fn format_package_publish_reir_json(publish: &PackagePublishDryRun) -> String {
+    let publish_json = format_package_publish_json(publish);
+    let bundle = reir::adapters::rsscript::rsscript_publish_json_to_bundle(&publish_json)
+        .expect("package publish JSON should convert to REIR");
+    serde_json::to_string(&bundle).expect("REIR package publish JSON serialization should not fail")
+}
+
 pub fn format_package_vendor_json(vendor: &PackageVendorReport) -> String {
     serde_json::to_string(vendor).expect("package vendor JSON serialization should not fail")
 }
 
+pub fn format_package_vendor_reir_json(vendor: &PackageVendorReport) -> String {
+    let vendor_json = format_package_vendor_json(vendor);
+    let bundle = reir::adapters::rsscript::rsscript_vendor_json_to_bundle(&vendor_json)
+        .expect("package vendor JSON should convert to REIR");
+    serde_json::to_string(&bundle).expect("REIR package vendor JSON serialization should not fail")
+}
+
 pub fn format_package_lock_json(lock: &PackageLock) -> String {
     serde_json::to_string(lock).expect("package lock JSON serialization should not fail")
+}
+
+pub fn format_package_lock_reir_json(lock: &PackageLock) -> String {
+    let lock_json = format_package_lock_json(lock);
+    let bundle = reir::adapters::rsscript::rsscript_lock_json_to_bundle(&lock_json)
+        .expect("package lock JSON should convert to REIR");
+    serde_json::to_string(&bundle).expect("REIR package lock JSON serialization should not fail")
+}
+
+pub fn format_package_lock_reir_json_with_path(lock: &PackageLock, lockfile_path: &Path) -> String {
+    let mut value =
+        serde_json::to_value(lock).expect("package lock JSON serialization should not fail");
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "lockfile_path".to_string(),
+            lockfile_path.display().to_string().into(),
+        );
+    }
+    let lock_json =
+        serde_json::to_string(&value).expect("package lock JSON serialization should not fail");
+    let bundle = reir::adapters::rsscript::rsscript_lock_json_to_bundle(&lock_json)
+        .expect("package lock JSON should convert to REIR");
+    serde_json::to_string(&bundle).expect("REIR package lock JSON serialization should not fail")
 }
 
 pub fn format_package_lock_toml(lock: &PackageLock) -> String {
@@ -44,6 +129,14 @@ pub fn format_package_lock_toml(lock: &PackageLock) -> String {
 
 pub fn format_package_lock_diff_json(diff: &PackageLockDiff) -> String {
     serde_json::to_string(diff).expect("package lock diff JSON serialization should not fail")
+}
+
+pub fn format_package_lock_diff_reir_json(diff: &PackageLockDiff) -> String {
+    let diff_json = format_package_lock_diff_json(diff);
+    let bundle = reir::adapters::rsscript::rsscript_lock_diff_json_to_bundle(&diff_json)
+        .expect("package lock diff JSON should convert to REIR");
+    serde_json::to_string(&bundle)
+        .expect("REIR package lock diff JSON serialization should not fail")
 }
 
 pub fn format_package_review_human(review: &PackageReview) -> String {
@@ -56,12 +149,15 @@ pub fn format_package_review_human(review: &PackageReview) -> String {
         package_risk_label(review.risk)
     ));
     output.push_str(&format!(
-        "summary: {} interface files; {} source files; {} dependencies; {} package features; {} public types; {} public functions; {} public APIs; {} mutating APIs; {} retaining APIs; {} resource APIs; {} fresh-returning APIs; {} guarantee APIs; {} native guarantee APIs; {} native APIs; {} async APIs; {} await sites; {} parallel APIs; {} unsafe APIs; {} unknown APIs; {} diagnostics ({} errors)\n",
+        "summary: {} interface files; {} source files; {} dependencies; {} package features; {} public types; {} public sum types; {} public type aliases; {} public consts; {} public functions; {} public APIs; {} mutating APIs; {} retaining APIs; {} resource APIs; {} fresh-returning APIs; {} guarantee APIs; {} native guarantee APIs; {} native APIs; {} async APIs; {} await sites; {} parallel APIs; {} unsafe APIs; {} unknown APIs; {} diagnostics ({} errors)\n",
         review.summary.interface_files,
         review.summary.source_files,
         review.summary.dependencies,
         review.summary.package_features,
         review.summary.public_types,
+        review.summary.public_sum_types,
+        review.summary.public_type_aliases,
+        review.summary.public_consts,
         review.summary.public_functions,
         review.summary.public_apis,
         review.summary.mutating_apis,
@@ -91,6 +187,9 @@ pub fn format_package_review_human(review: &PackageReview) -> String {
             review.features.join(", ")
         ));
     }
+    output.push_str(&format_package_review_dependencies_human(
+        &review.dependencies,
+    ));
     if let Some(native) = &review.native_rust {
         output.push_str(&format!("native rust: {}", native.path));
         if let Some(crate_name) = &native.crate_name {
@@ -126,15 +225,46 @@ pub fn format_package_metadata_human(metadata: &PackageMetadataReport) -> String
         "package metadata {} {} {} risk {}\n",
         metadata.package.name,
         metadata.package.version,
-        if metadata.dry_run { "dry-run" } else { "wrote" },
+        if metadata.verified {
+            "verified"
+        } else if metadata.dry_run {
+            "dry-run"
+        } else {
+            "wrote"
+        },
         package_risk_label(metadata.risk)
     ));
     output.push_str(&format!("metadata path: {}\n", metadata.metadata_path));
+    output.push_str(&format!("reir path: {}\n", metadata.reir_path));
+    if !metadata.mismatches.is_empty() {
+        output.push_str("metadata mismatches:\n");
+        for mismatch in &metadata.mismatches {
+            let actual = mismatch
+                .actual_sha256
+                .as_deref()
+                .map(|actual| format!(" actual={actual}"))
+                .unwrap_or_default();
+            output.push_str(&format!(
+                "  - {} {} {}: {} expected={}{}\n",
+                mismatch.artifact,
+                mismatch.kind,
+                mismatch.path,
+                mismatch.message,
+                mismatch.expected_sha256,
+                actual
+            ));
+        }
+    }
     output.push_str(&format!(
-        "summary: {} interface files; {} source files; {} public types; {} public functions; {} public APIs; {} mutating APIs; {} retaining APIs; {} resource APIs; {} fresh-returning APIs; {} guarantee APIs; {} native guarantee APIs; {} native APIs; {} async APIs; {} await sites; {} parallel APIs; {} unsafe APIs; {} unknown APIs; {} diagnostics ({} errors)\n",
+        "summary: {} interface files; {} source files; {} dependencies; {} package features; {} public types; {} public sum types; {} public type aliases; {} public consts; {} public functions; {} public APIs; {} mutating APIs; {} retaining APIs; {} resource APIs; {} fresh-returning APIs; {} guarantee APIs; {} native guarantee APIs; {} native APIs; {} async APIs; {} await sites; {} parallel APIs; {} unsafe APIs; {} unknown APIs; {} diagnostics ({} errors)\n",
         metadata.metadata.summary.interface_files,
         metadata.metadata.summary.source_files,
+        metadata.metadata.summary.dependencies,
+        metadata.metadata.summary.package_features,
         metadata.metadata.summary.public_types,
+        metadata.metadata.summary.public_sum_types,
+        metadata.metadata.summary.public_type_aliases,
+        metadata.metadata.summary.public_consts,
         metadata.metadata.summary.public_functions,
         metadata.metadata.summary.public_apis,
         metadata.metadata.summary.mutating_apis,
@@ -161,6 +291,9 @@ pub fn format_package_metadata_human(metadata: &PackageMetadataReport) -> String
             metadata.metadata.features.join(", ")
         ));
     }
+    output.push_str(&format_package_review_dependencies_human(
+        &metadata.metadata.dependencies,
+    ));
     output.push_str(&format_package_review_await_sites_human(
         &metadata.metadata.await_sites,
     ));
@@ -168,6 +301,46 @@ pub fn format_package_metadata_human(metadata: &PackageMetadataReport) -> String
         &metadata.metadata.exports,
     ));
     output
+}
+
+fn format_package_review_dependencies_human(dependencies: &[PackageReviewDependency]) -> String {
+    if dependencies.is_empty() {
+        return String::new();
+    }
+    let mut output = String::from("dependencies:\n");
+    for dependency in dependencies {
+        output.push_str(&format!(
+            "  - {} {} {}",
+            dependency_kind_label(dependency.dependency_kind),
+            dependency.name,
+            dependency.source
+        ));
+        if let Some(requirement) = &dependency.requirement {
+            output.push_str(&format!(" requirement {requirement}"));
+        }
+        if !dependency.features.is_empty() {
+            output.push_str(&format!(" features {}", dependency.features.join(",")));
+        }
+        if dependency.compile_only {
+            output.push_str(" compile_only");
+        }
+        if dependency.test_only {
+            output.push_str(" test_only");
+        }
+        if dependency.platform_provided {
+            output.push_str(" platform_provided");
+        }
+        output.push('\n');
+    }
+    output
+}
+
+fn dependency_kind_label(kind: PackageDependencyKind) -> &'static str {
+    match kind {
+        PackageDependencyKind::Root => "root",
+        PackageDependencyKind::Normal => "dependency",
+        PackageDependencyKind::Dev => "dev-dependency",
+    }
 }
 
 fn format_package_review_await_sites_human(await_sites: &[PackageReviewAwaitSite]) -> String {
@@ -280,12 +453,15 @@ pub fn format_package_check_human(check: &PackageCheck) -> String {
         package_risk_label(check.risk)
     ));
     output.push_str(&format!(
-        "summary: {} interface files; {} source files; {} dependencies; {} package features; {} public types; {} public functions; {} public APIs; {} mutating APIs; {} retaining APIs; {} resource APIs; {} fresh-returning APIs; {} native APIs; {} async APIs; {} await sites; {} parallel APIs; {} unsafe APIs; {} unknown APIs; {} diagnostics ({} errors)\n",
+        "summary: {} interface files; {} source files; {} dependencies; {} package features; {} public types; {} public sum types; {} public type aliases; {} public consts; {} public functions; {} public APIs; {} mutating APIs; {} retaining APIs; {} resource APIs; {} fresh-returning APIs; {} native APIs; {} async APIs; {} await sites; {} parallel APIs; {} unsafe APIs; {} unknown APIs; {} diagnostics ({} errors)\n",
         check.summary.interface_files,
         check.summary.source_files,
         check.summary.dependencies,
         check.summary.package_features,
         check.summary.public_types,
+        check.summary.public_sum_types,
+        check.summary.public_type_aliases,
+        check.summary.public_consts,
         check.summary.public_functions,
         check.summary.public_apis,
         check.summary.mutating_apis,

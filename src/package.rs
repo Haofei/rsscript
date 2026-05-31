@@ -20,6 +20,8 @@ mod source_set;
 mod types;
 mod vendor;
 
+pub const PACKAGE_REVIEW_METADATA_SCHEMA: &str = "rss.review.package.v1";
+
 pub use check::check_package_dir;
 use dependency::{
     PackageDependencySpec, collect_dependency_interface_sources, package_dependency_spec,
@@ -29,7 +31,7 @@ pub use diff::diff_package_dirs;
 pub use format::*;
 pub use graph::package_tree;
 pub use lock::{diff_package_locks, lock_package_dir};
-pub use metadata::{package_lowering_input, package_metadata};
+pub use metadata::{package_lowering_input, package_metadata, package_metadata_verify};
 use native::{manifest_native_enabled, manifest_native_unsafe_boundary};
 pub use publish::{publish_package_dry_run, publish_package_dry_run_with_registry};
 pub use review::review_package_dir;

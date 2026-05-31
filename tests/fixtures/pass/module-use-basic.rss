@@ -1,6 +1,7 @@
-module package.review
+module rss.package.review
 
-use package.contract.PackageContract
+use rss.package.contract.PackageContract
+use rss.review.ReviewMap
 use core.collections.Map
 
 fn review_package(name: read String) -> String {

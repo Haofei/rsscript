@@ -32,6 +32,7 @@ pub mod code {
     pub const AWAIT_OUTSIDE_ASYNC: &str = "RS0029";
     pub const AWAIT_NON_ASYNC: &str = "RS0030";
     pub const AWAIT_LIVE_LOCAL: &str = "RS0031";
+    pub const PROTOCOL_NOT_SATISFIED: &str = "RS0032";
     pub const FEATURE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
@@ -371,7 +372,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::NON_EXHAUSTIVE_MATCH,
         title: "non-exhaustive match",
-        explanation: "`match` must cover every visible variant for the supported enum shapes. In v0.5 that means `Some`/`None`, `Ok`/`Err`, or a `_` fallback.",
+        explanation: "`match` must cover every visible variant for the supported enum shapes. In v0.5 that means `Some`/`None`, `Ok`/`Err`, all variants of a declared sum type, or a `_` fallback.",
     },
     DiagnosticExplanation {
         code: code::ASYNC_CALL_NOT_CONSUMED,
@@ -424,6 +425,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         explanation: "`self` is reserved for explicit method/protocol receiver contracts. It may only appear as the first parameter of a qualified method signature, and protocol methods must declare `self: read|mut|take Self` first.",
     },
     DiagnosticExplanation {
+        code: code::PROTOCOL_NOT_SATISFIED,
+        title: "protocol not satisfied",
+        explanation: "A `Protocol.method(...)` call must prove that the receiver type satisfies the protocol through an explicit generic bound or an explicit `impl Protocol for Type` declaration. Protocols are nominal capability contracts, not structural matches inferred from method names.",
+    },
+    DiagnosticExplanation {
         code: code::FEATURE_VIOLATION,
         title: "feature violation",
         explanation: "Files must declare review-relevant capabilities before using them. `local`, `manage`, `take`, `ResourcePool<T>`, `native`, `unsafe`, and `async` boundaries require matching `features:` entries, and `native fn` declarations must also spell the boundary as `effects(native)`.",
@@ -471,7 +477,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::CONTROL_FLOW_TYPE_MISMATCH,
         title: "control-flow type mismatch",
-        explanation: "`if` and `while` conditions must be `Bool`, and v0.5 `match` scrutinees must be `Option<T>` or `Result<T, E>` with matching `Some`/`None` or `Ok`/`Err` arm variants before Rust lowering.",
+        explanation: "`if` and `while` conditions must be `Bool`, and v0.5 `match` scrutinees must be `Option<T>`, `Result<T, E>`, or a declared sum type with matching arm variants before Rust lowering.",
     },
     DiagnosticExplanation {
         code: code::OPERATOR_TYPE_MISMATCH,

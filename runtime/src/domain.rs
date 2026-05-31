@@ -153,6 +153,10 @@ impl fmt::Display for HttpError {
 
 impl std::error::Error for HttpError {}
 
+pub fn http_error_message(error: &HttpError) -> String {
+    error.to_string()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimerError {
     message: String,
@@ -401,6 +405,36 @@ pub fn response_status(response: &Response) -> i64 {
 
 pub fn response_body(response: &Response) -> String {
     response.body.clone()
+}
+
+pub fn http_get(url: &str) -> Result<Response, HttpError> {
+    Err(HttpError {
+        message: format!("HTTP client runtime is not configured for GET {url}"),
+    })
+}
+
+pub fn http_post_json(url: &str, _body: &str) -> Result<Response, HttpError> {
+    Err(HttpError {
+        message: format!("HTTP client runtime is not configured for POST JSON {url}"),
+    })
+}
+
+pub fn http_post_form(url: &str, _body: &str) -> Result<Response, HttpError> {
+    Err(HttpError {
+        message: format!("HTTP client runtime is not configured for POST form {url}"),
+    })
+}
+
+pub fn http_response_status(response: &Response) -> i64 {
+    response.status
+}
+
+pub fn http_response_text(response: &Response) -> String {
+    response.body.clone()
+}
+
+pub fn http_response_is_success(response: &Response) -> bool {
+    (200..300).contains(&response.status)
 }
 
 pub fn config_load<P: RuntimePath + ?Sized>(path: &P) -> Result<ConfigValue, ConfigError> {

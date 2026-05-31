@@ -97,8 +97,9 @@ Package review must be summary-first and evidence-linked.
 
 Tooling should not require reviewers to inspect all package source files before
 understanding what changed. It must first report normalized public contract
-deltas, selected feature deltas, package risk deltas, native/build facts,
-implementation hash deltas, unknown facts, and policy failures.
+deltas, direct dependency identities, selected feature deltas, package risk
+deltas, native/build facts, implementation hash deltas, unknown facts, and
+policy failures.
 
 When source review is required, tooling should identify the reason and the
 smallest relevant source artifact or region when possible.
@@ -321,6 +322,7 @@ review-relevant surface visible and comparable:
 ```text
 normalized public contract
 selected feature set
+direct dependency identities
 interface hashes
 package risk
 native/build facts
@@ -673,8 +675,9 @@ Rules:
    selected provider has been matched against the selected interface contract.
 5. A dependency on an interface-only package without a valid implementation
    provider is a diagnostic for rss run and rss verify-rust.
-6. Interface-only packages may be published only if their manifest declares the
-   provider expectation.
+6. Interface-only packages publish the contract only. Executable consumers must
+   either mark that dependency `platform_provided`, `compile_only`, or
+   `test_only`, or select a package provider in `[providers]`.
 ```
 
 Interface package example:
@@ -689,9 +692,6 @@ kind = "interface-only"
 [interfaces]
 paths = ["interface"]
 exports = ["Env"]
-
-[provider]
-mode = "package"   # platform_provided | compile_only | test_only | package
 ```
 
 Provider package example:
@@ -732,11 +732,23 @@ Provider resolution rules:
    implementation review event and must be reported by update review.
 ```
 
-Root-level provider choice may be expressed by policy or future resolver syntax:
+Root-level provider choice is expressed in the consuming package:
 
 ```toml
+[dependencies]
+platform-env = { path = "../platform-env" }
+posix-env = { path = "../posix-env" }
+
 [providers]
-platform-env = { package = "posix-env", version = "0.1" }
+platform-env = { package = "posix-env", version = "0.1.0" }
+```
+
+If the target platform supplies the interface directly, the consumer marks that
+dependency instead:
+
+```toml
+[dependencies]
+platform-env = { path = "../platform-env", platform_provided = true }
 ```
 
 ---
@@ -1153,6 +1165,12 @@ v0.5 package-interface syntax uses fully qualified public symbols and opaque
 interface types. There is no package-level `namespace` shorthand: package tooling
 follows the compiler frontend's normalizer and must reject shorthand forms rather
 than normalizing them.
+
+A selected `.rssi` file is already a public semantic-contract artifact, so
+package tooling treats declarations in it as contract entries. Matching source
+implementations in `.rss` files must still be explicit `pub` declarations; a
+private source type or function must not satisfy a public interface contract
+unless the interface function is fulfilled by a declared native binding.
 
 ```rust
 // interface/json.rssi
@@ -2418,17 +2436,20 @@ implementation/native facts.
 Canonical command:
 
 ```sh
-rss pkg diff
+rss pkg diff <old-package-directory> <new-package-directory>
 ```
 
 Examples:
 
 ```sh
-rss pkg diff --lockfile old/rsspkg.lock --new-lockfile rsspkg.lock
-rss pkg diff rss-http@0.3.1 rss-http@0.4.0
-rss pkg diff --update-plan
-rss pkg diff --update-plan --json
+rss pkg diff --json old-package-dir new-package-dir
+rss pkg diff --reir old-package-dir new-package-dir
+rss pkg review update --json --from old/rsspkg.lock --to rsspkg.lock
+rss pkg reir diff --json --fail-on-change --from review/reir-baseline.json --to review/reir/rsscript.json
 ```
+
+Registry-coordinate diffs, `--lockfile`/`--new-lockfile`, and update-plan diff
+UX are design targets, not part of the implemented v0.5 prototype surface.
 
 ### 13.2 Diff inputs
 
@@ -2695,50 +2716,70 @@ Generated file:
 review/package-review.json
 ```
 
-Schema example:
+Implemented v1 schema shape:
 
 ```json
 {
-  "schema": "rss.review.package.v2",
-  "tool": {
-    "name": "rsspkg",
-    "version": "0.5.0-alpha"
-  },
+  "schema": "rss.review.package.v1",
   "package": {
     "name": "rss-json",
-    "version": "0.1.0"
+    "version": "0.1.0",
+    "edition": "2026"
   },
-  "interface": {
-    "selected_features": [],
-    "interface_content_hash": "sha256:...",
-    "effective_interface_hash": "sha256:...",
-    "public_dependency_interfaces": [],
-    "normalizer": "rssc 0.5.0-alpha",
-    "hash_schema": "rss.effective_interface.v0.5"
-  },
-  "risk": {
-    "computed": "elevated",
-    "declared_expectation": "elevated",
-    "reasons": ["native_boundary", "result_return", "fresh_return"]
-  },
+  "risk": "elevated",
+  "reasons": ["native Rust wrapper enabled", "returns Result"],
+  "features": [],
+  "implements": [],
+  "dependencies": [],
   "summary": {
+    "interface_files": 1,
+    "source_files": 1,
+    "dependencies": 0,
+    "package_features": 0,
     "public_types": 2,
+    "public_sum_types": 0,
+    "public_type_aliases": 0,
+    "public_consts": 0,
     "public_functions": 2,
+    "public_apis": 4,
     "mutating_apis": 0,
     "retaining_apis": 0,
-    "closure_capture_retaining_apis": 0,
     "resource_apis": 0,
     "fresh_returning_apis": 1,
+    "guarantee_apis": 0,
+    "native_guarantee_apis": 0,
     "async_apis": 0,
     "await_sites": 0,
+    "parallel_apis": 0,
     "native_apis": 2,
     "unsafe_apis": 0,
-    "unknown_apis": 0
+    "unknown_apis": 0,
+    "diagnostics": 0,
+    "errors": 0
   },
+  "files": [],
+  "exports": [
+    {
+      "name": "Json.parse",
+      "kind": "function",
+      "function_kind": "sync",
+      "classification": "must_review",
+      "reasons": ["native_boundary", "returns_fresh", "returns_result"],
+      "span": {
+        "file": "interface/json.rssi",
+        "line": 4,
+        "column": 1,
+        "length": 9
+      },
+      "signature": "native fn Json.parse(text: read String) -> Result<fresh JsonValue, JsonError>",
+      "normalized_effects": ["native"]
+    }
+  ],
   "await_sites": [
     {
       "function": "Api.run",
       "callee": "Timer.sleep",
+      "boundary": "runtime_pending",
       "live_across_await": ["client"],
       "span": {
         "file": "src/main.rss",
@@ -2748,59 +2789,92 @@ Schema example:
       }
     }
   ],
-  "native": {
-    "rust": true,
-    "conformance": {
-      "native_boundary_declared": "checked",
-      "binding_existence": "checked",
-      "adapter_typechecked": "not_run",
-      "semantic_declarations": "recorded",
-      "semantic_source_scan": "source_scan_best_effort",
-      "audit": "none"
-    },
-    "facts": [
-      {
-        "name": "build_scripts",
-        "value": false,
-        "source": "cargo_metadata_nonexecuting",
-        "scope": "package"
-      },
-      {
-        "name": "proc_macros",
-        "value": false,
-        "source": "cargo_metadata_nonexecuting",
-        "scope": "transitive"
-      },
-      {
-        "name": "wrapper_unsafe_blocks",
-        "value": false,
-        "source": "source_scan_best_effort",
-        "scope": "package"
-      },
-      {
-        "name": "transitive_unsafe_blocks",
-        "value": "unknown",
-        "source": "not_scanned",
-        "scope": "transitive",
-        "acquisition": "source_scan_not_run_for_selected_cargo_graph"
-      }
-    ]
+  "native_rust": null,
+  "review_map": {
+    "schema": "rss.review.v0.5",
+    "source": "package",
+    "findings": []
   },
-  "exports": [
-    {
-      "name": "Json.parse",
-      "kind": "function",
-      "function_kind": "sync",
-      "normalized_effects": ["native"],
-      "classification": "must_review",
-      "reasons": ["native_boundary", "returns_fresh", "returns_result"]
-    }
-  ]
+  "diagnostics": []
 }
 ```
 
+`exports` records the normalized public contract surface, not only callable
+functions. Current package review metadata uses `kind` values such as
+`type`, `sum_type`, `type_alias`, `const`, `function`, `protocol`, and
+`protocol_impl` so typed-error, public data-model, protocol declaration, and
+explicit protocol implementation changes are visible to metadata and REIR diff
+consumers. `protocol` exports include both method names and normalized
+effect-carrying method contract strings in `reasons`; a method effect change is
+therefore a package contract change, not only a source diff.
+
 For async exports, `function_kind` is `"async"` and `normalized_effects` includes
 `"suspends"` even though `suspends` is not a user-authored RSS effect.
+Future package metadata schemas may add nested `tool`, `interface`, and richer
+native conformance summaries, but those fields are not part of the implemented
+`rss.review.package.v1` artifact and must not be required by v0.5 registry or CI
+consumers.
+
+The implemented CLI also provides a direct REIR projection:
+
+```sh
+rss pkg review --reir <package-directory>
+rss pkg reir diff --from <baseline-reir.json> --to <current-reir.json>
+reir collect --producer rsscript --package-review review/package-review.json --package-check review/package-check.json --out review/reir/rsscript-ci.json
+```
+
+This command emits a `reir.bundle.v0.1` JSON bundle derived from the package
+review and embedded language review map. It preserves package risk, native
+capability facts, native boundary facts, source `module` / `use` organization
+facts, and native crossing edges so REIR tools can consume package-manager
+evidence without an extra conversion step. The
+stdlib capability projection includes known file/data façades such as
+`File.open`, `File.read_all_string`, `File.write_buffer`, `Json.parse_file`, and
+`Toml.parse_file`; the general `File.open` constructor is reported as both
+`filesystem.read` and `filesystem.write` because its contract does not constrain
+the returned handle to one direction. The bundle includes derived review slices
+such as `package_risk_slice` and
+`native_unsafe_slice` so CI and registry views can start from review-focused
+subsets without recomputing them. `rss pkg reir diff` compares two already
+generated `reir.bundle.v0.1` artifacts and emits a `reir.diff.v0.1` result,
+letting CI compare a locked baseline artifact against the current
+`review/reir/rsscript.json` without re-running package review for the baseline.
+By default this reports differences without failing; `--fail-on-change` returns
+non-zero when any REIR diff item is present.
+When package REIR artifacts are merged with other producer bundles, `reir merge`
+dedupes stable ids, rebuilds the subject index, and recomputes derived slices so
+registry and CI views do not rely on stale per-package slices.
+Bundle-mode `reir reconcile <bundle.json> --out <reconciled.json>` then records
+required/granted capability reconciliation back into the merged bundle and
+recomputes slices for the review UI.
+For CI systems that already store package-manager JSON, `reir collect --producer
+rsscript` accepts `--package-check`, `--package-lock`, `--lock-update`,
+`--package-tree`, `--package-publish`, `--package-metadata`, and
+`--package-vendor` in addition to `--review-map` and `--package-review`, then
+merges those producer views into one deduped bundle. For `--package-lock`, the
+collector preserves the input artifact path as lockfile-entry evidence when the
+JSON does not already include a concrete `lockfile_path`.
+
+`rss pkg metadata` writes both review artifacts for CI and registry ingestion:
+
+```text
+review/package-review.json
+review/reir/rsscript.json
+```
+
+`review/package-review.json` and generated REIR files under `review/reir/` are
+excluded from package archive hashing, including CI-only artifacts such as
+`review/reir/rsscript-check.json` or `review/reir/rsscript-metadata-verify.json`.
+Regenerating or adding review artifacts must not change the package content
+checksum.
+`rss pkg metadata --verify` recomputes both artifacts and compares them with the
+files on disk; it reports missing or stale artifacts as metadata mismatches and
+exits unsuccessfully so CI can enforce committed review metadata freshness.
+Each mismatch records the artifact kind (`package_review` or `reir_bundle`), the
+path, mismatch kind (`missing`, `stale`, or `unreadable`), an expected SHA-256
+digest, and an actual SHA-256 digest when the stale artifact could be read. This
+lets CI and registry tooling compare artifacts without parsing human messages or
+inferring artifact type from paths.
 
 ### 15.2 Graph summary metadata
 
@@ -2847,7 +2921,7 @@ rss pkg metadata
 rss pkg metadata --json
 ```
 
-or:
+Design extensions may add:
 
 ```sh
 rss pkg review --emit-metadata
@@ -2890,18 +2964,24 @@ Computed local metadata wins over registry metadata for policy decisions.
 
 ### 15.5 Machine-readable facts
 
-Human-readable reports are views over structured facts. The following implemented and planned commands
-should support stable machine-readable output:
+Human-readable reports are views over structured facts. The implemented package
+commands with stable machine-readable output are:
 
 ```text
 rss pkg check --json
 rss pkg metadata --json
 rss pkg diff --json
+rss review --map --json
+rss review --diff --json
+```
+
+Planned package-management commands and flags should use the same stable
+machine-readable style once implemented and tested:
+
+```text
 rss pkg diff --update-plan --json
 rss pkg audit-surface --json
 rss pkg compare --json
-rss review --map --json
-rss review --diff --json
 ```
 
 Machine-readable formats must distinguish:
@@ -2969,13 +3049,14 @@ audit evidence references
 
 ```json
 {
+  "schema": "rss.registry.index.v1",
   "name": "rss-json",
   "version": "0.1.0",
   "checksum": "sha256:...",
-  "interface_content_hash": "sha256:...",
+  "interface_hash": "sha256:...",
   "effective_interface_hash_default": "sha256:...",
   "review_hash": "sha256:...",
-  "review_schema": "rss.review.package.v2",
+  "review_schema": "rss.review.package.v1",
   "risk": "elevated",
   "native": true,
   "unsafe_apis": false,
@@ -2988,15 +3069,25 @@ audit evidence references
   },
   "footprint_default": {
     "direct_dependencies": 1,
+    "total_packages": 2,
+    "path_dependencies": 0,
+    "unresolved_dependencies": 0,
     "native": true,
+    "native_packages": 1,
     "build_time_execution": false,
+    "build_execution_packages": 0,
+    "high_risk_packages": 0,
     "unknown_facts": 0
   }
 }
 ```
 
-A registry index entry is a preview and resolution aid. Lockfile verification
-uses package checksums and normalized interface hashes.
+A registry index entry is a preview and resolution aid. The implemented dry-run
+index writes both `interface_hash` and `effective_interface_hash_default` with
+the same default effective-interface value. Current REIR adapters prefer
+`effective_interface_hash_default` and fall back to `interface_hash` for older
+cached preview artifacts. Lockfile verification uses package checksums and
+normalized interface hashes.
 
 ### 16.3 Review-oriented registry UI
 
@@ -3042,8 +3133,26 @@ package archive reproducible
 unknown package review risk blocks publish readiness unless explicitly allowed
 ```
 
-`rss pkg publish --dry-run --native-abi` additionally runs generated native
-adapter type-checking and may execute native build code after policy approval.
+In the implemented prototype, `rss pkg publish --dry-run --reir` converts the
+publish preview into REIR `supply_chain` facts for archive checksum, registry
+checksum, effective-interface hash, review metadata hash, and native wrapper
+hash when present. It also emits publish readiness/check facts with
+`registry_metadata` evidence and maps the registry preview's `native` and
+`unsafe_apis` signals into REIR boundary facts so registries and CI can diff and
+slice publish previews without accepting the package. When `--registry` is
+provided, REIR registry-index facts carry the planned index path as their
+evidence file and archive checksum facts carry the planned archive-manifest path,
+while publish readiness and per-check facts carry the target registry directory.
+CI can therefore link to dry-run artifacts or their target context without
+implying the package was published. If a publish preview input is missing an
+expected checksum, effective-interface hash, or review metadata hash, the
+corresponding REIR `supply_chain` fact is `unknown`; the adapter must not turn a
+missing hash into verified supply-chain evidence.
+
+Planned native ABI validation, once implemented and policy-gated, may add
+`rss pkg publish --dry-run --native-abi` to run generated native adapter
+type-checking and native build code. The current prototype rejects
+`--native-abi` rather than silently executing build-time native code.
 
 Yanking should not break existing lockfile builds, but new resolution should
 avoid yanked versions unless explicitly allowed.
@@ -3092,18 +3201,20 @@ must be displayed and included in semantic dependency diff.
 ## 17. CLI Design
 
 Canonical package-management commands live under `rss pkg`. The implemented
-v0.5 prototype surface uses the `--json` flag for machine-readable output:
+v0.5 prototype surface uses `--json` for package-manager JSON and `--reir` for
+REIR bundle or diff JSON where listed:
 
 ```sh
-rss pkg check    [--json] [package-directory]
-rss pkg review   [--json] <package-directory>
-rss pkg review update [--json] --from <old-rsspkg.lock> --to <new-rsspkg.lock>
-rss pkg lock     [--json] <package-directory>
-rss pkg tree     [--json] [package-directory]
-rss pkg publish  --dry-run [--json] [--registry <directory>] [package-directory]
-rss pkg vendor   [--dry-run] [--json] [package-directory]
-rss pkg metadata [--dry-run] [--json] [package-directory]
-rss pkg diff     [--json] <old-package-directory> <new-package-directory>
+rss pkg check    [--json|--reir] [package-directory]
+rss pkg review   [--json|--reir] [package-directory]
+rss pkg review update [--json|--reir] --from <old-rsspkg.lock> --to <new-rsspkg.lock>
+rss pkg lock     [--json|--reir] <package-directory>
+rss pkg tree     [--json|--reir] [package-directory]
+rss pkg publish  --dry-run [--json|--reir] [--registry <directory>] [package-directory]
+rss pkg vendor   [--dry-run] [--json|--reir] [package-directory]
+rss pkg metadata [--dry-run|--verify] [--json|--reir] [package-directory]
+rss pkg diff     [--json|--reir] <old-package-directory> <new-package-directory>
+rss pkg reir diff [--json] [--fail-on-change] --from <baseline-reir.json> --to <current-reir.json>
 ```
 
 No `rss package ...` command is defined for v0.5 tooling. No `rss review deps`
@@ -3122,8 +3233,24 @@ Runs manifest, interface, source, lockfile, graph summary, and non-executing
 native checks.
 
 ```sh
-rss pkg check [--json] [package-directory]
+rss pkg check [--json|--reir] [package-directory]
 ```
+
+In the implemented prototype, `--reir` converts the package check result into a
+REIR bundle for CI gates. It emits the overall check status, graph/lock/native
+policy results, stale lock package-change facts and their changed lock fields,
+native unsafe/build-time facts, provider implementation declarations from
+`[implements]`, and diagnostics. This makes `rss pkg check` failures mergeable
+with package review, tree, lock, metadata, vendor, and publish evidence. Overall
+status and graph policy facts use the package directory as their evidence file.
+The lock policy fact uses `lockfile_entry` evidence at the reported semantic lock
+path. The native policy fact and native unsafe/build-time facts use the
+`native_rust.path` directory as their evidence file, keeping the review boundary
+directly navigable in CI output. Provider implementation facts from
+`[implements]` use `rsspkg.toml` as their evidence file.
+Diagnostic facts keep their source-span line and column; relative diagnostic
+paths are resolved under the checked package directory so CI output links to the
+actual manifest, source, interface, native metadata, or policy file.
 
 Planned policy/native-ABI extensions, once implemented and tested:
 
@@ -3135,7 +3262,15 @@ rss pkg check --native-abi
 
 ### 17.2 `rss pkg tree`
 
-Shows dependency graph with risk:
+Shows dependency graph with risk. In the implemented prototype, `--reir`
+converts the resolved tree into dependency-risk facts, effective-interface hash
+`supply_chain` facts, and `depends_on` edges with `dependency_path` evidence, so
+CI and registry tooling can merge graph facts with package-review and lockfile
+facts. The REIR evidence source is `rsscript_tree`, keeping graph observations
+separate from package-review output. For resolved `path+` dependencies, the
+evidence file is the resolved package directory; unresolved registry/git
+dependencies and missing path dependencies remain graph observations with empty
+`evidence.file`, not a synthetic local artifact path:
 
 ```text
 my-app
@@ -3161,8 +3296,14 @@ evidence, and policy result. It must not execute native build code by default.
 Generates package-level review report for the current package or workspace.
 
 ```sh
-rss pkg review [--json] <package-directory>
+rss pkg review [--json|--reir] [package-directory]
 ```
+
+In the implemented prototype, `--reir` converts the package review report into a
+REIR bundle with package risk, public contract, protocol, dependency, native
+boundary, capability, diagnostic, and async-boundary facts. This is the primary
+package-local producer for `reir show`, `reir merge`, `reir slice`, and
+bundle-mode `reir reconcile`.
 
 Design extensions may add:
 
@@ -3178,26 +3319,49 @@ It must not execute native build code by default.
 Emits machine-readable metadata.
 
 ```sh
-rss pkg metadata [--dry-run] [--json] [package-directory]
+rss pkg metadata [--dry-run|--verify] [--json|--reir] [package-directory]
 ```
 
-Design extensions may add:
+`--verify` recomputes metadata locally and compares against committed
+`review/package-review.json` and `review/reir/rsscript.json` artifacts. Registry
+metadata verification remains a design extension layered on top of the same
+local artifact comparison.
 
-```sh
-rss pkg metadata --verify
-```
-
-`--verify` recomputes metadata locally and compares against committed or registry
-metadata.
+`--reir` converts the metadata command result itself into a REIR bundle. The
+bundle records metadata status, the package-review and REIR artifact paths as
+artifact `supply_chain` facts, and any stale/missing/unreadable artifact
+mismatches as `policy_result` facts with `package_metadata` evidence. The
+top-level metadata status fact uses the package directory as its evidence file
+and `/ok` as its JSON pointer. It is important that mismatch `evidence.file`
+remains the artifact path while expected/actual SHA-256 details live in
+`evidence.value`, `evidence.reason`, and `unknown_reason`. This is intended for
+CI artifact freshness gates and complements, rather than replaces, the
+package-review REIR bundle written to `review/reir/rsscript.json`.
 
 ### 17.6 `rss pkg diff`
 
 Compares package versions, lockfiles, or update plans.
 
 ```sh
-rss pkg diff [--json] <old-package-directory> <new-package-directory>
-rss pkg review update [--json] --from <old-rsspkg.lock> --to <new-rsspkg.lock>
+rss pkg diff [--json|--reir] <old-package-directory> <new-package-directory>
+rss pkg reir diff [--json] [--fail-on-change] --from <baseline-reir.json> --to <current-reir.json>
+rss pkg review update [--json|--reir] --from <old-rsspkg.lock> --to <new-rsspkg.lock>
 ```
+
+`--reir` emits a `reir.diff.v0.1` JSON diff over the REIR bundles derived from
+each package review. This is the package-manager convenience path for CI jobs
+that want REIR-native review diffs without separately invoking `reir diff`.
+`rss pkg reir diff` uses already-written REIR bundles instead of package
+directories, which is the baseline-artifact path for registries and CI caches.
+`--fail-on-change` makes the artifact diff suitable as a CI gate while leaving
+plain diff usable for local inspection.
+`rss pkg review update --reir` emits a REIR bundle from the semantic lock update
+itself: update-risk facts, package-risk facts, and changed-field facts with
+`lockfile_entry` evidence. This complements `rss pkg lock --reir`, which emits
+the accepted lock state rather than the update decision. The top-level
+update-risk fact uses the `/risk` JSON pointer. Evidence for added or changed
+lock entries points at the new lockfile, while evidence for removed packages or
+removed fields points at the old lockfile.
 
 Design extensions may add:
 
@@ -3210,10 +3374,17 @@ rss pkg diff --update-plan --json
 
 ### 17.7 `rss pkg lock`
 
-Updates or checks `rsspkg.lock`.
+Updates or checks `rsspkg.lock`. In the implemented prototype, `--reir`
+converts the generated semantic lock into a REIR bundle with lockfile-backed
+`supply_chain` facts for package checksum, effective interface hash, review
+metadata hash, and native wrapper hash when present. The REIR evidence file is
+the generated semantic lock path (`<package-directory>/rsspkg.lock`) so CI and
+registry tools can link each hash fact to the lockfile that would be written or
+checked. Missing checksum, effective-interface hash, review hash, or native hash
+values become `unknown` REIR facts rather than verified supply-chain evidence.
 
 ```sh
-rss pkg lock [--json] <package-directory>
+rss pkg lock [--json|--reir] <package-directory>
 ```
 
 Design extensions may add:
@@ -3227,7 +3398,7 @@ rss pkg lock --check
 Vendors dependencies locally for offline/reproducible builds.
 
 ```sh
-rss pkg vendor [--dry-run] [--json] [package-directory]
+rss pkg vendor [--dry-run] [--json|--reir] [package-directory]
 ```
 
 For the prototype, local path dependencies can be copied into:
@@ -3239,6 +3410,16 @@ vendor/rss-vendor.json
 
 Registry support depends on resolver availability. Git dependencies are unsupported in v0.5 and must be rejected with a stable
 unsupported dependency-source diagnostic if encountered.
+
+In the implemented prototype, `--reir` converts the vendor report into a REIR
+bundle. Vendored local dependencies become checksum `supply_chain` facts, and
+registry/git/unresolved dependencies remain unknown `dependency_risk` facts with
+`package_metadata` evidence. The top-level vendor status fact points at the
+vendor directory with `/ok` evidence. Checksum facts for vendored entries point
+their evidence file at the specific `vendor/<name>-<version>/` path from the
+vendor report, while unresolved dependency facts point at the vendor directory.
+This lets offline-build preparation participate in the same package-risk and
+supply-chain review slices as lock, tree, metadata, and publish evidence.
 
 ### 17.9 Future commands
 
@@ -3405,7 +3586,8 @@ error[PKG1001]: dependency graph contains unknown-risk packages
   unknown packages: 2
   policy maximum: 0
 
-Run `rss pkg audit-surface` to see which packages are unknown and why.
+Run `rss pkg review --json` or `rss pkg tree --json` to see which packages are
+unknown and why. A dedicated `rss pkg audit-surface` command is a design target.
 ```
 
 Native wrapper compile errors may not map to RSScript source. Diagnostics should
@@ -3537,20 +3719,23 @@ adapter typechecked: not_run unless rss pkg check --native-abi is used
 ```rust
 features: native
 
-opaque struct Http.HttpClient
-opaque struct Http.Response
-opaque struct Http.HttpError
-opaque struct Http.Url
+struct HttpResponse
+struct HttpError
 
-native fn Http.get(
-    client: read Http.HttpClient,
-    url: read Http.Url,
-) -> Result<Http.Response, Http.HttpError>
+pub native fn Http.get(
+    url: read Url,
+) -> Result<fresh HttpResponse, HttpError>
     effects(native)
 
-native fn Http.body_text(
-    response: read Http.Response,
-) -> Result<String, Http.HttpError>
+pub native fn Http.post_json(
+    url: read Url,
+    body: read String,
+) -> Result<fresh HttpResponse, HttpError>
+    effects(native)
+
+pub native fn HttpResponse.text(
+    response: read HttpResponse,
+) -> fresh String
     effects(native)
 ```
 
@@ -3625,9 +3810,13 @@ Interface package:
 
 features: native
 
-opaque struct Env.EnvError
+pub native fn Env.get(name: read String) -> Option<fresh String>
+    effects(native)
 
-native fn Env.get(name: read String) -> Result<String, Env.EnvError>
+pub native fn Env.get_or_default(
+    name: read String,
+    default: read String,
+) -> fresh String
     effects(native)
 ```
 
@@ -3643,13 +3832,29 @@ kind = "interface-only"
 [interfaces]
 paths = ["interface"]
 exports = ["Env"]
-
-[provider]
-mode = "platform_provided"
 ```
 
-Executable builds must either target a platform that provides this interface or
-resolve a package provider.
+Executable builds must either mark the interface dependency as platform-provided
+in the consumer manifest:
+
+```toml
+[dependencies]
+platform-env = { path = "../platform-env", platform_provided = true }
+```
+
+or resolve a package provider with a reviewed implementation declaration:
+
+```toml
+[dependencies]
+platform-env = { path = "../platform-env" }
+posix-env = { path = "../posix-env" }
+
+[providers]
+platform-env = { package = "posix-env", version = "0.1.0" }
+```
+
+Provider packages bind themselves to the reviewed interface contract with
+`[implements."<interface-package>"]` and an `interface_effective_hash`.
 
 ---
 
@@ -3693,6 +3898,26 @@ Patch syntax can be deferred until after local path dependencies work.
 Workspace-level review policy may override package-local default policy for CI.
 Package-local policy is still useful for publish readiness and expected risk.
 
+### 21.1 Self-hosted package-review module boundary
+
+As the RSScript package manager moves from Rust implementation support toward a
+self-hosted RSScript implementation, package-review code should use explicit
+module and use declarations rather than an unstructured single-file namespace:
+
+```rust
+module rss.package.review
+
+use rss.package.contract.PackageContract
+use rss.review.ReviewMap
+```
+
+`rss.package.review` owns package-level review aggregation: it consumes
+compiler-owned package contracts and language review maps, then produces package
+risk summaries and metadata. It must not reimplement language semantics, infer
+effects from Rust code, or treat `use` as implicit method lookup. The imported
+`PackageContract` and `ReviewMap` are semantic inputs, not trait-style extension
+points.
+
 ---
 
 ## 22. MVP Plan
@@ -3719,6 +3944,7 @@ MVP 2: Interface dependency graph and lockfile
 
 MVP 3: Package review metadata and risk policy
   review/package-review.json
+  review/reir/rsscript.json
   computed package risk summary
   API classification
   native risk summary with evidence sources
@@ -3848,7 +4074,7 @@ effective interface hash captures selected-feature public semantics
 rsspkg.lock locks semantic dependency graph
 Cargo.lock locks Rust implementation graph
 review metadata summarizes package risk
-rss pkg audit-surface summarizes graph risk
+rss pkg review/tree summarize graph risk; audit-surface is a design target
 semantic diff explains dependency upgrades
 native wrappers expose Rust crates through reviewable APIs
 native facts report their evidence source

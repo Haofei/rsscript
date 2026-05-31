@@ -94,7 +94,7 @@ Files are managed-only unless they declare otherwise:
 features: local
 ```
 
-`local`, `native`, `unsafe`, and `async` are recognized as review capability gates today. `local` enables local ownership features; `native`, `unsafe`, and `async` must be declared before a file can expose those boundaries. Bodyless `native fn` declarations are native-wrapper bindings; executable `native fn` bodies remain outside the v0.5 runtime and are reported before Rust lowering. `async fn` bodies support the restricted v0.5 executable MVP: direct `await` inside an async function, single-isolate cooperative runtime polling, no public `Future`/`Waker` surface, and no `spawn`/TaskGroup yet. Runtime-only scheduler hooks for native pending operations are implementation ABI, not high-concurrency RSS source features. `device`, `ffi`, and `reflection` are reserved review markers: they raise review risk when present, but they do not unlock syntax, lowering, or runtime behavior in v0.5. Ordinary libraries (JSON, File, Image, HTTP, Map, Regex) stay as libraries. Repeated or unknown names are diagnostics so capability boundaries stay explicit.
+`local`, `native`, `unsafe`, and `async` are recognized as review capability gates today. `local` enables local ownership features; `native`, `unsafe`, and `async` must be declared before a file can expose those boundaries. Bodyless `native fn` declarations are native-wrapper bindings; executable `native fn` bodies remain outside the v0.5 runtime and are reported before Rust lowering. `async fn` bodies support the restricted v0.5 executable MVP: direct `await` inside an async function, isolate-local `task_group { async let ... }`, single-isolate cooperative runtime polling, and no public `Future`/`Waker` surface. Unstructured `spawn`, streams, channels, async closures, and public task handles remain future work. Runtime-only scheduler hooks for native pending operations are implementation ABI, not high-concurrency RSS source features. `device`, `ffi`, and `reflection` are reserved review markers: they raise review risk when present, but they do not unlock syntax, lowering, or runtime behavior in v0.5. Ordinary libraries (JSON, File, Image, HTTP, Map, Regex) stay as libraries. Repeated or unknown names are diagnostics so capability boundaries stay explicit.
 
 ---
 
@@ -237,9 +237,11 @@ The spec includes a semantic guarantee table that marks each promise as `static`
 
 ### What's implemented
 
-- **Runtime hooks** span the core library surface: `Log`, `Assert`, `Args`, `OS`, and the common `List` / `String` / `Json` / `Path` / `Directory` / `File` / `Map` / `Set` / `Buffer` helpers, plus `Toml`, `Csv`, `Cache`, `Image` / `ImageCache`, an HTTP handler, a DB resource-pool, config and rules reload, interpreter object links, `StringBuilder`, and `Counter`. `ImageCache` is the first retained managed-container hook; the interpreter hooks model `Environment` and `FunctionObject` as managed handles with the closure link stored weakly.
+- **Runtime hooks** span the core library surface: `Log`, `Assert`, `Args`, `OS`, and the common `List` / `String` / `Json` / `Path` / `Directory` / `File` / `Map` / `Set` / `Buffer` helpers, plus `Toml`, `Csv`, `Clock`, `Regex`, `Hash`, `TempDir`, `Env`, `Process`, `Random` / `Uuid`, encoding helpers, `Cache`, `Image` / `ImageCache`, HTTP handler/client facades, a DB resource-pool, config and rules reload, interpreter object links, `StringBuilder`, and `Counter`. The HTTP client facade lowers to review-visible runtime hooks; the safe runtime returns a structured "not configured" error unless a package supplies an audited native client. `ImageCache` is the first retained managed-container hook; the interpreter hooks model `Environment` and `FunctionObject` as managed handles with the closure link stored weakly.
 - **Lowering basics:** simple operations keep `.rssi` signatures for checking but lower directly to Rust std expressions and runtime hooks. Literals, arithmetic/comparison operators, `Option<T>` constructors, and surface types (`Bytes`, `Buffer`, `Path`, `List<T>`, `Map<K,V>`, `Set<T>`) lower to the matching Rust forms. User-defined operator overloading stays forbidden.
-- **Control flow:** `if`, `while`, `loop`, `break`, `continue`, and statement-form `match` for the current `Option<T>` / `Result<T, E>` shapes. A `match` must cover `Some`/`None`, `Ok`/`Err`, or include `_`; non-exhaustive matches are diagnostics before lowering.
+- **Control flow:** `if`, `while`, `loop`, `break`, `continue`, and statement-form `match` for `Option<T>`, `Result<T, E>`, and declared `sum` types. A `match` must cover `Some`/`None`, `Ok`/`Err`, every declared sum variant, or include `_`; non-exhaustive matches are diagnostics before lowering.
+- **Modules and protocols:** `module` / `use` declarations are parsed and formatted as large-codebase organization metadata. Protocols are effect-carrying capability contracts, not Rust traits in the source model; calls stay explicit as `Protocol.method(...)` with no auto method resolution.
+- **Async MVP:** direct `await` works inside `async fn`, and structured `task_group { async let ... }` is accepted for isolate-local child operations. `spawn`, streams, channels, async closures, and public task handles remain future work.
 - **Closures:** `noescape Fn()` parameters allow temporary callbacks that may use local values without becoming managed closures.
 
 ---
@@ -254,15 +256,16 @@ rss lint     [--json] [--core|--no-core] [--interface <f.rssi> ...] <file.rss>
 rss fmt      <file.rss>
 rss review   [--json] --diff <old.rss> <new.rss>
 rss review   [--json] --map  <file-or-directory>
-rss pkg      check  [--json] [package-directory]
-rss pkg      review [--json] <package-directory>
-rss pkg      review update [--json] --from <old-rsspkg.lock> --to <new-rsspkg.lock>
-rss pkg      lock   [--json] <package-directory>
-rss pkg      tree   [--json] [package-directory]
-rss pkg      publish --dry-run [--json] [--registry <directory>] [package-directory]
-rss pkg      vendor [--dry-run] [--json] [package-directory]
-rss pkg      metadata [--dry-run] [--json] [package-directory]
-rss pkg      diff   [--json] <old-package-directory> <new-package-directory>
+rss pkg      check  [--json|--reir] [package-directory]
+rss pkg      review [--json|--reir] [package-directory]
+rss pkg      review update [--json|--reir] --from <old-rsspkg.lock> --to <new-rsspkg.lock>
+rss pkg      lock   [--json|--reir] <package-directory>
+rss pkg      tree   [--json|--reir] [package-directory]
+rss pkg      publish --dry-run [--json|--reir] [--registry <directory>] [package-directory]
+rss pkg      vendor [--dry-run] [--json|--reir] [package-directory]
+rss pkg      metadata [--dry-run|--verify] [--json|--reir] [package-directory]
+rss pkg      diff   [--json|--reir] <old-package-directory> <new-package-directory>
+rss pkg      reir diff [--json] [--fail-on-change] --from <baseline-reir.json> --to <current-reir.json>
 rss lower    --rust  <file.rss> [--out-dir <directory>]
 rss run      [--json] <file-or-package-directory> [--out-dir <directory>] [-- <args>...]
 rss remap-rustc  [--json] <rsscript-source-map.json> <rustc-json-lines>
@@ -274,15 +277,20 @@ rss verify-rust  [--json] <file-or-package-directory> [--out-dir <directory>]
 - `rss check` loads bundled core `.rssi` signatures by default for single files; pointed at a directory with `rsspkg.toml`, it runs package check.
 - `rss lint` reuses the frontend checks and emits warnings. The first lint is `RSL001` — public signatures over the review budget for parameter count, generics, effects, or nested-type depth.
 - `rss review --map` validates inputs first, so files with frontend errors get diagnostics instead of misleading classifications. `--json` reports `unknown_ratio` and `unknown_function_ratio` directly.
-- `rss pkg check` validates a local package: loads local path dependency `.rssi` contracts, checks package `.rssi` contracts against implementations or native bindings, rejects unresolved or conflicting dependency graphs, runs package review, compares the semantic lock against `rsspkg.lock`, and scans enabled native Rust wrappers with Cargo metadata. `[review.policy] deny_unknown = true` makes unknown review risk fail the check.
-- `rss pkg review` treats `.rssi` files as the public semantic contract and summarizes public type/function/API counts plus mutating, retaining, resource, fresh-returning, native, unsafe, and unknown APIs, with per-export classifications. Frontend errors in `.rssi` contracts count as unknown exports.
-- `rss pkg review update` compares two `rsspkg.lock` files and reports version, source, checksum, `.rssi` interface, review metadata, native wrapper, and feature-selection changes.
-- `rss pkg lock` emits semantic lock metadata for the root package and local path dependency graph, with SHA-256 hashes for public `.rssi` contracts, review metadata, package contents, and native Rust wrapper contents when enabled.
-- `rss pkg tree` shows the dependency graph with review risk. Local path dependencies expand recursively; unresolved registry dependencies are unknown; git dependency sources are rejected with a stable unsupported-source diagnostic.
-- `rss pkg publish --dry-run` runs pre-publish checks without uploading: package consistency, dependency review, semver shape, review-risk classification, native metadata, a reproducible archive manifest with per-file checksums, and a registry index entry. Unknown review risk blocks publish readiness. `--registry <directory>` reports the index and archive-manifest paths that would be written.
-- `rss pkg vendor` copies local path dependencies into `vendor/<name>-<version>/` and writes `vendor/rss-vendor.json`; unresolved registry dependencies stay unknown, git sources stay unsupported.
-- `rss pkg metadata` writes `review/package-review.json` from the local package review result; `--dry-run` reports the path without writing. Unknown review risk is preserved and makes the result not ok.
-- `rss pkg diff` compares two local package directories and reports version, RSScript dependency, feature, native Rust wrapper, and public `.rssi` contract changes.
+- `rss pkg check` validates a local package: loads local path dependency `.rssi` contracts, checks package `.rssi` contracts against implementations or native bindings, rejects unresolved or conflicting dependency graphs, runs package review, compares the semantic lock against `rsspkg.lock`, and scans enabled native Rust wrappers with Cargo metadata. `[review.policy] deny_unknown = true` makes unknown review risk fail the check. `--reir` emits the CI gate status, graph/lock/native check facts, lock-change facts, native unsafe/build-time facts, and diagnostics as a REIR bundle.
+- `rss pkg review` treats `.rssi` files as the public semantic contract and summarizes public type/function/API counts plus direct dependency identities, mutating, retaining, resource, fresh-returning, native, unsafe, and unknown APIs, with per-export classifications. Frontend errors in `.rssi` contracts count as unknown exports. `--reir` emits package risk facts, direct dependency facts/edges, native boundary facts, and capability facts as a REIR bundle so it can feed `reir show`, `reir diff`, `reir merge`, `reir slice`, and bundle-mode `reir reconcile` directly.
+- `rss pkg review update` compares two `rsspkg.lock` files and reports version, source, checksum, `.rssi` interface, review metadata, native wrapper, and feature-selection changes. `--reir` emits update-risk, package-risk, and changed-field facts with `lockfile_entry` evidence.
+- `rss pkg lock` emits semantic lock metadata for the root package and local path dependency graph, with SHA-256 hashes for public `.rssi` contracts, review metadata, package contents, and native Rust wrapper contents when enabled. `--reir` emits those lockfile hashes as REIR `supply_chain` facts with `lockfile_entry` evidence.
+- `rss pkg tree` shows the dependency graph with review risk. Local path dependencies expand recursively; unresolved registry dependencies are unknown; git dependency sources are rejected with a stable unsupported-source diagnostic. `--reir` emits transitive dependency-risk facts, effective-interface hash facts, and `depends_on` edges with `dependency_path` evidence.
+- `rss pkg publish --dry-run` runs pre-publish checks without uploading: package consistency, dependency review, semver shape, review-risk classification, native metadata, a reproducible archive manifest with per-file checksums, and a registry index entry. Unknown review risk blocks publish readiness. `--registry <directory>` reports the index and archive-manifest paths that would be written. `--reir` emits registry/archive supply-chain facts and publish check results with `registry_metadata` evidence.
+- `rss pkg vendor` copies local path dependencies into `vendor/<name>-<version>/` and writes `vendor/rss-vendor.json`; unresolved registry dependencies stay unknown, git sources stay unsupported. `--reir` emits vendored checksum `supply_chain` facts and unresolved dependency-risk facts with `package_metadata` evidence.
+- `rss pkg metadata` writes `review/package-review.json` and `review/reir/rsscript.json` from the local package review result; `--dry-run` reports both paths without writing, and `--verify` recomputes both artifacts and fails if committed metadata is missing or stale. Unknown review risk is preserved and makes the result not ok. `--reir` emits metadata status, artifact, and mismatch facts with `package_metadata` evidence so CI can merge stale-or-missing artifact results with other REIR bundles.
+- `rss pkg diff` compares two local package directories and reports version, RSScript dependency, feature, native Rust wrapper, and public `.rssi` contract changes. `--reir` emits a `reir.diff.v0.1` JSON diff over the REIR bundles derived from each package review.
+- `rss pkg reir diff` compares already-generated REIR bundle artifacts, so CI can diff a locked baseline against `review/reir/rsscript.json` without re-running package review for the baseline package. Add `--fail-on-change` when the CI gate should return non-zero for any semantic REIR diff item.
+- `reir merge` combines REIR bundle artifacts for cross-repo or cross-producer review, rejects schema/ontology mismatches, dedupes stable ids, rebuilds the subject index, and recomputes derived review slices.
+- `reir collect --producer rsscript` converts existing RSScript JSON artifacts into REIR. Besides `--review-map` and `--package-review`, it accepts package-manager JSON artifacts from `--package-check`, `--package-lock`, `--lock-update`, `--package-tree`, `--package-publish`, `--package-metadata`, and `--package-vendor`, then merges them into one deduped bundle.
+- `reir reconcile <bundle.json> --target <name> --out <reconciled.json>` reconciles required and granted facts from one merged bundle, records the target name on each reconciliation result, writes those results back into the bundle, and recomputes slices for review. The older `--required required.json --granted granted.json --target <name>` form emits the same target field without writing a merged bundle.
+- `reir slice --bundle <bundle.json> --kind <slice-kind>` recomputes review slices from a bundle and can filter any implemented slice kind, using either short names such as `package_risk` or full schema names such as `package_risk_slice`.
 - `rss run` lowers a single file (or a package with `src/main.rss`) to a temporary Rust package and delegates to `cargo run`; package lowering carries enabled `[native.rust]` wrappers through as generated Cargo path dependencies and maps `native/bindings.rssbind.toml` call bindings into generated Rust calls. `--out-dir` keeps the generated package; arguments after `--` reach the program through the core `Args` API.
 - `rss verify-rust --out-dir` keeps the generated package and source map so unmappable rustc diagnostics can be inspected against the actual generated Rust.
 
@@ -313,11 +321,11 @@ Longer term: deeper semantic review tooling, a larger core library, agent and ru
 
 Post-v0.5 design directions (see spec §20.1) build on the single-isolate, non-`Send` managed model, which is what lets RSScript extend async without exposing Rust's `Pin`/`Poll`/`Waker`:
 
-- **Extended async.** Structured TaskGroup/spawn, async closures, optional isolate-local task handles, and a `Stream<T>` / `await for` async-sequence form. Read/mut guards may not cross `await`.
+- **Extended async.** Unstructured `spawn`, async closures, optional isolate-local task handles, and a `Stream<T>` / `await for` async-sequence form. Read/mut guards may not cross `await`; current `task_group` remains isolate-local structured async, not Rust-style threaded spawning.
 - **Cross-isolate messaging with zero-copy transfer.** Explicit typed channels between isolates; `take`-based moves are the zero-copy transfer path, with single ownership enforced at compile time. Managed handles never cross isolates — only explicit messages do.
 - **Two-tier execution.** A HIR-level interpreter for the managed subset gives a fast edit-run loop; Rust lowering stays the production/AOT path. Both observe identical semantics and diagnostics.
 - **Structured-fix tooling.** An `rss fix` command applying machine-applicable fixes, plus an analysis server streaming diagnostics and fixes to both human editors and AI repair agents.
-- **User-defined sum types** modeled on sealed types with exhaustive `match` (not Rust enums), with exhaustiveness checked before lowering.
+- **Sum type hardening.** Current `sum` declarations are closed and exhaustively checked before lowering; future work should strengthen package/interface metadata without importing Rust enum complexity.
 - **Registry review-risk badges.** The package registry surfaces review-risk signals (native, unsafe, unknown, mutating/retaining ratios) as first-class quality badges, reusing existing package review metadata.
 
 These intentionally exclude Dart-style conveniences that conflict with review-first semantics: cascade (`..`), extension methods / implicit method resolution, and positional records / implicit flow promotion.

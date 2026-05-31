@@ -10,6 +10,8 @@ pub struct Reconciliation {
     pub kind: ReconciliationKind,
     pub status: ReconciliationStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub subject_chain: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub required_fact: Option<String>,
@@ -79,7 +81,18 @@ pub enum RiskSeverity {
 /// Reconcile required facts against granted facts for a given capability.
 /// Returns reconciliation results: missing capabilities, excess grants, covered.
 pub fn reconcile_capabilities(required: &[Fact], granted: &[Fact]) -> Vec<Reconciliation> {
+    reconcile_capabilities_for_target(required, granted, None)
+}
+
+/// Reconcile required facts against granted facts and annotate results with a
+/// target environment when the caller has one.
+pub fn reconcile_capabilities_for_target(
+    required: &[Fact],
+    granted: &[Fact],
+    target: Option<&str>,
+) -> Vec<Reconciliation> {
     let mut results = Vec::new();
+    let target = target.map(str::to_owned);
 
     let required_with_capability: Vec<&Fact> = required
         .iter()
@@ -114,6 +127,7 @@ pub fn reconcile_capabilities(required: &[Fact], granted: &[Fact]) -> Vec<Reconc
                 id: format!("recon.missing.{}", required_fact.id),
                 kind: ReconciliationKind::MissingCapability,
                 status: ReconciliationStatus::Fail,
+                target: target.clone(),
                 subject_chain: None,
                 required_fact: Some(required_fact.id.clone()),
                 granted_facts: Vec::new(),
@@ -139,6 +153,7 @@ pub fn reconcile_capabilities(required: &[Fact], granted: &[Fact]) -> Vec<Reconc
                 id: format!("recon.covered.{}", required_fact.id),
                 kind: ReconciliationKind::Covered,
                 status: ReconciliationStatus::Pass,
+                target: target.clone(),
                 subject_chain: None,
                 required_fact: Some(required_fact.id.clone()),
                 granted_facts: matching_grants.iter().map(|fact| fact.id.clone()).collect(),
@@ -170,6 +185,7 @@ pub fn reconcile_capabilities(required: &[Fact], granted: &[Fact]) -> Vec<Reconc
                 id: format!("recon.excess.{}", granted_fact.id),
                 kind: ReconciliationKind::ExcessCapability,
                 status: ReconciliationStatus::Warn,
+                target: target.clone(),
                 subject_chain: None,
                 required_fact: None,
                 granted_facts: vec![granted_fact.id.clone()],

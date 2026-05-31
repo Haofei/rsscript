@@ -66,7 +66,10 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
     ("operator overload attempt", "RS1001"),
     ("feature violation", "RS0101"),
     ("unsupported syntax", "RS0015"),
-    ("spawn used before structured async task support", "RS0015"),
+    (
+        "unstructured spawn used before source-level task support",
+        "RS0015",
+    ),
     ("async call not consumed", "RS0022"),
     ("unknown protocol", "RS0027"),
     ("unmappable rustc diagnostic", "RS1102"),
@@ -84,6 +87,85 @@ fn pass_fixtures_have_no_diagnostics() {
         let diagnostics = analyze_source(path.to_str().unwrap(), &source);
         assert_eq!(diagnostics, Vec::new(), "{}", path.display());
     }
+}
+
+#[test]
+fn parser_preserves_large_scale_package_module_paths() {
+    let source = r#"
+module rss.package.review
+
+use rss.package.contract.PackageContract
+use rss.review.ReviewMap
+
+fn main() -> Unit {
+    return Unit
+}
+"#;
+    let program = parse_source("package-review-module.rss", source);
+
+    assert!(
+        matches!(&program.items[0], Item::Module(module) if module.path == ["rss", "package", "review"])
+    );
+    assert!(
+        matches!(&program.items[1], Item::Use(use_decl) if use_decl.path == ["rss", "package", "contract", "PackageContract"])
+    );
+    assert!(
+        matches!(&program.items[2], Item::Use(use_decl) if use_decl.path == ["rss", "review", "ReviewMap"])
+    );
+}
+
+#[test]
+fn checker_rejects_misplaced_or_duplicate_module_use_declarations() {
+    let source = r#"
+use rss.review.ReviewMap
+
+module rss.package.review
+
+fn first() -> Unit {
+    return Unit
+}
+
+use rss.package.contract.PackageContract
+
+module rss.package.other
+"#;
+    let diagnostics = analyze_source("bad-module-layout.rss", source);
+
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS0015" && diagnostic.label == "misplaced use declaration"
+    }));
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS0015" && diagnostic.label == "duplicate module declaration"
+    }));
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS0015" && diagnostic.label == "misplaced module declaration"
+    }));
+}
+
+#[test]
+fn parser_preserves_type_visibility() {
+    let source = r#"
+pub struct PublicConfig {
+    name: String
+}
+
+struct PrivateConfig {
+    name: String
+}
+
+pub opaque resource PublicHandle
+"#;
+    let program = parse_source("type-visibility.rss", source);
+
+    assert!(
+        matches!(&program.items[0], Item::Type(type_decl) if type_decl.name == "PublicConfig" && type_decl.is_public)
+    );
+    assert!(
+        matches!(&program.items[1], Item::Type(type_decl) if type_decl.name == "PrivateConfig" && !type_decl.is_public)
+    );
+    assert!(
+        matches!(&program.items[2], Item::Type(type_decl) if type_decl.name == "PublicHandle" && type_decl.is_public && type_decl.is_opaque)
+    );
 }
 
 #[test]
@@ -1385,7 +1467,7 @@ fn main() -> Unit {
         diagnostics.iter().any(|diagnostic| {
             diagnostic.code == "RS0209"
                 && diagnostic.summary
-                    == "match scrutinee has type `String`, expected `Option<T>` or `Result<T, E>`."
+                    == "match scrutinee has type `String`, expected `Option<T>`, `Result<T, E>`, or a declared sum type."
         }),
         "{diagnostics:?}"
     );
@@ -3250,6 +3332,33 @@ fn pick() -> Int {
 }
 
 #[test]
+fn checker_reports_non_exhaustive_sum_type_match() {
+    let source = r#"
+sum Color {
+    Red
+    Green
+    Blue
+}
+
+fn describe(c: read Color) -> String {
+    match c {
+        Red => { return "red" }
+        Green => { return "green" }
+    }
+}
+"#;
+    let diagnostics = analyze_source("sum-match-non-exhaustive.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0021"
+                && diagnostic.label == "non-exhaustive match"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn checker_accepts_and_lowers_list_for_loop() {
     let source = r#"
 fn run(items: read List<Int>) -> Unit {
@@ -3317,6 +3426,12 @@ fn describe(s: read Size) -> String {
             .iter()
             .any(|d| d.code == "RS0209" && d.summary.contains("cannot match scrutinee type")),
         "should reject matching Size with Color variants: {diagnostics:?}"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.code == "RS0021" && d.label == "non-exhaustive match"),
+        "matching all Color variants must not count as exhaustive for Size: {diagnostics:?}"
     );
 }
 
@@ -3389,7 +3504,10 @@ async fn load(id: read Int) -> Result<String, NetworkError> {
 }
 "#;
     let diagnostics = analyze_source("task-group-async-let.rss", source);
-    let errors: Vec<_> = diagnostics.iter().filter(|d| d.severity == Severity::Error).collect();
+    let errors: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .collect();
     assert!(
         errors.is_empty(),
         "task_group with async let should pass: {errors:?}"
@@ -3410,9 +3528,37 @@ async fn run(id: read Int) -> Int {
 "#;
     let diagnostics = analyze_source("async-let-outside.rss", source);
     assert!(
-        diagnostics.iter().any(|d| d.code == "RS0015"
-            && d.causes.iter().any(|c| c.contains("async let"))),
+        diagnostics
+            .iter()
+            .any(|d| d.code == "RS0015" && d.causes.iter().any(|c| c.contains("async let"))),
         "async let outside task_group should be rejected: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn task_group_rejects_unawaited_async_let() {
+    let source = r#"
+features: async
+
+async fn fetch(id: read Int) -> Int
+
+async fn run(id: read Int) -> Int {
+    task_group {
+        async let result = fetch(id: read id)
+    }
+    return 0
+}
+"#;
+    let diagnostics = analyze_source("task-group-unawaited.rss", source);
+    assert!(
+        diagnostics.iter().any(|d| {
+            d.code == "RS0015"
+                && d.label == "unawaited async let"
+                && d.causes
+                    .iter()
+                    .any(|cause| cause.contains("must be consumed by `await`"))
+        }),
+        "unawaited async let should be rejected: {diagnostics:?}"
     );
 }
 

@@ -5,8 +5,10 @@ use std::path::Path;
 
 use rsscript::{
     check_package_dir, diff_package_dirs, diff_package_locks, format_package_lock_toml,
-    lock_package_dir, lower_sources_to_rust_package_with_options, package_lowering_input,
-    package_metadata, package_tree, review_package_dir,
+    format_package_review_reir_diff_json, format_package_review_reir_json, lock_package_dir,
+    lower_sources_to_rust_package_with_options, package_lowering_input, package_metadata,
+    package_metadata_verify, package_tree, publish_package_dry_run, review_package_dir,
+    vendor_package_dir,
 };
 use serde_json::Value;
 
@@ -77,6 +79,21 @@ native fn Json.parse(text: read String) -> Result<fresh JsonValue, JsonError>
     assert_eq!(json["package"]["name"], "rss-json");
     assert_eq!(json["risk"], "high");
     assert_eq!(json["features"], serde_json::json!(["streaming"]));
+    assert_eq!(
+        json["dependencies"],
+        serde_json::json!([
+            {
+                "name": "rss-core",
+                "requirement": "0.5",
+                "source": "registry",
+                "features": [],
+                "dependency_kind": "normal",
+                "compile_only": false,
+                "test_only": false,
+                "platform_provided": false
+            }
+        ])
+    );
     assert_eq!(json["summary"]["interface_files"], 1);
     assert_eq!(json["summary"]["source_files"], 1);
     assert!(json["reasons"].as_array().is_some_and(|reasons| {
@@ -90,6 +107,96 @@ native fn Json.parse(text: read String) -> Result<fresh JsonValue, JsonError>
             .any(|reason| reason == "native Rust wrapper enabled")
     }));
     assert!(human.contains("package features: streaming"));
+    assert!(human.contains("dependency rss-core registry requirement 0.5"));
+}
+
+#[test]
+fn package_review_can_emit_reir_bundle_json() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-review-reir");
+    common::write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[dependencies]
+rss-core = "0.5"
+"#,
+        r#"features: native
+
+module rss.package.review
+
+use rss.package.contract.PackageContract
+use rss.review.ReviewMap
+
+pub fn NativeBridge.run(value: read Int) -> Int
+    effects(native)
+"#,
+    );
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let bundle: Value = serde_json::from_str(&format_package_review_reir_json(&review))
+        .expect("package review REIR JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(bundle["schema"], "reir.bundle.v0.1");
+    assert_eq!(bundle["ontology"], "reir.capability_ontology.v0.1");
+    assert!(bundle["facts"].as_array().is_some_and(|facts| {
+        facts
+            .iter()
+            .any(|fact| fact["kind"] == "package_risk" && fact["subject"]["id"] == "rss-json@0.1.0")
+            && facts.iter().any(|fact| {
+                fact["kind"] == "dependency_risk"
+                    && fact["subject"]["id"] == "rss-core@0.5"
+                    && fact["value"] == "unknown"
+            })
+            && facts.iter().any(|fact| {
+                fact["kind"] == "native_boundary"
+                    && fact["subject"]["id"] == "rss-json::native::NativeBridge"
+            })
+            && facts.iter().any(|fact| {
+                fact["kind"] == "native_module_declaration"
+                    && fact["subject"]["id"] == "rss-json::native::NativeBridge"
+            })
+            && facts.iter().any(|fact| {
+                fact["kind"] == "module_declaration"
+                    && fact["subject"]["id"] == "rss-json::module::rss.package.review"
+            })
+            && facts.iter().any(|fact| {
+                fact["kind"] == "use_declaration"
+                    && fact["subject"]["id"] == "rss-json::module::rss.package.review"
+                    && fact["evidence"].as_array().is_some_and(|evidence| {
+                        evidence
+                            .iter()
+                            .any(|item| item["symbol"] == "rss.package.contract.PackageContract")
+                    })
+            })
+            && facts.iter().any(|fact| {
+                fact["kind"] == "use_declaration"
+                    && fact["subject"]["id"] == "rss-json::module::rss.package.review"
+                    && fact["evidence"].as_array().is_some_and(|evidence| {
+                        evidence
+                            .iter()
+                            .any(|item| item["symbol"] == "rss.review.ReviewMap")
+                    })
+            })
+    }));
+    assert!(bundle["edges"].as_array().is_some_and(|edges| {
+        edges.iter().any(|edge| edge["kind"] == "crosses_native")
+            && edges
+                .iter()
+                .any(|edge| edge["kind"] == "depends_on" && edge["to"]["id"] == "rss-core@0.5")
+            && edges.iter().any(|edge| {
+                edge["kind"] == "normalizes_to_native_fn"
+                    && edge["from"]["id"] == "rss-json::native::NativeBridge"
+                    && edge["to"]["id"] == "rss-json::NativeBridge.run"
+            })
+    }));
+    assert!(bundle["slices"].as_array().is_some_and(|slices| {
+        slices
+            .iter()
+            .any(|slice| slice["kind"] == "package_risk_slice")
+            && slices
+                .iter()
+                .any(|slice| slice["kind"] == "native_unsafe_slice")
+    }));
 }
 
 #[test]
@@ -109,6 +216,9 @@ native-tls = ["native"]
     let review = review_package_dir(&temp_dir).expect("package review should succeed");
     let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
         .expect("package review JSON should parse");
+    let reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+            .expect("package review REIR JSON should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert_eq!(json["risk"], "high");
@@ -117,6 +227,17 @@ native-tls = ["native"]
         reasons.iter().any(|reason| {
             reason == "package feature `native-tls` may change native/unsafe/build risk"
         })
+    }));
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "package_feature"
+                && fact["subject"]["id"] == "rss-feature-risk@0.1.0#feature:native-tls"
+        })
+    }));
+    assert!(reir_json["slices"].as_array().is_some_and(|slices| {
+        slices
+            .iter()
+            .any(|slice| slice["kind"] == "package_feature_slice")
     }));
 }
 
@@ -428,8 +549,16 @@ interface_features = ["posix"]
     .expect("lock should be written");
 
     let check = check_package_dir(&temp_dir).expect("package check should succeed");
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
     let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
         .expect("package check JSON should parse");
+    let reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+            .expect("package review REIR JSON should parse");
+    let check_reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_check_reir_json(&check))
+            .expect("package check REIR JSON should parse");
+    let manifest_path = temp_dir.join("rsspkg.toml").display().to_string();
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert!(!check.ok);
@@ -442,6 +571,27 @@ interface_features = ["posix"]
             && diagnostics.iter().any(|diagnostic| {
                 diagnostic["code"] == "PKG0901" && diagnostic["label"] == "interface_effective_hash"
             })
+    }));
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "provider_implementation"
+                && fact["subject"]["id"] == "rss-platform-provider@0.1.0::implements::platform-env"
+                && fact["value"] == "unknown"
+        })
+    }));
+    assert!(check_reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "provider_implementation"
+                && fact["subject"]["id"] == "rss-platform-provider@0.1.0::implements::platform-env"
+                && fact["evidence"][0]["source"] == "rsscript_package_check"
+                && fact["evidence"][0]["file"] == manifest_path
+                && fact["evidence"][0]["json_pointer"] == "/implements/0"
+        })
+    }));
+    assert!(reir_json["slices"].as_array().is_some_and(|slices| {
+        slices
+            .iter()
+            .any(|slice| slice["kind"] == "provider_implementation_slice")
     }));
 }
 
@@ -582,7 +732,7 @@ fn package_review_reports_interface_type_contract_mismatch() {
     fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
     fs::write(
         temp_dir.join("src/lib.rss"),
-        r#"struct Session<T: Managed> {
+        r#"pub struct Session<T: Managed> {
     user: User
 }
 "#,
@@ -616,6 +766,61 @@ fn package_review_reports_interface_type_contract_mismatch() {
             .iter()
             .any(|cause| cause.contains("source: struct Session<T: Managed> { user: User }")),
         "{causes:?}"
+    );
+}
+
+#[test]
+fn package_review_reports_interface_data_model_contract_mismatch() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-interface-data-model-mismatch");
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-data-model-mismatch",
+        "0.1.0",
+        "",
+        r#"sum PackageError {
+    Io(path: String),
+    Invalid
+}
+
+type PackageName = String
+
+const MAX_RETRIES: Int = 3
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("src/lib.rss"),
+        r#"pub sum PackageError {
+    Io(code: Int),
+    Invalid
+}
+
+pub type PackageName = Bytes
+
+pub const MAX_RETRIES: Int = 4
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let labels = review
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.label.as_str())
+        .collect::<Vec<_>>();
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(
+        labels.contains(&"interface/source sum type mismatch"),
+        "{labels:?}"
+    );
+    assert!(
+        labels.contains(&"interface/source type alias mismatch"),
+        "{labels:?}"
+    );
+    assert!(
+        labels.contains(&"interface/source const mismatch"),
+        "{labels:?}"
     );
 }
 
@@ -835,6 +1040,9 @@ pub async fn Api.run(client: read Client) -> Result<Unit, TimerError> {
     let review = review_package_dir(&temp_dir).expect("package review should succeed");
     let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
         .expect("package review JSON should parse");
+    let reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+            .expect("package review REIR JSON should parse");
     let human = rsscript::format_package_review_human(&review);
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -870,6 +1078,101 @@ pub async fn Api.run(client: read Client) -> Result<Unit, TimerError> {
         "{human}"
     );
     assert!(human.contains("live_across [client]"), "{human}");
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "async_boundary"
+                && fact["subject"]["id"] == "rss-json::Api.run"
+                && fact["evidence"].as_array().is_some_and(|evidence| {
+                    evidence.iter().any(|item| {
+                        item["reason"].as_str().is_some_and(|reason| {
+                            reason.contains("boundary=runtime_pending")
+                                && reason.contains("callee=Timer.sleep")
+                        })
+                    })
+                })
+        })
+    }));
+    assert!(
+        reir_json["slices"]
+            .as_array()
+            .is_some_and(|slices| { slices.iter().any(|slice| slice["kind"] == "async_slice") })
+    );
+}
+
+#[test]
+fn package_review_resolves_task_group_async_let_await_callees() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-review-task-group-await");
+    common::write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        "",
+        r#"features: async, native
+
+struct TimerError
+struct Client
+
+pub async native fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
+    effects(native)
+
+pub fn Log.done(client: read Client) -> Unit
+
+pub async fn Api.run(client: read Client) -> Result<Unit, TimerError>
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("src dir should be created");
+    fs::write(
+        temp_dir.join("src/main.rss"),
+        r#"features: async
+
+pub async fn Api.run(client: read Client) -> Result<Unit, TimerError> {
+    task_group {
+        async let pause = Timer.sleep(ms: 1)
+        let done = await pause?
+    }
+    Log.done(client: read client)
+    return Ok(Unit)
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+            .expect("package review REIR JSON should parse");
+    let human = rsscript::format_package_review_human(&review);
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(json["summary"]["await_sites"], 1);
+    assert!(json["await_sites"].as_array().is_some_and(|await_sites| {
+        await_sites.iter().any(|site| {
+            site["function"] == "Api.run"
+                && site["callee"] == "Timer.sleep"
+                && site["boundary"] == "runtime_pending"
+                && site["live_across_await"]
+                    .as_array()
+                    .is_some_and(|values| values.iter().any(|value| value == "client"))
+        })
+    }));
+    assert!(
+        human.contains("Api.run awaits Timer.sleep (runtime_pending)"),
+        "{human}"
+    );
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "async_boundary"
+                && fact["evidence"].as_array().is_some_and(|evidence| {
+                    evidence.iter().any(|item| {
+                        item["reason"].as_str().is_some_and(|reason| {
+                            reason.contains("boundary=runtime_pending")
+                                && reason.contains("callee=Timer.sleep")
+                        })
+                    })
+                })
+        })
+    }));
 }
 
 #[test]
@@ -1056,6 +1359,9 @@ native fn Parallel.sort(values: mut List<Int>) -> Unit
     let review = review_package_dir(&temp_dir).expect("package review should succeed");
     let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
         .expect("package review JSON should parse");
+    let reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+            .expect("package review REIR JSON should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert_eq!(json["summary"]["native_apis"], 1);
@@ -1077,6 +1383,561 @@ native fn Parallel.sort(values: mut List<Int>) -> Unit
             .as_array()
             .is_some_and(|backends| backends.iter().any(|backend| backend == "rayon"))
     );
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "capability"
+                && fact["capability"]["category"] == "process.spawn"
+                && fact["capability"]["service"] == "native_rust_author_declaration"
+                && fact["confidence"]["level"] == "declared"
+                && fact["acquisition_mode"] == "manual_declaration"
+        })
+    }));
+    assert!(reir_json["slices"].as_array().is_some_and(|slices| {
+        slices
+            .iter()
+            .any(|slice| slice["kind"] == "native_unsafe_slice")
+    }));
+}
+
+#[test]
+fn package_review_reir_maps_process_facade_to_process_capability() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-review-process-facade-reir");
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-process-facade",
+        "0.1.0",
+        "",
+        r#"features: native
+
+pub native fn Process.run_stdout(
+    command: read String,
+    args: read List<String>,
+) -> Result<String, String>
+    effects(native)
+"#,
+    );
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+            .expect("package review REIR JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "capability"
+                && fact["subject"]["id"]
+                    == "rss-process-facade::public::function::Process.run_stdout"
+                && fact["capability"]["category"] == "process.spawn"
+                && fact["capability"]["service"] == "stdlib"
+                && fact["evidence"][0]["kind"] == "package_metadata"
+        })
+    }));
+    assert!(
+        reir_json["slices"]
+            .as_array()
+            .is_some_and(|slices| { slices.iter().any(|slice| slice["kind"] == "process_slice") })
+    );
+}
+
+#[test]
+fn package_review_reir_maps_args_facade_to_process_args_capability() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-review-args-facade-reir");
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-args-facade",
+        "0.1.0",
+        "",
+        r#"features: native
+
+pub native fn Args.count() -> Int
+    effects(native)
+
+pub native fn Args.get_or_default(
+    index: Int,
+    default: read String,
+) -> String
+    effects(native)
+"#,
+    );
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+            .expect("package review REIR JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        ["Args.count", "Args.get_or_default"].iter().all(|name| {
+            facts.iter().any(|fact| {
+                fact["kind"] == "capability"
+                    && fact["subject"]["id"].as_str().is_some_and(|id| {
+                        id == format!("rss-args-facade::public::function::{name}")
+                    })
+                    && fact["capability"]["category"] == "process.args"
+                    && fact["capability"]["service"] == "stdlib"
+                    && fact["evidence"][0]["kind"] == "package_metadata"
+            })
+        })
+    }));
+    assert!(
+        reir_json["slices"]
+            .as_array()
+            .is_some_and(|slices| { slices.iter().any(|slice| slice["kind"] == "process_slice") })
+    );
+}
+
+#[test]
+fn package_review_reir_maps_random_facade_to_random_capability() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-review-random-facade-reir");
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-random-facade",
+        "0.1.0",
+        "",
+        r#"features: native
+
+pub native fn Uuid.new_v4() -> fresh String
+    effects(native)
+
+pub native fn Random.bytes(len: Int) -> fresh Bytes
+    effects(native)
+"#,
+    );
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+            .expect("package review REIR JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "capability"
+                && fact["subject"]["id"] == "rss-random-facade::public::function::Random.bytes"
+                && fact["capability"]["category"] == "random.read"
+                && fact["capability"]["service"] == "stdlib"
+                && fact["evidence"][0]["kind"] == "package_metadata"
+        }) && facts.iter().any(|fact| {
+            fact["kind"] == "capability"
+                && fact["subject"]["id"] == "rss-random-facade::public::function::Uuid.new_v4"
+                && fact["capability"]["category"] == "random.read"
+                && fact["capability"]["service"] == "stdlib"
+        })
+    }));
+    assert!(reir_json["slices"].as_array().is_some_and(|slices| {
+        slices
+            .iter()
+            .any(|slice| slice["kind"] == "randomness_slice")
+    }));
+}
+
+#[test]
+fn package_review_reir_maps_env_http_time_hash_regex_and_tempdir_facades() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-review-stdlib-facades-reir");
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-stdlib-facades",
+        "0.1.0",
+        "",
+        r#"features: native, local
+
+resource TempDir
+struct Instant
+struct Regex
+struct RegexError
+
+pub native fn Env.get(name: read String) -> Option<fresh String>
+    effects(native)
+
+pub native fn Env.set(name: read String, value: read String) -> Unit
+    effects(native)
+
+pub native fn Http.post_json(url: read Url, body: read String) -> Result<fresh HttpResponse, HttpError>
+    effects(native)
+
+pub native fn Clock.now() -> fresh Instant
+    effects(native)
+
+pub native fn Hash.sha256_string(value: read String) -> fresh String
+    effects(native)
+
+pub native fn Hash.sha256_file(path: read Path) -> Result<fresh String, FileError>
+    effects(native)
+
+pub native fn Regex.compile(pattern: read String) -> Result<fresh Regex, RegexError>
+    effects(native)
+
+pub native fn TempDir.new() -> Result<TempDir, FileError>
+    effects(native)
+
+pub native fn TempDir.path(dir: read TempDir) -> fresh Path
+    effects(native)
+"#,
+    );
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+            .expect("package review REIR JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    let facts = reir_json["facts"]
+        .as_array()
+        .expect("REIR facts should be an array");
+    for (name, category) in [
+        ("Env.get", "env.read"),
+        ("Env.set", "env.write"),
+        ("Http.post_json", "network.client"),
+        ("Clock.now", "time.read"),
+        ("Hash.sha256_string", "compute.hash"),
+        ("Hash.sha256_file", "compute.hash"),
+        ("Hash.sha256_file", "filesystem.read"),
+        ("Regex.compile", "compute.regex"),
+        ("TempDir.new", "filesystem.write"),
+        ("TempDir.path", "filesystem.read"),
+    ] {
+        assert!(
+            facts.iter().any(|fact| {
+                fact["kind"] == "capability"
+                    && fact["subject"]["id"].as_str().is_some_and(|id| {
+                        id == format!("rss-stdlib-facades::public::function::{name}")
+                    })
+                    && fact["capability"]["category"] == category
+                    && fact["capability"]["service"] == "stdlib"
+                    && fact["evidence"][0]["kind"] == "package_metadata"
+            }),
+            "missing stdlib capability fact for {name} -> {category}: {facts:?}"
+        );
+    }
+
+    let slices = reir_json["slices"]
+        .as_array()
+        .expect("REIR slices should be an array");
+    for kind in [
+        "env_slice",
+        "network_slice",
+        "time_slice",
+        "compute_slice",
+        "filesystem_slice",
+    ] {
+        assert!(
+            slices.iter().any(|slice| slice["kind"] == kind),
+            "missing REIR slice {kind}: {slices:?}"
+        );
+    }
+}
+
+#[test]
+fn package_review_reir_maps_log_facade_to_telemetry_capability() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-review-log-facade-reir");
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-log-facade",
+        "0.1.0",
+        "",
+        r#"features: native
+
+pub fn Log.write(message: read String) -> Unit
+    effects(native)
+"#,
+    );
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+            .expect("package review REIR JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "capability"
+                && fact["subject"]["id"] == "rss-log-facade::public::function::Log.write"
+                && fact["capability"]["category"] == "telemetry.emit"
+                && fact["capability"]["service"] == "stdlib"
+                && fact["evidence"][0]["kind"] == "package_metadata"
+        })
+    }));
+    assert!(reir_json["slices"].as_array().is_some_and(|slices| {
+        slices
+            .iter()
+            .any(|slice| slice["kind"] == "telemetry_slice")
+    }));
+}
+
+#[test]
+fn package_review_reir_does_not_map_os_close_to_external_capability() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-review-os-close-reir");
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-os-close",
+        "0.1.0",
+        "",
+        r#"features: native
+
+pub native fn OS.close(fd: Fd) -> Unit
+    effects(native)
+"#,
+    );
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+            .expect("package review REIR JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    let facts = reir_json["facts"]
+        .as_array()
+        .expect("REIR facts should be an array");
+    assert!(
+        !facts.iter().any(|fact| {
+            fact["kind"] == "capability"
+                && fact["subject"]["id"] == "rss-os-close::public::function::OS.close"
+        }),
+        "OS.close should remain native/resource cleanup evidence, not an external capability fact: {facts:?}"
+    );
+}
+
+#[test]
+fn package_review_reir_maps_csv_and_config_facades_to_filesystem_read() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-review-data-file-facades-reir");
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-data-file-facades",
+        "0.1.0",
+        "",
+        r#"pub fn Csv.open_read(path: read Path) -> Result<File, CsvError>
+
+pub fn Csv.read_into(
+    file: mut File,
+    buffer: mut RowBuffer,
+) -> Result<Unit, CsvError>
+
+pub fn Config.load(path: read Path) -> Result<fresh ConfigValue, ConfigError>
+
+pub fn RuleLoader.load_rules(path: read Path) -> Result<fresh List<Rule>, ConfigError>
+"#,
+    );
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+            .expect("package review REIR JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        [
+            "Csv.open_read",
+            "Csv.read_into",
+            "Config.load",
+            "RuleLoader.load_rules",
+        ]
+        .iter()
+        .all(|name| {
+            facts.iter().any(|fact| {
+                fact["kind"] == "capability"
+                    && fact["subject"]["id"].as_str().is_some_and(|id| {
+                        id == format!("rss-data-file-facades::public::function::{name}")
+                    })
+                    && fact["capability"]["category"] == "filesystem.read"
+                    && fact["capability"]["service"] == "stdlib"
+                    && fact["evidence"][0]["kind"] == "package_metadata"
+            })
+        })
+    }));
+    assert!(reir_json["slices"].as_array().is_some_and(|slices| {
+        slices
+            .iter()
+            .any(|slice| slice["kind"] == "filesystem_slice")
+    }));
+}
+
+#[test]
+fn package_review_reir_maps_file_json_and_toml_facades_to_filesystem_capabilities() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-review-file-json-toml-facades-reir");
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-file-json-toml-facades",
+        "0.1.0",
+        "",
+        r#"features: native
+
+resource File
+
+pub fn File.open(path: read Path) -> Result<File, FileError>
+
+pub fn File.read_all_string(file: mut File) -> Result<String, FileError>
+
+pub fn File.write_buffer(file: mut File, buffer: read Buffer) -> Result<Unit, FileError>
+
+pub fn Json.parse_file(path: read Path) -> Result<fresh JsonValue, JsonError>
+
+pub native fn Toml.parse_file(path: read Path) -> Result<fresh JsonValue, JsonError>
+    effects(native)
+"#,
+    );
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+            .expect("package review REIR JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        [
+            "File.open",
+            "File.read_all_string",
+            "Json.parse_file",
+            "Toml.parse_file",
+        ]
+        .iter()
+        .all(|name| {
+            facts.iter().any(|fact| {
+                fact["kind"] == "capability"
+                    && fact["subject"]["id"].as_str().is_some_and(|id| {
+                        id == format!("rss-file-json-toml-facades::public::function::{name}")
+                    })
+                    && fact["capability"]["category"] == "filesystem.read"
+                    && fact["capability"]["service"] == "stdlib"
+            })
+        }) && ["File.open", "File.write_buffer"].iter().all(|name| {
+            facts.iter().any(|fact| {
+                fact["kind"] == "capability"
+                    && fact["subject"]["id"].as_str().is_some_and(|id| {
+                        id == format!("rss-file-json-toml-facades::public::function::{name}")
+                    })
+                    && fact["capability"]["category"] == "filesystem.write"
+                    && fact["capability"]["service"] == "stdlib"
+            })
+        })
+    }));
+    assert!(reir_json["slices"].as_array().is_some_and(|slices| {
+        slices
+            .iter()
+            .any(|slice| slice["kind"] == "filesystem_slice")
+    }));
+}
+
+#[test]
+fn package_review_reir_maps_db_and_image_facades_to_capabilities() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-review-db-image-facades-reir");
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-db-image-facades",
+        "0.1.0",
+        "",
+        r#"resource DbConnection
+
+pub fn DbConnection.open(url: read Url) -> DbConnection
+
+pub fn DbConnection.query(
+    conn: mut DbConnection,
+    sql: read String,
+) -> Result<Unit, DbError>
+
+pub fn Image.load(path: read Path) -> Result<fresh Image, ImageError>
+
+pub fn Image.save(image: read Image, path: read Path) -> Result<Unit, ImageError>
+"#,
+    );
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+            .expect("package review REIR JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "capability"
+                && fact["subject"]["id"]
+                    == "rss-db-image-facades::public::function::DbConnection.query"
+                && fact["capability"]["category"] == "database.read"
+                && fact["capability"]["service"] == "stdlib"
+        }) && facts.iter().any(|fact| {
+            fact["kind"] == "capability"
+                && fact["subject"]["id"]
+                    == "rss-db-image-facades::public::function::DbConnection.query"
+                && fact["capability"]["category"] == "database.write"
+                && fact["capability"]["service"] == "stdlib"
+        }) && facts.iter().any(|fact| {
+            fact["kind"] == "capability"
+                && fact["subject"]["id"] == "rss-db-image-facades::public::function::Image.load"
+                && fact["capability"]["category"] == "filesystem.read"
+                && fact["capability"]["service"] == "stdlib"
+        }) && facts.iter().any(|fact| {
+            fact["kind"] == "capability"
+                && fact["subject"]["id"] == "rss-db-image-facades::public::function::Image.save"
+                && fact["capability"]["category"] == "filesystem.write"
+                && fact["capability"]["service"] == "stdlib"
+        })
+    }));
+    assert!(reir_json["slices"].as_array().is_some_and(|slices| {
+        slices.iter().any(|slice| slice["kind"] == "database_slice")
+            && slices
+                .iter()
+                .any(|slice| slice["kind"] == "filesystem_slice")
+    }));
+}
+
+#[test]
+fn package_review_reir_records_native_build_time_execution() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-review-native-build-time-reir");
+    common::write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_build_native"
+build_scripts = "review"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+        r#"features: native
+
+native fn Build.run() -> Unit
+    effects(native)
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
+    fs::write(
+        temp_dir.join("native/rust/Cargo.toml"),
+        "[package]\nname = \"rss_build_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\nbuild = \"build.rs\"\n",
+    )
+    .expect("native Cargo.toml should be written");
+    fs::write(
+        temp_dir.join("native/rust/build.rs"),
+        "fn main() { println!(\"cargo:rerun-if-changed=build.rs\"); }\n",
+    )
+    .expect("native build script should be written");
+    fs::write(temp_dir.join("native/rust/src/lib.rs"), "pub fn run() {}\n")
+        .expect("native source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+            .expect("package review REIR JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "build_time_execution"
+                && fact["subject"]["kind"] == "build.step"
+                && fact["subject"]["id"] == "rss-json@0.1.0::build::native_rust_build_script"
+                && fact["confidence"]["level"] == "scanned"
+                && fact["acquisition_mode"] == "source_scan"
+        }) && facts.iter().any(|fact| {
+            fact["kind"] == "capability"
+                && fact["capability"]["category"] == "build.execute"
+                && fact["capability"]["service"] == "native_rust_source_scan"
+        })
+    }));
+    assert!(reir_json["slices"].as_array().is_some_and(|slices| {
+        slices
+            .iter()
+            .any(|slice| slice["kind"] == "build_time_slice")
+    }));
 }
 
 #[test]
@@ -1121,6 +1982,9 @@ native fn Feature.value() -> Int
     let review = review_package_dir(&temp_dir).expect("package review should succeed");
     let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
         .expect("package review JSON should parse");
+    let reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+            .expect("package review REIR JSON should parse");
     let lock = lock_package_dir(&temp_dir).expect("package lock should include native metadata");
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -1137,6 +2001,21 @@ native fn Feature.value() -> Int
             .iter()
             .any(|feature| feature == "rayon/web_spin_lock")
     );
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "native_cargo_feature"
+                && fact["subject"]["id"] == "rss-json@0.1.0#native-cargo-feature:base-native"
+        }) && facts.iter().any(|fact| {
+            fact["kind"] == "native_cargo_feature"
+                && fact["subject"]["id"]
+                    == "rss-json@0.1.0#native-cargo-feature:rayon/web_spin_lock"
+        })
+    }));
+    assert!(reir_json["slices"].as_array().is_some_and(|slices| {
+        slices
+            .iter()
+            .any(|slice| slice["kind"] == "native_unsafe_slice")
+    }));
     assert!(lock.packages[0].native_hash.is_some());
 }
 
@@ -1227,6 +2106,9 @@ impl Writer for BufferWriter {
     let review = review_package_dir(&temp_dir).expect("package review should succeed");
     let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
         .expect("package review JSON should parse");
+    let reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+            .expect("package review REIR JSON should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert!(json["exports"].as_array().is_some_and(|exports| {
@@ -1239,6 +2121,50 @@ impl Writer for BufferWriter {
                         .iter()
                         .any(|reason| reason == "write = BufferWriter.write")
                 })
+        })
+    }));
+    assert!(json["exports"].as_array().is_some_and(|exports| {
+        exports.iter().any(|export| {
+            export["name"] == "Writer"
+                && export["kind"] == "protocol"
+                && export["classification"] == "review_if_changed"
+                && export["reasons"].as_array().is_some_and(|reasons| {
+                    reasons.iter().any(|reason| reason == "method `write`")
+                        && reasons.iter().any(|reason| {
+                            reason
+                                == "method contract `fn Writer.write(self: mut Self, message: read String) -> Unit effects(retains(message))`"
+                        })
+                })
+        })
+    }));
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "protocol_declaration"
+                && fact["subject"]["kind"] == "code.protocol"
+                && fact["subject"]["id"] == "rss-protocol-export::public::protocol::Writer"
+                && fact["value"] == true
+        }) && facts.iter().any(|fact| {
+            fact["kind"] == "protocol_method_contract"
+                && fact["subject"]["kind"] == "code.protocol_method"
+                && fact["subject"]["id"] == "rss-protocol-export::protocol::Writer::method::write"
+                && fact["value"] == true
+        })
+    }));
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "protocol_impl"
+                && fact["subject"]["kind"] == "code.protocol_impl"
+                && fact["subject"]["id"]
+                    == "rss-protocol-export::public::protocol_impl::Writer for BufferWriter"
+                && fact["value"] == true
+        })
+    }));
+    assert!(reir_json["edges"].as_array().is_some_and(|edges| {
+        edges.iter().any(|edge| {
+            edge["kind"] == "implements_protocol"
+                && edge["from"]["id"]
+                    == "rss-protocol-export::public::protocol_impl::Writer for BufferWriter"
+                && edge["to"]["id"] == "rss-protocol-export::public::protocol::Writer"
         })
     }));
 }
@@ -1307,6 +2233,205 @@ impl Writer for BufferWriter {
                 .causes
                 .iter()
                 .any(|cause| cause.contains("impl Writer for BufferWriter"))
+    }));
+}
+
+#[test]
+fn package_review_reports_interface_protocol_contract_mismatch() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-review-protocol-contract-mismatch");
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-protocol-contract-mismatch",
+        "0.1.0",
+        "",
+        r#"protocol Writer {
+    fn write(self: mut Self, message: read String) -> Unit
+        effects(retains(message))
+}
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("src/lib.rss"),
+        r#"protocol Writer {
+    fn write(self: mut Self, message: read String) -> Unit
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(review.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS1301"
+            && diagnostic.label == "interface/source protocol mismatch"
+            && diagnostic
+                .causes
+                .iter()
+                .any(|cause| cause.contains("effects(retains(message))"))
+    }));
+}
+
+#[test]
+fn package_review_accepts_matching_interface_protocol_contract() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-review-protocol-contract-match");
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-protocol-contract-match",
+        "0.1.0",
+        "",
+        r#"protocol Writer {
+    fn write(self: mut Self, message: read String) -> Unit
+        effects(retains(message))
+}
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("src/lib.rss"),
+        r#"protocol Writer {
+    fn write(self: mut Self, message: read String) -> Unit
+        effects(retains(message))
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!review.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS1301" && diagnostic.label == "interface/source protocol mismatch"
+    }));
+}
+
+#[test]
+fn package_review_source_visibility_excludes_private_types() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-review-type-visibility");
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("rsspkg.toml"),
+        r#"[package]
+name = "rss-visibility"
+version = "0.1.0"
+edition = "2026"
+
+[sources]
+paths = ["src"]
+"#,
+    )
+    .expect("manifest should be written");
+    fs::write(
+        temp_dir.join("src/lib.rss"),
+        r#"pub struct PublicConfig {
+    name: String
+}
+
+struct PrivateConfig {
+    name: String
+}
+
+pub fn load() -> fresh PublicConfig {
+    return PublicConfig(name: "ok")
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(json["summary"]["public_types"], 1);
+    assert_eq!(json["summary"]["public_functions"], 1);
+    assert_eq!(json["summary"]["public_apis"], 2);
+    assert!(json["exports"].as_array().is_some_and(|exports| {
+        exports
+            .iter()
+            .any(|export| export["name"] == "PublicConfig" && export["kind"] == "type")
+            && !exports
+                .iter()
+                .any(|export| export["name"] == "PrivateConfig")
+    }));
+}
+
+#[test]
+fn package_review_exports_public_data_model_contracts() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-review-data-model-exports");
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("rsspkg.toml"),
+        r#"[package]
+name = "rss-data-model"
+version = "0.1.0"
+edition = "2026"
+
+[sources]
+paths = ["src"]
+"#,
+    )
+    .expect("manifest should be written");
+    fs::write(
+        temp_dir.join("src/lib.rss"),
+        r#"pub sum PackageError {
+    Io(path: String),
+    Invalid
+}
+
+sum PrivateError {
+    Hidden
+}
+
+pub type PackageName = String
+type PrivateName = String
+
+pub const MAX_RETRIES: Int = 3
+const INTERNAL_RETRIES: Int = 1
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(json["summary"]["public_sum_types"], 1);
+    assert_eq!(json["summary"]["public_type_aliases"], 1);
+    assert_eq!(json["summary"]["public_consts"], 1);
+    assert_eq!(json["summary"]["public_apis"], 3);
+    let exports = json["exports"]
+        .as_array()
+        .expect("exports should be an array");
+    assert!(exports.iter().any(|export| {
+        export["name"] == "PackageError"
+            && export["kind"] == "sum_type"
+            && export["reasons"].as_array().is_some_and(|reasons| {
+                reasons.iter().any(|reason| reason == "public sum type")
+                    && reasons.iter().any(|reason| reason == "variant `Io`")
+            })
+    }));
+    assert!(exports.iter().any(|export| {
+        export["name"] == "PackageName"
+            && export["kind"] == "type_alias"
+            && export["reasons"]
+                .as_array()
+                .is_some_and(|reasons| reasons.iter().any(|reason| reason == "target `String`"))
+    }));
+    assert!(exports.iter().any(|export| {
+        export["name"] == "MAX_RETRIES"
+            && export["kind"] == "const"
+            && export["reasons"]
+                .as_array()
+                .is_some_and(|reasons| reasons.iter().any(|reason| reason == "type `Int`"))
+    }));
+    assert!(!exports.iter().any(|export| {
+        matches!(
+            export["name"].as_str(),
+            Some("PrivateError" | "PrivateName" | "INTERNAL_RETRIES")
+        )
     }));
 }
 
@@ -2010,6 +3135,9 @@ fn package_review_marks_broken_rssi_contract_diagnostics_unknown() {
     let review = review_package_dir(&temp_dir).expect("package review should succeed");
     let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
         .expect("package review JSON should parse");
+    let reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+            .expect("package review REIR JSON should parse");
     let human = rsscript::format_package_review_human(&review);
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -2032,6 +3160,35 @@ fn package_review_marks_broken_rssi_contract_diagnostics_unknown() {
         })
     }));
     assert!(human.contains("contract_diagnostic interface/lib.rssi:1:1: unknown"));
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "diagnostic"
+                && fact["value"] == "unknown"
+                && fact["evidence"].as_array().is_some_and(|evidence| {
+                    evidence.iter().any(|item| {
+                        item["symbol"] == "RS0015"
+                            && item["file"]
+                                .as_str()
+                                .is_some_and(|file| file.ends_with("interface/lib.rssi"))
+                    })
+                })
+        })
+    }));
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "public_contract"
+                && fact["value"] == "unknown"
+                && fact["confidence"]["level"] == "unknown"
+                && fact["subject"]["id"].as_str().is_some_and(|id| {
+                    id.contains("public::contract_diagnostic::interface/lib.rssi:1:1")
+                })
+        })
+    }));
+    assert!(reir_json["slices"].as_array().is_some_and(|slices| {
+        slices
+            .iter()
+            .any(|slice| slice["kind"] == "diagnostic_slice")
+    }));
 }
 
 #[test]
@@ -2052,15 +3209,396 @@ fast = []
     let json: Value = serde_json::from_str(&rsscript::format_package_metadata_json(&metadata))
         .expect("metadata JSON should parse");
     let metadata_path_exists = temp_dir.join("review").join("package-review.json").exists();
+    let reir_path_exists = temp_dir
+        .join("review")
+        .join("reir")
+        .join("rsscript.json")
+        .exists();
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert!(metadata.ok);
     assert!(!metadata_path_exists);
+    assert!(!reir_path_exists);
     assert_eq!(json["dry_run"], true);
     assert_eq!(json["written"], false);
+    assert_eq!(json["verified"], false);
+    assert_eq!(json["mismatches"], serde_json::json!([]));
+    assert!(
+        json["metadata_path"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("review/package-review.json"))
+    );
+    assert!(
+        json["reir_path"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("review/reir/rsscript.json"))
+    );
     assert_eq!(json["metadata"]["schema"], "rss.review.package.v1");
     assert_eq!(json["metadata"]["package"]["name"], "rss-metadata");
     assert_eq!(json["metadata"]["features"], serde_json::json!(["fast"]));
+}
+
+#[test]
+fn package_metadata_writes_reir_review_artifact() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-metadata-reir");
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-metadata-reir",
+        "0.1.0",
+        "",
+        r#"features: native
+
+pub fn NativeBridge.run(value: read Int) -> Int
+    effects(native)
+"#,
+    );
+
+    let metadata = package_metadata(&temp_dir, false).expect("metadata write should succeed");
+    let package_review_json =
+        fs::read_to_string(temp_dir.join("review").join("package-review.json"))
+            .expect("package review metadata should be written");
+    let reir_json = fs::read_to_string(temp_dir.join("review").join("reir").join("rsscript.json"))
+        .expect("REIR metadata should be written");
+    let package_review: Value =
+        serde_json::from_str(&package_review_json).expect("package review should parse");
+    let reir: Value = serde_json::from_str(&reir_json).expect("REIR bundle should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(metadata.written);
+    assert!(!metadata.verified);
+    assert_eq!(package_review["package"]["name"], "rss-metadata-reir");
+    assert_eq!(reir["schema"], "reir.bundle.v0.1");
+    assert!(reir["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| fact["kind"] == "package_risk")
+            && facts.iter().any(|fact| fact["kind"] == "native_boundary")
+    }));
+}
+
+#[test]
+fn package_metadata_verify_accepts_current_review_artifacts() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-metadata-verify-current");
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-metadata-verify-current",
+        "0.1.0",
+        "",
+        r#"pub fn add(left: Int, right: Int) -> Int
+"#,
+    );
+
+    package_metadata(&temp_dir, false).expect("metadata write should succeed");
+    let verified =
+        package_metadata_verify(&temp_dir).expect("metadata verify should recompute package");
+    let json: Value = serde_json::from_str(&rsscript::format_package_metadata_json(&verified))
+        .expect("verified metadata JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(verified.ok);
+    assert!(verified.verified);
+    assert!(!verified.written);
+    assert_eq!(json["verified"], true);
+    assert_eq!(json["mismatches"], serde_json::json!([]));
+}
+
+#[test]
+fn package_metadata_verify_reports_missing_or_stale_artifacts() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-metadata-verify-stale");
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-metadata-verify-stale",
+        "0.1.0",
+        "",
+        r#"pub fn add(left: Int, right: Int) -> Int
+"#,
+    );
+
+    package_metadata(&temp_dir, false).expect("metadata write should succeed");
+    fs::write(
+        temp_dir.join("review").join("package-review.json"),
+        "{\"schema\":\"rss.review.package.v1\",\"stale\":true}",
+    )
+    .expect("package review artifact should be made stale");
+    fs::remove_file(temp_dir.join("review").join("reir").join("rsscript.json"))
+        .expect("REIR artifact should be removed");
+
+    let verified =
+        package_metadata_verify(&temp_dir).expect("metadata verify should report mismatches");
+    let reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_metadata_reir_json(&verified))
+            .expect("metadata REIR JSON should parse");
+    let mismatch_kinds = verified
+        .mismatches
+        .iter()
+        .map(|mismatch| mismatch.kind.as_str())
+        .collect::<Vec<_>>();
+    let stale_mismatch = verified
+        .mismatches
+        .iter()
+        .find(|mismatch| mismatch.kind == "stale")
+        .expect("stale package review metadata mismatch should be reported");
+    let missing_mismatch = verified
+        .mismatches
+        .iter()
+        .find(|mismatch| mismatch.kind == "missing")
+        .expect("missing REIR metadata mismatch should be reported");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!verified.ok);
+    assert!(!verified.verified);
+    assert!(!verified.written);
+    assert!(mismatch_kinds.contains(&"stale"));
+    assert!(mismatch_kinds.contains(&"missing"));
+    assert_eq!(stale_mismatch.artifact, "package_review");
+    assert!(stale_mismatch.expected_sha256.starts_with("sha256:"));
+    assert!(
+        stale_mismatch
+            .actual_sha256
+            .as_deref()
+            .is_some_and(|hash| hash.starts_with("sha256:"))
+    );
+    assert_eq!(missing_mismatch.artifact, "reir_bundle");
+    assert!(missing_mismatch.expected_sha256.starts_with("sha256:"));
+    assert_eq!(missing_mismatch.actual_sha256, None);
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "supply_chain"
+                && fact["id"]
+                    .as_str()
+                    .is_some_and(|id| id.ends_with(".reir_artifact"))
+                && fact["value"] == "unknown"
+                && fact["evidence"][0]["kind"] == "package_metadata"
+                && fact["evidence"][0]["json_pointer"] == "/reir_path"
+        }) && facts.iter().any(|fact| {
+            fact["kind"] == "policy_result"
+                && fact["id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains(".mismatch."))
+                && fact["evidence"][0]["json_pointer"]
+                    .as_str()
+                    .is_some_and(|pointer| pointer.starts_with("/mismatches/"))
+        })
+    }));
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "policy_result"
+                && fact["id"].as_str().is_some_and(|id| {
+                    id.contains(".mismatch.") && id.contains("review_package_review_json")
+                })
+                && fact["evidence"][0]["value"].as_str().is_some_and(|value| {
+                    value.contains("expected=sha256:") && value.contains("actual=sha256:")
+                })
+                && fact["evidence"][0]["file"] == stale_mismatch.path
+                && fact["evidence"][0]["reason"]
+                    .as_str()
+                    .is_some_and(|reason| {
+                        reason.contains("metadata package_review stale")
+                            && reason.contains("expected sha256:")
+                            && reason.contains("actual sha256:")
+                    })
+                && fact["unknown_reason"].as_str().is_some_and(|reason| {
+                    reason.contains("metadata artifact")
+                        && reason.contains("stale")
+                        && reason.contains("expected sha256:")
+                        && reason.contains("actual sha256:")
+                })
+        }) && facts.iter().any(|fact| {
+            fact["kind"] == "policy_result"
+                && fact["id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains(".mismatch.") && id.contains("rsscript_json"))
+                && fact["evidence"][0]["value"].as_str().is_some_and(|value| {
+                    value.contains("review/reir/rsscript.json")
+                        && value.contains("expected=sha256:")
+                        && !value.contains("actual=sha256:")
+                })
+                && fact["evidence"][0]["file"] == missing_mismatch.path
+                && fact["evidence"][0]["reason"]
+                    .as_str()
+                    .is_some_and(|reason| {
+                        reason.contains("metadata reir_bundle missing")
+                            && reason.contains("expected sha256:")
+                            && !reason.contains("actual sha256:")
+                    })
+        })
+    }));
+    assert!(reir_json["slices"].as_array().is_some_and(|slices| {
+        slices.iter().any(|slice| {
+            slice["kind"] == "package_risk_slice"
+                && slice["facts"].as_array().is_some_and(|facts| {
+                    facts.iter().any(|fact| {
+                        fact.as_str()
+                            .is_some_and(|id| id.ends_with(".reir_artifact"))
+                    })
+                })
+        })
+    }));
+}
+
+#[test]
+fn package_publish_archive_excludes_generated_review_artifacts() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-publish-excludes-review-artifacts");
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-publish-review-artifacts",
+        "0.1.0",
+        "",
+        r#"pub fn add(left: Int, right: Int) -> Int
+"#,
+    );
+
+    package_metadata(&temp_dir, false).expect("metadata write should succeed");
+    let publish_before_ci_artifacts =
+        publish_package_dry_run(&temp_dir).expect("publish dry-run should succeed");
+    fs::write(
+        temp_dir
+            .join("review")
+            .join("reir")
+            .join("rsscript-check.json"),
+        "{\"schema\":\"reir.bundle.v0.1\",\"producer\":\"check\"}",
+    )
+    .expect("additional REIR CI artifact should be written");
+    fs::create_dir_all(temp_dir.join("review").join("reir").join("ci"))
+        .expect("nested REIR artifact directory should be created");
+    fs::write(
+        temp_dir
+            .join("review")
+            .join("reir")
+            .join("ci")
+            .join("rsscript-metadata-verify.json"),
+        "{\"schema\":\"reir.bundle.v0.1\",\"producer\":\"metadata\"}",
+    )
+    .expect("nested REIR CI artifact should be written");
+    let publish = publish_package_dry_run(&temp_dir).expect("publish dry-run should succeed");
+    let reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_publish_reir_json(&publish))
+            .expect("package publish REIR JSON should parse");
+    let archive_paths = publish
+        .archive_files
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect::<Vec<_>>();
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(
+        publish.archive_hash,
+        publish_before_ci_artifacts.archive_hash
+    );
+    assert!(!archive_paths.contains(&"review/package-review.json"));
+    assert!(!archive_paths.contains(&"review/reir/rsscript.json"));
+    assert!(!archive_paths.contains(&"review/reir/rsscript-check.json"));
+    assert!(!archive_paths.contains(&"review/reir/ci/rsscript-metadata-verify.json"));
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"].as_str() == Some("supply_chain")
+                && fact["id"].as_str()
+                    == Some(
+                        "fact.publish.rss_publish_review_artifacts_0_1_0.effective_interface_hash",
+                    )
+                && fact["evidence"][0]["kind"].as_str() == Some("registry_metadata")
+                && fact["evidence"][0]["json_pointer"].as_str()
+                    == Some("/registry_index/effective_interface_hash_default")
+        }) && facts.iter().any(|fact| {
+            fact["kind"].as_str() == Some("policy_result")
+                && fact["id"].as_str()
+                    == Some("fact.publish.rss_publish_review_artifacts_0_1_0.readiness")
+                && fact["evidence"][0]["kind"].as_str() == Some("registry_metadata")
+        })
+    }));
+    assert!(reir_json["slices"].as_array().is_some_and(|slices| {
+        slices
+            .iter()
+            .any(|slice| slice["kind"] == "package_risk_slice")
+    }));
+}
+
+#[test]
+fn package_publish_registry_index_exposes_review_schema_features_and_footprint() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-publish-registry-index");
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-publish-index",
+        "0.1.0",
+        r#"[features]
+streaming = []
+
+[dependencies]
+rss-core = "0.5"
+"#,
+        r#"pub fn add(left: Int, right: Int) -> Int
+"#,
+    );
+
+    let publish = publish_package_dry_run(&temp_dir).expect("publish dry-run should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_publish_json(&publish))
+        .expect("package publish JSON should parse");
+    let reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_publish_reir_json(&publish))
+            .expect("package publish REIR JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(json["registry_index"]["schema"], "rss.registry.index.v1");
+    assert_eq!(
+        json["registry_index"]["review_schema"],
+        "rss.review.package.v1"
+    );
+    assert_eq!(
+        json["registry_index"]["effective_interface_hash_default"],
+        json["registry_index"]["interface_hash"]
+    );
+    assert_eq!(
+        json["registry_index"]["features"],
+        serde_json::json!({
+            "default": ["streaming"],
+            "streaming": []
+        })
+    );
+    assert_eq!(json["registry_index"]["unsafe_apis"], false);
+    assert_eq!(
+        json["registry_index"]["footprint_default"]["total_packages"],
+        2
+    );
+    assert_eq!(
+        json["registry_index"]["footprint_default"]["direct_dependencies"],
+        1
+    );
+    assert_eq!(
+        json["registry_index"]["footprint_default"]["unknown_facts"],
+        1
+    );
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["id"].as_str() == Some("fact.publish.rss_publish_index_0_1_0.readiness")
+                && fact["evidence"][0]["kind"].as_str() == Some("registry_metadata")
+        }) && facts.iter().any(|fact| {
+            fact["id"].as_str() == Some("fact.publish.rss_publish_index_0_1_0.review_schema")
+                && fact["kind"].as_str() == Some("supply_chain")
+                && fact["evidence"][0]["json_pointer"].as_str()
+                    == Some("/registry_index/review_schema")
+        }) && facts.iter().any(|fact| {
+            fact["id"].as_str() == Some("fact.publish.rss_publish_index_0_1_0.default_features")
+                && fact["kind"].as_str() == Some("supply_chain")
+                && fact["evidence"][0]["json_pointer"].as_str()
+                    == Some("/registry_index/features/default")
+        }) && facts.iter().any(|fact| {
+            fact["id"].as_str() == Some("fact.publish.rss_publish_index_0_1_0.registry_footprint")
+                && fact["kind"].as_str() == Some("dependency_risk")
+                && fact["evidence"][0]["json_pointer"].as_str()
+                    == Some("/registry_index/footprint_default")
+                && fact["unknown_reason"].as_str()
+                    == Some("registry preview footprint contains unknown or unresolved facts")
+        }) && facts.iter().any(|fact| {
+            fact["id"].as_str() == Some("fact.publish.rss_publish_index_0_1_0.registry_native")
+                && fact["kind"].as_str() == Some("native_boundary")
+                && fact["value"] == false
+                && fact["evidence"][0]["json_pointer"].as_str() == Some("/registry_index/native")
+        }) && facts.iter().any(|fact| {
+            fact["id"].as_str() == Some("fact.publish.rss_publish_index_0_1_0.registry_unsafe_apis")
+                && fact["kind"].as_str() == Some("unsafe_boundary")
+                && fact["value"] == false
+                && fact["evidence"][0]["json_pointer"].as_str()
+                    == Some("/registry_index/unsafe_apis")
+        })
+    }));
 }
 
 #[test]
@@ -2116,6 +3654,99 @@ fn docs_do_not_reintroduce_legacy_gc_runtime_surface() {
             "{relative_path} must emit low_semantic_risk instead of legacy review categories"
         );
     }
+}
+
+#[test]
+fn package_manager_spec_uses_current_http_and_env_facade_shapes() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let spec = fs::read_to_string(root.join("RSScript_Package_Manager_Design_v0.5.md"))
+        .expect("package manager spec should be readable");
+
+    for stale in [
+        "Http.HttpClient",
+        "Http.Response",
+        "Http.HttpError",
+        "Http.Url",
+        "Http.body_text",
+        "Env.EnvError",
+        "Result<String, Env.EnvError>",
+    ] {
+        assert!(
+            !spec.contains(stale),
+            "package manager spec should not reference stale facade shape `{stale}`"
+        );
+    }
+    for current in [
+        "pub native fn Http.get(\n    url: read Url,\n) -> Result<fresh HttpResponse, HttpError>",
+        "pub native fn HttpResponse.text(\n    response: read HttpResponse,\n) -> fresh String",
+        "pub native fn Env.get(name: read String) -> Option<fresh String>",
+        "pub native fn Env.get_or_default(",
+    ] {
+        assert!(
+            spec.contains(current),
+            "package manager spec should document current facade shape `{current}`"
+        );
+    }
+}
+
+#[test]
+fn package_manager_spec_uses_implemented_provider_resolution_manifest_shape() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let spec = fs::read_to_string(root.join("RSScript_Package_Manager_Design_v0.5.md"))
+        .expect("package manager spec should be readable");
+
+    for stale in ["[provider]", "mode = \"platform_provided\""] {
+        assert!(
+            !spec.contains(stale),
+            "package manager spec should not document unimplemented provider manifest shape `{stale}`"
+        );
+    }
+    for current in [
+        "platform-env = { path = \"../platform-env\", platform_provided = true }",
+        "[providers]",
+        "platform-env = { package = \"posix-env\", version = \"0.1.0\" }",
+        "`[implements.\"<interface-package>\"]`",
+        "`interface_effective_hash`",
+    ] {
+        assert!(
+            spec.contains(current),
+            "package manager spec should document implemented provider manifest shape `{current}`"
+        );
+    }
+}
+
+#[test]
+fn reir_spec_keeps_os_close_as_descriptor_cleanup_not_external_capability() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let spec = fs::read_to_string(root.join("Review_Evidence_IR_Spec_v0.1.md"))
+        .expect("REIR spec should be readable");
+
+    assert!(spec.contains("`OS.close`"));
+    assert!(spec.contains("trusted native/resource"));
+    assert!(spec.contains("do not imply `filesystem.read`, `filesystem.write`, or"));
+}
+
+#[test]
+fn rss_spec_keeps_protocol_dynamic_dispatch_deferred() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let spec = fs::read_to_string(root.join("RSScript_v0.5_Spec.md"))
+        .unwrap_or_else(|error| panic!("RSScript spec should read: {error}"));
+
+    for forbidden in [
+        "Dynamic dispatch (admitted",
+        "RSScript admits protocol-typed dynamic dispatch",
+        "The design decision is settled: dynamic dispatch is supported",
+        "form is admitted, not excluded",
+        "protocol_dynamic_dispatch",
+    ] {
+        assert!(
+            !spec.contains(forbidden),
+            "v0.5 protocol dynamic dispatch must remain deferred, found `{forbidden}`"
+        );
+    }
+    assert!(spec.contains("Dynamic dispatch (deferred, not admitted in v0.5)"));
+    assert!(spec.contains("The only implemented and specified protocol call form is"));
+    assert!(spec.contains("explicit `Protocol.method(...)` dispatch"));
 }
 
 #[test]
@@ -2182,6 +3813,47 @@ pub fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
         changes
             .iter()
             .any(|change| change["file"] == "interface/lib.rssi" && change["risk"] == "high")
+    }));
+}
+
+#[test]
+fn package_diff_can_emit_reir_diff_json() {
+    let old_dir = common::unique_temp_dir("rsscript-package-reir-diff-old");
+    let new_dir = common::unique_temp_dir("rsscript-package-reir-diff-new");
+    common::write_package_fixture(
+        &old_dir,
+        "0.1.0",
+        "",
+        r#"pub fn Api.run(value: read Int) -> Int
+"#,
+    );
+    common::write_package_fixture(
+        &new_dir,
+        "0.1.0",
+        "",
+        r#"features: native
+
+pub fn NativeBridge.run(value: read Int) -> Int
+    effects(native)
+"#,
+    );
+
+    let old_review = review_package_dir(&old_dir).expect("old package review should succeed");
+    let new_review = review_package_dir(&new_dir).expect("new package review should succeed");
+    let json: Value = serde_json::from_str(&format_package_review_reir_diff_json(
+        &old_review,
+        &new_review,
+    ))
+    .expect("REIR diff JSON should parse");
+    let _ = fs::remove_dir_all(&old_dir);
+    let _ = fs::remove_dir_all(&new_dir);
+
+    assert_eq!(json["schema"], "reir.diff.v0.1");
+    assert!(json["items"].as_array().is_some_and(|items| {
+        items.iter().any(|item| {
+            item["kind"] == "fact_added"
+                && item["subject"]["id"] == "rss-json::native::NativeBridge"
+        })
     }));
 }
 
@@ -2924,6 +4596,28 @@ rss-dep = {{ path = "{}", features = ["fast"] }}
             .as_str()
             .is_some_and(|hash| hash.starts_with("sha256:"))
     );
+
+    let lock_path = root_dir.join("rsspkg.lock");
+    let reir_json: Value = serde_json::from_str(
+        &rsscript::format_package_lock_reir_json_with_path(&lock, &lock_path),
+    )
+    .expect("package lock REIR JSON should parse");
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"].as_str() == Some("supply_chain")
+                && fact["id"].as_str()
+                    == Some("fact.lockfile.rss_dep_0_2_0.effective_interface_hash")
+                && fact["acquisition_mode"].as_str() == Some("lockfile")
+                && fact["evidence"][0]["kind"].as_str() == Some("lockfile_entry")
+                && fact["evidence"][0]["file"] == lock_path.display().to_string()
+                && fact["evidence"][0]["json_pointer"].as_str() == Some("/package/1/interface_hash")
+        })
+    }));
+    assert!(reir_json["slices"].as_array().is_some_and(|slices| {
+        slices
+            .iter()
+            .any(|slice| slice["kind"] == "package_risk_slice")
+    }));
 }
 
 #[test]
@@ -3210,6 +4904,9 @@ fast = []
         diff_package_locks(&old_lock_path, &new_lock_path).expect("lock diff should succeed");
     let json: Value = serde_json::from_str(&rsscript::format_package_lock_diff_json(&diff))
         .expect("lock diff JSON should parse");
+    let reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_lock_diff_reir_json(&diff))
+            .expect("lock diff REIR JSON should parse");
     let _ = fs::remove_dir_all(&old_dir);
     let _ = fs::remove_dir_all(&new_dir);
     let _ = fs::remove_dir_all(&lock_dir);
@@ -3234,6 +4931,51 @@ fast = []
                         .any(|field| field["field"] == "interface_hash" && field["risk"] == "high")
                 })
         })
+    }));
+    let interface_hash_after = json["package_changes"]
+        .as_array()
+        .and_then(|changes| {
+            changes.iter().find_map(|change| {
+                (change["name"] == "rss-json")
+                    .then_some(change)
+                    .and_then(|change| change["changes"].as_array())
+                    .and_then(|fields| {
+                        fields.iter().find_map(|field| {
+                            (field["field"] == "interface_hash")
+                                .then(|| field["after"].as_str())
+                                .flatten()
+                        })
+                    })
+            })
+        })
+        .expect("interface_hash after value should be reported");
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "supply_chain"
+                && fact["id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains(".field.interface_hash"))
+                && fact["subject"]["id"] == "rss-json@0.2.0"
+                && fact["value"] == true
+                && fact["evidence"][0]["kind"] == "lockfile_entry"
+                && fact["evidence"][0]["json_pointer"]
+                    .as_str()
+                    .is_some_and(|pointer| pointer.starts_with("/package_changes/0/changes/"))
+                && fact["evidence"][0]["value"].as_str() == Some(interface_hash_after)
+                && fact["evidence"][0]["reason"]
+                    .as_str()
+                    .is_some_and(|reason| reason.contains("risk=high"))
+        }) && facts.iter().any(|fact| {
+            fact["kind"] == "policy_result"
+                && fact["id"]
+                    .as_str()
+                    .is_some_and(|id| id.starts_with("fact.lock_update.") && id.ends_with(".risk"))
+        })
+    }));
+    assert!(reir_json["slices"].as_array().is_some_and(|slices| {
+        slices
+            .iter()
+            .any(|slice| slice["kind"] == "package_risk_slice")
     }));
 }
 
@@ -3321,6 +5063,8 @@ pub fn add(left: Int, right: Int) -> Result<Int, MathError>
     let check = check_package_dir(&temp_dir).expect("package check should succeed");
     let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
         .expect("package check JSON should parse");
+    let reir_json: Value = serde_json::from_str(&rsscript::format_package_check_reir_json(&check))
+        .expect("package check REIR JSON should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert!(!check.ok);
@@ -3331,6 +5075,32 @@ pub fn add(left: Int, right: Int) -> Result<Int, MathError>
         reasons
             .iter()
             .any(|reason| reason == ".rssi interface hash changed")
+    }));
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "policy_result"
+                && fact["id"].as_str().is_some_and(|id| id.ends_with(".lock"))
+                && fact["value"] == "unknown"
+                && fact["acquisition_mode"] == "lockfile"
+                && fact["evidence"][0]["kind"] == "lockfile_entry"
+                && fact["evidence"][0]["file"] == json["lock"]["path"]
+                && fact["evidence"][0]["json_pointer"] == "/lock"
+        }) && facts.iter().any(|fact| {
+            fact["kind"] == "dependency_risk"
+                && fact["id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains(".lock_change."))
+                && fact["evidence"][0]["kind"] == "lockfile_entry"
+        }) && facts.iter().any(|fact| {
+            fact["kind"] == "supply_chain"
+                && fact["id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains(".field.interface_hash"))
+                && fact["evidence"][0]["kind"] == "lockfile_entry"
+                && fact["evidence"][0]["json_pointer"]
+                    .as_str()
+                    .is_some_and(|pointer| pointer.starts_with("/lock/package_changes/0/changes/"))
+        })
     }));
 }
 
@@ -3800,6 +5570,9 @@ native fn Native.parse(text: read String) -> String
     let check = check_package_dir(&temp_dir).expect("package check should succeed");
     let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
         .expect("package check JSON should parse");
+    let native_path = temp_dir.join("native/rust").display().to_string();
+    let reir_json: Value = serde_json::from_str(&rsscript::format_package_check_reir_json(&check))
+        .expect("package check REIR JSON should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert!(!check.ok);
@@ -3811,6 +5584,20 @@ native fn Native.parse(text: read String) -> String
                 .iter()
                 .any(|reason| reason == "native Rust unsafe usage detected"))
     );
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "policy_result"
+                && fact["id"] == "fact.package_check.rss_json_0_1_0.native"
+                && fact["evidence"][0]["kind"] == "package_metadata"
+                && fact["evidence"][0]["file"] == native_path
+                && fact["evidence"][0]["json_pointer"] == "/native_rust"
+        }) && facts.iter().any(|fact| {
+            fact["kind"] == "unsafe_boundary"
+                && fact["id"] == "fact.package_check.rss_json_0_1_0.unsafe"
+                && fact["evidence"][0]["file"] == native_path
+                && fact["evidence"][0]["json_pointer"] == "/native_rust/unsafe_detected"
+        })
+    }));
 }
 
 #[test]
@@ -4342,6 +6129,67 @@ fn main() -> Unit {
 }
 
 #[test]
+fn package_vendor_can_emit_reir_supply_chain_facts() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-vendor-reir");
+    let root_dir = temp_dir.join("app");
+    let dep_dir = temp_dir.join("dep");
+    common::write_named_package_fixture(
+        &dep_dir,
+        "rss-vendor-dep",
+        "0.1.0",
+        "",
+        r#"pub fn Dep.value() -> Int
+"#,
+    );
+    common::write_named_package_fixture(
+        &root_dir,
+        "rss-vendor-app",
+        "0.1.0",
+        r#"[dependencies]
+rss-vendor-dep = { path = "../dep" }
+rss-registry-dep = "^1"
+"#,
+        r#"pub fn App.run() -> Int
+"#,
+    );
+
+    let vendor = vendor_package_dir(&root_dir, true).expect("vendor dry-run should succeed");
+    let reir_json: Value =
+        serde_json::from_str(&rsscript::format_package_vendor_reir_json(&vendor))
+            .expect("vendor REIR JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!vendor.ok);
+    assert_eq!(vendor.entries.len(), 1);
+    assert_eq!(vendor.unresolved.len(), 1);
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "supply_chain"
+                && fact["id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains(".entry.rss_vendor_dep_0_1_0.checksum"))
+                && fact["subject"]["id"] == "rss-vendor-dep@0.1.0"
+                && fact["evidence"][0]["kind"] == "package_metadata"
+                && fact["evidence"][0]["file"] == vendor.entries[0].vendor_path
+                && fact["evidence"][0]["json_pointer"] == "/entries/0"
+        }) && facts.iter().any(|fact| {
+            fact["kind"] == "policy_result"
+                && fact["id"]
+                    .as_str()
+                    .is_some_and(|id| id.ends_with(".status"))
+                && fact["evidence"][0]["file"] == vendor.vendor_dir
+                && fact["evidence"][0]["json_pointer"] == "/ok"
+        }) && facts.iter().any(|fact| {
+            fact["kind"] == "dependency_risk"
+                && fact["subject"]["id"] == "rss-registry-dep@^1"
+                && fact["value"] == "unknown"
+                && fact["evidence"][0]["file"] == vendor.vendor_dir
+                && fact["evidence"][0]["json_pointer"] == "/unresolved/0"
+        })
+    }));
+}
+
+#[test]
 fn package_tree_expands_path_dependencies_and_marks_unresolved() {
     let root_dir = common::unique_temp_dir("rsscript-package-tree-root");
     let dep_dir = common::unique_temp_dir("rsscript-package-tree-dep");
@@ -4381,6 +6229,7 @@ unsafe = "forbid"
             r#"[dependencies]
 rss-dep = {{ path = "{}", features = ["streaming"] }}
 rss-remote = "0.5"
+rss-missing = {{ path = "../missing" }}
 "#,
             common::toml_path(&dep_dir)
         ),
@@ -4391,14 +6240,16 @@ rss-remote = "0.5"
     let tree = package_tree(&root_dir).expect("package tree should succeed");
     let json: Value = serde_json::from_str(&rsscript::format_package_tree_json(&tree))
         .expect("package tree JSON should parse");
+    let reir_json: Value = serde_json::from_str(&rsscript::format_package_tree_reir_json(&tree))
+        .expect("package tree REIR JSON should parse");
     let human = rsscript::format_package_tree_human(&tree);
     let _ = fs::remove_dir_all(&root_dir);
     let _ = fs::remove_dir_all(&dep_dir);
 
     assert_eq!(json["root"]["name"], "rss-json");
-    assert_eq!(json["summary"]["packages"], 3);
-    assert_eq!(json["summary"]["path_dependencies"], 1);
-    assert_eq!(json["summary"]["unresolved_dependencies"], 1);
+    assert_eq!(json["summary"]["packages"], 4);
+    assert_eq!(json["summary"]["path_dependencies"], 2);
+    assert_eq!(json["summary"]["unresolved_dependencies"], 2);
     assert_eq!(json["summary"]["native_packages"], 1);
     assert!(json["root"]["dependencies"].as_array().is_some_and(|deps| {
         deps.iter().any(|dep| {
@@ -4409,9 +6260,62 @@ rss-remote = "0.5"
         }) && deps
             .iter()
             .any(|dep| dep["name"] == "rss-remote" && dep["risk"] == "unknown")
+            && deps
+                .iter()
+                .any(|dep| dep["name"] == "rss-missing" && dep["risk"] == "unknown")
     }));
     assert!(human.contains("|-- rss-dep 0.2.0 [elevated, native, features streaming]"));
     assert!(human.contains("`-- rss-remote req 0.5 [unknown]"));
+    assert!(reir_json["producers"].as_array().is_some_and(|producers| {
+        producers.iter().any(|producer| {
+            producer["adapter"] == "rsscript-package-tree" && producer["source"] == "rsscript_tree"
+        })
+    }));
+    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "dependency_risk"
+                && fact["subject"]["id"] == "rss-dep@0.2.0"
+                && fact["evidence"][0]["kind"] == "dependency_path"
+                && fact["evidence"][0]["file"] == dep_dir.display().to_string()
+                && fact["evidence"][0]["json_pointer"] == "/root/dependencies/0"
+                && fact["evidence"][0]["source"] == "rsscript_tree"
+        }) && facts.iter().any(|fact| {
+            fact["kind"] == "dependency_risk"
+                && fact["value"] == "unknown"
+                && fact["subject"]["id"] == "rss-remote@0.5"
+                && fact["confidence"]["source"] == "rsscript_tree"
+                && fact["evidence"][0]["file"].is_null()
+                && fact["evidence"][0]["json_pointer"] == "/root/dependencies/2"
+        }) && facts.iter().any(|fact| {
+            fact["kind"] == "dependency_risk"
+                && fact["value"] == "unknown"
+                && fact["subject"]["id"]
+                    .as_str()
+                    .is_some_and(|id| id.starts_with("rss-missing@path+"))
+                && fact["confidence"]["source"] == "rsscript_tree"
+                && fact["evidence"][0]["file"].is_null()
+                && fact["evidence"][0]["json_pointer"] == "/root/dependencies/1"
+        }) && facts.iter().any(|fact| {
+            fact["kind"] == "supply_chain"
+                && fact["id"] == "fact.package_tree.root_1.effective_interface_hash"
+                && fact["evidence"][0]["file"] == dep_dir.display().to_string()
+                && fact["evidence"][0]["source"] == "rsscript_tree"
+        })
+    }));
+    assert!(reir_json["edges"].as_array().is_some_and(|edges| {
+        edges.iter().any(|edge| {
+            edge["kind"] == "depends_on"
+                && edge["from"]["id"] == "rss-json@0.1.0"
+                && edge["to"]["id"] == "rss-dep@0.2.0"
+                && edge["evidence"][0]["file"] == dep_dir.display().to_string()
+                && edge["evidence"][0]["source"] == "rsscript_tree"
+        })
+    }));
+    assert!(reir_json["slices"].as_array().is_some_and(|slices| {
+        slices
+            .iter()
+            .any(|slice| slice["kind"] == "package_risk_slice")
+    }));
 }
 
 #[test]

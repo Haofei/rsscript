@@ -156,10 +156,7 @@ pub fn behavior_bom_sources_with_interfaces(
                     .reasons
                     .iter()
                     .filter(|r| r.starts_with("unresolved call"))
-                    .map(|r| {
-                        r.trim_start_matches("unresolved call(s): ")
-                            .to_string()
-                    })
+                    .map(|r| r.trim_start_matches("unresolved call(s): ").to_string())
                     .collect();
                 unknown_functions.push(BomUnknownFunction {
                     name: region.function.clone(),
@@ -287,8 +284,14 @@ fn collect_function_behaviors(
 fn type_ref_is_resource_like(ty: &TypeRef) -> bool {
     matches!(
         ty.name.as_str(),
-        "File" | "Directory" | "DbConnection" | "HttpClient" | "ResourcePool" | "TcpStream"
-            | "UdpSocket" | "Process"
+        "File"
+            | "Directory"
+            | "DbConnection"
+            | "HttpClient"
+            | "ResourcePool"
+            | "TcpStream"
+            | "UdpSocket"
+            | "Process"
     )
 }
 
@@ -369,14 +372,15 @@ pub fn format_bbom_human(bom: &BehaviorBom) -> String {
 
     if !bom.unknown.functions.is_empty() {
         out.push_str("unknown:\n");
-        out.push_str(&format!("  {} functions, {} lines\n", bom.unknown.functions.len(), bom.unknown.total_lines));
+        out.push_str(&format!(
+            "  {} functions, {} lines\n",
+            bom.unknown.functions.len(),
+            bom.unknown.total_lines
+        ));
         for f in &bom.unknown.functions {
             out.push_str(&format!("  {} (line {})", f.name, f.line));
             if !f.unresolved_calls.is_empty() {
-                out.push_str(&format!(
-                    " — unresolved: {}",
-                    f.unresolved_calls.join(", ")
-                ));
+                out.push_str(&format!(" — unresolved: {}", f.unresolved_calls.join(", ")));
             }
             out.push('\n');
         }
@@ -425,27 +429,15 @@ pub fn capability_delta(old: &BehaviorBom, new: &BehaviorBom) -> CapabilityDelta
     let removed_retentions = diff_items(&new.retentions, &old.retentions, retention_key);
     let added_resources = diff_items(&old.resources, &new.resources, resource_key);
     let removed_resources = diff_items(&new.resources, &old.resources, resource_key);
-    let added_native = diff_items(
-        &old.native_boundaries,
-        &new.native_boundaries,
-        native_key,
-    );
-    let removed_native = diff_items(
-        &new.native_boundaries,
-        &old.native_boundaries,
-        native_key,
-    );
+    let added_native = diff_items(&old.native_boundaries, &new.native_boundaries, native_key);
+    let removed_native = diff_items(&new.native_boundaries, &old.native_boundaries, native_key);
     let added_capabilities = diff_items(&old.capabilities, &new.capabilities, capability_key);
     let removed_capabilities = diff_items(&new.capabilities, &old.capabilities, capability_key);
-    let unknown_delta =
-        new.summary.unknown_functions as i64 - old.summary.unknown_functions as i64;
+    let unknown_delta = new.summary.unknown_functions as i64 - old.summary.unknown_functions as i64;
 
     let mut reasons = Vec::new();
     if !added_native.is_empty() {
-        reasons.push(format!(
-            "+{} native boundary(ies)",
-            added_native.len()
-        ));
+        reasons.push(format!("+{} native boundary(ies)", added_native.len()));
     }
     if !added_retentions.is_empty() {
         reasons.push(format!("+{} retention(s)", added_retentions.len()));
@@ -505,25 +497,37 @@ pub fn format_capability_delta_human(delta: &CapabilityDelta) -> String {
     if !delta.added_mutations.is_empty() {
         out.push_str("+ mutations:\n");
         for m in &delta.added_mutations {
-            out.push_str(&format!("    + {:?} {} (in {})\n", m.kind, m.target, m.function));
+            out.push_str(&format!(
+                "    + {:?} {} (in {})\n",
+                m.kind, m.target, m.function
+            ));
         }
     }
     if !delta.removed_mutations.is_empty() {
         out.push_str("- mutations:\n");
         for m in &delta.removed_mutations {
-            out.push_str(&format!("    - {:?} {} (in {})\n", m.kind, m.target, m.function));
+            out.push_str(&format!(
+                "    - {:?} {} (in {})\n",
+                m.kind, m.target, m.function
+            ));
         }
     }
     if !delta.added_retentions.is_empty() {
         out.push_str("+ retentions:\n");
         for r in &delta.added_retentions {
-            out.push_str(&format!("    + {:?} {} (in {})\n", r.kind, r.parameter, r.function));
+            out.push_str(&format!(
+                "    + {:?} {} (in {})\n",
+                r.kind, r.parameter, r.function
+            ));
         }
     }
     if !delta.removed_retentions.is_empty() {
         out.push_str("- retentions:\n");
         for r in &delta.removed_retentions {
-            out.push_str(&format!("    - {:?} {} (in {})\n", r.kind, r.parameter, r.function));
+            out.push_str(&format!(
+                "    - {:?} {} (in {})\n",
+                r.kind, r.parameter, r.function
+            ));
         }
     }
     if !delta.added_resources.is_empty() {
@@ -541,13 +545,19 @@ pub fn format_capability_delta_human(delta: &CapabilityDelta) -> String {
     if !delta.added_native_boundaries.is_empty() {
         out.push_str("+ native boundaries:\n");
         for b in &delta.added_native_boundaries {
-            out.push_str(&format!("    + {:?} {} (in {})\n", b.kind, b.call, b.function));
+            out.push_str(&format!(
+                "    + {:?} {} (in {})\n",
+                b.kind, b.call, b.function
+            ));
         }
     }
     if !delta.removed_native_boundaries.is_empty() {
         out.push_str("- native boundaries:\n");
         for b in &delta.removed_native_boundaries {
-            out.push_str(&format!("    - {:?} {} (in {})\n", b.kind, b.call, b.function));
+            out.push_str(&format!(
+                "    - {:?} {} (in {})\n",
+                b.kind, b.call, b.function
+            ));
         }
     }
     if !delta.added_capabilities.is_empty() {
@@ -586,7 +596,8 @@ pub fn format_capability_delta_human(delta: &CapabilityDelta) -> String {
 
 /// Format capability delta as JSON.
 pub fn format_capability_delta_json(delta: &CapabilityDelta) -> String {
-    serde_json::to_string_pretty(delta).expect("capability delta JSON serialization should not fail")
+    serde_json::to_string_pretty(delta)
+        .expect("capability delta JSON serialization should not fail")
 }
 
 // ─── Merge Policy ───────────────────────────────────────────────────────────

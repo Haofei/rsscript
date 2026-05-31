@@ -5,7 +5,7 @@ use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::{
     CallResolution, FunctionSig, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirStmt,
 };
-use crate::syntax::ast::{BinaryOp, Callee, FunctionDecl, Item, TypeRef};
+use crate::syntax::ast::{BinaryOp, Callee, FunctionDecl, GenericBound, Item, TypeRef};
 
 #[derive(Debug, Clone)]
 struct CallbackBinding {
@@ -204,7 +204,7 @@ fn check_block(
                     local_closure_bindings,
                     LocalClosureEscapeContext::Store,
                 );
-                check_expr(analyzer, value, context);
+                check_expr(analyzer, function, value, context);
             }
             HirStmt::Return {
                 value: Some(value), ..
@@ -224,7 +224,7 @@ fn check_block(
                     local_closure_bindings,
                     LocalClosureEscapeContext::Return,
                 );
-                check_expr(analyzer, value, context);
+                check_expr(analyzer, function, value, context);
             }
             HirStmt::Return {
                 value: None, span, ..
@@ -246,10 +246,10 @@ fn check_block(
                     local_closure_bindings,
                     LocalClosureEscapeContext::UseAsValue,
                 );
-                check_expr(analyzer, value, context);
+                check_expr(analyzer, function, value, context);
             }
             HirStmt::With { resource, body, .. } => {
-                check_expr(analyzer, resource, context);
+                check_expr(analyzer, function, resource, context);
                 check_block(analyzer, function, body, context);
             }
             HirStmt::If {
@@ -258,7 +258,7 @@ fn check_block(
                 else_body,
                 ..
             } => {
-                check_expr(analyzer, condition, context);
+                check_expr(analyzer, function, condition, context);
                 check_block(analyzer, function, then_body, context);
                 if let Some(else_body) = else_body {
                     check_block(analyzer, function, else_body, context);
@@ -268,16 +268,16 @@ fn check_block(
                 condition, body, ..
             } => {
                 if let Some(condition) = condition {
-                    check_expr(analyzer, condition, context);
+                    check_expr(analyzer, function, condition, context);
                 }
                 check_block(analyzer, function, body, context);
             }
             HirStmt::For { iterable, body, .. } => {
-                check_expr(analyzer, iterable, context);
+                check_expr(analyzer, function, iterable, context);
                 check_block(analyzer, function, body, context);
             }
             HirStmt::Match { value, arms, .. } => {
-                check_expr(analyzer, value, context);
+                check_expr(analyzer, function, value, context);
                 for arm in arms {
                     check_block(analyzer, function, &arm.body, context);
                 }
@@ -457,7 +457,12 @@ fn binding_payload_type_mismatch_diagnostic(
     );
 }
 
-fn check_expr(analyzer: &mut Analyzer<'_>, expr: &HirExpr, context: &CallCheckContext<'_>) {
+fn check_expr(
+    analyzer: &mut Analyzer<'_>,
+    function: &FunctionDecl,
+    expr: &HirExpr,
+    context: &CallCheckContext<'_>,
+) {
     match expr {
         HirExpr::Call {
             callee,
@@ -466,9 +471,9 @@ fn check_expr(analyzer: &mut Analyzer<'_>, expr: &HirExpr, context: &CallCheckCo
             resolution,
             ..
         } => {
-            check_call_args(analyzer, callee, args, span, resolution, context);
+            check_call_args(analyzer, function, callee, args, span, resolution, context);
             for arg in args {
-                check_expr(analyzer, &arg.value, context);
+                check_expr(analyzer, function, &arg.value, context);
             }
         }
         HirExpr::Effect { value, .. }
@@ -476,22 +481,22 @@ fn check_expr(analyzer: &mut Analyzer<'_>, expr: &HirExpr, context: &CallCheckCo
         | HirExpr::Spawn { value, .. }
         | HirExpr::Await { value, .. }
         | HirExpr::Try { value, .. } => {
-            check_expr(analyzer, value, context);
+            check_expr(analyzer, function, value, context);
         }
         HirExpr::Binary { left, right, .. } => {
-            check_expr(analyzer, left, context);
-            check_expr(analyzer, right, context);
+            check_expr(analyzer, function, left, context);
+            check_expr(analyzer, function, right, context);
         }
-        HirExpr::Field { base, .. } => check_expr(analyzer, base, context),
+        HirExpr::Field { base, .. } => check_expr(analyzer, function, base, context),
         HirExpr::Index { base, index, .. } => {
-            check_expr(analyzer, base, context);
-            check_expr(analyzer, index, context);
+            check_expr(analyzer, function, base, context);
+            check_expr(analyzer, function, index, context);
         }
         HirExpr::Closure { body, .. } => {
             // Closure bodies use the enclosing function's return contract only when they
             // are lowered as ordinary statements. noescape callback return contracts are
             // checked at their call/parameter boundary.
-            check_expr_block_without_return_contract(analyzer, body, context)
+            check_expr_block_without_return_contract(analyzer, function, body, context)
         }
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
@@ -502,6 +507,7 @@ fn check_expr(analyzer: &mut Analyzer<'_>, expr: &HirExpr, context: &CallCheckCo
 
 fn check_expr_block_without_return_contract(
     analyzer: &mut Analyzer<'_>,
+    function: &FunctionDecl,
     block: &HirBlock,
     context: &CallCheckContext<'_>,
 ) {
@@ -514,11 +520,11 @@ fn check_expr_block_without_return_contract(
                 value: Some(value), ..
             }
             | HirStmt::Expr(value) => {
-                check_expr(analyzer, value, context);
+                check_expr(analyzer, function, value, context);
             }
             HirStmt::With { resource, body, .. } => {
-                check_expr(analyzer, resource, context);
-                check_expr_block_without_return_contract(analyzer, body, context);
+                check_expr(analyzer, function, resource, context);
+                check_expr_block_without_return_contract(analyzer, function, body, context);
             }
             HirStmt::If {
                 condition,
@@ -526,28 +532,32 @@ fn check_expr_block_without_return_contract(
                 else_body,
                 ..
             } => {
-                check_expr(analyzer, condition, context);
-                check_expr_block_without_return_contract(analyzer, then_body, context);
+                check_expr(analyzer, function, condition, context);
+                check_expr_block_without_return_contract(analyzer, function, then_body, context);
                 if let Some(else_body) = else_body {
-                    check_expr_block_without_return_contract(analyzer, else_body, context);
+                    check_expr_block_without_return_contract(
+                        analyzer, function, else_body, context,
+                    );
                 }
             }
             HirStmt::Loop {
                 condition, body, ..
             } => {
                 if let Some(condition) = condition {
-                    check_expr(analyzer, condition, context);
+                    check_expr(analyzer, function, condition, context);
                 }
-                check_expr_block_without_return_contract(analyzer, body, context);
+                check_expr_block_without_return_contract(analyzer, function, body, context);
             }
             HirStmt::For { iterable, body, .. } => {
-                check_expr(analyzer, iterable, context);
-                check_expr_block_without_return_contract(analyzer, body, context);
+                check_expr(analyzer, function, iterable, context);
+                check_expr_block_without_return_contract(analyzer, function, body, context);
             }
             HirStmt::Match { value, arms, .. } => {
-                check_expr(analyzer, value, context);
+                check_expr(analyzer, function, value, context);
                 for arm in arms {
-                    check_expr_block_without_return_contract(analyzer, &arm.body, context);
+                    check_expr_block_without_return_contract(
+                        analyzer, function, &arm.body, context,
+                    );
                 }
             }
             HirStmt::Let { value: None, .. }
@@ -880,6 +890,7 @@ fn return_type_mismatch_diagnostic(
 
 fn check_call_args(
     analyzer: &mut Analyzer<'_>,
+    function: &FunctionDecl,
     callee: &Callee,
     args: &[HirCallArg],
     call_span: &Span,
@@ -948,6 +959,7 @@ fn check_call_args(
         CallResolution::EnumVariant => return,
     };
     let signature_params = signature.params.clone();
+    check_protocol_receiver_satisfaction(analyzer, function, callee, args, call_span);
     let param_effects: HashMap<String, &'static str> = signature
         .params
         .iter()
@@ -1184,6 +1196,69 @@ fn check_enum_variant_form(
         .with_fix(
             "use_conventional_variant_form",
             format!("Write this variant as {form}."),
+            "manual",
+        ),
+    );
+}
+
+fn check_protocol_receiver_satisfaction(
+    analyzer: &mut Analyzer<'_>,
+    function: &FunctionDecl,
+    callee: &Callee,
+    args: &[HirCallArg],
+    call_span: &Span,
+) {
+    let Callee::Qualified { namespace, name } = callee else {
+        return;
+    };
+    if !analyzer
+        .syntax_program
+        .protocols
+        .iter()
+        .any(|protocol| protocol.name == *namespace)
+    {
+        return;
+    }
+    let Some(self_arg) = args.iter().find(|arg| arg.name.as_deref() == Some("self")) else {
+        return;
+    };
+    let Some(receiver_type) = hir_expr_type_name(&self_arg.value) else {
+        return;
+    };
+    let receiver_type = strip_fresh_type(receiver_type);
+    let receiver_root = type_root_name(receiver_type);
+    if function.type_params.iter().any(|param| {
+        param.name == receiver_root
+            && matches!(
+                param.bound.as_ref(),
+                Some(GenericBound::Protocol(protocol)) if protocol == namespace
+            )
+    }) {
+        return;
+    }
+    if analyzer
+        .syntax_program
+        .protocol_impls
+        .iter()
+        .any(|protocol_impl| {
+            protocol_impl.protocol == *namespace && protocol_impl.type_name == receiver_root
+        })
+    {
+        return;
+    }
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::PROTOCOL_NOT_SATISFIED,
+            format!(
+                "receiver type `{receiver_type}` does not satisfy protocol `{namespace}` for `{namespace}.{name}`."
+            ),
+            call_span.clone(),
+            "protocol not satisfied",
+        )
+        .with_cause("Protocols are nominal capability contracts. A protocol call must be backed by an explicit generic bound or an explicit protocol implementation.")
+        .with_fix(
+            "add_protocol_bound_or_impl",
+            format!("Add a `{receiver_root}: {namespace}` generic bound or declare `impl {namespace} for {receiver_root} {{ ... }}`."),
             "manual",
         ),
     );

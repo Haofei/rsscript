@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use crate::checks;
 use crate::diagnostic::{Diagnostic, code};
 use crate::hir::{
-    CallResolution, DuplicateSymbolKind, FunctionSig, Hir, HirBlock, HirExpr, HirStmt, HirTypeKind,
-    ParamSig, ResolvedCalleeKind,
+    CallResolution, DuplicateSymbolKind, FunctionSig, Hir, HirBlock, HirExpr, HirMatchArm, HirStmt,
+    HirTypeKind, ParamSig, ResolvedCalleeKind,
 };
 use crate::interfaces::CORE_INTERFACES;
 use crate::lexer::{Token, lex};
@@ -166,7 +166,11 @@ fn type_ref_display_name(ty: &crate::syntax::ast::TypeRef) -> String {
         format!(
             "{}<{}>",
             ty.name,
-            ty.args.iter().map(type_ref_display_name).collect::<Vec<_>>().join(", ")
+            ty.args
+                .iter()
+                .map(type_ref_display_name)
+                .collect::<Vec<_>>()
+                .join(", ")
         )
     }
 }
@@ -179,6 +183,196 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) type_aliases: std::collections::BTreeMap<String, String>,
     in_task_group: bool,
     pub(crate) async_let_names: Vec<String>,
+}
+
+fn collect_task_group_async_lets(
+    block: &Block,
+    async_lets: &mut Vec<(String, crate::diagnostic::Span)>,
+) {
+    for statement in &block.statements {
+        match statement {
+            Stmt::Let(stmt) => {
+                if stmt.is_async {
+                    async_lets.push((stmt.name.clone(), stmt.span.clone()));
+                }
+                if let Some(value) = &stmt.value {
+                    collect_task_group_async_lets_expr(value, async_lets);
+                }
+            }
+            Stmt::Return(stmt) => {
+                if let Some(value) = &stmt.value {
+                    collect_task_group_async_lets_expr(value, async_lets);
+                }
+            }
+            Stmt::With(stmt) => {
+                collect_task_group_async_lets_expr(&stmt.resource, async_lets);
+                collect_task_group_async_lets(&stmt.body, async_lets);
+            }
+            Stmt::If(stmt) => {
+                collect_task_group_async_lets_expr(&stmt.condition, async_lets);
+                collect_task_group_async_lets(&stmt.then_body, async_lets);
+                if let Some(else_body) = &stmt.else_body {
+                    collect_task_group_async_lets(else_body, async_lets);
+                }
+            }
+            Stmt::Loop(stmt) => {
+                if let Some(condition) = &stmt.condition {
+                    collect_task_group_async_lets_expr(condition, async_lets);
+                }
+                collect_task_group_async_lets(&stmt.body, async_lets);
+            }
+            Stmt::For(stmt) => {
+                collect_task_group_async_lets_expr(&stmt.iterable, async_lets);
+                collect_task_group_async_lets(&stmt.body, async_lets);
+            }
+            Stmt::Match(stmt) => {
+                collect_task_group_async_lets_expr(&stmt.value, async_lets);
+                for arm in &stmt.arms {
+                    collect_task_group_async_lets(&arm.body, async_lets);
+                }
+            }
+            Stmt::LetElse(stmt) => {
+                collect_task_group_async_lets_expr(&stmt.value, async_lets);
+                collect_task_group_async_lets(&stmt.else_body, async_lets);
+            }
+            Stmt::Expr(expr) => collect_task_group_async_lets_expr(expr, async_lets),
+            Stmt::TaskGroup(_)
+            | Stmt::MalformedWith(_)
+            | Stmt::MalformedIf(_)
+            | Stmt::MalformedLoop(_)
+            | Stmt::MalformedFor(_)
+            | Stmt::MalformedMatch(_)
+            | Stmt::Break(_)
+            | Stmt::Continue(_)
+            | Stmt::Unknown(_) => {}
+        }
+    }
+}
+
+fn collect_task_group_async_lets_expr(
+    expr: &Expr,
+    async_lets: &mut Vec<(String, crate::diagnostic::Span)>,
+) {
+    match expr {
+        Expr::Binary { left, right, .. } => {
+            collect_task_group_async_lets_expr(left, async_lets);
+            collect_task_group_async_lets_expr(right, async_lets);
+        }
+        Expr::Field { base, .. } => collect_task_group_async_lets_expr(base, async_lets),
+        Expr::Index { base, index, .. } => {
+            collect_task_group_async_lets_expr(base, async_lets);
+            collect_task_group_async_lets_expr(index, async_lets);
+        }
+        Expr::Call { args, .. } => {
+            for arg in args {
+                collect_task_group_async_lets_expr(&arg.value, async_lets);
+            }
+        }
+        Expr::Effect { value, .. }
+        | Expr::Manage { value, .. }
+        | Expr::Spawn { value, .. }
+        | Expr::Await { value, .. }
+        | Expr::Try { value, .. } => collect_task_group_async_lets_expr(value, async_lets),
+        Expr::Closure { body, .. } => collect_task_group_async_lets(body, async_lets),
+        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+    }
+}
+
+fn collect_task_group_awaited_handles(block: &Block, awaited: &mut HashSet<String>) {
+    for statement in &block.statements {
+        match statement {
+            Stmt::Let(stmt) => {
+                if let Some(value) = &stmt.value {
+                    collect_task_group_awaited_handles_expr(value, awaited);
+                }
+            }
+            Stmt::Return(stmt) => {
+                if let Some(value) = &stmt.value {
+                    collect_task_group_awaited_handles_expr(value, awaited);
+                }
+            }
+            Stmt::With(stmt) => {
+                collect_task_group_awaited_handles_expr(&stmt.resource, awaited);
+                collect_task_group_awaited_handles(&stmt.body, awaited);
+            }
+            Stmt::If(stmt) => {
+                collect_task_group_awaited_handles_expr(&stmt.condition, awaited);
+                collect_task_group_awaited_handles(&stmt.then_body, awaited);
+                if let Some(else_body) = &stmt.else_body {
+                    collect_task_group_awaited_handles(else_body, awaited);
+                }
+            }
+            Stmt::Loop(stmt) => {
+                if let Some(condition) = &stmt.condition {
+                    collect_task_group_awaited_handles_expr(condition, awaited);
+                }
+                collect_task_group_awaited_handles(&stmt.body, awaited);
+            }
+            Stmt::For(stmt) => {
+                collect_task_group_awaited_handles_expr(&stmt.iterable, awaited);
+                collect_task_group_awaited_handles(&stmt.body, awaited);
+            }
+            Stmt::Match(stmt) => {
+                collect_task_group_awaited_handles_expr(&stmt.value, awaited);
+                for arm in &stmt.arms {
+                    collect_task_group_awaited_handles(&arm.body, awaited);
+                }
+            }
+            Stmt::LetElse(stmt) => {
+                collect_task_group_awaited_handles_expr(&stmt.value, awaited);
+                collect_task_group_awaited_handles(&stmt.else_body, awaited);
+            }
+            Stmt::Expr(expr) => collect_task_group_awaited_handles_expr(expr, awaited),
+            Stmt::TaskGroup(_)
+            | Stmt::MalformedWith(_)
+            | Stmt::MalformedIf(_)
+            | Stmt::MalformedLoop(_)
+            | Stmt::MalformedFor(_)
+            | Stmt::MalformedMatch(_)
+            | Stmt::Break(_)
+            | Stmt::Continue(_)
+            | Stmt::Unknown(_) => {}
+        }
+    }
+}
+
+fn collect_task_group_awaited_handles_expr(expr: &Expr, awaited: &mut HashSet<String>) {
+    match expr {
+        Expr::Await { value, .. } => {
+            if let Some(name) = await_handle_name(value) {
+                awaited.insert(name.to_string());
+            }
+            collect_task_group_awaited_handles_expr(value, awaited);
+        }
+        Expr::Binary { left, right, .. } => {
+            collect_task_group_awaited_handles_expr(left, awaited);
+            collect_task_group_awaited_handles_expr(right, awaited);
+        }
+        Expr::Field { base, .. } => collect_task_group_awaited_handles_expr(base, awaited),
+        Expr::Index { base, index, .. } => {
+            collect_task_group_awaited_handles_expr(base, awaited);
+            collect_task_group_awaited_handles_expr(index, awaited);
+        }
+        Expr::Call { args, .. } => {
+            for arg in args {
+                collect_task_group_awaited_handles_expr(&arg.value, awaited);
+            }
+        }
+        Expr::Effect { value, .. }
+        | Expr::Manage { value, .. }
+        | Expr::Spawn { value, .. }
+        | Expr::Try { value, .. } => collect_task_group_awaited_handles_expr(value, awaited),
+        Expr::Closure { body, .. } => collect_task_group_awaited_handles(body, awaited),
+        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+    }
+}
+
+fn await_handle_name(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Ident(name, _) => Some(name),
+        Expr::Effect { value, .. } | Expr::Try { value, .. } => await_handle_name(value),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -337,9 +531,62 @@ impl Analyzer<'_> {
                 "This declaration starts like RSScript syntax but does not match the supported declaration grammar.",
             );
         }
+        self.check_module_use_layout();
         let items = self.syntax_program.items.clone();
         for item in &items {
             self.check_unsupported_syntax_item(item);
+        }
+    }
+
+    fn check_module_use_layout(&mut self) {
+        let mut seen_module = false;
+        let mut seen_use = false;
+        let mut seen_non_organization_item = false;
+        let items = self.syntax_program.items.clone();
+        for item in &items {
+            match item {
+                Item::Module(module) => {
+                    if seen_module {
+                        self.unsupported_syntax(
+                            module.span.clone(),
+                            "duplicate module declaration",
+                            "A source or interface file may declare at most one `module` identity.",
+                        );
+                    }
+                    if seen_non_organization_item {
+                        self.unsupported_syntax(
+                            module.span.clone(),
+                            "misplaced module declaration",
+                            "`module` is source-organization metadata and must appear before declarations.",
+                        );
+                    }
+                    if seen_use {
+                        self.unsupported_syntax(
+                            module.span.clone(),
+                            "misplaced module declaration",
+                            "`module` must be the first organization declaration when present; `use` declarations follow it.",
+                        );
+                    }
+                    seen_module = true;
+                }
+                Item::Use(use_decl) => {
+                    if seen_non_organization_item {
+                        self.unsupported_syntax(
+                            use_decl.span.clone(),
+                            "misplaced use declaration",
+                            "`use` is source-organization metadata and must appear before declarations.",
+                        );
+                    }
+                    seen_use = true;
+                }
+                Item::Type(_)
+                | Item::SumType(_)
+                | Item::TypeAlias(_)
+                | Item::Const(_)
+                | Item::Function(_) => {
+                    seen_non_organization_item = true;
+                }
+            }
         }
     }
 
@@ -424,7 +671,11 @@ impl Analyzer<'_> {
                     );
                 }
             }
-            Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => {}
+            Item::Module(_)
+            | Item::Use(_)
+            | Item::SumType(_)
+            | Item::TypeAlias(_)
+            | Item::Const(_) => {}
         }
     }
 
@@ -517,6 +768,7 @@ impl Analyzer<'_> {
                 self.check_unsupported_syntax_block(&stmt.body);
             }
             Stmt::TaskGroup(stmt) => {
+                self.check_task_group_async_lets_consumed(&stmt.body);
                 let was_in_task_group = self.in_task_group;
                 self.in_task_group = true;
                 self.check_unsupported_syntax_block(&stmt.body);
@@ -590,7 +842,7 @@ impl Analyzer<'_> {
                 self.unsupported_syntax(
                     span.clone(),
                     "unsupported spawn expression",
-                    "`spawn` is currently review metadata only; executable async task lowering is not part of the v0.5 runtime yet.",
+                    "`spawn` is not a v0.5 source-level task feature. Use `task_group { async let ... }` for structured isolate-local async work.",
                 );
                 self.check_unsupported_syntax_expr(value);
             }
@@ -604,6 +856,22 @@ impl Analyzer<'_> {
                 "unsupported expression",
                 "This expression is outside the current RSScript parser surface.",
             ),
+        }
+    }
+
+    fn check_task_group_async_lets_consumed(&mut self, block: &Block) {
+        let mut async_lets = Vec::new();
+        let mut awaited = HashSet::new();
+        collect_task_group_async_lets(block, &mut async_lets);
+        collect_task_group_awaited_handles(block, &mut awaited);
+        for (name, span) in async_lets {
+            if !awaited.contains(&name) {
+                self.unsupported_syntax(
+                    span,
+                    "unawaited async let",
+                    "`async let` handles are lexical task_group handles and must be consumed by `await` inside the same `task_group { ... }` block.",
+                );
+            }
         }
     }
 
@@ -625,68 +893,84 @@ impl Analyzer<'_> {
     }
 
     fn check_match_exhaustiveness(&mut self) {
-        let items = self.syntax_program.items.clone();
-        for item in &items {
-            let Item::Function(function) = item else {
+        let function_names = self
+            .syntax_program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Function(function) => Some(function.name.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for function_name in function_names {
+            let Some(body) = self
+                .hir
+                .function_body(&function_name)
+                .and_then(|body| body.block.clone())
+            else {
                 continue;
             };
-            self.check_match_exhaustiveness_block(&function.body);
+            self.check_match_exhaustiveness_block(&body);
         }
     }
 
-    fn check_match_exhaustiveness_block(&mut self, block: &Block) {
+    fn check_match_exhaustiveness_block(&mut self, block: &HirBlock) {
         for statement in &block.statements {
             self.check_match_exhaustiveness_stmt(statement);
         }
     }
 
-    fn check_match_exhaustiveness_stmt(&mut self, statement: &Stmt) {
+    fn check_match_exhaustiveness_stmt(&mut self, statement: &HirStmt) {
         match statement {
-            Stmt::Let(stmt) => {
-                if let Some(value) = &stmt.value {
+            HirStmt::Let { value, .. } => {
+                if let Some(value) = value {
                     self.check_match_exhaustiveness_expr(value);
                 }
             }
-            Stmt::Return(stmt) => {
-                if let Some(value) = &stmt.value {
+            HirStmt::Return { value, .. } => {
+                if let Some(value) = value {
                     self.check_match_exhaustiveness_expr(value);
                 }
             }
-            Stmt::With(stmt) => {
-                self.check_match_exhaustiveness_expr(&stmt.resource);
-                self.check_match_exhaustiveness_block(&stmt.body);
+            HirStmt::With { resource, body, .. } => {
+                self.check_match_exhaustiveness_expr(resource);
+                self.check_match_exhaustiveness_block(body);
             }
-            Stmt::If(stmt) => {
-                self.check_match_exhaustiveness_expr(&stmt.condition);
-                self.check_match_exhaustiveness_block(&stmt.then_body);
-                if let Some(else_body) = &stmt.else_body {
+            HirStmt::If {
+                condition,
+                then_body,
+                else_body,
+                ..
+            } => {
+                self.check_match_exhaustiveness_expr(condition);
+                self.check_match_exhaustiveness_block(then_body);
+                if let Some(else_body) = else_body {
                     self.check_match_exhaustiveness_block(else_body);
                 }
             }
-            Stmt::Loop(stmt) => {
-                if let Some(condition) = &stmt.condition {
+            HirStmt::Loop {
+                condition, body, ..
+            } => {
+                if let Some(condition) = condition {
                     self.check_match_exhaustiveness_expr(condition);
                 }
-                self.check_match_exhaustiveness_block(&stmt.body);
+                self.check_match_exhaustiveness_block(body);
             }
-            Stmt::For(stmt) => {
-                self.check_match_exhaustiveness_expr(&stmt.iterable);
-                self.check_match_exhaustiveness_block(&stmt.body);
+            HirStmt::For { iterable, body, .. } => {
+                self.check_match_exhaustiveness_expr(iterable);
+                self.check_match_exhaustiveness_block(body);
             }
-            Stmt::TaskGroup(stmt) => {
-                self.check_match_exhaustiveness_block(&stmt.body);
-            }
-            Stmt::Match(stmt) => {
-                self.check_match_exhaustiveness_expr(&stmt.value);
-                for arm in &stmt.arms {
+            HirStmt::Match { value, arms, span } => {
+                self.check_match_exhaustiveness_expr(value);
+                for arm in arms {
                     self.check_match_exhaustiveness_block(&arm.body);
                 }
-                if !self.match_is_exhaustive_with_context(&stmt.arms) {
+                if !self.match_is_exhaustive_with_context(value, arms) {
                     self.diagnostics.push(
                         Diagnostic::error(
                             code::NON_EXHAUSTIVE_MATCH,
                             "match statement is not exhaustive.",
-                            stmt.span.clone(),
+                            span.clone(),
                             "non-exhaustive match",
                         )
                         .with_cause(
@@ -700,31 +984,12 @@ impl Analyzer<'_> {
                     );
                 }
             }
-            Stmt::LetElse(stmt) => {
-                self.check_match_exhaustiveness_expr(&stmt.value);
-                self.check_match_exhaustiveness_block(&stmt.else_body);
-            }
-            Stmt::Expr(expr) => self.check_match_exhaustiveness_expr(expr),
-            Stmt::Break(_)
-            | Stmt::Continue(_)
-            | Stmt::MalformedWith(_)
-            | Stmt::MalformedIf(_)
-            | Stmt::MalformedLoop(_)
-            | Stmt::MalformedFor(_)
-            | Stmt::MalformedMatch(_)
-            | Stmt::Unknown(_) => {}
+            HirStmt::Expr(expr) => self.check_match_exhaustiveness_expr(expr),
+            HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
         }
     }
 
-    fn match_is_exhaustive_with_context(
-        &self,
-        arms: &[crate::syntax::ast::MatchArm],
-    ) -> bool {
-        // First check with standard Option/Result logic
-        if match_is_exhaustive(arms) {
-            return true;
-        }
-        // Then check if all variants of a sum type are covered
+    fn match_is_exhaustive_with_context(&self, value: &HirExpr, arms: &[HirMatchArm]) -> bool {
         let mut arm_names: HashSet<&str> = HashSet::new();
         for arm in arms {
             match &arm.pattern {
@@ -734,44 +999,60 @@ impl Analyzer<'_> {
                 }
             }
         }
-        // Check if arm names completely cover any declared sum type
-        for item in &self.syntax_program.items {
-            if let Item::SumType(sum) = item {
-                let variant_names: HashSet<&str> =
-                    sum.variants.iter().map(|v| v.name.as_str()).collect();
-                if !variant_names.is_empty() && variant_names.is_subset(&arm_names) {
-                    return true;
-                }
-            }
-        }
-        false
+        let Some(type_name) = hir_expr_type_name(value) else {
+            return builtin_match_is_exhaustive(&arm_names);
+        };
+        let root = self.resolve_type_alias(type_root_name(type_name));
+        let Some(variant_names) = self.match_variant_names_for_type(root) else {
+            return builtin_match_is_exhaustive(&arm_names);
+        };
+        !variant_names.is_empty() && variant_names.is_subset(&arm_names)
     }
 
-    fn check_match_exhaustiveness_expr(&mut self, expr: &Expr) {
+    fn match_variant_names_for_type(&self, root: &str) -> Option<HashSet<&str>> {
+        match root {
+            "Option" => return Some(HashSet::from(["Some", "None"])),
+            "Result" => return Some(HashSet::from(["Ok", "Err"])),
+            _ => {}
+        }
+        for item in &self.syntax_program.items {
+            if let Item::SumType(sum) = item
+                && sum.name == root
+            {
+                return Some(sum.variants.iter().map(|v| v.name.as_str()).collect());
+            }
+        }
+        None
+    }
+
+    fn check_match_exhaustiveness_expr(&mut self, expr: &HirExpr) {
         match expr {
-            Expr::Binary { left, right, .. } => {
+            HirExpr::Binary { left, right, .. } => {
                 self.check_match_exhaustiveness_expr(left);
                 self.check_match_exhaustiveness_expr(right);
             }
-            Expr::Field { base, .. } => self.check_match_exhaustiveness_expr(base),
-            Expr::Index { base, index, .. } => {
+            HirExpr::Field { base, .. } => self.check_match_exhaustiveness_expr(base),
+            HirExpr::Index { base, index, .. } => {
                 self.check_match_exhaustiveness_expr(base);
                 self.check_match_exhaustiveness_expr(index);
             }
-            Expr::Call { args, .. } => {
+            HirExpr::Call { args, .. } => {
                 for arg in args {
                     self.check_match_exhaustiveness_expr(&arg.value);
                 }
             }
-            Expr::Effect { value, .. }
-            | Expr::Manage { value, .. }
-            | Expr::Spawn { value, .. }
-            | Expr::Await { value, .. }
-            | Expr::Try { value, .. } => {
+            HirExpr::Effect { value, .. }
+            | HirExpr::Manage { value, .. }
+            | HirExpr::Spawn { value, .. }
+            | HirExpr::Await { value, .. }
+            | HirExpr::Try { value, .. } => {
                 self.check_match_exhaustiveness_expr(value);
             }
-            Expr::Closure { body, .. } => self.check_match_exhaustiveness_block(body),
-            Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+            HirExpr::Closure { body, .. } => self.check_match_exhaustiveness_block(body),
+            HirExpr::Ident { .. }
+            | HirExpr::Number { .. }
+            | HirExpr::String { .. }
+            | HirExpr::Unknown(_) => {}
         }
     }
 
@@ -1225,7 +1506,11 @@ impl Analyzer<'_> {
                         }
                     }
                 }
-                Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => {}
+                Item::Module(_)
+                | Item::Use(_)
+                | Item::SumType(_)
+                | Item::TypeAlias(_)
+                | Item::Const(_) => {}
             }
         }
     }
@@ -1257,7 +1542,11 @@ impl Analyzer<'_> {
                         self.check_protocol_bound(param, &protocol_names);
                     }
                 }
-                Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => {}
+                Item::Module(_)
+                | Item::Use(_)
+                | Item::SumType(_)
+                | Item::TypeAlias(_)
+                | Item::Const(_) => {}
             }
         }
 
@@ -1384,7 +1673,11 @@ impl Analyzer<'_> {
                         self.check_unknown_type_ref(return_ty, &generic_params);
                     }
                 }
-                Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => {}
+                Item::Module(_)
+                | Item::Use(_)
+                | Item::SumType(_)
+                | Item::TypeAlias(_)
+                | Item::Const(_) => {}
             }
         }
     }
@@ -1978,7 +2271,11 @@ impl Analyzer<'_> {
                         }
                     }
                 }
-                Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => {}
+                Item::Module(_)
+                | Item::Use(_)
+                | Item::SumType(_)
+                | Item::TypeAlias(_)
+                | Item::Const(_) => {}
             }
         }
     }
@@ -2035,7 +2332,11 @@ impl Analyzer<'_> {
                     }
                     self.check_resource_pool_calls_in_block(&function.body);
                 }
-                Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => {}
+                Item::Module(_)
+                | Item::Use(_)
+                | Item::SumType(_)
+                | Item::TypeAlias(_)
+                | Item::Const(_) => {}
             }
         }
     }
@@ -2067,7 +2368,11 @@ impl Analyzer<'_> {
                     }
                     self.check_resource_generic_calls_in_block(&function.body);
                 }
-                Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => {}
+                Item::Module(_)
+                | Item::Use(_)
+                | Item::SumType(_)
+                | Item::TypeAlias(_)
+                | Item::Const(_) => {}
             }
         }
     }
@@ -2968,18 +3273,48 @@ fn function_has_effect(function: &crate::syntax::ast::FunctionDecl, effect_name:
         .any(|effect| matches!(effect, EffectDecl::Name(name) if name == effect_name))
 }
 
-fn match_is_exhaustive(arms: &[crate::syntax::ast::MatchArm]) -> bool {
-    let mut variants = HashSet::new();
-    for arm in arms {
-        match &arm.pattern {
-            MatchPattern::Wildcard(_) => return true,
-            MatchPattern::Variant { name, .. } => {
-                variants.insert(name.as_str());
-            }
-        }
-    }
+fn builtin_match_is_exhaustive(variants: &HashSet<&str>) -> bool {
     (variants.contains("Some") && variants.contains("None"))
         || (variants.contains("Ok") && variants.contains("Err"))
+}
+
+fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
+    match expr {
+        HirExpr::Ident {
+            name, type_name, ..
+        } => type_name
+            .as_deref()
+            .or_else(|| builtin_value_type_name(name)),
+        HirExpr::Call { type_name, .. }
+        | HirExpr::Effect { type_name, .. }
+        | HirExpr::Manage { type_name, .. }
+        | HirExpr::Spawn { type_name, .. }
+        | HirExpr::Await { type_name, .. }
+        | HirExpr::Try { type_name, .. } => type_name.as_deref(),
+        HirExpr::Field { access, .. } => access.type_name.as_deref(),
+        HirExpr::Number { .. } => Some("Int"),
+        HirExpr::String { .. } => Some("String"),
+        HirExpr::Binary { .. } | HirExpr::Index { .. } => None,
+        HirExpr::Closure { .. } | HirExpr::Unknown(_) => None,
+    }
+}
+
+fn builtin_value_type_name(name: &str) -> Option<&'static str> {
+    match name {
+        "true" | "false" => Some("Bool"),
+        "Unit" => Some("Unit"),
+        _ => None,
+    }
+}
+
+fn type_root_name(type_name: &str) -> &str {
+    let type_name = type_name
+        .trim()
+        .strip_prefix("fresh ")
+        .unwrap_or(type_name.trim());
+    type_name
+        .split_once('<')
+        .map_or(type_name, |(root, _)| root)
 }
 
 fn callee_display(callee: &Callee) -> String {

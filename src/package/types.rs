@@ -14,6 +14,7 @@ pub struct PackageReview {
     pub reasons: Vec<String>,
     pub features: Vec<String>,
     pub implements: Vec<PackageProviderImplementation>,
+    pub dependencies: Vec<PackageReviewDependency>,
     pub summary: PackageReviewSummary,
     pub files: Vec<PackageReviewFile>,
     pub exports: Vec<PackageReviewExport>,
@@ -40,12 +41,26 @@ pub struct PackageMetadataReport {
     pub package: PackageIdentity,
     pub package_dir: String,
     pub metadata_path: String,
+    pub reir_path: String,
     pub dry_run: bool,
     pub written: bool,
+    pub verified: bool,
     pub ok: bool,
     pub risk: PackageRisk,
     pub reasons: Vec<String>,
+    pub mismatches: Vec<PackageMetadataMismatch>,
     pub metadata: PackageReviewMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageMetadataMismatch {
+    pub artifact: String,
+    pub path: String,
+    pub kind: String,
+    pub message: String,
+    pub expected_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -56,6 +71,7 @@ pub struct PackageReviewMetadata {
     pub reasons: Vec<String>,
     pub features: Vec<String>,
     pub implements: Vec<PackageProviderImplementation>,
+    pub dependencies: Vec<PackageReviewDependency>,
     pub summary: PackageReviewSummary,
     pub files: Vec<PackageReviewFile>,
     pub exports: Vec<PackageReviewExport>,
@@ -136,13 +152,31 @@ pub struct PackageRegistryIndexEntry {
     pub version: String,
     pub checksum: String,
     pub interface_hash: String,
+    pub effective_interface_hash_default: String,
     pub review_hash: String,
+    pub review_schema: String,
     pub native_hash: Option<String>,
     pub risk: PackageRisk,
     pub native: bool,
-    #[serde(rename = "unsafe")]
+    #[serde(rename = "unsafe_apis")]
     pub unsafe_boundary: bool,
     pub dependencies: BTreeMap<String, String>,
+    pub features: BTreeMap<String, Vec<String>>,
+    pub footprint_default: PackageRegistryFootprint,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageRegistryFootprint {
+    pub direct_dependencies: usize,
+    pub total_packages: usize,
+    pub path_dependencies: usize,
+    pub unresolved_dependencies: usize,
+    pub native: bool,
+    pub native_packages: usize,
+    pub build_time_execution: bool,
+    pub build_execution_packages: usize,
+    pub high_risk_packages: usize,
+    pub unknown_facts: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -158,6 +192,18 @@ pub struct PackagePublishCheck {
     pub ok: bool,
     pub risk: PackageRisk,
     pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageReviewDependency {
+    pub name: String,
+    pub requirement: Option<String>,
+    pub source: String,
+    pub features: Vec<String>,
+    pub dependency_kind: PackageDependencyKind,
+    pub compile_only: bool,
+    pub test_only: bool,
+    pub platform_provided: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -222,7 +268,7 @@ pub struct PackageTreeNode {
     pub dependencies: Vec<PackageTreeNode>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageDependencyKind {
     Root,
@@ -363,6 +409,9 @@ pub struct PackageReviewSummary {
     pub dev_dependencies: usize,
     pub package_features: usize,
     pub public_types: usize,
+    pub public_sum_types: usize,
+    pub public_type_aliases: usize,
+    pub public_consts: usize,
     pub public_functions: usize,
     pub public_apis: usize,
     pub mutating_apis: usize,

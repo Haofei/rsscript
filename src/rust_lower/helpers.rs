@@ -503,7 +503,10 @@ pub(super) fn expr_has_await(expr: &Expr) -> bool {
 }
 
 pub(super) fn block_has_task_group(block: &Block) -> bool {
-    block.statements.iter().any(|s| matches!(s, Stmt::TaskGroup(_)))
+    block
+        .statements
+        .iter()
+        .any(|s| matches!(s, Stmt::TaskGroup(_)))
 }
 
 pub(super) fn collect_mutated_bindings_from_block(block: &Block, names: &mut BTreeSet<String>) {
@@ -1230,7 +1233,12 @@ pub(super) fn cargo_package_name(name: &str) -> String {
 pub(super) fn rust_package_main(program: &Program, package_name: &str) -> Option<String> {
     let main = program.items.iter().find_map(|item| match item {
         Item::Function(function) => runnable_main_kind(function).map(|kind| (function, kind)),
-        Item::Type(_) | Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => None,
+        Item::Type(_)
+        | Item::Module(_)
+        | Item::Use(_)
+        | Item::SumType(_)
+        | Item::TypeAlias(_)
+        | Item::Const(_) => None,
     })?;
     let (main, kind) = main;
     let crate_name = cargo_crate_name(package_name);

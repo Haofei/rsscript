@@ -53,10 +53,7 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         "core/encoding/encoding.rssi",
         include_str!("../core/encoding/encoding.rssi"),
     ),
-    (
-        "core/env/env.rssi",
-        include_str!("../core/env/env.rssi"),
-    ),
+    ("core/env/env.rssi", include_str!("../core/env/env.rssi")),
     (
         "core/fs/directory.rssi",
         include_str!("../core/fs/directory.rssi"),

@@ -619,7 +619,11 @@ impl Hir {
                 Item::Type(type_decl) => {
                     self.insert_builtin_type(type_info_from_decl(type_decl));
                 }
-                Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => {}
+                Item::Module(_)
+                | Item::Use(_)
+                | Item::SumType(_)
+                | Item::TypeAlias(_)
+                | Item::Const(_) => {}
             }
         }
     }
@@ -642,7 +646,11 @@ impl Hir {
             match item {
                 Item::Function(function) => collect_function_body_facts(self, function, &mut facts),
                 Item::Type(type_decl) => collect_type_feature_uses(type_decl, &mut facts),
-                Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => {}
+                Item::Module(_)
+                | Item::Use(_)
+                | Item::SumType(_)
+                | Item::TypeAlias(_)
+                | Item::Const(_) => {}
             }
         }
 
@@ -833,8 +841,9 @@ fn lower_hir_stmts(
     match statement {
         Stmt::LetElse(stmt) => {
             let value_type_name = infer_hir_expr_type(hir, &stmt.value, value_types);
-            let binding_type_name = match_pattern_binding_type(&stmt.pattern, value_type_name.as_deref())
-                .map(|(_, type_name)| type_name);
+            let binding_type_name =
+                match_pattern_binding_type(&stmt.pattern, value_type_name.as_deref())
+                    .map(|(_, type_name)| type_name);
             let mut statements = vec![HirStmt::Match {
                 value: lower_hir_expr(hir, function_name, &stmt.value, value_types),
                 arms: vec![
@@ -1376,10 +1385,17 @@ fn collect_body_facts_in_stmt(
         Stmt::LetElse(stmt) => {
             collect_body_facts_in_expr(hir, function_name, &stmt.value, value_types, facts);
             let mut else_types = value_types.clone();
-            collect_body_facts_in_block(hir, function_name, &stmt.else_body, &mut else_types, facts);
-            if let Some((binding, type_name)) =
-                match_pattern_binding_type(&stmt.pattern, infer_hir_expr_type(hir, &stmt.value, value_types).as_deref())
-            {
+            collect_body_facts_in_block(
+                hir,
+                function_name,
+                &stmt.else_body,
+                &mut else_types,
+                facts,
+            );
+            if let Some((binding, type_name)) = match_pattern_binding_type(
+                &stmt.pattern,
+                infer_hir_expr_type(hir, &stmt.value, value_types).as_deref(),
+            ) {
                 facts.bindings.push(HirBinding {
                     function_name: function_name.to_string(),
                     name: binding.clone(),

@@ -414,7 +414,7 @@ fn should_skip_archive_entry(root: &Path, path: &Path, name: &str) -> bool {
     matches!(
         relative.as_str(),
         "review/package-review.json" | "vendor/rss-vendor.json"
-    )
+    ) || relative.starts_with("review/reir/")
 }
 
 fn package_archive_file(root: &Path, path: &Path) -> Result<PackageArchiveFile, String> {
@@ -512,7 +512,7 @@ fn package_review_hash(review: &PackageReview) -> String {
         input.push('\n');
     }
     input.push_str(&format!(
-        "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}\n",
+        "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}\n",
         review.summary.interface_files,
         review.summary.source_files,
         review.summary.diagnostics,
@@ -521,6 +521,9 @@ fn package_review_hash(review: &PackageReview) -> String {
         review.summary.dev_dependencies,
         review.summary.package_features,
         review.summary.public_types,
+        review.summary.public_sum_types,
+        review.summary.public_type_aliases,
+        review.summary.public_consts,
         review.summary.public_functions,
         review.summary.public_apis,
         review.summary.mutating_apis,

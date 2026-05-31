@@ -45,6 +45,8 @@ pub struct ReviewFix {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReviewMap {
     pub summary: ReviewMapSummary,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modules: Vec<ReviewMapModule>,
     pub files: Vec<ReviewMapFile>,
 }
 
@@ -103,6 +105,21 @@ pub struct ReviewMapFile {
     pub risk: ReviewMapFileRisk,
     pub reasons: Vec<String>,
     pub regions: Vec<ReviewMapRegion>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReviewMapModule {
+    pub file: String,
+    pub module_path: String,
+    pub line: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uses: Vec<ReviewMapUse>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReviewMapUse {
+    pub path: String,
+    pub line: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -311,19 +328,14 @@ pub fn review_sources(
                 None,
                 Some(format!("sum {name}")),
             )),
-            (Some(old), Some(new)) if old.variant_names != new.variant_names => {
+            (Some(old), Some(new)) if old.variants != new.variants => {
                 findings.push(review_finding(
                     code::REVIEW_SUM_TYPE_CHANGED,
                     ReviewRisk::Api,
                     format!("sum type `{name}` variants changed."),
-                    paired_spans(
-                        &old.span,
-                        &new.span,
-                        "old sum type",
-                        "new sum type",
-                    ),
-                    Some(format!("variants: {}", old.variant_names.join(", "))),
-                    Some(format!("variants: {}", new.variant_names.join(", "))),
+                    paired_spans(&old.span, &new.span, "old sum type", "new sum type"),
+                    Some(format!("variants: {}", old.variants.join(", "))),
+                    Some(format!("variants: {}", new.variants.join(", "))),
                 ));
             }
             _ => {}
@@ -483,6 +495,7 @@ pub(crate) fn review_map_sources_with_interfaces(
 
     ReviewMap {
         summary: review_map_summary(&files),
+        modules: review_map_modules(&parsed_sources),
         files,
     }
 }
@@ -564,6 +577,35 @@ fn review_map_summary(files: &[ReviewMapFile]) -> ReviewMapSummary {
     summary
 }
 
+fn review_map_modules(sources: &[ReviewMapParsedSource]) -> Vec<ReviewMapModule> {
+    let mut modules = Vec::new();
+    for source in sources {
+        let uses = source
+            .program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Use(use_decl) => Some(ReviewMapUse {
+                    path: use_decl.path.join("."),
+                    line: use_decl.span.line,
+                }),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for item in &source.program.items {
+            if let Item::Module(module) = item {
+                modules.push(ReviewMapModule {
+                    file: source.file.clone(),
+                    module_path: module.path.join("."),
+                    line: module.span.line,
+                    uses: uses.clone(),
+                });
+            }
+        }
+    }
+    modules
+}
+
 #[derive(Debug, Clone)]
 struct ReviewMapParsedSource {
     file: String,
@@ -581,7 +623,12 @@ fn review_map_file_region_drafts(
         .iter()
         .filter_map(|item| match item {
             Item::Function(function) => Some((function.name.clone(), function.span.line)),
-            Item::Type(_) | Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => None,
+            Item::Type(_)
+            | Item::Module(_)
+            | Item::Use(_)
+            | Item::SumType(_)
+            | Item::TypeAlias(_)
+            | Item::Const(_) => None,
         })
         .collect::<Vec<_>>();
     function_lines.sort_by_key(|(_, line)| *line);
@@ -598,7 +645,12 @@ fn review_map_file_region_drafts(
                 &function_lines,
                 source.total_lines,
             )),
-            Item::Type(_) | Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => None,
+            Item::Type(_)
+            | Item::Module(_)
+            | Item::Use(_)
+            | Item::SumType(_)
+            | Item::TypeAlias(_)
+            | Item::Const(_) => None,
         })
         .collect()
 }
@@ -2116,14 +2168,12 @@ fn review_fixes(code: &str) -> Vec<ReviewFix> {
             "review_sum_type",
             "Review the changed sum type variants and update all match sites.",
         ),
-        code::REVIEW_CONST_CHANGED => (
-            "review_const",
-            "Review the changed constant value or type.",
-        ),
-        code::REVIEW_TYPE_ALIAS_CHANGED => (
-            "review_type_alias",
-            "Review the changed type alias target.",
-        ),
+        code::REVIEW_CONST_CHANGED => {
+            ("review_const", "Review the changed constant value or type.")
+        }
+        code::REVIEW_TYPE_ALIAS_CHANGED => {
+            ("review_type_alias", "Review the changed type alias target.")
+        }
         _ => ("review_change", "Review this source-level contract change."),
     };
     vec![ReviewFix {
@@ -2199,7 +2249,12 @@ fn collect_type_sigs(items: &[Item]) -> BTreeMap<String, TypeSig> {
         .iter()
         .filter_map(|item| match item {
             Item::Type(type_decl) => Some((type_decl.name.clone(), type_sig(type_decl))),
-            Item::Function(_) | Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => None,
+            Item::Function(_)
+            | Item::Module(_)
+            | Item::Use(_)
+            | Item::SumType(_)
+            | Item::TypeAlias(_)
+            | Item::Const(_) => None,
         })
         .collect()
 }
@@ -2257,14 +2312,19 @@ fn collect_function_sigs(items: &[Item]) -> BTreeMap<String, FunctionSig> {
         .iter()
         .filter_map(|item| match item {
             Item::Function(function) => Some((function.name.clone(), function_sig(function))),
-            Item::Type(_) | Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => None,
+            Item::Type(_)
+            | Item::Module(_)
+            | Item::Use(_)
+            | Item::SumType(_)
+            | Item::TypeAlias(_)
+            | Item::Const(_) => None,
         })
         .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SumTypeSig {
-    variant_names: Vec<String>,
+    variants: Vec<String>,
     span: Span,
 }
 
@@ -2287,13 +2347,46 @@ fn collect_sum_type_sigs(items: &[Item]) -> BTreeMap<String, SumTypeSig> {
             Item::SumType(sum) => Some((
                 sum.name.clone(),
                 SumTypeSig {
-                    variant_names: sum.variants.iter().map(|v| v.name.clone()).collect(),
+                    variants: sum_variant_contracts(sum),
                     span: sum.span.clone(),
                 },
             )),
             _ => None,
         })
         .collect()
+}
+
+fn sum_variant_contracts(sum: &crate::syntax::ast::SumTypeDecl) -> Vec<String> {
+    sum.variants
+        .iter()
+        .map(|variant| {
+            if variant.fields.is_empty() {
+                variant.name.clone()
+            } else {
+                format!(
+                    "{}({})",
+                    variant.name,
+                    variant
+                        .fields
+                        .iter()
+                        .map(field_contract)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
+        })
+        .collect()
+}
+
+fn field_contract(field: &FieldDecl) -> String {
+    let type_name = type_name(&field.ty);
+    if field.is_weak {
+        format!("{}: weak {type_name}", field.name)
+    } else if field.is_handle {
+        format!("{}: handle {type_name}", field.name)
+    } else {
+        format!("{}: {type_name}", field.name)
+    }
 }
 
 fn collect_const_sigs(items: &[Item]) -> BTreeMap<String, ConstSig> {

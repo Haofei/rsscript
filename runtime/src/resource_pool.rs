@@ -669,6 +669,13 @@ mod tests {
         assert_eq!(path, "/users");
         assert_eq!(crate::response_status(&response), 200);
         assert_eq!(crate::response_body(&response), "handled /users");
+        assert_eq!(crate::http_response_status(&response), 200);
+        assert_eq!(crate::http_response_text(&response), "handled /users");
+        assert!(crate::http_response_is_success(&response));
+
+        let error = crate::http_get("https://example.test")
+            .expect_err("safe runtime should not provide ambient network");
+        assert!(crate::http_error_message(&error).contains("not configured"));
     }
 
     #[test]

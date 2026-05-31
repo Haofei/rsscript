@@ -19,6 +19,7 @@ mod resource_pool;
 mod string_helpers;
 mod tempdir;
 
+pub use self::regex::*;
 pub use asserts::*;
 pub use async_runtime::*;
 pub use clock::*;
@@ -33,7 +34,6 @@ pub use hash::*;
 pub use managed::*;
 pub use process::*;
 pub use random::*;
-pub use self::regex::*;
 pub use resource_pool::*;
 pub use string_helpers::*;
 pub use tempdir::*;

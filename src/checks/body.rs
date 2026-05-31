@@ -21,7 +21,12 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
         .iter()
         .filter_map(|item| match item {
             Item::Function(function) => Some(function.clone()),
-            Item::Type(_) | Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => None,
+            Item::Type(_)
+            | Item::Module(_)
+            | Item::Use(_)
+            | Item::SumType(_)
+            | Item::TypeAlias(_)
+            | Item::Const(_) => None,
         })
         .collect();
 
@@ -126,7 +131,12 @@ fn check_block(
     let live_after_statements = block_live_after_statements(block, continuation_uses);
     for (index, statement) in block.statements.iter().enumerate() {
         // Track async let names so await checks can recognize pending bindings
-        if let HirStmt::Let { is_async: true, name, .. } = statement {
+        if let HirStmt::Let {
+            is_async: true,
+            name,
+            ..
+        } = statement
+        {
             analyzer.async_let_names.push(name.clone());
         }
         let live_after = live_after_statements
@@ -293,7 +303,11 @@ fn check_stmt_semantics(
 ) -> Flow {
     match statement {
         HirStmt::Let {
-            kind, value, is_async, span, ..
+            kind,
+            value,
+            is_async,
+            span,
+            ..
         } => {
             let mut merged_entry_state;
             let stmt_state = if let Some(entry_state) = local_analysis.flow_entry_state(span) {
@@ -312,7 +326,13 @@ fn check_stmt_semantics(
                 if *is_async {
                     // async let consumes the async call (produces a pending)
                     check_expr_semantics_with_context(
-                        analyzer, local_analysis, value, stmt_state, false, true, live_after,
+                        analyzer,
+                        local_analysis,
+                        value,
+                        stmt_state,
+                        false,
+                        true,
+                        live_after,
                     );
                 } else {
                     check_expr_semantics(analyzer, local_analysis, value, stmt_state, live_after);
@@ -636,14 +656,14 @@ fn check_match_scrutinee_type(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
     analyzer.diagnostics.push(
         Diagnostic::error(
             code::CONTROL_FLOW_TYPE_MISMATCH,
-            format!("match scrutinee has type `{type_name}`, expected `Option<T>` or `Result<T, E>`."),
+            format!("match scrutinee has type `{type_name}`, expected `Option<T>`, `Result<T, E>`, or a declared sum type."),
             hir_expr_span(expr).clone(),
             "control-flow type mismatch",
         )
-        .with_cause("RSScript v0.5 `match` is limited to review-visible `Option` and `Result` variant handling.")
+        .with_cause("RSScript v0.5 `match` is limited to review-visible `Option`, `Result`, and declared sum type variant handling.")
         .with_fix(
             "match_option_or_result",
-            "Match an `Option<T>` or `Result<T, E>` value, or rewrite this branch as `if`.",
+            "Match an `Option<T>`, `Result<T, E>`, or declared sum value; otherwise rewrite this branch as `if`.",
             "manual",
         ),
     );
@@ -699,15 +719,10 @@ fn check_match_patterns_match_scrutinee(
                 span.clone(),
                 "match variant type mismatch",
             )
-            .with_cause(
-                "RSScript match patterns must belong to the scrutinee's type.",
-            )
+            .with_cause("RSScript match patterns must belong to the scrutinee's type.")
             .with_fix(
                 "match_matching_variant_family",
-                format!(
-                    "Use variants of `{root}`: {}.",
-                    allowed_variants.join(", ")
-                ),
+                format!("Use variants of `{root}`: {}.", allowed_variants.join(", ")),
                 "manual",
             ),
         );

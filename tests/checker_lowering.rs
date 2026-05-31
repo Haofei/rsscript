@@ -1043,6 +1043,84 @@ fn main() -> Result<Unit, String> {
 }
 
 #[test]
+fn rust_lowering_maps_stdlib_facade_calls_to_runtime_hooks() {
+    let source = r#"
+features: native, local
+
+fn inspect_file(path: read Path, bytes: read Bytes) -> Result<String, FileError> {
+    let exists = Directory.exists(path: read path)
+    let metadata = Directory.metadata(path: read path)?
+    let length = metadata_len(metadata: read metadata)
+    let text = Directory.read_string(path: read path)?
+    Directory.write_string(path: read path, content: read text)?
+    let file_hash = Hash.sha256_file(path: read path)?
+    let byte_hash = Hash.sha256_bytes(value: read bytes)
+    let current = Env.current_dir()?
+    Env.set_current_dir(path: read current)?
+    let configured = Env.get_or_default(name: read "RSS_MODE", default: read "dev")
+    let now = Clock.now()
+    let elapsed = Instant.elapsed(start: read now)
+    let millis = Duration.as_ms(value: read elapsed)
+    return Ok(file_hash)
+}
+
+fn metadata_len(metadata: read FileMetadata) -> Int {
+    return metadata.len
+}
+
+fn compile_match(pattern: read String, value: read String) -> Result<Bool, RegexError> {
+    let regex = Regex.compile(pattern: read pattern)?
+    let found = Regex.find(regex: read regex, value: read value)
+    let captures = Regex.captures(regex: read regex, value: read value)
+    let replaced = Regex.replace_all(regex: read regex, value: read value, replacement: read "x")
+    let parts = Regex.split(regex: read regex, value: read value)
+    return Ok(Regex.is_match(regex: read regex, value: read value))
+}
+
+fn temp_path(parent: read Path) -> Result<fresh Path, FileError> {
+    with TempDir.new_in(parent: read parent)? as dir {
+        return Ok(TempDir.path(dir: read dir))
+    }
+}
+
+fn fetch_status(url: read Url) -> Result<Int, HttpError> {
+    let response = Http.get(url: read url)?
+    let ok = HttpResponse.is_success(response: read response)
+    let body = HttpResponse.text(response: read response)
+    return Ok(HttpResponse.status(response: read response))
+}
+"#;
+    let rust = lower_source_to_rust("stdlib-facades.rss", source).expect("source should lower");
+
+    assert!(rust.contains("metadata: &rsscript_runtime::FileMetadata"));
+    assert!(rust.contains("let exists = rsscript_runtime::directory_exists(&path);"));
+    assert!(rust.contains("let metadata = rsscript_runtime::directory_metadata(&path)?;"));
+    assert!(rust.contains("rsscript_runtime::directory_write_string(&path, &text)?;"));
+    assert!(rust.contains("let file_hash = rsscript_runtime::hash_sha256_file(&path)?;"));
+    assert!(rust.contains("let byte_hash = rsscript_runtime::hash_sha256_bytes(&bytes);"));
+    assert!(rust.contains("let current = rsscript_runtime::env_current_dir()?;"));
+    assert!(rust.contains("rsscript_runtime::env_set_current_dir(&current)?;"));
+    assert!(rust.contains("let configured = rsscript_runtime::env_get_or_default"));
+    assert!(rust.contains("let now = rsscript_runtime::clock_now();"));
+    assert!(rust.contains("let elapsed = rsscript_runtime::instant_elapsed(&now);"));
+    assert!(rust.contains("let millis = rsscript_runtime::duration_as_ms(&elapsed);"));
+    assert!(rust.contains("-> Result<bool, rsscript_runtime::RegexError>"));
+    assert!(rust.contains("let regex = rsscript_runtime::regex_compile(&pattern)?;"));
+    assert!(rust.contains("let found = rsscript_runtime::regex_find(&regex, &value);"));
+    assert!(rust.contains("let captures = rsscript_runtime::regex_captures(&regex, &value);"));
+    assert!(rust.contains("let replaced = rsscript_runtime::regex_replace_all"));
+    assert!(rust.contains("let parts = rsscript_runtime::regex_split(&regex, &value);"));
+    assert!(rust.contains("rsscript_runtime::regex_is_match(&regex, &value)"));
+    assert!(rust.contains("let mut dir = rsscript_runtime::tempdir_new_in(&parent)?;"));
+    assert!(rust.contains("rsscript_runtime::tempdir_path(&dir)"));
+    assert!(rust.contains("-> Result<i64, rsscript_runtime::HttpError>"));
+    assert!(rust.contains("let response = rsscript_runtime::http_get(&url)?;"));
+    assert!(rust.contains("let ok = rsscript_runtime::http_response_is_success(&response);"));
+    assert!(rust.contains("let body = rsscript_runtime::http_response_text(&response);"));
+    assert!(rust.contains("return Ok(rsscript_runtime::http_response_status(&response));"));
+}
+
+#[test]
 fn rust_lowering_maps_int_add_to_rust_std_expression() {
     let source = r#"
 fn main() -> Unit {
@@ -1327,9 +1405,22 @@ pub fn run() -> Unit {
     Log.write(message: read "core")
 }
 "#;
-    let lowered = lower_source_to_rust_with_map("native.rss", source).expect("source should lower");
-    let native_calls = lowered
-        .source_map
+    let package = lower_sources_to_rust_package_with_options(
+        &[("native.rss".to_string(), source.to_string())],
+        "Native Example.rss",
+        "/workspace/rsscript/runtime",
+        &[],
+        &[NativeRustDependency {
+            crate_name: "host_native".to_string(),
+            path: "/workspace/host-native".to_string(),
+            cargo_features: Vec::new(),
+            bindings: BTreeMap::from([("host_emit".to_string(), "host_native::emit".to_string())]),
+        }],
+    )
+    .expect("source should lower with native binding");
+    let source_map: Vec<rsscript::RustSourceMapEntry> =
+        serde_json::from_str(&package.source_map_json).expect("source map should parse");
+    let native_calls = source_map
         .iter()
         .filter(|entry| entry.kind == "native_call")
         .collect::<Vec<_>>();
@@ -1337,6 +1428,11 @@ pub fn run() -> Unit {
     assert_eq!(native_calls.len(), 2);
     assert!(native_calls.iter().any(|entry| entry.source.line == 8));
     assert!(native_calls.iter().any(|entry| entry.source.line == 9));
+    assert!(
+        package
+            .lib_rs
+            .contains("host_native::emit(&\"host\".to_string());")
+    );
 }
 
 #[test]
@@ -3279,7 +3375,12 @@ fn syntax_parser_accepts_all_fixtures() {
             assert!(
                 program.items.iter().any(|item| match item {
                     Item::Function(function) => !function.body.statements.is_empty(),
-                    Item::Type(_) | Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => false,
+                    Item::Type(_)
+                    | Item::Module(_)
+                    | Item::Use(_)
+                    | Item::SumType(_)
+                    | Item::TypeAlias(_)
+                    | Item::Const(_) => false,
                 }),
                 "{} missing function body statements",
                 path.display()
@@ -4292,6 +4393,51 @@ impl Writer for BufferWriter {
 }
 
 #[test]
+fn checker_requires_protocol_call_receiver_to_satisfy_protocol() {
+    let source = r#"
+protocol Writer {
+    fn write(
+        self: mut Self,
+        message: read String,
+    ) -> Unit
+        effects(retains(message))
+}
+
+struct BufferWriter
+
+fn write_concrete(
+    writer: mut BufferWriter,
+    message: read String,
+) -> Unit {
+    Writer.write(self: mut writer, message: read message)
+}
+
+fn write_generic<W>(
+    writer: mut W,
+    message: read String,
+) -> Unit {
+    Writer.write(self: mut writer, message: read message)
+}
+"#;
+    let diagnostics = analyze_source("protocol-call-satisfaction.rss", source);
+    let protocol_errors = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "RS0032")
+        .collect::<Vec<_>>();
+    assert_eq!(protocol_errors.len(), 2, "{diagnostics:#?}");
+    assert!(protocol_errors.iter().any(|diagnostic| {
+        diagnostic
+            .summary
+            .contains("receiver type `BufferWriter` does not satisfy protocol `Writer`")
+    }));
+    assert!(protocol_errors.iter().any(|diagnostic| {
+        diagnostic
+            .summary
+            .contains("receiver type `W` does not satisfy protocol `Writer`")
+    }));
+}
+
+#[test]
 fn parser_expands_native_module_declarations_to_native_functions() {
     let source = r#"
 features: native
@@ -4467,8 +4613,7 @@ async fn load(id: read Int) -> Result<String, NetworkError> {
     return Ok("done")
 }
 "#;
-    let lowered =
-        lower_source_to_rust("task-group.rss", source).expect("task_group should lower");
+    let lowered = lower_source_to_rust("task-group.rss", source).expect("task_group should lower");
     assert!(
         lowered.contains("__rsscript_pending_user"),
         "async let should produce pending variable, got:\n{lowered}"

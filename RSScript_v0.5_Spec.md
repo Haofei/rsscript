@@ -321,7 +321,7 @@ The following may be parsed and surfaced for review but are not executable lower
 ```text
 spawn
 future task runtime
-full user-defined enum system beyond standard Option/Result-like variants
+Rust-style open enum machinery beyond sealed RSScript sum types
 general user FFI
 advanced protocol/dynamic dispatch model
 ```
@@ -724,13 +724,15 @@ resource opened in the body drops at the end of each iteration. `break` and
 match <value> { <arm> => { ... } ... }
 ```
 
-In v0.5, `match` is over the standard `Option<T>` and `Result<T, E>` variant
-shapes only. The scrutinee must have type `Option<T>` or `Result<T, E>`.
-Arm variants must match the scrutinee family: `Option<T>` arms may use
-`Some`/`None`, and `Result<T, E>` arms may use `Ok`/`Err`. Mixing those variant
-families is a diagnostic before lowering, not a Rust backend error. It must be
-exhaustive: it covers `Some`/`None`, `Ok`/`Err`, or includes `_`; a
-non-exhaustive match is a diagnostic before lowering. Arm rules:
+In v0.5, `match` is over the standard `Option<T>` / `Result<T, E>` variant
+shapes and declared RSScript `sum` types. The scrutinee must have type
+`Option<T>`, `Result<T, E>`, or a declared sum type. Arm variants must match the
+scrutinee family: `Option<T>` arms may use `Some`/`None`, `Result<T, E>` arms may
+use `Ok`/`Err`, and sum-type arms use that sum's declared variants. Mixing
+variant families is a diagnostic before lowering, not a Rust backend error. It
+must be exhaustive: it covers `Some`/`None`, `Ok`/`Err`, every declared sum
+variant, or includes `_`; a non-exhaustive match is a diagnostic before lowering.
+Arm rules:
 
 ```text
 - payload variants may bind the payload (`Some(value)`, `Ok(value)`) or ignore it
@@ -1027,6 +1029,9 @@ How the checker knows it is "inside a trusted native/resource internal" for the
 implementations (e.g. `File`); the exemption applies there, and `Fd` is not a
 permitted public-API parameter type in ordinary managed/local code. A future
 version may formalize this with a capability rather than a type convention.
+`OS.close(fd: Fd)` is part of this trusted cleanup surface; package review may
+record it as native/public contract evidence, but it does not by itself imply a
+filesystem read/write capability.
 
 Everything else is non-Copy: managed handles, weak handles, resources,
 containers (`List`, `Map`, `Set`), `String`, `Bytes`, `Buffer`, generic type
@@ -2210,11 +2215,13 @@ fn load(path: read Path) -> Result<Image, ImageError>
 function kind in v0.5.
 
 `features: async` permits declaring `async fn` signatures and writing executable
-async bodies that use direct `await`.
+async bodies that use direct `await`. It also permits the v0.5 structured
+`task_group { ... }` form with `async let` bindings; the group is isolate-local
+and exists only to make concurrent suspension boundaries explicit.
 
-In executable code, a call to an `async fn` must be consumed by `await`. The
-source language does not expose future/task values, so `await` must directly
-consume an async call, optionally through the ordinary `?` error boundary:
+In executable code, a call to an `async fn` must be consumed by `await`. Outside
+a `task_group`, `await` directly consumes an async call, optionally through the
+ordinary `?` error boundary:
 
 ```rust
 async fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
@@ -2233,6 +2240,24 @@ but `suspends` is not a user-authored effect in v0.5.
 `await` may appear only inside an `async fn` body. It does not become valid inside
 ordinary inline closures nested in an async function; those closures have their
 own non-async frame unless a future async-closure syntax is admitted.
+
+Inside `task_group { ... }`, `async let` starts an isolate-local child operation
+whose handle is lexical to the group. The handle must be consumed by `await`
+inside the group; it is not a public `Future`, is not `Send`, and cannot escape
+as a task value. This is structured async, not unstructured spawning:
+
+```rust
+async fn load_user_data(id: read Int) -> Result<String, NetworkError> {
+    task_group {
+        async let user = fetch_user(id: read id)
+        async let profile = fetch_profile(id: read id)
+
+        let user_value = await user?
+        let profile_value = await profile?
+    }
+    return Ok("done")
+}
+```
 
 RSScript async must not expose Rust's `Future`, `Pin`, `Poll`, `Waker`, executor
 internals, or lifetime-across-await machinery to RSScript users.
@@ -2253,11 +2278,15 @@ RSScript source features.
 
 Package review metadata records each `await` site with its callee, source span,
 and `live_across_await` name set so reviewers can see which values are carried
-through a suspension boundary.
+through a suspension boundary. For `task_group` handles, review metadata
+resolves `await handle` back to the `async let handle = callee(...)`
+initializer so the package review and REIR `async_boundary` fact still name the
+concrete awaited callee rather than only the lexical handle name.
 
-`spawn` is not executable in v0.5. Future `spawn`/TaskGroup support must lower to
-an isolate-local structured task primitive; it must not imply `Send`, shared heap
-transfer, or multi-threaded execution.
+`spawn` is not executable in v0.5. Future unstructured task support must lower to
+an isolate-local primitive or an explicit cross-isolate message API; it must not
+imply `Send`, shared heap transfer, or multi-threaded execution. Streams,
+channels, async closures, and public task handles remain post-v0.5 design work.
 
 ### 14.5 Generics
 
@@ -2352,7 +2381,7 @@ A `protocol` is an app-layer capability contract, not a general trait system.
 The v0.5 MVP supports the static contract surface: protocol declarations,
 protocol method signatures, protocol generic bounds, and explicit
 `Protocol.method(...)` calls checked against those signatures. Dynamic dispatch
-is a future extension described below.
+is not admitted in v0.5 source or package contracts.
 
 #### Positive model (what a protocol is)
 
@@ -2373,6 +2402,9 @@ contract-checked   an implementation is validated against the protocol the same
 explicit calls     protocol methods are called in qualified form
                    `Protocol.method(self: <effect> value, ...)`, never
                    `value.method(...)`; there is no auto method resolution
+receiver proof     every protocol call must prove the receiver satisfies the
+                   protocol through an explicit `T: Protocol` generic bound or
+                   an explicit `impl Protocol for ConcreteType` declaration
 self convention    `self` is a reserved first-parameter name carrying a data
                    effect (`self: mut logger`); user parameters may not be named
                    `self`
@@ -2432,23 +2464,32 @@ checker validates parameter names, read/mut/take effects, `Self` substitution,
 return type and freshness, `retains(...)`, boundary effects, and guarantee
 effects exactly.
 
-#### Dynamic dispatch (admitted, in a reviewable form)
+An implementation may lower this static dispatch through Rust traits as typed
+backend IR, but that is not RSScript semantics. Rust trait machinery, object
+safety, blanket implementations, associated types, and auto method resolution
+must not leak into source, diagnostics, `.rssi` contracts, package metadata, or
+review evidence.
 
-RSScript admits protocol-typed dynamic dispatch (an open set of implementing
-types chosen at runtime) as a future feature, not part of the v0.5 executable
-MVP. The design decision is settled: dynamic dispatch is supported eventually,
-because forbidding it makes users write timidly around capabilities that the
-review model can in fact express safely. The constraints below are what make it
-reviewable; they are normative for the eventual implementation, not open
-questions.
+#### Dynamic dispatch (deferred, not admitted in v0.5)
+
+RSScript v0.5 does not admit protocol-typed dynamic dispatch, trait objects, or
+protocol-typed values. The only implemented and specified protocol call form is
+static, explicit `Protocol.method(...)` dispatch backed by an explicit generic
+bound or an explicit `impl Protocol for Type` declaration.
+
+Future protocol dynamic dispatch is a design target, not a v0.5 promise. It must
+go through feature admission again and must not be described as implemented,
+settled, or available to package contracts until syntax, checking, lowering,
+review evidence, and package metadata exist together.
 
 Closed sets should still prefer sealed sum types with exhaustive match
-(section 20.1), which are strictly more reviewable. Dynamic dispatch is the
-escape hatch for genuinely open sets (runtime-registered plugins, third-party
-extensions), not the default tool.
+(section 20.1), which are strictly more reviewable. For open sets such as
+runtime-registered plugins or third-party extensions, v0.5 packages should use
+explicit `.rssi` wrapper contracts and native/review boundaries rather than
+pretending that RSScript source has Rust trait-object power.
 
-The dynamic-dispatch design must satisfy all of the following. A form that
-cannot meet them is not admitted:
+Any future dynamic-dispatch proposal would have to satisfy all of the following.
+A form that cannot meet them is not admitted:
 
 ```text
 1. Only through a protocol whose methods carry full effect contracts. A dynamic
@@ -2459,19 +2500,15 @@ cannot meet them is not admitted:
 3. Calls stay explicit and qualified: `Protocol.method(self: read value, ...)`.
 4. A protocol-typed value is an ordinary managed handle (single-isolate, not
    `Send`); its allocation is the normal managed allocation, not hidden boxing.
-5. Review classification: a protocol-dynamic call classifies the region as
-   `must_review` (single classification, per the §16.2 precedence) with a
-   `protocol_dynamic_dispatch` reason, its effects bounded by the protocol
-   contract. It is NOT `unknown` (section 16.5), because the effects are known
-   even though the concrete type is not.
+5. Review classification: a protocol-dynamic call would need an explicit
+   must-review reason owned by that future feature, with effects bounded by the
+   protocol contract. It must not be treated as implemented package metadata in
+   v0.5.
 ```
 
-This is why dynamic dispatch passes the feature admission rule (section 2.8):
-the concrete type is hidden, but the reviewer question — what does this call
-mutate, retain, or own — is answered by the protocol's effect contract, and both
-coercion and call stay explicit. Review-first does not require knowing the
-concrete callee; it requires knowing the effects, and an effect-carrying protocol
-provides exactly that.
+These constraints are necessary but not sufficient. They explain the review bar
+for a future feature; they do not grant v0.5 source, `.rssi`, package review, or
+REIR permission to model protocol values or dynamic protocol calls.
 
 ### 14.7 `.rssi` interface files
 
@@ -2499,6 +2536,14 @@ pub fn ...                      # bodyless public RSScript contract
 native fn ... effects(native)   # bodyless native boundary contract
 ```
 
+Because a selected `.rssi` file is itself a public semantic-contract artifact,
+package tooling treats its declarations as contract entries even when legacy or
+native-wrapper signatures omit `pub`. Source `.rss` files do not get that
+shortcut: a source declaration must be marked `pub` to satisfy or create a
+package public contract. New `.rssi` examples should prefer explicit `pub` for
+ordinary RSScript contracts, while `native fn ... effects(native)` remains the
+accepted bodyless native-wrapper shorthand.
+
 There is no package-level `namespace` shorthand in v0.5. Public contract symbols
 use the same fully-qualified canonical names as source files:
 
@@ -2522,6 +2567,46 @@ Package features declared in `rsspkg.toml` are package-selection features, not
 RSScript file features. A package feature may cause additional `.rssi` files to
 be selected by package tooling, but the resulting effective interface is still a
 compiler-validated `.rssi` contract.
+
+### 14.8 Module, use, and visibility declarations
+
+`module` and `use` exist to support large source organization without adding a
+second semantic language. A source or interface file may begin with one module
+declaration and zero or more use declarations:
+
+```rust
+module rss.package.review
+
+use rss.package.contract.PackageContract
+use rss.review.ReviewMap
+```
+
+The module path is the file's declared package/module identity. A `use` path
+names an imported contract or module symbol and must be fully qualified. In the
+v0.5 prototype these declarations are parsed, preserved by formatting, and
+available to package/review tooling as organization metadata. `rss review map
+--json` includes them in a top-level `modules` array with exact source locations
+so downstream REIR tooling can emit `module_declaration` and `use_declaration`
+facts. Package tooling must not infer hidden effects, implicit receiver methods,
+or Rust module semantics from them.
+
+The organization header is strict: at most one `module` declaration may appear
+in a file, and all `module` / `use` declarations must appear before ordinary
+type, const, function, protocol, or implementation declarations. A misplaced or
+duplicate organization declaration is a frontend diagnostic before lowering, not
+a package-tool warning.
+
+Visibility remains declaration-local and explicit. `pub` marks exported types,
+sum types, type aliases, constants, and functions. Items without `pub` are
+package-private implementation details in source files. `.rssi` files are
+public semantic contracts, so selected `.rssi` declarations are package contract
+entries; source implementations still need matching `pub` declarations unless
+the interface function is a declared native binding.
+
+`use` does not enable auto method resolution, unqualified overload lookup,
+extension methods, or implicit conversion. Calls stay in canonical qualified
+form such as `Protocol.method(self: mut writer, ...)` or
+`PackageContract.hash(contract: read contract)`.
 
 ---
 
@@ -2838,7 +2923,7 @@ implicit conversion attempt
 operator overload attempt
 feature violation
 unsupported syntax
-spawn used before structured async task support
+unstructured spawn used before source-level task support
 async call not consumed by await
 await outside async function
 await non-async expression
@@ -2979,8 +3064,8 @@ part of the specification contract: implementations must not present a
 | Fixed native parallel facades marked `effects(native, parallel)` | review-only boundary + package/native metadata | package/native metadata, trusted signatures, and audits |
 | User-provided parallel closures, parallel iterators, joins/scopes, and thread-pool configuration | unsupported | future `features: parallel` capability |
 | Native wrapper semantic behavior beyond declared `.rssi` effects | review-only | package/native metadata, audits, and policy |
-| Restricted executable `async` bodies and direct `await` | static + dynamic runtime polling | frontend checker, Rust lowering, runtime pending ABI |
-| `spawn`, TaskGroup, select, timeout, cancellation, async streams, and public future/task handles | unsupported | frontend diagnostic before lowering |
+| Restricted executable `async` bodies, direct `await`, and isolate-local `task_group { async let ... }` | static + dynamic runtime polling | frontend checker, Rust lowering, runtime pending ABI |
+| Unstructured `spawn`, select, timeout, cancellation, async streams, channels, async closures, and public future/task handles | unsupported | frontend diagnostic before lowering |
 | Rust build scripts, proc macros, native links, and transitive native facts | package review-only unless specifically scanned or checked | package metadata and policy |
 
 ---
@@ -3034,6 +3119,20 @@ Json
 JsonError
 Toml
 FileError
+Clock / Instant / Duration
+Regex
+Hash
+TempDir
+Env
+Url
+HTTP request/response and client facade
+Process
+Random / Uuid
+Encoding: Base64 / Hex / URL component encoding
+Csv
+Config / RulesConfig
+Counter
+Weak
 ResourcePool<T: Resource>
 Diagnostic
 Span
@@ -3041,6 +3140,28 @@ Log
 Test
 Assert
 ```
+
+The prototype ships these signatures as ordinary bundled `.rssi` files under
+`core/`. They are standard-library facades, not privileged syntax: callers still
+use explicit qualified calls, declared effects, typed errors, and resource
+contracts. Facades that touch time, environment, filesystem, network, subprocess,
+randomness, hashing, regex engines, temp directories, log/telemetry emission, or
+native HTTP clients are review-visible library boundaries, usually `native`, not
+hidden language features.
+Package review lowers known filesystem facades such as `File.open`,
+`File.read_all_string`, `File.write_buffer`, `Json.parse_file`, and
+`Toml.parse_file` into REIR filesystem capability facts. `File.open` is treated
+conservatively as both read and write because the contract exposes a general
+file handle rather than a read-only or write-only constructor.
+
+The safe prototype runtime provides direct hooks for the implemented facades
+(`Clock`, `Regex`, `Hash`, `TempDir`, `Env`, richer `Directory`, and HTTP
+handler/client shapes) so checked RSScript lowers to ordinary Rust runtime calls.
+The HTTP client hooks are intentionally configuration stubs in the safe runtime:
+they return a structured `HttpError` unless an audited package/native wrapper
+supplies a real network client. This keeps `Http.get(...)` visible to REIR as a
+`network.client` capability without pretending the base runtime has ambient
+network authority.
 
 The minimum `List<T>` core surface includes indexed access plus a noescape
 predicate helper for tool-style reductions that should not hand-roll recursive
@@ -3266,7 +3387,11 @@ pub fn Set.remove<T>(set: mut Set<T>, value: read T) -> Bool
 pub fn Set.clear<T>(set: mut Set<T>) -> Unit
 ```
 
-Agent, GPU, HTTP, networking, and model-client packages are use-case libraries, not language core.
+Agent, GPU, model-client, and domain-specific network clients are use-case
+libraries, not language core. The bundled HTTP surface is intentionally only a
+small façade: `core/http/http.rssi` covers handler request/response values, and
+`core/http/client.rssi` exposes a native client boundary for simple package-tool
+and integration workflows.
 
 ### 18.3 Package manager boundary
 
@@ -3461,18 +3586,23 @@ D. Structured-fix tooling and analysis server
    - a language/analysis server streaming structured diagnostics and fixes,
      serving both human editors and AI repair agents as first-class consumers.
 
-E. User-defined sum types via sealed types + exhaustive match
-   - when user-defined variant types are added beyond Option/Result, model them
-     on sealed type hierarchies with exhaustive match, not Rust enums with
-     lifetime/generic complexity.
-   - exhaustiveness is a review property and must be checked before lowering,
-     consistent with current Option/Result match exhaustiveness.
+E. Sum type hardening
+   - v0.5 has closed RSScript `sum` declarations with exhaustive match checking.
+   - future work should harden package/interface contract metadata for sum
+     variants and avoid Rust enum machinery such as lifetimes, representation
+     attributes, or open extension.
+   - exhaustiveness remains a review property checked before lowering.
 
 F. Registry-level review-risk badges
    - the package registry should surface review-risk signals as first-class
      quality badges: native, unsafe, unknown, mutating/retaining ratios.
    - this reuses the package review metadata already produced by package tooling
      (section 18.3) rather than inventing a separate scoring system.
+   - package-manager registry previews expose these signals through
+     `rss.registry.index.v1` fields such as `review_schema`, `unsafe_apis`,
+     selected feature sets, and default graph footprint. The language spec does
+     not define registry scoring beyond requiring those signals to derive from
+     compiler/package review evidence.
 ```
 
 Explicitly rejected influences. The following Dart-style conveniences conflict
@@ -3516,8 +3646,9 @@ macro-heavy metaprogramming
 
 What is excluded is the *Rust-style* trait-object machinery: implicit coercion,
 auto method resolution, object safety rules, and type-erased dispatch with no
-effect contract. Protocol-typed dynamic dispatch in its explicit, effect-carrying
-form is admitted, not excluded (section 14.6).
+effect contract. Protocol-typed dynamic dispatch is also not part of v0.5; any
+future explicit, effect-carrying form must be admitted as a separate feature
+with source, checker, lowering, package-review, and REIR support (section 14.6).
 
 ### 21.1 Deferred, not excluded: managed memory strategy
 

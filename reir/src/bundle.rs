@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{Diff, Exception, PolicyResult, Reconciliation, Slice, Subject};
+use crate::{Diff, Exception, PolicyResult, Profile, Reconciliation, Slice, Subject};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Bundle {
@@ -23,6 +23,8 @@ pub struct Bundle {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub policy_results: Vec<PolicyResult>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<Profile>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diffs: Vec<Diff>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exceptions: Vec<Exception>,
@@ -41,6 +43,7 @@ impl Bundle {
             reconciliations: Vec::new(),
             slices: Vec::new(),
             policy_results: Vec::new(),
+            profiles: Vec::new(),
             diffs: Vec::new(),
             exceptions: Vec::new(),
         }

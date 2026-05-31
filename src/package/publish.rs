@@ -5,8 +5,9 @@ use super::graph::package_tree;
 use super::lock::{lock_package_entry, package_archive_files, package_archive_hash};
 use super::source_set::{LoadedPackage, Manifest, load_package, selected_root_package_features};
 use super::{
-    PackageLockPackage, PackageNativeRustCheck, PackagePublishCheck, PackagePublishDryRun,
-    PackageRegistryIndexEntry, PackageRegistryPublishTarget, PackageRisk, check_package_dir,
+    PACKAGE_REVIEW_METADATA_SCHEMA, PackageLockPackage, PackageNativeRustCheck,
+    PackagePublishCheck, PackagePublishDryRun, PackageRegistryFootprint, PackageRegistryIndexEntry,
+    PackageRegistryPublishTarget, PackageRisk, PackageTreeSummary, check_package_dir,
     package_dependency_spec, package_identity, package_risk_label, review_package_dir,
     sanitize_vendor_path_component,
 };
@@ -26,7 +27,7 @@ pub fn publish_package_dry_run_with_registry(
     let archive_files = package_archive_files(package_dir)?;
     let archive_hash = package_archive_hash(&archive_files);
     let root_features = selected_root_package_features(&package.manifest);
-    let root_lock_entry = lock_package_entry(package_dir, &package, root_features)?;
+    let root_lock_entry = lock_package_entry(package_dir, &package, root_features.clone())?;
 
     let version_ok = is_semver_like(&package.manifest.package.version);
     let dependency_graph_ok = tree.summary.unknown_risk_packages == 0;
@@ -135,6 +136,8 @@ pub fn publish_package_dry_run_with_registry(
         check.native_rust.as_ref(),
         risk,
         &archive_hash,
+        &root_features,
+        &tree.summary,
     );
     let registry_target = registry_dir.map(|registry_dir| {
         package_registry_publish_target(
@@ -181,24 +184,58 @@ fn package_registry_index_entry(
     native_check: Option<&PackageNativeRustCheck>,
     risk: PackageRisk,
     archive_hash: &str,
+    root_features: &[String],
+    tree_summary: &PackageTreeSummary,
 ) -> PackageRegistryIndexEntry {
+    let native = package
+        .manifest
+        .native
+        .as_ref()
+        .and_then(|native| native.rust.as_ref())
+        .is_some_and(|native| native.enabled);
     PackageRegistryIndexEntry {
         schema: "rss.registry.index.v1".to_string(),
         name: package.manifest.package.name.clone(),
         version: package.manifest.package.version.clone(),
         checksum: archive_hash.to_string(),
         interface_hash: lock_entry.interface_hash.clone(),
+        effective_interface_hash_default: lock_entry.interface_hash.clone(),
         review_hash: lock_entry.review_hash.clone(),
+        review_schema: PACKAGE_REVIEW_METADATA_SCHEMA.to_string(),
         native_hash: lock_entry.native_hash.clone(),
         risk,
-        native: package
-            .manifest
-            .native
-            .as_ref()
-            .and_then(|native| native.rust.as_ref())
-            .is_some_and(|native| native.enabled),
+        native,
         unsafe_boundary: package_index_unsafe_boundary(&package.manifest, native_check),
         dependencies: package_index_dependencies(&package.manifest.dependencies),
+        features: package_index_features(&package.manifest, root_features),
+        footprint_default: package_index_footprint(native, tree_summary),
+    }
+}
+
+fn package_index_features(
+    manifest: &Manifest,
+    root_features: &[String],
+) -> BTreeMap<String, Vec<String>> {
+    let mut features = BTreeMap::new();
+    features.insert("default".to_string(), root_features.to_vec());
+    for (name, dependencies) in &manifest.features {
+        features.insert(name.clone(), dependencies.clone());
+    }
+    features
+}
+
+fn package_index_footprint(native: bool, summary: &PackageTreeSummary) -> PackageRegistryFootprint {
+    PackageRegistryFootprint {
+        direct_dependencies: summary.packages.saturating_sub(1),
+        total_packages: summary.packages,
+        path_dependencies: summary.path_dependencies,
+        unresolved_dependencies: summary.unresolved_dependencies,
+        native,
+        native_packages: summary.native_packages,
+        build_time_execution: summary.build_execution_packages > 0,
+        build_execution_packages: summary.build_execution_packages,
+        high_risk_packages: summary.high_risk_packages,
+        unknown_facts: summary.unknown_risk_packages,
     }
 }
 

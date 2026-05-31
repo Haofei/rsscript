@@ -427,6 +427,7 @@ dependencies = [
 name = "rsscript"
 version = "0.1.0"
 dependencies = [
+ "reir",
  "serde",
  "serde_json",
  "sha2",

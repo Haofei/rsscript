@@ -1,5 +1,10 @@
 features: local
 
+module rss.package.review
+
+use rss.package.contract.PackageContract
+use rss.review.ReviewMap
+
 struct PackageManifestFacts {
     package_name: String
     version: String

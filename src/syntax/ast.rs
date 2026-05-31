@@ -156,6 +156,7 @@ pub enum TypeKind {
 pub struct TypeDecl {
     pub kind: TypeKind,
     pub name: String,
+    pub is_public: bool,
     pub is_opaque: bool,
     pub type_params: Vec<GenericParam>,
     pub malformed_generic_param_spans: Vec<Span>,

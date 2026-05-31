@@ -206,7 +206,12 @@ pub(super) fn native_binding_interface_sources(
         .flat_map(|source| parse_source(&source.path, &source.contents).items)
         .filter_map(|item| match item {
             Item::Type(type_decl) => Some(type_decl.name),
-            Item::Function(_) | Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => None,
+            Item::Function(_)
+            | Item::Module(_)
+            | Item::Use(_)
+            | Item::SumType(_)
+            | Item::TypeAlias(_)
+            | Item::Const(_) => None,
         })
         .collect::<BTreeSet<_>>();
 
