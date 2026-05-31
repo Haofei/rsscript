@@ -2776,7 +2776,28 @@ fn substitute_protocol_self(type_name: &str, concrete_type: &str) -> String {
     if type_name == "Self" {
         return concrete_type.to_string();
     }
-    type_name.replace("Self", concrete_type)
+    // Use word-boundary-aware replacement to avoid substituting inside identifiers
+    // like "MySelfThing". In RSScript, Self appears only as a standalone type or
+    // inside generic brackets (e.g. "List<Self>", "Option<Self>").
+    let mut result = String::new();
+    let mut chars = type_name.char_indices().peekable();
+    while let Some((i, _)) = chars.peek().copied() {
+        if type_name[i..].starts_with("Self") {
+            let before_ok = i == 0 || !type_name.as_bytes()[i - 1].is_ascii_alphanumeric();
+            let after_pos = i + 4;
+            let after_ok = after_pos >= type_name.len()
+                || !type_name.as_bytes()[after_pos].is_ascii_alphanumeric();
+            if before_ok && after_ok {
+                result.push_str(concrete_type);
+                for _ in 0..4 {
+                    chars.next();
+                }
+                continue;
+            }
+        }
+        result.push(chars.next().unwrap().1);
+    }
+    result
 }
 
 fn split_qualified_name(name: &str) -> (Option<String>, &str) {
