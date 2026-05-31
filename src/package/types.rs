@@ -195,6 +195,7 @@ pub struct PackageTreeSummary {
     pub path_dependencies: usize,
     pub unresolved_dependencies: usize,
     pub native_packages: usize,
+    pub build_execution_packages: usize,
     pub high_risk_packages: usize,
     pub unknown_risk_packages: usize,
 }

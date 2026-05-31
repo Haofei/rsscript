@@ -293,11 +293,12 @@ pub fn format_package_check_human(check: &PackageCheck) -> String {
 pub fn format_package_tree_human(tree: &PackageTree) -> String {
     let mut output = String::new();
     output.push_str(&format!(
-        "package tree: {} packages; {} path deps; {} unresolved; {} native; {} high risk; {} unknown\n",
+        "package tree: {} packages; {} path deps; {} unresolved; {} native; {} build execution; {} high risk; {} unknown\n",
         tree.summary.packages,
         tree.summary.path_dependencies,
         tree.summary.unresolved_dependencies,
         tree.summary.native_packages,
+        tree.summary.build_execution_packages,
         tree.summary.high_risk_packages,
         tree.summary.unknown_risk_packages
     ));

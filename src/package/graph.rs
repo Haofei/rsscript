@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use super::source_set::{
-    load_package_manifest, load_package_with_features, resolve_package_features,
-    selected_root_package_features,
+    ManifestDependencyBudget, load_package_manifest, load_package_with_features,
+    resolve_package_features, selected_root_package_features,
 };
 use super::{
     PackageDependencyKind, PackageDependencySpec, PackageGraphCheck, PackageRisk, PackageTree,
@@ -25,6 +25,7 @@ pub fn package_tree(package_dir: &Path) -> Result<PackageTree, String> {
 }
 
 pub(super) fn check_package_graph(package_dir: &Path) -> Result<PackageGraphCheck, String> {
+    let root_manifest = load_package_manifest(package_dir)?;
     let tree = package_tree(package_dir)?;
     let mut packages_by_name: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     collect_package_graph_identities(&tree.root, &mut packages_by_name);
@@ -44,6 +45,14 @@ pub(super) fn check_package_graph(package_dir: &Path) -> Result<PackageGraphChec
             ));
         }
     }
+    if let Some(dependency_policy) = root_manifest.dependency.as_ref() {
+        collect_graph_budget_reasons(
+            &tree.summary,
+            root_manifest.dependencies.len() + root_manifest.dev_dependencies.len(),
+            &dependency_policy.budget,
+            &mut reasons,
+        );
+    }
     reasons.sort();
     reasons.dedup();
 
@@ -57,6 +66,65 @@ pub(super) fn check_package_graph(package_dir: &Path) -> Result<PackageGraphChec
     };
 
     Ok(PackageGraphCheck { ok, risk, reasons })
+}
+
+fn collect_graph_budget_reasons(
+    summary: &PackageTreeSummary,
+    direct_dependencies: usize,
+    budget: &ManifestDependencyBudget,
+    reasons: &mut Vec<String>,
+) {
+    push_budget_reason(
+        reasons,
+        "direct dependencies",
+        direct_dependencies,
+        budget.max_direct_dependencies,
+    );
+    push_budget_reason(
+        reasons,
+        "total packages",
+        summary.packages,
+        budget.max_total_packages,
+    );
+    push_budget_reason(
+        reasons,
+        "native packages",
+        summary.native_packages,
+        budget.max_native_packages,
+    );
+    push_budget_reason(
+        reasons,
+        "high-risk packages",
+        summary.high_risk_packages,
+        budget.max_high_risk_packages,
+    );
+    push_budget_reason(
+        reasons,
+        "unknown packages",
+        summary.unknown_risk_packages,
+        budget.max_unknown_packages,
+    );
+    push_budget_reason(
+        reasons,
+        "build-execution packages",
+        summary.build_execution_packages,
+        budget.max_build_execution_packages,
+    );
+}
+
+fn push_budget_reason(
+    reasons: &mut Vec<String>,
+    label: &str,
+    actual: usize,
+    maximum: Option<usize>,
+) {
+    if let Some(maximum) = maximum
+        && actual > maximum
+    {
+        reasons.push(format!(
+            "dependency graph exceeds {label} budget: {actual} > {maximum}"
+        ));
+    }
 }
 
 fn collect_package_graph_identities(
@@ -217,7 +285,20 @@ fn collect_package_tree_summary(node: &PackageTreeNode, summary: &mut PackageTre
     if node.native {
         summary.native_packages += 1;
     }
+    if package_tree_node_uses_build_execution(node) {
+        summary.build_execution_packages += 1;
+    }
     for dependency in &node.dependencies {
         collect_package_tree_summary(dependency, summary);
     }
+}
+
+fn package_tree_node_uses_build_execution(node: &PackageTreeNode) -> bool {
+    node.reasons.iter().any(|reason| {
+        reason.contains("build script")
+            || reason.contains("build scripts")
+            || reason.contains("proc macro")
+            || reason.contains("proc macros")
+            || reason.contains("build-time execution")
+    })
 }

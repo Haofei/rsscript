@@ -18,6 +18,8 @@ pub(super) struct Manifest {
     #[serde(default, rename = "dev-dependencies")]
     pub(super) dev_dependencies: BTreeMap<String, toml::Value>,
     #[serde(default)]
+    pub(super) dependency: Option<ManifestDependencyPolicy>,
+    #[serde(default)]
     pub(super) features: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub(super) review: Option<ManifestReview>,
@@ -50,6 +52,22 @@ pub(super) struct ManifestFeaturePathSection {
     pub(super) paths: Vec<String>,
     #[serde(default)]
     pub(super) exports: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct ManifestDependencyPolicy {
+    #[serde(default)]
+    pub(super) budget: ManifestDependencyBudget,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct ManifestDependencyBudget {
+    pub(super) max_direct_dependencies: Option<usize>,
+    pub(super) max_total_packages: Option<usize>,
+    pub(super) max_native_packages: Option<usize>,
+    pub(super) max_high_risk_packages: Option<usize>,
+    pub(super) max_unknown_packages: Option<usize>,
+    pub(super) max_build_execution_packages: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]
