@@ -310,6 +310,13 @@ pub fn format_review_json(findings: &[ReviewFinding]) -> String {
 }
 
 pub fn review_map_sources(sources: Vec<(&str, &str)>) -> ReviewMap {
+    review_map_sources_with_interfaces(sources, &[])
+}
+
+pub(crate) fn review_map_sources_with_interfaces(
+    sources: Vec<(&str, &str)>,
+    interfaces: &[(&str, &str)],
+) -> ReviewMap {
     let parsed_sources = sources
         .into_iter()
         .map(|(file, source)| ReviewMapParsedSource {
@@ -319,7 +326,11 @@ pub fn review_map_sources(sources: Vec<(&str, &str)>) -> ReviewMap {
         })
         .collect::<Vec<_>>();
     let merged_program = merge_programs(parsed_sources.iter().map(|source| source.program.clone()));
-    let hir = Hir::from_syntax(&merged_program);
+    let interface_programs = interfaces
+        .iter()
+        .map(|(file, source)| parse_source(file, source))
+        .collect::<Vec<_>>();
+    let hir = Hir::from_syntax_with_interfaces(&merged_program, &interface_programs);
     let mut region_drafts = parsed_sources
         .iter()
         .flat_map(|source| review_map_file_region_drafts(source, &hir))

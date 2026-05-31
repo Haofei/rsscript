@@ -6,7 +6,7 @@ use crate::analyzer::{
 };
 use crate::diagnostic::{Diagnostic, code};
 use crate::lint::lint_source;
-use crate::review::{ReviewMap, ReviewMapClassification, review_map_sources};
+use crate::review::{ReviewMap, ReviewMapClassification, review_map_sources_with_interfaces};
 use crate::syntax::ast::TypeKind;
 
 use super::contract::{
@@ -98,11 +98,12 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
     ));
     diagnostics.extend(package_lint_diagnostics(sources));
     dedup_diagnostics(&mut diagnostics);
-    let review_map = review_map_sources(
+    let review_map = review_map_sources_with_interfaces(
         sources
             .iter()
             .map(|source| (source.path.as_str(), source.contents.as_str()))
             .collect(),
+        &source_interfaces,
     );
 
     let native_rust = manifest

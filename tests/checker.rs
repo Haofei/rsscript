@@ -9149,6 +9149,78 @@ fn package_review_json_counts_public_api_with_direct_unknown_call() {
 }
 
 #[test]
+fn package_review_map_resolves_path_dependency_interfaces() {
+    let dep_dir = unique_temp_dir("rsscript-package-review-map-dep");
+    write_named_package_fixture(
+        &dep_dir,
+        "rss-review-dep",
+        "0.1.0",
+        "",
+        r#"features: native
+
+native fn Dep.echo(message: read String) -> String
+    effects(native)
+"#,
+    );
+
+    let root_dir = unique_temp_dir("rsscript-package-review-map-root");
+    write_named_package_fixture(
+        &root_dir,
+        "rss-review-root",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-review-dep = {{ path = "{}" }}
+"#,
+            toml_path(&dep_dir)
+        ),
+        r#"pub fn Api.run(message: read String) -> String
+"#,
+    );
+    fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        root_dir.join("src/main.rss"),
+        r#"features: native
+
+pub fn Api.run(message: read String) -> String {
+    return Dep.echo(message: read message)
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&root_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&root_dir);
+    let _ = fs::remove_dir_all(&dep_dir);
+
+    assert_eq!(json["summary"]["public_functions"], 1);
+    assert_eq!(json["summary"]["unknown_apis"], 0);
+    assert_eq!(json["review_map"]["summary"]["unknown"]["functions"], 0);
+    assert!(json["exports"].as_array().is_some_and(|exports| {
+        exports.iter().any(|export| {
+            export["name"] == "Api.run" && export["classification"] == "review_if_changed"
+        })
+    }));
+    assert!(
+        json["review_map"]["files"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|file| file["regions"].as_array().into_iter().flatten())
+            .any(|region| {
+                region["function"] == "Api.run"
+                    && region["reasons"].as_array().is_some_and(|reasons| {
+                        reasons
+                            .iter()
+                            .any(|reason| reason == "native call `Dep.echo`")
+                    })
+            })
+    );
+}
+
+#[test]
 fn package_check_fails_unknown_review_when_configured_as_error() {
     let temp_dir = unique_temp_dir("rsscript-package-check-unknown-is-error");
     write_package_fixture(
