@@ -124,8 +124,25 @@ pub fn merge_programs(programs: impl IntoIterator<Item = Program>) -> Program {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
+    Module(ModuleDecl),
+    Use(UseDecl),
     Type(TypeDecl),
+    SumType(SumTypeDecl),
+    TypeAlias(TypeAliasDecl),
+    Const(ConstDecl),
     Function(FunctionDecl),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleDecl {
+    pub path: Vec<String>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UseDecl {
+    pub path: Vec<String>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,9 +159,45 @@ pub struct TypeDecl {
     pub is_opaque: bool,
     pub type_params: Vec<GenericParam>,
     pub malformed_generic_param_spans: Vec<Span>,
+    pub derives: Vec<String>,
     pub fields: Vec<FieldDecl>,
     pub malformed_field_spans: Vec<Span>,
     pub drop_body: Option<Block>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SumTypeDecl {
+    pub name: String,
+    pub type_params: Vec<GenericParam>,
+    pub derives: Vec<String>,
+    pub variants: Vec<SumVariant>,
+    pub is_public: bool,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SumVariant {
+    pub name: String,
+    pub fields: Vec<FieldDecl>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeAliasDecl {
+    pub name: String,
+    pub type_params: Vec<GenericParam>,
+    pub target: TypeRef,
+    pub is_public: bool,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConstDecl {
+    pub name: String,
+    pub type_annotation: Option<TypeRef>,
+    pub value: Expr,
+    pub is_public: bool,
     pub span: Span,
 }
 
@@ -267,6 +320,7 @@ pub enum Stmt {
     MalformedMatch(Span),
     Break(Span),
     Continue(Span),
+    LetElse(LetElseStmt),
     Expr(Expr),
     Unknown(Span),
 }
@@ -321,6 +375,15 @@ pub struct ForStmt {
     pub binding: String,
     pub iterable: Expr,
     pub body: Block,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LetElseStmt {
+    pub pattern: MatchPattern,
+    pub value: Expr,
+    pub else_body: Block,
+    pub binding_name: String,
     pub span: Span,
 }
 

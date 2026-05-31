@@ -1,0 +1,8 @@
+type PackageResult = Result<String, String>
+
+type Identifier = String
+
+fn main() -> Unit {
+    let result: PackageResult = Ok("success")
+    let name: Identifier = "hello"
+}

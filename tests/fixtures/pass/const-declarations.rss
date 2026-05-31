@@ -1,0 +1,9 @@
+const MAX_RETRIES: Int = 5
+const DEFAULT_NAME: String = "unknown"
+const IS_DEBUG: Bool = false
+
+fn main() -> Unit {
+    let retries = MAX_RETRIES
+    let name = DEFAULT_NAME
+    let debug = IS_DEBUG
+}

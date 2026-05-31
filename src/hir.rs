@@ -51,6 +51,7 @@ pub enum HirTypeKind {
     Class,
     Struct,
     Resource,
+    Sum,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -474,6 +475,28 @@ impl Hir {
                     );
                     self.insert_type(type_info_from_decl(type_decl));
                 }
+                Item::SumType(sum) => {
+                    record_duplicate_symbol(
+                        &mut self.duplicate_symbols,
+                        type_symbols,
+                        DuplicateSymbolKind::Type,
+                        &sum.name,
+                        &sum.span,
+                    );
+                    let type_info = TypeInfo {
+                        name: sum.name.clone(),
+                        kind: HirTypeKind::Sum,
+                        type_params: sum
+                            .type_params
+                            .iter()
+                            .map(|p| p.name.clone())
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice(),
+                        fields: HashMap::new(),
+                    };
+                    self.insert_type(type_info);
+                }
+                Item::TypeAlias(_) | Item::Const(_) | Item::Module(_) | Item::Use(_) => {}
             }
         }
     }
@@ -595,6 +618,7 @@ impl Hir {
                 Item::Type(type_decl) => {
                     self.insert_builtin_type(type_info_from_decl(type_decl));
                 }
+                Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => {}
             }
         }
     }
@@ -617,6 +641,7 @@ impl Hir {
             match item {
                 Item::Function(function) => collect_function_body_facts(self, function, &mut facts),
                 Item::Type(type_decl) => collect_type_feature_uses(type_decl, &mut facts),
+                Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => {}
             }
         }
 
@@ -788,13 +813,65 @@ fn lower_hir_block(
     block: &Block,
     value_types: &mut HashMap<String, String>,
 ) -> HirBlock {
+    let mut statements = Vec::new();
+    for statement in &block.statements {
+        statements.extend(lower_hir_stmts(hir, function_name, statement, value_types));
+    }
     HirBlock {
-        statements: block
-            .statements
-            .iter()
-            .map(|statement| lower_hir_stmt(hir, function_name, statement, value_types))
-            .collect(),
+        statements,
         span: block.span.clone(),
+    }
+}
+
+fn lower_hir_stmts(
+    hir: &Hir,
+    function_name: &str,
+    statement: &Stmt,
+    value_types: &mut HashMap<String, String>,
+) -> Vec<HirStmt> {
+    match statement {
+        Stmt::LetElse(stmt) => {
+            let value_type_name = infer_hir_expr_type(hir, &stmt.value, value_types);
+            let binding_type_name = match_pattern_binding_type(&stmt.pattern, value_type_name.as_deref())
+                .map(|(_, type_name)| type_name);
+            let mut statements = vec![HirStmt::Match {
+                value: lower_hir_expr(hir, function_name, &stmt.value, value_types),
+                arms: vec![
+                    HirMatchArm {
+                        pattern: stmt.pattern.clone(),
+                        body: HirBlock {
+                            statements: Vec::new(),
+                            span: stmt.span.clone(),
+                        },
+                        span: stmt.span.clone(),
+                    },
+                    HirMatchArm {
+                        pattern: MatchPattern::Wildcard(stmt.span.clone()),
+                        body: {
+                            let mut else_types = value_types.clone();
+                            lower_hir_block(hir, function_name, &stmt.else_body, &mut else_types)
+                        },
+                        span: stmt.span.clone(),
+                    },
+                ],
+                span: stmt.span.clone(),
+            }];
+            if !stmt.binding_name.is_empty() {
+                if let Some(type_name) = &binding_type_name {
+                    value_types.insert(stmt.binding_name.clone(), type_name.clone());
+                }
+                statements.push(HirStmt::Let {
+                    kind: HirBindingKind::ManagedLet,
+                    name: stmt.binding_name.clone(),
+                    value: None,
+                    type_name: binding_type_name,
+                    value_type_name,
+                    span: stmt.span.clone(),
+                });
+            }
+            statements
+        }
+        _ => vec![lower_hir_stmt(hir, function_name, statement, value_types)],
     }
 }
 
@@ -924,6 +1001,7 @@ fn lower_hir_stmt(
                 span: stmt.span.clone(),
             }
         }
+        Stmt::LetElse(_) => unreachable!("let-else statements are lowered by lower_hir_stmts"),
         Stmt::Expr(expr) => HirStmt::Expr(lower_hir_expr(hir, function_name, expr, value_types)),
         Stmt::Break(span) => HirStmt::Break(span.clone()),
         Stmt::Continue(span) => HirStmt::Continue(span.clone()),
@@ -1269,6 +1347,24 @@ fn collect_body_facts_in_stmt(
                     arm_types.insert(binding, type_name);
                 }
                 collect_body_facts_in_block(hir, function_name, &arm.body, &mut arm_types, facts);
+            }
+        }
+        Stmt::LetElse(stmt) => {
+            collect_body_facts_in_expr(hir, function_name, &stmt.value, value_types, facts);
+            let mut else_types = value_types.clone();
+            collect_body_facts_in_block(hir, function_name, &stmt.else_body, &mut else_types, facts);
+            if let Some((binding, type_name)) =
+                match_pattern_binding_type(&stmt.pattern, infer_hir_expr_type(hir, &stmt.value, value_types).as_deref())
+            {
+                facts.bindings.push(HirBinding {
+                    function_name: function_name.to_string(),
+                    name: binding.clone(),
+                    kind: HirBindingKind::ManagedLet,
+                    effect: None,
+                    span: stmt.span.clone(),
+                    type_name: Some(type_name.clone()),
+                });
+                value_types.insert(binding, type_name);
             }
         }
         Stmt::Expr(expr) => {
@@ -1693,7 +1789,7 @@ fn infer_closure_return_type(
                     .or_else(|| Some("Unit".to_string()));
             }
             Stmt::Expr(value) => return infer_hir_expr_type(hir, value, value_types),
-            Stmt::Let(_) => return Some("Unit".to_string()),
+            Stmt::Let(_) | Stmt::LetElse(_) => return Some("Unit".to_string()),
             Stmt::With { .. }
             | Stmt::If { .. }
             | Stmt::Loop { .. }

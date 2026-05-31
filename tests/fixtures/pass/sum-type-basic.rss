@@ -1,0 +1,23 @@
+sum Color {
+    Red
+    Green
+    Blue
+}
+
+sum Shape {
+    Circle(radius: Int)
+    Rectangle(width: Int, height: Int)
+}
+
+fn describe_color(color: read Color) -> String {
+    match color {
+        Red => { return "red" }
+        Green => { return "green" }
+        Blue => { return "blue" }
+    }
+}
+
+fn main() -> Unit {
+    let c = Red
+    let desc = describe_color(color: read c)
+}

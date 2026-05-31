@@ -1,0 +1,10 @@
+fn unwrap_option(value: read Option<String>) -> String {
+    let Some(inner) = value else {
+        return "default"
+    }
+    return inner
+}
+
+fn main() -> Unit {
+    let result = unwrap_option(value: read Some("hello"))
+}

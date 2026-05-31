@@ -1,0 +1,12 @@
+module package.review
+
+use package.contract.PackageContract
+use core.collections.Map
+
+fn review_package(name: read String) -> String {
+    return name
+}
+
+fn main() -> Unit {
+    let result = review_package(name: read "test-pkg")
+}

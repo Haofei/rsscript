@@ -852,7 +852,7 @@ pub(super) fn package_type_contracts_for_source(
             Item::Type(type_decl) => {
                 Some((type_decl.name.clone(), package_type_contract(&type_decl)))
             }
-            Item::Function(_) => None,
+            Item::Function(_) | Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => None,
         })
         .collect()
 }
@@ -867,7 +867,7 @@ pub(super) fn package_function_contracts_for_source(
             Item::Function(function) => {
                 Some((function.name.clone(), package_function_contract(&function)))
             }
-            Item::Type(_) => None,
+            Item::Type(_) | Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => None,
         })
         .collect()
 }

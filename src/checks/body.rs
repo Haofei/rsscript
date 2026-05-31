@@ -21,7 +21,7 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
         .iter()
         .filter_map(|item| match item {
             Item::Function(function) => Some(function.clone()),
-            Item::Type(_) => None,
+            Item::Type(_) | Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => None,
         })
         .collect();
 
@@ -616,6 +616,10 @@ fn check_match_scrutinee_type(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
         return;
     };
     if type_root_name(type_name) == "Option" || type_root_name(type_name) == "Result" {
+        return;
+    }
+    // Allow matching on user-defined sum types
+    if analyzer.hir.type_kind(type_name) == Some(crate::hir::HirTypeKind::Sum) {
         return;
     }
     analyzer.diagnostics.push(
@@ -2719,7 +2723,7 @@ fn check_fresh_return_type(analyzer: &mut Analyzer<'_>, function: &FunctionDecl)
     };
     let target = fresh_return_target_type(return_ty);
     match analyzer.hir.type_kind(&target.name) {
-        Some(HirTypeKind::Struct) | None => {}
+        Some(HirTypeKind::Struct) | Some(HirTypeKind::Sum) | None => {}
         Some(HirTypeKind::Class) | Some(HirTypeKind::Resource) => {
             invalid_fresh_return_type_diagnostic(analyzer, function, target);
         }

@@ -2,8 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::diagnostic::Span;
 use crate::syntax::ast::{
-    BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl, Item,
-    Param, Program, Stmt, TypeDecl, TypeKind, TypeRef,
+    BinaryOp, Block, CallArg, Callee, ConstDecl, DataEffect, EffectDecl, Expr, FieldDecl,
+    FunctionDecl, Item, MatchPattern, Param, Program, Stmt, SumTypeDecl, TypeAliasDecl, TypeDecl,
+    TypeKind, TypeRef,
 };
 
 use super::helpers::*;
@@ -38,7 +39,8 @@ impl<'a> RustLowerer<'a> {
             .iter()
             .filter_map(|item| match item {
                 Item::Type(ty) => Some((ty.name.clone(), ty.kind)),
-                Item::Function(_) => None,
+                Item::SumType(_) => None, // sum types don't contribute to type_kinds map
+                Item::Function(_) | Item::TypeAlias(_) | Item::Const(_) | Item::Module(_) | Item::Use(_) => None,
             })
             .collect();
         let native_boundary_callees = collect_native_boundary_callees(program);
@@ -97,10 +99,30 @@ impl<'a> RustLowerer<'a> {
                 out.push('\n');
             }
         }
+        for item in &self.program.items {
+            if let Item::SumType(sum) = item {
+                self.lower_sum_type(sum, &mut out);
+                out.push('\n');
+            }
+        }
+        // Lower type aliases
+        for item in &self.program.items {
+            if let Item::TypeAlias(alias) = item {
+                self.lower_type_alias(alias, &mut out);
+                out.push('\n');
+            }
+        }
+        // Lower constants
+        for item in &self.program.items {
+            if let Item::Const(decl) = item {
+                self.lower_const_decl(decl, &mut out);
+                out.push('\n');
+            }
+        }
         self.lower_protocol_traits(&mut out);
         for item in &self.program.items {
             match item {
-                Item::Type(_) => {}
+                Item::Type(_) | Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => {}
                 Item::Function(function) if !function.body.statements.is_empty() => {
                     self.lower_function(function, &mut out);
                     out.push('\n');
@@ -209,11 +231,8 @@ impl<'a> RustLowerer<'a> {
         if ty.kind == TypeKind::Resource {
             out.push_str("#[must_use]\n");
         }
-        if ty.kind == TypeKind::Resource {
-            out.push_str("#[derive(Debug)]\n");
-        } else {
-            out.push_str("#[derive(Debug, Clone)]\n");
-        }
+        let derive_str = self.compute_derive_attr(&ty.derives, ty.kind == TypeKind::Resource);
+        out.push_str(&derive_str);
         out.push_str(&format!(
             "{}struct {}{} {{\n",
             visibility(true),
@@ -280,6 +299,95 @@ impl<'a> RustLowerer<'a> {
                 rust_ty
             ));
         }
+    }
+
+    fn lower_sum_type(&mut self, sum: &SumTypeDecl, out: &mut String) {
+        let derive_str = self.compute_derive_attr(&sum.derives, false);
+        out.push_str(&derive_str);
+        out.push_str(&format!(
+            "{}enum {} {{\n",
+            visibility(sum.is_public),
+            rust_ident(&sum.name)
+        ));
+        for variant in &sum.variants {
+            if variant.fields.is_empty() {
+                out.push_str(&format!("    {},\n", rust_ident(&variant.name)));
+            } else {
+                out.push_str(&format!("    {} {{\n", rust_ident(&variant.name)));
+                for field in &variant.fields {
+                    let rust_ty = self.lower_type_ref(&field.ty, ManagedPosition::Bare);
+                    out.push_str(&format!(
+                        "        {}: {},\n",
+                        rust_ident(&field.name),
+                        rust_ty
+                    ));
+                }
+                out.push_str("    },\n");
+            }
+        }
+        out.push_str("}\n");
+    }
+
+    /// Compute the `#[derive(...)]` attribute string.
+    /// If user specified `derives(...)`, use those (always including Debug).
+    /// Otherwise use defaults: Debug + Clone for non-resource, Debug only for resource.
+    fn compute_derive_attr(&self, user_derives: &[String], is_resource: bool) -> String {
+        if user_derives.is_empty() {
+            if is_resource {
+                return "#[derive(Debug)]\n".to_string();
+            } else {
+                return "#[derive(Debug, Clone)]\n".to_string();
+            }
+        }
+        let mut rust_derives = Vec::new();
+        // Always include Debug
+        rust_derives.push("Debug".to_string());
+        for d in user_derives {
+            match d.as_str() {
+                "Debug" => {} // already added
+                "Clone" => rust_derives.push("Clone".to_string()),
+                "Eq" => {
+                    rust_derives.push("PartialEq".to_string());
+                    rust_derives.push("Eq".to_string());
+                }
+                "Hash" => rust_derives.push("Hash".to_string()),
+                // JsonEncode/JsonDecode recognized but not lowered without serde
+                "JsonEncode" | "JsonDecode" => {}
+                _ => {} // unknown derives silently ignored
+            }
+        }
+        format!("#[derive({})]\n", rust_derives.join(", "))
+    }
+
+    fn lower_type_alias(&mut self, alias: &TypeAliasDecl, out: &mut String) {
+        let vis = visibility(alias.is_public);
+        let generics = lower_generic_params(&alias.type_params);
+        let target = self.lower_type_ref(&alias.target, ManagedPosition::Bare);
+        out.push_str(&format!(
+            "{}type {}{} = {};\n",
+            vis,
+            rust_ident(&alias.name),
+            generics,
+            target
+        ));
+    }
+
+    fn lower_const_decl(&mut self, decl: &ConstDecl, out: &mut String) {
+        let vis = visibility(decl.is_public);
+        let ty_str = if let Some(ty) = &decl.type_annotation {
+            self.lower_type_ref(ty, ManagedPosition::Bare)
+        } else {
+            // Infer type from value literal
+            infer_const_type(&decl.value)
+        };
+        let value_str = lower_const_value(&decl.value);
+        out.push_str(&format!(
+            "{}const {}: {} = {};\n",
+            vis,
+            rust_ident(&decl.name).to_uppercase(),
+            ty_str,
+            value_str
+        ));
     }
 
     fn lower_function(&mut self, function: &FunctionDecl, out: &mut String) {
@@ -542,16 +650,55 @@ impl<'a> RustLowerer<'a> {
             }
             Stmt::Match(stmt) => {
                 out.push_str(&format!("{pad}match {} {{\n", self.lower_expr(&stmt.value)));
+                // Determine if this is a sum type match (qualify variant patterns)
+                let sum_type_name = self.find_sum_type_for_match(&stmt.arms);
                 for arm in &stmt.arms {
+                    let pattern = if let Some(ref sum_name) = sum_type_name {
+                        lower_match_pattern_qualified(&arm.pattern, sum_name)
+                    } else {
+                        lower_match_pattern(&arm.pattern)
+                    };
                     out.push_str(&format!(
                         "{}{} => {{\n",
                         "    ".repeat(indent + 1),
-                        lower_match_pattern(&arm.pattern)
+                        pattern
                     ));
                     self.lower_block(&arm.body, out, indent + 2);
                     out.push_str(&format!("{}}},\n", "    ".repeat(indent + 1)));
                 }
                 out.push_str(&format!("{pad}}}\n"));
+            }
+            Stmt::LetElse(stmt) => {
+                let pattern = lower_match_pattern(&stmt.pattern);
+                let value = self.lower_expr(&stmt.value);
+                out.push_str(&format!("{pad}let {pattern} = {value} else {{\n"));
+                self.lower_block(&stmt.else_body, out, indent + 1);
+                out.push_str(&format!("{pad}}};\n"));
+                if !stmt.binding_name.is_empty() {
+                    let binding_type = match &stmt.pattern {
+                        MatchPattern::Variant {
+                            name,
+                            binding: Some(_),
+                            ..
+                        } => self.infer_expr_type(&stmt.value).and_then(|ty| match name.as_str() {
+                            "Some" if ty.name == "Option" => ty.args.first().cloned(),
+                            "Ok" if ty.name == "Result" => ty.args.first().cloned(),
+                            "Err" if ty.name == "Result" => ty.args.get(1).cloned(),
+                            _ => None,
+                        }),
+                        _ => None,
+                    };
+                    if let Some(binding_type) = binding_type {
+                        if self.is_class_type(&binding_type) {
+                            self.managed_bindings.insert(stmt.binding_name.clone());
+                        } else {
+                            self.managed_bindings.remove(&stmt.binding_name);
+                        }
+                        self.value_types
+                            .insert(stmt.binding_name.clone(), binding_type);
+                    }
+                    self.read_view_bindings.remove(&stmt.binding_name);
+                }
             }
             Stmt::Break(_) => out.push_str(&format!("{pad}break;\n")),
             Stmt::Continue(_) => out.push_str(&format!("{pad}continue;\n")),
@@ -620,6 +767,10 @@ impl<'a> RustLowerer<'a> {
                 for arm in &stmt.arms {
                     self.record_block_source_map(&arm.body, generated);
                 }
+            }
+            Stmt::LetElse(stmt) => {
+                self.record_expr_source_map(&stmt.value, generated);
+                self.record_block_source_map(&stmt.else_body, generated);
             }
             Stmt::Expr(expr) => self.record_expr_source_map(expr, generated),
             Stmt::Break(_)
@@ -761,6 +912,8 @@ impl<'a> RustLowerer<'a> {
                         .is_some_and(|ty| !is_copy_type_ref(ty))
                 {
                     format!("{}.clone()", rust_value_ident(name))
+                } else if let Some(sum_name) = self.find_sum_type_for_variant(name) {
+                    format!("{}::{}", rust_ident(&sum_name), rust_ident(name))
                 } else {
                     lower_builtin_value_ident(name)
                         .map(str::to_string)
@@ -1499,5 +1652,68 @@ impl<'a> RustLowerer<'a> {
             return format!("rsscript_runtime::weak(&{value_expr})");
         }
         format!("rsscript_runtime::weak(&{})", self.lower_expr(expr))
+    }
+
+    fn find_sum_type_for_match(&self, arms: &[crate::syntax::ast::MatchArm]) -> Option<String> {
+        // Check if any arm variant name matches a sum type's variant
+        for arm in arms {
+            if let MatchPattern::Variant { name, .. } = &arm.pattern {
+                // Skip built-in Option/Result variants
+                if matches!(name.as_str(), "Some" | "None" | "Ok" | "Err") {
+                    return None;
+                }
+                // Find which sum type owns this variant
+                for item in &self.program.items {
+                    if let Item::SumType(sum) = item {
+                        if sum.variants.iter().any(|v| v.name == *name) {
+                            return Some(sum.name.clone());
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn find_sum_type_for_variant(&self, variant_name: &str) -> Option<String> {
+        // Skip built-in variants
+        if matches!(
+            variant_name,
+            "Some" | "None" | "Ok" | "Err" | "true" | "false"
+        ) {
+            return None;
+        }
+        for item in &self.program.items {
+            if let Item::SumType(sum) = item {
+                if sum.variants.iter().any(|v| v.name == variant_name) {
+                    return Some(sum.name.clone());
+                }
+            }
+        }
+        None
+    }
+}
+
+fn infer_const_type(expr: &Expr) -> String {
+    match expr {
+        Expr::Number(s, _) => {
+            if s.contains('.') {
+                "f64".to_string()
+            } else {
+                "i64".to_string()
+            }
+        }
+        Expr::String(_, _) => "&'static str".to_string(),
+        Expr::Ident(name, _) if name == "true" || name == "false" => "bool".to_string(),
+        _ => "i64".to_string(), // fallback
+    }
+}
+
+fn lower_const_value(expr: &Expr) -> String {
+    match expr {
+        Expr::Number(value, _) => value.clone(),
+        Expr::String(value, _) => format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"")),
+        Expr::Ident(name, _) if name == "true" || name == "false" => name.clone(),
+        _ => "()".to_string(), // unsupported const expression
     }
 }

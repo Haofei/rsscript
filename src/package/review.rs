@@ -542,6 +542,7 @@ fn collect_package_await_sites(sources: &[PackageSource]) -> Vec<PackageReviewAw
                             )
                         })
                     }
+                    Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => Vec::new(),
                 })
                 .map(|mut site| {
                     site.span.file = source.relative_path.clone();
@@ -756,6 +757,24 @@ fn collect_await_sites_from_stmt(
                 );
             }
         }
+        Stmt::LetElse(stmt) => {
+            collect_await_sites_from_expr(
+                function,
+                &stmt.value,
+                live_after,
+                scoped_live,
+                context,
+                sites,
+            );
+            collect_await_sites_from_block(
+                function,
+                &stmt.else_body,
+                live_after,
+                scoped_live,
+                context,
+                sites,
+            );
+        }
         Stmt::Expr(expr) => {
             collect_await_sites_from_expr(function, expr, live_after, scoped_live, context, sites)
         }
@@ -924,6 +943,10 @@ fn collect_stmt_uses(statement: &Stmt, uses: &mut BTreeSet<String>) {
                 collect_block_uses(&arm.body, uses);
             }
         }
+        Stmt::LetElse(stmt) => {
+            collect_expr_uses(&stmt.value, uses);
+            collect_block_uses(&stmt.else_body, uses);
+        }
         Stmt::Expr(expr) => collect_expr_uses(expr, uses),
         Stmt::Break(_)
         | Stmt::Continue(_)
@@ -1023,6 +1046,11 @@ fn remove_stmt_bindings(statement: &Stmt, uses: &mut BTreeSet<String>) {
                 {
                     uses.remove(binding);
                 }
+            }
+        }
+        Stmt::LetElse(stmt) => {
+            if !stmt.binding_name.is_empty() {
+                uses.remove(&stmt.binding_name);
             }
         }
         Stmt::Return(_)

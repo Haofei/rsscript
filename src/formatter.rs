@@ -53,7 +53,73 @@ impl Formatter {
             }
             match item {
                 Item::Type(ty) => self.type_decl(ty),
+                Item::SumType(sum) => {
+                    if sum.is_public {
+                        self.out.push_str("pub ");
+                    }
+                    self.out.push_str("sum ");
+                    self.out.push_str(&sum.name);
+                    if !sum.derives.is_empty() {
+                        self.out.push_str(" derives(");
+                        self.out.push_str(&sum.derives.join(", "));
+                        self.out.push(')');
+                    }
+                    self.out.push_str(" {\n");
+                    for variant in &sum.variants {
+                        self.out.push_str("    ");
+                        self.out.push_str(&variant.name);
+                        if !variant.fields.is_empty() {
+                            self.out.push('(');
+                            for (i, field) in variant.fields.iter().enumerate() {
+                                if i > 0 {
+                                    self.out.push_str(", ");
+                                }
+                                self.out.push_str(&field.name);
+                                self.out.push_str(": ");
+                                self.type_ref(&field.ty);
+                            }
+                            self.out.push(')');
+                        }
+                        self.out.push('\n');
+                    }
+                    self.out.push_str("}\n");
+                }
+                Item::TypeAlias(alias) => {
+                    if alias.is_public {
+                        self.out.push_str("pub ");
+                    }
+                    self.out.push_str("type ");
+                    self.out.push_str(&alias.name);
+                    self.generic_params(&alias.type_params);
+                    self.out.push_str(" = ");
+                    self.type_ref(&alias.target);
+                    self.out.push('\n');
+                }
+                Item::Const(decl) => {
+                    if decl.is_public {
+                        self.out.push_str("pub ");
+                    }
+                    self.out.push_str("const ");
+                    self.out.push_str(&decl.name);
+                    if let Some(ty) = &decl.type_annotation {
+                        self.out.push_str(": ");
+                        self.type_ref(ty);
+                    }
+                    self.out.push_str(" = ");
+                    self.expr(&decl.value, 0);
+                    self.out.push('\n');
+                }
                 Item::Function(function) => self.function_decl(function),
+                Item::Module(m) => {
+                    self.out.push_str("module ");
+                    self.out.push_str(&m.path.join("."));
+                    self.out.push('\n');
+                }
+                Item::Use(u) => {
+                    self.out.push_str("use ");
+                    self.out.push_str(&u.path.join("."));
+                    self.out.push('\n');
+                }
             }
             wrote_item = true;
         }
@@ -79,6 +145,11 @@ impl Formatter {
         self.out.push(' ');
         self.out.push_str(&ty.name);
         self.generic_params(&ty.type_params);
+        if !ty.derives.is_empty() {
+            self.out.push_str(" derives(");
+            self.out.push_str(&ty.derives.join(", "));
+            self.out.push(')');
+        }
         if ty.fields.is_empty() && ty.drop_body.is_none() {
             return;
         }
@@ -309,6 +380,16 @@ impl Formatter {
                     self.indent(indent + 1);
                     self.out.push_str("}\n");
                 }
+                self.indent(indent);
+                self.out.push('}');
+            }
+            Stmt::LetElse(stmt) => {
+                self.out.push_str("let ");
+                self.match_pattern(&stmt.pattern);
+                self.out.push_str(" = ");
+                self.expr(&stmt.value, 0);
+                self.out.push_str(" else {\n");
+                self.block(&stmt.else_body, indent + 1);
                 self.indent(indent);
                 self.out.push('}');
             }

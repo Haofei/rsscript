@@ -1,0 +1,25 @@
+struct Point derives(Clone, Eq, Hash) {
+    x: Int
+    y: Int
+}
+
+sum Direction derives(Clone, Eq) {
+    North
+    South
+    East
+    West
+}
+
+fn describe(d: read Direction) -> String {
+    match d {
+        North => { return "north" }
+        South => { return "south" }
+        East => { return "east" }
+        West => { return "west" }
+    }
+}
+
+fn main() -> Unit {
+    let d = North
+    let desc = describe(d: read d)
+}

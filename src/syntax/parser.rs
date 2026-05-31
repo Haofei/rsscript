@@ -2,11 +2,12 @@ use std::collections::HashSet;
 
 use crate::lexer::{Token, TokenKind, lex};
 use crate::syntax::ast::{
-    BinaryOp, Block, CallArg, Callee, DataEffect, DuplicateFileFeature, EffectDecl, Expr,
-    FieldDecl, FileFeature, FileFeatureScope, ForStmt, FunctionDecl, GenericBound, GenericParam,
-    IfStmt, Item, LetKind, LetStmt, LoopStmt, MatchArm, MatchPattern, MatchStmt, Param, Program,
-    ProtocolDecl, ProtocolImpl, ProtocolImplMapping, ReturnStmt, Stmt, TypeDecl, TypeKind, TypeRef,
-    UnknownFileFeature, WithStmt,
+    BinaryOp, Block, CallArg, Callee, ConstDecl, DataEffect, DuplicateFileFeature, EffectDecl,
+    Expr, FieldDecl, FileFeature, FileFeatureScope, ForStmt, FunctionDecl, GenericBound,
+    GenericParam, IfStmt, Item, LetElseStmt, LetKind, LetStmt, LoopStmt, MatchArm, MatchPattern,
+    MatchStmt, ModuleDecl, Param, Program, ProtocolDecl, ProtocolImpl, ProtocolImplMapping,
+    ReturnStmt, Stmt, SumTypeDecl, SumVariant, TypeAliasDecl, TypeDecl, TypeKind, TypeRef,
+    UnknownFileFeature, UseDecl, WithStmt,
 };
 
 pub fn parse_source(file: &str, source: &str) -> Program {
@@ -66,6 +67,16 @@ impl Parser<'_> {
                     malformed_declaration_spans.push(self.tokens[start].span.clone());
                     self.index = skip_unknown_top_level(self.tokens, start);
                 }
+            } else if self.at_ident("sum")
+                || (self.at_ident("pub") && self.peek_ident(1, "sum"))
+            {
+                let start = self.index;
+                if let Some(item) = self.parse_sum_type_decl() {
+                    items.push(Item::SumType(item));
+                } else {
+                    malformed_declaration_spans.push(self.tokens[start].span.clone());
+                    self.index = skip_unknown_top_level(self.tokens, start);
+                }
             } else if self.at_ident("protocol") {
                 let start = self.index;
                 if let Some((protocol, functions)) = self.parse_protocol_decl() {
@@ -90,6 +101,38 @@ impl Parser<'_> {
                 } else {
                     malformed_declaration_spans.push(self.tokens[start].span.clone());
                     self.index = skip_unknown_top_level(self.tokens, start);
+                }
+            } else if self.at_ident("type")
+                || (self.at_ident("pub") && self.peek_ident(1, "type"))
+            {
+                let start = self.index;
+                if let Some(alias) = self.parse_type_alias_decl() {
+                    items.push(Item::TypeAlias(alias));
+                } else {
+                    malformed_declaration_spans.push(self.tokens[start].span.clone());
+                    self.index = skip_unknown_top_level(self.tokens, start);
+                }
+            } else if self.at_ident("const")
+                || (self.at_ident("pub") && self.peek_ident(1, "const"))
+            {
+                let start = self.index;
+                if let Some(decl) = self.parse_const_decl() {
+                    items.push(Item::Const(decl));
+                } else {
+                    malformed_declaration_spans.push(self.tokens[start].span.clone());
+                    self.index = skip_unknown_top_level(self.tokens, start);
+                }
+            } else if self.at_ident("module") && !self.peek_ident(1, "{") {
+                if let Some(decl) = self.parse_module_decl() {
+                    items.push(Item::Module(decl));
+                } else {
+                    self.index += 1;
+                }
+            } else if self.at_ident("use") {
+                if let Some(decl) = self.parse_use_decl() {
+                    items.push(Item::Use(decl));
+                } else {
+                    self.index += 1;
                 }
             } else if self.at_ident("pub")
                 || self.at_ident("async")
@@ -168,6 +211,166 @@ impl Parser<'_> {
         }
     }
 
+    // type Name = TargetType
+    // type Name<T> = Result<T, Error>
+    // pub type Name = TargetType
+    fn parse_type_alias_decl(&mut self) -> Option<TypeAliasDecl> {
+        let span = self.current()?.span.clone();
+        let is_public = self.at_ident("pub");
+        if is_public {
+            self.index += 1;
+        }
+        if !self.at_ident("type") {
+            return None;
+        }
+        self.index += 1;
+        let name = self.take_ident_name()?;
+        let parsed_generics = self.parse_generic_params();
+        if !self.at_symbol("=") {
+            return None;
+        }
+        self.index += 1;
+        let ty_start = self.index;
+        let ty_end = next_line_or_block_end(self.tokens, ty_start, self.tokens.len());
+        let target = parse_type_ref(self.tokens, ty_start, ty_end)?;
+        self.index = ty_end;
+        Some(TypeAliasDecl {
+            name,
+            type_params: parsed_generics.params,
+            target,
+            is_public,
+            span,
+        })
+    }
+
+    // sum PaymentState { Pending, Authorized(receipt: Receipt), Failed(reason: String) }
+    // pub sum Name<T> { ... }
+    fn parse_sum_type_decl(&mut self) -> Option<SumTypeDecl> {
+        let span = self.current()?.span.clone();
+        let is_public = self.at_ident("pub");
+        if is_public {
+            self.index += 1;
+        }
+        if !self.at_ident("sum") {
+            return None;
+        }
+        self.index += 1;
+        let name = self.take_ident_name()?;
+        let parsed_generics = self.parse_generic_params();
+        let derives = self.parse_derives();
+        if !self.at_symbol("{") {
+            return None;
+        }
+        let open = self.index;
+        let close = find_matching(self.tokens, open, "{", "}")?;
+        self.index = open + 1;
+        let mut variants = Vec::new();
+        while self.index < close {
+            if let Some(variant) = self.parse_sum_variant(close) {
+                variants.push(variant);
+            } else {
+                self.index += 1;
+            }
+        }
+        self.index = close + 1;
+        Some(SumTypeDecl {
+            name,
+            type_params: parsed_generics.params,
+            derives,
+            variants,
+            is_public,
+            span,
+        })
+    }
+
+    fn parse_sum_variant(&mut self, limit: usize) -> Option<SumVariant> {
+        if self.index >= limit {
+            return None;
+        }
+        let span = self.current()?.span.clone();
+        let name = self.take_ident_name()?;
+        let mut fields = Vec::new();
+        if self.at_symbol("(") {
+            let open = self.index;
+            let close = find_matching(self.tokens, open, "(", ")")?;
+            // Parse fields inside parens: name: Type, name: Type, ...
+            let mut pos = open + 1;
+            while pos < close {
+                let field_name = ident_name(self.tokens.get(pos)?)?;
+                if pos + 1 < close && self.tokens[pos + 1].symbol(":") {
+                    let ty_start = pos + 2;
+                    let ty_end = (ty_start..close)
+                        .find(|i| self.tokens[*i].symbol(","))
+                        .unwrap_or(close);
+                    if let Some(ty) = parse_type_ref(self.tokens, ty_start, ty_end) {
+                        fields.push(FieldDecl {
+                            name: field_name.to_string(),
+                            ty,
+                            is_handle: false,
+                            is_weak: false,
+                            span: self.tokens[pos].span.clone(),
+                        });
+                    }
+                    pos = if ty_end < close { ty_end + 1 } else { close };
+                } else {
+                    pos += 1;
+                }
+            }
+            self.index = close + 1;
+        }
+        Some(SumVariant {
+            name,
+            fields,
+            span,
+        })
+    }
+
+    // const NAME: Type = value
+    // pub const NAME: Type = value
+    // const NAME = value  (type inferred)
+    fn parse_const_decl(&mut self) -> Option<ConstDecl> {
+        let span = self.current()?.span.clone();
+        let is_public = self.at_ident("pub");
+        if is_public {
+            self.index += 1;
+        }
+        if !self.at_ident("const") {
+            return None;
+        }
+        self.index += 1;
+        let name = self.take_ident_name()?;
+        let type_annotation = if self.at_symbol(":") {
+            self.index += 1;
+            let ty_start = self.index;
+            // scan forward to '=' to find the type end
+            let mut eq_pos = ty_start;
+            while eq_pos < self.tokens.len() && !self.tokens[eq_pos].symbol("=") {
+                eq_pos += 1;
+            }
+            let ty = parse_type_ref(self.tokens, ty_start, eq_pos)?;
+            self.index = eq_pos;
+            Some(ty)
+        } else {
+            None
+        };
+        if !self.at_symbol("=") {
+            return None;
+        }
+        self.index += 1;
+        // Parse const value expression: scan to end of line
+        let expr_start = self.index;
+        let expr_end = next_line_or_block_end(self.tokens, expr_start, self.tokens.len());
+        let value = parse_expr(self.tokens, expr_start, expr_end)?;
+        self.index = expr_end;
+        Some(ConstDecl {
+            name,
+            type_annotation,
+            value,
+            is_public,
+            span,
+        })
+    }
+
     fn parse_type_decl(&mut self) -> Option<TypeDecl> {
         let span = self.current()?.span.clone();
         let is_opaque = self.at_ident("opaque");
@@ -188,6 +391,7 @@ impl Parser<'_> {
         let parsed_type_params = self.parse_generic_params();
         let type_params = parsed_type_params.params;
         let malformed_generic_param_spans = parsed_type_params.malformed_spans;
+        let derives = self.parse_derives();
         let (fields, malformed_field_spans, drop_body) = if self.at_symbol("{") {
             let open = self.index;
             let close = find_matching(self.tokens, open, "{", "}")?;
@@ -216,6 +420,7 @@ impl Parser<'_> {
             is_opaque,
             type_params,
             malformed_generic_param_spans,
+            derives,
             fields,
             malformed_field_spans,
             drop_body,
@@ -528,6 +733,73 @@ impl Parser<'_> {
         let params = parse_generic_params(self.tokens, open + 1, close);
         self.index = close + 1;
         params
+    }
+
+    /// Parse `derives(Debug, Clone, Eq)` annotation.
+    /// Returns empty vec if no derives annotation present.
+    fn parse_derives(&mut self) -> Vec<String> {
+        if !self.at_ident("derives") {
+            return Vec::new();
+        }
+        self.index += 1;
+        if !self.at_symbol("(") {
+            return Vec::new();
+        }
+        let open = self.index;
+        let Some(close) = find_matching(self.tokens, open, "(", ")") else {
+            return Vec::new();
+        };
+        self.index = open + 1;
+        let mut derives = Vec::new();
+        while self.index < close {
+            if let Some(name) = self.take_ident_name() {
+                derives.push(name);
+            }
+            // skip commas
+            if self.at_symbol(",") {
+                self.index += 1;
+            }
+        }
+        self.index = close + 1;
+        derives
+    }
+
+    /// Parse `module package.review` declaration.
+    fn parse_module_decl(&mut self) -> Option<ModuleDecl> {
+        let span = self.current()?.span.clone();
+        if !self.at_ident("module") {
+            return None;
+        }
+        self.index += 1;
+        let path = self.parse_dotted_path()?;
+        Some(ModuleDecl { path, span })
+    }
+
+    /// Parse `use package.contract.PackageContract` declaration.
+    fn parse_use_decl(&mut self) -> Option<UseDecl> {
+        let span = self.current()?.span.clone();
+        if !self.at_ident("use") {
+            return None;
+        }
+        self.index += 1;
+        let path = self.parse_dotted_path()?;
+        Some(UseDecl { path, span })
+    }
+
+    /// Parse a dot-separated path like `package.contract.PackageContract`.
+    fn parse_dotted_path(&mut self) -> Option<Vec<String>> {
+        let mut path = Vec::new();
+        let first = self.take_ident_name()?;
+        path.push(first);
+        while self.at_symbol(".") {
+            self.index += 1;
+            if let Some(segment) = self.take_ident_name() {
+                path.push(segment);
+            } else {
+                break;
+            }
+        }
+        Some(path)
     }
 
     fn is_eof(&self) -> bool {
@@ -957,7 +1229,84 @@ fn parse_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
     (statement, end)
 }
 
+// let Some(binding) = expr else { diverging-block }
+// let Ok(binding) = expr else { diverging-block }
+fn try_parse_let_else(tokens: &[Token], start: usize, limit: usize) -> Option<(Stmt, usize)> {
+    // start should be at `let` or `local`
+    if !tokens[start].is_ident_text("let") && !tokens[start].is_ident_text("local") {
+        return None;
+    }
+    let pattern_start = start + 1;
+    // Check for variant pattern: Some(...) or Ok(...) or None or Err(...)
+    let variant_name = ident_name(tokens.get(pattern_start)?)?;
+    if !matches!(variant_name, "Some" | "Ok" | "None" | "Err") {
+        return None;
+    }
+    // Parse binding inside parens (if any)
+    let binding_name;
+    let after_pattern;
+    if tokens.get(pattern_start + 1)?.symbol("(") {
+        let close = find_matching(tokens, pattern_start + 1, "(", ")")?;
+        binding_name = ident_name(tokens.get(pattern_start + 2)?)
+            .unwrap_or("")
+            .to_string();
+        after_pattern = close + 1;
+    } else {
+        binding_name = String::new();
+        after_pattern = pattern_start + 1;
+    }
+    // Expect `=`
+    if !tokens.get(after_pattern)?.symbol("=") {
+        return None;
+    }
+    // Find `else` keyword before a `{`
+    let mut else_pos = None;
+    let mut i = after_pattern + 1;
+    while i < limit {
+        if tokens[i].is_ident_text("else") {
+            else_pos = Some(i);
+            break;
+        }
+        if tokens[i].symbol("{") {
+            // Could be the else block's opening brace - check if preceded by else
+            break;
+        }
+        i += 1;
+    }
+    let else_pos = else_pos?;
+    // Parse expression between `=` and `else`
+    let value = parse_expr(tokens, after_pattern + 1, else_pos)?;
+    // Parse else block
+    let open = (else_pos + 1..limit).find(|idx| tokens[*idx].symbol("{"))?;
+    let close = find_matching(tokens, open, "{", "}")?;
+    let else_body = parse_block(tokens, open + 1, close);
+    let pattern = MatchPattern::Variant {
+        name: variant_name.to_string(),
+        binding: if binding_name.is_empty() {
+            None
+        } else {
+            Some(binding_name.clone())
+        },
+        span: tokens[pattern_start].span.clone(),
+    };
+    Some((
+        Stmt::LetElse(LetElseStmt {
+            pattern,
+            value,
+            else_body,
+            binding_name,
+            span: tokens[start].span.clone(),
+        }),
+        close + 1,
+    ))
+}
+
 fn parse_let_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
+    // Try to parse `let Some(binding) = expr else { ... }` or `let Ok(binding) = expr else { ... }`
+    if let Some(result) = try_parse_let_else(tokens, start, limit) {
+        return result;
+    }
+
     let kind = if tokens[start].is_ident_text("local") {
         LetKind::Local
     } else {

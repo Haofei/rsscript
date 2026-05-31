@@ -312,7 +312,9 @@ fn check_binding_type(
     if unresolved_generic_type(actual) {
         return;
     }
-    if argument_type_matches(expected, actual) {
+    let resolved_expected = analyzer.resolve_type_alias(expected);
+    let resolved_actual = analyzer.resolve_type_alias(actual);
+    if argument_type_matches(resolved_expected, resolved_actual) {
         return;
     }
     analyzer.diagnostics.push(

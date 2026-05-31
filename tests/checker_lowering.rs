@@ -3279,7 +3279,7 @@ fn syntax_parser_accepts_all_fixtures() {
             assert!(
                 program.items.iter().any(|item| match item {
                     Item::Function(function) => !function.body.statements.is_empty(),
-                    Item::Type(_) => false,
+                    Item::Type(_) | Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => false,
                 }),
                 "{} missing function body statements",
                 path.display()

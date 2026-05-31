@@ -134,14 +134,39 @@ fn analyze_program(
     syntax_program: crate::syntax::ast::Program,
     hir: Hir,
 ) -> Vec<Diagnostic> {
+    use crate::syntax::ast::Item;
+    let type_aliases = syntax_program
+        .items
+        .iter()
+        .filter_map(|item| {
+            if let Item::TypeAlias(alias) = item {
+                Some((alias.name.clone(), type_ref_display_name(&alias.target)))
+            } else {
+                None
+            }
+        })
+        .collect();
     let mut analyzer = Analyzer {
         tokens: &tokens,
         syntax_program,
         hir,
         diagnostics: Vec::new(),
+        type_aliases,
     };
     analyzer.run();
     analyzer.diagnostics
+}
+
+fn type_ref_display_name(ty: &crate::syntax::ast::TypeRef) -> String {
+    if ty.args.is_empty() {
+        ty.name.clone()
+    } else {
+        format!(
+            "{}<{}>",
+            ty.name,
+            ty.args.iter().map(type_ref_display_name).collect::<Vec<_>>().join(", ")
+        )
+    }
 }
 
 pub(crate) struct Analyzer<'a> {
@@ -149,6 +174,7 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) syntax_program: crate::syntax::ast::Program,
     pub(crate) hir: Hir,
     pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) type_aliases: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,6 +199,13 @@ impl RuntimeGuarantee {
 }
 
 impl Analyzer<'_> {
+    pub(crate) fn resolve_type_alias<'b>(&'b self, type_name: &'b str) -> &'b str {
+        self.type_aliases
+            .get(type_name)
+            .map(|s| s.as_str())
+            .unwrap_or(type_name)
+    }
+
     fn run(&mut self) {
         self.check_single_feature_declaration();
         self.check_unknown_file_features();
@@ -382,6 +415,7 @@ impl Analyzer<'_> {
                     );
                 }
             }
+            Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => {}
         }
     }
 
@@ -483,6 +517,10 @@ impl Analyzer<'_> {
                 for arm in &stmt.arms {
                     self.check_unsupported_syntax_block(&arm.body);
                 }
+            }
+            Stmt::LetElse(stmt) => {
+                self.check_unsupported_syntax_expr(&stmt.value);
+                self.check_unsupported_syntax_block(&stmt.else_body);
             }
             Stmt::MalformedMatch(span) => self.unsupported_syntax(
                 span.clone(),
@@ -618,7 +656,7 @@ impl Analyzer<'_> {
                 for arm in &stmt.arms {
                     self.check_match_exhaustiveness_block(&arm.body);
                 }
-                if !match_is_exhaustive(&stmt.arms) {
+                if !self.match_is_exhaustive_with_context(&stmt.arms) {
                     self.diagnostics.push(
                         Diagnostic::error(
                             code::NON_EXHAUSTIVE_MATCH,
@@ -627,7 +665,7 @@ impl Analyzer<'_> {
                             "non-exhaustive match",
                         )
                         .with_cause(
-                            "Supported match statements must cover `Some`/`None`, `Ok`/`Err`, or include `_`.",
+                            "Supported match statements must cover `Some`/`None`, `Ok`/`Err`, all sum type variants, or include `_`.",
                         )
                         .with_fix(
                             "add_missing_arm",
@@ -636,6 +674,10 @@ impl Analyzer<'_> {
                         ),
                     );
                 }
+            }
+            Stmt::LetElse(stmt) => {
+                self.check_match_exhaustiveness_expr(&stmt.value);
+                self.check_match_exhaustiveness_block(&stmt.else_body);
             }
             Stmt::Expr(expr) => self.check_match_exhaustiveness_expr(expr),
             Stmt::Break(_)
@@ -647,6 +689,37 @@ impl Analyzer<'_> {
             | Stmt::MalformedMatch(_)
             | Stmt::Unknown(_) => {}
         }
+    }
+
+    fn match_is_exhaustive_with_context(
+        &self,
+        arms: &[crate::syntax::ast::MatchArm],
+    ) -> bool {
+        // First check with standard Option/Result logic
+        if match_is_exhaustive(arms) {
+            return true;
+        }
+        // Then check if all variants of a sum type are covered
+        let mut arm_names: HashSet<&str> = HashSet::new();
+        for arm in arms {
+            match &arm.pattern {
+                MatchPattern::Wildcard(_) => return true,
+                MatchPattern::Variant { name, .. } => {
+                    arm_names.insert(name.as_str());
+                }
+            }
+        }
+        // Check if arm names completely cover any declared sum type
+        for item in &self.syntax_program.items {
+            if let Item::SumType(sum) = item {
+                let variant_names: HashSet<&str> =
+                    sum.variants.iter().map(|v| v.name.as_str()).collect();
+                if !variant_names.is_empty() && variant_names.is_subset(&arm_names) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn check_match_exhaustiveness_expr(&mut self, expr: &Expr) {
@@ -1127,6 +1200,7 @@ impl Analyzer<'_> {
                         }
                     }
                 }
+                Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => {}
             }
         }
     }
@@ -1158,6 +1232,7 @@ impl Analyzer<'_> {
                         self.check_protocol_bound(param, &protocol_names);
                     }
                 }
+                Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => {}
             }
         }
 
@@ -1284,6 +1359,7 @@ impl Analyzer<'_> {
                         self.check_unknown_type_ref(return_ty, &generic_params);
                     }
                 }
+                Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => {}
             }
         }
     }
@@ -1327,6 +1403,21 @@ impl Analyzer<'_> {
     }
 
     fn check_unknown_bindings(&mut self) {
+        // Collect top-level const names and sum type variant names as globally visible bindings
+        let mut global_names: HashSet<String> = HashSet::new();
+        for item in &self.syntax_program.items {
+            match item {
+                Item::Const(decl) => {
+                    global_names.insert(decl.name.clone());
+                }
+                Item::SumType(sum) => {
+                    for variant in &sum.variants {
+                        global_names.insert(variant.name.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
         let items = self.syntax_program.items.clone();
         for item in &items {
             let Item::Function(function) = item else {
@@ -1339,11 +1430,12 @@ impl Analyzer<'_> {
             else {
                 continue;
             };
-            let mut visible = function
+            let mut visible: HashSet<String> = function
                 .params
                 .iter()
                 .map(|param| param.name.clone())
-                .collect::<HashSet<_>>();
+                .collect();
+            visible.extend(global_names.iter().cloned());
             self.check_unknown_bindings_in_block(&block, &mut visible);
         }
     }
@@ -1669,6 +1761,10 @@ impl Analyzer<'_> {
                     self.check_runtime_guarantee_block(guarantee, function_name, &arm.body);
                 }
             }
+            Stmt::LetElse(stmt) => {
+                self.check_runtime_guarantee_expr(guarantee, function_name, &stmt.value);
+                self.check_runtime_guarantee_block(guarantee, function_name, &stmt.else_body);
+            }
             Stmt::Break(_)
             | Stmt::Continue(_)
             | Stmt::MalformedWith(_)
@@ -1851,6 +1947,7 @@ impl Analyzer<'_> {
                         }
                     }
                 }
+                Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => {}
             }
         }
     }
@@ -1907,6 +2004,7 @@ impl Analyzer<'_> {
                     }
                     self.check_resource_pool_calls_in_block(&function.body);
                 }
+                Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => {}
             }
         }
     }
@@ -1938,6 +2036,7 @@ impl Analyzer<'_> {
                     }
                     self.check_resource_generic_calls_in_block(&function.body);
                 }
+                Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => {}
             }
         }
     }
@@ -2020,6 +2119,10 @@ impl Analyzer<'_> {
                 for arm in &stmt.arms {
                     self.check_resource_pool_calls_in_block(&arm.body);
                 }
+            }
+            Stmt::LetElse(stmt) => {
+                self.check_resource_pool_calls_in_expr(&stmt.value);
+                self.check_resource_pool_calls_in_block(&stmt.else_body);
             }
             Stmt::Break(_)
             | Stmt::Continue(_)
@@ -2119,6 +2222,10 @@ impl Analyzer<'_> {
                     self.check_resource_generic_calls_in_block(&arm.body);
                 }
             }
+            Stmt::LetElse(stmt) => {
+                self.check_resource_generic_calls_in_expr(&stmt.value);
+                self.check_resource_generic_calls_in_block(&stmt.else_body);
+            }
             Stmt::Break(_)
             | Stmt::Continue(_)
             | Stmt::MalformedWith(_)
@@ -2171,7 +2278,7 @@ impl Analyzer<'_> {
     fn check_resource_pool_arg(&mut self, type_name: &str, span: &crate::diagnostic::Span) {
         match self.hir.type_kind(type_name) {
             Some(HirTypeKind::Resource) | None => {}
-            Some(HirTypeKind::Class) | Some(HirTypeKind::Struct) => {
+            Some(HirTypeKind::Class) | Some(HirTypeKind::Struct) | Some(HirTypeKind::Sum) => {
                 self.invalid_resource_pool_type_diagnostic(
                     format!(
                         "ResourcePool can only hold resources, but `{type_name}` is not a resource."
@@ -2871,7 +2978,12 @@ fn removed_runtime_effect_replacement(effect_name: &str) -> Option<&'static str>
 
 fn item_span(item: &Item) -> &crate::diagnostic::Span {
     match item {
+        Item::Module(decl) => &decl.span,
+        Item::Use(decl) => &decl.span,
         Item::Type(decl) => &decl.span,
+        Item::SumType(sum) => &sum.span,
+        Item::TypeAlias(alias) => &alias.span,
+        Item::Const(decl) => &decl.span,
         Item::Function(function) => &function.span,
     }
 }

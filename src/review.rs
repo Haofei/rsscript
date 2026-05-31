@@ -456,7 +456,7 @@ fn review_map_file_region_drafts(
         .iter()
         .filter_map(|item| match item {
             Item::Function(function) => Some((function.name.clone(), function.span.line)),
-            Item::Type(_) => None,
+            Item::Type(_) | Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => None,
         })
         .collect::<Vec<_>>();
     function_lines.sort_by_key(|(_, line)| *line);
@@ -473,7 +473,7 @@ fn review_map_file_region_drafts(
                 &function_lines,
                 source.total_lines,
             )),
-            Item::Type(_) => None,
+            Item::Type(_) | Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => None,
         })
         .collect()
 }
@@ -809,6 +809,10 @@ fn collect_review_map_local_closure_bindings_stmt(stmt: &Stmt, bindings: &mut BT
                 collect_review_map_local_closure_bindings_block(&arm.body, bindings);
             }
         }
+        Stmt::LetElse(stmt) => {
+            collect_review_map_local_closure_bindings_expr(&stmt.value, bindings);
+            collect_review_map_local_closure_bindings_block(&stmt.else_body, bindings);
+        }
         Stmt::Expr(expr) => collect_review_map_local_closure_bindings_expr(expr, bindings),
         Stmt::Break(_)
         | Stmt::Continue(_)
@@ -996,6 +1000,22 @@ fn collect_review_map_facts_stmt(
                     facts,
                 );
             }
+        }
+        Stmt::LetElse(stmt) => {
+            collect_review_map_facts_expr(
+                &stmt.value,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
+            collect_review_map_facts_block(
+                &stmt.else_body,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
         }
         Stmt::Expr(expr) => {
             collect_review_map_facts_expr(expr, hir, callback_params, local_closure_bindings, facts)
@@ -1270,6 +1290,12 @@ fn collect_spawn_capture_names_from_stmt(stmt: &Stmt, captures: &mut BTreeSet<St
                 for statement in &arm.body.statements {
                     collect_spawn_capture_names_from_stmt(statement, captures);
                 }
+            }
+        }
+        Stmt::LetElse(stmt) => {
+            collect_spawn_capture_names(&stmt.value, captures);
+            for statement in &stmt.else_body.statements {
+                collect_spawn_capture_names_from_stmt(statement, captures);
             }
         }
         Stmt::Break(_)
@@ -2019,7 +2045,7 @@ fn collect_type_sigs(items: &[Item]) -> BTreeMap<String, TypeSig> {
         .iter()
         .filter_map(|item| match item {
             Item::Type(type_decl) => Some((type_decl.name.clone(), type_sig(type_decl))),
-            Item::Function(_) => None,
+            Item::Function(_) | Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => None,
         })
         .collect()
 }
@@ -2077,7 +2103,7 @@ fn collect_function_sigs(items: &[Item]) -> BTreeMap<String, FunctionSig> {
         .iter()
         .filter_map(|item| match item {
             Item::Function(function) => Some((function.name.clone(), function_sig(function))),
-            Item::Type(_) => None,
+            Item::Type(_) | Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => None,
         })
         .collect()
 }
@@ -2580,6 +2606,10 @@ fn collect_boundary_stmt(statement: &Stmt, path: &str, boundary: &mut BoundarySi
             for (index, arm) in stmt.arms.iter().enumerate() {
                 collect_boundary_block(&arm.body, &format!("{path}.arm{}", index + 1), boundary);
             }
+        }
+        Stmt::LetElse(stmt) => {
+            collect_boundary_expr(&stmt.value, &format!("{path}.let_else"), boundary);
+            collect_boundary_block(&stmt.else_body, &format!("{path}.else"), boundary);
         }
         Stmt::Expr(expr) => collect_boundary_expr(expr, path, boundary),
         Stmt::Break(_)

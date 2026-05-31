@@ -122,7 +122,7 @@ fn check_operator_overload_attempts(analyzer: &mut Analyzer<'_>) {
         .iter()
         .filter_map(|item| match item {
             Item::Function(function) => Some(function.clone()),
-            Item::Type(_) => None,
+            Item::Type(_) | Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => None,
         })
         .collect::<Vec<FunctionDecl>>();
 
