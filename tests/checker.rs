@@ -4425,6 +4425,32 @@ pub fn run() -> Unit {
 }
 
 #[test]
+fn rust_lowering_rejects_unbound_async_native_calls_before_generation() {
+    let source = r#"
+features: async, native
+
+struct HostError
+
+async native fn Host.wait(ms: Int) -> Result<Unit, HostError>
+    effects(native)
+
+async fn main() -> Result<Unit, HostError> {
+    await Host.wait(ms: 1)?
+    return Ok(Unit)
+}
+"#;
+    let diagnostics = lower_source_to_rust("unbound-async-native.rss", source)
+        .expect_err("unbound native async call should fail before Rust generation");
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0015" && diagnostic.label == "unbound native declaration call"
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn checker_rejects_managed_type_drop_blocks() {
     let source = r#"
 class Session {

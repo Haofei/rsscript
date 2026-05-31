@@ -91,7 +91,7 @@ pub fn lower_source_to_rust_with_map(
     }
 
     let program = parse_source(file, source);
-    let lowering_diagnostics = validate_executable_declarations(&program);
+    let lowering_diagnostics = validate_executable_declarations(&program, &BTreeMap::new());
     if !lowering_diagnostics.is_empty() {
         return Err(lowering_diagnostics);
     }
@@ -161,15 +161,15 @@ pub fn lower_sources_to_rust_package_with_options(
             .iter()
             .map(|(path, source)| parse_source(path, source)),
     );
-    let lowering_diagnostics = validate_executable_declarations(&program);
-    if !lowering_diagnostics.is_empty() {
-        return Err(lowering_diagnostics);
-    }
     let native_bindings = native_dependencies
         .iter()
         .flat_map(|dependency| dependency.bindings.iter())
         .map(|(symbol, target)| (symbol.clone(), target.clone()))
         .collect::<BTreeMap<_, _>>();
+    let lowering_diagnostics = validate_executable_declarations(&program, &native_bindings);
+    if !lowering_diagnostics.is_empty() {
+        return Err(lowering_diagnostics);
+    }
     let lowered = lower_program_to_rust_with_map_with_native_bindings(&program, native_bindings);
     let package_name = cargo_package_name(package_name);
     let native_dependency_toml = native_dependencies
@@ -298,9 +298,13 @@ fn lower_program_to_rust_with_map_with_native_bindings(
     RustLowerer::new(program, native_bindings).lower()
 }
 
-fn validate_executable_declarations(program: &Program) -> Vec<Diagnostic> {
+fn validate_executable_declarations(
+    program: &Program,
+    native_bindings: &BTreeMap<String, String>,
+) -> Vec<Diagnostic> {
     let mut implemented = BTreeSet::new();
     let mut bodyless = BTreeMap::new();
+    let mut native_bodyless = BTreeMap::new();
     let protocol_method_keys = protocol_method_keys(program);
     for item in &program.items {
         let Item::Function(function) = item else {
@@ -311,7 +315,9 @@ fn validate_executable_declarations(program: &Program) -> Vec<Diagnostic> {
             continue;
         }
         if function.body.statements.is_empty() {
-            if !function.is_native {
+            if function.is_native {
+                native_bodyless.insert(key, function.name.clone());
+            } else {
                 bodyless.insert(key, function.name.clone());
             }
         } else {
@@ -320,12 +326,18 @@ fn validate_executable_declarations(program: &Program) -> Vec<Diagnostic> {
     }
     for key in &implemented {
         bodyless.remove(key);
+        native_bodyless.remove(key);
     }
-    if bodyless.is_empty() {
+    if bodyless.is_empty() && native_bodyless.is_empty() {
         return Vec::new();
     }
 
     let mut diagnostics = Vec::new();
+    let context = ExecutableDeclarationValidation {
+        bodyless: &bodyless,
+        native_bodyless: &native_bodyless,
+        native_bindings,
+    };
     for item in &program.items {
         let Item::Function(function) = item else {
             continue;
@@ -333,65 +345,71 @@ fn validate_executable_declarations(program: &Program) -> Vec<Diagnostic> {
         if function.body.statements.is_empty() {
             continue;
         }
-        validate_executable_declarations_in_block(&function.body, &bodyless, &mut diagnostics);
+        validate_executable_declarations_in_block(&function.body, &context, &mut diagnostics);
     }
     diagnostics
 }
 
+struct ExecutableDeclarationValidation<'a> {
+    bodyless: &'a BTreeMap<String, String>,
+    native_bodyless: &'a BTreeMap<String, String>,
+    native_bindings: &'a BTreeMap<String, String>,
+}
+
 fn validate_executable_declarations_in_block(
     block: &Block,
-    bodyless: &BTreeMap<String, String>,
+    context: &ExecutableDeclarationValidation<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for statement in &block.statements {
-        validate_executable_declarations_in_stmt(statement, bodyless, diagnostics);
+        validate_executable_declarations_in_stmt(statement, context, diagnostics);
     }
 }
 
 fn validate_executable_declarations_in_stmt(
     statement: &Stmt,
-    bodyless: &BTreeMap<String, String>,
+    context: &ExecutableDeclarationValidation<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     match statement {
         Stmt::Let(stmt) => {
             if let Some(value) = &stmt.value {
-                validate_executable_declarations_in_expr(value, bodyless, diagnostics);
+                validate_executable_declarations_in_expr(value, context, diagnostics);
             }
         }
         Stmt::Return(stmt) => {
             if let Some(value) = &stmt.value {
-                validate_executable_declarations_in_expr(value, bodyless, diagnostics);
+                validate_executable_declarations_in_expr(value, context, diagnostics);
             }
         }
         Stmt::With(stmt) => {
-            validate_executable_declarations_in_expr(&stmt.resource, bodyless, diagnostics);
-            validate_executable_declarations_in_block(&stmt.body, bodyless, diagnostics);
+            validate_executable_declarations_in_expr(&stmt.resource, context, diagnostics);
+            validate_executable_declarations_in_block(&stmt.body, context, diagnostics);
         }
         Stmt::If(stmt) => {
-            validate_executable_declarations_in_expr(&stmt.condition, bodyless, diagnostics);
-            validate_executable_declarations_in_block(&stmt.then_body, bodyless, diagnostics);
+            validate_executable_declarations_in_expr(&stmt.condition, context, diagnostics);
+            validate_executable_declarations_in_block(&stmt.then_body, context, diagnostics);
             if let Some(else_body) = &stmt.else_body {
-                validate_executable_declarations_in_block(else_body, bodyless, diagnostics);
+                validate_executable_declarations_in_block(else_body, context, diagnostics);
             }
         }
         Stmt::Loop(stmt) => {
             if let Some(condition) = &stmt.condition {
-                validate_executable_declarations_in_expr(condition, bodyless, diagnostics);
+                validate_executable_declarations_in_expr(condition, context, diagnostics);
             }
-            validate_executable_declarations_in_block(&stmt.body, bodyless, diagnostics);
+            validate_executable_declarations_in_block(&stmt.body, context, diagnostics);
         }
         Stmt::For(stmt) => {
-            validate_executable_declarations_in_expr(&stmt.iterable, bodyless, diagnostics);
-            validate_executable_declarations_in_block(&stmt.body, bodyless, diagnostics);
+            validate_executable_declarations_in_expr(&stmt.iterable, context, diagnostics);
+            validate_executable_declarations_in_block(&stmt.body, context, diagnostics);
         }
         Stmt::Match(stmt) => {
-            validate_executable_declarations_in_expr(&stmt.value, bodyless, diagnostics);
+            validate_executable_declarations_in_expr(&stmt.value, context, diagnostics);
             for arm in &stmt.arms {
-                validate_executable_declarations_in_block(&arm.body, bodyless, diagnostics);
+                validate_executable_declarations_in_block(&arm.body, context, diagnostics);
             }
         }
-        Stmt::Expr(expr) => validate_executable_declarations_in_expr(expr, bodyless, diagnostics),
+        Stmt::Expr(expr) => validate_executable_declarations_in_expr(expr, context, diagnostics),
         Stmt::Break(_)
         | Stmt::Continue(_)
         | Stmt::MalformedWith(_)
@@ -405,14 +423,14 @@ fn validate_executable_declarations_in_stmt(
 
 fn validate_executable_declarations_in_expr(
     expr: &Expr,
-    bodyless: &BTreeMap<String, String>,
+    context: &ExecutableDeclarationValidation<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     match expr {
         Expr::Call { callee, args, span } => {
             let key = executable_declaration_callee_key(callee);
             if runtime_intrinsic_target(callee).is_none()
-                && let Some(function_name) = bodyless.get(&key)
+                && let Some(function_name) = context.bodyless.get(&key)
             {
                 diagnostics.push(
                     Diagnostic::error(
@@ -426,30 +444,46 @@ fn validate_executable_declarations_in_expr(
                     )),
                 );
             }
+            if runtime_intrinsic_target(callee).is_none()
+                && !context.native_bindings.contains_key(&key)
+                && let Some(function_name) = context.native_bodyless.get(&key)
+            {
+                diagnostics.push(
+                    Diagnostic::error(
+                        code::UNSUPPORTED_SYNTAX,
+                        "unbound native RSScript declaration call.",
+                        span.clone(),
+                        "unbound native declaration call",
+                    )
+                    .with_cause(format!(
+                        "`{function_name}` is a native declaration without a configured Rust binding. Add a native binding before executable lowering."
+                    )),
+                );
+            }
             for arg in args {
-                validate_executable_declarations_in_expr(&arg.value, bodyless, diagnostics);
+                validate_executable_declarations_in_expr(&arg.value, context, diagnostics);
             }
         }
         Expr::Binary { left, right, .. } => {
-            validate_executable_declarations_in_expr(left, bodyless, diagnostics);
-            validate_executable_declarations_in_expr(right, bodyless, diagnostics);
+            validate_executable_declarations_in_expr(left, context, diagnostics);
+            validate_executable_declarations_in_expr(right, context, diagnostics);
         }
         Expr::Field { base, .. } => {
-            validate_executable_declarations_in_expr(base, bodyless, diagnostics);
+            validate_executable_declarations_in_expr(base, context, diagnostics);
         }
         Expr::Index { base, index, .. } => {
-            validate_executable_declarations_in_expr(base, bodyless, diagnostics);
-            validate_executable_declarations_in_expr(index, bodyless, diagnostics);
+            validate_executable_declarations_in_expr(base, context, diagnostics);
+            validate_executable_declarations_in_expr(index, context, diagnostics);
         }
         Expr::Effect { value, .. }
         | Expr::Manage { value, .. }
         | Expr::Spawn { value, .. }
         | Expr::Await { value, .. }
         | Expr::Try { value, .. } => {
-            validate_executable_declarations_in_expr(value, bodyless, diagnostics);
+            validate_executable_declarations_in_expr(value, context, diagnostics);
         }
         Expr::Closure { body, .. } => {
-            validate_executable_declarations_in_block(body, bodyless, diagnostics);
+            validate_executable_declarations_in_block(body, context, diagnostics);
         }
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
     }
