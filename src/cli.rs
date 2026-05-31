@@ -177,6 +177,10 @@ fn run_check(args: &[String]) -> ExitCode {
     };
 
     if is_package_directory(path) {
+        if let Some(error) = package_check_option_error(&options) {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
         return run_package_check(options.json, path);
     }
 
@@ -759,6 +763,20 @@ fn parse_check_args(args: &[String]) -> Result<CheckOptions<'_>, String> {
         path,
         interfaces,
     })
+}
+
+fn package_check_option_error(options: &CheckOptions<'_>) -> Option<String> {
+    if !options.use_core {
+        return Some(
+            "`rss check --no-core` is only valid for single-file checks; package checks use package interfaces and dependencies.".to_string(),
+        );
+    }
+    if !options.interfaces.is_empty() {
+        return Some(
+            "`rss check --interface` is only valid for single-file checks; package checks read interfaces from rsspkg.toml.".to_string(),
+        );
+    }
+    None
 }
 
 fn parse_lower_args(args: &[String]) -> Result<LowerOptions<'_>, String> {
@@ -1547,8 +1565,9 @@ fn is_package_directory(path: &str) -> bool {
 fn print_usage() {
     eprintln!("usage:");
     eprintln!(
-        "  rsscript check [--json] [--core|--no-core] [--interface <file.rssi> ...] <file-or-package-directory>"
+        "  rsscript check [--json] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>"
     );
+    eprintln!("  rsscript check [--json] <package-directory>");
     eprintln!(
         "  rsscript lint [--json] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>"
     );
@@ -1624,6 +1643,23 @@ mod tests {
         let error = super::parse_check_args(&values).expect_err("missing interface should fail");
 
         assert_eq!(error, "missing value for `--interface`.");
+    }
+
+    #[test]
+    fn package_check_options_reject_single_file_flags() {
+        let values = args(&["--no-core", "package"]);
+        let options = super::parse_check_args(&values).expect("arguments should parse");
+        let error = super::package_check_option_error(&options)
+            .expect("package check should reject no-core");
+
+        assert!(error.contains("--no-core"));
+
+        let values = args(&["--interface", "api.rssi", "package"]);
+        let options = super::parse_check_args(&values).expect("arguments should parse");
+        let error = super::package_check_option_error(&options)
+            .expect("package check should reject explicit interface");
+
+        assert!(error.contains("--interface"));
     }
 
     #[test]
