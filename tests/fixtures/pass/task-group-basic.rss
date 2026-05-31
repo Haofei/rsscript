@@ -1,0 +1,24 @@
+features: async
+
+struct NetworkError {
+    message: String
+}
+
+async fn fetch_user(id: read Int) -> Result<String, NetworkError> {
+    return Ok("user")
+}
+
+async fn fetch_profile(id: read Int) -> Result<String, NetworkError> {
+    return Ok("profile")
+}
+
+async fn load_user_data(id: read Int) -> Result<String, NetworkError> {
+    task_group {
+        async let user = fetch_user(id: read id)
+        async let profile = fetch_profile(id: read id)
+
+        let user_value = await user?
+        let profile_value = await profile?
+    }
+    return Ok("done")
+}

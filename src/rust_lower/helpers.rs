@@ -116,6 +116,9 @@ fn validate_executable_declarations_in_stmt(
             validate_executable_declarations_in_expr(&stmt.iterable, context, diagnostics);
             validate_executable_declarations_in_block(&stmt.body, context, diagnostics);
         }
+        Stmt::TaskGroup(stmt) => {
+            validate_executable_declarations_in_block(&stmt.body, context, diagnostics);
+        }
         Stmt::Match(stmt) => {
             validate_executable_declarations_in_expr(&stmt.value, context, diagnostics);
             for arm in &stmt.arms {
@@ -466,6 +469,7 @@ pub(super) fn stmt_has_await(statement: &Stmt) -> bool {
             stmt.condition.as_ref().is_some_and(expr_has_await) || block_has_await(&stmt.body)
         }
         Stmt::For(stmt) => expr_has_await(&stmt.iterable) || block_has_await(&stmt.body),
+        Stmt::TaskGroup(stmt) => block_has_await(&stmt.body),
         Stmt::Match(stmt) => {
             expr_has_await(&stmt.value) || stmt.arms.iter().any(|arm| block_has_await(&arm.body))
         }
@@ -496,6 +500,10 @@ pub(super) fn expr_has_await(expr: &Expr) -> bool {
         Expr::Closure { body, .. } => block_has_await(body),
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => false,
     }
+}
+
+pub(super) fn block_has_task_group(block: &Block) -> bool {
+    block.statements.iter().any(|s| matches!(s, Stmt::TaskGroup(_)))
 }
 
 pub(super) fn collect_mutated_bindings_from_block(block: &Block, names: &mut BTreeSet<String>) {
@@ -535,6 +543,9 @@ pub(super) fn collect_mutated_bindings_from_stmt(statement: &Stmt, names: &mut B
         }
         Stmt::For(stmt) => {
             collect_mutated_bindings_from_expr(&stmt.iterable, names);
+            collect_mutated_bindings_from_block(&stmt.body, names);
+        }
+        Stmt::TaskGroup(stmt) => {
             collect_mutated_bindings_from_block(&stmt.body, names);
         }
         Stmt::Match(stmt) => {
@@ -624,6 +635,9 @@ pub(super) fn collect_closure_bound_names_from_block(block: &Block, names: &mut 
                 names.insert(stmt.binding.clone());
                 collect_closure_bound_names_from_block(&stmt.body, names);
             }
+            Stmt::TaskGroup(stmt) => {
+                collect_closure_bound_names_from_block(&stmt.body, names);
+            }
             Stmt::Match(stmt) => {
                 for arm in &stmt.arms {
                     collect_closure_bound_names_from_block(&arm.body, names);
@@ -691,6 +705,7 @@ pub(super) fn closure_stmt_mutates_unbound_name(
             closure_expr_mutates_unbound_name(&stmt.iterable, bound)
                 || closure_block_mutates_unbound_name(&stmt.body, bound)
         }
+        Stmt::TaskGroup(stmt) => closure_block_mutates_unbound_name(&stmt.body, bound),
         Stmt::Match(stmt) => {
             closure_expr_mutates_unbound_name(&stmt.value, bound)
                 || stmt
@@ -762,6 +777,7 @@ pub(super) fn stmt_span(statement: &Stmt) -> &Span {
         Stmt::If(stmt) => &stmt.span,
         Stmt::Loop(stmt) => &stmt.span,
         Stmt::For(stmt) => &stmt.span,
+        Stmt::TaskGroup(stmt) => &stmt.span,
         Stmt::Match(stmt) => &stmt.span,
         Stmt::LetElse(stmt) => &stmt.span,
         Stmt::Break(span)

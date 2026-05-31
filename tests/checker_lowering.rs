@@ -4440,3 +4440,49 @@ fn main() -> Unit {
         "should not produce `const X: String` in Rust, got:\n{lowered}"
     );
 }
+
+#[test]
+fn task_group_lowers_to_pending_pattern() {
+    let source = r#"
+features: async
+
+struct NetworkError { message: String }
+
+async fn fetch_user(id: read Int) -> Result<String, NetworkError> {
+    return Ok("user")
+}
+
+async fn fetch_profile(id: read Int) -> Result<String, NetworkError> {
+    return Ok("profile")
+}
+
+async fn load(id: read Int) -> Result<String, NetworkError> {
+    task_group {
+        async let user = fetch_user(id: read id)
+        async let profile = fetch_profile(id: read id)
+
+        let u = await user?
+        let p = await profile?
+    }
+    return Ok("done")
+}
+"#;
+    let lowered =
+        lower_source_to_rust("task-group.rss", source).expect("task_group should lower");
+    assert!(
+        lowered.contains("__rsscript_pending_user"),
+        "async let should produce pending variable, got:\n{lowered}"
+    );
+    assert!(
+        lowered.contains("__rsscript_pending_profile"),
+        "async let should produce pending variable, got:\n{lowered}"
+    );
+    assert!(
+        lowered.contains("run_pending"),
+        "await should produce run_pending call, got:\n{lowered}"
+    );
+    assert!(
+        lowered.contains("__rsscript_async_executor"),
+        "task_group should create executor, got:\n{lowered}"
+    );
+}

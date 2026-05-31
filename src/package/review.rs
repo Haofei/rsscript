@@ -729,6 +729,16 @@ fn collect_await_sites_from_stmt(
                 sites,
             );
         }
+        Stmt::TaskGroup(stmt) => {
+            collect_await_sites_from_block(
+                function,
+                &stmt.body,
+                live_after,
+                scoped_live,
+                context,
+                sites,
+            );
+        }
         Stmt::Match(stmt) => {
             collect_await_sites_from_expr(
                 function,
@@ -937,6 +947,9 @@ fn collect_stmt_uses(statement: &Stmt, uses: &mut BTreeSet<String>) {
             collect_expr_uses(&stmt.iterable, uses);
             collect_block_uses(&stmt.body, uses);
         }
+        Stmt::TaskGroup(stmt) => {
+            collect_block_uses(&stmt.body, uses);
+        }
         Stmt::Match(stmt) => {
             collect_expr_uses(&stmt.value, uses);
             for arm in &stmt.arms {
@@ -1037,6 +1050,7 @@ fn remove_stmt_bindings(statement: &Stmt, uses: &mut BTreeSet<String>) {
         Stmt::For(stmt) => {
             uses.remove(&stmt.binding);
         }
+        Stmt::TaskGroup(_) => {}
         Stmt::Match(stmt) => {
             for arm in &stmt.arms {
                 if let MatchPattern::Variant {

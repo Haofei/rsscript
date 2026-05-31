@@ -301,6 +301,9 @@ impl Formatter {
     fn stmt(&mut self, statement: &Stmt, indent: usize) {
         match statement {
             Stmt::Let(stmt) => {
+                if stmt.is_async {
+                    self.out.push_str("async ");
+                }
                 self.out.push_str(match stmt.kind {
                     LetKind::Managed => "let ",
                     LetKind::Local => "local ",
@@ -364,6 +367,12 @@ impl Formatter {
                 self.out.push_str(" in ");
                 self.expr(&stmt.iterable, 0);
                 self.out.push_str(" {\n");
+                self.block(&stmt.body, indent + 1);
+                self.indent(indent);
+                self.out.push('}');
+            }
+            Stmt::TaskGroup(stmt) => {
+                self.out.push_str("task_group {\n");
                 self.block(&stmt.body, indent + 1);
                 self.indent(indent);
                 self.out.push('}');

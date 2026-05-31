@@ -152,6 +152,8 @@ fn analyze_program(
         hir,
         diagnostics: Vec::new(),
         type_aliases,
+        in_task_group: false,
+        async_let_names: Vec::new(),
     };
     analyzer.run();
     analyzer.diagnostics
@@ -175,6 +177,8 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) hir: Hir,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) type_aliases: std::collections::BTreeMap<String, String>,
+    in_task_group: bool,
+    pub(crate) async_let_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -460,10 +464,17 @@ impl Analyzer<'_> {
                         "`let` and `local` bindings need a binding name, and an `=` must be followed by an expression.",
                     );
                 }
-                if let Some(value) = &stmt.value {
-                    self.check_unsupported_syntax_expr(value);
-                }
-            }
+               if stmt.is_async && !self.in_task_group {
+                   self.unsupported_syntax(
+                       stmt.span.clone(),
+                       "`async let` outside task_group",
+                       "`async let` can only be used inside a `task_group { ... }` block.",
+                   );
+               }
+               if let Some(value) = &stmt.value {
+                   self.check_unsupported_syntax_expr(value);
+               }
+           }
             Stmt::Return(stmt) => {
                 if let Some(value) = &stmt.value {
                     self.check_unsupported_syntax_expr(value);
@@ -504,6 +515,12 @@ impl Analyzer<'_> {
             Stmt::For(stmt) => {
                 self.check_unsupported_syntax_expr(&stmt.iterable);
                 self.check_unsupported_syntax_block(&stmt.body);
+            }
+            Stmt::TaskGroup(stmt) => {
+                let was_in_task_group = self.in_task_group;
+                self.in_task_group = true;
+                self.check_unsupported_syntax_block(&stmt.body);
+                self.in_task_group = was_in_task_group;
             }
             Stmt::MalformedFor(span) => self.unsupported_syntax(
                 span.clone(),
@@ -654,6 +671,9 @@ impl Analyzer<'_> {
             }
             Stmt::For(stmt) => {
                 self.check_match_exhaustiveness_expr(&stmt.iterable);
+                self.check_match_exhaustiveness_block(&stmt.body);
+            }
+            Stmt::TaskGroup(stmt) => {
                 self.check_match_exhaustiveness_block(&stmt.body);
             }
             Stmt::Match(stmt) => {
@@ -1763,6 +1783,9 @@ impl Analyzer<'_> {
                 self.check_runtime_guarantee_expr(guarantee, function_name, &stmt.iterable);
                 self.check_runtime_guarantee_block(guarantee, function_name, &stmt.body);
             }
+            Stmt::TaskGroup(stmt) => {
+                self.check_runtime_guarantee_block(guarantee, function_name, &stmt.body);
+            }
             Stmt::Match(stmt) => {
                 self.check_runtime_guarantee_expr(guarantee, function_name, &stmt.value);
                 for arm in &stmt.arms {
@@ -2122,6 +2145,9 @@ impl Analyzer<'_> {
                 self.check_resource_pool_calls_in_expr(&stmt.iterable);
                 self.check_resource_pool_calls_in_block(&stmt.body);
             }
+            Stmt::TaskGroup(stmt) => {
+                self.check_resource_pool_calls_in_block(&stmt.body);
+            }
             Stmt::Match(stmt) => {
                 self.check_resource_pool_calls_in_expr(&stmt.value);
                 for arm in &stmt.arms {
@@ -2222,6 +2248,9 @@ impl Analyzer<'_> {
             }
             Stmt::For(stmt) => {
                 self.check_resource_generic_calls_in_expr(&stmt.iterable);
+                self.check_resource_generic_calls_in_block(&stmt.body);
+            }
+            Stmt::TaskGroup(stmt) => {
                 self.check_resource_generic_calls_in_block(&stmt.body);
             }
             Stmt::Match(stmt) => {

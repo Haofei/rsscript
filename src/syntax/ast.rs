@@ -318,6 +318,7 @@ pub enum Stmt {
     MalformedFor(Span),
     Match(MatchStmt),
     MalformedMatch(Span),
+    TaskGroup(TaskGroupStmt),
     Break(Span),
     Continue(Span),
     LetElse(LetElseStmt),
@@ -337,6 +338,7 @@ pub struct LetStmt {
     pub name: String,
     pub type_annotation: Option<TypeRef>,
     pub value: Option<Expr>,
+    pub is_async: bool,
     pub malformed: bool,
     pub span: Span,
 }
@@ -384,6 +386,12 @@ pub struct LetElseStmt {
     pub value: Expr,
     pub else_body: Block,
     pub binding_name: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskGroupStmt {
+    pub body: Block,
     pub span: Span,
 }
 

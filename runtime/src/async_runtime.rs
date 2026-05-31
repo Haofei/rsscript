@@ -46,6 +46,16 @@ impl Executor {
         }
     }
 
+    pub fn poll_once<T>(&mut self, pending: &mut impl Pending<T>) -> AsyncPoll<T> {
+        self.polls += 1;
+        let mut cx = Context { executor: self };
+        pending.poll(&mut cx)
+    }
+
+    pub fn yield_once(&mut self) {
+        self.park_or_yield(None);
+    }
+
     pub fn run_task_group<T>(&mut self, group: TaskGroup<T>) -> Vec<T> {
         group.join(self)
     }

@@ -928,6 +928,9 @@ fn collect_review_map_local_closure_bindings_stmt(stmt: &Stmt, bindings: &mut BT
             collect_review_map_local_closure_bindings_expr(&stmt.iterable, bindings);
             collect_review_map_local_closure_bindings_block(&stmt.body, bindings);
         }
+        Stmt::TaskGroup(stmt) => {
+            collect_review_map_local_closure_bindings_block(&stmt.body, bindings);
+        }
         Stmt::Match(stmt) => {
             collect_review_map_local_closure_bindings_expr(&stmt.value, bindings);
             for arm in &stmt.arms {
@@ -1100,6 +1103,15 @@ fn collect_review_map_facts_stmt(
                 local_closure_bindings,
                 facts,
             );
+            collect_review_map_facts_block(
+                &stmt.body,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
+        }
+        Stmt::TaskGroup(stmt) => {
             collect_review_map_facts_block(
                 &stmt.body,
                 hir,
@@ -1405,6 +1417,11 @@ fn collect_spawn_capture_names_from_stmt(stmt: &Stmt, captures: &mut BTreeSet<St
         }
         Stmt::For(stmt) => {
             collect_spawn_capture_names(&stmt.iterable, captures);
+            for statement in &stmt.body.statements {
+                collect_spawn_capture_names_from_stmt(statement, captures);
+            }
+        }
+        Stmt::TaskGroup(stmt) => {
             for statement in &stmt.body.statements {
                 collect_spawn_capture_names_from_stmt(statement, captures);
             }
@@ -2807,6 +2824,9 @@ fn collect_boundary_stmt(statement: &Stmt, path: &str, boundary: &mut BoundarySi
         Stmt::For(stmt) => {
             collect_boundary_expr(&stmt.iterable, &format!("{path}.iterable"), boundary);
             collect_boundary_block(&stmt.body, &format!("{path}.for"), boundary);
+        }
+        Stmt::TaskGroup(stmt) => {
+            collect_boundary_block(&stmt.body, &format!("{path}.task_group"), boundary);
         }
         Stmt::Match(stmt) => {
             collect_boundary_expr(&stmt.value, &format!("{path}.match"), boundary);

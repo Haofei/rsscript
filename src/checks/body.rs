@@ -125,6 +125,10 @@ fn check_block(
 ) -> Flow {
     let live_after_statements = block_live_after_statements(block, continuation_uses);
     for (index, statement) in block.statements.iter().enumerate() {
+        // Track async let names so await checks can recognize pending bindings
+        if let HirStmt::Let { is_async: true, name, .. } = statement {
+            analyzer.async_let_names.push(name.clone());
+        }
         let live_after = live_after_statements
             .get(index)
             .unwrap_or(continuation_uses);
@@ -289,7 +293,7 @@ fn check_stmt_semantics(
 ) -> Flow {
     match statement {
         HirStmt::Let {
-            kind, value, span, ..
+            kind, value, is_async, span, ..
         } => {
             let mut merged_entry_state;
             let stmt_state = if let Some(entry_state) = local_analysis.flow_entry_state(span) {
@@ -305,7 +309,14 @@ fn check_stmt_semantics(
                 check_managed_closure_captures(analyzer, local_analysis, span, stmt_state);
             }
             if let Some(value) = value {
-                check_expr_semantics(analyzer, local_analysis, value, stmt_state, live_after);
+                if *is_async {
+                    // async let consumes the async call (produces a pending)
+                    check_expr_semantics_with_context(
+                        analyzer, local_analysis, value, stmt_state, false, true, live_after,
+                    );
+                } else {
+                    check_expr_semantics(analyzer, local_analysis, value, stmt_state, live_after);
+                }
                 if check_resource_contexts {
                     check_resource_pool_lease_expr(analyzer, value, false);
                     check_resource_producer_expr(analyzer, value, false);
@@ -1019,6 +1030,10 @@ fn check_await_operand(analyzer: &mut Analyzer<'_>, value: &HirExpr, await_expr:
     if await_expr_targets_async_call(value) {
         return;
     }
+    // Allow `await x` where x is an async let binding (task_group pending)
+    if await_targets_async_let_binding(value, &analyzer.async_let_names) {
+        return;
+    }
     analyzer.diagnostics.push(
         Diagnostic::error(
             code::AWAIT_NON_ASYNC,
@@ -1029,6 +1044,16 @@ fn check_await_operand(analyzer: &mut Analyzer<'_>, value: &HirExpr, await_expr:
         .with_cause("RSScript does not expose Future or Task values in source; the executable async MVP only awaits direct async calls.")
         .with_fix("await_async_call", "Await an `async fn` call directly.", "manual"),
     );
+}
+
+fn await_targets_async_let_binding(expr: &HirExpr, async_let_names: &[String]) -> bool {
+    match expr {
+        HirExpr::Ident { name, .. } => async_let_names.contains(name),
+        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => {
+            await_targets_async_let_binding(value, async_let_names)
+        }
+        _ => false,
+    }
 }
 
 fn await_expr_targets_async_call(expr: &HirExpr) -> bool {

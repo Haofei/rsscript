@@ -430,7 +430,8 @@ impl<'a> RustLowerer<'a> {
             .collect();
         self.mutated_bindings = collect_mutated_bindings(&function.body);
         self.current_return_type = function.return_ty.clone();
-        self.current_async_executor = (function.is_async && block_has_await(&function.body))
+        self.current_async_executor = ((function.is_async && block_has_await(&function.body))
+            || block_has_task_group(&function.body))
             .then(|| "__rsscript_async_executor".to_string());
         self.record_source_marker(out, 0, "function", &function.span);
         let is_public = function.is_public || is_runnable_main(function);
@@ -515,6 +516,101 @@ impl<'a> RustLowerer<'a> {
     fn lower_block(&mut self, block: &Block, out: &mut String, indent: usize) {
         for statement in &block.statements {
             self.lower_stmt(statement, out, indent);
+        }
+    }
+
+    fn lower_task_group_block(&mut self, block: &Block, out: &mut String, indent: usize) {
+        let pad = "    ".repeat(indent);
+
+        // Collect async let names to know which `await x` references a pending
+        let mut async_let_names: Vec<String> = Vec::new();
+        for statement in &block.statements {
+            if let Stmt::Let(stmt) = statement {
+                if stmt.is_async {
+                    async_let_names.push(stmt.name.clone());
+                }
+            }
+        }
+
+        // Lower each statement in the task_group body
+        for statement in &block.statements {
+            match statement {
+                Stmt::Let(stmt) if stmt.is_async => {
+                    // async let x = expr → let mut __rsscript_pending_x = expr;
+                    if let Some(value) = &stmt.value {
+                        let lowered = self.lower_expr(value);
+                        out.push_str(&format!(
+                            "{pad}let mut __rsscript_pending_{} = {lowered};\n",
+                            rust_ident(&stmt.name)
+                        ));
+                    }
+                }
+                Stmt::Let(stmt) if !stmt.is_async => {
+                    // Regular let inside task_group — check if value is `await x`
+                    if let Some(value) = &stmt.value {
+                        if let Some(pending_name) =
+                            self.extract_task_group_await(value, &async_let_names)
+                        {
+                            // let result = await x → polls the pending to completion
+                            let executor = self
+                                .current_async_executor
+                                .clone()
+                                .unwrap_or_else(|| "__rsscript_async_executor".to_string());
+                            let (try_suffix, wrap) = if is_try_wrapped(value) {
+                                ("?", true)
+                            } else {
+                                ("", false)
+                            };
+                            let mutable = if self.mutated_bindings.contains(&stmt.name) {
+                                "mut "
+                            } else {
+                                ""
+                            };
+                            out.push_str(&format!(
+                                "{pad}let {mutable}{} = {executor}.run_pending(&mut __rsscript_pending_{pending_name}){try_suffix};\n",
+                                rust_ident(&stmt.name),
+                            ));
+                            // suppress unused variable warning
+                            let _ = wrap;
+                        } else {
+                            // Normal let statement
+                            self.lower_stmt(statement, out, indent);
+                        }
+                    } else {
+                        self.lower_stmt(statement, out, indent);
+                    }
+                }
+                _ => {
+                    // All other statements lower normally
+                    self.lower_stmt(statement, out, indent);
+                }
+            }
+        }
+    }
+
+    fn extract_task_group_await<'b>(
+        &self,
+        expr: &'b Expr,
+        async_let_names: &[String],
+    ) -> Option<String> {
+        match expr {
+            Expr::Await { value, .. } => match value.as_ref() {
+                Expr::Ident(name, _) if async_let_names.contains(name) => {
+                    Some(rust_ident(name))
+                }
+                Expr::Effect { value, .. } => {
+                    // await read x / await take x
+                    if let Expr::Ident(name, _) = value.as_ref() {
+                        if async_let_names.contains(name) {
+                            return Some(rust_ident(name));
+                        }
+                    }
+                    None
+                }
+                _ => None,
+            },
+            Expr::Try { value, .. } => self.extract_task_group_await(value, async_let_names),
+            _ => None,
         }
     }
 
@@ -653,6 +749,13 @@ impl<'a> RustLowerer<'a> {
                     self.read_view_bindings.remove(&stmt.binding);
                 }
             }
+            Stmt::TaskGroup(stmt) => {
+                // Structured concurrency scope
+                out.push_str(&format!("{pad}// task_group: structured concurrency scope\n"));
+                out.push_str(&format!("{pad}{{\n"));
+                self.lower_task_group_block(&stmt.body, out, indent + 1);
+                out.push_str(&format!("{pad}}}\n"));
+            }
             Stmt::Match(stmt) => {
                 out.push_str(&format!("{pad}match {} {{\n", self.lower_expr(&stmt.value)));
                 // Determine if this is a sum type match (qualify variant patterns)
@@ -765,6 +868,9 @@ impl<'a> RustLowerer<'a> {
             }
             Stmt::For(stmt) => {
                 self.record_expr_source_map(&stmt.iterable, generated);
+                self.record_block_source_map(&stmt.body, generated);
+            }
+            Stmt::TaskGroup(stmt) => {
                 self.record_block_source_map(&stmt.body, generated);
             }
             Stmt::Match(stmt) => {
@@ -1721,4 +1827,8 @@ fn lower_const_value(expr: &Expr) -> String {
         Expr::Ident(name, _) if name == "true" || name == "false" => name.clone(),
         _ => "()".to_string(), // unsupported const expression
     }
+}
+
+fn is_try_wrapped(expr: &Expr) -> bool {
+    matches!(expr, Expr::Try { .. })
 }

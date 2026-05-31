@@ -6,8 +6,8 @@ use crate::syntax::ast::{
     Expr, FieldDecl, FileFeature, FileFeatureScope, ForStmt, FunctionDecl, GenericBound,
     GenericParam, IfStmt, Item, LetElseStmt, LetKind, LetStmt, LoopStmt, MatchArm, MatchPattern,
     MatchStmt, ModuleDecl, Param, Program, ProtocolDecl, ProtocolImpl, ProtocolImplMapping,
-    ReturnStmt, Stmt, SumTypeDecl, SumVariant, TypeAliasDecl, TypeDecl, TypeKind, TypeRef,
-    UnknownFileFeature, UseDecl, WithStmt,
+    ReturnStmt, Stmt, SumTypeDecl, SumVariant, TaskGroupStmt, TypeAliasDecl, TypeDecl, TypeKind,
+    TypeRef, UnknownFileFeature, UseDecl, WithStmt,
 };
 
 pub fn parse_source(file: &str, source: &str) -> Program {
@@ -1189,6 +1189,12 @@ fn parse_block(tokens: &[Token], open: usize, close: usize) -> Block {
 }
 
 fn parse_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
+    // async let x = expr
+    if tokens[start].is_ident_text("async")
+        && tokens.get(start + 1).is_some_and(|t| t.is_ident_text("let"))
+    {
+        return parse_async_let_stmt(tokens, start, limit);
+    }
     if tokens[start].is_ident_text("let") || tokens[start].is_ident_text("local") {
         return parse_let_stmt(tokens, start, limit);
     }
@@ -1209,6 +1215,9 @@ fn parse_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
     }
     if tokens[start].is_ident_text("for") {
         return parse_for_stmt(tokens, start, limit);
+    }
+    if tokens[start].is_ident_text("task_group") {
+        return parse_task_group_stmt(tokens, start, limit);
     }
     if tokens[start].is_ident_text("break") {
         return (
@@ -1330,6 +1339,32 @@ fn parse_let_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize)
             name,
             type_annotation,
             value,
+            is_async: false,
+            malformed,
+            span: tokens[start].span.clone(),
+        }),
+        end,
+    )
+}
+
+fn parse_async_let_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
+    // async let name = expr
+    // start is at "async", start+1 is "let"
+    let let_start = start + 1;
+    let parsed_name = tokens.get(let_start + 1).and_then(ident_name);
+    let name = parsed_name.unwrap_or("").to_string();
+    let end = statement_end(tokens, start, limit);
+    let equals = (let_start + 2..end).find(|index| tokens[*index].symbol("="));
+    let value = equals.and_then(|equals| parse_expr(tokens, equals + 1, end));
+    let malformed = parsed_name.is_none() || equals.is_none() || value.is_none();
+
+    (
+        Stmt::Let(LetStmt {
+            kind: LetKind::Managed,
+            name,
+            type_annotation: None,
+            value,
+            is_async: true,
             malformed,
             span: tokens[start].span.clone(),
         }),
@@ -1502,6 +1537,24 @@ fn parse_for_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize)
         Stmt::For(ForStmt {
             binding: binding.to_string(),
             iterable,
+            body: parse_block(tokens, open, close),
+            span: tokens[start].span.clone(),
+        }),
+        close + 1,
+    )
+}
+
+fn parse_task_group_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
+    // task_group { body }
+    let open = start + 1;
+    if open >= limit || !tokens[open].symbol("{") {
+        return (Stmt::Unknown(tokens[start].span.clone()), statement_end(tokens, start, limit));
+    }
+    let Some(close) = find_matching(tokens, open, "{", "}") else {
+        return (Stmt::Unknown(tokens[start].span.clone()), limit);
+    };
+    (
+        Stmt::TaskGroup(TaskGroupStmt {
             body: parse_block(tokens, open, close),
             span: tokens[start].span.clone(),
         }),

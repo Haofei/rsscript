@@ -3361,3 +3361,74 @@ fn greet(name: read Alias) -> Alias {
         "should resolve type alias chain: {diagnostics:?}"
     );
 }
+
+#[test]
+fn task_group_with_async_let_passes_checker() {
+    let source = r#"
+features: async
+
+struct NetworkError { message: String }
+
+async fn fetch_user(id: read Int) -> Result<String, NetworkError> {
+    return Ok("user")
+}
+
+async fn fetch_profile(id: read Int) -> Result<String, NetworkError> {
+    return Ok("profile")
+}
+
+async fn load(id: read Int) -> Result<String, NetworkError> {
+    task_group {
+        async let user = fetch_user(id: read id)
+        async let profile = fetch_profile(id: read id)
+
+        let u = await user?
+        let p = await profile?
+    }
+    return Ok("done")
+}
+"#;
+    let diagnostics = analyze_source("task-group-async-let.rss", source);
+    let errors: Vec<_> = diagnostics.iter().filter(|d| d.severity == Severity::Error).collect();
+    assert!(
+        errors.is_empty(),
+        "task_group with async let should pass: {errors:?}"
+    );
+}
+
+#[test]
+fn async_let_outside_task_group_is_rejected() {
+    let source = r#"
+features: async
+
+async fn fetch(id: read Int) -> Int
+
+async fn run(id: read Int) -> Int {
+    async let result = fetch(id: read id)
+    return await result
+}
+"#;
+    let diagnostics = analyze_source("async-let-outside.rss", source);
+    assert!(
+        diagnostics.iter().any(|d| d.code == "RS0015"
+            && d.causes.iter().any(|c| c.contains("async let"))),
+        "async let outside task_group should be rejected: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn task_group_requires_async_feature() {
+    let source = r#"
+fn run() -> Int {
+    task_group {
+        let x = 1
+    }
+    return x
+}
+"#;
+    let diagnostics = analyze_source("task-group-no-feature.rss", source);
+    assert!(
+        diagnostics.iter().any(|d| d.code == "RS0101"),
+        "task_group without features: async should be rejected: {diagnostics:?}"
+    );
+}

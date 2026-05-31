@@ -3100,6 +3100,7 @@ mod tests {
                         value: None,
                         type_name: Some("Image".to_string()),
                         value_type_name: None,
+                        is_async: false,
                         span: span(2),
                     },
                     HirStmt::Expr(HirExpr::Call {
@@ -3222,6 +3223,7 @@ mod tests {
                         }),
                         type_name: Some("Image".to_string()),
                         value_type_name: Some("Image".to_string()),
+                        is_async: false,
                         span: span(1),
                     },
                     HirStmt::Expr(HirExpr::Call {
@@ -3272,6 +3274,7 @@ mod tests {
                     value: None,
                     type_name: Some("Image".to_string()),
                     value_type_name: None,
+                    is_async: false,
                     span: span(1),
                 },
                 HirStmt::If {
@@ -3551,6 +3554,7 @@ mod tests {
                                 }),
                                 type_name: None,
                                 value_type_name: None,
+                                is_async: false,
                                 span: span(4),
                             },
                         ],
@@ -3606,6 +3610,7 @@ mod tests {
                         value: None,
                         type_name: Some("Image".to_string()),
                         value_type_name: None,
+                        is_async: false,
                         span: span(1),
                     },
                     HirStmt::If {
@@ -3666,6 +3671,7 @@ mod tests {
                         value: None,
                         type_name: Some("InlineConfig".to_string()),
                         value_type_name: None,
+                        is_async: false,
                         span: span(1),
                     },
                     HirStmt::If {
@@ -3716,6 +3722,7 @@ mod tests {
                         value: None,
                         type_name: Some("Image".to_string()),
                         value_type_name: None,
+                        is_async: false,
                         span: span(1),
                     },
                     HirStmt::Let {
@@ -3735,6 +3742,7 @@ mod tests {
                         }),
                         type_name: None,
                         value_type_name: None,
+                        is_async: false,
                         span: span(2),
                     },
                 ],
@@ -3769,6 +3777,7 @@ mod tests {
                         value: None,
                         type_name: Some("Image".to_string()),
                         value_type_name: None,
+                        is_async: false,
                         span: span(1),
                     },
                     HirStmt::Loop {
@@ -3839,6 +3848,7 @@ mod tests {
                         value: None,
                         type_name: Some("Image".to_string()),
                         value_type_name: None,
+                        is_async: false,
                         span: span(1),
                     },
                     HirStmt::Expr(HirExpr::Manage {
@@ -3885,6 +3895,7 @@ mod tests {
                         value: None,
                         type_name: Some("Image".to_string()),
                         value_type_name: None,
+                        is_async: false,
                         span: span(1),
                     },
                     HirStmt::Let {
@@ -3897,6 +3908,7 @@ mod tests {
                         }),
                         type_name: Some("Image".to_string()),
                         value_type_name: Some("Image".to_string()),
+                        is_async: false,
                         span: span(2),
                     },
                 ],

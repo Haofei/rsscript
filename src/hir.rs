@@ -204,6 +204,7 @@ pub enum HirStmt {
         value: Option<HirExpr>,
         type_name: Option<String>,
         value_type_name: Option<String>,
+        is_async: bool,
         span: Span,
     },
     Return {
@@ -866,10 +867,15 @@ fn lower_hir_stmts(
                     value: None,
                     type_name: binding_type_name,
                     value_type_name,
+                    is_async: false,
                     span: stmt.span.clone(),
                 });
             }
             statements
+        }
+        Stmt::TaskGroup(stmt) => {
+            let mut body_types = value_types.clone();
+            lower_hir_block(hir, function_name, &stmt.body, &mut body_types).statements
         }
         _ => vec![lower_hir_stmt(hir, function_name, statement, value_types)],
     }
@@ -904,6 +910,7 @@ fn lower_hir_stmt(
                 value,
                 type_name,
                 value_type_name,
+                is_async: stmt.is_async,
                 span: stmt.span.clone(),
             }
         }
@@ -1001,6 +1008,7 @@ fn lower_hir_stmt(
                 span: stmt.span.clone(),
             }
         }
+        Stmt::TaskGroup(_) => unreachable!("task-group statements are lowered by lower_hir_stmts"),
         Stmt::LetElse(_) => unreachable!("let-else statements are lowered by lower_hir_stmts"),
         Stmt::Expr(expr) => HirStmt::Expr(lower_hir_expr(hir, function_name, expr, value_types)),
         Stmt::Break(span) => HirStmt::Break(span.clone()),
@@ -1238,6 +1246,13 @@ fn collect_body_facts_in_stmt(
 ) {
     match statement {
         Stmt::Let(stmt) => {
+            if stmt.is_async {
+                facts.feature_uses.push(HirFeatureUse {
+                    function_name: Some(function_name.to_string()),
+                    kind: HirFeatureUseKind::Async,
+                    span: stmt.span.clone(),
+                });
+            }
             if stmt.kind == LetKind::Local {
                 facts.feature_uses.push(HirFeatureUse {
                     function_name: Some(function_name.to_string()),
@@ -1326,6 +1341,15 @@ fn collect_body_facts_in_stmt(
                 });
                 body_types.insert(stmt.binding.clone(), item_type);
             }
+            collect_body_facts_in_block(hir, function_name, &stmt.body, &mut body_types, facts);
+        }
+        Stmt::TaskGroup(stmt) => {
+            facts.feature_uses.push(HirFeatureUse {
+                function_name: Some(function_name.to_string()),
+                kind: HirFeatureUseKind::Async,
+                span: stmt.span.clone(),
+            });
+            let mut body_types = value_types.clone();
             collect_body_facts_in_block(hir, function_name, &stmt.body, &mut body_types, facts);
         }
         Stmt::Match(stmt) => {
@@ -1794,6 +1818,7 @@ fn infer_closure_return_type(
             | Stmt::If { .. }
             | Stmt::Loop { .. }
             | Stmt::For(_)
+            | Stmt::TaskGroup(_)
             | Stmt::Match { .. }
             | Stmt::Break(_)
             | Stmt::Continue(_)
