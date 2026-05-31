@@ -36,6 +36,13 @@ pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
     analyze_program(tokens, syntax_program, hir)
 }
 
+pub fn analyze_source_without_core(file: &str, source: &str) -> Vec<Diagnostic> {
+    let tokens = lex(file, source);
+    let syntax_program = parse_source(file, source);
+    let hir = Hir::from_syntax_without_builtin_interfaces(&syntax_program);
+    analyze_program(tokens, syntax_program, hir)
+}
+
 pub fn core_interfaces() -> &'static [(&'static str, &'static str)] {
     CORE_INTERFACES
 }
@@ -59,6 +66,24 @@ pub fn analyze_source_with_interfaces(
     analyze_program(tokens, syntax_program, hir)
 }
 
+pub fn analyze_source_with_interfaces_without_core(
+    file: &str,
+    source: &str,
+    interfaces: &[(&str, &str)],
+) -> Vec<Diagnostic> {
+    let tokens = lex(file, source);
+    let syntax_program = parse_source(file, source);
+    let interface_programs = interfaces
+        .iter()
+        .map(|(file, source)| parse_source(file, source))
+        .collect::<Vec<_>>();
+    let hir = Hir::from_syntax_with_interfaces_without_builtin_interfaces(
+        &syntax_program,
+        &interface_programs,
+    );
+    analyze_program(tokens, syntax_program, hir)
+}
+
 pub fn analyze_sources_with_interfaces(
     sources: &[(&str, &str)],
     interfaces: &[(&str, &str)],
@@ -77,6 +102,30 @@ pub fn analyze_sources_with_interfaces(
         .map(|(file, source)| parse_source(file, source))
         .collect::<Vec<_>>();
     let hir = Hir::from_syntax_with_interfaces(&syntax_program, &interface_programs);
+    analyze_program(tokens, syntax_program, hir)
+}
+
+pub fn analyze_sources_with_interfaces_without_core(
+    sources: &[(&str, &str)],
+    interfaces: &[(&str, &str)],
+) -> Vec<Diagnostic> {
+    let tokens = sources
+        .iter()
+        .flat_map(|(file, source)| lex(file, source))
+        .collect::<Vec<_>>();
+    let syntax_program = merge_programs(
+        sources
+            .iter()
+            .map(|(file, source)| parse_source(file, source)),
+    );
+    let interface_programs = interfaces
+        .iter()
+        .map(|(file, source)| parse_source(file, source))
+        .collect::<Vec<_>>();
+    let hir = Hir::from_syntax_with_interfaces_without_builtin_interfaces(
+        &syntax_program,
+        &interface_programs,
+    );
     analyze_program(tokens, syntax_program, hir)
 }
 

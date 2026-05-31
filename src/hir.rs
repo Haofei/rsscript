@@ -367,12 +367,33 @@ impl Hir {
         Self::from_syntax_with_interfaces(program, &[])
     }
 
+    pub fn from_syntax_without_builtin_interfaces(program: &SyntaxProgram) -> Self {
+        Self::from_syntax_with_interfaces_options(program, &[], false)
+    }
+
     pub fn from_syntax_with_interfaces(
         program: &SyntaxProgram,
         interfaces: &[SyntaxProgram],
     ) -> Self {
+        Self::from_syntax_with_interfaces_options(program, interfaces, true)
+    }
+
+    pub fn from_syntax_with_interfaces_without_builtin_interfaces(
+        program: &SyntaxProgram,
+        interfaces: &[SyntaxProgram],
+    ) -> Self {
+        Self::from_syntax_with_interfaces_options(program, interfaces, false)
+    }
+
+    fn from_syntax_with_interfaces_options(
+        program: &SyntaxProgram,
+        interfaces: &[SyntaxProgram],
+        include_builtin_interfaces: bool,
+    ) -> Self {
         let mut hir = Self::default();
-        hir.insert_builtin_interfaces();
+        if include_builtin_interfaces {
+            hir.insert_builtin_interfaces();
+        }
         let mut type_symbols: HashMap<String, (DuplicateSymbolKind, Span)> = HashMap::new();
         let mut callable_symbols: HashMap<String, (DuplicateSymbolKind, Span)> = HashMap::new();
         for interface in interfaces {
