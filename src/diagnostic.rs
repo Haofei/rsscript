@@ -52,6 +52,7 @@ pub mod code {
     pub const INVALID_MANAGE_OPERAND: &str = "RS0307";
     pub const INVALID_TAKE_OPERAND: &str = "RS0308";
     pub const MANAGED_FIELD_SPLIT_CONFLICT: &str = "RS0309";
+    pub const READ_VIEW_MUTATION: &str = "RS0310";
     pub const USE_AFTER_MANAGE: &str = "RS0401";
     pub const LOCAL_VALUE_RETAINED: &str = "RS0501";
     pub const FRESH_RETURN_NOT_CLEAN: &str = "RS0601";
@@ -513,6 +514,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::INVALID_TAKE_OPERAND,
         title: "invalid take operand",
         explanation: "`take value` consumes a local value. Managed values cannot be passed to taking parameters because they may have aliases.",
+    },
+    DiagnosticExplanation {
+        code: code::READ_VIEW_MUTATION,
+        title: "read view mutation",
+        explanation: "`for` loop variables for non-Copy struct elements are read views into the list. They can be passed as `read`, but cannot be used as `mut`, `take`, or `manage` because iteration does not grant exclusive ownership of list elements.",
     },
     DiagnosticExplanation {
         code: code::USE_AFTER_MANAGE,

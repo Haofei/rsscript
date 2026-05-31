@@ -291,7 +291,16 @@ fn check_stmt_semantics(
         HirStmt::Let {
             kind, value, span, ..
         } => {
-            let stmt_state = local_analysis.flow_entry_state(span).unwrap_or(state);
+            let mut merged_entry_state;
+            let stmt_state = if let Some(entry_state) = local_analysis.flow_entry_state(span) {
+                merged_entry_state = entry_state.clone();
+                merged_entry_state
+                    .read_views
+                    .extend(state.read_views.iter().cloned());
+                &merged_entry_state
+            } else {
+                state
+            };
             if *kind == HirBindingKind::ManagedLet {
                 check_managed_closure_captures(analyzer, local_analysis, span, stmt_state);
             }
@@ -435,9 +444,15 @@ fn check_stmt_semantics(
 
             let base_state = state.clone();
             let mut body_state = base_state.clone();
-            body_state.bind_managed(binding.clone());
             if let Some(item_type_name) = item_type_name {
                 body_state.record_type(binding.clone(), item_type_name.clone());
+                if analyzer.hir.type_kind(type_root_name(item_type_name))
+                    == Some(HirTypeKind::Class)
+                {
+                    body_state.bind_managed(binding.clone());
+                } else if !is_copy_type_name(item_type_name) {
+                    body_state.bind_read_view(binding.clone());
+                }
             }
             let body_flow = check_block(
                 analyzer,
@@ -735,6 +750,20 @@ fn check_expr_semantics_with_context(
             span,
             ..
         } => {
+            if matches!(effect, ParamEffect::Mut | ParamEffect::Take)
+                && check_read_view_not_exclusive(analyzer, value, span, state)
+            {
+                check_expr_semantics_with_context(
+                    analyzer,
+                    local_analysis,
+                    value,
+                    state,
+                    false,
+                    async_call_consumed,
+                    live_after,
+                );
+                return;
+            }
             if matches!(effect, ParamEffect::Mut | ParamEffect::Take) && expr_is_fresh_shell(value)
             {
                 fresh_requires_local_binding_diagnostic(analyzer, value, span);
@@ -1167,6 +1196,22 @@ fn fresh_requires_local_binding_diagnostic(
             "manual",
         ),
     );
+}
+
+fn check_read_view_not_exclusive(
+    analyzer: &mut Analyzer<'_>,
+    value: &HirExpr,
+    span: &Span,
+    state: &BodyState,
+) -> bool {
+    let Some(path) = place_path(value) else {
+        return false;
+    };
+    if !state.is_read_view(&path.base) {
+        return false;
+    }
+    read_view_mutation_diagnostic(analyzer, &path.base, span.clone());
+    true
 }
 
 fn hir_expr_hint(expr: &HirExpr) -> String {
@@ -2502,12 +2547,33 @@ fn check_manage_operand_is_local(
         return;
     };
     if !state.is_local(name) {
+        if state.is_read_view(name) {
+            read_view_mutation_diagnostic(analyzer, name, span.clone());
+            return;
+        }
         invalid_manage_operand_diagnostic(
             analyzer,
             format!("`{name}` is not a local binding and cannot be moved with `manage`."),
             span.clone(),
         );
     }
+}
+
+fn read_view_mutation_diagnostic(analyzer: &mut Analyzer<'_>, name: &str, span: Span) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::READ_VIEW_MUTATION,
+            format!("`{name}` is a read view from a `for` loop and cannot be used as an exclusive value."),
+            span,
+            "read view mutation",
+        )
+        .with_cause("RSScript `for` iterates `List<T>` by read view for non-Copy struct elements, so the loop variable does not own the element.")
+        .with_fix(
+            "copy_before_mutating",
+            "Create a fresh local copy before mutation, or use an explicit partitioning API that grants exclusive element ownership.",
+            "manual",
+        ),
+    );
 }
 
 fn check_take_operand_is_local(

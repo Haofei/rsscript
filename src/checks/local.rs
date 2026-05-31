@@ -16,6 +16,7 @@ pub(crate) struct BodyState {
     pub(crate) clean_locals: HashSet<String>,
     pub(crate) fresh_returnable_locals: HashSet<String>,
     pub(crate) managed: HashSet<String>,
+    pub(crate) read_views: HashSet<String>,
     pub(crate) resources: HashSet<String>,
     pub(crate) moved: HashMap<String, Span>,
     pub(crate) moved_paths: HashMap<String, Span>,
@@ -2405,6 +2406,11 @@ fn merge_flow_states(left: &BodyState, right: &BodyState) -> BodyState {
         .intersection(&right.managed)
         .cloned()
         .collect::<HashSet<_>>();
+    let read_views = left
+        .read_views
+        .intersection(&right.read_views)
+        .cloned()
+        .collect::<HashSet<_>>();
     let resources = left
         .resources
         .intersection(&right.resources)
@@ -2454,6 +2460,7 @@ fn merge_flow_states(left: &BodyState, right: &BodyState) -> BodyState {
         clean_locals,
         fresh_returnable_locals,
         managed,
+        read_views,
         resources,
         moved,
         moved_paths,
@@ -2660,6 +2667,10 @@ impl BodyState {
         self.managed.insert(name.into());
     }
 
+    pub(crate) fn bind_read_view(&mut self, name: impl Into<String>) {
+        self.read_views.insert(name.into());
+    }
+
     pub(crate) fn bind_resource(&mut self, name: impl Into<String>) {
         self.resources.insert(name.into());
     }
@@ -2718,6 +2729,10 @@ impl BodyState {
 
     pub(crate) fn is_managed(&self, name: &str) -> bool {
         self.managed.contains(name)
+    }
+
+    pub(crate) fn is_read_view(&self, name: &str) -> bool {
+        self.read_views.contains(name)
     }
 
     pub(crate) fn is_resource(&self, name: &str) -> bool {
@@ -2877,6 +2892,7 @@ pub(crate) fn merge_loop_state(
     state.locals = base.locals.clone();
     state.field_splittable_locals = base.field_splittable_locals.clone();
     state.managed = base.managed.clone();
+    state.read_views = base.read_views.clone();
     state.resources = base.resources.clone();
     state.value_types = base.value_types.clone();
     state.moved = moved;
@@ -2927,6 +2943,7 @@ fn fallthrough_projection(base: &BodyState, branch: &BodyState) -> BodyState {
         locals: base.locals.clone(),
         field_splittable_locals: base.field_splittable_locals.clone(),
         managed: base.managed.clone(),
+        read_views: base.read_views.clone(),
         resources: base.resources.clone(),
         value_types: base.value_types.clone(),
         moved,
@@ -2965,6 +2982,7 @@ fn merge_fallthrough_states(base: &BodyState, left: &BodyState, right: &BodyStat
         locals: base.locals.clone(),
         field_splittable_locals: base.field_splittable_locals.clone(),
         managed: base.managed.clone(),
+        read_views: base.read_views.clone(),
         resources: base.resources.clone(),
         value_types: base.value_types.clone(),
         moved,

@@ -33,6 +33,7 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
     ("same-call place conflict", "RS0302"),
     ("constructor/variant call-like conflict", "RS0203"),
     ("handle-field same-call conflict", "RS0303"),
+    ("read view mutation", "RS0310"),
     ("retaining local value", "RS0501"),
     ("managed closure capturing local/resource", "RS0801"),
     (
@@ -121,6 +122,7 @@ fn required_spec_diagnostics_have_regression_coverage() {
     let dedicated_test_codes = BTreeSet::from([
         "RS1102",  // rustc_diagnostics_report_unmappable_generated_spans
         "RS1201",  // runtime_diagnostic_lines_parse_to_rsscript_diagnostics
+        "RS0310",  // checker_rejects_exclusive_use_of_for_read_view
         "PKG0101", // package feature resolution diagnostics
         "PKG0102", // unsupported package dependency source diagnostics
         "PKG0501", // package review policy diagnostics
@@ -633,6 +635,37 @@ fn bad_config() -> fresh Config {
         .count();
 
     assert_eq!(constructor_effect_count, 2, "{diagnostics:?}");
+}
+
+#[test]
+fn checker_rejects_exclusive_use_of_for_read_view() {
+    let source = r#"
+features: local
+
+struct Buffer {
+    bytes: Int
+}
+
+fn mutate(buffer: mut Buffer) -> Unit
+fn consume(buffer: take Buffer) -> Unit
+fn inspect(buffer: read Buffer) -> Unit
+
+fn bad(buffers: read List<Buffer>) -> Unit {
+    for buffer in buffers {
+        inspect(buffer: read buffer)
+        mutate(buffer: mut buffer)
+        consume(buffer: take buffer)
+        local copied = manage buffer
+    }
+}
+"#;
+    let diagnostics = analyze_source("for-read-view.rss", source);
+    let read_view_errors = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "RS0310")
+        .count();
+
+    assert_eq!(read_view_errors, 3, "{diagnostics:?}");
 }
 
 #[test]
