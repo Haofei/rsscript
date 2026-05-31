@@ -744,6 +744,25 @@ pub fn timer_sleep_start(ms: i64) -> TimerSleepPending {
     }
 }
 
+pub fn timer_sleep_native_start(ms: i64) -> NativeAsyncPending<Result<(), TimerError>> {
+    timer_sleep_native_start_with_cancellation(ms, CancellationToken::new())
+}
+
+pub fn timer_sleep_native_start_with_cancellation(
+    ms: i64,
+    cancellation: CancellationToken,
+) -> NativeAsyncPending<Result<(), TimerError>> {
+    let millis = u64::try_from(ms).unwrap_or(0);
+    let (pending, completer) = native_async_pending(cancellation.clone());
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(millis));
+        if !cancellation.is_cancelled() {
+            let _completed = completer.complete(Ok(()));
+        }
+    });
+    pending
+}
+
 #[derive(Debug, Clone)]
 pub struct RowBuffer {
     bytes: Vec<u8>,
@@ -3303,6 +3322,18 @@ mod tests {
         let value = executor.run_pending(pending);
 
         assert_eq!(value, 99);
+        assert!(started.elapsed() < std::time::Duration::from_millis(500));
+    }
+
+    #[test]
+    fn native_timer_sleep_pending_completes_through_completion_slot() {
+        let pending = super::timer_sleep_native_start(5);
+
+        let mut executor = super::Executor::new();
+        let started = std::time::Instant::now();
+        let value = executor.run_pending(pending);
+
+        assert_eq!(value, Ok(()));
         assert!(started.elapsed() < std::time::Duration::from_millis(500));
     }
 
