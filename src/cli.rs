@@ -55,7 +55,15 @@ pub fn run() -> ExitCode {
 }
 
 fn run_package(args: &[String]) -> ExitCode {
-    match parse_package_args(args) {
+    let command = match parse_package_args(args) {
+        Ok(command) => command,
+        Err(error) => {
+            eprintln!("{error}");
+            print_usage();
+            return ExitCode::from(2);
+        }
+    };
+    match command {
         PackageCommand::Check { json, path } => run_package_check(json, path),
         PackageCommand::Review { json, path } => run_package_review(json, path),
         PackageCommand::ReviewUpdate {
@@ -86,10 +94,6 @@ fn run_package(args: &[String]) -> ExitCode {
             old_path,
             new_path,
         } => run_package_diff(json, old_path, new_path),
-        PackageCommand::Invalid => {
-            print_usage();
-            ExitCode::from(2)
-        }
     }
 }
 
@@ -265,17 +269,21 @@ fn run_fmt(args: &[String]) -> ExitCode {
 }
 
 fn run_review(args: &[String]) -> ExitCode {
-    match parse_review_args(args) {
+    let command = match parse_review_args(args) {
+        Ok(command) => command,
+        Err(error) => {
+            eprintln!("{error}");
+            print_usage();
+            return ExitCode::from(2);
+        }
+    };
+    match command {
         ReviewCommand::Diff {
             json,
             old_path,
             new_path,
         } => run_review_diff(json, old_path, new_path),
         ReviewCommand::Map { json, path } => run_review_map(json, path),
-        ReviewCommand::Invalid => {
-            print_usage();
-            ExitCode::from(2)
-        }
     }
 }
 
@@ -1054,6 +1062,7 @@ fn cleanup_temp_dir(path: &Path) {
     let _ = fs::remove_dir_all(path);
 }
 
+#[derive(Debug)]
 enum ReviewCommand<'a> {
     Diff {
         json: bool,
@@ -1064,9 +1073,9 @@ enum ReviewCommand<'a> {
         json: bool,
         path: &'a str,
     },
-    Invalid,
 }
 
+#[derive(Debug)]
 enum PackageCommand<'a> {
     Check {
         json: bool,
@@ -1110,10 +1119,9 @@ enum PackageCommand<'a> {
         old_path: &'a str,
         new_path: &'a str,
     },
-    Invalid,
 }
 
-fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
+fn parse_package_args(args: &[String]) -> Result<PackageCommand<'_>, String> {
     let mut json = false;
     let mut dry_run = false;
     let mut words = Vec::new();
@@ -1129,23 +1137,16 @@ fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
         } else if arg == "--dry-run" {
             dry_run = true;
         } else if arg == "--from" {
-            let Some(path) = args.get(index + 1) else {
-                return PackageCommand::Invalid;
-            };
-            from_path = Some(path.as_str());
             index += 1;
+            from_path = Some(required_flag_value(args, index, "--from")?);
         } else if arg == "--registry" {
-            let Some(path) = args.get(index + 1) else {
-                return PackageCommand::Invalid;
-            };
-            registry_path = Some(path.as_str());
             index += 1;
+            registry_path = Some(required_flag_value(args, index, "--registry")?);
         } else if arg == "--to" {
-            let Some(path) = args.get(index + 1) else {
-                return PackageCommand::Invalid;
-            };
-            to_path = Some(path.as_str());
             index += 1;
+            to_path = Some(required_flag_value(args, index, "--to")?);
+        } else if arg.starts_with("--") {
+            return Err(format!("unknown argument `{arg}`."));
         } else if matches!(
             arg.as_str(),
             "check"
@@ -1166,61 +1167,61 @@ fn parse_package_args(args: &[String]) -> PackageCommand<'_> {
     }
 
     match (words.as_slice(), paths.as_slice(), from_path, to_path) {
-        (["check"], [], None, None) => PackageCommand::Check { json, path: "." },
-        (["check"], [path], None, None) => PackageCommand::Check { json, path },
-        (["review"], [path], None, None) => PackageCommand::Review { json, path },
+        (["check"], [], None, None) => Ok(PackageCommand::Check { json, path: "." }),
+        (["check"], [path], None, None) => Ok(PackageCommand::Check { json, path }),
+        (["review"], [path], None, None) => Ok(PackageCommand::Review { json, path }),
         (["review", "update"], [], Some(old_lock_path), Some(new_lock_path)) => {
-            PackageCommand::ReviewUpdate {
+            Ok(PackageCommand::ReviewUpdate {
                 json,
                 old_lock_path,
                 new_lock_path,
-            }
+            })
         }
-        (["lock"], [path], None, None) => PackageCommand::Lock { json, path },
-        (["tree"], [], None, None) => PackageCommand::Tree { json, path: "." },
-        (["tree"], [path], None, None) => PackageCommand::Tree { json, path },
-        (["publish"], [], None, None) => PackageCommand::Publish {
+        (["lock"], [path], None, None) => Ok(PackageCommand::Lock { json, path }),
+        (["tree"], [], None, None) => Ok(PackageCommand::Tree { json, path: "." }),
+        (["tree"], [path], None, None) => Ok(PackageCommand::Tree { json, path }),
+        (["publish"], [], None, None) => Ok(PackageCommand::Publish {
             json,
             dry_run,
             path: ".",
             registry: registry_path,
-        },
-        (["publish"], [path], None, None) => PackageCommand::Publish {
+        }),
+        (["publish"], [path], None, None) => Ok(PackageCommand::Publish {
             json,
             dry_run,
             path,
             registry: registry_path,
-        },
-        (["vendor"], [], None, None) => PackageCommand::Vendor {
+        }),
+        (["vendor"], [], None, None) => Ok(PackageCommand::Vendor {
             json,
             dry_run,
             path: ".",
-        },
-        (["vendor"], [path], None, None) => PackageCommand::Vendor {
+        }),
+        (["vendor"], [path], None, None) => Ok(PackageCommand::Vendor {
             json,
             dry_run,
             path,
-        },
-        (["metadata"], [], None, None) => PackageCommand::Metadata {
+        }),
+        (["metadata"], [], None, None) => Ok(PackageCommand::Metadata {
             json,
             dry_run,
             path: ".",
-        },
-        (["metadata"], [path], None, None) => PackageCommand::Metadata {
+        }),
+        (["metadata"], [path], None, None) => Ok(PackageCommand::Metadata {
             json,
             dry_run,
             path,
-        },
-        (["diff"], [old_path, new_path], None, None) => PackageCommand::Diff {
+        }),
+        (["diff"], [old_path, new_path], None, None) => Ok(PackageCommand::Diff {
             json,
             old_path,
             new_path,
-        },
-        _ => PackageCommand::Invalid,
+        }),
+        _ => Err("invalid package arguments.".to_string()),
     }
 }
 
-fn parse_review_args(args: &[String]) -> ReviewCommand<'_> {
+fn parse_review_args(args: &[String]) -> Result<ReviewCommand<'_>, String> {
     let mut json = false;
     let mut command = None;
     let mut paths = Vec::new();
@@ -1229,20 +1230,25 @@ fn parse_review_args(args: &[String]) -> ReviewCommand<'_> {
         if arg == "--json" {
             json = true;
         } else if arg == "--diff" || arg == "--map" {
+            if command.is_some() {
+                return Err(format!("unexpected review command `{arg}`."));
+            }
             command = Some(arg.as_str());
+        } else if arg.starts_with("--") {
+            return Err(format!("unknown argument `{arg}`."));
         } else {
             paths.push(arg.as_str());
         }
     }
 
     match (command, paths.as_slice()) {
-        (Some("--map"), [path]) => ReviewCommand::Map { json, path },
-        (Some("--diff") | None, [old_path, new_path]) => ReviewCommand::Diff {
+        (Some("--map"), [path]) => Ok(ReviewCommand::Map { json, path }),
+        (Some("--diff") | None, [old_path, new_path]) => Ok(ReviewCommand::Diff {
             json,
             old_path,
             new_path,
-        },
-        _ => ReviewCommand::Invalid,
+        }),
+        _ => Err("invalid review arguments.".to_string()),
     }
 }
 
@@ -1810,6 +1816,30 @@ pub fn Api.run(message: read String) -> String {
     fn parse_multi_path_args_rejects_unknown_flags() {
         let values = args(&["--wat", "source-map.json", "rustc.json"]);
         let error = super::parse_multi_path_args(&values).expect_err("unknown flag should fail");
+
+        assert_eq!(error, "unknown argument `--wat`.");
+    }
+
+    #[test]
+    fn parse_review_args_rejects_unknown_flags() {
+        let values = args(&["--map", "--wat", "package"]);
+        let error = super::parse_review_args(&values).expect_err("unknown flag should fail");
+
+        assert_eq!(error, "unknown argument `--wat`.");
+    }
+
+    #[test]
+    fn parse_package_args_rejects_missing_flag_values() {
+        let values = args(&["review", "update", "--from", "old.lock", "--to"]);
+        let error = super::parse_package_args(&values).expect_err("missing to should fail");
+
+        assert_eq!(error, "missing value for `--to`.");
+    }
+
+    #[test]
+    fn parse_package_args_rejects_unknown_flags() {
+        let values = args(&["publish", "--wat", "package"]);
+        let error = super::parse_package_args(&values).expect_err("unknown flag should fail");
 
         assert_eq!(error, "unknown argument `--wat`.");
     }
