@@ -822,7 +822,9 @@ fn collect_block_uses(block: &Block, uses: &mut BTreeSet<String>) {
 fn collect_expr_uses(expr: &Expr, uses: &mut BTreeSet<String>) {
     match expr {
         Expr::Ident(name, _) => {
-            uses.insert(name.clone());
+            if !is_builtin_value_ident(name) {
+                uses.insert(name.clone());
+            }
         }
         Expr::Binary { left, right, .. } => {
             collect_expr_uses(left, uses);
@@ -846,6 +848,10 @@ fn collect_expr_uses(expr: &Expr, uses: &mut BTreeSet<String>) {
         Expr::Closure { body, .. } => collect_block_uses(body, uses),
         Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
     }
+}
+
+fn is_builtin_value_ident(name: &str) -> bool {
+    matches!(name, "Unit" | "true" | "false")
 }
 
 fn remove_stmt_bindings(statement: &Stmt, uses: &mut BTreeSet<String>) {

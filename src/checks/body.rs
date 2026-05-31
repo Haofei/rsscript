@@ -218,7 +218,9 @@ fn collect_block_uses(block: &HirBlock, uses: &mut HashSet<String>) {
 fn collect_expr_uses(expr: &HirExpr, uses: &mut HashSet<String>) {
     match expr {
         HirExpr::Ident { name, .. } => {
-            uses.insert(name.clone());
+            if !is_builtin_value_ident(name) {
+                uses.insert(name.clone());
+            }
         }
         HirExpr::Binary { left, right, .. } => {
             collect_expr_uses(left, uses);
@@ -242,6 +244,10 @@ fn collect_expr_uses(expr: &HirExpr, uses: &mut HashSet<String>) {
         HirExpr::Closure { body, .. } => collect_block_uses(body, uses),
         HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
     }
+}
+
+fn is_builtin_value_ident(name: &str) -> bool {
+    matches!(name, "Unit" | "true" | "false")
 }
 
 fn remove_stmt_bindings(statement: &HirStmt, uses: &mut HashSet<String>) {

@@ -8996,6 +8996,7 @@ pub async fn Api.run(client: read Client) -> Result<Unit, TimerError> {
     let review = review_package_dir(&temp_dir).expect("package review should succeed");
     let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
         .expect("package review JSON should parse");
+    let human = rsscript::format_package_review_human(&review);
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert_eq!(json["summary"]["async_apis"], 2);
@@ -9024,6 +9025,11 @@ pub async fn Api.run(client: read Client) -> Result<Unit, TimerError> {
                     .is_some_and(|reasons| reasons.iter().any(|reason| reason == "async boundary"))
         })
     }));
+    assert!(
+        human.contains("await sites:") && human.contains("Api.run awaits Timer.sleep"),
+        "{human}"
+    );
+    assert!(human.contains("live_across [client]"), "{human}");
 }
 
 #[test]

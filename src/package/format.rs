@@ -1,7 +1,7 @@
 use crate::package::{
     PackageCheck, PackageDependencyKind, PackageDiff, PackageLock, PackageLockDiff,
-    PackageMetadataReport, PackagePublishDryRun, PackageReview, PackageReviewExport, PackageTree,
-    PackageTreeNode, PackageVendorReport, package_risk_label,
+    PackageMetadataReport, PackagePublishDryRun, PackageReview, PackageReviewAwaitSite,
+    PackageReviewExport, PackageTree, PackageTreeNode, PackageVendorReport, package_risk_label,
 };
 use crate::review::format_review_human;
 
@@ -112,6 +112,9 @@ pub fn format_package_review_human(review: &PackageReview) -> String {
         }
         output.push('\n');
     }
+    output.push_str(&format_package_review_await_sites_human(
+        &review.await_sites,
+    ));
     output.push_str(&format_package_review_exports_human(&review.exports));
     output
 }
@@ -157,9 +160,34 @@ pub fn format_package_metadata_human(metadata: &PackageMetadataReport) -> String
             metadata.metadata.features.join(", ")
         ));
     }
+    output.push_str(&format_package_review_await_sites_human(
+        &metadata.metadata.await_sites,
+    ));
     output.push_str(&format_package_review_exports_human(
         &metadata.metadata.exports,
     ));
+    output
+}
+
+fn format_package_review_await_sites_human(await_sites: &[PackageReviewAwaitSite]) -> String {
+    if await_sites.is_empty() {
+        return String::new();
+    }
+    let mut output = String::from("await sites:\n");
+    for site in await_sites {
+        let callee = site.callee.as_deref().unwrap_or("<unknown>");
+        output.push_str(&format!(
+            "  - {} awaits {} at {}:{}:{}",
+            site.function, callee, site.span.file, site.span.line, site.span.column
+        ));
+        if !site.live_across_await.is_empty() {
+            output.push_str(&format!(
+                " live_across [{}]",
+                site.live_across_await.join(", ")
+            ));
+        }
+        output.push('\n');
+    }
     output
 }
 
