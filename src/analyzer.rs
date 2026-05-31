@@ -831,12 +831,20 @@ impl Analyzer<'_> {
                     || effect_name == "parallel"
                     || matches!(effect, EffectDecl::Retains(_));
                 if !valid {
-                    self.diagnostics.push(Diagnostic::warning(
-                        code::UNKNOWN_EFFECT,
-                        format!("unknown effect `{effect_name}` in `{}`.", function.name),
-                        function.span.clone(),
-                        "unknown effect",
-                    ));
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            code::UNKNOWN_EFFECT,
+                            format!("unknown effect `{effect_name}` in `{}`.", function.name),
+                            function.span.clone(),
+                            "unknown effect",
+                        )
+                        .with_cause("Effects are review-visible semantic contracts; unknown effect names cannot be interpreted safely.")
+                        .with_fix(
+                            "fix_unknown_effect",
+                            "Use a recognized effect such as `pure`, `no_panic`, `noalloc`, `no_block`, `native`, `unsafe`, `parallel`, or `retains(param)`.",
+                            "manual",
+                        ),
+                    );
                 }
             }
 

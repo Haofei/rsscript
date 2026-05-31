@@ -4515,6 +4515,24 @@ fn unknown_effect_call(value: read String) -> Unit
 }
 
 #[test]
+fn checker_rejects_unknown_effect_names() {
+    let source = r#"
+fn typo(value: read String) -> Unit
+    effects(retian)
+{
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("unknown-effect.rss", source);
+
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS0004"
+            && diagnostic.severity.is_error()
+            && diagnostic.summary.contains("retian")
+    }));
+}
+
+#[test]
 fn checker_reports_malformed_match_arms_as_unsupported() {
     let source = r#"
 fn bad(value: read Option<Int>) -> Int {

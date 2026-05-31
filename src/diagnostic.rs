@@ -279,7 +279,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::UNKNOWN_EFFECT,
         title: "unknown effect",
-        explanation: "The effect list contains an effect name outside the currently recognized MVP surface.",
+        explanation: "The effect list contains an effect name outside the currently recognized RSScript v0.5 surface. Effects are review-visible semantic contracts, so unknown effect names are errors.",
     },
     DiagnosticExplanation {
         code: code::DUPLICATE_DECLARATION,
