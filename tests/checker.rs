@@ -6885,6 +6885,95 @@ async fn bad(path: read Path) -> Result<Unit, IOError> {
 }
 
 #[test]
+fn checker_allows_dead_local_before_await() {
+    let source = r#"
+features: async, local
+
+struct Image {
+    size: Int
+}
+
+async fn Timer.sleep(ms: Int) -> Unit
+
+async fn ok() -> Unit {
+    local image = Image(size: 1)
+    await Timer.sleep(ms: 1)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("await-dead-local.rss", source);
+
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0031"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_rejects_local_used_after_await() {
+    let source = r#"
+features: async, local
+
+struct Image {
+    size: Int
+}
+
+async fn Timer.sleep(ms: Int) -> Unit
+fn Image.inspect(image: read Image) -> Unit
+
+async fn bad() -> Unit {
+    local image = Image(size: 1)
+    await Timer.sleep(ms: 1)
+    Image.inspect(image: read image)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("await-live-local.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0031"
+                && diagnostic
+                    .summary
+                    .contains("local value `image` cannot live across `await`")
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_rejects_local_passed_into_awaited_call() {
+    let source = r#"
+features: async, local
+
+struct Image {
+    size: Int
+}
+
+async fn Image.upload(image: read Image) -> Unit
+
+async fn bad() -> Unit {
+    local image = Image(size: 1)
+    await Image.upload(image: read image)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("await-local-arg.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0031"
+                && diagnostic
+                    .summary
+                    .contains("local value `image` cannot live across `await`")
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn checker_reports_spawn_as_unsupported_until_async_lowering_exists() {
     let source = r#"
 features: async

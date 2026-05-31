@@ -48,7 +48,14 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
                 .as_ref()
                 .and_then(result_error_type_ref_name);
             check_try_error_types(analyzer, block, return_error_type.as_deref());
-            check_block(analyzer, &local_analysis, block, &mut state, true);
+            check_block(
+                analyzer,
+                &local_analysis,
+                block,
+                &mut state,
+                true,
+                &HashSet::new(),
+            );
         }
     }
 }
@@ -114,14 +121,20 @@ fn check_block(
     block: &HirBlock,
     state: &mut BodyState,
     check_resource_contexts: bool,
+    continuation_uses: &HashSet<String>,
 ) -> Flow {
-    for statement in &block.statements {
+    let live_after_statements = block_live_after_statements(block, continuation_uses);
+    for (index, statement) in block.statements.iter().enumerate() {
+        let live_after = live_after_statements
+            .get(index)
+            .unwrap_or(continuation_uses);
         let flow = check_stmt_semantics(
             analyzer,
             local_analysis,
             statement,
             state,
             check_resource_contexts,
+            live_after,
         );
         apply_stmt_effects(statement, state);
         if flow != Flow::Fallthrough {
@@ -131,12 +144,142 @@ fn check_block(
     Flow::Fallthrough
 }
 
+fn block_live_after_statements(
+    block: &HirBlock,
+    continuation_uses: &HashSet<String>,
+) -> Vec<HashSet<String>> {
+    let mut live_after = vec![HashSet::new(); block.statements.len()];
+    let mut used = continuation_uses.clone();
+    for (index, statement) in block.statements.iter().enumerate().rev() {
+        live_after[index] = used.clone();
+        collect_stmt_uses(statement, &mut used);
+        remove_stmt_bindings(statement, &mut used);
+    }
+    live_after
+}
+
+fn collect_stmt_uses(statement: &HirStmt, uses: &mut HashSet<String>) {
+    match statement {
+        HirStmt::Let { value, .. } | HirStmt::Return { value, .. } => {
+            if let Some(value) = value {
+                collect_expr_uses(value, uses);
+            }
+        }
+        HirStmt::With { resource, body, .. } => {
+            collect_expr_uses(resource, uses);
+            collect_block_uses(body, uses);
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            collect_expr_uses(condition, uses);
+            collect_block_uses(then_body, uses);
+            if let Some(else_body) = else_body {
+                collect_block_uses(else_body, uses);
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                collect_expr_uses(condition, uses);
+            }
+            collect_block_uses(body, uses);
+        }
+        HirStmt::For { iterable, body, .. } => {
+            collect_expr_uses(iterable, uses);
+            collect_block_uses(body, uses);
+        }
+        HirStmt::Match { value, arms, .. } => {
+            collect_expr_uses(value, uses);
+            for arm in arms {
+                collect_block_uses(&arm.body, uses);
+            }
+        }
+        HirStmt::Expr(expr) => collect_expr_uses(expr, uses),
+        HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn collect_block_uses(block: &HirBlock, uses: &mut HashSet<String>) {
+    let mut block_uses = HashSet::new();
+    for statement in block.statements.iter().rev() {
+        collect_stmt_uses(statement, &mut block_uses);
+        remove_stmt_bindings(statement, &mut block_uses);
+    }
+    for name in block_uses {
+        uses.insert(name);
+    }
+}
+
+fn collect_expr_uses(expr: &HirExpr, uses: &mut HashSet<String>) {
+    match expr {
+        HirExpr::Ident { name, .. } => {
+            uses.insert(name.clone());
+        }
+        HirExpr::Binary { left, right, .. } => {
+            collect_expr_uses(left, uses);
+            collect_expr_uses(right, uses);
+        }
+        HirExpr::Field { base, .. } => collect_expr_uses(base, uses),
+        HirExpr::Index { base, index, .. } => {
+            collect_expr_uses(base, uses);
+            collect_expr_uses(index, uses);
+        }
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                collect_expr_uses(&arg.value, uses);
+            }
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. } => collect_expr_uses(value, uses),
+        HirExpr::Closure { body, .. } => collect_block_uses(body, uses),
+        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn remove_stmt_bindings(statement: &HirStmt, uses: &mut HashSet<String>) {
+    match statement {
+        HirStmt::Let { name, .. } | HirStmt::For { binding: name, .. } => {
+            uses.remove(name);
+        }
+        HirStmt::With { binding, .. } => {
+            uses.remove(binding);
+        }
+        HirStmt::Match { arms, .. } => {
+            for arm in arms {
+                if let MatchPattern::Variant {
+                    binding: Some(binding),
+                    ..
+                } = &arm.pattern
+                {
+                    uses.remove(binding);
+                }
+            }
+        }
+        HirStmt::Return { .. }
+        | HirStmt::If { .. }
+        | HirStmt::Loop { .. }
+        | HirStmt::Expr(_)
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
 fn check_stmt_semantics(
     analyzer: &mut Analyzer<'_>,
     local_analysis: &LocalAnalysis,
     statement: &HirStmt,
     state: &mut BodyState,
     check_resource_contexts: bool,
+    live_after: &HashSet<String>,
 ) -> Flow {
     match statement {
         HirStmt::Let {
@@ -147,7 +290,7 @@ fn check_stmt_semantics(
                 check_managed_closure_captures(analyzer, local_analysis, span, stmt_state);
             }
             if let Some(value) = value {
-                check_expr_semantics(analyzer, local_analysis, value, stmt_state);
+                check_expr_semantics(analyzer, local_analysis, value, stmt_state, live_after);
                 if check_resource_contexts {
                     check_resource_pool_lease_expr(analyzer, value, false);
                     check_resource_producer_expr(analyzer, value, false);
@@ -158,7 +301,7 @@ fn check_stmt_semantics(
         }
         HirStmt::Return { value, .. } => {
             if let Some(value) = value {
-                check_expr_semantics(analyzer, local_analysis, value, state);
+                check_expr_semantics(analyzer, local_analysis, value, state, live_after);
                 if check_resource_contexts {
                     check_resource_pool_lease_expr(analyzer, value, false);
                     check_resource_producer_expr(analyzer, value, false);
@@ -173,7 +316,7 @@ fn check_stmt_semantics(
             binding,
             ..
         } => {
-            check_expr_semantics(analyzer, local_analysis, resource, state);
+            check_expr_semantics(analyzer, local_analysis, resource, state, live_after);
             if check_resource_contexts {
                 check_resource_pool_lease_expr(analyzer, resource, true);
                 check_result_resource_with_has_try(analyzer, resource);
@@ -193,6 +336,7 @@ fn check_stmt_semantics(
                 body,
                 &mut scoped_state,
                 check_resource_contexts,
+                live_after,
             )
         }
         HirStmt::If {
@@ -202,7 +346,7 @@ fn check_stmt_semantics(
             ..
         } => {
             check_bool_condition(analyzer, condition, "if");
-            check_expr_semantics(analyzer, local_analysis, condition, state);
+            check_expr_semantics(analyzer, local_analysis, condition, state, live_after);
             if check_resource_contexts {
                 check_resource_pool_lease_expr(analyzer, condition, false);
                 check_resource_producer_expr(analyzer, condition, false);
@@ -217,6 +361,7 @@ fn check_stmt_semantics(
                 then_body,
                 &mut then_state,
                 check_resource_contexts,
+                live_after,
             );
 
             let else_branch = else_body.as_ref().map(|else_body| {
@@ -227,6 +372,7 @@ fn check_stmt_semantics(
                     else_body,
                     &mut else_state,
                     check_resource_contexts,
+                    live_after,
                 );
                 (else_state, else_flow)
             });
@@ -238,7 +384,7 @@ fn check_stmt_semantics(
         } => {
             if let Some(condition) = condition {
                 check_bool_condition(analyzer, condition, "while");
-                check_expr_semantics(analyzer, local_analysis, condition, state);
+                check_expr_semantics(analyzer, local_analysis, condition, state, live_after);
                 if check_resource_contexts {
                     check_resource_pool_lease_expr(analyzer, condition, false);
                     check_resource_producer_expr(analyzer, condition, false);
@@ -254,6 +400,7 @@ fn check_stmt_semantics(
                 body,
                 &mut body_state,
                 check_resource_contexts,
+                live_after,
             );
 
             merge_loop_state(
@@ -273,7 +420,7 @@ fn check_stmt_semantics(
             ..
         } => {
             check_for_iterable_type(analyzer, iterable, iterable_type_name.as_deref());
-            check_expr_semantics(analyzer, local_analysis, iterable, state);
+            check_expr_semantics(analyzer, local_analysis, iterable, state, live_after);
             if check_resource_contexts {
                 check_resource_pool_lease_expr(analyzer, iterable, false);
                 check_resource_producer_expr(analyzer, iterable, false);
@@ -292,13 +439,14 @@ fn check_stmt_semantics(
                 body,
                 &mut body_state,
                 check_resource_contexts,
+                live_after,
             );
             merge_loop_state(state, &base_state, body_state, body_flow, true)
         }
         HirStmt::Match { value, arms, .. } => {
             check_match_scrutinee_type(analyzer, value);
             check_match_patterns_match_scrutinee(analyzer, value, arms);
-            check_expr_semantics(analyzer, local_analysis, value, state);
+            check_expr_semantics(analyzer, local_analysis, value, state, live_after);
             if check_resource_contexts {
                 check_resource_pool_lease_expr(analyzer, value, false);
                 check_resource_producer_expr(analyzer, value, false);
@@ -315,6 +463,7 @@ fn check_stmt_semantics(
                     &arm.body,
                     &mut arm_state,
                     check_resource_contexts,
+                    live_after,
                 );
                 all_return &= flow == Flow::Return;
             }
@@ -325,7 +474,7 @@ fn check_stmt_semantics(
             }
         }
         HirStmt::Expr(expr) => {
-            check_expr_semantics(analyzer, local_analysis, expr, state);
+            check_expr_semantics(analyzer, local_analysis, expr, state, live_after);
             if check_resource_contexts {
                 check_resource_pool_lease_expr(analyzer, expr, false);
                 check_resource_producer_expr(analyzer, expr, false);
@@ -382,8 +531,17 @@ fn check_expr_semantics(
     local_analysis: &LocalAnalysis,
     expr: &HirExpr,
     state: &BodyState,
+    live_after: &HashSet<String>,
 ) {
-    check_expr_semantics_with_context(analyzer, local_analysis, expr, state, false, false);
+    check_expr_semantics_with_context(
+        analyzer,
+        local_analysis,
+        expr,
+        state,
+        false,
+        false,
+        live_after,
+    );
 }
 
 fn check_bool_condition(analyzer: &mut Analyzer<'_>, expr: &HirExpr, construct: &str) {
@@ -506,6 +664,7 @@ fn check_expr_semantics_with_context(
     state: &BodyState,
     allow_weak_upgrade_arg: bool,
     async_call_consumed: bool,
+    live_after: &HashSet<String>,
 ) {
     match expr {
         HirExpr::Call {
@@ -523,7 +682,8 @@ fn check_expr_semantics_with_context(
             check_resource_pool_constructor_max_size_contract(analyzer, callee, args);
             check_resource_pool_factory_resource_captures(analyzer, callee, args, state);
             let weak_upgrade = is_weak_upgrade_callee(callee);
-            for arg in args {
+            let mut arg_live_after = live_after.clone();
+            for arg in args.iter().rev() {
                 check_expr_semantics_with_context(
                     analyzer,
                     local_analysis,
@@ -531,17 +691,37 @@ fn check_expr_semantics_with_context(
                     state,
                     weak_upgrade,
                     false,
+                    &arg_live_after,
                 );
+                collect_expr_uses(&arg.value, &mut arg_live_after);
             }
         }
         HirExpr::Spawn { value, .. } => {
             check_spawn_captures(analyzer, value, state);
-            check_expr_semantics_with_context(analyzer, local_analysis, value, state, false, true);
+            check_expr_semantics_with_context(
+                analyzer,
+                local_analysis,
+                value,
+                state,
+                false,
+                true,
+                live_after,
+            );
         }
         HirExpr::Await { value, .. } => {
             check_await_operand(analyzer, value, expr);
-            check_await_live_values(analyzer, state, expr);
-            check_expr_semantics_with_context(analyzer, local_analysis, value, state, false, true);
+            let mut await_live_after = live_after.clone();
+            collect_expr_uses(value, &mut await_live_after);
+            check_await_live_values(analyzer, state, expr, &await_live_after);
+            check_expr_semantics_with_context(
+                analyzer,
+                local_analysis,
+                value,
+                state,
+                false,
+                true,
+                live_after,
+            );
         }
         HirExpr::Effect {
             effect,
@@ -566,6 +746,7 @@ fn check_expr_semantics_with_context(
                 state,
                 false,
                 async_call_consumed,
+                live_after,
             );
         }
         HirExpr::Try { value, .. } => {
@@ -579,26 +760,86 @@ fn check_expr_semantics_with_context(
                 state,
                 false,
                 async_call_consumed,
+                live_after,
             );
         }
         HirExpr::Manage { value, span, .. } => {
             check_manage_operand_is_local(analyzer, value, span, state);
-            check_expr_semantics_with_context(analyzer, local_analysis, value, state, false, false);
+            check_expr_semantics_with_context(
+                analyzer,
+                local_analysis,
+                value,
+                state,
+                false,
+                false,
+                live_after,
+            );
         }
         HirExpr::Binary { left, right, .. } => {
-            check_expr_semantics_with_context(analyzer, local_analysis, left, state, false, false);
-            check_expr_semantics_with_context(analyzer, local_analysis, right, state, false, false);
+            let mut left_live_after = live_after.clone();
+            collect_expr_uses(right, &mut left_live_after);
+            check_expr_semantics_with_context(
+                analyzer,
+                local_analysis,
+                left,
+                state,
+                false,
+                false,
+                &left_live_after,
+            );
+            check_expr_semantics_with_context(
+                analyzer,
+                local_analysis,
+                right,
+                state,
+                false,
+                false,
+                live_after,
+            );
         }
         HirExpr::Field { base, .. } => {
-            check_expr_semantics_with_context(analyzer, local_analysis, base, state, false, false);
+            check_expr_semantics_with_context(
+                analyzer,
+                local_analysis,
+                base,
+                state,
+                false,
+                false,
+                live_after,
+            );
         }
         HirExpr::Index { base, index, .. } => {
-            check_expr_semantics_with_context(analyzer, local_analysis, base, state, false, false);
-            check_expr_semantics_with_context(analyzer, local_analysis, index, state, false, false);
+            let mut base_live_after = live_after.clone();
+            collect_expr_uses(index, &mut base_live_after);
+            check_expr_semantics_with_context(
+                analyzer,
+                local_analysis,
+                base,
+                state,
+                false,
+                false,
+                &base_live_after,
+            );
+            check_expr_semantics_with_context(
+                analyzer,
+                local_analysis,
+                index,
+                state,
+                false,
+                false,
+                live_after,
+            );
         }
         HirExpr::Closure { body, .. } => {
             let mut closure_state = BodyState::default();
-            check_block(analyzer, local_analysis, body, &mut closure_state, false);
+            check_block(
+                analyzer,
+                local_analysis,
+                body,
+                &mut closure_state,
+                false,
+                &HashSet::new(),
+            );
         }
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
@@ -742,12 +983,20 @@ fn await_expr_targets_async_call(expr: &HirExpr) -> bool {
     }
 }
 
-fn check_await_live_values(analyzer: &mut Analyzer<'_>, state: &BodyState, await_expr: &HirExpr) {
+fn check_await_live_values(
+    analyzer: &mut Analyzer<'_>,
+    state: &BodyState,
+    await_expr: &HirExpr,
+    live_after: &HashSet<String>,
+) {
     let span = expr_span(await_expr).clone();
     for resource in &state.resources {
         await_live_value_diagnostic(analyzer, "resource", resource, &span);
     }
     for local in &state.locals {
+        if !live_after.contains(local) {
+            continue;
+        }
         if state
             .value_type(local)
             .is_some_and(|type_name| is_copy_type_name(type_name))
