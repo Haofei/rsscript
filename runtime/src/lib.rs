@@ -387,6 +387,10 @@ impl Executor {
             }
         }
     }
+
+    pub fn run_task_group<T>(&mut self, group: TaskGroup<T>) -> Vec<T> {
+        group.join(self)
+    }
 }
 
 pub struct Context<'executor> {
@@ -410,6 +414,66 @@ pub trait Pending<T> {
 
 pub fn run_pending<T>(pending: impl Pending<T>) -> T {
     Executor::new().run_pending(pending)
+}
+
+pub struct TaskGroup<T> {
+    tasks: Vec<Box<dyn Pending<T>>>,
+}
+
+impl<T> TaskGroup<T> {
+    pub fn new() -> Self {
+        Self { tasks: Vec::new() }
+    }
+
+    pub fn len(&self) -> usize {
+        self.tasks.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tasks.is_empty()
+    }
+
+    pub fn spawn_pending(&mut self, pending: impl Pending<T> + 'static) {
+        self.tasks.push(Box::new(pending));
+    }
+
+    pub fn join(self, executor: &mut Executor) -> Vec<T> {
+        let mut tasks = self.tasks;
+        let mut outputs = (0..tasks.len()).map(|_| None).collect::<Vec<_>>();
+        let mut remaining = tasks.len();
+        while remaining > 0 {
+            let mut made_progress = false;
+            for (index, task) in tasks.iter_mut().enumerate() {
+                if outputs[index].is_some() {
+                    continue;
+                }
+                executor.polls += 1;
+                let poll = {
+                    let mut cx = Context { executor };
+                    task.poll(&mut cx)
+                };
+                if let AsyncPoll::Ready(value) = poll {
+                    outputs[index] = Some(value);
+                    remaining -= 1;
+                    made_progress = true;
+                }
+            }
+            if remaining > 0 && !made_progress {
+                let mut cx = Context { executor };
+                cx.yield_now();
+            }
+        }
+        outputs
+            .into_iter()
+            .map(|output| output.expect("task group output should be ready after join"))
+            .collect()
+    }
+}
+
+impl<T> Default for TaskGroup<T> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 pub struct TimerSleepPending {
@@ -2746,6 +2810,42 @@ mod tests {
 
         assert_eq!(value, 42);
         assert_eq!(executor.poll_count(), 3);
+        assert!(executor.yield_count() >= 2);
+    }
+
+    #[test]
+    fn task_group_joins_pending_tasks_in_spawn_order() {
+        struct CountPending {
+            value: usize,
+            polls_before_ready: usize,
+        }
+
+        impl super::Pending<usize> for CountPending {
+            fn poll(&mut self, cx: &mut super::Context<'_>) -> super::AsyncPoll<usize> {
+                if self.polls_before_ready == 0 {
+                    return super::AsyncPoll::Ready(self.value);
+                }
+                self.polls_before_ready -= 1;
+                cx.yield_now();
+                super::AsyncPoll::Pending
+            }
+        }
+
+        let mut group = super::TaskGroup::new();
+        group.spawn_pending(CountPending {
+            value: 10,
+            polls_before_ready: 2,
+        });
+        group.spawn_pending(CountPending {
+            value: 20,
+            polls_before_ready: 0,
+        });
+
+        let mut executor = super::Executor::new();
+        let outputs = executor.run_task_group(group);
+
+        assert_eq!(outputs, vec![10, 20]);
+        assert!(executor.poll_count() >= 3);
         assert!(executor.yield_count() >= 2);
     }
 
