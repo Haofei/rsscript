@@ -9,7 +9,7 @@
       "resource": "arn:aws:s3:::reports-prod/*"
     },
     {
-      "category": "object_storage.write",
+      "category": "object_storage.delete",
       "provider": "aws",
       "service": "s3",
       "action": "s3:DeleteObject",

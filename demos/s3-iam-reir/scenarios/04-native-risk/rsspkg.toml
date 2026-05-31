@@ -1,0 +1,28 @@
+[package]
+name = "rss-s3-uploader"
+version = "0.1.0-native-risk"
+edition = "2026"
+
+[sources]
+paths = ["src"]
+
+[interfaces]
+paths = ["interface"]
+
+[native.rust]
+enabled = true
+path = "../../native/rust"
+crate = "rss_s3_demo_native"
+build_scripts = "review"
+proc_macros = "forbid"
+unsafe = "review"
+native_links = "forbid"
+ffi = "forbid"
+
+[[review.capability_bindings]]
+symbol = "S3.put_object"
+category = "object_storage.write"
+provider = "aws"
+service = "s3"
+action = "s3:PutObject"
+resource = "arn:aws:s3:::reports-prod/*"

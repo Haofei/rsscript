@@ -82,6 +82,8 @@ string_enum! {
         ObjectStorageRead => "object_storage.read",
         #[serde(rename = "object_storage.write")]
         ObjectStorageWrite => "object_storage.write",
+        #[serde(rename = "object_storage.delete")]
+        ObjectStorageDelete => "object_storage.delete",
         #[serde(rename = "database.read")]
         DatabaseRead => "database.read",
         #[serde(rename = "database.write")]

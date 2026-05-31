@@ -1271,6 +1271,7 @@ fn reir_spec_lists_implemented_core_capability_categories() {
         "filesystem.write",
         "object_storage.read",
         "object_storage.write",
+        "object_storage.delete",
         "database.read",
         "database.write",
         "queue.publish",

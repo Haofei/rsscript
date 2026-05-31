@@ -239,6 +239,108 @@ fn s3_iam_reir_demo_preflight_reports_missing_fixed_and_excess() {
     println!("s3 iam preflight: missing=s3:PutObject fixed=covered excess=s3:DeleteObject");
 }
 
+#[test]
+fn s3_iam_reir_demo_scenarios_report_code_capability_change() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let demo_dir = repo.join("demos/s3-iam-reir");
+    let fixed_dir = demo_dir.join("scenarios/00-fixed");
+    let adds_delete_dir = demo_dir.join("scenarios/03-code-adds-delete");
+
+    let fixed_required = required_facts_for_demo(&fixed_dir);
+    let adds_delete_required = required_facts_for_demo(&adds_delete_dir);
+
+    assert!(required_actions(&fixed_required).contains("s3:PutObject"));
+    assert!(!required_actions(&fixed_required).contains("s3:DeleteObject"));
+    assert!(required_actions(&adds_delete_required).contains("s3:PutObject"));
+    assert!(required_actions(&adds_delete_required).contains("s3:DeleteObject"));
+
+    let delete_requirement = adds_delete_required
+        .iter()
+        .find(|fact| {
+            fact.capability
+                .as_ref()
+                .is_some_and(|capability| capability.action.as_deref() == Some("s3:DeleteObject"))
+        })
+        .expect("code-adds-delete scenario should require S3 DeleteObject");
+    assert!(delete_requirement.evidence.iter().any(|evidence| {
+        evidence.file.as_deref() == Some("src/upload.rss")
+            && evidence.reason.as_deref().is_some_and(|reason| {
+                reason.contains("Reports.cleanup_old_reports -> S3.delete_object")
+            })
+    }));
+
+    let fixed_iam_reconciliations = reir::reconcile_capabilities_for_target(
+        &adds_delete_required,
+        &deployment_grants_from_fixtures(&demo_dir, "mock-iam-fixed.json"),
+        Some("prod"),
+    );
+    assert!(fixed_iam_reconciliations.iter().any(|reconciliation| {
+        reconciliation.kind == ReconciliationKind::MissingCapability
+            && reconciliation
+                .capability
+                .as_ref()
+                .is_some_and(|capability| capability.action.as_deref() == Some("s3:DeleteObject"))
+    }));
+
+    let excess_iam_reconciliations = reir::reconcile_capabilities_for_target(
+        &adds_delete_required,
+        &deployment_grants_from_fixtures(&demo_dir, "mock-iam-excess.json"),
+        Some("prod"),
+    );
+    assert!(
+        excess_iam_reconciliations
+            .iter()
+            .all(|reconciliation| reconciliation.kind != ReconciliationKind::MissingCapability),
+        "excess fixture grants DeleteObject and should cover the code-adds-delete scenario: {excess_iam_reconciliations:#?}"
+    );
+
+    let package_diff =
+        rsscript::diff_package_dirs(&fixed_dir, &adds_delete_dir).expect("scenario diff succeeds");
+    assert!(
+        package_diff
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("package version changed"))
+            || package_diff
+                .interface_changes
+                .iter()
+                .any(|change| change.file.contains("s3.rssi")),
+        "package diff should still expose the PR surface change: {package_diff:#?}"
+    );
+
+    println!(
+        "s3 iam scenarios: fixed=PutObject code-change-adds=DeleteObject fixed-iam=missing-delete excess-iam=covers-delete"
+    );
+}
+
+#[test]
+fn s3_iam_reir_demo_native_risk_scenario_reports_review_boundary() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let native_risk_dir = repo.join("demos/s3-iam-reir/scenarios/04-native-risk");
+    let review = review_package_dir(&native_risk_dir).expect("native-risk review should succeed");
+
+    assert!(
+        review
+            .reasons
+            .iter()
+            .any(|reason| reason == "native Rust wrapper enabled")
+    );
+    assert!(
+        review
+            .reasons
+            .iter()
+            .any(|reason| reason == "native Rust build scripts require review")
+    );
+    assert!(
+        review
+            .reasons
+            .iter()
+            .any(|reason| reason == "native Rust unsafe policy requires review")
+    );
+
+    println!("s3 iam native-risk: native-wrapper build-scripts unsafe-policy require review");
+}
+
 fn required_facts_for_demo(demo_dir: &Path) -> Vec<Fact> {
     let review = review_package_dir(demo_dir).expect("demo package review should succeed");
     let bundle: reir::Bundle =
@@ -248,6 +350,13 @@ fn required_facts_for_demo(demo_dir: &Path) -> Vec<Fact> {
         .facts
         .into_iter()
         .filter(|fact| fact.role == Some(FactRole::Required))
+        .collect()
+}
+
+fn required_actions(required_facts: &[Fact]) -> std::collections::BTreeSet<&str> {
+    required_facts
+        .iter()
+        .filter_map(|fact| fact.capability.as_ref()?.action.as_deref())
         .collect()
 }
 

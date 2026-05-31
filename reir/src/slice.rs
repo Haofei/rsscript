@@ -182,9 +182,9 @@ fn capability_slice_kind(category: &CapabilityCategory) -> Option<SliceKind> {
         CapabilityCategory::FilesystemRead | CapabilityCategory::FilesystemWrite => {
             Some(SliceKind::FilesystemSlice)
         }
-        CapabilityCategory::ObjectStorageRead | CapabilityCategory::ObjectStorageWrite => {
-            Some(SliceKind::ObjectStorageSlice)
-        }
+        CapabilityCategory::ObjectStorageRead
+        | CapabilityCategory::ObjectStorageWrite
+        | CapabilityCategory::ObjectStorageDelete => Some(SliceKind::ObjectStorageSlice),
         CapabilityCategory::DatabaseRead | CapabilityCategory::DatabaseWrite => {
             Some(SliceKind::DatabaseSlice)
         }

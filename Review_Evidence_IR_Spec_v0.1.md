@@ -826,6 +826,7 @@ filesystem.read
 filesystem.write
 object_storage.read
 object_storage.write
+object_storage.delete
 database.read
 database.write
 queue.publish
@@ -860,6 +861,7 @@ Provider-specific actions map into categories. For example:
 ```text
 aws s3:GetObject       -> object_storage.read
 aws s3:PutObject       -> object_storage.write
+aws s3:DeleteObject    -> object_storage.delete
 aws sts:AssumeRole     -> identity.assume
 k8s RBAC get secrets   -> secret.read
 k8s hostPath mount     -> container.host_access / filesystem.read/write depending mode

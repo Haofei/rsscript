@@ -1,0 +1,8 @@
+features: async, native
+
+pub async native fn S3.put_object(
+    bucket: read String,
+    key: read String,
+    body: read String,
+) -> Result<Unit, String>
+    effects(native)
