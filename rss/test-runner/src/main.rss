@@ -11,6 +11,7 @@ struct TestCase {
     command: String
     args: List<String>
     jobs: Int
+    timeout_ms: Int
     contains: String
     contains_all: List<String>
     ignored: Bool
@@ -165,6 +166,7 @@ fn test_case_from_json(value: read JsonValue) -> Result<fresh TestCase, String> 
         command: json_string_or_default(value: read value, name: read "command", default: read ""),
         args: json_string_list_or_empty(value: read value, name: read "args"),
         jobs: json_int_or_default(value: read value, name: read "jobs", default: 0),
+        timeout_ms: json_int_or_default(value: read value, name: read "timeout_ms", default: 10000),
         contains: json_string_or_default(value: read value, name: read "contains", default: read ""),
         contains_all: json_string_list_or_empty(value: read value, name: read "contains_all"),
         ignored: json_bool_or_default(value: read value, name: read "ignored", default: false),
@@ -311,8 +313,16 @@ fn command_with_windows_exe_suffix(command: read String) -> fresh String {
     return String.concat(left: read command, right: read ".exe")
 }
 
-fn run_command_stdout(command: read String, args: read List<String>) -> Result<String, String> {
-    match Process.run_stdout(command: read command, args: read args) {
+fn run_command_stdout(
+    command: read String,
+    args: read List<String>,
+    timeout_ms: Int,
+) -> Result<String, String> {
+    match Process.run_stdout_timeout(
+        command: read command,
+        args: read args,
+        timeout_ms: timeout_ms,
+    ) {
         Ok(stdout) => {
             return Ok(stdout)
         }
@@ -321,9 +331,10 @@ fn run_command_stdout(command: read String, args: read List<String>) -> Result<S
                 return Err(first_error)
             }
 
-            match Process.run_stdout(
+            match Process.run_stdout_timeout(
                 command: read command_with_windows_exe_suffix(command: read command),
                 args: read args,
+                timeout_ms: timeout_ms,
             ) {
                 Ok(stdout) => {
                     return Ok(stdout)
@@ -336,8 +347,12 @@ fn run_command_stdout(command: read String, args: read List<String>) -> Result<S
     }
 }
 
-fn run_command_success(command: read String, args: read List<String>) -> Result<Bool, String> {
-    match run_command_stdout(command: read command, args: read args) {
+fn run_command_success(
+    command: read String,
+    args: read List<String>,
+    timeout_ms: Int,
+) -> Result<Bool, String> {
+    match run_command_stdout(command: read command, args: read args, timeout_ms: timeout_ms) {
         Ok(_) => {
             return Ok(true)
         }
@@ -351,7 +366,7 @@ fn run_rss_source_stdout(test: read TestCase) -> Result<String, String> {
     let command = rss_binary_command(command: read test.command)
     let args = rss_run_args(path: read test.path, program_args: read test.args)
 
-    return run_command_stdout(command: read command, args: read args)
+    return run_command_stdout(command: read command, args: read args, timeout_ms: test.timeout_ms)
 }
 
 fn run_rss_source_success(test: read TestCase) -> Result<Bool, String> {
@@ -407,10 +422,11 @@ fn run_command_for_path(
     command: read String,
     args: read List<String>,
     path: read String,
+    timeout_ms: Int,
 ) -> Result<Bool, String> {
     let next_args = append_arg(args: read args, arg: read path)
 
-    return run_command_success(command: read command, args: read next_args)
+    return run_command_success(command: read command, args: read next_args, timeout_ms: timeout_ms)
 }
 
 fn collect_paths_from(
@@ -469,12 +485,14 @@ fn run_command_with_appended_args(
     args: read List<String>,
     appended_args: read List<String>,
     jobs: Int,
+    timeout_ms: Int,
 ) -> Result<Bool, String> {
-    match Process.run_many_stdout(
+    match Process.run_many_stdout_timeout(
         command: read command,
         args: read args,
         appended_args: read appended_args,
         jobs: jobs,
+        timeout_ms: timeout_ms,
     ) {
         Ok(_) => {
             return Ok(true)
@@ -496,7 +514,11 @@ fn run_test(test: read TestCase) -> Result<Bool, String> {
     }
 
     if test.kind == "command_stdout_contains" {
-        match run_command_stdout(command: read test.command, args: read test.args) {
+        match run_command_stdout(
+            command: read test.command,
+            args: read test.args,
+            timeout_ms: test.timeout_ms,
+        ) {
             Ok(stdout) => {
                 return text_matches_expectations(
                     value: read stdout,
@@ -511,7 +533,11 @@ fn run_test(test: read TestCase) -> Result<Bool, String> {
     }
 
     if test.kind == "command_success" {
-        return run_command_success(command: read test.command, args: read test.args)
+        return run_command_success(
+            command: read test.command,
+            args: read test.args,
+            timeout_ms: test.timeout_ms,
+        )
     }
 
     if test.kind == "rss_run_success" {
@@ -549,6 +575,7 @@ fn run_test(test: read TestCase) -> Result<Bool, String> {
             args: read test.args,
             appended_args: read selected,
             jobs: test.jobs,
+            timeout_ms: test.timeout_ms,
         )
     }
 
@@ -569,6 +596,7 @@ fn run_test(test: read TestCase) -> Result<Bool, String> {
                     args: read test.args,
                     appended_args: read selected,
                     jobs: test.jobs,
+                    timeout_ms: test.timeout_ms,
                 )
             }
             Err(error) => {
