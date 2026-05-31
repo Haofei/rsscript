@@ -14,7 +14,7 @@ args = [
 ]
 
 [[tests]]
-name = "file upload async vs sync benchmark demo"
+name = "file upload RSS async vs Rust async benchmark"
 kind = "command_success"
 command = "cargo"
 timeout_ms = 120000

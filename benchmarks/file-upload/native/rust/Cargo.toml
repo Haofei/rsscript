@@ -1,16 +1,19 @@
 [package]
-name = "rss_file_upload_benchmark"
+name = "rss_file_upload_benchmark_native"
 version = "0.1.0"
 edition = "2021"
 
 [workspace]
+
+[lib]
+path = "src/lib.rs"
 
 [[bin]]
 name = "mock_upload_server"
 path = "src/bin/mock_upload_server.rs"
 
 [[bin]]
-name = "async_upload_client"
+name = "rust_async_upload_client"
 path = "src/bin/async_upload_client.rs"
 
 [[bin]]
@@ -18,4 +21,5 @@ name = "sync_upload_client"
 path = "src/bin/sync_upload_client.rs"
 
 [dependencies]
+rsscript-runtime = { path = "../../../../runtime" }
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }

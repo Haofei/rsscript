@@ -1,0 +1,7 @@
+features: async, native
+
+pub async native fn Upload.put(
+    path: read String,
+    body: read String,
+) -> Result<Unit, String>
+    effects(native)

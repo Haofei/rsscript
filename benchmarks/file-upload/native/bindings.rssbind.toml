@@ -1,0 +1,2 @@
+[bindings]
+"Upload.put" = "rss_file_upload_benchmark_native::upload_start"

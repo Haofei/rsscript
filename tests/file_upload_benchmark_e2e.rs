@@ -6,6 +6,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use rsscript::{
+    lower_sources_to_rust_package_with_options, package_lowering_input,
+    write_generated_rust_package,
+};
+
 const REQUESTS: usize = 24;
 const PAYLOAD_BYTES: usize = 64 * 1024;
 const CONCURRENCY: usize = 8;
@@ -15,56 +20,97 @@ const SERVER_DELAY_MS: u64 = 50;
 #[ignore = "release/demo e2e; run from rss/test-runner/manifests/demo-e2e.rsstest.toml"]
 fn file_upload_benchmark_reports_async_and_sync_requests_per_second() {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let demo_dir = repo.join("demos/file-upload-benchmark");
-    let native_dir = demo_dir.join("native/rust");
+    let benchmark_dir = repo.join("benchmarks/file-upload");
+    let native_dir = benchmark_dir.join("native/rust");
     let native_manifest = native_dir.join("Cargo.toml");
     let temp_dir = common::unique_temp_dir("rsscript-file-upload-benchmark");
     fs::create_dir_all(&temp_dir).expect("e2e temp dir should be created");
 
     cargo_build(&native_manifest, "mock_upload_server");
-    cargo_build(&native_manifest, "async_upload_client");
+    cargo_build(&native_manifest, "rust_async_upload_client");
     cargo_build(&native_manifest, "sync_upload_client");
 
     let addr = available_local_addr();
     let server_log = temp_dir.join("file-upload-server.log");
     let _server = UploadServer::start(&native_dir, addr, &server_log);
 
+    let generated_dir = temp_dir.join("generated-rss-file-upload-benchmark");
+    generate_rss_package(&benchmark_dir, repo, &generated_dir);
+    cargo_build(
+        &generated_dir.join("Cargo.toml"),
+        "rss-file-upload-benchmark",
+    );
+
     let target_dir = native_dir.join("target/debug");
-    let async_bin = binary_path(&target_dir, "async_upload_client");
+    let rss_async_bin = binary_path(
+        &generated_dir.join("target/debug"),
+        "rss-file-upload-benchmark",
+    );
+    let rust_async_bin = binary_path(&target_dir, "rust_async_upload_client");
     let sync_bin = binary_path(&target_dir, "sync_upload_client");
 
-    let async_result = run_client(
-        &async_bin,
+    run_client(&rss_async_bin, addr, &[]);
+    run_client(
+        &rust_async_bin,
+        addr,
+        &[("RSS_FILE_UPLOAD_CONCURRENCY", CONCURRENCY.to_string())],
+    );
+
+    let rss_async_result = run_client(&rss_async_bin, addr, &[]);
+    let rust_async_result = run_client(
+        &rust_async_bin,
         addr,
         &[("RSS_FILE_UPLOAD_CONCURRENCY", CONCURRENCY.to_string())],
     );
     let sync_result = run_client(&sync_bin, addr, &[]);
 
     let log = fs::read_to_string(&server_log).expect("server log should be readable");
-    let async_max_in_flight = max_in_flight_for(&log, "/upload/async-");
+    let rss_async_max_in_flight = max_in_flight_for(&log, "/upload/rss-");
+    let rust_async_max_in_flight = max_in_flight_for(&log, "/upload/rust-");
     let sync_max_in_flight = max_in_flight_for(&log, "/upload/sync-");
 
     assert!(
-        async_result.rps > sync_result.rps,
-        "async RPS should exceed sync RPS; async={async_result:?}, sync={sync_result:?}\n{log}"
+        rss_async_result.rps > sync_result.rps,
+        "RSS async RPS should exceed sync RPS; rss_async={rss_async_result:?}, sync={sync_result:?}\n{log}"
     );
     assert!(
-        async_max_in_flight > 1,
-        "async client should overlap upload requests; log:\n{log}"
+        rust_async_result.rps > sync_result.rps,
+        "Rust async RPS should exceed sync RPS; rust_async={rust_async_result:?}, sync={sync_result:?}\n{log}"
+    );
+    assert!(
+        rss_async_max_in_flight > 1,
+        "RSS async client should overlap upload requests; log:\n{log}"
+    );
+    assert!(
+        rust_async_max_in_flight > 1,
+        "Rust async client should overlap upload requests; log:\n{log}"
     );
     assert_eq!(
         sync_max_in_flight, 1,
         "sync client should upload sequentially; log:\n{log}"
     );
 
+    let rust_to_rss_ratio = rust_async_result.rps / rss_async_result.rps;
+    let likely_bottleneck = if (rust_to_rss_ratio - 1.0).abs() <= 0.10 {
+        "server_or_io"
+    } else if rust_to_rss_ratio > 1.0 {
+        "rss_runtime_or_lowering"
+    } else {
+        "rust_client_or_noise"
+    };
     println!(
-        "file upload benchmark: async_rps={:.2} sync_rps={:.2} async_ms={} sync_ms={} async_max_in_flight={} sync_max_in_flight={}",
-        async_result.rps,
+        "file upload benchmark: rss_async_rps={:.2} rust_async_rps={:.2} sync_rps={:.2} rss_async_ms={} rust_async_ms={} sync_ms={} rss_async_max_in_flight={} rust_async_max_in_flight={} sync_max_in_flight={} rust_to_rss_rps_ratio={:.3} likely_bottleneck={}",
+        rss_async_result.rps,
+        rust_async_result.rps,
         sync_result.rps,
-        async_result.elapsed_ms,
+        rss_async_result.elapsed_ms,
+        rust_async_result.elapsed_ms,
         sync_result.elapsed_ms,
-        async_max_in_flight,
-        sync_max_in_flight
+        rss_async_max_in_flight,
+        rust_async_max_in_flight,
+        sync_max_in_flight,
+        rust_to_rss_ratio,
+        likely_bottleneck,
     );
 
     let _ = fs::remove_dir_all(&temp_dir);
@@ -95,7 +141,23 @@ fn cargo_build(manifest: &Path, bin: &str) {
     );
 }
 
+fn generate_rss_package(benchmark_dir: &Path, repo: &Path, out_dir: &Path) {
+    let input = package_lowering_input(benchmark_dir).expect("benchmark package should lower");
+    let runtime_path = repo.join("runtime").display().to_string();
+    let package = lower_sources_to_rust_package_with_options(
+        &input.sources,
+        &input.package.name,
+        &runtime_path,
+        &input.interfaces,
+        &input.native_dependencies,
+    )
+    .expect("benchmark package Rust lowering should succeed");
+    write_generated_rust_package(out_dir, &package)
+        .expect("generated RSS benchmark package should be written");
+}
+
 fn run_client(binary: &Path, addr: SocketAddr, extra_env: &[(&str, String)]) -> ClientResult {
+    let started = Instant::now();
     let output = Command::new(binary)
         .env("RSS_FILE_UPLOAD_ENDPOINT", addr.to_string())
         .env("RSS_FILE_UPLOAD_REQUESTS", REQUESTS.to_string())
@@ -103,6 +165,7 @@ fn run_client(binary: &Path, addr: SocketAddr, extra_env: &[(&str, String)]) -> 
         .envs(extra_env.iter().map(|(key, value)| (*key, value)))
         .output()
         .unwrap_or_else(|error| panic!("failed to run {}: {error}", binary.display()));
+    let elapsed = started.elapsed();
     assert!(
         output.status.success(),
         "{} failed:\nstdout:\n{}\nstderr:\n{}",
@@ -111,21 +174,12 @@ fn run_client(binary: &Path, addr: SocketAddr, extra_env: &[(&str, String)]) -> 
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let measured_ms = elapsed.as_millis().max(1) as u64;
+    let measured_rps = REQUESTS as f64 / elapsed.as_secs_f64();
     ClientResult {
-        elapsed_ms: parse_metric(&stdout, "elapsed_ms")
-            .unwrap_or_else(|| panic!("elapsed_ms missing in output:\n{stdout}"))
-            as u64,
-        rps: parse_metric(&stdout, "rps")
-            .unwrap_or_else(|| panic!("rps missing in output:\n{stdout}")),
+        elapsed_ms: measured_ms,
+        rps: measured_rps,
     }
-}
-
-fn parse_metric(output: &str, key: &str) -> Option<f64> {
-    output.split_whitespace().find_map(|part| {
-        let (name, value) = part.split_once('=')?;
-        (name == key).then(|| value.parse::<f64>().ok()).flatten()
-    })
 }
 
 fn available_local_addr() -> SocketAddr {

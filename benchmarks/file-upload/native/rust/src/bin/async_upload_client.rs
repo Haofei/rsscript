@@ -40,7 +40,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let elapsed = started.elapsed();
     let rps = requests as f64 / elapsed.as_secs_f64();
     println!(
-        "mode=async requests={requests} payload_bytes={payload_bytes} concurrency={concurrency} elapsed_ms={} rps={rps:.2}",
+        "mode=rust_async requests={requests} payload_bytes={payload_bytes} concurrency={concurrency} elapsed_ms={} rps={rps:.2}",
         elapsed.as_millis()
     );
     Ok(())
@@ -48,7 +48,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
 async fn upload_one(endpoint: &str, index: usize, payload: &[u8]) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut stream = TcpStream::connect(endpoint).await?;
-    let path = format!("/upload/async-{index}.bin");
+    let path = format!("/upload/rust-{index}.bin");
     let header = format!(
         "PUT {path} HTTP/1.1\r\nHost: {endpoint}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         payload.len()
