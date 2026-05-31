@@ -2730,10 +2730,23 @@ Schema example:
     "resource_apis": 0,
     "fresh_returning_apis": 1,
     "async_apis": 0,
+    "await_sites": 0,
     "native_apis": 2,
     "unsafe_apis": 0,
     "unknown_apis": 0
   },
+  "await_sites": [
+    {
+      "function": "Api.run",
+      "callee": "Timer.sleep",
+      "span": {
+        "file": "src/main.rss",
+        "line": 4,
+        "column": 5,
+        "length": 5
+      }
+    }
+  ],
   "native": {
     "rust": true,
     "conformance": {
