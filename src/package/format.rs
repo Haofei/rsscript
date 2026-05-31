@@ -1,7 +1,8 @@
 use crate::package::{
     PackageCheck, PackageDependencyKind, PackageDiff, PackageLock, PackageLockDiff,
-    PackageMetadataReport, PackagePublishDryRun, PackageReview, PackageReviewAwaitSite,
-    PackageReviewExport, PackageTree, PackageTreeNode, PackageVendorReport, package_risk_label,
+    PackageMetadataReport, PackagePublishDryRun, PackageReview, PackageReviewAwaitBoundary,
+    PackageReviewAwaitSite, PackageReviewExport, PackageTree, PackageTreeNode, PackageVendorReport,
+    package_risk_label,
 };
 use crate::review::format_review_human;
 
@@ -177,8 +178,13 @@ fn format_package_review_await_sites_human(await_sites: &[PackageReviewAwaitSite
     for site in await_sites {
         let callee = site.callee.as_deref().unwrap_or("<unknown>");
         output.push_str(&format!(
-            "  - {} awaits {} at {}:{}:{}",
-            site.function, callee, site.span.file, site.span.line, site.span.column
+            "  - {} awaits {} ({}) at {}:{}:{}",
+            site.function,
+            callee,
+            await_boundary_label(site.boundary),
+            site.span.file,
+            site.span.line,
+            site.span.column
         ));
         if !site.live_across_await.is_empty() {
             output.push_str(&format!(
@@ -189,6 +195,15 @@ fn format_package_review_await_sites_human(await_sites: &[PackageReviewAwaitSite
         output.push('\n');
     }
     output
+}
+
+fn await_boundary_label(boundary: PackageReviewAwaitBoundary) -> &'static str {
+    match boundary {
+        PackageReviewAwaitBoundary::RuntimePending => "runtime_pending",
+        PackageReviewAwaitBoundary::NativePending => "native_pending",
+        PackageReviewAwaitBoundary::RssCall => "rss_call",
+        PackageReviewAwaitBoundary::Unknown => "unknown",
+    }
 }
 
 fn format_package_review_exports_human(exports: &[PackageReviewExport]) -> String {

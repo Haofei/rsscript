@@ -13,9 +13,9 @@ use super::source_set::{
 use super::{
     LoadedPackage, PackageArchiveFile, PackageLock, PackageLockDiff, PackageLockFieldChange,
     PackageLockMetadata, PackageLockPackage, PackageLockPackageChange, PackageReview,
-    PackageReviewFileKind, PackageRisk, PackageSource, collect_regular_files,
-    package_dependency_spec, package_feature_may_change_boundary_risk, package_risk_label,
-    relative_path, review_package_dir,
+    PackageReviewAwaitBoundary, PackageReviewFileKind, PackageRisk, PackageSource,
+    collect_regular_files, package_dependency_spec, package_feature_may_change_boundary_risk,
+    package_risk_label, relative_path, review_package_dir,
 };
 
 pub fn lock_package_dir(package_dir: &Path) -> Result<PackageLock, String> {
@@ -556,6 +556,8 @@ fn package_review_hash(review: &PackageReview) -> String {
         input.push('\n');
         input.push_str(await_site.callee.as_deref().unwrap_or(""));
         input.push('\n');
+        input.push_str(await_boundary_hash_label(await_site.boundary));
+        input.push('\n');
         for live_value in &await_site.live_across_await {
             input.push_str(live_value);
             input.push('\n');
@@ -592,6 +594,15 @@ fn package_review_hash(review: &PackageReview) -> String {
         input.push('\n');
     }
     sha256_label(input.as_bytes())
+}
+
+fn await_boundary_hash_label(boundary: PackageReviewAwaitBoundary) -> &'static str {
+    match boundary {
+        PackageReviewAwaitBoundary::RuntimePending => "runtime_pending",
+        PackageReviewAwaitBoundary::NativePending => "native_pending",
+        PackageReviewAwaitBoundary::RssCall => "rss_call",
+        PackageReviewAwaitBoundary::Unknown => "unknown",
+    }
 }
 
 pub(super) fn package_native_hash(

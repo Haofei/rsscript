@@ -15,9 +15,10 @@ use super::contract::{
 use super::source_set::{ManifestNativeRust, PackageSource, load_package};
 use super::{
     Manifest, PackageDiff, PackageInterfaceChange, PackageInterfaceChangeKind,
-    PackageManifestChange, PackageReviewAwaitSite, PackageReviewFileKind, PackageRisk,
-    feature_values_label, package_feature_may_change_boundary_risk, package_identity,
-    package_risk_label, review_package_dir, toml_value_label,
+    PackageManifestChange, PackageReviewAwaitBoundary, PackageReviewAwaitSite,
+    PackageReviewFileKind, PackageRisk, feature_values_label,
+    package_feature_may_change_boundary_risk, package_identity, package_risk_label,
+    review_package_dir, toml_value_label,
 };
 
 pub fn diff_package_dirs(old_dir: &Path, new_dir: &Path) -> Result<PackageDiff, String> {
@@ -444,12 +445,22 @@ fn package_await_site_labels(sites: &[PackageReviewAwaitSite]) -> Vec<String> {
 
 fn package_await_site_label(site: &PackageReviewAwaitSite) -> String {
     format!(
-        "{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}",
         site.function,
         site.callee.as_deref().unwrap_or("<unknown>"),
+        await_boundary_label(site.boundary),
         site.span.file,
         site.live_across_await.join(",")
     )
+}
+
+fn await_boundary_label(boundary: PackageReviewAwaitBoundary) -> &'static str {
+    match boundary {
+        PackageReviewAwaitBoundary::RuntimePending => "runtime_pending",
+        PackageReviewAwaitBoundary::NativePending => "native_pending",
+        PackageReviewAwaitBoundary::RssCall => "rss_call",
+        PackageReviewAwaitBoundary::Unknown => "unknown",
+    }
 }
 
 fn interface_change_risk(findings: &[ReviewFinding]) -> PackageRisk {

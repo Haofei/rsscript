@@ -9055,6 +9055,7 @@ pub async fn Api.run(client: read Client) -> Result<Unit, TimerError> {
         await_sites.iter().any(|site| {
             site["function"] == "Api.run"
                 && site["callee"] == "Timer.sleep"
+                && site["boundary"] == "runtime_pending"
                 && site["live_across_await"]
                     .as_array()
                     .is_some_and(|values| values.iter().any(|value| value == "client"))
@@ -9080,6 +9081,50 @@ pub async fn Api.run(client: read Client) -> Result<Unit, TimerError> {
         "{human}"
     );
     assert!(human.contains("live_across [client]"), "{human}");
+}
+
+#[test]
+fn package_review_marks_async_native_await_boundary() {
+    let temp_dir = unique_temp_dir("rsscript-package-review-async-native-boundary");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        "",
+        r#"features: async, native
+
+struct HostError
+
+pub async native fn Host.wait(ms: Int) -> Result<Unit, HostError>
+    effects(native)
+
+pub async fn Api.run() -> Result<Unit, HostError>
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("src dir should be created");
+    fs::write(
+        temp_dir.join("src/main.rss"),
+        r#"features: async
+
+pub async fn Api.run() -> Result<Unit, HostError> {
+    await Host.wait(ms: 1)?
+    return Ok(Unit)
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(json["await_sites"].as_array().is_some_and(|await_sites| {
+        await_sites.iter().any(|site| {
+            site["function"] == "Api.run"
+                && site["callee"] == "Host.wait"
+                && site["boundary"] == "native_pending"
+        })
+    }));
 }
 
 #[test]

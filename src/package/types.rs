@@ -401,8 +401,18 @@ pub struct PackageReviewExport {
 pub struct PackageReviewAwaitSite {
     pub function: String,
     pub callee: Option<String>,
+    pub boundary: PackageReviewAwaitBoundary,
     pub live_across_await: Vec<String>,
     pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageReviewAwaitBoundary {
+    RuntimePending,
+    NativePending,
+    RssCall,
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

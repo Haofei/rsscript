@@ -7,6 +7,7 @@ use crate::analyzer::{
 use crate::diagnostic::{Diagnostic, code};
 use crate::lint::lint_source;
 use crate::review::{ReviewMap, ReviewMapClassification, review_map_sources_with_interfaces};
+use crate::runtime_abi;
 use crate::syntax::ast::{Block, Callee, Expr, Item, MatchPattern, Stmt, TypeKind};
 use crate::syntax::parse_source;
 
@@ -22,9 +23,9 @@ use super::native::{
 };
 use super::source_set::{Manifest, PackageSource, load_package};
 use super::{
-    PackageNativeRustReview, PackageProviderImplementation, PackageReview, PackageReviewAwaitSite,
-    PackageReviewFile, PackageReviewFileKind, PackageReviewSummary, PackageRisk,
-    collect_dependency_interface_sources, dedup_diagnostics,
+    PackageNativeRustReview, PackageProviderImplementation, PackageReview,
+    PackageReviewAwaitBoundary, PackageReviewAwaitSite, PackageReviewFile, PackageReviewFileKind,
+    PackageReviewSummary, PackageRisk, collect_dependency_interface_sources, dedup_diagnostics,
     package_feature_may_change_boundary_risk, package_feature_resolution_diagnostics,
 };
 
@@ -519,6 +520,7 @@ fn package_api_effect_summary(
 }
 
 fn collect_package_await_sites(sources: &[PackageSource]) -> Vec<PackageReviewAwaitSite> {
+    let context = collect_await_site_context(sources);
     let mut await_sites = sources
         .iter()
         .filter(|source| source.kind == PackageReviewFileKind::Source)
@@ -529,11 +531,15 @@ fn collect_package_await_sites(sources: &[PackageSource]) -> Vec<PackageReviewAw
                 .iter()
                 .flat_map(|item| match item {
                     Item::Function(function) => {
-                        collect_await_sites_in_block(&function.name, &function.body)
+                        collect_await_sites_in_block(&function.name, &function.body, &context)
                     }
                     Item::Type(type_decl) => {
                         type_decl.drop_body.as_ref().map_or_else(Vec::new, |body| {
-                            collect_await_sites_in_block(&format!("drop {}", type_decl.name), body)
+                            collect_await_sites_in_block(
+                                &format!("drop {}", type_decl.name),
+                                body,
+                                &context,
+                            )
                         })
                     }
                 })
@@ -555,13 +561,47 @@ fn collect_package_await_sites(sources: &[PackageSource]) -> Vec<PackageReviewAw
     await_sites
 }
 
-fn collect_await_sites_in_block(function: &str, block: &Block) -> Vec<PackageReviewAwaitSite> {
+struct AwaitSiteContext {
+    async_native_callees: BTreeSet<String>,
+    async_rss_callees: BTreeSet<String>,
+}
+
+fn collect_await_site_context(sources: &[PackageSource]) -> AwaitSiteContext {
+    let mut context = AwaitSiteContext {
+        async_native_callees: BTreeSet::new(),
+        async_rss_callees: BTreeSet::new(),
+    };
+    for source in sources {
+        let program = parse_source(&source.path, &source.contents);
+        for item in &program.items {
+            let Item::Function(function) = item else {
+                continue;
+            };
+            if !function.is_async {
+                continue;
+            }
+            if function.is_native {
+                context.async_native_callees.insert(function.name.clone());
+            } else {
+                context.async_rss_callees.insert(function.name.clone());
+            }
+        }
+    }
+    context
+}
+
+fn collect_await_sites_in_block(
+    function: &str,
+    block: &Block,
+    context: &AwaitSiteContext,
+) -> Vec<PackageReviewAwaitSite> {
     let mut sites = Vec::new();
     collect_await_sites_from_block(
         function,
         block,
         &BTreeSet::new(),
         &BTreeSet::new(),
+        context,
         &mut sites,
     );
     sites
@@ -572,21 +612,43 @@ fn collect_await_sites_from_stmt(
     statement: &Stmt,
     live_after: &BTreeSet<String>,
     scoped_live: &BTreeSet<String>,
+    context: &AwaitSiteContext,
     sites: &mut Vec<PackageReviewAwaitSite>,
 ) {
     match statement {
         Stmt::Let(stmt) => {
             if let Some(value) = &stmt.value {
-                collect_await_sites_from_expr(function, value, live_after, scoped_live, sites);
+                collect_await_sites_from_expr(
+                    function,
+                    value,
+                    live_after,
+                    scoped_live,
+                    context,
+                    sites,
+                );
             }
         }
         Stmt::Return(stmt) => {
             if let Some(value) = &stmt.value {
-                collect_await_sites_from_expr(function, value, live_after, scoped_live, sites);
+                collect_await_sites_from_expr(
+                    function,
+                    value,
+                    live_after,
+                    scoped_live,
+                    context,
+                    sites,
+                );
             }
         }
         Stmt::With(stmt) => {
-            collect_await_sites_from_expr(function, &stmt.resource, live_after, scoped_live, sites);
+            collect_await_sites_from_expr(
+                function,
+                &stmt.resource,
+                live_after,
+                scoped_live,
+                context,
+                sites,
+            );
             let mut body_scoped_live = scoped_live.clone();
             body_scoped_live.insert(stmt.binding.clone());
             collect_await_sites_from_block(
@@ -594,6 +656,7 @@ fn collect_await_sites_from_stmt(
                 &stmt.body,
                 live_after,
                 &body_scoped_live,
+                context,
                 sites,
             );
         }
@@ -603,6 +666,7 @@ fn collect_await_sites_from_stmt(
                 &stmt.condition,
                 live_after,
                 scoped_live,
+                context,
                 sites,
             );
             collect_await_sites_from_block(
@@ -610,20 +674,49 @@ fn collect_await_sites_from_stmt(
                 &stmt.then_body,
                 live_after,
                 scoped_live,
+                context,
                 sites,
             );
             if let Some(else_body) = &stmt.else_body {
-                collect_await_sites_from_block(function, else_body, live_after, scoped_live, sites);
+                collect_await_sites_from_block(
+                    function,
+                    else_body,
+                    live_after,
+                    scoped_live,
+                    context,
+                    sites,
+                );
             }
         }
         Stmt::Loop(stmt) => {
             if let Some(condition) = &stmt.condition {
-                collect_await_sites_from_expr(function, condition, live_after, scoped_live, sites);
+                collect_await_sites_from_expr(
+                    function,
+                    condition,
+                    live_after,
+                    scoped_live,
+                    context,
+                    sites,
+                );
             }
-            collect_await_sites_from_block(function, &stmt.body, live_after, scoped_live, sites);
+            collect_await_sites_from_block(
+                function,
+                &stmt.body,
+                live_after,
+                scoped_live,
+                context,
+                sites,
+            );
         }
         Stmt::For(stmt) => {
-            collect_await_sites_from_expr(function, &stmt.iterable, live_after, scoped_live, sites);
+            collect_await_sites_from_expr(
+                function,
+                &stmt.iterable,
+                live_after,
+                scoped_live,
+                context,
+                sites,
+            );
             let mut body_scoped_live = scoped_live.clone();
             body_scoped_live.insert(stmt.binding.clone());
             collect_await_sites_from_block(
@@ -631,11 +724,19 @@ fn collect_await_sites_from_stmt(
                 &stmt.body,
                 live_after,
                 &body_scoped_live,
+                context,
                 sites,
             );
         }
         Stmt::Match(stmt) => {
-            collect_await_sites_from_expr(function, &stmt.value, live_after, scoped_live, sites);
+            collect_await_sites_from_expr(
+                function,
+                &stmt.value,
+                live_after,
+                scoped_live,
+                context,
+                sites,
+            );
             for arm in &stmt.arms {
                 let mut arm_scoped_live = scoped_live.clone();
                 if let MatchPattern::Variant {
@@ -650,12 +751,13 @@ fn collect_await_sites_from_stmt(
                     &arm.body,
                     live_after,
                     &arm_scoped_live,
+                    context,
                     sites,
                 );
             }
         }
         Stmt::Expr(expr) => {
-            collect_await_sites_from_expr(function, expr, live_after, scoped_live, sites)
+            collect_await_sites_from_expr(function, expr, live_after, scoped_live, context, sites)
         }
         Stmt::Break(_)
         | Stmt::Continue(_)
@@ -673,6 +775,7 @@ fn collect_await_sites_from_block(
     block: &Block,
     continuation_uses: &BTreeSet<String>,
     scoped_live: &BTreeSet<String>,
+    context: &AwaitSiteContext,
     sites: &mut Vec<PackageReviewAwaitSite>,
 ) {
     let live_after_statements = block_live_after_statements(block, continuation_uses);
@@ -680,7 +783,7 @@ fn collect_await_sites_from_block(
         let live_after = live_after_statements
             .get(index)
             .unwrap_or(continuation_uses);
-        collect_await_sites_from_stmt(function, statement, live_after, scoped_live, sites);
+        collect_await_sites_from_stmt(function, statement, live_after, scoped_live, context, sites);
     }
 }
 
@@ -689,6 +792,7 @@ fn collect_await_sites_from_expr(
     expr: &Expr,
     live_after: &BTreeSet<String>,
     scoped_live: &BTreeSet<String>,
+    context: &AwaitSiteContext,
     sites: &mut Vec<PackageReviewAwaitSite>,
 ) {
     match expr {
@@ -696,34 +800,50 @@ fn collect_await_sites_from_expr(
             let mut live_across_await = scoped_live.clone();
             live_across_await.extend(live_after.iter().cloned());
             collect_expr_uses(value, &mut live_across_await);
+            let callee = awaited_callee(value);
             sites.push(PackageReviewAwaitSite {
                 function: function.to_string(),
-                callee: awaited_callee(value),
+                boundary: await_boundary(callee.as_deref(), context),
+                callee,
                 live_across_await: live_across_await.into_iter().collect(),
                 span: span.clone(),
             });
-            collect_await_sites_from_expr(function, value, live_after, scoped_live, sites);
+            collect_await_sites_from_expr(function, value, live_after, scoped_live, context, sites);
         }
         Expr::Effect { value, .. }
         | Expr::Manage { value, .. }
         | Expr::Spawn { value, .. }
         | Expr::Try { value, .. } => {
-            collect_await_sites_from_expr(function, value, live_after, scoped_live, sites)
+            collect_await_sites_from_expr(function, value, live_after, scoped_live, context, sites)
         }
         Expr::Binary { left, right, .. } => {
             let mut left_live_after = live_after.clone();
             collect_expr_uses(right, &mut left_live_after);
-            collect_await_sites_from_expr(function, left, &left_live_after, scoped_live, sites);
-            collect_await_sites_from_expr(function, right, live_after, scoped_live, sites);
+            collect_await_sites_from_expr(
+                function,
+                left,
+                &left_live_after,
+                scoped_live,
+                context,
+                sites,
+            );
+            collect_await_sites_from_expr(function, right, live_after, scoped_live, context, sites);
         }
         Expr::Field { base, .. } => {
-            collect_await_sites_from_expr(function, base, live_after, scoped_live, sites)
+            collect_await_sites_from_expr(function, base, live_after, scoped_live, context, sites)
         }
         Expr::Index { base, index, .. } => {
             let mut base_live_after = live_after.clone();
             collect_expr_uses(index, &mut base_live_after);
-            collect_await_sites_from_expr(function, base, &base_live_after, scoped_live, sites);
-            collect_await_sites_from_expr(function, index, live_after, scoped_live, sites);
+            collect_await_sites_from_expr(
+                function,
+                base,
+                &base_live_after,
+                scoped_live,
+                context,
+                sites,
+            );
+            collect_await_sites_from_expr(function, index, live_after, scoped_live, context, sites);
         }
         Expr::Call { args, .. } => {
             let mut arg_live_after = live_after.clone();
@@ -733,6 +853,7 @@ fn collect_await_sites_from_expr(
                     &arg.value,
                     &arg_live_after,
                     scoped_live,
+                    context,
                     sites,
                 );
                 collect_expr_uses(&arg.value, &mut arg_live_after);
@@ -743,6 +864,7 @@ fn collect_await_sites_from_expr(
             body,
             &BTreeSet::new(),
             &BTreeSet::new(),
+            context,
             sites,
         ),
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
@@ -856,6 +978,29 @@ fn collect_expr_uses(expr: &Expr, uses: &mut BTreeSet<String>) {
 
 fn is_builtin_value_ident(name: &str) -> bool {
     matches!(name, "Unit" | "true" | "false")
+}
+
+fn await_boundary(callee: Option<&str>, context: &AwaitSiteContext) -> PackageReviewAwaitBoundary {
+    let Some(callee) = callee else {
+        return PackageReviewAwaitBoundary::Unknown;
+    };
+    if runtime_intrinsic_label(callee) {
+        return PackageReviewAwaitBoundary::RuntimePending;
+    }
+    if context.async_native_callees.contains(callee) {
+        return PackageReviewAwaitBoundary::NativePending;
+    }
+    if context.async_rss_callees.contains(callee) {
+        return PackageReviewAwaitBoundary::RssCall;
+    }
+    PackageReviewAwaitBoundary::Unknown
+}
+
+fn runtime_intrinsic_label(callee: &str) -> bool {
+    let Some((namespace, name)) = callee.rsplit_once('.') else {
+        return false;
+    };
+    runtime_abi::lookup_runtime_intrinsic(namespace, name).is_some()
 }
 
 fn remove_stmt_bindings(statement: &Stmt, uses: &mut BTreeSet<String>) {
