@@ -4652,6 +4652,30 @@ fn typo(value: read String) -> Unit
 }
 
 #[test]
+fn checker_rejects_user_authored_suspends_effect() {
+    let source = r#"
+fn wait() -> Unit
+    effects(suspends)
+{
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("suspends-effect.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0012"
+                && diagnostic.label == "removed runtime effect"
+                && diagnostic
+                    .fixes
+                    .iter()
+                    .any(|fix| fix.title.contains("compiler-normalized review metadata"))
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn checker_reports_malformed_match_arms_as_unsupported() {
     let source = r#"
 fn bad(value: read Option<Int>) -> Int {

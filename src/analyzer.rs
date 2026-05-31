@@ -2841,6 +2841,9 @@ fn removed_runtime_effect_replacement(effect_name: &str) -> Option<&'static str>
         "async" => Some(
             "Remove `async` from `effects(...)`; write `async fn` when the function itself is async.",
         ),
+        "suspends" => Some(
+            "`suspends` is compiler-normalized review metadata for `async fn`; remove it from `effects(...)` and write `async fn` on the function.",
+        ),
         _ => None,
     }
 }
