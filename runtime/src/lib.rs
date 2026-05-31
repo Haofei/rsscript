@@ -1966,8 +1966,20 @@ impl<T: Resource> ResourcePool<T> {
         Self::new(Vec::new())
     }
 
+    pub fn try_push(&self, value: T) -> Result<(), RuntimeError> {
+        let mut values = self.values.try_borrow_mut().map_err(|_| RuntimeError {
+            kind: RuntimeErrorKind::ResourcePoolBorrowConflict,
+            message: "resource pool is already borrowed".to_string(),
+            span: None,
+        })?;
+        values.push(value);
+        Ok(())
+    }
+
     pub fn push(&self, value: T) {
-        self.values.borrow_mut().push(value);
+        if let Err(error) = self.try_push(value) {
+            panic_runtime_error(error);
+        }
     }
 
     pub fn try_borrow(&self) -> Result<ResourceLease<'_, T>, RuntimeError> {
@@ -2166,6 +2178,17 @@ mod tests {
         let error = pool
             .try_borrow()
             .expect_err("second borrow should conflict");
+
+        assert_eq!(error.kind, RuntimeErrorKind::ResourcePoolBorrowConflict);
+    }
+
+    #[test]
+    fn resource_pool_reports_push_borrow_conflict() {
+        let pool = ResourcePool::new(vec![FileHandle(7)]);
+        let _lease = pool.try_borrow().expect("initial borrow should succeed");
+        let error = pool
+            .try_push(FileHandle(8))
+            .expect_err("push during borrow should conflict");
 
         assert_eq!(error.kind, RuntimeErrorKind::ResourcePoolBorrowConflict);
     }
