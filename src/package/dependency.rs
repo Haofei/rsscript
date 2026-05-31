@@ -16,6 +16,9 @@ pub(super) struct PackageDependencySpec {
     pub(super) path: Option<String>,
     pub(super) git: Option<String>,
     pub(super) features: Vec<String>,
+    pub(super) compile_only: bool,
+    pub(super) test_only: bool,
+    pub(super) platform_provided: bool,
 }
 
 pub(super) fn collect_dependency_interface_sources(
@@ -252,6 +255,9 @@ pub(super) fn package_dependency_spec(name: &str, value: &toml::Value) -> Packag
             path: None,
             git: None,
             features: Vec::new(),
+            compile_only: false,
+            test_only: false,
+            platform_provided: false,
         };
     }
     let Some(table) = value.as_table() else {
@@ -261,6 +267,9 @@ pub(super) fn package_dependency_spec(name: &str, value: &toml::Value) -> Packag
             path: None,
             git: None,
             features: Vec::new(),
+            compile_only: false,
+            test_only: false,
+            platform_provided: false,
         };
     };
     PackageDependencySpec {
@@ -288,5 +297,17 @@ pub(super) fn package_dependency_spec(name: &str, value: &toml::Value) -> Packag
                     .collect()
             })
             .unwrap_or_default(),
+        compile_only: table
+            .get("compile_only")
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(false),
+        test_only: table
+            .get("test_only")
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(false),
+        platform_provided: table
+            .get("platform_provided")
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(false),
     }
 }

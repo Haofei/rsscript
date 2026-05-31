@@ -70,7 +70,12 @@ pub(super) fn check_package_graph(package_dir: &Path) -> Result<PackageGraphChec
 }
 
 fn collect_missing_provider_reasons(node: &PackageTreeNode, reasons: &mut Vec<String>) {
-    if node.interface_only && node.dependency_kind == PackageDependencyKind::Normal {
+    if node.interface_only
+        && node.dependency_kind == PackageDependencyKind::Normal
+        && !node.compile_only
+        && !node.test_only
+        && !node.platform_provided
+    {
         reasons.push(format!(
             "interface-only dependency `{}` requires an implementation provider for executable builds",
             node.name
@@ -178,6 +183,9 @@ fn package_tree_node(
             features,
             native: review.native_rust.is_some(),
             interface_only: package_is_interface_only(&package.sources),
+            compile_only: false,
+            test_only: false,
+            platform_provided: false,
             dependency_kind,
             reasons: vec!["dependency cycle truncated".to_string()],
             dependencies: Vec::new(),
@@ -208,6 +216,9 @@ fn package_tree_node(
         features,
         native: review.native_rust.is_some(),
         interface_only: package_is_interface_only(&package.sources),
+        compile_only: false,
+        test_only: false,
+        platform_provided: false,
         dependency_kind,
         reasons: review.reasons,
         dependencies,
@@ -238,6 +249,9 @@ fn package_tree_dependencies(
                 node.requirement = spec.requirement.clone();
                 node.features = selected_features.selected;
                 node.source = format!("path+{}", dependency_dir.display());
+                node.compile_only = spec.compile_only;
+                node.test_only = spec.test_only;
+                node.platform_provided = spec.platform_provided;
                 nodes.push(node);
             } else {
                 nodes.push(unresolved_dependency_node(
@@ -278,6 +292,9 @@ fn unresolved_dependency_node(
         features: spec.features,
         native: false,
         interface_only: false,
+        compile_only: spec.compile_only,
+        test_only: spec.test_only,
+        platform_provided: spec.platform_provided,
         dependency_kind,
         reasons,
         dependencies: Vec::new(),
