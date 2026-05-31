@@ -1742,6 +1742,36 @@ fn write_line<W: Writer>(writer: mut W, message: read String) -> Unit {
 }
 
 #[test]
+fn rust_lowering_uses_trait_qualified_ufcs_for_concrete_receiver_protocol_impl_calls() {
+    let source = r#"
+protocol Writer {
+    fn write(self: mut Self, message: read String) -> Unit
+}
+
+struct BufferWriter {
+    count: Int
+}
+
+fn BufferWriterImpl.write(self: mut BufferWriter, message: read String) -> Unit {
+    Log.write(message: read message)
+}
+
+impl Writer for BufferWriter {
+    write = BufferWriterImpl.write
+}
+
+fn write_line(writer: mut BufferWriter, message: read String) -> Unit {
+    mut writer.write(message: read message)
+}
+"#;
+    let rust = lower_source_to_rust("receiver-concrete-protocol-lower.rss", source)
+        .expect("source should lower");
+
+    assert!(rust.contains("<BufferWriter as Writer>::write(&mut writer, &message);"));
+    assert!(!rust.contains("BufferWriter::write(&mut writer, &message);"));
+}
+
+#[test]
 fn rust_lowering_wraps_managed_class_returns_in_managed_handle() {
     let source = r#"
 class Session {

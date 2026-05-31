@@ -931,7 +931,7 @@ fn check_call_args(
                     arg.span.clone(),
                     "argument must be named",
                 )
-                .with_cause("RSScript v0.5 requires all non-receiver call arguments to be named.")
+                .with_cause("RSScript v0.6 requires all non-receiver call arguments to be named.")
                 .with_fix(
                     "add_argument_name",
                     "Write the argument as `name: value`.",

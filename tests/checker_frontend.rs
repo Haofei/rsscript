@@ -3563,6 +3563,80 @@ async fn run(id: read Int) -> Int {
 }
 
 #[test]
+fn task_group_async_let_handle_not_visible_after_group() {
+    let source = r#"
+features: async
+
+async fn fetch(id: read Int) -> Int
+
+async fn run(id: read Int) -> Int {
+    task_group {
+        async let result = fetch(id: read id)
+        await result
+    }
+    return await result
+}
+"#;
+    let diagnostics = analyze_source("task-group-handle-escape.rss", source);
+    assert!(
+        diagnostics.iter().any(|d| d.code == "RS0030"),
+        "awaiting a consumed task_group handle outside the group should be rejected: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn task_group_rejects_nested_async_let() {
+    let source = r#"
+features: async
+
+async fn fetch(id: read Int) -> Int
+
+async fn run(id: read Int) -> Int {
+    task_group {
+        if true {
+            async let result = fetch(id: read id)
+            await result
+        }
+    }
+    return 0
+}
+"#;
+    let diagnostics = analyze_source("task-group-nested-async-let.rss", source);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.code == "RS0015" && d.label == "nested async let"),
+        "nested async let should be rejected until lowering supports it: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn task_group_rejects_nested_await_of_async_let_handle() {
+    let source = r#"
+features: async
+
+async fn fetch(id: read Int) -> Int
+
+async fn run(id: read Int) -> Int {
+    task_group {
+        async let result = fetch(id: read id)
+        if true {
+            await result
+        }
+    }
+    return 0
+}
+"#;
+    let diagnostics = analyze_source("task-group-nested-await.rss", source);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.code == "RS0015" && d.label == "nested async let await"),
+        "nested await of task_group handle should be rejected until lowering supports it: {diagnostics:?}"
+    );
+}
+
+#[test]
 fn task_group_requires_async_feature() {
     let source = r#"
 fn run() -> Int {

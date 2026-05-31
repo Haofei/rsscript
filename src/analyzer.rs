@@ -249,6 +249,161 @@ fn collect_task_group_async_lets(
     }
 }
 
+fn collect_nested_task_group_async_lets(
+    block: &Block,
+    async_lets: &mut Vec<crate::diagnostic::Span>,
+) {
+    for statement in &block.statements {
+        match statement {
+            Stmt::Let(stmt) => {
+                if let Some(value) = &stmt.value {
+                    collect_all_async_let_spans_expr(value, async_lets);
+                }
+            }
+            Stmt::With(stmt) => {
+                collect_all_async_let_spans_expr(&stmt.resource, async_lets);
+                collect_all_async_let_spans(&stmt.body, async_lets);
+            }
+            Stmt::If(stmt) => {
+                collect_all_async_let_spans_expr(&stmt.condition, async_lets);
+                collect_all_async_let_spans(&stmt.then_body, async_lets);
+                if let Some(else_body) = &stmt.else_body {
+                    collect_all_async_let_spans(else_body, async_lets);
+                }
+            }
+            Stmt::Loop(stmt) => {
+                if let Some(condition) = &stmt.condition {
+                    collect_all_async_let_spans_expr(condition, async_lets);
+                }
+                collect_all_async_let_spans(&stmt.body, async_lets);
+            }
+            Stmt::For(stmt) => {
+                collect_all_async_let_spans_expr(&stmt.iterable, async_lets);
+                collect_all_async_let_spans(&stmt.body, async_lets);
+            }
+            Stmt::Match(stmt) => {
+                collect_all_async_let_spans_expr(&stmt.value, async_lets);
+                for arm in &stmt.arms {
+                    collect_all_async_let_spans(&arm.body, async_lets);
+                }
+            }
+            Stmt::LetElse(stmt) => {
+                collect_all_async_let_spans_expr(&stmt.value, async_lets);
+                collect_all_async_let_spans(&stmt.else_body, async_lets);
+            }
+            Stmt::Expr(expr) => collect_all_async_let_spans_expr(expr, async_lets),
+            Stmt::Return(crate::syntax::ast::ReturnStmt {
+                value: Some(expr), ..
+            }) => {
+                collect_all_async_let_spans_expr(expr, async_lets);
+            }
+            Stmt::Return(_)
+            | Stmt::TaskGroup(_)
+            | Stmt::MalformedWith(_)
+            | Stmt::MalformedIf(_)
+            | Stmt::MalformedLoop(_)
+            | Stmt::MalformedFor(_)
+            | Stmt::MalformedMatch(_)
+            | Stmt::Break(_)
+            | Stmt::Continue(_)
+            | Stmt::Unknown(_) => {}
+        }
+    }
+}
+
+fn collect_all_async_let_spans(block: &Block, async_lets: &mut Vec<crate::diagnostic::Span>) {
+    for statement in &block.statements {
+        match statement {
+            Stmt::Let(stmt) => {
+                if stmt.is_async {
+                    async_lets.push(stmt.span.clone());
+                }
+                if let Some(value) = &stmt.value {
+                    collect_all_async_let_spans_expr(value, async_lets);
+                }
+            }
+            Stmt::Return(stmt) => {
+                if let Some(value) = &stmt.value {
+                    collect_all_async_let_spans_expr(value, async_lets);
+                }
+            }
+            Stmt::With(stmt) => {
+                collect_all_async_let_spans_expr(&stmt.resource, async_lets);
+                collect_all_async_let_spans(&stmt.body, async_lets);
+            }
+            Stmt::If(stmt) => {
+                collect_all_async_let_spans_expr(&stmt.condition, async_lets);
+                collect_all_async_let_spans(&stmt.then_body, async_lets);
+                if let Some(else_body) = &stmt.else_body {
+                    collect_all_async_let_spans(else_body, async_lets);
+                }
+            }
+            Stmt::Loop(stmt) => {
+                if let Some(condition) = &stmt.condition {
+                    collect_all_async_let_spans_expr(condition, async_lets);
+                }
+                collect_all_async_let_spans(&stmt.body, async_lets);
+            }
+            Stmt::For(stmt) => {
+                collect_all_async_let_spans_expr(&stmt.iterable, async_lets);
+                collect_all_async_let_spans(&stmt.body, async_lets);
+            }
+            Stmt::Match(stmt) => {
+                collect_all_async_let_spans_expr(&stmt.value, async_lets);
+                for arm in &stmt.arms {
+                    collect_all_async_let_spans(&arm.body, async_lets);
+                }
+            }
+            Stmt::LetElse(stmt) => {
+                collect_all_async_let_spans_expr(&stmt.value, async_lets);
+                collect_all_async_let_spans(&stmt.else_body, async_lets);
+            }
+            Stmt::Expr(expr) => collect_all_async_let_spans_expr(expr, async_lets),
+            Stmt::TaskGroup(_)
+            | Stmt::MalformedWith(_)
+            | Stmt::MalformedIf(_)
+            | Stmt::MalformedLoop(_)
+            | Stmt::MalformedFor(_)
+            | Stmt::MalformedMatch(_)
+            | Stmt::Break(_)
+            | Stmt::Continue(_)
+            | Stmt::Unknown(_) => {}
+        }
+    }
+}
+
+fn collect_all_async_let_spans_expr(expr: &Expr, async_lets: &mut Vec<crate::diagnostic::Span>) {
+    match expr {
+        Expr::Binary { left, right, .. } => {
+            collect_all_async_let_spans_expr(left, async_lets);
+            collect_all_async_let_spans_expr(right, async_lets);
+        }
+        Expr::Field { base, .. } => collect_all_async_let_spans_expr(base, async_lets),
+        Expr::Index { base, index, .. } => {
+            collect_all_async_let_spans_expr(base, async_lets);
+            collect_all_async_let_spans_expr(index, async_lets);
+        }
+        Expr::Call { args, .. } => {
+            for arg in args {
+                collect_all_async_let_spans_expr(&arg.value, async_lets);
+            }
+        }
+        Expr::Effect { value, .. }
+        | Expr::Manage { value, .. }
+        | Expr::Spawn { value, .. }
+        | Expr::Await { value, .. }
+        | Expr::Try { value, .. } => collect_all_async_let_spans_expr(value, async_lets),
+        Expr::Closure { body, .. } => collect_all_async_let_spans(body, async_lets),
+        Expr::Match { value, arms, .. } => {
+            collect_all_async_let_spans_expr(value, async_lets);
+            for arm in arms {
+                collect_all_async_let_spans(&arm.body, async_lets);
+            }
+        }
+        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+    }
+}
+
 fn collect_task_group_async_lets_expr(
     expr: &Expr,
     async_lets: &mut Vec<(String, crate::diagnostic::Span)>,
@@ -339,6 +494,245 @@ fn collect_task_group_awaited_handles(block: &Block, awaited: &mut HashSet<Strin
             | Stmt::Continue(_)
             | Stmt::Unknown(_) => {}
         }
+    }
+}
+
+fn collect_direct_task_group_awaited_handles(block: &Block, awaited: &mut HashSet<String>) {
+    for statement in &block.statements {
+        match statement {
+            Stmt::Let(stmt) => {
+                if let Some(value) = &stmt.value {
+                    collect_task_group_awaited_handles_expr(value, awaited);
+                }
+            }
+            Stmt::Expr(expr) => collect_task_group_awaited_handles_expr(expr, awaited),
+            _ => {}
+        }
+    }
+}
+
+fn find_nested_task_group_await_span<'a>(
+    block: &'a Block,
+    name: &str,
+) -> Option<&'a crate::diagnostic::Span> {
+    for statement in &block.statements {
+        match statement {
+            Stmt::Let(stmt) => {
+                if let Some(value) = &stmt.value
+                    && let Some(span) = find_nested_task_group_await_span_expr(value, name)
+                {
+                    return Some(span);
+                }
+            }
+            Stmt::With(stmt) => {
+                if let Some(span) = find_nested_task_group_await_span_expr(&stmt.resource, name) {
+                    return Some(span);
+                }
+                if let Some(span) = find_task_group_await_span(&stmt.body, name) {
+                    return Some(span);
+                }
+            }
+            Stmt::If(stmt) => {
+                if let Some(span) = find_nested_task_group_await_span_expr(&stmt.condition, name) {
+                    return Some(span);
+                }
+                if let Some(span) = find_task_group_await_span(&stmt.then_body, name) {
+                    return Some(span);
+                }
+                if let Some(else_body) = &stmt.else_body
+                    && let Some(span) = find_task_group_await_span(else_body, name)
+                {
+                    return Some(span);
+                }
+            }
+            Stmt::Loop(stmt) => {
+                if let Some(condition) = &stmt.condition
+                    && let Some(span) = find_nested_task_group_await_span_expr(condition, name)
+                {
+                    return Some(span);
+                }
+                if let Some(span) = find_task_group_await_span(&stmt.body, name) {
+                    return Some(span);
+                }
+            }
+            Stmt::For(stmt) => {
+                if let Some(span) = find_nested_task_group_await_span_expr(&stmt.iterable, name) {
+                    return Some(span);
+                }
+                if let Some(span) = find_task_group_await_span(&stmt.body, name) {
+                    return Some(span);
+                }
+            }
+            Stmt::Match(stmt) => {
+                if let Some(span) = find_nested_task_group_await_span_expr(&stmt.value, name) {
+                    return Some(span);
+                }
+                for arm in &stmt.arms {
+                    if let Some(span) = find_task_group_await_span(&arm.body, name) {
+                        return Some(span);
+                    }
+                }
+            }
+            Stmt::LetElse(stmt) => {
+                if let Some(span) = find_nested_task_group_await_span_expr(&stmt.value, name) {
+                    return Some(span);
+                }
+                if let Some(span) = find_task_group_await_span(&stmt.else_body, name) {
+                    return Some(span);
+                }
+            }
+            Stmt::Return(stmt) => {
+                if let Some(value) = &stmt.value
+                    && let Some(span) = find_nested_task_group_await_span_expr(value, name)
+                {
+                    return Some(span);
+                }
+            }
+            Stmt::Expr(expr) => {
+                if let Some(span) = find_nested_task_group_await_span_expr(expr, name) {
+                    return Some(span);
+                }
+            }
+            Stmt::TaskGroup(_)
+            | Stmt::MalformedWith(_)
+            | Stmt::MalformedIf(_)
+            | Stmt::MalformedLoop(_)
+            | Stmt::MalformedFor(_)
+            | Stmt::MalformedMatch(_)
+            | Stmt::Break(_)
+            | Stmt::Continue(_)
+            | Stmt::Unknown(_) => {}
+        }
+    }
+    None
+}
+
+fn find_task_group_await_span<'a>(
+    block: &'a Block,
+    name: &str,
+) -> Option<&'a crate::diagnostic::Span> {
+    for statement in &block.statements {
+        match statement {
+            Stmt::Let(stmt) => {
+                if let Some(value) = &stmt.value
+                    && let Some(span) = find_nested_task_group_await_span_expr(value, name)
+                {
+                    return Some(span);
+                }
+            }
+            Stmt::Return(stmt) => {
+                if let Some(value) = &stmt.value
+                    && let Some(span) = find_nested_task_group_await_span_expr(value, name)
+                {
+                    return Some(span);
+                }
+            }
+            Stmt::With(stmt) => {
+                if let Some(span) = find_nested_task_group_await_span_expr(&stmt.resource, name) {
+                    return Some(span);
+                }
+                if let Some(span) = find_task_group_await_span(&stmt.body, name) {
+                    return Some(span);
+                }
+            }
+            Stmt::If(stmt) => {
+                if let Some(span) = find_nested_task_group_await_span_expr(&stmt.condition, name) {
+                    return Some(span);
+                }
+                if let Some(span) = find_task_group_await_span(&stmt.then_body, name) {
+                    return Some(span);
+                }
+                if let Some(else_body) = &stmt.else_body
+                    && let Some(span) = find_task_group_await_span(else_body, name)
+                {
+                    return Some(span);
+                }
+            }
+            Stmt::Loop(stmt) => {
+                if let Some(condition) = &stmt.condition
+                    && let Some(span) = find_nested_task_group_await_span_expr(condition, name)
+                {
+                    return Some(span);
+                }
+                if let Some(span) = find_task_group_await_span(&stmt.body, name) {
+                    return Some(span);
+                }
+            }
+            Stmt::For(stmt) => {
+                if let Some(span) = find_nested_task_group_await_span_expr(&stmt.iterable, name) {
+                    return Some(span);
+                }
+                if let Some(span) = find_task_group_await_span(&stmt.body, name) {
+                    return Some(span);
+                }
+            }
+            Stmt::Match(stmt) => {
+                if let Some(span) = find_nested_task_group_await_span_expr(&stmt.value, name) {
+                    return Some(span);
+                }
+                for arm in &stmt.arms {
+                    if let Some(span) = find_task_group_await_span(&arm.body, name) {
+                        return Some(span);
+                    }
+                }
+            }
+            Stmt::LetElse(stmt) => {
+                if let Some(span) = find_nested_task_group_await_span_expr(&stmt.value, name) {
+                    return Some(span);
+                }
+                if let Some(span) = find_task_group_await_span(&stmt.else_body, name) {
+                    return Some(span);
+                }
+            }
+            Stmt::Expr(expr) => {
+                if let Some(span) = find_nested_task_group_await_span_expr(expr, name) {
+                    return Some(span);
+                }
+            }
+            Stmt::TaskGroup(_)
+            | Stmt::MalformedWith(_)
+            | Stmt::MalformedIf(_)
+            | Stmt::MalformedLoop(_)
+            | Stmt::MalformedFor(_)
+            | Stmt::MalformedMatch(_)
+            | Stmt::Break(_)
+            | Stmt::Continue(_)
+            | Stmt::Unknown(_) => {}
+        }
+    }
+    None
+}
+
+fn find_nested_task_group_await_span_expr<'a>(
+    expr: &'a Expr,
+    name: &str,
+) -> Option<&'a crate::diagnostic::Span> {
+    match expr {
+        Expr::Await { value, span } => {
+            if await_handle_name(value).is_some_and(|handle| handle == name) {
+                return Some(span);
+            }
+            find_nested_task_group_await_span_expr(value, name)
+        }
+        Expr::Binary { left, right, .. } => find_nested_task_group_await_span_expr(left, name)
+            .or_else(|| find_nested_task_group_await_span_expr(right, name)),
+        Expr::Field { base, .. } => find_nested_task_group_await_span_expr(base, name),
+        Expr::Index { base, index, .. } => find_nested_task_group_await_span_expr(base, name)
+            .or_else(|| find_nested_task_group_await_span_expr(index, name)),
+        Expr::Call { args, .. } => args
+            .iter()
+            .find_map(|arg| find_nested_task_group_await_span_expr(&arg.value, name)),
+        Expr::Effect { value, .. }
+        | Expr::Manage { value, .. }
+        | Expr::Spawn { value, .. }
+        | Expr::Try { value, .. } => find_nested_task_group_await_span_expr(value, name),
+        Expr::Closure { body, .. } => find_task_group_await_span(body, name),
+        Expr::Match { value, arms, .. } => find_nested_task_group_await_span_expr(value, name)
+            .or_else(|| {
+                arms.iter()
+                    .find_map(|arm| find_task_group_await_span(&arm.body, name))
+            }),
+        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => None,
     }
 }
 
@@ -514,11 +908,11 @@ impl Analyzer<'_> {
             self.diagnostics.push(
                 Diagnostic::error(
                     code::REMOVED_PROFILE_DECLARATION,
-                    "`profile:` declarations are not part of RSScript v0.5.",
+                    "`profile:` declarations are not part of RSScript v0.6.",
                     span.clone(),
                     "removed profile declaration",
                 )
-                .with_cause("v0.5 uses `features:` for file-level advanced capabilities; omitted features means managed-only.")
+                .with_cause("v0.6 uses `features:` for file-level advanced capabilities; omitted features means managed-only.")
                 .with_fix(
                     "remove_profile",
                     "Remove `profile:` and add `features: local` only if the file uses local ownership features.",
@@ -616,7 +1010,7 @@ impl Analyzer<'_> {
                     self.unsupported_syntax(
                         function.span.clone(),
                         "unsupported native function body",
-                        "`native fn` declares an external/native boundary in v0.5. Provide a bodyless declaration and bind the implementation through the native wrapper path.",
+                        "`native fn` declares an external/native boundary in v0.6. Provide a bodyless declaration and bind the implementation through the native wrapper path.",
                     );
                 }
                 for span in &function.malformed_effect_spans {
@@ -679,7 +1073,7 @@ impl Analyzer<'_> {
                     self.unsupported_syntax(
                         drop_body.span.clone(),
                         "unsupported managed drop",
-                        "Managed class and struct values do not have user-observable destructors in v0.5. Use `resource` with `with` or `ResourcePool` for deterministic cleanup.",
+                        "Managed class and struct values do not have user-observable destructors in v0.6. Use `resource` with `with` or `ResourcePool` for deterministic cleanup.",
                     );
                 }
             }
@@ -780,6 +1174,7 @@ impl Analyzer<'_> {
                 self.check_unsupported_syntax_block(&stmt.body);
             }
             Stmt::TaskGroup(stmt) => {
+                self.check_task_group_async_let_shape(&stmt.body);
                 self.check_task_group_async_lets_consumed(&stmt.body);
                 let was_in_task_group = self.in_task_group;
                 self.in_task_group = true;
@@ -854,7 +1249,7 @@ impl Analyzer<'_> {
                 self.unsupported_syntax(
                     span.clone(),
                     "unsupported spawn expression",
-                    "`spawn` is not a v0.5 source-level task feature. Use `task_group { async let ... }` for structured isolate-local async work.",
+                    "`spawn` is not a v0.6 source-level task feature. Use `task_group { async let ... }` for structured isolate-local async work.",
                 );
                 self.check_unsupported_syntax_expr(value);
             }
@@ -881,13 +1276,51 @@ impl Analyzer<'_> {
         let mut async_lets = Vec::new();
         let mut awaited = HashSet::new();
         collect_task_group_async_lets(block, &mut async_lets);
-        collect_task_group_awaited_handles(block, &mut awaited);
+        collect_direct_task_group_awaited_handles(block, &mut awaited);
         for (name, span) in async_lets {
             if !awaited.contains(&name) {
                 self.unsupported_syntax(
                     span,
                     "unawaited async let",
                     "`async let` handles are lexical task_group handles and must be consumed by `await` inside the same `task_group { ... }` block.",
+                );
+            }
+        }
+    }
+
+    fn check_task_group_async_let_shape(&mut self, block: &Block) {
+        let mut top_level_async_lets = HashSet::new();
+        for statement in &block.statements {
+            if let Stmt::Let(stmt) = statement
+                && stmt.is_async
+            {
+                top_level_async_lets.insert(stmt.name.clone());
+            }
+        }
+
+        let mut nested_async_lets = Vec::new();
+        collect_nested_task_group_async_lets(block, &mut nested_async_lets);
+        for span in nested_async_lets {
+            self.unsupported_syntax(
+                span,
+                "nested async let",
+                "`async let` is currently supported only as a direct child of `task_group { ... }` so checking and lowering share one structured-concurrency model.",
+            );
+        }
+
+        let mut all_awaited = HashSet::new();
+        let mut direct_awaited = HashSet::new();
+        collect_task_group_awaited_handles(block, &mut all_awaited);
+        collect_direct_task_group_awaited_handles(block, &mut direct_awaited);
+        for name in all_awaited {
+            if top_level_async_lets.contains(&name) && !direct_awaited.contains(&name) {
+                let span = find_nested_task_group_await_span(block, &name)
+                    .cloned()
+                    .unwrap_or_else(|| block.span.clone());
+                self.unsupported_syntax(
+                    span,
+                    "nested async let await",
+                    "`await` of a task_group async-let handle must be a direct task_group statement in the v0.6 executable MVP.",
                 );
             }
         }
@@ -1167,7 +1600,7 @@ impl Analyzer<'_> {
                             param.ty.span.clone(),
                             "removed share data effect",
                         )
-                        .with_cause("RSScript v0.5 has exactly three data effects: `read`, `mut`, and `take`.")
+                        .with_cause("RSScript v0.6 has exactly three data effects: `read`, `mut`, and `take`.")
                         .with_fix(
                             "replace_share_effect",
                             format!(
@@ -1267,13 +1700,13 @@ impl Analyzer<'_> {
                         Diagnostic::error(
                             code::REMOVED_RUNTIME_EFFECT,
                             format!(
-                                "`{effect_name}` is not a valid RSScript v0.5 effect in `{}`.",
+                                "`{effect_name}` is not a valid RSScript v0.6 effect in `{}`.",
                                 function.name
                             ),
                             function.span.clone(),
                             "removed runtime effect",
                         )
-                        .with_cause("v0.5 uses reductive guarantees such as `no_panic`, `noalloc`, `no_block`, and `pure`.")
+                        .with_cause("v0.6 uses reductive guarantees such as `no_panic`, `noalloc`, `no_block`, and `pure`.")
                         .with_fix(
                             "replace_removed_effect",
                             replacement,
@@ -1320,7 +1753,7 @@ impl Analyzer<'_> {
                         "native boundary missing effect",
                     )
                     .with_cause(
-                        "`native fn` is an implementation boundary, and v0.5 requires that boundary to appear in the effect list for review maps and semantic diffs.",
+                        "`native fn` is an implementation boundary, and v0.6 requires that boundary to appear in the effect list for review maps and semantic diffs.",
                     )
                     .with_fix(
                         "add_native_effect",
@@ -1579,7 +2012,7 @@ impl Analyzer<'_> {
                         self.unsupported_syntax(
                             function.span.clone(),
                             "unsupported protocol method body",
-                            "Protocols are effect-carrying capability contracts in v0.5. Protocol methods are bodyless signatures; default method bodies are not part of the RSScript protocol model.",
+                            "Protocols are effect-carrying capability contracts in v0.6. Protocol methods are bodyless signatures; default method bodies are not part of the RSScript protocol model.",
                         );
                     }
                     for param in &function.type_params {

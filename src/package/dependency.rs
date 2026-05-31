@@ -140,7 +140,7 @@ fn package_unsupported_dependency_source_diagnostic(
         super::package_dependency_span(package_dir, dependency),
         "unsupported dependency source",
     )
-    .with_cause("Git dependencies are not part of the v0.5 accepted dependency-source grammar.")
+    .with_cause("Git dependencies are not part of the v0.6 accepted dependency-source grammar.")
     .with_fix(
         "use_supported_dependency_source",
         "Use a registry version requirement or a local path dependency.",

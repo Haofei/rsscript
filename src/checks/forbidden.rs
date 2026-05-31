@@ -18,11 +18,11 @@ fn check_own_struct_attempts(analyzer: &mut Analyzer<'_>) {
             analyzer.diagnostics.push(
                 Diagnostic::error(
                     code::OWN_STRUCT_ATTEMPT,
-                    "`own struct` is not part of RSScript v0.5.",
+                    "`own struct` is not part of RSScript v0.6.",
                     analyzer.tokens[index].span.clone(),
                     "own struct attempt",
                 )
-                .with_cause("v0.5 has only `class`, `struct`, and `resource` type declarations.")
+                .with_cause("v0.6 has only `class`, `struct`, and `resource` type declarations.")
                 .with_fix(
                     "choose_type_kind",
                     "Use `struct` for inline values, `class` for managed identity, or `resource` for deterministic cleanup.",

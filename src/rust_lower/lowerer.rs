@@ -238,6 +238,26 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
+    fn protocol_impl_namespace(&self, receiver_type: &str, method: &str) -> Option<String> {
+        let mut matches = self
+            .program
+            .protocol_impls
+            .iter()
+            .filter(|protocol_impl| protocol_impl.type_name == receiver_type)
+            .filter(|protocol_impl| {
+                protocol_impl
+                    .mappings
+                    .iter()
+                    .any(|mapping| mapping.method == method)
+            })
+            .map(|protocol_impl| protocol_impl.protocol.clone());
+        let first = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        Some(first)
+    }
+
     fn lower_type_decl(&mut self, ty: &TypeDecl, out: &mut String) {
         self.record_source_marker(out, 0, "type", &ty.span);
         if ty.kind == TypeKind::Resource {
@@ -1246,11 +1266,14 @@ impl<'a> RustLowerer<'a> {
                         .map(|ty| ty.name.clone())
                         .unwrap_or_else(|| receiver.clone());
                     // Resolve namespace: check generic protocol bounds first,
-                    // then fall back to the type name itself
+                    // then concrete protocol impls, then fall back to the type
+                    // name itself. This mirrors HIR receiver-call resolution for
+                    // the non-ambiguous cases that are allowed to reach lowering.
                     let namespace = self
                         .generic_protocol_bounds
                         .get(&receiver_type_name)
                         .cloned()
+                        .or_else(|| self.protocol_impl_namespace(&receiver_type_name, method))
                         .unwrap_or(receiver_type_name.clone());
                     let is_protocol = self.protocol_names.contains(&namespace);
                     let lowered_receiver = match effect {

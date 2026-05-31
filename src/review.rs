@@ -138,6 +138,18 @@ pub struct ReviewMapRegion {
     pub line: usize,
     pub line_count: usize,
     pub reasons: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub receiver_calls: Vec<ReviewMapReceiverCall>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReviewMapReceiverCall {
+    pub line: usize,
+    pub column: usize,
+    pub source: String,
+    pub canonical_callee: String,
+    pub self_effect: String,
+    pub resolution: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -831,6 +843,7 @@ fn review_map_region_draft(
                 total_lines,
             ),
             reasons,
+            receiver_calls: facts.receiver_calls.clone(),
         },
         facts,
     }
@@ -859,6 +872,7 @@ struct ReviewMapFacts {
     user_calls: BTreeSet<String>,
     unresolved_calls: BTreeSet<String>,
     callback_calls: BTreeSet<String>,
+    receiver_calls: Vec<ReviewMapReceiverCall>,
     native_calls: BTreeSet<String>,
     unsafe_calls: BTreeSet<String>,
     spawn_captures: BTreeSet<String>,
@@ -938,6 +952,19 @@ fn propagate_review_required_calls(drafts: &mut [ReviewMapRegionDraft]) {
         if !changed {
             break;
         }
+    }
+}
+
+fn receiver_call_resolution_label(resolution: &CallResolution) -> &'static str {
+    match resolution {
+        CallResolution::Resolved { kind, .. } => match kind {
+            ResolvedCalleeKind::UserFunction => "user_function",
+            ResolvedCalleeKind::BuiltinFunction => "builtin_function",
+            ResolvedCalleeKind::Constructor { .. } => "constructor",
+        },
+        CallResolution::EnumVariant => "enum_variant",
+        CallResolution::Ambiguous { .. } => "ambiguous",
+        CallResolution::Unknown => "unknown",
     }
 }
 
@@ -1252,7 +1279,7 @@ fn collect_review_map_facts_expr(
     facts: &mut ReviewMapFacts,
 ) {
     match expr {
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, span } => {
             if is_resource_pool_callee(callee) {
                 facts.has_resource_pool = true;
             }
@@ -1261,12 +1288,36 @@ fn collect_review_map_facts_expr(
             } else if review_map_local_closure_call(callee, local_closure_bindings).is_none() {
                 let resolution = match callee {
                     Callee::ReceiverCall {
-                        receiver, method, ..
+                        receiver,
+                        method,
+                        effect,
                     } => {
                         if let Some(receiver_type) = facts.value_types.get(receiver).cloned() {
-                            hir.resolve_receiver_call(&receiver_type, method, &facts.value_types)
-                                .0
+                            let (resolution, namespace) = hir.resolve_receiver_call(
+                                &receiver_type,
+                                method,
+                                &facts.value_types,
+                            );
+                            facts.receiver_calls.push(ReviewMapReceiverCall {
+                                line: span.line,
+                                column: span.column,
+                                source: format!("{} {receiver}.{method}", effect.as_str()),
+                                canonical_callee: namespace
+                                    .map(|namespace| format!("{namespace}.{method}"))
+                                    .unwrap_or_else(|| format!("<unresolved>.{method}")),
+                                self_effect: effect.as_str().to_string(),
+                                resolution: receiver_call_resolution_label(&resolution).to_string(),
+                            });
+                            resolution
                         } else {
+                            facts.receiver_calls.push(ReviewMapReceiverCall {
+                                line: span.line,
+                                column: span.column,
+                                source: format!("{} {receiver}.{method}", effect.as_str()),
+                                canonical_callee: format!("<unresolved>.{method}"),
+                                self_effect: effect.as_str().to_string(),
+                                resolution: "unknown".to_string(),
+                            });
                             CallResolution::Unknown
                         }
                     }

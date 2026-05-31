@@ -287,7 +287,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::UNKNOWN_EFFECT,
         title: "unknown effect",
-        explanation: "The effect list contains an effect name outside the currently recognized RSScript v0.5 surface. Effects are review-visible semantic contracts, so unknown effect names are errors.",
+        explanation: "The effect list contains an effect name outside the currently recognized RSScript v0.6 surface. Effects are review-visible semantic contracts, so unknown effect names are errors.",
     },
     DiagnosticExplanation {
         code: code::DUPLICATE_DECLARATION,
@@ -317,17 +317,17 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::REMOVED_PROFILE_DECLARATION,
         title: "removed profile declaration",
-        explanation: "RSScript v0.5 does not include `profile:` declarations. Use `features:` only for advanced file-level capabilities; omitted features means managed-only.",
+        explanation: "RSScript v0.6 does not include `profile:` declarations. Use `features:` only for advanced file-level capabilities; omitted features means managed-only.",
     },
     DiagnosticExplanation {
         code: code::REMOVED_SHARE_EFFECT,
         title: "removed share data effect",
-        explanation: "RSScript v0.5 does not include `share` as a data effect. Retention must be declared with `effects(retains(param))`.",
+        explanation: "RSScript v0.6 does not include `share` as a data effect. Retention must be declared with `effects(retains(param))`.",
     },
     DiagnosticExplanation {
         code: code::REMOVED_RUNTIME_EFFECT,
         title: "removed runtime effect",
-        explanation: "RSScript v0.5 uses reductive guarantees. Additive runtime effects such as `io`, `allocates`, `may_panic`, and `may_fail` are not valid effects.",
+        explanation: "RSScript v0.6 uses reductive guarantees. Additive runtime effects such as `io`, `allocates`, `may_panic`, and `may_fail` are not valid effects.",
     },
     DiagnosticExplanation {
         code: code::INVALID_TRY_OPERATOR,
@@ -372,12 +372,12 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::NON_EXHAUSTIVE_MATCH,
         title: "non-exhaustive match",
-        explanation: "`match` must cover every visible variant for the supported enum shapes. In v0.5 that means `Some`/`None`, `Ok`/`Err`, all variants of a declared sum type, or a `_` fallback.",
+        explanation: "`match` must cover every visible variant for the supported enum shapes. In v0.6 that means `Some`/`None`, `Ok`/`Err`, all variants of a declared sum type, or a `_` fallback.",
     },
     DiagnosticExplanation {
         code: code::ASYNC_CALL_NOT_CONSUMED,
         title: "async call not consumed",
-        explanation: "Async calls must be consumed by `await` so suspension boundaries remain review-visible. `spawn` is reserved but not executable in v0.5.",
+        explanation: "Async calls must be consumed by `await` so suspension boundaries remain review-visible. `spawn` is reserved but not executable in v0.6.",
     },
     DiagnosticExplanation {
         code: code::AWAIT_OUTSIDE_ASYNC,
@@ -397,7 +397,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::FD_OUTSIDE_INTERNAL_BOUNDARY,
         title: "Fd outside native/resource internals",
-        explanation: "`Fd` is not an ordinary user-facing value type in v0.5. It may appear only in native function signatures or resource internals such as resource fields.",
+        explanation: "`Fd` is not an ordinary user-facing value type in v0.6. It may appear only in native function signatures or resource internals such as resource fields.",
     },
     DiagnosticExplanation {
         code: code::UNKNOWN_TYPE,
@@ -477,7 +477,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::CONTROL_FLOW_TYPE_MISMATCH,
         title: "control-flow type mismatch",
-        explanation: "`if` and `while` conditions must be `Bool`, and v0.5 `match` scrutinees must be `Option<T>`, `Result<T, E>`, or a declared sum type with matching arm variants before Rust lowering.",
+        explanation: "`if` and `while` conditions must be `Bool`, and v0.6 `match` scrutinees must be `Option<T>`, `Result<T, E>`, or a declared sum type with matching arm variants before Rust lowering.",
     },
     DiagnosticExplanation {
         code: code::OPERATOR_TYPE_MISMATCH,
@@ -502,7 +502,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::INDEXED_PARTIAL_ACCESS_CONFLICT,
         title: "indexed container partial access conflict",
-        explanation: "RSScript v0.5 does not prove indexed element disjointness. Indexed local paths conflict with other accesses to the same local base when mutation or take is involved.",
+        explanation: "RSScript v0.6 does not prove indexed element disjointness. Indexed local paths conflict with other accesses to the same local base when mutation or take is involved.",
     },
     DiagnosticExplanation {
         code: code::MOVE_BASE_FIELD_CONFLICT,
@@ -512,7 +512,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::LOCAL_CLASS_BINDING,
         title: "local class binding",
-        explanation: "Classes are managed identity objects in RSScript v0.5. They are created as managed handles and cannot be bound as local exclusive values.",
+        explanation: "Classes are managed identity objects in RSScript v0.6. They are created as managed handles and cannot be bound as local exclusive values.",
     },
     DiagnosticExplanation {
         code: code::INVALID_MANAGE_OPERAND,
@@ -592,12 +592,12 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::RESOURCE_POOL_FALLIBLE_FACTORY,
         title: "ResourcePool factory contract violation",
-        explanation: "`ResourcePool.new` is the v0.5 eager noescape infallible constructor and requires a factory returning a bare resource. `ResourcePool.try_new` is the matching fallible constructor and requires a factory returning `Result<Resource, E>`.",
+        explanation: "`ResourcePool.new` is the v0.6 eager noescape infallible constructor and requires a factory returning a bare resource. `ResourcePool.try_new` is the matching fallible constructor and requires a factory returning `Result<Resource, E>`.",
     },
     DiagnosticExplanation {
         code: code::RESOURCE_POOL_INVALID_MAX_SIZE,
         title: "ResourcePool max_size not a positive Int literal",
-        explanation: "`ResourcePool.new` is eager and infallible in v0.5, so `max_size` must be a positive `Int` literal checked before lowering.",
+        explanation: "`ResourcePool.new` is eager and infallible in v0.6, so `max_size` must be a positive `Int` literal checked before lowering.",
     },
     DiagnosticExplanation {
         code: code::RESOURCE_POOL_ACTIVE_LEASE_CONFLICT,
@@ -622,7 +622,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::NOESCAPE_CONSUMES_CAPTURE,
         title: "noescape closure consumes captured local",
-        explanation: "`noescape Fn()` callbacks are non-consuming in v0.5: the callee may call them multiple times, so a noescape closure may read or mutate captured local values but must not take or manage them.",
+        explanation: "`noescape Fn()` callbacks are non-consuming in v0.6: the callee may call them multiple times, so a noescape closure may read or mutate captured local values but must not take or manage them.",
     },
     DiagnosticExplanation {
         code: code::TAKE_HANDLE_FIELD,
@@ -657,7 +657,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::OWN_STRUCT_ATTEMPT,
         title: "own struct attempt",
-        explanation: "RSScript v0.5 has exactly three type declaration kinds: `class`, `struct`, and `resource`. There is no `own struct`.",
+        explanation: "RSScript v0.6 has exactly three type declaration kinds: `class`, `struct`, and `resource`. There is no `own struct`.",
     },
     DiagnosticExplanation {
         code: code::SURFACE_REFERENCE_ATTEMPT,
@@ -692,7 +692,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::PACKAGE_UNSUPPORTED_DEPENDENCY_SOURCE,
         title: "unsupported package dependency source",
-        explanation: "RSScript v0.5 accepts registry and local path package dependencies. Future-looking dependency source forms such as git must be rejected with a stable package-manager diagnostic.",
+        explanation: "RSScript v0.6 accepts registry and local path package dependencies. Future-looking dependency source forms such as git must be rejected with a stable package-manager diagnostic.",
     },
     DiagnosticExplanation {
         code: code::PACKAGE_REVIEW_POLICY_VIOLATION,

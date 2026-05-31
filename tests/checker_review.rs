@@ -590,6 +590,36 @@ fn process() -> Unit {
 }
 
 #[test]
+fn review_map_json_records_receiver_call_canonical_expansion() {
+    let source = r#"
+features: local
+
+struct Cache
+
+fn Cache.put(self: mut Cache, key: read String) -> Unit {
+    return Unit
+}
+
+fn update(cache: mut Cache) -> Unit {
+    mut cache.put(key: read "k")
+    return Unit
+}
+"#;
+    let map = review_map_sources(vec![("receiver-map.rss", source)]);
+    let json: Value =
+        serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
+    let update = json["files"][0]["regions"]
+        .as_array()
+        .and_then(|regions| regions.iter().find(|region| region["function"] == "update"))
+        .expect("update region should exist");
+    let receiver_call = &update["receiver_calls"][0];
+    assert_eq!(receiver_call["source"], "mut cache.put");
+    assert_eq!(receiver_call["canonical_callee"], "Cache.put");
+    assert_eq!(receiver_call["self_effect"], "mut");
+    assert_eq!(receiver_call["resolution"], "user_function");
+}
+
+#[test]
 fn review_diff_detects_sum_type_added() {
     let old_source = r#"
 fn main() -> Unit {

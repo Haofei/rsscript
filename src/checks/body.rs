@@ -31,6 +31,7 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
         .collect();
 
     for function in functions {
+        analyzer.async_let_names.clear();
         let hir_body = analyzer.hir.function_body(&function.name).cloned();
         let local_analysis = LocalAnalysis::new(hir_body.as_ref());
         check_managed_to_local_uses(analyzer, &local_analysis);
@@ -639,7 +640,7 @@ fn check_for_iterable_type(analyzer: &mut Analyzer<'_>, expr: &HirExpr, type_nam
             hir_expr_span(expr).clone(),
             "control-flow type mismatch",
         )
-        .with_cause("RSScript v0.5 `for` iteration is limited to `List<T>` so loop ownership and review metadata stay explicit.")
+        .with_cause("RSScript v0.6 `for` iteration is limited to `List<T>` so loop ownership and review metadata stay explicit.")
         .with_fix(
             "iterate_list",
             "Iterate a `List<T>` value or convert the input to a List before the loop.",
@@ -666,7 +667,7 @@ fn check_match_scrutinee_type(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
             hir_expr_span(expr).clone(),
             "control-flow type mismatch",
         )
-        .with_cause("RSScript v0.5 `match` is limited to review-visible `Option`, `Result`, and declared sum type variant handling.")
+        .with_cause("RSScript v0.6 `match` is limited to review-visible `Option`, `Result`, and declared sum type variant handling.")
         .with_fix(
             "match_option_or_result",
             "Match an `Option<T>`, `Result<T, E>`, or declared sum value; otherwise rewrite this branch as `if`.",
@@ -1133,7 +1134,12 @@ fn check_await_operand(analyzer: &mut Analyzer<'_>, value: &HirExpr, await_expr:
         return;
     }
     // Allow `await x` where x is an async let binding (task_group pending)
-    if await_targets_async_let_binding(value, &analyzer.async_let_names) {
+    if let Some(async_let_name) =
+        await_targets_async_let_binding(value, &analyzer.async_let_names).map(str::to_string)
+    {
+        analyzer
+            .async_let_names
+            .retain(|name| name != &async_let_name);
         return;
     }
     analyzer.diagnostics.push(
@@ -1148,13 +1154,16 @@ fn check_await_operand(analyzer: &mut Analyzer<'_>, value: &HirExpr, await_expr:
     );
 }
 
-fn await_targets_async_let_binding(expr: &HirExpr, async_let_names: &[String]) -> bool {
+fn await_targets_async_let_binding<'a>(
+    expr: &'a HirExpr,
+    async_let_names: &'a [String],
+) -> Option<&'a str> {
     match expr {
-        HirExpr::Ident { name, .. } => async_let_names.contains(name),
+        HirExpr::Ident { name, .. } if async_let_names.contains(name) => Some(name.as_str()),
         HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => {
             await_targets_async_let_binding(value, async_let_names)
         }
-        _ => false,
+        _ => None,
     }
 }
 
@@ -1252,7 +1261,7 @@ fn check_async_call_consumed(
             "async call must be awaited",
         )
         .with_cause(
-            "Async calls introduce suspension boundaries that must be visible in source; `spawn` is reserved but not executable in v0.5.",
+            "Async calls introduce suspension boundaries that must be visible in source; `spawn` is reserved but not executable in v0.6.",
         )
         .with_fix(
             "await_async_call",
@@ -2691,7 +2700,7 @@ fn indexed_place_conflict_diagnostic(
             right.span.clone(),
             "indexed local access conflict",
         )
-        .with_cause("RSScript v0.5 treats indexed access as access to the whole local container for alias checking.")
+        .with_cause("RSScript v0.6 treats indexed access as access to the whole local container for alias checking.")
         .with_fix(
             "use_split_api",
             "Use an explicit container split API that proves or checks disjoint element access.",
@@ -4258,7 +4267,7 @@ fn resource_pool_fallible_factory_diagnostic(
         .with_cause(format!(
             "The factory expression has type `{type_name}`, but `ResourcePool.new` expects a resource value."
         ))
-        .with_cause("v0.5 `ResourcePool.new` eagerly constructs the pool and does not hide `Result` handling inside the pool constructor.")
+        .with_cause("v0.6 `ResourcePool.new` eagerly constructs the pool and does not hide `Result` handling inside the pool constructor.")
         .with_fix(
             "use_matching_pool_constructor",
             "Handle failure before constructing the pool, or use `ResourcePool.try_new` with a fallible factory.",
@@ -4311,7 +4320,7 @@ fn resource_pool_active_lease_conflict_diagnostic(
         .with_cause(format!(
             "This `{effect}` use targets the same pool root as an active `ResourcePool.borrow` lease."
         ))
-        .with_cause("v0.5 permits one active lease per pool; borrow, stats, reset, take, and manage of the same pool root are rejected until the `with` scope exits.")
+        .with_cause("v0.6 permits one active lease per pool; borrow, stats, reset, take, and manage of the same pool root are rejected until the `with` scope exits.")
         .with_fix(
             "end_pool_lease_scope",
             "Move this pool use after the `with ResourcePool.borrow(...)` block, or use a different pool.",
@@ -4331,7 +4340,7 @@ fn resource_pool_invalid_max_size_diagnostic(
             span,
             "invalid ResourcePool max_size",
         )
-        .with_cause("v0.5 `ResourcePool.new` eagerly constructs exactly `max_size` resources and returns no `Result`.")
+        .with_cause("v0.6 `ResourcePool.new` eagerly constructs exactly `max_size` resources and returns no `Result`.")
         .with_cause("Use a positive `Int` literal so empty or dynamically sized pools cannot hide construction failure or exhaustion behavior.")
         .with_fix(
             "use_positive_literal_max_size",
@@ -4353,7 +4362,7 @@ fn resource_pool_factory_resource_capture_diagnostic(
             span,
             "resource captured by ResourcePool factory",
         )
-        .with_cause("ResourcePool factories are eager and noescape in v0.5, but they still must not close over with-bound resources.")
+        .with_cause("ResourcePool factories are eager and noescape in v0.6, but they still must not close over with-bound resources.")
         .with_fix(
             "avoid_resource_capture",
             "Create the pooled resource directly inside the factory, or pass ordinary managed configuration into the factory.",

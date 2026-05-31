@@ -2,7 +2,7 @@
 name = "rsscript"
 version = "0.1.0"
 edition = "2024"
-description = "Reviewable System Script v0.5 review-first front-end checker and Rust lowering prototype"
+description = "Reviewable System Script v0.6 review-first front-end checker and Rust lowering prototype"
 license = "MIT OR Apache-2.0"
 
 [workspace]
