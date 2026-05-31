@@ -9,6 +9,7 @@ use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 use std::str::Utf8Error;
+use std::time::{Duration, Instant};
 
 pub const RUNTIME_DIAGNOSTIC_PREFIX: &str = "RSSCRIPT_RUNTIME_DIAGNOSTIC:";
 
@@ -189,6 +190,19 @@ impl fmt::Display for HttpError {
 
 impl std::error::Error for HttpError {}
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimerError {
+    message: String,
+}
+
+impl fmt::Display for TimerError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.message)
+    }
+}
+
+impl std::error::Error for TimerError {}
+
 impl From<ConfigError> for HttpError {
     fn from(error: ConfigError) -> Self {
         Self {
@@ -331,6 +345,47 @@ pub fn json_error_message(error: &JsonError) -> String {
 
 pub fn file_error_message(error: &std::io::Error) -> String {
     error.to_string()
+}
+
+pub enum AsyncPoll<T> {
+    Ready(T),
+    Pending,
+}
+
+pub trait Pending<T> {
+    fn poll(&mut self) -> AsyncPoll<T>;
+}
+
+pub fn run_pending<T>(mut pending: impl Pending<T>) -> T {
+    loop {
+        match pending.poll() {
+            AsyncPoll::Ready(value) => return value,
+            AsyncPoll::Pending => std::thread::yield_now(),
+        }
+    }
+}
+
+pub struct TimerSleepPending {
+    deadline: Instant,
+}
+
+impl Pending<Result<(), TimerError>> for TimerSleepPending {
+    fn poll(&mut self) -> AsyncPoll<Result<(), TimerError>> {
+        let now = Instant::now();
+        if now >= self.deadline {
+            return AsyncPoll::Ready(Ok(()));
+        }
+        let remaining = self.deadline.saturating_duration_since(now);
+        std::thread::sleep(remaining.min(Duration::from_millis(1)));
+        AsyncPoll::Pending
+    }
+}
+
+pub fn timer_sleep_start(ms: i64) -> TimerSleepPending {
+    let millis = u64::try_from(ms).unwrap_or(0);
+    TimerSleepPending {
+        deadline: Instant::now() + Duration::from_millis(millis),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2613,6 +2668,11 @@ mod tests {
         assert_eq!(path, "/users");
         assert_eq!(super::response_status(&response), 200);
         assert_eq!(super::response_body(&response), "handled /users");
+    }
+
+    #[test]
+    fn timer_sleep_pending_completes() {
+        super::run_pending(super::timer_sleep_start(0)).expect("timer sleep should complete");
     }
 
     #[test]

@@ -929,12 +929,10 @@ impl<'a> RustLowerer<'a> {
         self.mutated_bindings = collect_mutated_bindings(&function.body);
         self.current_return_type = function.return_ty.clone();
         self.record_source_marker(out, 0, "function", &function.span);
-        let async_prefix = if function.is_async { "async " } else { "" };
         let is_public = function.is_public || is_runnable_main(function);
         out.push_str(&format!(
-            "{}{}fn {}{}(",
+            "{}fn {}{}(",
             visibility(is_public),
-            async_prefix,
             rust_function_ident(&function.name),
             lower_generic_params(&function.type_params)
         ));
@@ -1585,7 +1583,7 @@ impl<'a> RustLowerer<'a> {
                 )
             }
             Expr::Spawn { span, .. } => unreachable_lowering("spawn expression", span),
-            Expr::Await { span, .. } => unreachable_lowering("await expression", span),
+            Expr::Await { value, .. } => self.lower_await_expr(value),
             Expr::Try { value, .. } => format!("{}?", self.lower_expr(value)),
             Expr::Closure { params, body, .. } => {
                 let lowered_params = params
@@ -1637,6 +1635,18 @@ impl<'a> RustLowerer<'a> {
                 value,
                 ..
             } => self.lower_expr(value),
+            _ => self.lower_expr(expr),
+        }
+    }
+
+    fn lower_await_expr(&mut self, expr: &Expr) -> String {
+        match expr {
+            Expr::Try { value, .. } => format!("{}?", self.lower_await_expr(value)),
+            Expr::Effect { value, .. } => self.lower_await_expr(value),
+            Expr::Call { callee, .. } if is_async_runtime_intrinsic_callee(callee) => {
+                format!("rsscript_runtime::run_pending({})", self.lower_expr(expr))
+            }
+            Expr::Call { .. } => self.lower_expr(expr),
             _ => self.lower_expr(expr),
         }
     }
@@ -1916,6 +1926,7 @@ impl<'a> RustLowerer<'a> {
             "Request" => "rsscript_runtime::Request".to_string(),
             "Response" => "rsscript_runtime::Response".to_string(),
             "HttpError" => "rsscript_runtime::HttpError".to_string(),
+            "TimerError" => "rsscript_runtime::TimerError".to_string(),
             "ConfigValue" => "rsscript_runtime::ConfigValue".to_string(),
             "ConfigStore" => "rsscript_runtime::ConfigStore".to_string(),
             "ConfigError" => "rsscript_runtime::ConfigError".to_string(),
@@ -2851,6 +2862,10 @@ fn is_string_concat_callee(callee: &Callee) -> bool {
 
 fn is_file_open_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && type_root_name(name) == "open")
+}
+
+fn is_async_runtime_intrinsic_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Timer" && type_root_name(name) == "sleep")
 }
 
 fn is_file_open_read_callee(callee: &Callee) -> bool {

@@ -1,0 +1,6 @@
+features: async, native
+
+struct TimerError
+
+pub async native fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
+    effects(native)

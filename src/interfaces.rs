@@ -1,5 +1,9 @@
 pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
     (
+        "core/async/timer.rssi",
+        include_str!("../core/async/timer.rssi"),
+    ),
+    (
         "core/cache/cache.rssi",
         include_str!("../core/cache/cache.rssi"),
     ),

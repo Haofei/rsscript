@@ -3238,6 +3238,25 @@ fn main() -> Unit {
 }
 
 #[test]
+fn rust_lowering_maps_async_timer_await_to_runtime_pending() {
+    let source = r#"
+features: async
+
+async fn main() -> Result<Unit, TimerError> {
+    await Timer.sleep(ms: 1)?
+    return Ok(Unit)
+}
+"#;
+    let rust = lower_source_to_rust("async-timer.rss", source).expect("source should lower");
+
+    assert!(rust.contains("pub fn main() -> Result<(), rsscript_runtime::TimerError>"));
+    assert!(!rust.contains("async fn"));
+    assert!(
+        rust.contains("rsscript_runtime::run_pending(rsscript_runtime::timer_sleep_start(1))?;")
+    );
+}
+
+#[test]
 fn rust_lowering_maps_assert_equal_to_runtime_hook() {
     let source = r#"
 fn main() -> Unit {
