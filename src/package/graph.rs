@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use super::lock::effective_interface_hash;
 use super::source_set::{
     ManifestDependencyBudget, ManifestProviderChoice, load_package_manifest,
     load_package_with_features, resolve_package_features, selected_root_package_features,
@@ -131,13 +132,21 @@ fn collect_missing_provider_reason(
         ));
         return;
     }
-    if !provider
+    let Some(declared_hash) = provider
         .implements
         .iter()
-        .any(|interface| interface == &node.name)
-    {
+        .find(|implementation| implementation.interface_package == node.name)
+        .and_then(|implementation| implementation.interface_effective_hash.as_deref())
+    else {
         reasons.push(format!(
             "provider `{provider_package}` does not declare implementation for interface-only dependency `{}`",
+            node.name
+        ));
+        return;
+    };
+    if declared_hash != node.interface_effective_hash {
+        reasons.push(format!(
+            "provider `{provider_package}` interface hash for `{}` is stale or mismatched",
             node.name
         ));
     }
@@ -243,6 +252,7 @@ fn package_tree_node(
     let features = selected_features
         .map(|features| features.to_vec())
         .unwrap_or_else(|| selected_root_package_features(&package.manifest));
+    let interface_effective_hash = effective_interface_hash(&package.sources, &features);
     let identity = package_identity(&package.manifest);
     let visit_key = super::canonical_path_label(package_dir);
     if !visiting.insert(visit_key.clone()) {
@@ -258,7 +268,8 @@ fn package_tree_node(
             compile_only: false,
             test_only: false,
             platform_provided: false,
-            implements: package_provider_interfaces(&package.manifest),
+            interface_effective_hash,
+            implements: package_provider_implementations(&package.manifest),
             dependency_kind,
             reasons: vec!["dependency cycle truncated".to_string()],
             dependencies: Vec::new(),
@@ -292,7 +303,8 @@ fn package_tree_node(
         compile_only: false,
         test_only: false,
         platform_provided: false,
-        implements: package_provider_interfaces(&package.manifest),
+        interface_effective_hash,
+        implements: package_provider_implementations(&package.manifest),
         dependency_kind,
         reasons: review.reasons,
         dependencies,
@@ -369,6 +381,7 @@ fn unresolved_dependency_node(
         compile_only: spec.compile_only,
         test_only: spec.test_only,
         platform_provided: spec.platform_provided,
+        interface_effective_hash: String::new(),
         implements: Vec::new(),
         dependency_kind,
         reasons,
@@ -376,8 +389,21 @@ fn unresolved_dependency_node(
     }
 }
 
-fn package_provider_interfaces(manifest: &super::Manifest) -> Vec<String> {
-    manifest.implements.keys().cloned().collect()
+fn package_provider_implementations(
+    manifest: &super::Manifest,
+) -> Vec<super::PackageProviderImplementation> {
+    manifest
+        .implements
+        .iter()
+        .map(
+            |(interface_package, implementation)| super::PackageProviderImplementation {
+                interface_package: interface_package.clone(),
+                version: implementation.version.clone(),
+                interface_features: implementation.interface_features.clone(),
+                interface_effective_hash: implementation.interface_effective_hash.clone(),
+            },
+        )
+        .collect()
 }
 
 fn package_is_interface_only(sources: &[super::PackageSource]) -> bool {
