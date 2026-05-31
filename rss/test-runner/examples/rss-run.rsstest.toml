@@ -3,3 +3,9 @@ name = "rss async source runs"
 kind = "rss_run_stdout_contains"
 path = "rss/test-runner/examples/async-smoke.rss"
 contains = "rss async smoke ok"
+
+[[tests]]
+name = "rss source failure is assertable"
+kind = "rss_run_failure_contains"
+path = "rss/test-runner/examples/expected-failure.rss"
+contains = "return type mismatch"

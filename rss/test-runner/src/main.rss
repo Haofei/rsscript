@@ -365,6 +365,21 @@ fn run_rss_source_success(test: read TestCase) -> Result<Bool, String> {
     }
 }
 
+fn run_rss_source_failure_contains(test: read TestCase) -> Result<Bool, String> {
+    match run_rss_source_stdout(test: read test) {
+        Ok(_) => {
+            return Ok(false)
+        }
+        Err(error) => {
+            return text_matches_expectations(
+                value: read error,
+                contains: read test.contains,
+                contains_all: read test.contains_all,
+            )
+        }
+    }
+}
+
 fn path_allows_recursive(path: read String, recursive: Bool) -> Bool {
     if recursive {
         return true
@@ -516,6 +531,10 @@ fn run_test(test: read TestCase) -> Result<Bool, String> {
                 return Err(error)
             }
         }
+    }
+
+    if test.kind == "rss_run_failure_contains" {
+        return run_rss_source_failure_contains(test: read test)
     }
 
     if test.kind == "command_for_each_path" {
