@@ -706,7 +706,7 @@ fn check_await_placement_expr(
         | HirExpr::Try { value, .. } => {
             check_await_placement_expr(analyzer, value, function_is_async);
         }
-        HirExpr::Closure { body, .. } => check_await_placement(analyzer, body, function_is_async),
+        HirExpr::Closure { body, .. } => check_await_placement(analyzer, body, false),
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }

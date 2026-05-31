@@ -6790,6 +6790,31 @@ async fn receive() -> Unit {
 }
 
 #[test]
+fn checker_rejects_await_inside_non_async_closure() {
+    let source = r#"
+features: async
+
+async fn Timer.sleep(ms: Int) -> Unit
+fn run(callback: noescape Fn()) -> Unit
+
+async fn receive() -> Unit {
+    run(callback: || {
+        await Timer.sleep(ms: 1)
+    })
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("await-closure.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0029" && diagnostic.label == "await outside async fn"
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn checker_rejects_resource_live_across_await() {
     let source = r#"
 features: async, local
