@@ -29,6 +29,9 @@ pub mod code {
     pub const UNKNOWN_BINDING: &str = "RS0026";
     pub const UNKNOWN_PROTOCOL: &str = "RS0027";
     pub const INVALID_SELF_PARAMETER: &str = "RS0028";
+    pub const AWAIT_OUTSIDE_ASYNC: &str = "RS0029";
+    pub const AWAIT_NON_ASYNC: &str = "RS0030";
+    pub const AWAIT_LIVE_LOCAL: &str = "RS0031";
     pub const FEATURE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
@@ -370,6 +373,21 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::ASYNC_CALL_NOT_CONSUMED,
         title: "async call not consumed",
         explanation: "Async calls must be consumed by `await` or `spawn` so suspension and task boundaries remain review-visible.",
+    },
+    DiagnosticExplanation {
+        code: code::AWAIT_OUTSIDE_ASYNC,
+        title: "await outside async function",
+        explanation: "`await` is an explicit suspension boundary and is only valid inside an `async fn` body.",
+    },
+    DiagnosticExplanation {
+        code: code::AWAIT_NON_ASYNC,
+        title: "await non-async expression",
+        explanation: "`await` must directly consume an async call in the executable async MVP; RSScript does not expose Future or Task values as source-level types.",
+    },
+    DiagnosticExplanation {
+        code: code::AWAIT_LIVE_LOCAL,
+        title: "local value live across await",
+        explanation: "RSScript async frames may suspend managed handles and Copy snapshots, but local values, resources, and runtime guards must not live across an await boundary.",
     },
     DiagnosticExplanation {
         code: code::FD_OUTSIDE_INTERNAL_BOUNDARY,

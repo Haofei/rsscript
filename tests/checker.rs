@@ -73,10 +73,7 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
     ("operator overload attempt", "RS1001"),
     ("feature violation", "RS0101"),
     ("unsupported syntax", "RS0015"),
-    (
-        "async body / await / spawn used in v0.5 executable lowering",
-        "RS0015",
-    ),
+    ("spawn used before structured async task support", "RS0015"),
     ("async call not consumed by await or spawn", "RS0022"),
     ("unknown protocol", "RS0027"),
     ("unmappable rustc diagnostic", "RS1102"),
@@ -6699,43 +6696,107 @@ fn receive(url: read Url) -> Unit {
 }
 
 #[test]
-fn checker_reports_async_bodies_as_unsupported_until_async_lowering_exists() {
+fn checker_accepts_executable_async_function_body() {
     let source = r#"
 features: async
 
-async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError> {
-    return Network.fetch(url: read url)
+async fn tick() -> Unit {
+    return Unit
 }
 "#;
     let diagnostics = analyze_source("async-body.rss", source);
 
-    assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "RS0015"
-                && diagnostic.label == "unsupported async function body")
-    );
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
 }
 
 #[test]
-fn checker_reports_await_as_unsupported_until_async_lowering_exists() {
+fn checker_accepts_await_inside_async_function() {
     let source = r#"
 features: async
 
-async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError>
+async fn Timer.sleep(ms: Int) -> Unit
 
-fn receive(url: read Url) -> Unit {
-    let bytes = await fetch(url: read url)
+async fn receive() -> Unit {
+    await Timer.sleep(ms: 1)
     return Unit
 }
 "#;
     let diagnostics = analyze_source("await-body.rss", source);
 
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+#[test]
+fn checker_rejects_await_outside_async_function() {
+    let source = r#"
+features: async
+
+async fn Timer.sleep(ms: Int) -> Unit
+
+fn receive() -> Unit {
+    await Timer.sleep(ms: 1)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("await-outside-async.rss", source);
+
     assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "RS0015"
-                && diagnostic.label == "unsupported await expression"),
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0029" && diagnostic.label == "await outside async fn"
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_rejects_await_of_non_async_expression() {
+    let source = r#"
+features: async
+
+fn sync_sleep(ms: Int) -> Unit
+
+async fn receive() -> Unit {
+    await sync_sleep(ms: 1)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("await-non-async.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0030" && diagnostic.label == "await non-async expression"
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_rejects_resource_live_across_await() {
+    let source = r#"
+features: async, local
+
+resource File
+struct IOError
+
+fn File.open(path: read Path) -> Result<File, IOError>
+async fn Timer.sleep(ms: Int) -> Result<Unit, IOError>
+
+async fn bad(path: read Path) -> Result<Unit, IOError> {
+    with File.open(path: read path)? as file {
+        await Timer.sleep(ms: 1)?
+    }
+    return Ok(Unit)
+}
+"#;
+    let diagnostics = analyze_source("await-resource.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0031"
+                && diagnostic
+                    .summary
+                    .contains("resource `file` cannot live across `await`")
+        }),
         "{diagnostics:?}"
     );
 }

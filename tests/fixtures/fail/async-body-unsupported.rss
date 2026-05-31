@@ -1,6 +1,9 @@
-// expect: RS0015
+// expect: RS0029
 features: async
 
-async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError> {
-    return Network.fetch(url: read url)
+async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError>
+
+fn receive(url: read Url) -> Unit {
+    let bytes = await fetch(url: read url)
+    return Unit
 }

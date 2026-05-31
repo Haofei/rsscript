@@ -311,13 +311,6 @@ impl Analyzer<'_> {
                         "Generic parameters must use `T`, `T: Managed`, `T: Struct`, `T: Resource`, or a single protocol bound such as `T: Writer`.",
                     );
                 }
-                if function.is_async && !function.body.statements.is_empty() {
-                    self.unsupported_syntax(
-                        function.span.clone(),
-                        "unsupported async function body",
-                        "`async fn` is currently supported only in interface and review metadata; executable async lowering is not part of the v0.5 runtime yet.",
-                    );
-                }
                 if function.is_native && !function.body.statements.is_empty() {
                     self.unsupported_syntax(
                         function.span.clone(),
@@ -541,12 +534,7 @@ impl Analyzer<'_> {
                 );
                 self.check_unsupported_syntax_expr(value);
             }
-            Expr::Await { value, span } => {
-                self.unsupported_syntax(
-                    span.clone(),
-                    "unsupported await expression",
-                    "`await` is future executable async syntax; executable async lowering is not part of the v0.5 runtime yet.",
-                );
+            Expr::Await { value, .. } => {
                 self.check_unsupported_syntax_expr(value);
             }
             Expr::Closure { body, .. } => self.check_unsupported_syntax_block(body),

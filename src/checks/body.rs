@@ -35,6 +35,9 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
         check_take_handle_fields(analyzer, &local_analysis);
         check_fresh_returns(analyzer, &local_analysis, &function);
         if let Some(body) = &hir_body {
+            if let Some(block) = body.block.as_ref() {
+                check_await_placement(analyzer, block, function.is_async);
+            }
             check_resource_pool_bindings(analyzer, body);
             check_local_class_bindings(analyzer, body);
         }
@@ -536,6 +539,8 @@ fn check_expr_semantics_with_context(
             check_expr_semantics_with_context(analyzer, local_analysis, value, state, false, true);
         }
         HirExpr::Await { value, .. } => {
+            check_await_operand(analyzer, value, expr);
+            check_await_live_values(analyzer, state, expr);
             check_expr_semantics_with_context(analyzer, local_analysis, value, state, false, true);
         }
         HirExpr::Effect {
@@ -599,6 +604,189 @@ fn check_expr_semantics_with_context(
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn check_await_placement(analyzer: &mut Analyzer<'_>, block: &HirBlock, function_is_async: bool) {
+    for statement in &block.statements {
+        check_await_placement_stmt(analyzer, statement, function_is_async);
+    }
+}
+
+fn check_await_placement_stmt(
+    analyzer: &mut Analyzer<'_>,
+    statement: &HirStmt,
+    function_is_async: bool,
+) {
+    match statement {
+        HirStmt::Let { value, .. } | HirStmt::Return { value, .. } => {
+            if let Some(value) = value {
+                check_await_placement_expr(analyzer, value, function_is_async);
+            }
+        }
+        HirStmt::With { resource, body, .. } => {
+            check_await_placement_expr(analyzer, resource, function_is_async);
+            check_await_placement(analyzer, body, function_is_async);
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            check_await_placement_expr(analyzer, condition, function_is_async);
+            check_await_placement(analyzer, then_body, function_is_async);
+            if let Some(else_body) = else_body {
+                check_await_placement(analyzer, else_body, function_is_async);
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                check_await_placement_expr(analyzer, condition, function_is_async);
+            }
+            check_await_placement(analyzer, body, function_is_async);
+        }
+        HirStmt::For { iterable, body, .. } => {
+            check_await_placement_expr(analyzer, iterable, function_is_async);
+            check_await_placement(analyzer, body, function_is_async);
+        }
+        HirStmt::Match { value, arms, .. } => {
+            check_await_placement_expr(analyzer, value, function_is_async);
+            for arm in arms {
+                check_await_placement(analyzer, &arm.body, function_is_async);
+            }
+        }
+        HirStmt::Expr(value) => check_await_placement_expr(analyzer, value, function_is_async),
+        HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn check_await_placement_expr(
+    analyzer: &mut Analyzer<'_>,
+    expr: &HirExpr,
+    function_is_async: bool,
+) {
+    match expr {
+        HirExpr::Await { value, span, .. } => {
+            if !function_is_async {
+                analyzer.diagnostics.push(
+                    Diagnostic::error(
+                        code::AWAIT_OUTSIDE_ASYNC,
+                        "`await` is only valid inside an async function.",
+                        span.clone(),
+                        "await outside async fn",
+                    )
+                    .with_cause("Suspension points are part of the async function frame and cannot appear in ordinary synchronous functions.")
+                    .with_fix("move_to_async_fn", "Move this await into an `async fn`, or call a synchronous API.", "manual"),
+                );
+            }
+            check_await_placement_expr(analyzer, value, function_is_async);
+        }
+        HirExpr::Binary { left, right, .. } => {
+            check_await_placement_expr(analyzer, left, function_is_async);
+            check_await_placement_expr(analyzer, right, function_is_async);
+        }
+        HirExpr::Field { base, .. } => {
+            check_await_placement_expr(analyzer, base, function_is_async)
+        }
+        HirExpr::Index { base, index, .. } => {
+            check_await_placement_expr(analyzer, base, function_is_async);
+            check_await_placement_expr(analyzer, index, function_is_async);
+        }
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                check_await_placement_expr(analyzer, &arg.value, function_is_async);
+            }
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Try { value, .. } => {
+            check_await_placement_expr(analyzer, value, function_is_async);
+        }
+        HirExpr::Closure { body, .. } => check_await_placement(analyzer, body, function_is_async),
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn check_await_operand(analyzer: &mut Analyzer<'_>, value: &HirExpr, await_expr: &HirExpr) {
+    if await_expr_targets_async_call(value) {
+        return;
+    }
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::AWAIT_NON_ASYNC,
+            "`await` must consume an async call.",
+            expr_span(await_expr).clone(),
+            "await non-async expression",
+        )
+        .with_cause("RSScript does not expose Future or Task values in source; the executable async MVP only awaits direct async calls.")
+        .with_fix("await_async_call", "Await an `async fn` call directly.", "manual"),
+    );
+}
+
+fn await_expr_targets_async_call(expr: &HirExpr) -> bool {
+    match expr {
+        HirExpr::Call { resolution, .. } => {
+            matches!(resolution, CallResolution::Resolved { signature, .. } if signature.is_async)
+        }
+        HirExpr::Effect { value, .. } | HirExpr::Try { value, .. } => {
+            await_expr_targets_async_call(value)
+        }
+        _ => false,
+    }
+}
+
+fn check_await_live_values(analyzer: &mut Analyzer<'_>, state: &BodyState, await_expr: &HirExpr) {
+    let span = expr_span(await_expr).clone();
+    for resource in &state.resources {
+        await_live_value_diagnostic(analyzer, "resource", resource, &span);
+    }
+    for local in &state.locals {
+        if state
+            .value_type(local)
+            .is_some_and(|type_name| is_copy_type_name(type_name))
+        {
+            continue;
+        }
+        await_live_value_diagnostic(analyzer, "local value", local, &span);
+    }
+}
+
+fn await_live_value_diagnostic(analyzer: &mut Analyzer<'_>, kind: &str, name: &str, span: &Span) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::AWAIT_LIVE_LOCAL,
+            format!("{kind} `{name}` cannot live across `await`."),
+            span.clone(),
+            "value live across await",
+        )
+        .with_cause("Suspending an RSScript async frame may keep managed handles and Copy snapshots, but local values, resources, and runtime guards must not be retained across suspension.")
+        .with_fix("drop_before_await", format!("End the lifetime of `{name}` before this `await`."), "manual"),
+    );
+}
+
+fn expr_span(expr: &HirExpr) -> &Span {
+    match expr {
+        HirExpr::Ident { span, .. }
+        | HirExpr::Number { span, .. }
+        | HirExpr::String { span, .. }
+        | HirExpr::Binary { span, .. }
+        | HirExpr::Field { span, .. }
+        | HirExpr::Index { span, .. }
+        | HirExpr::Call { span, .. }
+        | HirExpr::Effect { span, .. }
+        | HirExpr::Manage { span, .. }
+        | HirExpr::Spawn { span, .. }
+        | HirExpr::Await { span, .. }
+        | HirExpr::Try { span, .. }
+        | HirExpr::Closure { span, .. }
+        | HirExpr::Unknown(span) => span,
     }
 }
 
