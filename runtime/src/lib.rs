@@ -3155,6 +3155,66 @@ mod tests {
     }
 
     #[test]
+    fn cancellable_pending_ignores_late_native_wake_after_timeout() {
+        struct LateNativePending {
+            ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
+            token: super::CancellationToken,
+            started: bool,
+        }
+
+        impl super::Pending<usize> for LateNativePending {
+            fn poll(&mut self, cx: &mut super::Context<'_>) -> super::AsyncPoll<usize> {
+                if self.token.is_cancelled() {
+                    return super::AsyncPoll::Pending;
+                }
+                if self.ready.load(std::sync::atomic::Ordering::SeqCst) {
+                    return super::AsyncPoll::Ready(7);
+                }
+                if !self.started {
+                    self.started = true;
+                    let ready = self.ready.clone();
+                    let wake = cx.wake_handle();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        ready.store(true, std::sync::atomic::Ordering::SeqCst);
+                        wake.wake();
+                    });
+                }
+                super::AsyncPoll::Pending
+            }
+        }
+
+        let ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut group = super::TaskGroup::new();
+        let cancellation = group.cancellation_token();
+        let pending_ready = ready.clone();
+        group.spawn_cancellable(|token| {
+            Box::new(LateNativePending {
+                ready: pending_ready,
+                token,
+                started: false,
+            })
+        });
+
+        let mut executor = super::Executor::new();
+        let outcome = group.join_until(
+            &mut executor,
+            std::time::Instant::now() + std::time::Duration::from_millis(1),
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        assert!(matches!(
+            outcome,
+            super::TaskGroupJoin::TimedOut {
+                completed,
+                pending: 1
+            } if completed == vec![None]
+        ));
+        assert!(cancellation.is_cancelled());
+        assert!(ready.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
     fn process_runtime_hook_captures_stdout_and_failure() {
         let args = vec!["--version".to_string()];
         let stdout = super::process_run_stdout("cargo", &args).expect("cargo should run");
