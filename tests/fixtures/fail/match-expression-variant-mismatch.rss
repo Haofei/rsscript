@@ -1,0 +1,13 @@
+// expect: RS0209
+
+fn maybe() -> Option<String> {
+    return Some("x")
+}
+
+fn pick() -> String {
+    let value = maybe()
+    return match value {
+        Ok(result) => { "ok" }
+        Err(error) => { read error }
+    }
+}

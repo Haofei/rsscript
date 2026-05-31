@@ -256,6 +256,12 @@ fn collect_expr_uses(expr: &HirExpr, uses: &mut HashSet<String>) {
         | HirExpr::Await { value, .. }
         | HirExpr::Try { value, .. } => collect_expr_uses(value, uses),
         HirExpr::Closure { body, .. } => collect_block_uses(body, uses),
+        HirExpr::Match { value, arms, .. } => {
+            collect_expr_uses(value, uses);
+            for arm in arms {
+                collect_block_uses(&arm.body, uses);
+            }
+        }
         HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
     }
 }
@@ -927,10 +933,85 @@ fn check_expr_semantics_with_context(
                 &HashSet::new(),
             );
         }
+        HirExpr::Match {
+            value,
+            arms,
+            type_name,
+            ..
+        } => {
+            check_match_scrutinee_type(analyzer, value);
+            check_match_patterns_match_scrutinee(analyzer, value, arms);
+            check_match_expression_arm_types(analyzer, arms, type_name.as_deref());
+            check_expr_semantics_with_context(
+                analyzer,
+                local_analysis,
+                value,
+                state,
+                false,
+                async_call_consumed,
+                live_after,
+            );
+            let base_state = state.clone();
+            for arm in arms {
+                let mut arm_state = base_state.clone();
+                check_block(
+                    analyzer,
+                    local_analysis,
+                    &arm.body,
+                    &mut arm_state,
+                    false,
+                    live_after,
+                );
+            }
+        }
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn check_match_expression_arm_types(
+    analyzer: &mut Analyzer<'_>,
+    arms: &[HirMatchArm],
+    expected_type: Option<&str>,
+) {
+    let Some(expected_type) = expected_type else {
+        return;
+    };
+    for arm in arms {
+        let Some(arm_type) = match_arm_value_type(&arm.body) else {
+            continue;
+        };
+        if arm_type == expected_type {
+            continue;
+        }
+        analyzer.diagnostics.push(
+            Diagnostic::error(
+                code::CONTROL_FLOW_TYPE_MISMATCH,
+                format!(
+                    "match arm has type `{arm_type}`, expected `{expected_type}` from the first produced arm."
+                ),
+                arm.span.clone(),
+                "match arm type mismatch",
+            )
+            .with_cause("A match expression must produce one compatible value type across every arm.")
+            .with_fix(
+                "align_match_arm_types",
+                "Return the same value type from every match expression arm.",
+                "manual",
+            ),
+        );
+    }
+}
+
+fn match_arm_value_type(block: &HirBlock) -> Option<&str> {
+    match block.statements.iter().next_back()? {
+        HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => hir_expr_type_name(value),
+        _ => None,
     }
 }
 
@@ -1034,6 +1115,12 @@ fn check_await_placement_expr(
             check_await_placement_expr(analyzer, value, function_is_async);
         }
         HirExpr::Closure { body, .. } => check_await_placement(analyzer, body, false),
+        HirExpr::Match { value, arms, .. } => {
+            check_await_placement_expr(analyzer, value, function_is_async);
+            for arm in arms {
+                check_await_placement(analyzer, &arm.body, function_is_async);
+            }
+        }
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -1135,6 +1222,7 @@ fn expr_span(expr: &HirExpr) -> &Span {
         | HirExpr::Await { span, .. }
         | HirExpr::Try { span, .. }
         | HirExpr::Closure { span, .. }
+        | HirExpr::Match { span, .. }
         | HirExpr::Unknown(span) => span,
     }
 }
@@ -1234,6 +1322,7 @@ fn expr_is_fresh_shell(expr: &HirExpr) -> bool {
         | HirExpr::Manage { .. }
         | HirExpr::Spawn { .. }
         | HirExpr::Await { .. }
+        | HirExpr::Match { .. }
         | HirExpr::Closure { .. }
         | HirExpr::Unknown(_) => false,
     }
@@ -1336,6 +1425,16 @@ fn weak_field_access_requiring_upgrade(expr: &HirExpr) -> Option<&crate::hir::Hi
             .statements
             .iter()
             .find_map(|statement| weak_field_access_requiring_upgrade_in_stmt(statement)),
+        HirExpr::Match { value, arms, .. } => {
+            weak_field_access_requiring_upgrade(value).or_else(|| {
+                arms.iter().find_map(|arm| {
+                    arm.body
+                        .statements
+                        .iter()
+                        .find_map(weak_field_access_requiring_upgrade_in_stmt)
+                })
+            })
+        }
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -1520,6 +1619,7 @@ fn constructor_arg_place_path(expr: &HirExpr) -> Option<PlacePath> {
         | HirExpr::Await { .. }
         | HirExpr::Call { .. }
         | HirExpr::Binary { .. }
+        | HirExpr::Match { .. }
         | HirExpr::Closure { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -1570,6 +1670,7 @@ fn constructor_arg_uses_managed_inline_value(
             CallResolution::EnumVariant | CallResolution::Unknown => false,
         },
         HirExpr::Binary { .. }
+        | HirExpr::Match { .. }
         | HirExpr::Closure { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -1715,6 +1816,14 @@ fn collect_spawn_capture_idents(expr: &HirExpr, captures: &mut Vec<(String, Span
         HirExpr::Closure { body, .. } => {
             for statement in &body.statements {
                 collect_spawn_capture_idents_from_stmt(statement, captures);
+            }
+        }
+        HirExpr::Match { value, arms, .. } => {
+            collect_spawn_capture_idents(value, captures);
+            for arm in arms {
+                for statement in &arm.body.statements {
+                    collect_spawn_capture_idents_from_stmt(statement, captures);
+                }
             }
         }
         HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
@@ -2012,6 +2121,12 @@ fn collect_closure_effect_accesses_expr(
             }
         }
         HirExpr::Closure { body, .. } => collect_closure_effect_accesses_block(body, bound, out),
+        HirExpr::Match { value, arms, .. } => {
+            collect_closure_effect_accesses_expr(value, bound, out);
+            for arm in arms {
+                collect_closure_effect_accesses_block(&arm.body, bound, out);
+            }
+        }
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -2062,6 +2177,7 @@ fn expr_moves_path(expr: &HirExpr) -> bool {
         HirExpr::Binary { left, right, .. } => expr_moves_path(left) || expr_moves_path(right),
         HirExpr::Call { args, .. } => args.iter().any(|arg| expr_moves_path(&arg.value)),
         HirExpr::Closure { .. }
+        | HirExpr::Match { .. }
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -2206,6 +2322,12 @@ fn check_try_error_types_expr(
         HirExpr::Closure { body, .. } => {
             check_try_error_types(analyzer, body, function_error_type);
         }
+        HirExpr::Match { value, arms, .. } => {
+            check_try_error_types_expr(analyzer, value, function_error_type);
+            for arm in arms {
+                check_try_error_types(analyzer, &arm.body, function_error_type);
+            }
+        }
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -2225,7 +2347,8 @@ fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
         | HirExpr::Manage { type_name, .. }
         | HirExpr::Spawn { type_name, .. }
         | HirExpr::Await { type_name, .. }
-        | HirExpr::Try { type_name, .. } => type_name.as_deref(),
+        | HirExpr::Try { type_name, .. }
+        | HirExpr::Match { type_name, .. } => type_name.as_deref(),
         HirExpr::Field { access, .. } => access.type_name.as_deref(),
         HirExpr::Number { .. } => Some("Int"),
         HirExpr::String { .. } => Some("String"),
@@ -2258,6 +2381,7 @@ fn hir_expr_span(expr: &HirExpr) -> &Span {
         | HirExpr::Await { span, .. }
         | HirExpr::Try { span, .. }
         | HirExpr::Closure { span, .. }
+        | HirExpr::Match { span, .. }
         | HirExpr::Unknown(span) => span,
     }
 }
@@ -2714,6 +2838,7 @@ fn apply_expr_effects(expr: &HirExpr, state: &mut BodyState) {
             apply_expr_effects(value, state)
         }
         HirExpr::Try { value, .. } => apply_expr_effects(value, state),
+        HirExpr::Match { value, .. } => apply_expr_effects(value, state),
         HirExpr::Binary { left, right, .. } => {
             apply_expr_effects(left, state);
             apply_expr_effects(right, state);
@@ -3061,6 +3186,14 @@ fn check_resource_pool_lease_expr(
                 check_resource_pool_lease_stmt(analyzer, statement);
             }
         }
+        HirExpr::Match { value, arms, .. } => {
+            check_resource_pool_lease_expr(analyzer, value, within_with_resource);
+            for arm in arms {
+                for statement in &arm.body.statements {
+                    check_resource_pool_lease_stmt(analyzer, statement);
+                }
+            }
+        }
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -3115,6 +3248,14 @@ fn check_resource_producer_expr(
         HirExpr::Closure { body, .. } => {
             for statement in &body.statements {
                 check_resource_producer_stmt(analyzer, statement);
+            }
+        }
+        HirExpr::Match { value, arms, .. } => {
+            check_resource_producer_expr(analyzer, value, allowed_resource_context);
+            for arm in arms {
+                for statement in &arm.body.statements {
+                    check_resource_producer_stmt(analyzer, statement);
+                }
             }
         }
         HirExpr::Ident { .. }
@@ -3525,6 +3666,17 @@ fn collect_resource_pool_factory_resource_captures_expr(
                 captures,
             );
         }
+        HirExpr::Match { value, arms, .. } => {
+            collect_resource_pool_factory_resource_captures_expr(value, state, bound, captures);
+            for arm in arms {
+                collect_resource_pool_factory_resource_captures_block(
+                    &arm.body,
+                    state,
+                    &mut bound.clone(),
+                    captures,
+                );
+            }
+        }
         HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
     }
 }
@@ -3576,6 +3728,7 @@ fn resource_pool_fallible_factory_expr(expr: &HirExpr) -> Option<&HirExpr> {
         | HirExpr::Spawn { value, .. }
         | HirExpr::Await { value, .. } => resource_pool_fallible_factory_expr(value),
         HirExpr::Try { .. }
+        | HirExpr::Match { .. }
         | HirExpr::Call { .. }
         | HirExpr::Field { .. }
         | HirExpr::Index { .. }
@@ -3944,6 +4097,12 @@ fn check_resource_pool_active_lease_expr(
         }
         HirExpr::Closure { body, .. } => {
             check_resource_pool_active_lease_block(analyzer, active_pool, body);
+        }
+        HirExpr::Match { value, arms, .. } => {
+            check_resource_pool_active_lease_expr(analyzer, active_pool, value);
+            for arm in arms {
+                check_resource_pool_active_lease_block(analyzer, active_pool, &arm.body);
+            }
         }
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }

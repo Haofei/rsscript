@@ -38,3 +38,31 @@ pub fn Map.for_each<K, V>(
     map: read Map<K, V>,
     callback: noescape Fn(K, V) -> Unit,
 ) -> Unit
+
+pub fn Map.map_values<K, V, U>(
+    map: read Map<K, V>,
+    mapper: noescape Fn(V) -> U,
+) -> fresh Map<K, U>
+
+pub fn Map.filter<K, V>(
+    map: read Map<K, V>,
+    predicate: noescape Fn(K, V) -> Bool,
+) -> fresh Map<K, V>
+
+pub fn Map.try_fold<K, V, U: Struct, E>(
+    map: read Map<K, V>,
+    initial: read U,
+    folder: noescape Fn(U, K, V) -> Result<fresh U, E>,
+) -> Result<fresh U, E>
+
+pub fn Map.fold<K, V, U: Struct>(
+    map: read Map<K, V>,
+    initial: read U,
+    folder: noescape Fn(U, K, V) -> fresh U,
+) -> fresh U
+
+pub fn Map.merge<K, V>(
+    left: read Map<K, V>,
+    right: read Map<K, V>,
+    resolver: noescape Fn(V, V) -> V,
+) -> fresh Map<K, V>

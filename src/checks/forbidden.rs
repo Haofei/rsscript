@@ -240,6 +240,12 @@ fn check_operator_overload_attempts_in_expr(analyzer: &mut Analyzer<'_>, expr: &
         | HirExpr::Await { value, .. }
         | HirExpr::Try { value, .. } => check_operator_overload_attempts_in_expr(analyzer, value),
         HirExpr::Closure { body, .. } => check_operator_overload_attempts_in_block(analyzer, body),
+        HirExpr::Match { value, arms, .. } => {
+            check_operator_overload_attempts_in_expr(analyzer, value);
+            for arm in arms {
+                check_operator_overload_attempts_in_block(analyzer, &arm.body);
+            }
+        }
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -387,7 +393,8 @@ fn inferred_operand_type<'a>(analyzer: &'a Analyzer<'_>, expr: &'a HirExpr) -> O
         | HirExpr::Manage { type_name, .. }
         | HirExpr::Spawn { type_name, .. }
         | HirExpr::Await { type_name, .. }
-        | HirExpr::Try { type_name, .. } => type_name.as_deref(),
+        | HirExpr::Try { type_name, .. }
+        | HirExpr::Match { type_name, .. } => type_name.as_deref(),
         HirExpr::Field { access, .. } => access.type_name.as_deref(),
         HirExpr::Binary { .. }
         | HirExpr::Index { .. }

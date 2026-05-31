@@ -1,0 +1,37 @@
+features: local
+
+sum Direction {
+    North
+    South
+    East
+    West
+}
+
+sum Shape {
+    Circle(radius: Int)
+    Rectangle(width: Int, height: Int)
+}
+
+fn direction_name(d: read Direction) -> String {
+    let name = match d {
+        North => { "north" }
+        South => { "south" }
+        East => { "east" }
+        West => { "west" }
+    }
+    return name
+}
+
+fn area(s: read Shape) -> Int {
+    let result = match s {
+        Circle(r) => { read r }
+        Rectangle(w) => { read w }
+    }
+    return result
+}
+
+fn main() -> Unit {
+    let d = North
+    let name = direction_name(d: read d)
+    Log.write(message: read name)
+}

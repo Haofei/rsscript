@@ -1066,6 +1066,32 @@ fn collect_await_sites_from_expr(
             context,
             sites,
         ),
+        Expr::Match { value, arms, .. } => {
+            let mut value_live_after = live_after.clone();
+            for arm in arms {
+                collect_block_uses(&arm.body, &mut value_live_after);
+            }
+            collect_await_sites_from_expr(
+                function,
+                value,
+                &value_live_after,
+                scoped_live,
+                pending_callees,
+                context,
+                sites,
+            );
+            for arm in arms {
+                collect_await_sites_from_block(
+                    function,
+                    &arm.body,
+                    live_after,
+                    scoped_live,
+                    pending_callees,
+                    context,
+                    sites,
+                );
+            }
+        }
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
     }
 }
@@ -1193,6 +1219,12 @@ fn collect_expr_uses(expr: &Expr, uses: &mut BTreeSet<String>) {
         | Expr::Await { value, .. }
         | Expr::Try { value, .. } => collect_expr_uses(value, uses),
         Expr::Closure { body, .. } => collect_block_uses(body, uses),
+        Expr::Match { value, arms, .. } => {
+            collect_expr_uses(value, uses);
+            for arm in arms {
+                collect_block_uses(&arm.body, uses);
+            }
+        }
         Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
     }
 }

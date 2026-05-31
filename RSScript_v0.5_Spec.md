@@ -747,6 +747,46 @@ Arm rules:
   match exit by the conservative branch join below.
 ```
 
+### `match` (expression form)
+
+```text
+let result = match <value> { <arm> => { <expr> } ... }
+```
+
+A `match` may also appear in expression position. The same exhaustiveness,
+variant-family, and payload-binding rules from the statement form apply. Each arm
+body is a block whose last expression is the arm's produced value. All arms must
+produce values of a compatible type.
+
+```rust
+sum Direction { North South East West }
+
+fn direction_name(d: read Direction) -> String {
+    let name = match d {
+        North => { "north" }
+        South => { "south" }
+        East => { "east" }
+        West => { "west" }
+    }
+    return name
+}
+```
+
+Match expressions compose with `let` bindings, function arguments, and `return`:
+
+```rust
+fn classify(result: read Result<Int, String>) -> String {
+    return match result {
+        Ok(value) => { "success" }
+        Err(msg) => { read msg }
+    }
+}
+```
+
+Review metadata treats a match expression identically to a match statement: each
+arm is a branch, the join is conservative, and exhaustiveness is checked before
+lowering.
+
 A payload binding has no `read`/`mut`/`take` syntax of its own, so its mode is
 fixed by the **scrutinee's** materialization mode:
 
@@ -3363,6 +3403,46 @@ pub fn List.try_fold<T, U: Struct, E>(
 ) -> Result<fresh U, E>
 ```
 
+The extended `List<T>` core surface includes additional noescape collection
+pipeline operations for data transformation, subsetting, and aggregation:
+
+```rust
+pub fn List.sort_by<T>(
+    list: read List<T>,
+    compare: noescape Fn(T, T) -> Int,
+) -> fresh List<T>
+
+pub fn List.group_by<T>(
+    list: read List<T>,
+    key_fn: noescape Fn(T) -> String,
+) -> fresh Map<String, List<T>>
+
+pub fn List.partition<T>(
+    list: read List<T>,
+    predicate: noescape Fn(T) -> Bool,
+) -> fresh List<List<T>>
+
+pub fn List.flat_map<T, U>(
+    list: read List<T>,
+    mapper: noescape Fn(T) -> List<U>,
+) -> fresh List<U>
+
+pub fn List.take<T>(list: read List<T>, count: Int) -> fresh List<T>
+
+pub fn List.skip<T>(list: read List<T>, count: Int) -> fresh List<T>
+
+pub fn List.first<T>(list: read List<T>) -> Option<T>
+
+pub fn List.last<T>(list: read List<T>) -> Option<T>
+
+pub fn List.join<T>(list: read List<T>, separator: read String) -> fresh String
+```
+
+All List operations use `noescape` closures: captured values cannot be retained,
+control flow is bounded, and effects are statically computed. This covers
+application-level data processing without introducing Rust's iterator trait
+complexity.
+
 The minimum `String` core surface includes pure current-value inspection helpers
 needed by review tooling and self-hosted package validation:
 
@@ -3520,6 +3600,38 @@ pub fn Map.insert<K, V>(map: mut Map<K, V>, key: read K, value: read V) -> Unit
 pub fn Map.remove<K, V>(map: mut Map<K, V>, key: read K) -> Option<V>
 
 pub fn Map.clear<K, V>(map: mut Map<K, V>) -> Unit
+```
+
+The extended `Map<K,V>` core surface includes transformation, filtering, and
+aggregation operations:
+
+```rust
+pub fn Map.map_values<K, V, U>(
+    map: read Map<K, V>,
+    mapper: noescape Fn(V) -> U,
+) -> fresh Map<K, U>
+
+pub fn Map.filter<K, V>(
+    map: read Map<K, V>,
+    predicate: noescape Fn(K, V) -> Bool,
+) -> fresh Map<K, V>
+
+pub fn Map.try_fold<K, V, U: Struct, E>(
+    map: read Map<K, V>,
+    initial: read U,
+    folder: noescape Fn(U, K, V) -> Result<fresh U, E>,
+) -> Result<fresh U, E>
+
+pub fn Map.fold<K, V, U: Struct>(
+    map: read Map<K, V>,
+    initial: read U,
+    folder: noescape Fn(U, K, V) -> fresh U,
+) -> fresh U
+
+pub fn Map.merge<K, V>(
+    base: read Map<K, V>,
+    other: read Map<K, V>,
+) -> fresh Map<K, V>
 
 struct Set<T>
 
@@ -3538,6 +3650,57 @@ pub fn Set.remove<T>(set: mut Set<T>, value: read T) -> Bool
 
 pub fn Set.clear<T>(set: mut Set<T>) -> Unit
 ```
+
+The core `Result<T, E>` surface includes explicit error composition and chaining
+operations. These replace implicit `From<E1> for E2` conversions found in other
+languages, keeping error-boundary changes visible to reviewers:
+
+```rust
+pub fn Result.map_error<T, E, F>(
+    result: read Result<T, E>,
+    mapper: noescape Fn(E) -> F,
+) -> fresh Result<T, F>
+
+pub fn Result.and_then<T, U, E>(
+    result: read Result<T, E>,
+    mapper: noescape Fn(T) -> Result<U, E>,
+) -> fresh Result<U, E>
+
+pub fn Result.map<T, U, E>(
+    result: read Result<T, E>,
+    mapper: noescape Fn(T) -> U,
+) -> fresh Result<U, E>
+```
+
+The core `Option<T>` surface includes transformation, chaining, and conversion
+to `Result`:
+
+```rust
+pub fn Option.map<T, U>(
+    option: read Option<T>,
+    mapper: noescape Fn(T) -> U,
+) -> fresh Option<U>
+
+pub fn Option.and_then<T, U>(
+    option: read Option<T>,
+    mapper: noescape Fn(T) -> Option<U>,
+) -> fresh Option<U>
+
+pub fn Option.ok_or<T, E>(
+    option: read Option<T>,
+    error: read E,
+) -> fresh Result<T, E>
+
+pub fn Option.unwrap_or_else<T>(
+    option: read Option<T>,
+    default_fn: noescape Fn() -> T,
+) -> T
+```
+
+Error composition in RSScript is always explicit at the call site. Unlike Rust's
+`From`/`Into` implicit conversions, every error-boundary crossing requires a
+visible `map_error` call that a reviewer can audit. The `?` operator propagates
+errors within the same error type; crossing error types requires explicit mapping.
 
 Agent, GPU, model-client, and domain-specific network clients are use-case
 libraries, not language core. The bundled HTTP surface is intentionally only a
@@ -3789,11 +3952,14 @@ D. Structured-fix tooling and analysis server
      serving both human editors and AI repair agents as first-class consumers.
 
 E. Sum type hardening
-   - v0.5 has closed RSScript `sum` declarations with exhaustive match checking.
-   - future work should harden package/interface contract metadata for sum
-     variants and avoid Rust enum machinery such as lifetimes, representation
-     attributes, or open extension.
+   - v0.5 has closed RSScript `sum` declarations with exhaustive match checking,
+     including match expressions in expression position.
+   - future work: named payload fields in variants (`Authorized(id: String)`),
+     package/interface contract metadata for sum variants, and semantic diff
+     showing "variant added/removed".
    - exhaustiveness remains a review property checked before lowering.
+   - not adopted: Rust enum repr attributes, lifetime payloads, open extension,
+     implicit variant coercion.
 
 F. Registry-level review-risk badges
    - the package registry should surface review-risk signals as first-class
@@ -3805,6 +3971,103 @@ F. Registry-level review-risk badges
      selected feature sets, and default graph footprint. The language spec does
      not define registry scoring beyond requiring those signals to derive from
      compiler/package review evidence.
+
+G. Capability objects (explicit dynamic dispatch)
+   - RSScript does not adopt Rust-style `dyn Trait` with vtable coercion.
+   - if dynamic dispatch is needed, it must use an explicit capability-bounded
+     form that is visible to review:
+
+       fn serve(store: read capability Store<Image>) -> Result<Unit, Error>
+
+   - the review map must flag capability boundaries: the concrete implementation
+     is unknown or specified by package contract, not inferred at compile time.
+   - capability objects carry effect declarations (read/mut/take, retains, native)
+     from their protocol; no silent widening of capability is permitted.
+   - not adopted: implicit dyn coercion, object safety rules as user-facing
+     errors, fat-pointer vtable layout details in source.
+
+H. Stream<T> and await-for (async sequences)
+   - extends the async MVP with a pull-based async sequence type:
+
+       async fn lines(file: read File) -> Stream<String>
+
+       await for line in lines(file: read file) {
+           Process.println(message: read line)
+       }
+
+   - streams must be isolate-local; read/mut guards cannot span await points.
+   - channel-based streams (multi-producer) are a separate construct from
+     generator-style streams (single-producer).
+   - not adopted: Rust's `AsyncIterator`/`Poll`-based streaming, pinned streams,
+     or `Stream` combinators that hide allocation.
+
+I. Scoped views and slices (zero-copy borrowed regions)
+   - for high-performance parsing, HTTP buffers, and binary protocols, RSScript
+     needs a "borrowed view" that avoids full-copy semantics:
+
+       with Buffer.view(buffer: read buffer, range: read range) as bytes {
+           Parser.parse(input: read bytes)?
+       }
+
+   - views cannot be retained, cannot escape their lexical scope, cannot cross
+     await points, and cannot enter managed object graphs.
+   - this provides Rust slice performance without Rust lifetime annotation
+     surface. The scope block replaces lifetime parameters.
+   - alternative form for let-binding with region scope:
+
+       view bytes = Buffer.view(buffer: read buffer, range: read range)
+
+     where the view's scope ends at the enclosing block.
+   - not adopted: general lifetime annotations, lifetime elision rules,
+     self-referential structs, or Pin/Unpin for views.
+
+J. Noescape collection pipeline (design principle — v0.5 implemented)
+   - collection operations (List.map, List.filter, Map.fold, etc.) use noescape
+     closures by contract: captured values cannot be retained, control flow is
+     bounded, and effect side-channels are statically computable.
+   - future extensions (List.group_by, List.sort_by, Map.map_values, etc.) must
+     maintain this contract. No Rust-style iterator trait system or open
+     Iterator impl is introduced.
+   - not adopted: lazy iterators, iterator adaptors with hidden state,
+     custom Iterator protocol for user types, or open-ended trait composition.
+
+K. Explicit error composition (design principle — v0.5 implemented)
+   - error mapping across type boundaries uses explicit Result.map_error at
+     each crossing, keeping error-boundary changes visible to review.
+   - the `?` operator propagates within a single error type; crossing error
+     families requires a visible map_error or match.
+   - not adopted: implicit From<E1> for E2 conversion, blanket From impls,
+     anyhow/eyre-style erased errors (these hide error provenance from review).
+
+L. Compiler-owned derives (restricted code generation)
+   - RSScript may support a limited set of compiler-owned derive directives:
+
+       derive JsonDecode for Config
+       derive ReviewSchema for PackageMetadata
+
+   - generated code must produce visible .rssi signatures and review facts.
+   - generated code must not introduce hidden control flow, mutation, or
+     resource acquisition.
+   - not adopted: user-defined proc macros, attribute macros, macro_rules,
+     build-time code generation that is not auditable, or derive that can
+     suppress review facts.
+
+M. Module visibility and re-export hardening
+   - modules and visibility are already part of v0.5 (.rssi files, pub markers).
+   - future work: semantic diff for public API changes (added/removed/modified),
+     re-export chains tracked in review metadata, and package contract validation
+     that public surface matches declared .rssi.
+   - not adopted: Rust-style glob re-exports (pub use *), nested visibility
+     levels (pub(crate)), or conditional compilation affecting public surface.
+
+N. Native boundary and ABI adapter contracts
+   - RSScript already declares native functions in .rssi with explicit unsafe and
+     native markers.
+   - future work: structured native adapter protocol (Rust adapter crate per
+     native dependency), tooling checks that bindings exist and match declared
+     contracts, dependency updates as review events with semantic diff.
+   - not adopted: general FFI, C header parsing, automatic binding generation
+     without audit, or direct pointer manipulation in RSScript source.
 ```
 
 Explicitly rejected influences. The following Dart-style conveniences conflict

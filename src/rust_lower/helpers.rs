@@ -205,6 +205,12 @@ fn validate_executable_declarations_in_expr(
         Expr::Closure { body, .. } => {
             validate_executable_declarations_in_block(body, context, diagnostics);
         }
+        Expr::Match { value, arms, .. } => {
+            validate_executable_declarations_in_expr(value, context, diagnostics);
+            for arm in arms {
+                validate_executable_declarations_in_block(&arm.body, context, diagnostics);
+            }
+        }
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
     }
 }
@@ -500,6 +506,9 @@ pub(super) fn expr_has_await(expr: &Expr) -> bool {
         | Expr::Spawn { value, .. }
         | Expr::Try { value, .. } => expr_has_await(value),
         Expr::Closure { body, .. } => block_has_await(body),
+        Expr::Match { value, arms, .. } => {
+            expr_has_await(value) || arms.iter().any(|arm| block_has_await(&arm.body))
+        }
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => false,
     }
 }
@@ -606,6 +615,12 @@ pub(super) fn collect_mutated_bindings_from_expr(expr: &Expr, names: &mut BTreeS
             collect_mutated_bindings_from_expr(value, names);
         }
         Expr::Closure { body, .. } => collect_mutated_bindings_from_block(body, names),
+        Expr::Match { value, arms, .. } => {
+            collect_mutated_bindings_from_expr(value, names);
+            for arm in arms {
+                collect_mutated_bindings_from_block(&arm.body, names);
+            }
+        }
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
     }
 }
@@ -762,6 +777,12 @@ pub(super) fn closure_expr_mutates_unbound_name(expr: &Expr, bound: &BTreeSet<St
         | Expr::Await { value, .. }
         | Expr::Try { value, .. } => closure_expr_mutates_unbound_name(value, bound),
         Expr::Closure { body, .. } => closure_block_mutates_unbound_name(body, bound),
+        Expr::Match { value, arms, .. } => {
+            closure_expr_mutates_unbound_name(value, bound)
+                || arms
+                    .iter()
+                    .any(|arm| closure_block_mutates_unbound_name(&arm.body, bound))
+        }
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => false,
     }
 }

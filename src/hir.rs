@@ -329,6 +329,12 @@ pub enum HirExpr {
         body: HirBlock,
         span: Span,
     },
+    Match {
+        value: Box<HirExpr>,
+        arms: Vec<HirMatchArm>,
+        type_name: Option<String>,
+        span: Span,
+    },
     Unknown(Span),
 }
 
@@ -1225,6 +1231,36 @@ fn lower_hir_expr(
                 span: span.clone(),
             }
         }
+        Expr::Match { value, arms, span } => {
+            let value_type = infer_hir_expr_type(hir, value, value_types);
+            let lowered_value = lower_hir_expr(hir, function_name, value, value_types);
+            let mut match_type = None;
+            let lowered_arms = arms
+                .iter()
+                .map(|arm| {
+                    let mut arm_types = value_types.clone();
+                    if let Some((binding, type_name)) =
+                        match_pattern_binding_type(&arm.pattern, value_type.as_deref())
+                    {
+                        arm_types.insert(binding, type_name);
+                    }
+                    if match_type.is_none() {
+                        match_type = infer_closure_return_type(hir, &arm.body, &arm_types);
+                    }
+                    HirMatchArm {
+                        pattern: arm.pattern.clone(),
+                        body: lower_hir_block(hir, function_name, &arm.body, &mut arm_types),
+                        span: arm.span.clone(),
+                    }
+                })
+                .collect();
+            HirExpr::Match {
+                value: Box::new(lowered_value),
+                arms: lowered_arms,
+                type_name: match_type,
+                span: span.clone(),
+            }
+        }
         Expr::Unknown(span) => HirExpr::Unknown(span.clone()),
     }
 }
@@ -1648,6 +1684,12 @@ fn collect_body_facts_in_expr(
         Expr::Closure { body, .. } => {
             collect_body_facts_in_block(hir, function_name, body, value_types, facts);
         }
+        Expr::Match { value, arms, .. } => {
+            collect_body_facts_in_expr(hir, function_name, value, value_types, facts);
+            for arm in arms {
+                collect_body_facts_in_block(hir, function_name, &arm.body, value_types, facts);
+            }
+        }
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
     }
 }
@@ -1745,6 +1787,9 @@ fn infer_hir_expr_type(
         Expr::Try { value, .. } => {
             infer_hir_expr_type(hir, value, value_types).and_then(|ty| result_ok_type(&ty))
         }
+        Expr::Match { arms, .. } => arms
+            .first()
+            .and_then(|arm| infer_closure_return_type(hir, &arm.body, value_types)),
         Expr::Call { callee, args, .. } => {
             let resolution = match callee {
                 Callee::ReceiverCall {
@@ -1968,6 +2013,7 @@ fn infer_arg_expr_type(
                     .join(", ");
                 format!("noescape Fn({params}) -> {return_type}")
             }),
+        Expr::Match { .. } => infer_hir_expr_type(hir, expr, value_types),
         Expr::Field { .. }
         | Expr::Index { .. }
         | Expr::Binary { .. }
@@ -2189,6 +2235,36 @@ fn split_top_level_type_args(args: &str) -> Vec<&str> {
     parts
 }
 
+fn classify_block_return_expr(hir: &Hir, block: &Block) -> HirReturnProof {
+    let Some(statement) = block.statements.iter().next_back() else {
+        return HirReturnProof::NoValue;
+    };
+    match statement {
+        Stmt::Return(stmt) => stmt
+            .value
+            .as_ref()
+            .map_or(HirReturnProof::NoValue, |value| {
+                classify_return_expr(hir, value)
+            }),
+        Stmt::Expr(value) => classify_return_expr(hir, value),
+        Stmt::Let(_) | Stmt::LetElse(_) => HirReturnProof::NoValue,
+        Stmt::With { .. }
+        | Stmt::If { .. }
+        | Stmt::Loop { .. }
+        | Stmt::For(_)
+        | Stmt::TaskGroup(_)
+        | Stmt::Match { .. }
+        | Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::MalformedWith(_)
+        | Stmt::MalformedIf(_)
+        | Stmt::MalformedLoop(_)
+        | Stmt::MalformedFor(_)
+        | Stmt::MalformedMatch(_)
+        | Stmt::Unknown(_) => HirReturnProof::Unknown,
+    }
+}
+
 fn classify_return_expr(hir: &Hir, expr: &Expr) -> HirReturnProof {
     match expr {
         Expr::Ident(name, _) => HirReturnProof::Ident { name: name.clone() },
@@ -2229,6 +2305,9 @@ fn classify_return_expr(hir: &Hir, expr: &Expr) -> HirReturnProof {
         | Expr::Spawn { value, .. }
         | Expr::Await { value, .. }
         | Expr::Try { value, .. } => classify_return_expr(hir, value),
+        Expr::Match { arms, .. } => arms.first().map_or(HirReturnProof::Unknown, |arm| {
+            classify_block_return_expr(hir, &arm.body)
+        }),
         Expr::Field { .. }
         | Expr::Index { .. }
         | Expr::Binary { .. }

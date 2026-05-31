@@ -498,6 +498,12 @@ fn check_expr(
             // checked at their call/parameter boundary.
             check_expr_block_without_return_contract(analyzer, function, body, context)
         }
+        HirExpr::Match { value, arms, .. } => {
+            check_expr(analyzer, function, value, context);
+            for arm in arms {
+                check_expr_block_without_return_contract(analyzer, function, &arm.body, context);
+            }
+        }
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -2080,6 +2086,7 @@ fn callback_expr_is_fresh_value(
         HirExpr::Manage { .. }
         | HirExpr::Spawn { .. }
         | HirExpr::Await { .. }
+        | HirExpr::Match { .. }
         | HirExpr::Field { .. }
         | HirExpr::Index { .. }
         | HirExpr::Binary { .. }
@@ -2104,6 +2111,7 @@ fn fresh_return_ident(expr: &HirExpr) -> Option<&str> {
         | HirExpr::Index { .. }
         | HirExpr::Call { .. }
         | HirExpr::Binary { .. }
+        | HirExpr::Match { .. }
         | HirExpr::Closure { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -2183,6 +2191,12 @@ fn check_callback_call_argument_types(
         HirExpr::Index { base, index, .. } => {
             check_callback_call_argument_types(analyzer, base, contract);
             check_callback_call_argument_types(analyzer, index, contract);
+        }
+        HirExpr::Match { value, arms, .. } => {
+            check_callback_call_argument_types(analyzer, value, contract);
+            for arm in arms {
+                check_callback_body_call_argument_types(analyzer, &arm.body, contract);
+            }
         }
         HirExpr::Closure { .. }
         | HirExpr::Ident { .. }
@@ -2264,6 +2278,12 @@ fn callback_retained_local_use(
             .or_else(|| callback_retained_local_use(right, contract)),
         HirExpr::Index { base, index, .. } => callback_retained_local_use(base, contract)
             .or_else(|| callback_retained_local_use(index, contract)),
+        HirExpr::Match { value, arms, .. } => {
+            callback_retained_local_use(value, contract).or_else(|| {
+                arms.iter()
+                    .find_map(|arm| callback_retained_local_use_in_block(&arm.body, contract))
+            })
+        }
         HirExpr::Manage { .. }
         | HirExpr::Spawn { .. }
         | HirExpr::Await { .. }
@@ -2274,6 +2294,55 @@ fn callback_retained_local_use(
         | HirExpr::Unknown(_)
         | HirExpr::Ident { .. } => None,
     }
+}
+
+fn callback_retained_local_use_in_block(
+    body: &HirBlock,
+    contract: &CallbackContract<'_>,
+) -> Option<(String, Span)> {
+    body.statements
+        .iter()
+        .find_map(|statement| match statement {
+            HirStmt::Let {
+                value: Some(value), ..
+            }
+            | HirStmt::Return {
+                value: Some(value), ..
+            }
+            | HirStmt::Expr(value) => callback_retained_local_use(value, contract),
+            HirStmt::With { resource, body, .. } => callback_retained_local_use(resource, contract)
+                .or_else(|| callback_retained_local_use_in_block(body, contract)),
+            HirStmt::If {
+                condition,
+                then_body,
+                else_body,
+                ..
+            } => callback_retained_local_use(condition, contract)
+                .or_else(|| callback_retained_local_use_in_block(then_body, contract))
+                .or_else(|| {
+                    else_body
+                        .as_ref()
+                        .and_then(|body| callback_retained_local_use_in_block(body, contract))
+                }),
+            HirStmt::Loop {
+                condition, body, ..
+            } => condition
+                .as_ref()
+                .and_then(|condition| callback_retained_local_use(condition, contract))
+                .or_else(|| callback_retained_local_use_in_block(body, contract)),
+            HirStmt::For { iterable, body, .. } => callback_retained_local_use(iterable, contract)
+                .or_else(|| callback_retained_local_use_in_block(body, contract)),
+            HirStmt::Match { value, arms, .. } => callback_retained_local_use(value, contract)
+                .or_else(|| {
+                    arms.iter()
+                        .find_map(|arm| callback_retained_local_use_in_block(&arm.body, contract))
+                }),
+            HirStmt::Let { value: None, .. }
+            | HirStmt::Return { value: None, .. }
+            | HirStmt::Break(_)
+            | HirStmt::Continue(_)
+            | HirStmt::Unknown(_) => None,
+        })
 }
 
 fn check_callback_operator_operand_types(
@@ -2359,11 +2428,76 @@ fn check_callback_operator_operand_types(
             check_callback_operator_operand_types(analyzer, base, contract);
             check_callback_operator_operand_types(analyzer, index, contract);
         }
+        HirExpr::Match { value, arms, .. } => {
+            check_callback_operator_operand_types(analyzer, value, contract);
+            for arm in arms {
+                check_callback_body_operator_operand_types(analyzer, &arm.body, contract);
+            }
+        }
         HirExpr::Closure { .. }
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn check_callback_body_operator_operand_types(
+    analyzer: &mut Analyzer<'_>,
+    body: &HirBlock,
+    contract: &CallbackContract<'_>,
+) {
+    for statement in &body.statements {
+        match statement {
+            HirStmt::Let {
+                value: Some(value), ..
+            }
+            | HirStmt::Return {
+                value: Some(value), ..
+            }
+            | HirStmt::Expr(value) => {
+                check_callback_operator_operand_types(analyzer, value, contract)
+            }
+            HirStmt::With { resource, body, .. } => {
+                check_callback_operator_operand_types(analyzer, resource, contract);
+                check_callback_body_operator_operand_types(analyzer, body, contract);
+            }
+            HirStmt::If {
+                condition,
+                then_body,
+                else_body,
+                ..
+            } => {
+                check_callback_operator_operand_types(analyzer, condition, contract);
+                check_callback_body_operator_operand_types(analyzer, then_body, contract);
+                if let Some(else_body) = else_body {
+                    check_callback_body_operator_operand_types(analyzer, else_body, contract);
+                }
+            }
+            HirStmt::Loop {
+                condition, body, ..
+            } => {
+                if let Some(condition) = condition {
+                    check_callback_operator_operand_types(analyzer, condition, contract);
+                }
+                check_callback_body_operator_operand_types(analyzer, body, contract);
+            }
+            HirStmt::For { iterable, body, .. } => {
+                check_callback_operator_operand_types(analyzer, iterable, contract);
+                check_callback_body_operator_operand_types(analyzer, body, contract);
+            }
+            HirStmt::Match { value, arms, .. } => {
+                check_callback_operator_operand_types(analyzer, value, contract);
+                for arm in arms {
+                    check_callback_body_operator_operand_types(analyzer, &arm.body, contract);
+                }
+            }
+            HirStmt::Let { value: None, .. }
+            | HirStmt::Return { value: None, .. }
+            | HirStmt::Break(_)
+            | HirStmt::Continue(_)
+            | HirStmt::Unknown(_) => {}
+        }
     }
 }
 
@@ -2900,6 +3034,15 @@ fn local_closure_escape_use<'a>(
             }
             None
         }
+        HirExpr::Match { value, arms, .. } => {
+            local_closure_escape_use(value, local_closure_bindings).or_else(|| {
+                arms.iter().find_map(|arm| {
+                    arm.body.statements.iter().find_map(|statement| {
+                        local_closure_any_use_in_stmt(statement, local_closure_bindings)
+                    })
+                })
+            })
+        }
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -2981,6 +3124,14 @@ fn noescape_escape_use<'a>(
             }
             None
         }
+        HirExpr::Match { value, arms, .. } => noescape_escape_use(value, noescape_bindings)
+            .or_else(|| {
+                arms.iter().find_map(|arm| {
+                    arm.body.statements.iter().find_map(|statement| {
+                        noescape_any_use_in_stmt(statement, noescape_bindings)
+                    })
+                })
+            }),
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -3091,6 +3242,15 @@ fn noescape_any_use<'a>(
             .statements
             .iter()
             .find_map(|statement| noescape_any_use_in_stmt(statement, noescape_bindings)),
+        HirExpr::Match { value, arms, .. } => {
+            noescape_any_use(value, noescape_bindings).or_else(|| {
+                arms.iter().find_map(|arm| {
+                    arm.body.statements.iter().find_map(|statement| {
+                        noescape_any_use_in_stmt(statement, noescape_bindings)
+                    })
+                })
+            })
+        }
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -3201,6 +3361,14 @@ fn local_closure_any_use<'a>(
             .statements
             .iter()
             .find_map(|statement| local_closure_any_use_in_stmt(statement, local_closure_bindings)),
+        HirExpr::Match { value, arms, .. } => local_closure_any_use(value, local_closure_bindings)
+            .or_else(|| {
+                arms.iter().find_map(|arm| {
+                    arm.body.statements.iter().find_map(|statement| {
+                        local_closure_any_use_in_stmt(statement, local_closure_bindings)
+                    })
+                })
+            }),
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -3427,6 +3595,7 @@ fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
         HirExpr::Binary { .. }
         | HirExpr::Index { .. }
         | HirExpr::Closure { .. }
+        | HirExpr::Match { .. }
         | HirExpr::Unknown(_) => None,
     }
 }
@@ -3611,6 +3780,7 @@ fn hir_expr_span(expr: &HirExpr) -> &Span {
         | HirExpr::Await { span, .. }
         | HirExpr::Try { span, .. }
         | HirExpr::Closure { span, .. }
+        | HirExpr::Match { span, .. }
         | HirExpr::Unknown(span) => span,
     }
 }

@@ -72,3 +72,40 @@ pub fn List.sort<T>(
     list: mut List<T>,
     compare: noescape Fn(T, T) -> Int,
 ) -> Unit
+
+pub fn List.sort_by<T, K>(
+    list: read List<T>,
+    key: noescape Fn(T) -> K,
+    compare: noescape Fn(K, K) -> Int,
+) -> fresh List<T>
+
+pub fn List.group_by<T, K>(
+    list: read List<T>,
+    key: noescape Fn(T) -> K,
+) -> fresh Map<K, List<T>>
+
+pub fn List.partition<T>(
+    list: read List<T>,
+    predicate: noescape Fn(T) -> Bool,
+) -> fresh List<List<T>>
+
+pub fn List.flat_map<T, U>(
+    list: read List<T>,
+    mapper: noescape Fn(T) -> List<U>,
+) -> fresh List<U>
+
+pub fn List.take<T>(
+    list: read List<T>,
+    count: Int,
+) -> fresh List<T>
+
+pub fn List.skip<T>(
+    list: read List<T>,
+    count: Int,
+) -> fresh List<T>
+
+pub fn List.first<T>(list: read List<T>) -> Option<T>
+
+pub fn List.last<T>(list: read List<T>) -> Option<T>
+
+pub fn List.join(list: read List<String>, separator: read String) -> fresh String

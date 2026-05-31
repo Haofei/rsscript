@@ -539,6 +539,28 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
+    fn lower_expr_block(&mut self, block: &Block, indent: usize) -> String {
+        let pad = "    ".repeat(indent);
+        let mut out = String::new();
+        out.push_str("{\n");
+        for (index, statement) in block.statements.iter().enumerate() {
+            if index + 1 == block.statements.len()
+                && let Stmt::Expr(expr) = statement
+            {
+                out.push_str(&format!(
+                    "{}{}\n",
+                    "    ".repeat(indent + 1),
+                    self.lower_expr(expr)
+                ));
+                out.push_str(&format!("{pad}}}"));
+                return out;
+            }
+            self.lower_stmt(statement, &mut out, indent + 1);
+        }
+        out.push_str(&format!("{pad}}}"));
+        out
+    }
+
     fn lower_task_group_block(&mut self, block: &Block, out: &mut String, indent: usize) {
         let pad = "    ".repeat(indent);
 
@@ -998,6 +1020,12 @@ impl<'a> RustLowerer<'a> {
                 self.record_expr_source_map(value, generated);
             }
             Expr::Closure { body, .. } => self.record_block_source_map(body, generated),
+            Expr::Match { value, arms, .. } => {
+                self.record_expr_source_map(value, generated);
+                for arm in arms {
+                    self.record_block_source_map(&arm.body, generated);
+                }
+            }
             Expr::Ident(_, span) => self.source_map.push(RustSourceMapEntry {
                 kind: "ident".to_string(),
                 source: span.clone(),
@@ -1333,6 +1361,24 @@ impl<'a> RustLowerer<'a> {
                 self.current_return_type = previous_return_type;
                 out
             }
+            Expr::Match { value, arms, .. } => {
+                let mut out = format!("match {} {{\n", self.lower_expr(value));
+                let sum_type_name = self.find_sum_type_for_match(arms);
+                for arm in arms {
+                    let pattern = if let Some(ref sum_name) = sum_type_name {
+                        lower_match_pattern_qualified(&arm.pattern, sum_name)
+                    } else {
+                        lower_match_pattern(&arm.pattern)
+                    };
+                    out.push_str(&format!(
+                        "    {pattern} => {}",
+                        self.lower_expr_block(&arm.body, 1)
+                    ));
+                    out.push_str(",\n");
+                }
+                out.push('}');
+                out
+            }
             Expr::Unknown(span) => unreachable_lowering("expression", span),
         }
     }
@@ -1495,6 +1541,20 @@ impl<'a> RustLowerer<'a> {
             Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
                 self.expr_returns_result(value)
             }
+            Expr::Match { arms, .. } => {
+                arms.first().is_some_and(|arm| {
+                    arm.body.statements.iter().next_back().is_some_and(
+                        |statement| match statement {
+                            Stmt::Return(stmt) => stmt
+                                .value
+                                .as_ref()
+                                .is_some_and(|value| self.expr_returns_result(value)),
+                            Stmt::Expr(value) => self.expr_returns_result(value),
+                            _ => false,
+                        },
+                    )
+                })
+            }
             _ => false,
         }
     }
@@ -1544,6 +1604,20 @@ impl<'a> RustLowerer<'a> {
             Expr::Try { value, .. } => self
                 .infer_expr_type(value)
                 .and_then(|ty| result_ok_type_ref(&ty)),
+            Expr::Match { arms, .. } => arms.first().and_then(|arm| {
+                arm.body
+                    .statements
+                    .iter()
+                    .next_back()
+                    .and_then(|statement| match statement {
+                        Stmt::Return(stmt) => stmt
+                            .value
+                            .as_ref()
+                            .and_then(|value| self.infer_expr_type(value)),
+                        Stmt::Expr(value) => self.infer_expr_type(value),
+                        _ => None,
+                    })
+            }),
             _ => None,
         }
     }

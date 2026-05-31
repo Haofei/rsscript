@@ -483,6 +483,11 @@ pub enum Expr {
         body: Block,
         span: Span,
     },
+    Match {
+        value: Box<Expr>,
+        arms: Vec<MatchArm>,
+        span: Span,
+    },
     Unknown(Span),
 }
 
@@ -542,6 +547,7 @@ impl Expr {
             | Self::Await { span, .. }
             | Self::Try { span, .. }
             | Self::Closure { span, .. }
+            | Self::Match { span, .. }
             | Self::Unknown(span) => span,
         }
     }

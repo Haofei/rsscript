@@ -513,6 +513,20 @@ impl Formatter {
                 self.block(body, 1);
                 self.out.push('}');
             }
+            Expr::Match { value, arms, .. } => {
+                self.out.push_str("match ");
+                self.expr(value, 0);
+                self.out.push_str(" {\n");
+                for arm in arms {
+                    self.indent(1);
+                    self.match_pattern(&arm.pattern);
+                    self.out.push_str(" => {\n");
+                    self.block(&arm.body, 2);
+                    self.indent(1);
+                    self.out.push_str("}\n");
+                }
+                self.out.push('}');
+            }
             Expr::Unknown(_) => self.out.push_str("/* unsupported */"),
         }
     }

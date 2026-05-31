@@ -1596,6 +1596,35 @@ fn parse_match_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usiz
     )
 }
 
+fn parse_match_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
+    // match <value> { arms... }
+    // Find the opening brace within our expression range
+    let mut brace_start = start + 1;
+    while brace_start < end && !tokens[brace_start].symbol("{") {
+        brace_start += 1;
+    }
+    if brace_start >= end {
+        return None;
+    }
+    let Some(close) = find_matching(tokens, brace_start, "{", "}") else {
+        return None;
+    };
+    // The closing brace must be the end of the expression
+    if close + 1 != end {
+        return None;
+    }
+    let value = parse_expr(tokens, start + 1, brace_start)?;
+    let parsed_arms = parse_match_arms(tokens, brace_start + 1, close);
+    if parsed_arms.arms.is_empty() {
+        return None;
+    }
+    Some(Expr::Match {
+        value: Box::new(value),
+        arms: parsed_arms.arms,
+        span: tokens[start].span.clone(),
+    })
+}
+
 struct ParsedMatchArms {
     arms: Vec<MatchArm>,
     malformed_spans: Vec<crate::diagnostic::Span>,
@@ -1715,6 +1744,13 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
             value: Box::new(value),
             span: tokens[question].span.clone(),
         });
+    }
+
+    // Match expression: match <value> { arms }
+    if tokens[start].is_ident_text("match") {
+        if let Some(match_expr) = parse_match_expr(tokens, start, end) {
+            return Some(match_expr);
+        }
     }
 
     if let Some(effect) = parse_data_effect(tokens.get(start)) {

@@ -1050,6 +1050,12 @@ fn collect_review_map_local_closure_bindings_expr(expr: &Expr, bindings: &mut BT
         Expr::Closure { body, .. } => {
             collect_review_map_local_closure_bindings_block(body, bindings)
         }
+        Expr::Match { value, arms, .. } => {
+            collect_review_map_local_closure_bindings_expr(value, bindings);
+            for arm in arms {
+                collect_review_map_local_closure_bindings_block(&arm.body, bindings);
+            }
+        }
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
     }
 }
@@ -1344,6 +1350,24 @@ fn collect_review_map_facts_expr(
                 facts,
             );
         }
+        Expr::Match { value, arms, .. } => {
+            collect_review_map_facts_expr(
+                value,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
+            for arm in arms {
+                collect_review_map_facts_block(
+                    &arm.body,
+                    hir,
+                    callback_params,
+                    local_closure_bindings,
+                    facts,
+                );
+            }
+        }
         Expr::Binary { left, right, .. } => {
             collect_review_map_facts_expr(
                 left,
@@ -1449,6 +1473,14 @@ fn collect_spawn_capture_names(expr: &Expr, captures: &mut BTreeSet<String>) {
             collect_spawn_capture_names(left, captures);
             collect_spawn_capture_names(right, captures);
         }
+        Expr::Match { value, arms, .. } => {
+            collect_spawn_capture_names(value, captures);
+            for arm in arms {
+                for statement in &arm.body.statements {
+                    collect_spawn_capture_names_from_stmt(statement, captures);
+                }
+            }
+        }
         Expr::Spawn { value, .. } => collect_spawn_capture_names(value, captures),
         Expr::Await { value, .. } => collect_spawn_capture_names(value, captures),
         Expr::Closure { body, .. } => {
@@ -1548,6 +1580,7 @@ fn spawn_capture_path(expr: &Expr) -> Option<String> {
         | Expr::Call { .. }
         | Expr::Binary { .. }
         | Expr::Closure { .. }
+        | Expr::Match { .. }
         | Expr::Number(_, _)
         | Expr::String(_, _)
         | Expr::Unknown(_) => None,
@@ -1684,6 +1717,12 @@ fn collect_review_map_hir_facts_expr(
         HirExpr::Closure { body, .. } => {
             collect_managed_closure_capture_names(body, local_bindings, facts);
             collect_review_map_hir_facts_block(body, local_bindings, facts);
+        }
+        HirExpr::Match { value, arms, .. } => {
+            collect_review_map_hir_facts_expr(value, local_bindings, facts);
+            for arm in arms {
+                collect_review_map_hir_facts_block(&arm.body, local_bindings, facts);
+            }
         }
         HirExpr::Ident { .. }
         | HirExpr::Number { .. }
@@ -1959,6 +1998,23 @@ fn collect_managed_closure_capture_names_expr(
                 facts,
             );
         }
+        HirExpr::Match { value, arms, .. } => {
+            collect_managed_closure_capture_names_expr(
+                value,
+                local_bindings,
+                closure_locals,
+                facts,
+            );
+            for arm in arms {
+                let mut arm_locals = closure_locals.clone();
+                collect_managed_closure_capture_names_block(
+                    &arm.body,
+                    local_bindings,
+                    &mut arm_locals,
+                    facts,
+                );
+            }
+        }
         HirExpr::Field { .. }
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
@@ -2013,6 +2069,7 @@ fn hir_place_path_root(expr: &HirExpr) -> Option<&str> {
         HirExpr::Binary { .. }
         | HirExpr::Call { .. }
         | HirExpr::Closure { .. }
+        | HirExpr::Match { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => None,
@@ -2035,6 +2092,7 @@ fn hir_place_path_crosses_handle_field(expr: &HirExpr) -> bool {
         HirExpr::Binary { .. }
         | HirExpr::Call { .. }
         | HirExpr::Closure { .. }
+        | HirExpr::Match { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => false,
@@ -3031,6 +3089,12 @@ fn collect_boundary_expr(expr: &Expr, path: &str, boundary: &mut BoundarySig) {
         Expr::Closure { body, .. } => {
             collect_boundary_block(body, &format!("{path}.closure"), boundary)
         }
+        Expr::Match { value, arms, .. } => {
+            collect_boundary_expr(value, &format!("{path}.match"), boundary);
+            for (index, arm) in arms.iter().enumerate() {
+                collect_boundary_block(&arm.body, &format!("{path}.arm{}", index + 1), boundary);
+            }
+        }
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
     }
 }
@@ -3061,6 +3125,7 @@ fn boundary_expr_subject(expr: &Expr) -> Option<String> {
         Expr::Call { .. }
         | Expr::Binary { .. }
         | Expr::Closure { .. }
+        | Expr::Match { .. }
         | Expr::Number(_, _)
         | Expr::String(_, _)
         | Expr::Unknown(_) => None,
