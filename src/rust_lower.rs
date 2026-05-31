@@ -1306,7 +1306,22 @@ impl<'a> RustLowerer<'a> {
                 self.record_expr_source_map(value, generated);
             }
             Expr::Closure { body, .. } => self.record_block_source_map(body, generated),
-            Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+            Expr::Ident(_, span) => self.source_map.push(RustSourceMapEntry {
+                kind: "ident".to_string(),
+                source: span.clone(),
+                generated: generated.clone(),
+            }),
+            Expr::Number(_, span) => self.source_map.push(RustSourceMapEntry {
+                kind: "number".to_string(),
+                source: span.clone(),
+                generated: generated.clone(),
+            }),
+            Expr::String(_, span) => self.source_map.push(RustSourceMapEntry {
+                kind: "string".to_string(),
+                source: span.clone(),
+                generated: generated.clone(),
+            }),
+            Expr::Unknown(_) => {}
         }
     }
 

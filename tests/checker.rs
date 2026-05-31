@@ -3548,6 +3548,7 @@ pub fn make_session(id: Int) -> Unit {
     assert!(kinds.contains(&"call"));
     assert!(kinds.contains(&"named_arg"));
     assert!(kinds.contains(&"manage"));
+    assert!(kinds.contains(&"ident"));
     assert!(kinds.contains(&"field"));
     assert!(lowered.source_map.iter().any(|entry| {
         entry.source.file == "session.rss"
@@ -3555,6 +3556,29 @@ pub fn make_session(id: Int) -> Unit {
             && entry.generated.line > 0
             && entry.generated.column > 0
     }));
+}
+
+#[test]
+fn rust_lowering_maps_identifiers_and_literals() {
+    let source = r#"
+fn demo() -> Unit {
+    let value = 42
+    Log.write(message: read "ok")
+    Log.write(message: read String.from_int(value: value))
+    return Unit
+}
+"#;
+    let lowered =
+        lower_source_to_rust_with_map("literals.rss", source).expect("source should lower");
+    let kinds = lowered
+        .source_map
+        .iter()
+        .map(|entry| entry.kind.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(kinds.contains(&"number"));
+    assert!(kinds.contains(&"string"));
+    assert!(kinds.contains(&"ident"));
 }
 
 #[test]
