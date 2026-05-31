@@ -934,8 +934,7 @@ impl<'a> RustLowerer<'a> {
             .collect();
         self.mutated_bindings = collect_mutated_bindings(&function.body);
         self.current_return_type = function.return_ty.clone();
-        self.current_async_executor = function
-            .is_async
+        self.current_async_executor = (function.is_async && block_has_await(&function.body))
             .then(|| "__rsscript_async_executor".to_string());
         self.record_source_marker(out, 0, "function", &function.span);
         let is_public = function.is_public || is_runnable_main(function);
@@ -2338,6 +2337,55 @@ fn collect_mutated_bindings(block: &Block) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
     collect_mutated_bindings_from_block(block, &mut names);
     names
+}
+
+fn block_has_await(block: &Block) -> bool {
+    block.statements.iter().any(stmt_has_await)
+}
+
+fn stmt_has_await(statement: &Stmt) -> bool {
+    match statement {
+        Stmt::Let(stmt) => stmt.value.as_ref().is_some_and(expr_has_await),
+        Stmt::Return(stmt) => stmt.value.as_ref().is_some_and(expr_has_await),
+        Stmt::With(stmt) => expr_has_await(&stmt.resource) || block_has_await(&stmt.body),
+        Stmt::If(stmt) => {
+            expr_has_await(&stmt.condition)
+                || block_has_await(&stmt.then_body)
+                || stmt.else_body.as_ref().is_some_and(block_has_await)
+        }
+        Stmt::Loop(stmt) => {
+            stmt.condition.as_ref().is_some_and(expr_has_await) || block_has_await(&stmt.body)
+        }
+        Stmt::For(stmt) => expr_has_await(&stmt.iterable) || block_has_await(&stmt.body),
+        Stmt::Match(stmt) => {
+            expr_has_await(&stmt.value) || stmt.arms.iter().any(|arm| block_has_await(&arm.body))
+        }
+        Stmt::Expr(expr) => expr_has_await(expr),
+        Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::MalformedWith(_)
+        | Stmt::MalformedIf(_)
+        | Stmt::MalformedLoop(_)
+        | Stmt::MalformedFor(_)
+        | Stmt::MalformedMatch(_)
+        | Stmt::Unknown(_) => false,
+    }
+}
+
+fn expr_has_await(expr: &Expr) -> bool {
+    match expr {
+        Expr::Await { .. } => true,
+        Expr::Binary { left, right, .. } => expr_has_await(left) || expr_has_await(right),
+        Expr::Field { base, .. } => expr_has_await(base),
+        Expr::Index { base, index, .. } => expr_has_await(base) || expr_has_await(index),
+        Expr::Call { args, .. } => args.iter().any(|arg| expr_has_await(&arg.value)),
+        Expr::Effect { value, .. }
+        | Expr::Manage { value, .. }
+        | Expr::Spawn { value, .. }
+        | Expr::Try { value, .. } => expr_has_await(value),
+        Expr::Closure { body, .. } => block_has_await(body),
+        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => false,
+    }
 }
 
 fn collect_mutated_bindings_from_block(block: &Block, names: &mut BTreeSet<String>) {

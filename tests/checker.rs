@@ -3260,6 +3260,21 @@ async fn main() -> Result<Unit, TimerError> {
 }
 
 #[test]
+fn rust_lowering_omits_async_executor_without_await() {
+    let source = r#"
+features: async
+
+async fn tick() -> Unit {
+    return Unit
+}
+"#;
+    let rust = lower_source_to_rust("async-no-await.rss", source).expect("source should lower");
+
+    assert!(rust.contains("fn tick()"));
+    assert!(!rust.contains("__rsscript_async_executor"));
+}
+
+#[test]
 fn rust_lowering_wraps_async_native_bindings_in_runtime_pending() {
     let source = r#"
 features: async, native
