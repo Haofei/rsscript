@@ -537,6 +537,10 @@ fn collect_package_await_sites(sources: &[PackageSource]) -> Vec<PackageReviewAw
                         })
                     }
                 })
+                .map(|mut site| {
+                    site.span.file = source.relative_path.clone();
+                    site
+                })
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
