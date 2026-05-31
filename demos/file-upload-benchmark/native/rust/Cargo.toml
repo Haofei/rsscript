@@ -1,0 +1,21 @@
+[package]
+name = "rss_file_upload_benchmark"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[[bin]]
+name = "mock_upload_server"
+path = "src/bin/mock_upload_server.rs"
+
+[[bin]]
+name = "async_upload_client"
+path = "src/bin/async_upload_client.rs"
+
+[[bin]]
+name = "sync_upload_client"
+path = "src/bin/sync_upload_client.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
