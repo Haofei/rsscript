@@ -3257,6 +3257,45 @@ async fn main() -> Result<Unit, TimerError> {
 }
 
 #[test]
+fn rust_lowering_wraps_async_native_bindings_in_runtime_pending() {
+    let source = r#"
+features: async, native
+
+struct HostError
+
+async native fn Host.wait(ms: Int) -> Result<Unit, HostError>
+    effects(native)
+
+async fn main() -> Result<Unit, HostError> {
+    await Host.wait(ms: 1)?
+    return Ok(Unit)
+}
+"#;
+    let package = lower_sources_to_rust_package_with_options(
+        &[("async-native.rss".to_string(), source.to_string())],
+        "Async Native Example.rss",
+        "/workspace/rsscript/runtime",
+        &[],
+        &[NativeRustDependency {
+            crate_name: "timer_native".to_string(),
+            path: "/workspace/timer-native".to_string(),
+            cargo_features: Vec::new(),
+            bindings: BTreeMap::from([(
+                "Host.wait".to_string(),
+                "timer_native::sleep_start".to_string(),
+            )]),
+        }],
+    )
+    .expect("source should lower with async native binding");
+
+    assert!(
+        package
+            .lib_rs
+            .contains("rsscript_runtime::run_pending(timer_native::sleep_start(1))?;")
+    );
+}
+
+#[test]
 fn rust_lowering_maps_assert_equal_to_runtime_hook() {
     let source = r#"
 fn main() -> Unit {

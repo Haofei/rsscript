@@ -632,6 +632,7 @@ struct RustLowerer<'a> {
     type_kinds: BTreeMap<String, TypeKind>,
     protocol_names: BTreeSet<String>,
     native_boundary_callees: BTreeSet<String>,
+    async_native_boundary_callees: BTreeSet<String>,
     native_bindings: BTreeMap<String, String>,
     function_return_types: BTreeMap<String, TypeRef>,
     retained_params_by_callee: BTreeMap<String, BTreeSet<String>>,
@@ -657,6 +658,7 @@ impl<'a> RustLowerer<'a> {
             })
             .collect();
         let native_boundary_callees = collect_native_boundary_callees(program);
+        let async_native_boundary_callees = collect_async_native_boundary_callees(program);
         let protocol_names = program
             .protocols
             .iter()
@@ -670,6 +672,7 @@ impl<'a> RustLowerer<'a> {
             type_kinds,
             protocol_names,
             native_boundary_callees,
+            async_native_boundary_callees,
             native_bindings,
             function_return_types,
             retained_params_by_callee,
@@ -1345,6 +1348,13 @@ impl<'a> RustLowerer<'a> {
         self.native_boundary_callees.contains(&key) || self.native_bindings.contains_key(&key)
     }
 
+    fn await_call_lowers_to_pending(&self, callee: &Callee) -> bool {
+        let key = native_boundary_callee_key(callee);
+        is_async_runtime_intrinsic_callee(callee)
+            || (self.async_native_boundary_callees.contains(&key)
+                && self.native_bindings.contains_key(&key))
+    }
+
     fn lower_expr(&mut self, expr: &Expr) -> String {
         match expr {
             Expr::Ident(name, _) => {
@@ -1643,7 +1653,7 @@ impl<'a> RustLowerer<'a> {
         match expr {
             Expr::Try { value, .. } => format!("{}?", self.lower_await_expr(value)),
             Expr::Effect { value, .. } => self.lower_await_expr(value),
-            Expr::Call { callee, .. } if is_async_runtime_intrinsic_callee(callee) => {
+            Expr::Call { callee, .. } if self.await_call_lowers_to_pending(callee) => {
                 format!("rsscript_runtime::run_pending({})", self.lower_expr(expr))
             }
             Expr::Call { .. } => self.lower_expr(expr),
@@ -2256,12 +2266,36 @@ fn collect_native_boundary_callees(program: &Program) -> BTreeSet<String> {
     callees
 }
 
+fn collect_async_native_boundary_callees(program: &Program) -> BTreeSet<String> {
+    let mut callees = BTreeSet::new();
+    for (file, source) in builtin_interfaces() {
+        let interface = parse_source(file, source);
+        collect_async_native_boundary_callees_from_program(&interface, &mut callees);
+    }
+    collect_async_native_boundary_callees_from_program(program, &mut callees);
+    callees
+}
+
 fn collect_native_boundary_callees_from_program(program: &Program, callees: &mut BTreeSet<String>) {
     for item in &program.items {
         let Item::Function(function) = item else {
             continue;
         };
         if function.effects.iter().any(is_native_boundary) {
+            callees.insert(native_boundary_function_key(&function.name));
+        }
+    }
+}
+
+fn collect_async_native_boundary_callees_from_program(
+    program: &Program,
+    callees: &mut BTreeSet<String>,
+) {
+    for item in &program.items {
+        let Item::Function(function) = item else {
+            continue;
+        };
+        if function.is_async && function.effects.iter().any(is_native_boundary) {
             callees.insert(native_boundary_function_key(&function.name));
         }
     }
