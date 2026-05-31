@@ -420,6 +420,15 @@ pub struct TaskGroup<T> {
     tasks: Vec<Box<dyn Pending<T>>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TaskGroupJoin<T> {
+    Completed(Vec<T>),
+    TimedOut {
+        completed: Vec<Option<T>>,
+        pending: usize,
+    },
+}
+
 impl<T> TaskGroup<T> {
     pub fn new() -> Self {
         Self { tasks: Vec::new() }
@@ -467,6 +476,46 @@ impl<T> TaskGroup<T> {
             .into_iter()
             .map(|output| output.expect("task group output should be ready after join"))
             .collect()
+    }
+
+    pub fn join_until(self, executor: &mut Executor, deadline: Instant) -> TaskGroupJoin<T> {
+        let mut tasks = self.tasks;
+        let mut outputs = (0..tasks.len()).map(|_| None).collect::<Vec<_>>();
+        let mut remaining = tasks.len();
+        while remaining > 0 {
+            if Instant::now() >= deadline {
+                return TaskGroupJoin::TimedOut {
+                    completed: outputs,
+                    pending: remaining,
+                };
+            }
+            let mut made_progress = false;
+            for (index, task) in tasks.iter_mut().enumerate() {
+                if outputs[index].is_some() {
+                    continue;
+                }
+                executor.polls += 1;
+                let poll = {
+                    let mut cx = Context { executor };
+                    task.poll(&mut cx)
+                };
+                if let AsyncPoll::Ready(value) = poll {
+                    outputs[index] = Some(value);
+                    remaining -= 1;
+                    made_progress = true;
+                }
+            }
+            if remaining > 0 && !made_progress {
+                let mut cx = Context { executor };
+                cx.yield_now();
+            }
+        }
+        TaskGroupJoin::Completed(
+            outputs
+                .into_iter()
+                .map(|output| output.expect("task group output should be ready after join"))
+                .collect(),
+        )
     }
 }
 
@@ -2847,6 +2896,48 @@ mod tests {
         assert_eq!(outputs, vec![10, 20]);
         assert!(executor.poll_count() >= 3);
         assert!(executor.yield_count() >= 2);
+    }
+
+    #[test]
+    fn task_group_join_until_times_out_with_completed_outputs() {
+        struct MaybePending {
+            value: usize,
+            ready: bool,
+        }
+
+        impl super::Pending<usize> for MaybePending {
+            fn poll(&mut self, _cx: &mut super::Context<'_>) -> super::AsyncPoll<usize> {
+                if self.ready {
+                    super::AsyncPoll::Ready(self.value)
+                } else {
+                    super::AsyncPoll::Pending
+                }
+            }
+        }
+
+        let mut group = super::TaskGroup::new();
+        group.spawn_pending(MaybePending {
+            value: 10,
+            ready: true,
+        });
+        group.spawn_pending(MaybePending {
+            value: 20,
+            ready: false,
+        });
+
+        let mut executor = super::Executor::new();
+        let outcome = group.join_until(
+            &mut executor,
+            std::time::Instant::now() + std::time::Duration::from_millis(1),
+        );
+
+        assert!(matches!(
+            outcome,
+            super::TaskGroupJoin::TimedOut {
+                completed,
+                pending: 1
+            } if completed == vec![Some(10), None]
+        ));
     }
 
     #[test]
