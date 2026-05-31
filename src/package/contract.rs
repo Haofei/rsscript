@@ -267,6 +267,7 @@ pub(super) fn package_function_contracts_match(
         && interface.params == source.params
         && interface.return_type == source.return_type
         && interface.returns_fresh == source.returns_fresh
+        && interface.is_async == source.is_async
         && interface.effects == source.effects
 }
 
