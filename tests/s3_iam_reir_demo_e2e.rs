@@ -315,6 +315,48 @@ fn s3_iam_reir_demo_scenarios_report_code_capability_change() {
 }
 
 #[test]
+fn s3_iam_reir_demo_pr_review_comment_matches_golden_output() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let demo_dir = repo.join("demos/s3-iam-reir");
+    let adds_delete_dir = demo_dir.join("scenarios/03-code-adds-delete");
+
+    let required = required_facts_for_demo(&adds_delete_dir);
+    let grants = deployment_grants_from_fixtures(&demo_dir, "mock-iam-fixed.json");
+    let reconciliations = reir::reconcile_capabilities_for_target(&required, &grants, Some("prod"));
+    let comment = pr_change_comment(&required, &grants, &reconciliations);
+    assert_eq!(comment, read_demo_text(&demo_dir, "expected/pr-comment.md"));
+
+    println!("s3 iam pr review: blocked missing=s3:DeleteObject evidence=src/upload.rss:28");
+}
+
+#[test]
+fn s3_iam_reir_demo_missing_capability_binding_is_unknown_not_safe() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let demo_dir = repo.join("demos/s3-iam-reir");
+    let missing_binding_dir = demo_dir.join("scenarios/05-missing-capability-binding");
+    let review = review_package_dir(&missing_binding_dir)
+        .expect("missing-binding scenario review should still parse");
+
+    assert!(
+        review.capabilities.is_empty(),
+        "no package capability facts should be inferred without a binding: {:#?}",
+        review.capabilities
+    );
+    assert!(
+        review.summary.native_apis > 0,
+        "native facade should still be visible even without capability binding"
+    );
+
+    let report = missing_capability_binding_report(&review);
+    assert_eq!(
+        report,
+        read_demo_text(&demo_dir, "expected/missing-capability-binding.txt")
+    );
+
+    println!("s3 iam negative-control: missing capability binding is unknown");
+}
+
+#[test]
 fn s3_iam_reir_demo_native_risk_scenario_reports_review_boundary() {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
     let native_risk_dir = repo.join("demos/s3-iam-reir/scenarios/04-native-risk");
@@ -352,6 +394,108 @@ fn required_facts_for_demo(demo_dir: &Path) -> Vec<Fact> {
         .into_iter()
         .filter(|fact| fact.role == Some(FactRole::Required))
         .collect()
+}
+
+fn pr_change_comment(
+    required: &[Fact],
+    grants: &[Fact],
+    reconciliations: &[reir::Reconciliation],
+) -> String {
+    let delete_required = required
+        .iter()
+        .find(|fact| capability_action(fact) == Some("s3:DeleteObject"))
+        .expect("PR scenario should require DeleteObject");
+    let delete_evidence = delete_required
+        .evidence
+        .iter()
+        .find(|evidence| {
+            evidence
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("Reports.cleanup_old_reports"))
+        })
+        .expect("DeleteObject requirement should carry cleanup evidence");
+    let put_grant = grants
+        .iter()
+        .find(|fact| capability_action(fact) == Some("s3:PutObject"))
+        .expect("fixed IAM fixture should grant PutObject");
+    assert!(reconciliations.iter().any(|reconciliation| {
+        reconciliation.kind == ReconciliationKind::MissingCapability
+            && reconciliation
+                .capability
+                .as_ref()
+                .is_some_and(|capability| capability.action.as_deref() == Some("s3:DeleteObject"))
+    }));
+
+    format!(
+        "## RSScript / REIR deployment review\n\n\
+Status: FAIL\n\n\
+### Added required capability\n\n\
+- subject: Reports.cleanup_old_reports\n\
+- capability: {}\n\
+- evidence: {}:{} Reports.cleanup_old_reports -> S3.delete_object\n\n\
+### Current prod grants\n\n\
+- {}\n\n\
+### Missing capability\n\n\
+- s3:DeleteObject on arn:aws:s3:::reports-prod/*\n\n\
+### Review decision\n\n\
+Block this PR before deploy. Either remove Reports.cleanup_old_reports, or update IAM and review why delete access is needed.\n",
+        capability_label(delete_required),
+        delete_evidence.file.as_deref().unwrap_or("<unknown>"),
+        delete_evidence.line.unwrap_or(0),
+        capability_label(put_grant)
+    )
+}
+
+fn missing_capability_binding_report(review: &rsscript::PackageReview) -> String {
+    let native_symbol = review
+        .exports
+        .iter()
+        .find(|export| {
+            export
+                .normalized_effects
+                .iter()
+                .any(|effect| effect == "native")
+        })
+        .map(|export| export.name.as_str())
+        .unwrap_or("S3.put_object");
+    [
+        "RSScript semantic deployment review: FAIL",
+        "",
+        "UNKNOWN capability binding:",
+        &format!("  native symbol: {native_symbol}"),
+        "  evidence: interface/s3.rssi",
+        "  reason: native/external facade has no review.capability_bindings entry",
+        "",
+        "Decision:",
+        "  fail under deny_unknown; absence of capability metadata is not safe",
+        "",
+    ]
+    .join("\n")
+}
+
+fn capability_action(fact: &Fact) -> Option<&str> {
+    fact.capability.as_ref()?.action.as_deref()
+}
+
+fn capability_label(fact: &Fact) -> String {
+    let capability = fact
+        .capability
+        .as_ref()
+        .expect("capability fact should carry capability");
+    format!(
+        "{} {}/{} {} {}",
+        String::from(capability.category.clone()),
+        capability.provider.as_deref().unwrap_or("unknown"),
+        capability.service.as_deref().unwrap_or("unknown"),
+        capability.action.as_deref().unwrap_or("unknown"),
+        capability.resource.as_deref().unwrap_or("unknown"),
+    )
+}
+
+fn read_demo_text(demo_dir: &Path, relative_path: &str) -> String {
+    fs::read_to_string(demo_dir.join(relative_path))
+        .unwrap_or_else(|error| panic!("failed to read {relative_path}: {error}"))
 }
 
 fn required_actions(required_facts: &[Fact]) -> std::collections::BTreeSet<&str> {

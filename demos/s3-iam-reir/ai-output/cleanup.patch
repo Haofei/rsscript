@@ -1,0 +1,12 @@
+diff --git a/src/upload.rss b/src/upload.rss
+@@
++pub async fn Reports.cleanup_old_reports(
++    bucket: read String,
++    day: read String,
++) -> Result<Unit, String> {
++    await S3.delete_object(
++        bucket: read bucket,
++        key: read "reports/old.json",
++    )?
++    return Ok(Unit)
++}

@@ -1,6 +1,41 @@
 # S3 IAM REIR demo
 
-This demo shows the core REIR loop:
+This demo shows a PR review story:
+
+```text
+base: 00-fixed
+head: 03-code-adds-delete
+
+PR change:
+  Reports.cleanup_old_reports -> S3.delete_object
+
+Existing prod IAM:
+  grants only s3:PutObject
+
+RSScript / REIR result:
+  new required capability: s3:DeleteObject
+  deployment missing: s3:DeleteObject
+  evidence: src/upload.rss:28 Reports.cleanup_old_reports -> S3.delete_object
+  decision: fail pre-deploy
+```
+
+Run the PR-review golden test:
+
+```sh
+cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_pr_review -- --nocapture
+```
+
+Expected output includes:
+
+```text
+s3 iam pr review: blocked missing=s3:DeleteObject evidence=src/upload.rss:28
+```
+
+The checked-in PR comment is [expected/pr-comment.md](expected/pr-comment.md).
+
+## Core loop
+
+The underlying REIR loop is:
 
 1. RSScript code uploads reports to S3 through an async package facade.
 2. `rsspkg.toml` binds the facade symbol `S3.put_object` to one external capability.
@@ -11,10 +46,33 @@ The RSS source does not write `effects(requires(...))`. The capability binding i
 `interface/s3.rssi` is the mock native S3 boundary. `src/upload.rss` is ordinary RSS async business code; it is not a native implementation.
 The runtime path is also executable: `rsscript-runtime` owns the Tokio-backed native async executor, while the demo native wrapper only starts HTTP IO futures.
 
+## Evidence chain
+
+```mermaid
+flowchart LR
+  A["Reports.upload_batch<br/>src/upload.rss"] --> B["upload_report"]
+  B --> C["S3.put_object<br/>native facade"]
+  C --> D["required capability<br/>s3:PutObject<br/>arn:aws:s3:::reports-prod/*"]
+  E["prod IAM role"] --> F["granted capability<br/>s3:GetObject"]
+  D --> G["REIR reconcile"]
+  F --> G
+  G --> H["FAIL: missing s3:PutObject"]
+```
+
+```text
+Scenario                 Required          Granted                 Result
+00-fixed                 PutObject         PutObject               PASS
+01-missing-iam           PutObject         GetObject               FAIL: missing PutObject
+02-excess-iam            PutObject         PutObject+DeleteObject  WARN: excess DeleteObject
+03-code-adds-delete      Put+Delete        PutObject               FAIL: missing DeleteObject
+04-native-risk           PutObject         PutObject               REVIEW: native boundary risk
+05-missing-binding       native call       no capability binding   FAIL: unknown, not safe
+```
+
 ## Run the full demo flow with the Rust test runner
 
 ```sh
-cargo test --test s3_iam_reir_demo_e2e -- --nocapture
+cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain -- --ignored --nocapture
 ```
 
 Expected flow:
@@ -83,6 +141,46 @@ Expected output includes:
 
 ```text
 s3 iam native-risk: native-wrapper build-scripts unsafe-policy require review
+```
+
+Run the missing-binding negative control:
+
+```sh
+cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_missing_capability -- --nocapture
+```
+
+Expected output includes:
+
+```text
+s3 iam negative-control: missing capability binding is unknown
+```
+
+The checked-in negative-control output is [expected/missing-capability-binding.txt](expected/missing-capability-binding.txt).
+
+## AI patch story
+
+The prompt in [prompts/add-cleanup.md](prompts/add-cleanup.md) asks for a cleanup function that deletes old reports. The representative generated patch in [ai-output/cleanup.patch](ai-output/cleanup.patch) adds `Reports.cleanup_old_reports -> S3.delete_object`.
+
+That code can be represented in RSScript, but package review turns the new external ability into a semantic fact. With the existing fixed IAM fixture, REIR blocks the PR before deploy because prod grants only `s3:PutObject`.
+
+## Review cost shape
+
+```text
+Review task: Did this PR add a deployment-relevant capability?
+
+Raw artifacts to inspect:
+  src/upload.rss
+  interface/s3.rssi
+  rsspkg.toml
+  native/bindings.rssbind.toml
+  native/rust/src/lib.rs
+  infra/mock-iam-fixed.json
+
+RSScript/REIR findings:
+  added required capability: s3:DeleteObject
+  missing grant: s3:DeleteObject
+  evidence: src/upload.rss:28 Reports.cleanup_old_reports -> S3.delete_object
+  native wrapper risk: explicit package review boundary
 ```
 
 ## What the preflight proves

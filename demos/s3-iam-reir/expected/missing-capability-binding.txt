@@ -1,0 +1,9 @@
+RSScript semantic deployment review: FAIL
+
+UNKNOWN capability binding:
+  native symbol: S3.put_object
+  evidence: interface/s3.rssi
+  reason: native/external facade has no review.capability_bindings entry
+
+Decision:
+  fail under deny_unknown; absence of capability metadata is not safe

@@ -22,6 +22,18 @@ That distinction matters more with AI in the loop. When a model writes Rust appl
 
 ## Try the review demo
 
+PR review story: an AI-style patch adds `Reports.cleanup_old_reports -> S3.delete_object`, but the existing prod IAM role grants only `s3:PutObject`. RSScript package review turns that new external ability into a REIR fact, and deployment reconciliation blocks the PR before deploy.
+
+```sh
+cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_pr_review -- --nocapture
+```
+
+Expected output:
+
+```text
+s3 iam pr review: blocked missing=s3:DeleteObject evidence=src/upload.rss:28
+```
+
 Fast preflight: RSScript code requires an S3 capability, mock IAM grants are reconciled before deploy.
 
 ```sh
