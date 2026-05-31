@@ -1057,20 +1057,19 @@ fn check_async_call_consumed(
         Diagnostic::error(
             code::ASYNC_CALL_NOT_CONSUMED,
             format!(
-                "async call `{}` must be awaited or spawned.",
+                "async call `{}` must be awaited.",
                 body_callee_display(callee)
             ),
             span.clone(),
-            "async call must be awaited or spawned",
+            "async call must be awaited",
         )
         .with_cause(
-            "Async calls introduce suspension or task boundaries that must be visible in source.",
+            "Async calls introduce suspension boundaries that must be visible in source; `spawn` is reserved but not executable in v0.5.",
         )
         .with_fix(
-            "await_or_spawn_async_call",
+            "await_async_call",
             format!(
-                "Write `await {}(...)` or `spawn {}(...)`.",
-                body_callee_display(callee),
+                "Write `await {}(...)`.",
                 body_callee_display(callee)
             ),
             "manual",

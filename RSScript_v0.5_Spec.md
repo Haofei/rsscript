@@ -2835,7 +2835,7 @@ operator overload attempt
 feature violation
 unsupported syntax
 spawn used before structured async task support
-async call not consumed by await or spawn
+async call not consumed by await
 await outside async function
 await non-async expression
 local or resource value live across await

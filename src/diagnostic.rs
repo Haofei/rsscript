@@ -372,7 +372,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::ASYNC_CALL_NOT_CONSUMED,
         title: "async call not consumed",
-        explanation: "Async calls must be consumed by `await` or `spawn` so suspension and task boundaries remain review-visible.",
+        explanation: "Async calls must be consumed by `await` so suspension boundaries remain review-visible. `spawn` is reserved but not executable in v0.5.",
     },
     DiagnosticExplanation {
         code: code::AWAIT_OUTSIDE_ASYNC,

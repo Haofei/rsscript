@@ -74,7 +74,7 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
     ("feature violation", "RS0101"),
     ("unsupported syntax", "RS0015"),
     ("spawn used before structured async task support", "RS0015"),
-    ("async call not consumed by await or spawn", "RS0022"),
+    ("async call not consumed", "RS0022"),
     ("unknown protocol", "RS0027"),
     ("unmappable rustc diagnostic", "RS1102"),
     ("package feature resolution violation", "PKG0101"),
@@ -6996,7 +6996,7 @@ fn schedule(url: read Url) -> Unit {
 }
 
 #[test]
-fn checker_rejects_async_call_without_await_or_spawn() {
+fn checker_rejects_async_call_without_await() {
     let source = r#"
 features: async
 
@@ -7011,8 +7011,7 @@ fn receive(url: read Url) -> Unit {
 
     assert!(
         diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == "RS0022"
-                && diagnostic.label == "async call must be awaited or spawned"
+            diagnostic.code == "RS0022" && diagnostic.label == "async call must be awaited"
         }),
         "{diagnostics:?}"
     );
