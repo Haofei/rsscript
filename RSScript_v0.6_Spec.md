@@ -1105,7 +1105,7 @@ The sized and unsized scalar names are **distinct types in v0.6, not aliases**:
 `Int` is not an alias for `Int64`, `Byte` is not an alias for `UInt8`, and so on.
 There is no implicit conversion between them (§2.4); width changes are explicit
 through a `T.from` constructor (`let n: Int64 = Int64.from(value: x)`). Whether
-any of these should later become aliases is deferred; v0.5 keeps them distinct so
+any of these should later become aliases is deferred; v0.6 keeps them distinct so
 no conversion is hidden.
 
 How the checker knows it is "inside a trusted native/resource internal" for the
@@ -1122,7 +1122,7 @@ containers (`List`, `Map`, `Set`), `String`, `Bytes`, `Buffer`, generic type
 parameters, and every user-defined `class`, `struct`, or `resource` — including a
 struct all of whose fields are Copy.
 
-User-defined types are non-Copy in v0.5 with no implicit derivation; a struct is
+User-defined types are non-Copy in v0.6 with no implicit derivation; a struct is
 never silently Copy because its fields are. A future explicit `copy struct` or
 `derives(copy)` is deferred, not excluded (Article VI), and would have to be
 explicit per the no-hidden-behavior rule (§2.4).
@@ -1342,7 +1342,7 @@ Foo.run(
 )
 ```
 
-RSScript v0.5 does not prove index inequality.
+RSScript v0.6 does not prove index inequality.
 
 ### 8.4 Same-call compatibility matrix
 
@@ -1440,7 +1440,7 @@ function*:
 ```
 
 The earlier "value type ⇒ splittable" reading was wrong: a struct is a value
-type but a `mut` struct parameter can still be managed-backed. The v0.5 checker
+type but a `mut` struct parameter can still be managed-backed. The v0.6 checker
 therefore tracks field-splittable local exclusivity separately from ordinary
 `mut` parameter access.
 
@@ -1657,7 +1657,7 @@ work has joined. The backend's thread pool, work-stealing model, `Send`/`Sync`
 rules, trait extension APIs, and lifetime machinery are not part of the RSScript
 surface.
 
-The only v0.5 admitted parallel surface is fixed native facade functions whose
+The only v0.6 admitted parallel surface is fixed native facade functions whose
 contracts mark both `native` and `parallel`, for example numeric reductions or
 sorts over `List<Int>`. User-provided parallel closures, parallel iterators,
 structured joins/scopes, thread-pool configuration, and partitioned mutable
@@ -1815,7 +1815,7 @@ Those positional types also apply to ordinary calls inside callback bodies; for
 example `callback: |value| String.len(value: read value)` is rejected for
 `Fn(Int) -> Int` because the `String.len` argument expects `String`, not `Int`.
 
-v0.5 `noescape Fn` closures are **non-consuming**: a callee may call the closure
+v0.6 `noescape Fn` closures are **non-consuming**: a callee may call the closure
 any number of times (for example `ResourcePool.new` calls its factory `max_size`
 times), so the closure may `read` or `mut` a captured local but must not `take`
 or `manage` a captured local — that would move it on the first call and leave it
@@ -1944,11 +1944,11 @@ approved resource container insertion
 immediate resource lease APIs
 ```
 
-In v0.5 these last two are concrete and closed: the only approved resource
+In v0.6 these last two are concrete and closed: the only approved resource
 container is `ResourcePool<T: Resource>`, and the only standard immediate resource
 lease API is `ResourcePool.borrow`. There is no general mechanism for a package to
-declare a new approved container or lease API in v0.5; any other container or
-lease API is rejected by the v0.5 checker. The extension points are reserved for a
+declare a new approved container or lease API in v0.6; any other container or
+lease API is rejected by the v0.6 checker. The extension points are reserved for a
 future version, which must define how approval is expressed in `.rssi` and how the
 checker recognizes it.
 
@@ -1969,7 +1969,7 @@ with File.open(path: read path)? as file {
 ```
 
 `with File.open(...) as file` is valid only when the producer returns a bare
-resource `R`. When the producer returns `Result<R, E>`, omitting `?` is a v0.5
+resource `R`. When the producer returns `Result<R, E>`, omitting `?` is a v0.6
 diagnostic, not a compatibility warning. RSScript has no legacy source corpus, so
 the checker keeps one canonical resource-producer spelling.
 
@@ -2017,7 +2017,7 @@ Hard rules:
 ```text
 ResourcePool itself must be local.
 ResourcePool is allowed only with features: local.
-ResourcePool is the privileged long-lived resource container in v0.5.
+ResourcePool is the privileged long-lived resource container in v0.6.
 Pool drop releases all held resources.
 Borrow returns a with-compatible resource lease.
 Resource values cannot escape the pool lease.
@@ -2035,9 +2035,9 @@ apply to `ResourcePool<T>`.
 
 This is a hard implementation boundary.
 
-The v0.5 standard ResourcePool factory is eager and noescape.
+The v0.6 standard ResourcePool factory is eager and noescape.
 
-Conceptual contract for the v0.5 constructor:
+Conceptual contract for the v0.6 constructor:
 
 ```rust
 fn ResourcePool<T: Resource>.new(
@@ -2046,11 +2046,11 @@ fn ResourcePool<T: Resource>.new(
 ) -> fresh ResourcePool<T>
 ```
 
-`new` is the v0.5 constructor and requires an **infallible** factory: `create` must return a resource `T`, never `Result<T, E>`. Construction is eager and exact: the runtime calls `create` exactly `max_size` times, stores the `max_size` resources in the local pool, then discards the factory closure. In v0.5, `max_size` must be a positive `Int` literal; a non-positive literal is a diagnostic (RS0708), not a runtime condition — this keeps `new` infallible without needing a `Result` for a degenerate pool size. Because construction cannot fail, `new` returns the pool directly, not a `Result`. "Eager" and "exactly `max_size`" together remove any ambiguity with lazy replenishment: the pool never creates a resource after construction.
+`new` is the v0.6 constructor and requires an **infallible** factory: `create` must return a resource `T`, never `Result<T, E>`. Construction is eager and exact: the runtime calls `create` exactly `max_size` times, stores the `max_size` resources in the local pool, then discards the factory closure. In v0.6, `max_size` must be a positive `Int` literal; a non-positive literal is a diagnostic (RS0708), not a runtime condition — this keeps `new` infallible without needing a `Result` for a degenerate pool size. Because construction cannot fail, `new` returns the pool directly, not a `Result`. "Eager" and "exactly `max_size`" together remove any ambiguity with lazy replenishment: the pool never creates a resource after construction.
 
 Implementation note (non-normative): a prototype runtime may defensively diagnose
 invalid or empty pools, but this is not RSScript source semantics. A conforming
-v0.5 frontend rejects non-positive `max_size` literals (RS0708) before lowering.
+v0.6 frontend rejects non-positive `max_size` literals (RS0708) before lowering.
 
 A fallible factory passed to `new` is rejected (diagnostic RS0707): hiding a creation failure inside `new` would violate no-hidden-behavior, since failure is represented by a return type (section 14.3). The closure literal is checked against the expected `noescape Fn() -> T` parameter contract, including its result type: the user need not annotate the closure's return type, but the checker takes the expected result `T` from the parameter and rejects a factory whose result is `Result<T, E>` (that is the RS0707 case). The `-> T` in the contract is the expected result the checker enforces, not mere documentation.
 
@@ -2058,7 +2058,7 @@ The canonical example below uses `DbConnection.open` as an *infallible* factory 
 
 #### Fallible construction: `try_new`
 
-The realistic case is a factory that can fail. `try_new` is part of the v0.5
+The realistic case is a factory that can fail. `try_new` is part of the v0.6
 executable MVP because resource allocation failure must stay explicit instead
 of being hidden behind an infallible pool constructor.
 
@@ -2069,7 +2069,7 @@ fn ResourcePool<T: Resource>.try_new<E>(
 ) -> Result<fresh ResourcePool<T>, E>
 ```
 
-`try_new` is eager like `new`, but because `create` can fail, construction can fail, so it returns a `Result` and the caller writes `?`. Binding semantics for v0.5 lowering and the reference runtime:
+`try_new` is eager like `new`, but because `create` can fail, construction can fail, so it returns a `Result` and the caller writes `?`. Binding semantics for v0.6 lowering and the reference runtime:
 
 ```text
 1. eager: create is called up to max_size times at construction.
@@ -2126,7 +2126,7 @@ with ResourcePool.borrow(pool: mut pool) as conn {
 
 The lease cannot escape the `with` body, be returned through `Ok`/`Some`, be captured by a managed closure, or be stored in managed data.
 
-Exhaustion and nesting, made precise for v0.5:
+Exhaustion and nesting, made precise for v0.6:
 
 ```text
 - borrow does not return Result and must not block.
@@ -2138,7 +2138,7 @@ Exhaustion and nesting, made precise for v0.5:
   introspection or multi-borrow; until then, use one lease per pool at a time.
 ```
 
-Exhaustion is not expected in ordinary v0.5 source: `max_size` is a positive
+Exhaustion is not expected in ordinary v0.6 source: `max_size` is a positive
 literal and nested same-pool borrow is rejected, so a single sequential lease per
 pool cannot exhaust it. Borrowing from an exhausted pool is therefore a
 **defensive** runtime diagnostic (with a source span, not a block and not a
@@ -2148,7 +2148,7 @@ is expected to handle. This is why `borrow` need not return a `Result`.
 
 ```rust
 with ResourcePool.borrow(pool: mut pool) as a {
-    with ResourcePool.borrow(pool: mut pool) as b {   // rejected in v0.5
+    with ResourcePool.borrow(pool: mut pool) as b {   // rejected in v0.6
         ...
     }
 }
