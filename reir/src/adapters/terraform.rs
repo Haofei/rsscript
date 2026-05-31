@@ -29,20 +29,23 @@ pub fn terraform_dir_to_bundle(root: &Path) -> Result<Bundle, String> {
             .to_string_lossy()
             .replace('\\', "/");
         for block in terraform_resource_blocks(&relative, &text) {
-            if !matches!(
-                block.resource_type.as_str(),
-                "aws_iam_role_policy" | "aws_s3_bucket_policy"
-            ) {
-                continue;
-            }
-            for policy_json in terraform_policy_jsons(&block.body) {
-                let policy: Value = serde_json::from_str(&policy_json).map_err(|error| {
-                    format!(
-                        "failed to parse IAM policy JSON in {} resource {}.{}: {error}",
-                        block.file, block.resource_type, block.name
-                    )
-                })?;
-                facts.extend(policy_grant_facts(&block, &policy));
+            match block.resource_type.as_str() {
+                "aws_iam_role_policy" | "aws_s3_bucket_policy" => {
+                    for policy_json in terraform_policy_jsons(&block.body) {
+                        let policy: Value =
+                            serde_json::from_str(&policy_json).map_err(|error| {
+                                format!(
+                                    "failed to parse IAM policy JSON in {} resource {}.{}: {error}",
+                                    block.file, block.resource_type, block.name
+                                )
+                            })?;
+                        facts.extend(policy_grant_facts(&block, &policy));
+                    }
+                }
+                "postgresql_grant" => {
+                    facts.extend(postgresql_grant_facts(&block));
+                }
+                _ => {}
             }
         }
     }
@@ -334,6 +337,144 @@ fn capability_grant_fact(
         }],
         unknown_reason: None,
     }
+}
+
+fn postgresql_grant_facts(block: &TerraformResourceBlock) -> Vec<Fact> {
+    let database = hcl_string_attr(&block.body, "database").unwrap_or_default();
+    let schema = hcl_string_attr(&block.body, "schema").unwrap_or_else(|| "public".to_owned());
+    let role = hcl_string_attr(&block.body, "role").unwrap_or_default();
+    let mut objects = hcl_string_array_attr(&block.body, "objects");
+    if objects.is_empty() {
+        objects.push("*".to_owned());
+    }
+    let privileges = hcl_string_array_attr(&block.body, "privileges");
+
+    let subject = Subject {
+        kind: SubjectKind::CloudPolicy,
+        id: format!("terraform::{}.{}", block.resource_type, block.name),
+        name: Some(format!("{}.{}", block.resource_type, block.name)),
+        package: Some("terraform".to_owned()),
+    };
+
+    let mut facts = Vec::new();
+    for (privilege_index, privilege) in privileges.iter().enumerate() {
+        let normalized = privilege.to_ascii_uppercase();
+        let category = postgres_privilege_category(&normalized);
+        for object in &objects {
+            let resource = format!("postgres://{database}/{schema}/{object}");
+            facts.push(Fact {
+                schema: FACT_SCHEMA.to_owned(),
+                id: format!(
+                    "fact.terraform.{}.{}.privilege_{}.{}.{}",
+                    sanitize_id(&block.resource_type),
+                    sanitize_id(&block.name),
+                    privilege_index,
+                    sanitize_id(&normalized),
+                    sanitize_id(&resource)
+                ),
+                kind: FactKind::Capability,
+                role: Some(FactRole::Granted),
+                subject: subject.clone(),
+                capability: Some(Capability {
+                    category: category.clone(),
+                    provider: Some("postgres".to_owned()),
+                    service: Some("postgres".to_owned()),
+                    action: Some(normalized.clone()),
+                    resource: Some(resource.clone()),
+                    constraints: HashMap::new(),
+                }),
+                value: FactValue::True,
+                confidence: Confidence {
+                    level: ConfidenceLevel::Scanned,
+                    source: Some(PRODUCER_SOURCE.to_owned()),
+                },
+                acquisition_mode: AcquisitionMode::TerraformPlan,
+                precision: Precision::ResourceScoped,
+                evidence: vec![Evidence {
+                    kind: EvidenceKind::TerraformPlanPointer,
+                    file: Some(block.file.clone()),
+                    line: Some(block.line),
+                    column: None,
+                    length: None,
+                    symbol: Some(format!("{}.{}", block.resource_type, block.name)),
+                    reason: Some(format!(
+                        "Terraform/OpenTofu {}.{} grants {normalized} on {resource} to role {role}",
+                        block.resource_type, block.name
+                    )),
+                    json_pointer: Some(format!("/privileges/{privilege_index}")),
+                    resource: Some(resource.clone()),
+                    provider: Some("postgres".to_owned()),
+                    value: None,
+                    event_id: None,
+                    time: None,
+                    source: Some(PRODUCER_SOURCE.to_owned()),
+                    event_name: None,
+                    principal: if role.is_empty() { None } else { Some(role.clone()) },
+                    account: None,
+                    policy_arn: None,
+                    statement_index: Some(privilege_index),
+                    action: Some(normalized.clone()),
+                }],
+                unknown_reason: None,
+            });
+        }
+    }
+    facts
+}
+
+fn postgres_privilege_category(privilege: &str) -> CapabilityCategory {
+    match privilege {
+        "SELECT" | "REFERENCES" => CapabilityCategory::DatabaseRead,
+        "INSERT" | "UPDATE" | "DELETE" | "TRUNCATE" => CapabilityCategory::DatabaseWrite,
+        _ => CapabilityCategory::Extension("database".to_owned()),
+    }
+}
+
+fn hcl_string_attr(body: &str, key: &str) -> Option<String> {
+    for line in body.lines() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix(key) else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let Some(rest) = rest.strip_prefix('=') else {
+            continue;
+        };
+        let rest = rest.trim();
+        let Some(rest) = rest.strip_prefix('"') else {
+            continue;
+        };
+        if let Some(end) = rest.find('"') {
+            return Some(rest[..end].to_owned());
+        }
+    }
+    None
+}
+
+fn hcl_string_array_attr(body: &str, key: &str) -> Vec<String> {
+    for line in body.lines() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix(key) else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let Some(rest) = rest.strip_prefix('=') else {
+            continue;
+        };
+        let rest = rest.trim();
+        let Some(rest) = rest.strip_prefix('[') else {
+            continue;
+        };
+        let Some(end) = rest.find(']') else {
+            continue;
+        };
+        return rest[..end]
+            .split(',')
+            .map(|item| item.trim().trim_matches('"').to_owned())
+            .filter(|item| !item.is_empty())
+            .collect();
+    }
+    Vec::new()
 }
 
 fn capability_category_for_action(action: &str) -> CapabilityCategory {
@@ -655,5 +796,63 @@ POLICY
             .collect::<std::collections::BTreeSet<_>>();
         assert!(actions.contains("s3:PutObject"));
         assert!(actions.contains("s3:DeleteObject"));
+    }
+
+    #[test]
+    fn terraform_dir_to_bundle_reads_postgresql_grants() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "reir-terraform-postgresql-grant-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+        std::fs::write(
+            temp_dir.join("postgres.tf"),
+            r#"resource "postgresql_grant" "report_writer_audit_events" {
+  database    = "reports"
+  role        = "report_writer"
+  schema      = "public"
+  object_type = "table"
+  objects     = ["audit_events"]
+  privileges  = ["SELECT", "INSERT"]
+}
+"#,
+        )
+        .expect("Terraform fixture should be written");
+
+        let bundle = terraform_dir_to_bundle(&temp_dir).expect("Terraform should collect");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        let insert = bundle
+            .facts
+            .iter()
+            .find(|fact| {
+                fact.capability
+                    .as_ref()
+                    .is_some_and(|capability| capability.action.as_deref() == Some("INSERT"))
+            })
+            .expect("INSERT privilege should be present");
+        let capability = insert
+            .capability
+            .as_ref()
+            .expect("INSERT fact should carry a capability");
+        assert_eq!(capability.category, CapabilityCategory::DatabaseWrite);
+        assert_eq!(capability.provider.as_deref(), Some("postgres"));
+        assert_eq!(capability.service.as_deref(), Some("postgres"));
+        assert_eq!(
+            capability.resource.as_deref(),
+            Some("postgres://reports/public/audit_events")
+        );
+
+        let select = bundle.facts.iter().find(|fact| {
+            fact.capability
+                .as_ref()
+                .is_some_and(|capability| capability.action.as_deref() == Some("SELECT"))
+        });
+        assert!(select.is_some(), "SELECT privilege should be present");
+        assert_eq!(
+            select.unwrap().capability.as_ref().unwrap().category,
+            CapabilityCategory::DatabaseRead
+        );
     }
 }

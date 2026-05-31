@@ -428,6 +428,87 @@ fn s3_iam_reir_demo_native_risk_scenario_reports_review_boundary() {
     println!("s3 iam native-risk: native-wrapper build-scripts unsafe-policy require review");
 }
 
+#[test]
+fn s3_iam_reir_demo_postgres_write_scenario_reports_missing_then_covered() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let demo_dir = repo.join("demos/s3-iam-reir");
+    let postgres_dir = demo_dir.join("scenarios/06-postgres-write");
+
+    let required = required_facts_for_demo(&postgres_dir);
+
+    let insert_requirement = required
+        .iter()
+        .find(|fact| {
+            fact.capability
+                .as_ref()
+                .is_some_and(|capability| capability.action.as_deref() == Some("INSERT"))
+        })
+        .expect("postgres scenario should require INSERT capability");
+    let capability = insert_requirement
+        .capability
+        .as_ref()
+        .expect("INSERT requirement should carry capability metadata");
+    assert_eq!(capability.category, CapabilityCategory::DatabaseWrite);
+    assert_eq!(capability.provider.as_deref(), Some("postgres"));
+    assert_eq!(
+        capability.resource.as_deref(),
+        Some("postgres://reports/public/audit_events")
+    );
+    assert!(insert_requirement.evidence.iter().any(|evidence| {
+        evidence.file.as_deref() == Some("src/audit.rss")
+            && evidence
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("persist_event -> DB.insert_event"))
+    }));
+    assert!(required.iter().any(|fact| {
+        fact.subject.id == "rss-postgres-audit::function::Audit.record_login"
+            && fact
+                .capability
+                .as_ref()
+                .is_some_and(|capability| capability.action.as_deref() == Some("INSERT"))
+    }));
+
+    let missing = reir::reconcile_capabilities_for_target(
+        &required,
+        &terraform_grants_from_fixture(&demo_dir, "postgres-missing"),
+        Some("prod"),
+    );
+    assert!(missing.iter().any(|reconciliation| {
+        reconciliation.kind == ReconciliationKind::MissingCapability
+            && reconciliation.capability.as_ref().is_some_and(|capability| {
+                capability.action.as_deref() == Some("INSERT")
+                    && capability.category == CapabilityCategory::DatabaseWrite
+            })
+    }));
+
+    let fixed = reir::reconcile_capabilities_for_target(
+        &required,
+        &terraform_grants_from_fixture(&demo_dir, "postgres-fixed"),
+        Some("prod"),
+    );
+    assert!(
+        fixed.iter().all(|reconciliation| reconciliation.kind
+            != ReconciliationKind::MissingCapability),
+        "postgres-fixed grants INSERT and should cover the scenario: {fixed:#?}"
+    );
+    let excess_select = fixed.iter().find(|reconciliation| {
+        reconciliation.kind == ReconciliationKind::ExcessCapability
+            && reconciliation
+                .capability
+                .as_ref()
+                .is_some_and(|capability| capability.action.as_deref() == Some("SELECT"))
+    });
+    assert!(
+        excess_select.is_some(),
+        "postgres-fixed SELECT grant should be reported as excess (no read requirement): {fixed:#?}"
+    );
+
+    println!(
+        "s3 iam postgres-write: missing=INSERT fixed=covered excess=SELECT evidence=src/audit.rss"
+    );
+}
+
 fn required_facts_for_demo(demo_dir: &Path) -> Vec<Fact> {
     let review = review_package_dir(demo_dir).expect("demo package review should succeed");
     let bundle: reir::Bundle =

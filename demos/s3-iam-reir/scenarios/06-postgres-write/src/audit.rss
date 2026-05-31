@@ -1,0 +1,19 @@
+features: async
+
+async fn persist_event(
+    table: read String,
+    payload: read String,
+) -> Result<Unit, String> {
+    await DB.insert_event(table: read table, payload: read payload)?
+    return Ok(Unit)
+}
+
+pub async fn Audit.record_login(
+    user: read String,
+) -> Result<Unit, String> {
+    await persist_event(
+        table: read "audit_events",
+        payload: read user,
+    )?
+    return Ok(Unit)
+}

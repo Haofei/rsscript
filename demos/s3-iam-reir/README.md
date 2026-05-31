@@ -86,6 +86,7 @@ Scenario                 Required          Granted                 Result
 03-code-adds-delete      Put+Delete        PutObject               FAIL: missing DeleteObject
 04-native-risk           PutObject         PutObject               REVIEW: native boundary risk
 05-missing-binding       native call       no capability binding   FAIL: unknown, not safe
+06-postgres-write        pg INSERT         pg SELECT (missing)     FAIL: missing INSERT
 ```
 
 ## Run the full demo flow with the Rust test runner
@@ -135,6 +136,7 @@ Scenario                 Reviewer question                         Expected REIR
 03-code-adds-delete      Did the PR add a new external ability?      new DeleteObject requirement
 04-native-risk           Is native risk hidden in the wrapper?       build/unsafe policies require review
 05-missing-capability-binding  Does absent metadata become safe?     unknown binding; fail deny_unknown
+06-postgres-write              Does Postgres role grant INSERT?      database.write INSERT missing/covered
 ```
 
 Run the scenario-only test:
@@ -176,6 +178,20 @@ s3 iam negative-control: missing capability binding is unknown
 ```
 
 The checked-in negative-control output is [expected/missing-capability-binding.txt](expected/missing-capability-binding.txt).
+
+Run the Postgres write scenario (cloud/security extension covering a non-S3 capability):
+
+```sh
+cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_postgres_write_scenario -- --nocapture
+```
+
+Expected output includes:
+
+```text
+s3 iam postgres-write: missing=INSERT fixed=covered excess=SELECT evidence=src/audit.rss
+```
+
+The scenario binds `DB.insert_event` to `database.write / postgres INSERT` on `postgres://reports/public/audit_events`. The `infra/terraform/postgres-missing` fixture only grants `SELECT` through a `postgresql_grant` resource and fails preflight; `infra/terraform/postgres-fixed` adds `INSERT` and passes, while flagging the unused `SELECT` grant as excess. This proves the same required/granted reconciliation loop applies to database write permissions, not only S3 IAM.
 
 ## AI patch story
 
