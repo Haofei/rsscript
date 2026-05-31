@@ -82,7 +82,10 @@ fn run_collect(args: &[String]) -> ExitCode {
 
 fn run_report_pr(args: &[String]) -> ExitCode {
     match try_run_report_pr(args) {
-        Ok(code) => code,
+        Ok((code, comment)) => {
+            print!("{comment}");
+            code
+        }
         Err(error) => report_error(error),
     }
 }
@@ -213,10 +216,10 @@ fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn try_run_report_pr(args: &[String]) -> Result<ExitCode, CliError> {
+fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
     if wants_help(args) {
         print_usage();
-        return Ok(ExitCode::SUCCESS);
+        return Ok((ExitCode::SUCCESS, String::new()));
     }
 
     let mut required = None;
@@ -247,15 +250,12 @@ fn try_run_report_pr(args: &[String]) -> Result<ExitCode, CliError> {
         &granted_bundle.facts,
         target.as_deref(),
     );
-    print!(
-        "{}",
-        format_pr_review_comment(
-            &required_bundle.facts,
-            &granted_bundle.facts,
-            &reconciliations
-        )
+    let comment = format_pr_review_comment(
+        &required_bundle.facts,
+        &granted_bundle.facts,
+        &reconciliations,
     );
-    Ok(exit_for_reconciliations(&reconciliations))
+    Ok((exit_for_reconciliations(&reconciliations), comment))
 }
 
 fn try_run_reconcile(args: &[String]) -> Result<ExitCode, CliError> {
@@ -1197,6 +1197,22 @@ mod tests {
     }
 
     fn capability_fact(id: &str, role: FactRole, subject: Subject, action: &str) -> Fact {
+        capability_fact_with_category(
+            id,
+            role,
+            subject,
+            CapabilityCategory::ObjectStorageWrite,
+            action,
+        )
+    }
+
+    fn capability_fact_with_category(
+        id: &str,
+        role: FactRole,
+        subject: Subject,
+        category: CapabilityCategory,
+        action: &str,
+    ) -> Fact {
         Fact {
             schema: "reir.fact.v0.1".to_owned(),
             id: id.to_owned(),
@@ -1204,7 +1220,7 @@ mod tests {
             role: Some(role),
             subject,
             capability: Some(Capability {
-                category: CapabilityCategory::ObjectStorageWrite,
+                category,
                 provider: Some("aws".to_owned()),
                 service: Some("s3".to_owned()),
                 action: Some(action.to_owned()),
@@ -1515,6 +1531,86 @@ mod tests {
                 && fact.evidence[0].file.as_deref() == Some(lock_path.to_string_lossy().as_ref())
         }));
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn report_pr_cli_reads_bundles_and_outputs_all_missing_capabilities() {
+        let temp_dir = unique_temp_dir("report-pr");
+        let required_path = temp_dir.join("required.json");
+        let granted_path = temp_dir.join("granted.json");
+        let function = Subject {
+            kind: SubjectKind::CodeFunction,
+            id: "reports::Reports.cleanup_old_reports".to_owned(),
+            name: Some("Reports.cleanup_old_reports".to_owned()),
+            package: Some("reports".to_owned()),
+        };
+        let role = Subject {
+            kind: SubjectKind::CloudRole,
+            id: "arn:aws:iam::123456789012:role/report-uploader".to_owned(),
+            name: Some("report-uploader".to_owned()),
+            package: Some("reports".to_owned()),
+        };
+        let required = Bundle {
+            facts: vec![
+                capability_fact_with_category(
+                    "fact.reports.cleanup.requires.s3_put_object",
+                    FactRole::Required,
+                    function.clone(),
+                    CapabilityCategory::ObjectStorageWrite,
+                    "s3:PutObject",
+                ),
+                capability_fact_with_category(
+                    "fact.reports.cleanup.requires.s3_delete_object",
+                    FactRole::Required,
+                    function,
+                    CapabilityCategory::ObjectStorageDelete,
+                    "s3:DeleteObject",
+                ),
+            ],
+            ..Bundle::new()
+        };
+        let granted = Bundle {
+            facts: vec![capability_fact_with_category(
+                "fact.reports.role.grants.s3_get_object",
+                FactRole::Granted,
+                role,
+                CapabilityCategory::ObjectStorageRead,
+                "s3:GetObject",
+            )],
+            ..Bundle::new()
+        };
+        std::fs::write(
+            &required_path,
+            required
+                .to_json()
+                .expect("required bundle should serialize"),
+        )
+        .expect("required bundle should be written");
+        std::fs::write(
+            &granted_path,
+            granted.to_json().expect("granted bundle should serialize"),
+        )
+        .expect("granted bundle should be written");
+
+        let args = vec![
+            "--required".to_owned(),
+            required_path.to_string_lossy().into_owned(),
+            "--granted".to_owned(),
+            granted_path.to_string_lossy().into_owned(),
+            "--target".to_owned(),
+            "prod".to_owned(),
+        ];
+        let (code, comment) = try_run_report_pr(&args).expect("report-pr should run");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        assert_eq!(code, ExitCode::from(1));
+        assert!(comment.contains("Status: FAIL"));
+        assert!(comment.contains("### Required capabilities needing deployment grant"));
+        assert!(comment.contains("object_storage.write aws/s3 s3:PutObject"));
+        assert!(comment.contains("object_storage.delete aws/s3 s3:DeleteObject"));
+        assert!(comment.contains("### Missing capabilities"));
+        assert!(comment.contains("s3:PutObject on arn:aws:s3:::reports-prod/*"));
+        assert!(comment.contains("s3:DeleteObject on arn:aws:s3:::reports-prod/*"));
     }
 
     #[test]

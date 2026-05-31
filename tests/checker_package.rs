@@ -1586,9 +1586,6 @@ paths = ["interface"]
 
 [sources]
 paths = ["src"]
-
-[review.policy]
-deny_unknown = true
 "#,
     )
     .expect("manifest should be written");
@@ -1618,7 +1615,7 @@ native fn S3.put_object(body: read String) -> Result<Unit, String>
             .expect("package review REIR bundle should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 
-    assert_eq!(review.risk, rsscript::PackageRisk::Unknown);
+    assert_ne!(review.risk, rsscript::PackageRisk::Unknown);
     assert_eq!(review_json["summary"]["unknown_apis"], 1);
     assert!(review_json["reasons"].as_array().is_some_and(|reasons| {
         reasons

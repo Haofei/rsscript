@@ -35,7 +35,13 @@ The checked-in PR comment is [expected/pr-comment.md](expected/pr-comment.md).
 The comment format is produced by the `reir report-pr` command:
 
 ```sh
-reir report-pr --required head.reir.json --granted prod-grants.reir.json --target prod
+cargo run --quiet --bin rss -- pkg review --reir \
+  demos/s3-iam-reir/scenarios/03-code-adds-delete > /tmp/rsscript-s3-head.reir.json
+
+cargo run --quiet -p reir -- report-pr \
+  --required /tmp/rsscript-s3-head.reir.json \
+  --granted demos/s3-iam-reir/expected/prod-grants.reir.json \
+  --target prod
 ```
 
 ## Core loop

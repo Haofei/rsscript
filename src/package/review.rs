@@ -147,13 +147,22 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
     let await_sites = collect_package_await_sites(sources);
     let api_summary = package_api_effect_summary(sources, &review_map, &await_sites);
     let risk = if interface_diagnostic_exports.is_empty() {
+        let unknown_capability_bindings_for_risk = if manifest
+            .review
+            .as_ref()
+            .is_some_and(|review| review.policy.deny_unknown == Some(true))
+        {
+            unknown_capability_bindings
+        } else {
+            0
+        };
         package_risk(
             manifest,
             native_rust.as_ref(),
             &review_map,
             &diagnostics,
             api_summary.native_apis,
-            unknown_capability_bindings,
+            unknown_capability_bindings_for_risk,
         )
     } else {
         PackageRisk::Unknown
@@ -660,21 +669,6 @@ fn package_review_capabilities(
                 },
             );
         }
-    }
-
-    let should_emit_unknown_bindings = manifest
-        .review
-        .as_ref()
-        .is_some_and(|review| review.policy.deny_unknown == Some(true));
-    if !should_emit_unknown_bindings {
-        let mut capabilities = capabilities.into_values().collect::<Vec<_>>();
-        capabilities.sort_by(|left, right| {
-            left.binding_symbol
-                .cmp(&right.binding_symbol)
-                .then_with(|| left.function.cmp(&right.function))
-                .then_with(|| left.call_chain.cmp(&right.call_chain))
-        });
-        return capabilities;
     }
 
     let bound_symbols = manifest

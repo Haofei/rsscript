@@ -1,5 +1,5 @@
 use crate::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
 /// Format reconciliation results as human-readable text.
@@ -94,37 +94,56 @@ pub fn format_pr_review_comment(
     reconciliations: &[Reconciliation],
 ) -> String {
     let mut output = String::new();
+    let mut seen_missing = HashSet::new();
     let missing = reconciliations
         .iter()
-        .find(|reconciliation| reconciliation.kind == ReconciliationKind::MissingCapability);
-    let required = missing
-        .and_then(|reconciliation| reconciliation.required_fact.as_deref())
-        .and_then(|id| required_facts.iter().find(|fact| fact.id == id))
-        .or_else(|| {
-            required_facts
-                .iter()
-                .find(|fact| fact.role == Some(FactRole::Required))
-        });
+        .filter(|reconciliation| reconciliation.kind == ReconciliationKind::MissingCapability)
+        .filter(|reconciliation| {
+            reconciliation
+                .capability
+                .as_ref()
+                .is_none_or(|capability| seen_missing.insert(pr_capability_label(capability)))
+        })
+        .collect::<Vec<_>>();
+    let required = if missing.is_empty() {
+        required_facts
+            .iter()
+            .filter(|fact| fact.role == Some(FactRole::Required))
+            .collect::<Vec<_>>()
+    } else {
+        missing
+            .iter()
+            .filter_map(|reconciliation| reconciliation.required_fact.as_deref())
+            .filter_map(|id| required_facts.iter().find(|fact| fact.id == id))
+            .collect::<Vec<_>>()
+    };
 
     writeln!(output, "## RSScript / REIR deployment review\n").unwrap();
     writeln!(
         output,
         "Status: {}\n",
-        if missing.is_some() { "FAIL" } else { "PASS" }
+        if missing.is_empty() { "PASS" } else { "FAIL" }
     )
     .unwrap();
 
-    if let Some(required) = required {
-        writeln!(output, "### Added required capability\n").unwrap();
-        writeln!(output, "- subject: {}", pr_subject_name(required)).unwrap();
-        if let Some(capability) = &required.capability {
-            writeln!(output, "- capability: {}", pr_capability_label(capability)).unwrap();
+    writeln!(
+        output,
+        "### Required capabilities needing deployment grant\n"
+    )
+    .unwrap();
+    if required.is_empty() {
+        writeln!(output, "- none\n").unwrap();
+    } else {
+        for fact in &required {
+            writeln!(output, "- subject: {}", pr_subject_name(fact)).unwrap();
+            if let Some(capability) = &fact.capability {
+                writeln!(output, "  capability: {}", pr_capability_label(capability)).unwrap();
+            }
+            if let Some(evidence) = fact.evidence.first() {
+                writeln!(output, "  evidence: {}", pr_evidence_label(evidence)).unwrap();
+            }
         }
-        if let Some(evidence) = required.evidence.first() {
-            writeln!(output, "- evidence: {}\n", pr_evidence_label(evidence)).unwrap();
-        } else {
-            writeln!(output).unwrap();
-        }
+        writeln!(output).unwrap();
     }
 
     writeln!(output, "### Current prod grants\n").unwrap();
@@ -155,24 +174,27 @@ pub fn format_pr_review_comment(
         writeln!(output).unwrap();
     }
 
-    writeln!(output, "### Missing capability\n").unwrap();
-    if let Some(capability) = missing.and_then(|reconciliation| reconciliation.capability.as_ref())
-    {
-        writeln!(output, "- {}\n", pr_missing_capability_label(capability)).unwrap();
-    } else {
+    writeln!(output, "### Missing capabilities\n").unwrap();
+    if missing.is_empty() {
         writeln!(output, "- none\n").unwrap();
+    } else {
+        for reconciliation in &missing {
+            if let Some(capability) = &reconciliation.capability {
+                writeln!(output, "- {}", pr_missing_capability_label(capability)).unwrap();
+            }
+        }
+        writeln!(output).unwrap();
     }
 
     writeln!(output, "### Review decision\n").unwrap();
-    if let Some(required) = required {
+    if missing.is_empty() {
+        writeln!(output, "No missing deployment capability was found.").unwrap();
+    } else {
         writeln!(
             output,
-            "Block this PR before deploy. Either remove {}, or update IAM and review why delete access is needed.",
-            pr_subject_name(required)
+            "Block this PR before deploy. Either remove the code paths above, or update IAM and review why the missing access is needed."
         )
         .unwrap();
-    } else {
-        writeln!(output, "No missing deployment capability was found.").unwrap();
     }
     output
 }
