@@ -352,17 +352,64 @@ pub enum AsyncPoll<T> {
     Pending,
 }
 
-pub trait Pending<T> {
-    fn poll(&mut self) -> AsyncPoll<T>;
+#[derive(Debug, Default)]
+pub struct Executor {
+    polls: usize,
+    yields: usize,
 }
 
-pub fn run_pending<T>(mut pending: impl Pending<T>) -> T {
-    loop {
-        match pending.poll() {
-            AsyncPoll::Ready(value) => return value,
-            AsyncPoll::Pending => std::thread::yield_now(),
+impl Executor {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn poll_count(&self) -> usize {
+        self.polls
+    }
+
+    pub fn yield_count(&self) -> usize {
+        self.yields
+    }
+
+    pub fn run_pending<T>(&mut self, mut pending: impl Pending<T>) -> T {
+        loop {
+            self.polls += 1;
+            let poll = {
+                let mut cx = Context { executor: self };
+                pending.poll(&mut cx)
+            };
+            match poll {
+                AsyncPoll::Ready(value) => return value,
+                AsyncPoll::Pending => {
+                    let mut cx = Context { executor: self };
+                    cx.yield_now();
+                }
+            }
         }
     }
+}
+
+pub struct Context<'executor> {
+    executor: &'executor mut Executor,
+}
+
+impl Context<'_> {
+    pub fn yield_now(&mut self) {
+        self.executor.yields += 1;
+        std::thread::yield_now();
+    }
+
+    pub fn sleep_for(&mut self, duration: Duration) {
+        std::thread::sleep(duration);
+    }
+}
+
+pub trait Pending<T> {
+    fn poll(&mut self, cx: &mut Context<'_>) -> AsyncPoll<T>;
+}
+
+pub fn run_pending<T>(pending: impl Pending<T>) -> T {
+    Executor::new().run_pending(pending)
 }
 
 pub struct TimerSleepPending {
@@ -370,13 +417,13 @@ pub struct TimerSleepPending {
 }
 
 impl Pending<Result<(), TimerError>> for TimerSleepPending {
-    fn poll(&mut self) -> AsyncPoll<Result<(), TimerError>> {
+    fn poll(&mut self, cx: &mut Context<'_>) -> AsyncPoll<Result<(), TimerError>> {
         let now = Instant::now();
         if now >= self.deadline {
             return AsyncPoll::Ready(Ok(()));
         }
         let remaining = self.deadline.saturating_duration_since(now);
-        std::thread::sleep(remaining.min(Duration::from_millis(1)));
+        cx.sleep_for(remaining.min(Duration::from_millis(1)));
         AsyncPoll::Pending
     }
 }
@@ -2673,6 +2720,33 @@ mod tests {
     #[test]
     fn timer_sleep_pending_completes() {
         super::run_pending(super::timer_sleep_start(0)).expect("timer sleep should complete");
+    }
+
+    #[test]
+    fn executor_drives_pending_with_context() {
+        struct CountPending {
+            polls_before_ready: usize,
+        }
+
+        impl super::Pending<usize> for CountPending {
+            fn poll(&mut self, cx: &mut super::Context<'_>) -> super::AsyncPoll<usize> {
+                if self.polls_before_ready == 0 {
+                    return super::AsyncPoll::Ready(42);
+                }
+                self.polls_before_ready -= 1;
+                cx.yield_now();
+                super::AsyncPoll::Pending
+            }
+        }
+
+        let mut executor = super::Executor::new();
+        let value = executor.run_pending(CountPending {
+            polls_before_ready: 2,
+        });
+
+        assert_eq!(value, 42);
+        assert_eq!(executor.poll_count(), 3);
+        assert!(executor.yield_count() >= 2);
     }
 
     #[test]

@@ -2242,6 +2242,11 @@ cross isolate-local suspension points, but local values, resources, runtime
 read/write guards, noescape closure frames, and unmanaged native borrows may not
 be live across `await`.
 
+Native async bindings lower to an internal start/poll ABI driven by the RSScript
+runtime executor. A pending native operation is polled with a runtime `Context`;
+that context is an implementation ABI for Rust wrappers, not a source-level RSS
+type.
+
 Package review metadata records each `await` site with its callee, source span,
 and `live_across_await` name set so reviewers can see which values are carried
 through a suspension boundary.
