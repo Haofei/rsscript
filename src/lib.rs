@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod analyzer;
+pub mod bbom;
 mod checks;
 mod diagnostic;
 mod formatter;
