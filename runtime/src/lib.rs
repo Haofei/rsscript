@@ -9,6 +9,7 @@ use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 use std::str::Utf8Error;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 pub const RUNTIME_DIAGNOSTIC_PREFIX: &str = "RSSCRIPT_RUNTIME_DIAGNOSTIC:";
@@ -357,6 +358,7 @@ pub struct Executor {
     polls: usize,
     yields: usize,
     next_wake: Option<Instant>,
+    wake_signal: WakeHandle,
 }
 
 impl Executor {
@@ -392,6 +394,10 @@ impl Executor {
         group.join(self)
     }
 
+    pub fn wake_handle(&self) -> WakeHandle {
+        self.wake_signal.clone()
+    }
+
     fn request_wake_at(&mut self, deadline: Instant) {
         self.next_wake = Some(
             self.next_wake
@@ -411,11 +417,47 @@ impl Executor {
         if let Some(deadline) = target {
             let now = Instant::now();
             if deadline > now {
-                std::thread::sleep(deadline.saturating_duration_since(now));
+                self.wake_signal
+                    .wait_timeout(deadline.saturating_duration_since(now));
                 return;
             }
         }
         std::thread::yield_now();
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct WakeHandle {
+    signal: Arc<WakeSignal>,
+}
+
+#[derive(Debug, Default)]
+struct WakeSignal {
+    woken: Mutex<bool>,
+    ready: Condvar,
+}
+
+impl WakeHandle {
+    pub fn wake(&self) {
+        let mut woken = self.signal.woken.lock().expect("wake signal lock poisoned");
+        *woken = true;
+        self.signal.ready.notify_all();
+    }
+
+    fn wait_timeout(&self, duration: Duration) {
+        let mut woken = self.signal.woken.lock().expect("wake signal lock poisoned");
+        if *woken {
+            *woken = false;
+            return;
+        }
+        let (mut woken_after_wait, _) = self
+            .signal
+            .ready
+            .wait_timeout(woken, duration)
+            .expect("wake signal condvar wait poisoned");
+        if *woken_after_wait {
+            *woken_after_wait = false;
+        }
     }
 }
 
@@ -439,6 +481,10 @@ impl Context<'_> {
 
     pub fn wake_after(&mut self, duration: Duration) {
         self.wake_at(Instant::now() + duration);
+    }
+
+    pub fn wake_handle(&self) -> WakeHandle {
+        self.executor.wake_handle()
     }
 }
 
@@ -2970,6 +3016,47 @@ mod tests {
                 pending: 1
             } if completed == vec![Some(10), None]
         ));
+    }
+
+    #[test]
+    fn task_group_join_until_wakes_from_native_signal() {
+        struct ExternalWakePending {
+            ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
+            started: bool,
+        }
+
+        impl super::Pending<usize> for ExternalWakePending {
+            fn poll(&mut self, cx: &mut super::Context<'_>) -> super::AsyncPoll<usize> {
+                if self.ready.load(std::sync::atomic::Ordering::SeqCst) {
+                    return super::AsyncPoll::Ready(42);
+                }
+                if !self.started {
+                    self.started = true;
+                    let ready = self.ready.clone();
+                    let wake = cx.wake_handle();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        ready.store(true, std::sync::atomic::Ordering::SeqCst);
+                        wake.wake();
+                    });
+                }
+                super::AsyncPoll::Pending
+            }
+        }
+
+        let ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut group = super::TaskGroup::new();
+        group.spawn_pending(ExternalWakePending {
+            ready,
+            started: false,
+        });
+
+        let mut executor = super::Executor::new();
+        let started = std::time::Instant::now();
+        let outcome = group.join_until(&mut executor, started + std::time::Duration::from_secs(1));
+
+        assert!(matches!(outcome, super::TaskGroupJoin::Completed(values) if values == vec![42]));
+        assert!(started.elapsed() < std::time::Duration::from_millis(500));
     }
 
     #[test]
