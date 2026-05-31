@@ -512,7 +512,7 @@ fn package_review_hash(review: &PackageReview) -> String {
         input.push('\n');
     }
     input.push_str(&format!(
-        "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}\n",
+        "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}\n",
         review.summary.interface_files,
         review.summary.source_files,
         review.summary.diagnostics,
@@ -528,6 +528,8 @@ fn package_review_hash(review: &PackageReview) -> String {
         review.summary.resource_apis,
         review.summary.fresh_returning_apis,
         review.summary.native_apis,
+        review.summary.async_apis,
+        review.summary.await_sites,
         review.summary.unsafe_apis,
         review.summary.unknown_apis
     ));

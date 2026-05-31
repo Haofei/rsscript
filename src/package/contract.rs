@@ -17,6 +17,7 @@ pub(super) struct PackageFunctionContract {
     pub(super) params: Vec<PackageParamContract>,
     pub(super) return_type: Option<String>,
     pub(super) returns_fresh: bool,
+    pub(super) is_async: bool,
     pub(super) effects: BTreeSet<String>,
     pub(super) span: crate::diagnostic::Span,
 }
@@ -465,6 +466,9 @@ fn package_function_review_export(
     review_map: &ReviewMap,
 ) -> PackageReviewExport {
     let mut reasons = vec!["public function".to_string()];
+    if contract.is_async {
+        reasons.push("async boundary".to_string());
+    }
     for param in &contract.params {
         if matches!(param.effect, Some("mut" | "take")) {
             reasons.push(format!(
@@ -601,6 +605,7 @@ fn package_function_contract(function: &FunctionDecl) -> PackageFunctionContract
         params: function.params.iter().map(package_param_contract).collect(),
         return_type: function.return_ty.as_ref().map(package_type_name),
         returns_fresh: function.returns_fresh,
+        is_async: function.is_async,
         effects: function.effects.iter().map(package_effect_name).collect(),
         span: function.span.clone(),
     }
@@ -778,7 +783,8 @@ pub(super) fn package_function_contract_label(contract: &PackageFunctionContract
         })
         .collect::<Vec<_>>()
         .join(", ");
-    let mut label = format!("pub fn {}({params})", contract.name);
+    let async_prefix = if contract.is_async { "async " } else { "" };
+    let mut label = format!("pub {async_prefix}fn {}({params})", contract.name);
     if let Some(return_type) = &contract.return_type {
         if contract.returns_fresh {
             label.push_str(&format!(" -> fresh {return_type}"));
@@ -881,7 +887,8 @@ pub(super) fn package_function_contract_boundary_changed(
     new: &PackageFunctionContract,
     resource_types: &BTreeSet<&str>,
 ) -> bool {
-    function_contract_adds_mut_or_take_effect(old, new)
+    old.is_async != new.is_async
+        || function_contract_adds_mut_or_take_effect(old, new)
         || function_contract_noescape_boundary_changed(old, new)
         || function_contract_resource_boundary_changed(old, new, resource_types)
 }

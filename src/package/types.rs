@@ -370,6 +370,8 @@ pub struct PackageReviewSummary {
     pub guarantee_apis: usize,
     pub native_guarantee_apis: usize,
     pub native_apis: usize,
+    pub async_apis: usize,
+    pub await_sites: usize,
     pub parallel_apis: usize,
     pub unsafe_apis: usize,
     pub unknown_apis: usize,

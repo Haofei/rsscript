@@ -7,7 +7,8 @@ use crate::analyzer::{
 use crate::diagnostic::{Diagnostic, code};
 use crate::lint::lint_source;
 use crate::review::{ReviewMap, ReviewMapClassification, review_map_sources_with_interfaces};
-use crate::syntax::ast::TypeKind;
+use crate::syntax::ast::{Block, Expr, Item, Stmt, TypeKind};
+use crate::syntax::parse_source;
 
 use super::contract::{
     PackageFunctionContract, collect_package_function_contracts, collect_package_type_contracts,
@@ -170,6 +171,8 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         guarantee_apis: api_summary.guarantee_apis,
         native_guarantee_apis: api_summary.native_guarantee_apis,
         native_apis: api_summary.native_apis,
+        async_apis: api_summary.async_apis,
+        await_sites: api_summary.await_sites,
         parallel_apis: api_summary.parallel_apis,
         unsafe_apis: api_summary.unsafe_apis,
         unknown_apis: api_summary.unknown_apis + interface_diagnostic_exports.len(),
@@ -390,6 +393,8 @@ struct PackageApiSummary {
     guarantee_apis: usize,
     native_guarantee_apis: usize,
     native_apis: usize,
+    async_apis: usize,
+    await_sites: usize,
     parallel_apis: usize,
     unsafe_apis: usize,
     unknown_apis: usize,
@@ -483,6 +488,11 @@ fn package_api_effect_summary(
                     .any(|effect| effect.as_str() == "native")
             })
             .count(),
+        async_apis: contracts
+            .values()
+            .filter(|contract| contract.is_async)
+            .count(),
+        await_sites: package_await_site_count(sources),
         parallel_apis: contracts
             .values()
             .filter(|contract| {
@@ -502,6 +512,96 @@ fn package_api_effect_summary(
             })
             .count(),
         unknown_apis: package_unknown_api_count(contracts, review_map),
+    }
+}
+
+fn package_await_site_count(sources: &[PackageSource]) -> usize {
+    sources
+        .iter()
+        .filter(|source| source.kind == PackageReviewFileKind::Source)
+        .map(|source| {
+            let program = parse_source(&source.path, &source.contents);
+            program
+                .items
+                .iter()
+                .map(|item| match item {
+                    Item::Function(function) => count_await_sites_in_block(&function.body),
+                    Item::Type(type_decl) => type_decl
+                        .drop_body
+                        .as_ref()
+                        .map_or(0, count_await_sites_in_block),
+                })
+                .sum::<usize>()
+        })
+        .sum()
+}
+
+fn count_await_sites_in_block(block: &Block) -> usize {
+    block.statements.iter().map(count_await_sites_in_stmt).sum()
+}
+
+fn count_await_sites_in_stmt(statement: &Stmt) -> usize {
+    match statement {
+        Stmt::Let(stmt) => stmt.value.as_ref().map_or(0, count_await_sites_in_expr),
+        Stmt::Return(stmt) => stmt.value.as_ref().map_or(0, count_await_sites_in_expr),
+        Stmt::With(stmt) => {
+            count_await_sites_in_expr(&stmt.resource) + count_await_sites_in_block(&stmt.body)
+        }
+        Stmt::If(stmt) => {
+            count_await_sites_in_expr(&stmt.condition)
+                + count_await_sites_in_block(&stmt.then_body)
+                + stmt
+                    .else_body
+                    .as_ref()
+                    .map_or(0, count_await_sites_in_block)
+        }
+        Stmt::Loop(stmt) => {
+            stmt.condition.as_ref().map_or(0, count_await_sites_in_expr)
+                + count_await_sites_in_block(&stmt.body)
+        }
+        Stmt::For(stmt) => {
+            count_await_sites_in_expr(&stmt.iterable) + count_await_sites_in_block(&stmt.body)
+        }
+        Stmt::Match(stmt) => {
+            count_await_sites_in_expr(&stmt.value)
+                + stmt
+                    .arms
+                    .iter()
+                    .map(|arm| count_await_sites_in_block(&arm.body))
+                    .sum::<usize>()
+        }
+        Stmt::Expr(expr) => count_await_sites_in_expr(expr),
+        Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::MalformedWith(_)
+        | Stmt::MalformedIf(_)
+        | Stmt::MalformedLoop(_)
+        | Stmt::MalformedFor(_)
+        | Stmt::MalformedMatch(_)
+        | Stmt::Unknown(_) => 0,
+    }
+}
+
+fn count_await_sites_in_expr(expr: &Expr) -> usize {
+    match expr {
+        Expr::Await { value, .. } => 1 + count_await_sites_in_expr(value),
+        Expr::Effect { value, .. }
+        | Expr::Manage { value, .. }
+        | Expr::Spawn { value, .. }
+        | Expr::Try { value, .. } => count_await_sites_in_expr(value),
+        Expr::Binary { left, right, .. } => {
+            count_await_sites_in_expr(left) + count_await_sites_in_expr(right)
+        }
+        Expr::Field { base, .. } => count_await_sites_in_expr(base),
+        Expr::Index { base, index, .. } => {
+            count_await_sites_in_expr(base) + count_await_sites_in_expr(index)
+        }
+        Expr::Call { args, .. } => args
+            .iter()
+            .map(|arg| count_await_sites_in_expr(&arg.value))
+            .sum(),
+        Expr::Closure { body, .. } => count_await_sites_in_block(body),
+        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => 0,
     }
 }
 

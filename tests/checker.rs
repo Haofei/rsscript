@@ -8790,6 +8790,53 @@ pub fn Api.overloaded<A, B, C, D>(
 }
 
 #[test]
+fn package_review_summarizes_async_apis_and_await_sites() {
+    let temp_dir = unique_temp_dir("rsscript-package-review-async");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        "",
+        r#"features: async, native
+
+struct TimerError
+
+pub async native fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
+    effects(native)
+
+pub async fn Api.run() -> Result<Unit, TimerError>
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("src dir should be created");
+    fs::write(
+        temp_dir.join("src/main.rss"),
+        r#"features: async
+
+pub async fn Api.run() -> Result<Unit, TimerError> {
+    await Timer.sleep(ms: 1)?
+    return Ok(Unit)
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(json["summary"]["async_apis"], 2);
+    assert_eq!(json["summary"]["await_sites"], 1);
+    assert!(json["exports"].as_array().is_some_and(|exports| {
+        exports.iter().any(|export| {
+            export["name"] == "Api.run"
+                && export["reasons"]
+                    .as_array()
+                    .is_some_and(|reasons| reasons.iter().any(|reason| reason == "async boundary"))
+        })
+    }));
+}
+
+#[test]
 fn package_review_explains_manifest_unknown_risk() {
     let temp_dir = unique_temp_dir("rsscript-package-review-manifest-unknown");
     write_package_fixture(
