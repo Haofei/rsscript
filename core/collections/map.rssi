@@ -29,3 +29,12 @@ pub fn Map.remove<K, V>(
 ) -> Option<V>
 
 pub fn Map.clear<K, V>(map: mut Map<K, V>) -> Unit
+
+pub fn Map.keys<K, V>(map: read Map<K, V>) -> fresh List<K>
+
+pub fn Map.values<K, V>(map: read Map<K, V>) -> fresh List<V>
+
+pub fn Map.for_each<K, V>(
+    map: read Map<K, V>,
+    callback: noescape Fn(K, V) -> Unit,
+) -> Unit

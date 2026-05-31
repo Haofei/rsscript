@@ -23,3 +23,10 @@ pub fn Set.remove<T>(
 ) -> Bool
 
 pub fn Set.clear<T>(set: mut Set<T>) -> Unit
+
+pub fn Set.to_list<T>(set: read Set<T>) -> fresh List<T>
+
+pub fn Set.for_each<T>(
+    set: read Set<T>,
+    callback: noescape Fn(T) -> Unit,
+) -> Unit

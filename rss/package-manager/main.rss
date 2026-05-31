@@ -44,6 +44,51 @@ struct PackageReviewFacts {
     unknown_apis: Int
 }
 
+struct LockEntry {
+    name: String
+    path: String
+    interface_lines: Int
+    public_apis: Int
+}
+
+struct LockFacts {
+    package_name: String
+    version: String
+    edition: String
+    entries: Int
+}
+
+struct DiffFacts {
+    package_name: String
+    added_apis: Int
+    removed_apis: Int
+    changed_interfaces: Int
+    risk_changed: Bool
+}
+
+struct PublishCheckFacts {
+    package_name: String
+    version: String
+    interface_files: Int
+    source_files: Int
+    public_apis: Int
+    ok: Bool
+    errors: Int
+}
+
+struct InterfaceSummary {
+    interface_files: Int
+    interface_lines: Int
+    public_apis: Int
+    empty_files: Int
+    non_public_files: Int
+}
+
+struct InterfaceSnapshot {
+    relative_path: String
+    text: String
+}
+
 fn json_error(prefix: read String, error: read JsonError) -> fresh String {
     let message = JsonError.message(error: read error)
     let first = String.concat(left: read prefix, right: read ": ")
@@ -821,6 +866,664 @@ fn vendor_metadata_json(
     return StringBuilder.finish(builder: take builder)
 }
 
+fn json_bool_text(value: Bool) -> String {
+    if value {
+        return "true"
+    }
+
+    return "false"
+}
+
+fn copy_string(value: read String) -> fresh String {
+    return String.concat(left: read "", right: read value)
+}
+
+fn json_field_string_or_empty(value: read JsonValue, name: read String) -> fresh String {
+    match Json.field_string(value: read value, name: read name) {
+        Ok(text) => {
+            return copy_string(value: read text)
+        }
+        Err(_) => {
+            return copy_string(value: read "")
+        }
+    }
+}
+
+fn manifest_package_string_or_empty(
+    manifest: read JsonValue,
+    field: read String,
+) -> fresh String {
+    match Json.field(value: read manifest, name: read "package") {
+        Ok(package) => {
+            let text = json_field_string_or_empty(value: read package, name: read field)
+            return copy_string(value: read text)
+        }
+        Err(_) => {
+            return copy_string(value: read "")
+        }
+    }
+}
+
+fn manifest_array_strings_or_empty(
+    manifest: read JsonValue,
+    section: read String,
+    field: read String,
+) -> fresh List<String> {
+    match Json.field(value: read manifest, name: read section) {
+        Ok(section_value) => {
+            match Json.field(value: read section_value, name: read field) {
+                Ok(items_value) => {
+                    match Json.array_strings(value: read items_value) {
+                        Ok(items) => {
+                            return items
+                        }
+                        Err(_) => {
+                            return List<String>.new()
+                        }
+                    }
+                }
+                Err(_) => {
+                    return List<String>.new()
+                }
+            }
+        }
+        Err(_) => {
+            return List<String>.new()
+        }
+    }
+}
+
+fn public_interface_line_count(line: read String) -> Int {
+    let trimmed = String.trim(value: read line)
+    let is_public_fn = String.starts_with(value: read trimmed, prefix: read "pub fn ")
+    let is_public_native_fn = String.starts_with(
+        value: read trimmed,
+        prefix: read "pub native fn ",
+    )
+    let is_public_struct = String.starts_with(value: read trimmed, prefix: read "pub struct ")
+
+    return bool_count(value: is_public_fn || is_public_native_fn || is_public_struct)
+}
+
+fn empty_interface_summary() -> fresh InterfaceSummary {
+    return InterfaceSummary(
+        interface_files: 0,
+        interface_lines: 0,
+        public_apis: 0,
+        empty_files: 0,
+        non_public_files: 0,
+    )
+}
+
+fn copy_interface_summary(summary: read InterfaceSummary) -> fresh InterfaceSummary {
+    return InterfaceSummary(
+        interface_files: summary.interface_files,
+        interface_lines: summary.interface_lines,
+        public_apis: summary.public_apis,
+        empty_files: summary.empty_files,
+        non_public_files: summary.non_public_files,
+    )
+}
+
+fn add_interface_summary_from_text(
+    summary: read InterfaceSummary,
+    text: read String,
+) -> fresh InterfaceSummary {
+    let lines = String.lines(value: read text)
+    let public_apis = List.fold<String, Int>(
+        list: read lines,
+        initial: read 0,
+        folder: |count, line| {
+            return count + public_interface_line_count(line: read line)
+        },
+    )
+    let trimmed = String.trim(value: read text)
+
+    return InterfaceSummary(
+        interface_files: summary.interface_files + 1,
+        interface_lines: summary.interface_lines + List.len(list: read lines),
+        public_apis: summary.public_apis + public_apis,
+        empty_files: summary.empty_files + bool_count(value: String.len(value: read trimmed) == 0),
+        non_public_files: summary.non_public_files + bool_count(value: public_apis == 0),
+    )
+}
+
+fn summarize_interface_file(
+    root: read Path,
+    child: read String,
+    file: read String,
+    summary: read InterfaceSummary,
+) -> Result<fresh InterfaceSummary, String> {
+    if String.ends_with(value: read file, suffix: read ".rssi") == false {
+        return copy_interface_summary(summary: read summary)
+    }
+
+    let directory = Path.join(base: read root, child: read child)
+    let path = Path.join(base: read directory, child: read file)
+    let text = read_text_result(path: read path)?
+
+    return add_interface_summary_from_text(summary: read summary, text: read text)
+}
+
+fn summarize_interface_root(
+    root: read Path,
+    child: read String,
+    summary: read InterfaceSummary,
+) -> Result<fresh InterfaceSummary, String> {
+    let directory = Path.join(base: read root, child: read child)
+    if Directory.exists(path: read directory) == false {
+        return copy_interface_summary(summary: read summary)
+    }
+
+    if Directory.is_dir(path: read directory) == false {
+        return copy_interface_summary(summary: read summary)
+    }
+
+    let files = list_files_result(path: read directory)?
+
+    return List.try_fold<String, InterfaceSummary, String>(
+        list: read files,
+        initial: read summary,
+        folder: |state, file| {
+            return summarize_interface_file(
+                root: read root,
+                child: read child,
+                file: read file,
+                summary: read state,
+            )
+        },
+    )
+}
+
+fn package_interface_summary(root: read Path) -> Result<fresh InterfaceSummary, String> {
+    let manifest = parse_toml_result(path: read manifest_path(root: read root))?
+    let interface_roots = manifest_array_strings_or_empty(
+        manifest: read manifest,
+        section: read "interfaces",
+        field: read "paths",
+    )
+
+    return List.try_fold<String, InterfaceSummary, String>(
+        list: read interface_roots,
+        initial: read empty_interface_summary(),
+        folder: |summary, child| {
+            return summarize_interface_root(
+                root: read root,
+                child: read child,
+                summary: read summary,
+            )
+        },
+    )
+}
+
+fn count_existing_files_with_suffix(
+    root: read Path,
+    child: read String,
+    suffix: read String,
+) -> Result<Int, String> {
+    let directory = Path.join(base: read root, child: read child)
+    if Directory.exists(path: read directory) == false {
+        return 0
+    }
+
+    if Directory.is_dir(path: read directory) == false {
+        return 0
+    }
+
+    let files = list_files_result(path: read directory)?
+    let counter = Counter.new(value: 0)
+
+    for file in files {
+        if String.ends_with(value: read file, suffix: read suffix) {
+            Counter.add(counter: mut counter, amount: 1)
+        }
+    }
+
+    return Counter.value(counter: read counter)
+}
+
+fn count_existing_root_files_with_suffix(
+    root: read Path,
+    children: read List<String>,
+    suffix: read String,
+) -> Result<Int, String> {
+    let counter = Counter.new(value: 0)
+
+    for child in children {
+        let count = count_existing_files_with_suffix(
+            root: read root,
+            child: read child,
+            suffix: read suffix,
+        )?
+        Counter.add(counter: mut counter, amount: count)
+    }
+
+    return Counter.value(counter: read counter)
+}
+
+fn collect_interface_snapshots_from_files(
+    root: read Path,
+    child: read String,
+    files: read List<String>,
+    index: Int,
+    snapshots: mut List<InterfaceSnapshot>,
+) -> Result<Unit, String> {
+    if index >= List.len(list: read files) {
+        return Ok(Unit)
+    }
+
+    let file = List.get(list: read files, index: index)
+    if String.ends_with(value: read file, suffix: read ".rssi") {
+        let directory = Path.join(base: read root, child: read child)
+        let path = Path.join(base: read directory, child: read file)
+        let text = read_text_result(path: read path)?
+        let prefix = String.concat(left: read child, right: read "/")
+        let relative_path = String.concat(left: read prefix, right: read file)
+        let snapshot = InterfaceSnapshot(relative_path: read relative_path, text: read text)
+        List.push(list: mut snapshots, value: read snapshot)
+    }
+
+    return collect_interface_snapshots_from_files(
+        root: read root,
+        child: read child,
+        files: read files,
+        index: index + 1,
+        snapshots: mut snapshots,
+    )
+}
+
+fn collect_interface_snapshots_from_roots(
+    root: read Path,
+    children: read List<String>,
+    index: Int,
+    snapshots: mut List<InterfaceSnapshot>,
+) -> Result<Unit, String> {
+    if index >= List.len(list: read children) {
+        return Ok(Unit)
+    }
+
+    let child = List.get(list: read children, index: index)
+    let directory = Path.join(base: read root, child: read child)
+    require_directory(path: read directory, label: read child)?
+    let files = list_files_result(path: read directory)?
+    collect_interface_snapshots_from_files(
+        root: read root,
+        child: read child,
+        files: read files,
+        index: 0,
+        snapshots: mut snapshots,
+    )?
+
+    return collect_interface_snapshots_from_roots(
+        root: read root,
+        children: read children,
+        index: index + 1,
+        snapshots: mut snapshots,
+    )
+}
+
+fn package_interface_snapshots(root: read Path) -> Result<fresh List<InterfaceSnapshot>, String> {
+    let manifest = parse_toml_result(path: read manifest_path(root: read root))?
+    let interface_roots = manifest_interface_roots(manifest: read manifest)?
+    local snapshots = List<InterfaceSnapshot>.new()
+    collect_interface_snapshots_from_roots(
+        root: read root,
+        children: read interface_roots,
+        index: 0,
+        snapshots: mut snapshots,
+    )?
+
+    return snapshots
+}
+
+fn find_snapshot_text(
+    snapshots: read List<InterfaceSnapshot>,
+    index: Int,
+    path: read String,
+) -> Option<String> {
+    if index >= List.len(list: read snapshots) {
+        return None
+    }
+
+    let snapshot = List.get(list: read snapshots, index: index)
+    if snapshot.relative_path == path {
+        return Some(read snapshot.text)
+    }
+
+    return find_snapshot_text(
+        snapshots: read snapshots,
+        index: index + 1,
+        path: read path,
+    )
+}
+
+fn count_removed_snapshots(
+    left: read List<InterfaceSnapshot>,
+    right: read List<InterfaceSnapshot>,
+    index: Int,
+) -> Int {
+    if index >= List.len(list: read left) {
+        return 0
+    }
+
+    let snapshot = List.get(list: read left, index: index)
+    match find_snapshot_text(
+        snapshots: read right,
+        index: 0,
+        path: read snapshot.relative_path,
+    ) {
+        Some(_) => {
+            return count_removed_snapshots(left: read left, right: read right, index: index + 1)
+        }
+        None => {
+            return 1 + count_removed_snapshots(
+                left: read left,
+                right: read right,
+                index: index + 1,
+            )
+        }
+    }
+}
+
+fn count_added_snapshots(
+    left: read List<InterfaceSnapshot>,
+    right: read List<InterfaceSnapshot>,
+    index: Int,
+) -> Int {
+    if index >= List.len(list: read right) {
+        return 0
+    }
+
+    let snapshot = List.get(list: read right, index: index)
+    match find_snapshot_text(
+        snapshots: read left,
+        index: 0,
+        path: read snapshot.relative_path,
+    ) {
+        Some(_) => {
+            return count_added_snapshots(left: read left, right: read right, index: index + 1)
+        }
+        None => {
+            return 1 + count_added_snapshots(
+                left: read left,
+                right: read right,
+                index: index + 1,
+            )
+        }
+    }
+}
+
+fn count_modified_snapshots(
+    left: read List<InterfaceSnapshot>,
+    right: read List<InterfaceSnapshot>,
+    index: Int,
+) -> Int {
+    if index >= List.len(list: read left) {
+        return 0
+    }
+
+    let snapshot = List.get(list: read left, index: index)
+    match find_snapshot_text(
+        snapshots: read right,
+        index: 0,
+        path: read snapshot.relative_path,
+    ) {
+        Some(text) => {
+            return bool_count(value: text != snapshot.text) + count_modified_snapshots(
+                left: read left,
+                right: read right,
+                index: index + 1,
+            )
+        }
+        None => {
+            return count_modified_snapshots(left: read left, right: read right, index: index + 1)
+        }
+    }
+}
+
+fn collect_lock_entries_from_manifest(
+    root: read Path,
+    manifest: read JsonValue,
+    entries: mut List<LockEntry>,
+) -> Result<Unit, String> {
+    match manifest_dependencies(manifest: read manifest)? {
+        Some(dependencies) => {
+            let names = json_object_keys_result(value: read dependencies)?
+            return collect_lock_entries_from_dependencies(
+                root: read root,
+                dependencies: read dependencies,
+                names: read names,
+                index: 0,
+                entries: mut entries,
+            )
+        }
+        None => {
+            return Ok(Unit)
+        }
+    }
+}
+
+fn collect_lock_entries_from_dependencies(
+    root: read Path,
+    dependencies: read JsonValue,
+    names: read List<String>,
+    index: Int,
+    entries: mut List<LockEntry>,
+) -> Result<Unit, String> {
+    if index >= List.len(list: read names) {
+        return Ok(Unit)
+    }
+
+    let name = List.get(list: read names, index: index)
+    let spec = json_field_result(value: read dependencies, name: read name)?
+    if Json.is_object(value: read spec) {
+        match Json.field_string(value: read spec, name: read "path") {
+            Ok(path) => {
+                let dependency_root = Path.join(base: read root, child: read path)
+                let dependency_manifest = parse_toml_result(
+                    path: read manifest_path(root: read dependency_root),
+                )?
+                let package = json_field_result(value: read dependency_manifest, name: read "package")?
+                let package_name = json_field_string_result(value: read package, name: read "name")?
+                let summary = package_interface_summary(root: read dependency_root)?
+                let entry = LockEntry(
+                    name: read package_name,
+                    path: read path,
+                    interface_lines: summary.interface_lines,
+                    public_apis: summary.public_apis,
+                )
+                List.push(list: mut entries, value: read entry)
+                collect_lock_entries_from_manifest(
+                    root: read dependency_root,
+                    manifest: read dependency_manifest,
+                    entries: mut entries,
+                )?
+            }
+            Err(_) => {
+            }
+        }
+    }
+
+    return collect_lock_entries_from_dependencies(
+        root: read root,
+        dependencies: read dependencies,
+        names: read names,
+        index: index + 1,
+        entries: mut entries,
+    )
+}
+
+fn package_lock_entries(root: read Path) -> Result<fresh List<LockEntry>, String> {
+    let manifest = parse_toml_result(path: read manifest_path(root: read root))?
+    local entries = List<LockEntry>.new()
+    collect_lock_entries_from_manifest(
+        root: read root,
+        manifest: read manifest,
+        entries: mut entries,
+    )?
+
+    return entries
+}
+
+fn added_api_count(before: Int, after: Int) -> Int {
+    if after > before {
+        return after - before
+    }
+
+    return 0
+}
+
+fn removed_api_count(before: Int, after: Int) -> Int {
+    if before > after {
+        return before - after
+    }
+
+    return 0
+}
+
+fn append_lock_entries_json(
+    entries: read List<LockEntry>,
+    index: Int,
+    builder: mut StringBuilder,
+) -> Unit {
+    if index >= List.len(list: read entries) {
+        return Unit
+    }
+
+    if index > 0 {
+        StringBuilder.push(builder: mut builder, value: read ",\n")
+    }
+
+    let entry = List.get(list: read entries, index: index)
+    StringBuilder.push(builder: mut builder, value: read "    {\n      \"name\": ")
+    let name = Json.quote_string(value: read entry.name)
+    StringBuilder.push(builder: mut builder, value: read name)
+    StringBuilder.push(builder: mut builder, value: read ",\n      \"path\": ")
+    let path = Json.quote_string(value: read entry.path)
+    StringBuilder.push(builder: mut builder, value: read path)
+    StringBuilder.push(builder: mut builder, value: read ",\n      \"interface_lines\": ")
+    let interface_lines = String.from_int(value: entry.interface_lines)
+    StringBuilder.push(builder: mut builder, value: read interface_lines)
+    StringBuilder.push(builder: mut builder, value: read ",\n      \"public_apis\": ")
+    let public_apis = String.from_int(value: entry.public_apis)
+    StringBuilder.push(builder: mut builder, value: read public_apis)
+    StringBuilder.push(builder: mut builder, value: read "\n    }")
+
+    return append_lock_entries_json(
+        entries: read entries,
+        index: index + 1,
+        builder: mut builder,
+    )
+}
+
+fn package_lock_json(facts: read LockFacts, entries: read List<LockEntry>) -> fresh String {
+    local builder = StringBuilder.new()
+    StringBuilder.push(builder: mut builder, value: read "{\n")
+    StringBuilder.push(builder: mut builder, value: read "  \"package\": ")
+    let package_name = Json.quote_string(value: read facts.package_name)
+    StringBuilder.push(builder: mut builder, value: read package_name)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"version\": ")
+    let version = Json.quote_string(value: read facts.version)
+    StringBuilder.push(builder: mut builder, value: read version)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"edition\": ")
+    let edition = Json.quote_string(value: read facts.edition)
+    StringBuilder.push(builder: mut builder, value: read edition)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"entries\": ")
+    let entry_count = String.from_int(value: facts.entries)
+    StringBuilder.push(builder: mut builder, value: read entry_count)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"dependencies\": [\n")
+    append_lock_entries_json(entries: read entries, index: 0, builder: mut builder)
+    StringBuilder.push(builder: mut builder, value: read "\n  ]\n}\n")
+
+    return StringBuilder.finish(builder: take builder)
+}
+
+fn package_diff_json(facts: read DiffFacts) -> fresh String {
+    local builder = StringBuilder.new()
+    StringBuilder.push(builder: mut builder, value: read "{\n")
+    StringBuilder.push(builder: mut builder, value: read "  \"package\": ")
+    let package_name = Json.quote_string(value: read facts.package_name)
+    StringBuilder.push(builder: mut builder, value: read package_name)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"added_apis\": ")
+    let added_apis = String.from_int(value: facts.added_apis)
+    StringBuilder.push(builder: mut builder, value: read added_apis)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"removed_apis\": ")
+    let removed_apis = String.from_int(value: facts.removed_apis)
+    StringBuilder.push(builder: mut builder, value: read removed_apis)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"changed_interfaces\": ")
+    let changed_interfaces = String.from_int(value: facts.changed_interfaces)
+    StringBuilder.push(builder: mut builder, value: read changed_interfaces)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"risk_changed\": ")
+    let risk_changed = json_bool_text(value: facts.risk_changed)
+    StringBuilder.push(builder: mut builder, value: read risk_changed)
+    StringBuilder.push(builder: mut builder, value: read "\n}\n")
+
+    return StringBuilder.finish(builder: take builder)
+}
+
+fn package_publish_json(facts: read PublishCheckFacts) -> fresh String {
+    local builder = StringBuilder.new()
+    StringBuilder.push(builder: mut builder, value: read "{\n")
+    StringBuilder.push(builder: mut builder, value: read "  \"package\": ")
+    let package_name = Json.quote_string(value: read facts.package_name)
+    StringBuilder.push(builder: mut builder, value: read package_name)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"version\": ")
+    let version = Json.quote_string(value: read facts.version)
+    StringBuilder.push(builder: mut builder, value: read version)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"interface_files\": ")
+    let interface_files = String.from_int(value: facts.interface_files)
+    StringBuilder.push(builder: mut builder, value: read interface_files)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"source_files\": ")
+    let source_files = String.from_int(value: facts.source_files)
+    StringBuilder.push(builder: mut builder, value: read source_files)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"public_apis\": ")
+    let public_apis = String.from_int(value: facts.public_apis)
+    StringBuilder.push(builder: mut builder, value: read public_apis)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"ok\": ")
+    let ok = json_bool_text(value: facts.ok)
+    StringBuilder.push(builder: mut builder, value: read ok)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"errors\": ")
+    let errors = String.from_int(value: facts.errors)
+    StringBuilder.push(builder: mut builder, value: read errors)
+    StringBuilder.push(builder: mut builder, value: read "\n}\n")
+
+    return StringBuilder.finish(builder: take builder)
+}
+
+fn package_publish_check_facts(root: read Path) -> Result<fresh PublishCheckFacts, String> {
+    let manifest = parse_toml_result(path: read manifest_path(root: read root))?
+    let package_name = manifest_package_string_or_empty(manifest: read manifest, field: read "name")
+    let version = manifest_package_string_or_empty(manifest: read manifest, field: read "version")
+    let edition = manifest_package_string_or_empty(manifest: read manifest, field: read "edition")
+    let source_roots = manifest_array_strings_or_empty(
+        manifest: read manifest,
+        section: read "sources",
+        field: read "paths",
+    )
+    let interface_summary = package_interface_summary(root: read root)?
+    let source_files = count_existing_root_files_with_suffix(
+        root: read root,
+        children: read source_roots,
+        suffix: read ".rss",
+    )?
+    let missing_name = bool_count(value: String.len(value: read package_name) == 0)
+    let missing_version = bool_count(value: String.len(value: read version) == 0)
+    let missing_edition = bool_count(value: String.len(value: read edition) == 0)
+    let missing_interfaces = bool_count(value: interface_summary.interface_files == 0)
+    let missing_sources = bool_count(value: source_files == 0)
+    let errors = missing_name + missing_version + missing_edition + missing_interfaces + missing_sources + interface_summary.empty_files + interface_summary.non_public_files
+
+    return PublishCheckFacts(
+        package_name: read package_name,
+        version: read version,
+        interface_files: interface_summary.interface_files,
+        source_files: source_files,
+        public_apis: interface_summary.public_apis,
+        ok: errors == 0,
+        errors: errors,
+    )
+}
+
 fn run_metadata(root: read Path, output: read Path) -> Result<Unit, String> {
     let facts = package_manifest_facts(root: read root)?
     let text = package_metadata_json(facts: read facts)
@@ -931,6 +1634,90 @@ fn run_review(root: read Path, output: read Path) -> Result<Unit, String> {
     return Ok(Unit)
 }
 
+fn run_lock(root: read Path, output: read Path) -> Result<Unit, String> {
+    let manifest = parse_toml_result(path: read manifest_path(root: read root))?
+    let package = json_field_result(value: read manifest, name: read "package")?
+    let package_name = json_field_string_result(value: read package, name: read "name")?
+    let version = json_field_string_result(value: read package, name: read "version")?
+    let edition = json_field_string_result(value: read package, name: read "edition")?
+    let entries = package_lock_entries(root: read root)?
+    let facts = LockFacts(
+        package_name: read package_name,
+        version: read version,
+        edition: read edition,
+        entries: List.len(list: read entries),
+    )
+    let text = package_lock_json(facts: read facts, entries: read entries)
+    write_text_result(path: read output, text: read text)?
+
+    local builder = StringBuilder.new()
+    StringBuilder.push(builder: mut builder, value: read "rss package manager lock ")
+    StringBuilder.push(builder: mut builder, value: read package_name)
+    StringBuilder.push(builder: mut builder, value: read " entries=")
+    let entry_count = String.from_int(value: facts.entries)
+    StringBuilder.push(builder: mut builder, value: read entry_count)
+    let message = StringBuilder.finish(builder: take builder)
+    Log.write(message: read message)
+
+    return Ok(Unit)
+}
+
+fn run_diff(root: read Path, other: read Path, output: read Path) -> Result<Unit, String> {
+    let before = package_review_facts(root: read root)?
+    let after = package_review_facts(root: read other)?
+    let before_snapshots = package_interface_snapshots(root: read root)?
+    let after_snapshots = package_interface_snapshots(root: read other)?
+    let facts = DiffFacts(
+        package_name: read before.package_name,
+        added_apis: added_api_count(before: before.public_apis, after: after.public_apis),
+        removed_apis: removed_api_count(before: before.public_apis, after: after.public_apis),
+        changed_interfaces: count_removed_snapshots(
+                left: read before_snapshots,
+                right: read after_snapshots,
+                index: 0,
+            ) + count_added_snapshots(
+                left: read before_snapshots,
+                right: read after_snapshots,
+                index: 0,
+            ) + count_modified_snapshots(
+                left: read before_snapshots,
+                right: read after_snapshots,
+                index: 0,
+            ),
+        risk_changed: package_review_risk(facts: read before) != package_review_risk(facts: read after),
+    )
+    let text = package_diff_json(facts: read facts)
+    write_text_result(path: read output, text: read text)?
+
+    local builder = StringBuilder.new()
+    StringBuilder.push(builder: mut builder, value: read "rss package manager diff ")
+    StringBuilder.push(builder: mut builder, value: read before.package_name)
+    StringBuilder.push(builder: mut builder, value: read " changed_interfaces=")
+    let changed_interfaces = String.from_int(value: facts.changed_interfaces)
+    StringBuilder.push(builder: mut builder, value: read changed_interfaces)
+    let message = StringBuilder.finish(builder: take builder)
+    Log.write(message: read message)
+
+    return Ok(Unit)
+}
+
+fn run_publish(root: read Path, output: read Path) -> Result<Unit, String> {
+    let facts = package_publish_check_facts(root: read root)?
+    let text = package_publish_json(facts: read facts)
+    write_text_result(path: read output, text: read text)?
+
+    local builder = StringBuilder.new()
+    StringBuilder.push(builder: mut builder, value: read "rss package manager publish ")
+    StringBuilder.push(builder: mut builder, value: read facts.package_name)
+    StringBuilder.push(builder: mut builder, value: read " errors=")
+    let errors = String.from_int(value: facts.errors)
+    StringBuilder.push(builder: mut builder, value: read errors)
+    let message = StringBuilder.finish(builder: take builder)
+    Log.write(message: read message)
+
+    return Ok(Unit)
+}
+
 pub fn main() -> Result<Unit, String> {
     let command = Args.get_or_default(index: 0, default: read "metadata")
     let root = root_path()
@@ -954,6 +1741,20 @@ pub fn main() -> Result<Unit, String> {
 
     if command == "review" {
         return run_review(root: read root, output: read output)
+    }
+
+    if command == "lock" {
+        return run_lock(root: read root, output: read output)
+    }
+
+    if command == "diff" {
+        let other = Args.get_or_default(index: 3, default: read ".")
+        let other_path = Path.from_string(value: read other)
+        return run_diff(root: read root, other: read other_path, output: read output)
+    }
+
+    if command == "publish" {
+        return run_publish(root: read root, output: read output)
     }
 
     let message = String.concat(left: read "unknown package command: ", right: read command)

@@ -58,3 +58,17 @@ pub fn List.try_fold<T, U: Struct, E>(
 ) -> Result<fresh U, E>
 
 pub fn List.consume<T>(list: take List<T>) -> Unit
+
+pub fn List.contains<T>(
+    list: read List<T>,
+    predicate: noescape Fn(T) -> Bool,
+) -> Bool
+
+pub fn List.is_empty<T>(list: read List<T>) -> Bool
+
+pub fn List.reverse<T>(list: read List<T>) -> fresh List<T>
+
+pub fn List.sort<T>(
+    list: mut List<T>,
+    compare: noescape Fn(T, T) -> Int,
+) -> Unit

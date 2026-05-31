@@ -1,0 +1,24 @@
+features: local
+
+fn sort_descending(numbers: mut List<Int>) -> Unit {
+    List.sort<Int>(
+        list: mut numbers,
+        compare: |a, b| { return b - a },
+    )
+}
+
+fn make_reversed(items: read List<Int>) -> fresh List<Int> {
+    local result = List.reverse<Int>(list: read items)
+    return result
+}
+
+fn check_empty(items: read List<Int>) -> Bool {
+    return List.is_empty<Int>(list: read items)
+}
+
+fn has_positive(items: read List<Int>) -> Bool {
+    return List.contains<Int>(
+        list: read items,
+        predicate: |x| x > 0,
+    )
+}

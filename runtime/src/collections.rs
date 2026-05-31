@@ -74,6 +74,33 @@ pub fn list_consume<T>(list: Vec<T>) {
     drop(list);
 }
 
+pub fn list_contains<T: Clone>(list: &[T], mut predicate: impl FnMut(T) -> bool) -> bool {
+    list.iter().any(|item| predicate(item.clone()))
+}
+
+pub fn list_is_empty<T>(list: &[T]) -> bool {
+    list.is_empty()
+}
+
+pub fn list_reverse<T: Clone>(list: &[T]) -> Vec<T> {
+    let mut result: Vec<T> = list.to_vec();
+    result.reverse();
+    result
+}
+
+pub fn list_sort<T: Clone>(list: &mut Vec<T>, mut compare: impl FnMut(T, T) -> i64) {
+    list.sort_by(|a, b| {
+        let result = compare(a.clone(), b.clone());
+        if result < 0 {
+            std::cmp::Ordering::Less
+        } else if result > 0 {
+            std::cmp::Ordering::Greater
+        } else {
+            std::cmp::Ordering::Equal
+        }
+    });
+}
+
 pub fn map_new<K, V>() -> HashMap<K, V> {
     HashMap::new()
 }
@@ -106,6 +133,20 @@ pub fn map_clear<K, V>(map: &mut HashMap<K, V>) {
     map.clear();
 }
 
+pub fn map_keys<K: Clone, V>(map: &HashMap<K, V>) -> Vec<K> {
+    map.keys().cloned().collect()
+}
+
+pub fn map_values<K, V: Clone>(map: &HashMap<K, V>) -> Vec<V> {
+    map.values().cloned().collect()
+}
+
+pub fn map_for_each<K: Clone, V: Clone>(map: &HashMap<K, V>, mut callback: impl FnMut(K, V)) {
+    for (key, value) in map {
+        callback(key.clone(), value.clone());
+    }
+}
+
 pub fn set_new<T>() -> HashSet<T> {
     HashSet::new()
 }
@@ -132,6 +173,16 @@ pub fn set_remove<T: Eq + Hash>(set: &mut HashSet<T>, value: &T) -> bool {
 
 pub fn set_clear<T>(set: &mut HashSet<T>) {
     set.clear();
+}
+
+pub fn set_to_list<T: Clone>(set: &HashSet<T>) -> Vec<T> {
+    set.iter().cloned().collect()
+}
+
+pub fn set_for_each<T: Clone>(set: &HashSet<T>, mut callback: impl FnMut(T)) {
+    for value in set {
+        callback(value.clone());
+    }
 }
 
 pub fn buffer_new(size: i64) -> Vec<u8> {

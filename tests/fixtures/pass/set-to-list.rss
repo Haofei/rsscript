@@ -1,0 +1,7 @@
+features: local
+
+fn set_size(tags: read Set<String>) -> Int {
+    let items = Set.to_list<String>(set: read tags)
+    let count = List.len<String>(list: read items)
+    return count
+}
