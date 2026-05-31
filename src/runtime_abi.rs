@@ -314,8 +314,18 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     ),
     runtime_intrinsic(
         "Process",
+        "run_stdout_timeout",
+        "rsscript_runtime::process_run_stdout_timeout",
+    ),
+    runtime_intrinsic(
+        "Process",
         "run_many_stdout",
         "rsscript_runtime::process_run_many_stdout",
+    ),
+    runtime_intrinsic(
+        "Process",
+        "run_many_stdout_timeout",
+        "rsscript_runtime::process_run_many_stdout_timeout",
     ),
     runtime_intrinsic("Request", "new", "rsscript_runtime::request_new"),
     runtime_intrinsic("Request", "path", "rsscript_runtime::request_path"),

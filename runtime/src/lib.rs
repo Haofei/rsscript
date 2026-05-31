@@ -1013,27 +1013,88 @@ pub fn process_run_stdout(command: &str, args: &[String]) -> Result<String, Stri
     let output = child
         .output()
         .map_err(|error| format!("failed to run `{command}`: {error}"))?;
+    process_output_result(command, output)
+}
+
+pub fn process_run_stdout_timeout(
+    command: &str,
+    args: &[String],
+    timeout_ms: i64,
+) -> Result<String, String> {
+    if timeout_ms <= 0 {
+        return process_run_stdout(command, args);
+    }
+
+    let timeout_ms = u64::try_from(timeout_ms).unwrap_or(0);
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let mut child = std::process::Command::new(command);
+    child
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    if std::env::var_os("RSSCRIPT_RAMDISK_PATH").is_none()
+        && let Some(path) = default_ramdisk_root_dir()
+    {
+        child.env("RSSCRIPT_RAMDISK_PATH", path);
+    }
+    let mut child = child
+        .spawn()
+        .map_err(|error| format!("failed to run `{command}`: {error}"))?;
+    loop {
+        if child
+            .try_wait()
+            .map_err(|error| format!("failed to poll `{command}`: {error}"))?
+            .is_some()
+        {
+            let output = child
+                .wait_with_output()
+                .map_err(|error| format!("failed to collect `{command}` output: {error}"))?;
+            return process_output_result(command, output);
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            let _ = child.kill();
+            let output = child
+                .wait_with_output()
+                .map_err(|error| format!("failed to collect `{command}` output: {error}"))?;
+            return Err(format!(
+                "`{command}` timed out after {timeout_ms}ms: {}",
+                process_output_details(&output)
+            ));
+        }
+        std::thread::sleep((deadline - now).min(Duration::from_millis(10)));
+    }
+}
+
+fn process_output_result(command: &str, output: std::process::Output) -> Result<String, String> {
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     if output.status.success() {
         return Ok(stdout);
     }
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = stdout.trim();
-    let stderr = stderr.trim();
-    let details = if stdout.is_empty() {
-        stderr.to_string()
-    } else if stderr.is_empty() {
-        stdout.to_string()
-    } else {
-        format!("{stdout}\n{stderr}")
-    };
     let code = output
         .status
         .code()
         .map(|code| code.to_string())
         .unwrap_or_else(|| "signal".to_string());
-    Err(format!("`{command}` exited with {code}: {details}"))
+    Err(format!(
+        "`{command}` exited with {code}: {}",
+        process_output_details(&output)
+    ))
+}
+
+fn process_output_details(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = stdout.trim();
+    let stderr = stderr.trim();
+    if stdout.is_empty() {
+        stderr.to_string()
+    } else if stderr.is_empty() {
+        stdout.to_string()
+    } else {
+        format!("{stdout}\n{stderr}")
+    }
 }
 
 pub fn process_run_many_stdout(
@@ -1041,6 +1102,28 @@ pub fn process_run_many_stdout(
     args: &[String],
     appended_args: &[String],
     jobs: i64,
+) -> Result<Vec<String>, String> {
+    process_run_many_stdout_with_runner(command, args, appended_args, jobs, process_run_stdout)
+}
+
+pub fn process_run_many_stdout_timeout(
+    command: &str,
+    args: &[String],
+    appended_args: &[String],
+    jobs: i64,
+    timeout_ms: i64,
+) -> Result<Vec<String>, String> {
+    process_run_many_stdout_with_runner(command, args, appended_args, jobs, |command, args| {
+        process_run_stdout_timeout(command, args, timeout_ms)
+    })
+}
+
+fn process_run_many_stdout_with_runner(
+    command: &str,
+    args: &[String],
+    appended_args: &[String],
+    jobs: i64,
+    runner: impl Fn(&str, &[String]) -> Result<String, String> + Send + Sync,
 ) -> Result<Vec<String>, String> {
     if appended_args.is_empty() {
         return Ok(Vec::new());
@@ -1056,6 +1139,7 @@ pub fn process_run_many_stdout(
     let errors = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let args = std::sync::Arc::new(args.to_vec());
     let appended_args = std::sync::Arc::new(appended_args.to_vec());
+    let runner = &runner;
 
     std::thread::scope(|scope| {
         for _ in 0..worker_count {
@@ -1072,7 +1156,7 @@ pub fn process_run_many_stdout(
                     };
                     let mut command_args = (*args).clone();
                     command_args.push(appended_arg.clone());
-                    match process_run_stdout(command, &command_args) {
+                    match runner(command, &command_args) {
                         Ok(stdout) => {
                             if let Ok(mut result) = results[index].lock() {
                                 *result = Some(stdout);
