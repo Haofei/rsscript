@@ -11,10 +11,10 @@ The RSS source does not write `effects(requires(...))`. The capability binding i
 `interface/s3.rssi` is the mock native S3 boundary. `src/upload.rss` is ordinary RSS async business code; it is not a native implementation.
 The runtime path is also executable: `rsscript-runtime` owns the Tokio-backed native async executor, while the demo native wrapper only starts HTTP IO futures.
 
-## Run the full demo flow
+## Run the full demo flow with the Rust test runner
 
 ```sh
-demos/s3-iam-reir/scripts/run-full-demo.sh
+cargo test --test s3_iam_reir_demo_e2e -- --nocapture
 ```
 
 Expected flow:
@@ -24,16 +24,7 @@ Expected flow:
 3. The RSS async uploader sends six 256 KiB objects through `rsscript-runtime::spawn_tokio_native`.
 4. A blocking sync client uploads the same number and size of objects sequentially.
 
-The default mock server adds 250 ms of per-request latency. The async client should finish close to one latency window, while the sync client pays that latency once per object. Tune with `RSS_S3_DEMO_OBJECTS`, `RSS_S3_DEMO_PAYLOAD_BYTES`, and `RSS_S3_DEMO_SERVER_DELAY_MS`.
-
-## Run the concurrent runtime demo
-
-```sh
-demos/s3-iam-reir/scripts/run-runtime-demo.sh
-```
-
-Expected result: the script starts a Tokio multi-thread mock S3 HTTP server, lowers the RSS package, and runs six `task_group` uploads concurrently through `rsscript-runtime::spawn_tokio_native`.
-The mock server log is written to `demos/s3-iam-reir/review/mock-s3-server.log`; the `in_flight` values should show overlapping requests.
+The test runner starts the Tokio mock S3 server, builds the generated RSS package, times a warmed async upload, times the blocking sync client, and asserts that the server saw overlapping async requests. It does not use shell scripts.
 
 ## Run the failing deployment check
 

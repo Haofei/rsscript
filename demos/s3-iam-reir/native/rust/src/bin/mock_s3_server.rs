@@ -45,24 +45,44 @@ async fn handle_connection(
     mut stream: TcpStream,
     state: Arc<ServerState>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let current = state.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+    let guard = InFlightGuard::new(state.clone());
+    let current = guard.current;
     let request = read_http_request(&mut stream).await?;
     tokio::time::sleep(state.delay).await;
 
     let total = state.total.fetch_add(1, Ordering::SeqCst) + 1;
     println!(
-        "stored object #{total} path={} bytes={} in_flight={current}",
+        "stored object #{total} method={} path={} bytes={} in_flight={current}",
+        request.method,
         request.path,
         request.body_len
     );
 
     let response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
     stream.write_all(response.as_bytes()).await?;
-    state.in_flight.fetch_sub(1, Ordering::SeqCst);
     Ok(())
 }
 
+struct InFlightGuard {
+    state: Arc<ServerState>,
+    current: usize,
+}
+
+impl InFlightGuard {
+    fn new(state: Arc<ServerState>) -> Self {
+        let current = state.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        Self { state, current }
+    }
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        self.state.in_flight.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 struct HttpRequest {
+    method: String,
     path: String,
     body_len: usize,
 }
@@ -88,6 +108,11 @@ async fn read_http_request(
     let headers = String::from_utf8_lossy(&buffer[..header_end]);
     let mut lines = headers.lines();
     let request_line = lines.next().ok_or("missing request line")?;
+    let method = request_line
+        .split_whitespace()
+        .next()
+        .ok_or("missing request method")?
+        .to_string();
     let path = request_line
         .split_whitespace()
         .nth(1)
@@ -104,6 +129,7 @@ async fn read_http_request(
         .unwrap_or(0);
 
     Ok(HttpRequest {
+        method,
         path,
         body_len: content_length,
     })
