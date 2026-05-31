@@ -2790,12 +2790,17 @@ Schema example:
     {
       "name": "Json.parse",
       "kind": "function",
+      "function_kind": "sync",
+      "normalized_effects": ["native"],
       "classification": "must_review",
       "reasons": ["native_boundary", "returns_fresh", "returns_result"]
     }
   ]
 }
 ```
+
+For async exports, `function_kind` is `"async"` and `normalized_effects` includes
+`"suspends"` even though `suspends` is not a user-authored RSS effect.
 
 ### 15.2 Graph summary metadata
 

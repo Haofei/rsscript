@@ -540,6 +540,12 @@ fn package_review_hash(review: &PackageReview) -> String {
         input.push('\n');
         input.push_str(&export.classification);
         input.push('\n');
+        input.push_str(export.function_kind.as_deref().unwrap_or(""));
+        input.push('\n');
+        for effect in &export.normalized_effects {
+            input.push_str(effect);
+            input.push('\n');
+        }
         for reason in &export.reasons {
             input.push_str(reason);
             input.push('\n');

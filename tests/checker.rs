@@ -8997,6 +8997,10 @@ pub async fn Api.run(client: read Client) -> Result<Unit, TimerError> {
     assert!(json["exports"].as_array().is_some_and(|exports| {
         exports.iter().any(|export| {
             export["name"] == "Api.run"
+                && export["function_kind"] == "async"
+                && export["normalized_effects"]
+                    .as_array()
+                    .is_some_and(|effects| effects.iter().any(|effect| effect == "suspends"))
                 && export["reasons"]
                     .as_array()
                     .is_some_and(|reasons| reasons.iter().any(|reason| reason == "async boundary"))

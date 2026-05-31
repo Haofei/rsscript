@@ -391,6 +391,10 @@ pub struct PackageReviewExport {
     pub kind: String,
     pub classification: String,
     pub reasons: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function_kind: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub normalized_effects: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

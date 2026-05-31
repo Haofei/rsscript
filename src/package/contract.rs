@@ -373,6 +373,8 @@ pub(super) fn package_interface_diagnostic_exports(
                 format!("frontend error {}", diagnostic.code),
                 diagnostic.label.clone(),
             ],
+            function_kind: None,
+            normalized_effects: Vec::new(),
         });
     }
 
@@ -458,6 +460,8 @@ fn package_type_review_export(contract: &PackageTypeContract) -> PackageReviewEx
         kind: "type".to_string(),
         classification: "review_if_changed".to_string(),
         reasons,
+        function_kind: None,
+        normalized_effects: Vec::new(),
     }
 }
 
@@ -518,7 +522,23 @@ fn package_function_review_export(
         kind: "function".to_string(),
         classification: classification.to_string(),
         reasons,
+        function_kind: Some(if contract.is_async {
+            "async".to_string()
+        } else {
+            "sync".to_string()
+        }),
+        normalized_effects: package_function_normalized_effects(contract),
     }
+}
+
+fn package_function_normalized_effects(contract: &PackageFunctionContract) -> Vec<String> {
+    let mut effects = contract.effects.iter().cloned().collect::<Vec<_>>();
+    if contract.is_async && !effects.iter().any(|effect| effect == "suspends") {
+        effects.push("suspends".to_string());
+    }
+    effects.sort();
+    effects.dedup();
+    effects
 }
 
 fn package_protocol_impl_review_export(
@@ -542,6 +562,8 @@ fn package_protocol_impl_review_export(
         kind: "protocol_impl".to_string(),
         classification: "review_if_changed".to_string(),
         reasons,
+        function_kind: None,
+        normalized_effects: Vec::new(),
     }
 }
 
