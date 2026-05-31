@@ -12,6 +12,10 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../core/cache/image_cache.rssi"),
     ),
     (
+        "core/clock/clock.rssi",
+        include_str!("../core/clock/clock.rssi"),
+    ),
+    (
         "core/collections/buffer.rssi",
         include_str!("../core/collections/buffer.rssi"),
     ),
@@ -46,10 +50,26 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
     ("core/csv/csv.rssi", include_str!("../core/csv/csv.rssi")),
     ("core/db/db.rssi", include_str!("../core/db/db.rssi")),
     (
+        "core/encoding/encoding.rssi",
+        include_str!("../core/encoding/encoding.rssi"),
+    ),
+    (
+        "core/env/env.rssi",
+        include_str!("../core/env/env.rssi"),
+    ),
+    (
         "core/fs/directory.rssi",
         include_str!("../core/fs/directory.rssi"),
     ),
     ("core/fs/file.rssi", include_str!("../core/fs/file.rssi")),
+    (
+        "core/hash/hash.rssi",
+        include_str!("../core/hash/hash.rssi"),
+    ),
+    (
+        "core/http/client.rssi",
+        include_str!("../core/http/client.rssi"),
+    ),
     (
         "core/http/http.rssi",
         include_str!("../core/http/http.rssi"),
@@ -67,6 +87,10 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../core/json/json.rssi"),
     ),
     ("core/log/log.rssi", include_str!("../core/log/log.rssi")),
+    (
+        "core/option/option.rssi",
+        include_str!("../core/option/option.rssi"),
+    ),
     ("core/os/os.rssi", include_str!("../core/os/os.rssi")),
     (
         "core/path/path.rssi",
@@ -77,12 +101,28 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../core/process/process.rssi"),
     ),
     (
+        "core/random/random.rssi",
+        include_str!("../core/random/random.rssi"),
+    ),
+    (
+        "core/regex/regex.rssi",
+        include_str!("../core/regex/regex.rssi"),
+    ),
+    (
         "core/resource/resource_pool.rssi",
         include_str!("../core/resource/resource_pool.rssi"),
     ),
     (
+        "core/result/result.rssi",
+        include_str!("../core/result/result.rssi"),
+    ),
+    (
         "core/string/string.rssi",
         include_str!("../core/string/string.rssi"),
+    ),
+    (
+        "core/tempdir/tempdir.rssi",
+        include_str!("../core/tempdir/tempdir.rssi"),
     ),
     (
         "core/test/assert.rssi",

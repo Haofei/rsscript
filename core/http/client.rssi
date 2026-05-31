@@ -1,0 +1,25 @@
+features: native
+
+struct HttpResponse
+struct HttpError
+
+pub native fn Http.get(url: read Url) -> Result<fresh HttpResponse, HttpError>
+    effects(native)
+
+pub native fn Http.post_json(url: read Url, body: read String) -> Result<fresh HttpResponse, HttpError>
+    effects(native)
+
+pub native fn Http.post_form(url: read Url, body: read String) -> Result<fresh HttpResponse, HttpError>
+    effects(native)
+
+pub native fn HttpResponse.status(response: read HttpResponse) -> Int
+    effects(native)
+
+pub native fn HttpResponse.text(response: read HttpResponse) -> fresh String
+    effects(native)
+
+pub native fn HttpResponse.is_success(response: read HttpResponse) -> Bool
+    effects(native)
+
+pub native fn HttpError.message(error: read HttpError) -> String
+    effects(native)

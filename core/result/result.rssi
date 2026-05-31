@@ -1,0 +1,14 @@
+pub fn Result.is_ok<T, E>(value: read Result<T, E>) -> Bool
+    effects(pure)
+
+pub fn Result.is_err<T, E>(value: read Result<T, E>) -> Bool
+    effects(pure)
+
+pub fn Result.unwrap_or<T, E>(value: read Result<T, E>, default: read T) -> T
+    effects(pure)
+
+pub fn Result.ok<T, E>(value: read Result<T, E>) -> Option<T>
+    effects(pure)
+
+pub fn Result.err_message<T, E>(value: read Result<T, E>) -> Option<String>
+    effects(pure)

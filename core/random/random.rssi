@@ -1,0 +1,19 @@
+features: native
+
+pub native fn Uuid.new_v4() -> fresh String
+    effects(native)
+
+pub native fn Random.int(min: Int, max: Int) -> Int
+    effects(native)
+
+pub native fn Random.bool() -> Bool
+    effects(native)
+
+pub native fn Random.float() -> Float
+    effects(native)
+
+pub native fn Random.bytes(len: Int) -> fresh Bytes
+    effects(native)
+
+pub native fn Random.string(len: Int) -> fresh String
+    effects(native)

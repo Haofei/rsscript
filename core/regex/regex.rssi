@@ -1,0 +1,29 @@
+features: native
+
+struct Regex
+struct RegexError
+
+pub native fn Regex.compile(pattern: read String) -> Result<fresh Regex, RegexError>
+    effects(native)
+
+pub native fn Regex.is_match(regex: read Regex, value: read String) -> Bool
+    effects(native)
+
+pub native fn Regex.find(regex: read Regex, value: read String) -> Option<fresh String>
+    effects(native)
+
+pub native fn Regex.captures(regex: read Regex, value: read String) -> fresh List<String>
+    effects(native)
+
+pub native fn Regex.replace_all(
+    regex: read Regex,
+    value: read String,
+    replacement: read String,
+) -> fresh String
+    effects(native)
+
+pub native fn Regex.split(regex: read Regex, value: read String) -> fresh List<String>
+    effects(native)
+
+pub native fn RegexError.message(error: read RegexError) -> String
+    effects(native)

@@ -2,24 +2,38 @@
 
 mod asserts;
 mod async_runtime;
+mod clock;
 mod collections;
 mod diagnostics;
 mod domain;
+mod encoding;
+mod env;
 mod error;
 mod fs;
+mod hash;
 mod managed;
 mod process;
+mod random;
+mod regex;
 mod resource_pool;
 mod string_helpers;
+mod tempdir;
 
 pub use asserts::*;
 pub use async_runtime::*;
+pub use clock::*;
 pub use collections::*;
 pub use diagnostics::*;
 pub use domain::*;
+pub use encoding::*;
+pub use env::*;
 pub use error::*;
 pub use fs::*;
+pub use hash::*;
 pub use managed::*;
 pub use process::*;
+pub use random::*;
+pub use self::regex::*;
 pub use resource_pool::*;
 pub use string_helpers::*;
+pub use tempdir::*;

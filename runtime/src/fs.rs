@@ -189,3 +189,52 @@ fn relative_runtime_path(root: &std::path::Path, path: &std::path::Path) -> Stri
         .to_string_lossy()
         .replace('\\', "/")
 }
+
+pub fn directory_remove_file<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<()> {
+    std::fs::remove_file(path.as_path())
+}
+
+pub fn directory_remove_dir_all<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<()> {
+    std::fs::remove_dir_all(path.as_path())
+}
+
+pub fn directory_copy_file<P: RuntimePath + ?Sized, Q: RuntimePath + ?Sized>(
+    from: &P,
+    to: &Q,
+) -> std::io::Result<()> {
+    std::fs::copy(from.as_path(), to.as_path())?;
+    Ok(())
+}
+
+pub fn directory_rename<P: RuntimePath + ?Sized, Q: RuntimePath + ?Sized>(
+    from: &P,
+    to: &Q,
+) -> std::io::Result<()> {
+    std::fs::rename(from.as_path(), to.as_path())
+}
+
+pub struct FileMetadata {
+    pub is_file: bool,
+    pub is_dir: bool,
+    pub len: i64,
+}
+
+pub fn directory_metadata<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<FileMetadata> {
+    let meta = std::fs::metadata(path.as_path())?;
+    Ok(FileMetadata {
+        is_file: meta.is_file(),
+        is_dir: meta.is_dir(),
+        len: meta.len() as i64,
+    })
+}
+
+pub fn directory_read_string<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<String> {
+    std::fs::read_to_string(path.as_path())
+}
+
+pub fn directory_write_string<P: RuntimePath + ?Sized>(
+    path: &P,
+    content: &str,
+) -> std::io::Result<()> {
+    std::fs::write(path.as_path(), content.as_bytes())
+}

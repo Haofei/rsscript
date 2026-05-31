@@ -1,0 +1,15 @@
+features: native, local
+
+resource TempDir
+
+pub native fn TempDir.new() -> Result<TempDir, FileError>
+    effects(native)
+
+pub native fn TempDir.new_in(parent: read Path) -> Result<TempDir, FileError>
+    effects(native)
+
+pub native fn TempDir.path(dir: read TempDir) -> fresh Path
+    effects(native)
+
+pub native fn TempDir.keep(dir: take TempDir) -> fresh Path
+    effects(native)

@@ -1,0 +1,8 @@
+pub fn Option.is_some<T>(value: read Option<T>) -> Bool
+    effects(pure)
+
+pub fn Option.is_none<T>(value: read Option<T>) -> Bool
+    effects(pure)
+
+pub fn Option.unwrap_or<T>(value: read Option<T>, default: read T) -> T
+    effects(pure)
