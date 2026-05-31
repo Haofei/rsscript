@@ -164,16 +164,6 @@ pub fn format_pr_review_comment(
         writeln!(output).unwrap();
     }
 
-    writeln!(output, "### Missing capabilities\n").unwrap();
-    if missing_groups.is_empty() {
-        writeln!(output, "- none\n").unwrap();
-    } else {
-        for group in &missing_groups {
-            write_pr_missing_group(&mut output, group);
-        }
-        writeln!(output).unwrap();
-    }
-
     writeln!(output, "### Review decision\n").unwrap();
     if missing_groups.is_empty() {
         writeln!(output, "No missing deployment capability was found.").unwrap();

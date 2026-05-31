@@ -1608,7 +1608,6 @@ mod tests {
         assert!(comment.contains("### Required capabilities needing deployment grant"));
         assert!(comment.contains("object_storage.write aws/s3 s3:PutObject"));
         assert!(comment.contains("object_storage.delete aws/s3 s3:DeleteObject"));
-        assert!(comment.contains("### Missing capabilities"));
         assert!(comment.contains("s3:PutObject on arn:aws:s3:::reports-prod/*"));
         assert!(comment.contains("s3:DeleteObject on arn:aws:s3:::reports-prod/*"));
     }

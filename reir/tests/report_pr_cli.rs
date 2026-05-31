@@ -2,6 +2,8 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use reir::{Bundle, FactRole};
+
 fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
     let mut path = std::env::temp_dir();
     path.push(format!(
@@ -45,6 +47,15 @@ fn report_pr_cli_matches_s3_demo_golden_comment() {
         "rss pkg review should emit the REIR bundle even when package risk makes the review command non-zero\nstderr:\n{}",
         String::from_utf8_lossy(&package_review.stderr)
     );
+    let bundle: Bundle = serde_json::from_slice(&package_review.stdout)
+        .expect("rss pkg review --reir should emit valid REIR JSON");
+    assert!(bundle.facts.iter().any(|fact| {
+        fact.role == Some(FactRole::Required)
+            && fact
+                .capability
+                .as_ref()
+                .is_some_and(|capability| capability.action.as_deref() == Some("s3:DeleteObject"))
+    }));
     fs::write(&head_reir, &package_review.stdout).expect("head REIR bundle should be written");
 
     let report_pr = Command::new(env!("CARGO_BIN_EXE_reir"))

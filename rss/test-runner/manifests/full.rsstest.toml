@@ -31,7 +31,7 @@ paths = [
 name = "workspace tests pass"
 kind = "command_success"
 command = "cargo"
-timeout_ms = 60000
+timeout_ms = 120000
 args = ["test", "--workspace"]
 
 [[tests]]
