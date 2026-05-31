@@ -10,7 +10,7 @@ use serde::Deserialize;
 use crate::diagnostic::{Diagnostic, code};
 use crate::formatter::format_program;
 use crate::rust_lower::NativeRustDependency;
-use crate::syntax::ast::{EffectDecl, FileFeature, Item, Program};
+use crate::syntax::ast::{EffectDecl, FileFeature, FileFeatureScope, Item, Program};
 use crate::syntax::parse_source;
 
 use super::contract::collect_package_function_contracts;
@@ -239,6 +239,10 @@ pub(super) fn native_binding_interface_sources(
             }
             let program = Program {
                 features: vec![FileFeature::Native],
+                feature_scopes: vec![FileFeatureScope {
+                    file: source.path.clone(),
+                    features: vec![FileFeature::Native],
+                }],
                 unknown_features: Vec::new(),
                 duplicate_features: Vec::new(),
                 feature_spans: Vec::new(),

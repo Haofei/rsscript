@@ -24,8 +24,15 @@ pub struct DuplicateFileFeature {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileFeatureScope {
+    pub file: String,
+    pub features: Vec<FileFeature>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
     pub features: Vec<FileFeature>,
+    pub feature_scopes: Vec<FileFeatureScope>,
     pub unknown_features: Vec<UnknownFileFeature>,
     pub duplicate_features: Vec<DuplicateFileFeature>,
     pub feature_spans: Vec<Span>,
@@ -42,6 +49,12 @@ impl Program {
         self.features.contains(&feature)
     }
 
+    pub fn file_has_feature(&self, file: &str, feature: FileFeature) -> bool {
+        self.feature_scopes
+            .iter()
+            .any(|scope| scope.file == file && scope.features.contains(&feature))
+    }
+
     pub fn local_capability_enabled(&self) -> bool {
         self.has_feature(FileFeature::Local)
     }
@@ -49,6 +62,7 @@ impl Program {
 
 pub fn merge_programs(programs: impl IntoIterator<Item = Program>) -> Program {
     let mut features = Vec::new();
+    let mut feature_scopes: Vec<FileFeatureScope> = Vec::new();
     let mut unknown_features = Vec::new();
     let mut duplicate_features = Vec::new();
     let mut feature_spans = Vec::new();
@@ -63,6 +77,20 @@ pub fn merge_programs(programs: impl IntoIterator<Item = Program>) -> Program {
         for feature in program.features {
             if !features.contains(&feature) {
                 features.push(feature);
+            }
+        }
+        for scope in program.feature_scopes {
+            if let Some(existing) = feature_scopes
+                .iter_mut()
+                .find(|existing| existing.file == scope.file)
+            {
+                for feature in scope.features {
+                    if !existing.features.contains(&feature) {
+                        existing.features.push(feature);
+                    }
+                }
+            } else {
+                feature_scopes.push(scope);
             }
         }
         unknown_features.extend(program.unknown_features);
@@ -80,6 +108,7 @@ pub fn merge_programs(programs: impl IntoIterator<Item = Program>) -> Program {
 
     Program {
         features,
+        feature_scopes,
         unknown_features,
         duplicate_features,
         feature_spans,

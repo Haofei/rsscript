@@ -3,9 +3,9 @@ use std::collections::HashSet;
 use crate::lexer::{Token, TokenKind, lex};
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, DataEffect, DuplicateFileFeature, EffectDecl, Expr,
-    FieldDecl, FileFeature, ForStmt, FunctionDecl, GenericBound, GenericParam, IfStmt, Item,
-    LetKind, LetStmt, LoopStmt, MatchArm, MatchPattern, MatchStmt, Param, Program, ProtocolDecl,
-    ProtocolImpl, ProtocolImplMapping, ReturnStmt, Stmt, TypeDecl, TypeKind, TypeRef,
+    FieldDecl, FileFeature, FileFeatureScope, ForStmt, FunctionDecl, GenericBound, GenericParam,
+    IfStmt, Item, LetKind, LetStmt, LoopStmt, MatchArm, MatchPattern, MatchStmt, Param, Program,
+    ProtocolDecl, ProtocolImpl, ProtocolImplMapping, ReturnStmt, Stmt, TypeDecl, TypeKind, TypeRef,
     UnknownFileFeature, WithStmt,
 };
 
@@ -14,6 +14,7 @@ pub fn parse_source(file: &str, source: &str) -> Program {
     Parser {
         tokens: &tokens,
         index: 0,
+        file,
     }
     .parse_program()
 }
@@ -21,6 +22,7 @@ pub fn parse_source(file: &str, source: &str) -> Program {
 struct Parser<'a> {
     tokens: &'a [Token],
     index: usize,
+    file: &'a str,
 }
 
 struct ParsedFeatures {
@@ -108,6 +110,10 @@ impl Parser<'_> {
         }
 
         Program {
+            feature_scopes: vec![FileFeatureScope {
+                file: self.file.to_string(),
+                features: features.clone(),
+            }],
             features,
             unknown_features,
             duplicate_features,

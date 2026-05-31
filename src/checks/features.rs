@@ -7,7 +7,7 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
     for feature_use in analyzer.hir.feature_uses().to_vec() {
         if !analyzer
             .syntax_program
-            .has_feature(required_feature(feature_use.kind))
+            .file_has_feature(&feature_use.span.file, required_feature(feature_use.kind))
         {
             feature_violation(
                 analyzer,

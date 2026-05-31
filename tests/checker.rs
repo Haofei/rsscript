@@ -8,15 +8,15 @@ use rsscript::syntax::ast::{EffectDecl, Expr, Item};
 use rsscript::syntax::parse_source;
 use rsscript::{
     NativeRustDependency, ReviewMapClassification, ReviewMapFileRisk, ReviewRisk, Severity,
-    analyze_source, analyze_source_with_core, analyze_source_with_interfaces, check_package_dir,
-    core_interfaces, diff_package_dirs, diff_package_locks, explain_diagnostic_code,
-    format_diagnostic_explanation, format_diagnostics_json, format_package_lock_toml,
-    format_review_human, format_review_json, format_review_map_human, format_review_map_json,
-    lint_source, lock_package_dir, lower_source_to_rust, lower_source_to_rust_package,
-    lower_source_to_rust_with_map, lower_sources_to_rust_package_with_options,
-    package_lowering_input, package_metadata, package_tree, parse_runtime_diagnostics,
-    remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines, review_map_sources,
-    review_package_dir, review_sources,
+    analyze_source, analyze_source_with_core, analyze_source_with_interfaces,
+    analyze_sources_with_interfaces, check_package_dir, core_interfaces, diff_package_dirs,
+    diff_package_locks, explain_diagnostic_code, format_diagnostic_explanation,
+    format_diagnostics_json, format_package_lock_toml, format_review_human, format_review_json,
+    format_review_map_human, format_review_map_json, lint_source, lock_package_dir,
+    lower_source_to_rust, lower_source_to_rust_package, lower_source_to_rust_with_map,
+    lower_sources_to_rust_package_with_options, package_lowering_input, package_metadata,
+    package_tree, parse_runtime_diagnostics, remap_rustc_diagnostic_json,
+    remap_rustc_diagnostic_json_lines, review_map_sources, review_package_dir, review_sources,
 };
 use serde_json::Value;
 
@@ -6905,6 +6905,44 @@ fn main() -> Unit {
             .iter()
             .any(|diagnostic| diagnostic.code == "RS0017")
     );
+}
+
+#[test]
+fn checker_keeps_file_features_scoped_across_source_sets() {
+    let diagnostics = analyze_sources_with_interfaces(
+        &[
+            (
+                "capability.rss",
+                r#"
+features: local
+
+fn helper() -> Unit {
+    local value = String.new()
+    return Unit
+}
+"#,
+            ),
+            (
+                "plain.rss",
+                r#"
+fn bad() -> Unit {
+    local value = String.new()
+    return Unit
+}
+"#,
+            ),
+        ],
+        &[],
+    );
+
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS0101"
+            && diagnostic.span.file == "plain.rss"
+            && diagnostic.summary.contains("features: local")
+    }));
+    assert!(!diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS0101" && diagnostic.span.file == "capability.rss"
+    }));
 }
 
 #[test]
