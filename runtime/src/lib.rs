@@ -552,6 +552,13 @@ impl<T> TaskGroup<T> {
         self.tasks.push(Box::new(pending));
     }
 
+    pub fn spawn_cancellable(
+        &mut self,
+        create: impl FnOnce(CancellationToken) -> Box<dyn Pending<T>>,
+    ) {
+        self.tasks.push(create(self.cancellation.clone()));
+    }
+
     pub fn cancellation_token(&self) -> CancellationToken {
         self.cancellation.clone()
     }
@@ -3082,6 +3089,28 @@ mod tests {
             } if completed == vec![None]
         ));
         assert!(cancellation.is_cancelled());
+    }
+
+    #[test]
+    fn task_group_spawn_cancellable_passes_group_token_to_pending() {
+        struct CapturesCancellation {
+            token: super::CancellationToken,
+        }
+
+        impl super::Pending<bool> for CapturesCancellation {
+            fn poll(&mut self, _cx: &mut super::Context<'_>) -> super::AsyncPoll<bool> {
+                super::AsyncPoll::Ready(self.token.is_cancelled())
+            }
+        }
+
+        let mut group = super::TaskGroup::new();
+        group.cancel();
+        group.spawn_cancellable(|token| Box::new(CapturesCancellation { token }));
+
+        let mut executor = super::Executor::new();
+        let outputs = executor.run_task_group(group);
+
+        assert_eq!(outputs, vec![true]);
     }
 
     #[test]
