@@ -3759,6 +3759,26 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"#;
 }
 
 #[test]
+fn assertion_runtime_diagnostics_parse_to_rsscript_diagnostics() {
+    let stderr = r#"thread 'main' panicked at runtime/src/lib.rs:1:1:
+RSSCRIPT_RUNTIME_DIAGNOSTIC:{"code":"RS1201","severity":"error","summary":"RSScript runtime error: assertion failed: left `left` did not equal right `right`","file":"<runtime>","line":1,"column":1,"length":1,"label":"assertion failed: left `left` did not equal right `right`","kind":"assertion_failed"}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"#;
+
+    let diagnostics = parse_runtime_diagnostics(stderr);
+
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code, "RS1201");
+    assert_eq!(diagnostics[0].span.file, "<runtime>");
+    assert!(diagnostics[0].summary.contains("assertion failed"));
+    assert!(
+        diagnostics[0]
+            .causes
+            .iter()
+            .any(|cause| cause == "runtime error kind: assertion_failed")
+    );
+}
+
+#[test]
 fn rust_lowering_targets_runtime_crate_hooks() {
     let source = r#"
 features: local

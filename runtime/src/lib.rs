@@ -1779,15 +1779,27 @@ pub fn string_builder_finish(builder: String) -> String {
 }
 
 pub fn assert_equal(left: &str, right: &str) {
-    assert_eq!(left, right);
+    if left != right {
+        panic_runtime_error(assertion_failed_error(format!(
+            "assertion failed: left `{left}` did not equal right `{right}`"
+        )));
+    }
 }
 
 pub fn assert_equal_int(left: i64, right: i64) {
-    assert_eq!(left, right);
+    if left != right {
+        panic_runtime_error(assertion_failed_error(format!(
+            "assertion failed: left `{left}` did not equal right `{right}`"
+        )));
+    }
 }
 
 pub fn assert_equal_bool(left: bool, right: bool) {
-    assert_eq!(left, right);
+    if left != right {
+        panic_runtime_error(assertion_failed_error(format!(
+            "assertion failed: left `{left}` did not equal right `{right}`"
+        )));
+    }
 }
 
 pub struct ManagedRead<'a, T>(Ref<'a, T>);
@@ -1832,6 +1844,7 @@ impl<T: fmt::Debug> fmt::Debug for ManagedWrite<'_, T> {
 pub enum RuntimeErrorKind {
     ManagedReadConflict,
     ManagedWriteConflict,
+    AssertionFailed,
     ResourcePoolBorrowConflict,
     ResourcePoolEmpty,
 }
@@ -1882,6 +1895,7 @@ impl RuntimeErrorKind {
         match self {
             Self::ManagedReadConflict => "managed_read_conflict",
             Self::ManagedWriteConflict => "managed_write_conflict",
+            Self::AssertionFailed => "assertion_failed",
             Self::ResourcePoolBorrowConflict => "resource_pool_borrow_conflict",
             Self::ResourcePoolEmpty => "resource_pool_empty",
         }
@@ -1890,6 +1904,14 @@ impl RuntimeErrorKind {
 
 fn panic_runtime_error(error: RuntimeError) -> ! {
     panic!("{}{}", RUNTIME_DIAGNOSTIC_PREFIX, error.diagnostic_json())
+}
+
+fn assertion_failed_error(message: String) -> RuntimeError {
+    RuntimeError {
+        kind: RuntimeErrorKind::AssertionFailed,
+        message,
+        span: None,
+    }
 }
 
 fn managed_read_error(error: BorrowError) -> RuntimeError {
@@ -2191,6 +2213,24 @@ mod tests {
             .expect_err("push during borrow should conflict");
 
         assert_eq!(error.kind, RuntimeErrorKind::ResourcePoolBorrowConflict);
+    }
+
+    #[test]
+    #[should_panic(expected = "RSSCRIPT_RUNTIME_DIAGNOSTIC:")]
+    fn assert_equal_failure_uses_runtime_diagnostic() {
+        super::assert_equal("left", "right");
+    }
+
+    #[test]
+    fn assertion_failed_error_has_structured_kind() {
+        let error = super::assertion_failed_error("assertion failed".to_string());
+
+        assert_eq!(error.kind, RuntimeErrorKind::AssertionFailed);
+        assert!(
+            error
+                .diagnostic_json()
+                .contains("\"kind\":\"assertion_failed\"")
+        );
     }
 
     #[test]
