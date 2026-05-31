@@ -958,7 +958,20 @@ fn check_call_args(
         }
         CallResolution::EnumVariant => return,
     };
-    let signature_params = signature.params.clone();
+    check_receiver_call_self_effect(analyzer, callee, &signature, call_span);
+    // For receiver-call shorthand, the `self` parameter is provided implicitly
+    // by the receiver, so filter it out of the signature params for arg checking.
+    let is_receiver_call = matches!(callee, Callee::ReceiverCall { .. });
+    let signature_params: Vec<_> = if is_receiver_call {
+        signature
+            .params
+            .iter()
+            .filter(|p| p.name != "self")
+            .cloned()
+            .collect()
+    } else {
+        signature.params.clone()
+    };
     check_protocol_receiver_satisfaction(analyzer, function, callee, args, call_span);
     let param_effects: HashMap<String, &'static str> = signature
         .params
@@ -1264,6 +1277,91 @@ fn check_protocol_receiver_satisfaction(
     );
 }
 
+fn check_receiver_call_self_effect(
+    analyzer: &mut Analyzer<'_>,
+    callee: &Callee,
+    signature: &crate::hir::FunctionSig,
+    call_span: &Span,
+) {
+    let Callee::ReceiverCall {
+        receiver,
+        method,
+        effect,
+    } = callee
+    else {
+        return;
+    };
+    let Some(self_param) = signature
+        .params
+        .first()
+        .filter(|param| param.name == "self")
+    else {
+        analyzer.diagnostics.push(
+            Diagnostic::error(
+                code::UNKNOWN_CALLEE,
+                format!(
+                    "receiver-call `{}` does not resolve to a method with a `self` receiver.",
+                    callee_display(callee)
+                ),
+                call_span.clone(),
+                "receiver method required",
+            )
+            .with_cause(
+                "Receiver-call shorthand expands to a qualified method call and requires the resolved function to declare `self` as its first parameter.",
+            )
+            .with_fix(
+                "use_qualified_call",
+                format!("Call `{method}` in qualified form, or add `self: <effect> ...` to its signature."),
+                "manual",
+            ),
+        );
+        return;
+    };
+    let Some(expected) = self_param.effect else {
+        analyzer.diagnostics.push(
+            Diagnostic::error(
+                code::MISSING_DATA_EFFECT,
+                format!(
+                    "receiver `{receiver}` for `{method}` has no declared `self` effect to match."
+                ),
+                call_span.clone(),
+                "missing receiver effect",
+            )
+            .with_cause(
+                "Receiver-call shorthand requires the resolved method to declare `self: read|mut|take ...` so the call-site effect can be checked.",
+            )
+            .with_fix(
+                "add_self_effect",
+                "Declare the method receiver as `self: read ...`, `self: mut ...`, or `self: take ...`.",
+                "manual",
+            ),
+        );
+        return;
+    };
+    if expected.as_str() != effect.as_str() {
+        analyzer.diagnostics.push(
+            Diagnostic::error(
+                code::MISSING_DATA_EFFECT,
+                format!(
+                    "receiver `{receiver}` for `{method}` uses `{}` but the method requires `{}`.",
+                    effect.as_str(),
+                    expected.as_str()
+                ),
+                call_span.clone(),
+                "receiver effect mismatch",
+            )
+            .with_cause(
+                "Receiver-call shorthand is only valid when the visible receiver effect exactly matches the resolved method's `self` effect.",
+            )
+            .with_fix(
+                "match_receiver_effect",
+                format!("Write `{} {receiver}.{method}(...)`.", expected.as_str()),
+                "machine-applicable",
+            ),
+        );
+    }
+}
+
 fn call_type_param_substitutions(
     analyzer: &Analyzer<'_>,
     callee: &Callee,
@@ -1315,6 +1413,7 @@ fn call_type_param_substitutions(
 fn explicit_callee_type_args(callee: &Callee) -> Option<Vec<&str>> {
     match callee {
         Callee::Name(name) | Callee::Qualified { name, .. } => type_arg_names(name),
+        Callee::ReceiverCall { method, .. } => type_arg_names(method),
     }
 }
 
@@ -3272,6 +3371,7 @@ fn callee_name(callee: &Callee) -> String {
     match callee {
         Callee::Name(name) => name.clone(),
         Callee::Qualified { name, .. } => name.clone(),
+        Callee::ReceiverCall { method, .. } => method.clone(),
     }
 }
 
@@ -3279,6 +3379,11 @@ fn callee_display(callee: &Callee) -> String {
     match callee {
         Callee::Name(name) => name.clone(),
         Callee::Qualified { namespace, name } => format!("{namespace}.{name}"),
+        Callee::ReceiverCall {
+            receiver,
+            method,
+            effect,
+        } => format!("{} {receiver}.{method}", effect.as_str()),
     }
 }
 

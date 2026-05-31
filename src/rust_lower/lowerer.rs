@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::diagnostic::Span;
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, ConstDecl, DataEffect, EffectDecl, Expr, FieldDecl,
-    FunctionDecl, Item, MatchPattern, Param, Program, Stmt, SumTypeDecl, TypeAliasDecl, TypeDecl,
-    TypeKind, TypeRef,
+    FunctionDecl, GenericBound, Item, MatchPattern, Param, Program, Stmt, SumTypeDecl,
+    TypeAliasDecl, TypeDecl, TypeKind, TypeRef,
 };
 
 use super::helpers::*;
@@ -30,6 +30,8 @@ pub(super) struct RustLowerer<'a> {
     current_return_type: Option<TypeRef>,
     current_async_executor: Option<String>,
     source_map: Vec<RustSourceMapEntry>,
+    /// Maps generic type param name -> protocol bound name for receiver-call resolution
+    generic_protocol_bounds: BTreeMap<String, String>,
 }
 
 impl<'a> RustLowerer<'a> {
@@ -76,6 +78,7 @@ impl<'a> RustLowerer<'a> {
             current_return_type: None,
             current_async_executor: None,
             source_map: Vec::new(),
+            generic_protocol_bounds: BTreeMap::new(),
         }
     }
 
@@ -422,6 +425,14 @@ impl<'a> RustLowerer<'a> {
             .params
             .iter()
             .map(|param| (param.name.clone(), param.ty.clone()))
+            .collect();
+        self.generic_protocol_bounds = function
+            .type_params
+            .iter()
+            .filter_map(|tp| match &tp.bound {
+                Some(GenericBound::Protocol(protocol)) => Some((tp.name.clone(), protocol.clone())),
+                _ => None,
+            })
             .collect();
         self.managed_bindings = function
             .params
@@ -1158,6 +1169,49 @@ impl<'a> RustLowerer<'a> {
                             .join(", ");
                         return format!("{}({args})", rust_ident(name));
                     }
+                }
+                // Receiver-call shorthand: resolve receiver type and emit
+                // qualified call with receiver as first arg.
+                if let Callee::ReceiverCall {
+                    receiver,
+                    method,
+                    effect,
+                } = callee
+                {
+                    let receiver_type_name = self
+                        .value_types
+                        .get(receiver)
+                        .map(|ty| ty.name.clone())
+                        .unwrap_or_else(|| receiver.clone());
+                    // Resolve namespace: check generic protocol bounds first,
+                    // then fall back to the type name itself
+                    let namespace = self
+                        .generic_protocol_bounds
+                        .get(&receiver_type_name)
+                        .cloned()
+                        .unwrap_or(receiver_type_name.clone());
+                    let is_protocol = self.protocol_names.contains(&namespace);
+                    let lowered_receiver = match effect {
+                        DataEffect::Mut => format!("&mut {}", rust_ident(receiver)),
+                        DataEffect::Read => format!("&{}", rust_ident(receiver)),
+                        DataEffect::Take => rust_ident(receiver),
+                    };
+                    let lowered_args = args
+                        .iter()
+                        .map(|arg| self.lower_expr(&arg.value))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let all_args = if lowered_args.is_empty() {
+                        lowered_receiver
+                    } else {
+                        format!("{lowered_receiver}, {lowered_args}")
+                    };
+                    let callee_str = if is_protocol {
+                        format!("{}::{}", rust_ident(&namespace), rust_ident(method))
+                    } else {
+                        rust_qualified_function_ident(&namespace, method)
+                    };
+                    return format!("{callee_str}({all_args})");
                 }
                 if is_string_concat_callee(callee) {
                     return lower_string_concat_call(self, args);

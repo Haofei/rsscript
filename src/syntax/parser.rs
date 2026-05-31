@@ -1718,6 +1718,11 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
     }
 
     if let Some(effect) = parse_data_effect(tokens.get(start)) {
+        // Check for receiver-call shorthand: <effect> receiver.method(args)
+        if let Some(receiver_call) = parse_receiver_call_expr(tokens, start, end, effect) {
+            return Some(receiver_call);
+        }
+
         let value_start = start + 1;
         let value = if tokens
             .get(value_start)
@@ -2008,6 +2013,64 @@ fn parse_closure_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr
     Some(Expr::Closure {
         params,
         body: parse_block(tokens, open, close),
+        span: tokens[start].span.clone(),
+    })
+}
+
+/// Parse receiver-call shorthand: `<effect> receiver.method(args)`
+/// The pattern is: effect keyword already consumed, then:
+///   tokens[start+1] = lowercase identifier (receiver)
+///   tokens[start+2] = "."
+///   tokens[start+3] = identifier (method name)
+///   tokens[start+4] = "(" (args open)
+/// A receiver is identified by its first character being lowercase.
+/// This distinguishes `mut cache.put(...)` (receiver-call) from
+/// `mut Cache.put(...)` which would be parsed as effect + qualified call.
+fn parse_receiver_call_expr(
+    tokens: &[Token],
+    start: usize,
+    end: usize,
+    effect: DataEffect,
+) -> Option<Expr> {
+    let receiver_pos = start + 1;
+    let receiver_name = ident_name(tokens.get(receiver_pos)?)?;
+
+    // Receiver must start with lowercase to distinguish from Type.method qualified calls
+    if !receiver_name.starts_with(|c: char| c.is_lowercase() || c == '_') {
+        return None;
+    }
+
+    // Must be followed by "."
+    if !tokens.get(receiver_pos + 1)?.symbol(".") {
+        return None;
+    }
+
+    let method_pos = receiver_pos + 2;
+    let method_name = ident_name(tokens.get(method_pos)?)?;
+
+    // Find the opening paren for the call args (may have generic args like method<T>(...))
+    let call_open = find_call_open(tokens, method_pos, end)?;
+    let close = find_matching(tokens, call_open, "(", ")")?;
+    if close + 1 != end {
+        return None;
+    }
+
+    // Build the method name (may include generic args like "write<T>")
+    let method = if call_open == method_pos + 1 {
+        method_name.to_string()
+    } else {
+        // There are generic type args between method name and "("
+        parse_named_callee_segment(tokens, method_pos, call_open)?
+    };
+
+    let args = parse_call_args(tokens, call_open + 1, close);
+    Some(Expr::Call {
+        callee: Callee::ReceiverCall {
+            receiver: receiver_name.to_string(),
+            method,
+            effect,
+        },
+        args,
         span: tokens[start].span.clone(),
     })
 }

@@ -1292,6 +1292,11 @@ fn body_callee_display(callee: &Callee) -> String {
     match callee {
         Callee::Name(name) => name.clone(),
         Callee::Qualified { namespace, name } => format!("{namespace}.{name}"),
+        Callee::ReceiverCall {
+            receiver,
+            method,
+            effect,
+        } => format!("{} {receiver}.{method}", effect.as_str()),
     }
 }
 

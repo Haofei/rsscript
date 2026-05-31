@@ -292,6 +292,9 @@ conversion, auto method resolution, hidden control flow, positional magic, or
 inferred promotion — it is rejected, even when convenient. Convenience bought
 with implicitness is how a coherent language slides into feature fights. The
 rejected influences in section 20.1 are the first applications of this rule.
+Receiver-call shorthand (§14.6.1) passes this test: it requires a mandatory
+effect keyword, resolves uniquely or rejects, and is mechanically expandable to
+its single canonical form.
 
 ---
 
@@ -2400,8 +2403,9 @@ contract-checked   an implementation is validated against the protocol the same
                    the protocol feature reuses that checker, it does not invent a
                    new dispatch or resolution mechanism
 explicit calls     protocol methods are called in qualified form
-                   `Protocol.method(self: <effect> value, ...)`, never
-                   `value.method(...)`; there is no auto method resolution
+                   `Protocol.method(self: <effect> value, ...)`, or via the
+                   receiver-call shorthand `<effect> value.method(...)` (§14.6.1);
+                   there is no auto method resolution
 receiver proof     every protocol call must prove the receiver satisfies the
                    protocol through an explicit `T: Protocol` generic bound or
                    an explicit `impl Protocol for ConcreteType` declaration
@@ -2421,7 +2425,10 @@ higher-ranked bounds
 lifetime bounds
 arbitrary where clauses
 operator overloading
-auto method resolution
+auto method resolution (Rust-style: auto-ref, auto-deref, trait search,
+                        blanket impl lookup, argument-type overload ranking;
+                        receiver-call shorthand §14.6.1 is NOT this — it requires
+                        a visible effect keyword and unique resolution)
 protocol inheritance
 default method bodies
 implicit coercion to a protocol type
@@ -2470,6 +2477,146 @@ safety, blanket implementations, associated types, and auto method resolution
 must not leak into source, diagnostics, `.rssi` contracts, package metadata, or
 review evidence.
 
+#### 14.6.1 Receiver-call shorthand
+
+A **receiver-call expression** is a syntactic shorthand for a qualified function
+or protocol method call. It has the form:
+
+```text
+<effect> <receiver>.<method>(<named args>)
+```
+
+where `<effect>` is `read`, `mut`, or `take`. The effect keyword is mandatory;
+bare `receiver.method(...)` without an effect prefix is rejected.
+
+Examples:
+
+```rust
+read user.name()
+mut cache.put(key: read key, value: read value)
+take builder.finish()
+mut writer.write(message: read msg)
+```
+
+Each is semantically identical to the canonical qualified call:
+
+```rust
+User.name(self: read user)
+Cache.put(self: mut cache, key: read key, value: read value)
+StringBuilder.finish(self: take builder)
+Writer.write(self: mut writer, message: read msg)
+```
+
+##### Resolution rules
+
+The compiler resolves a receiver-call expression using the following rules.
+All must hold; if any fails the program is rejected:
+
+```text
+1. The receiver's static type is known at the call site.
+2. Exactly one visible method named <method> exists for that type, considering:
+   (a) inherent functions declared as Type.method(self: ...) for the concrete type
+   (b) protocol methods from protocols explicitly implemented for the type
+       (via `impl Protocol for Type`) or required by a generic bound (T: Protocol)
+3. The method's declared self-effect must equal the effect written at the call site.
+4. All non-self parameters must use named-argument syntax with explicit effects.
+5. No auto-reference, auto-dereference, implicit protocol coercion, extension-method
+   lookup, overload ranking, or argument-type-based method search is performed.
+```
+
+If more than one candidate exists (e.g. two protocols both declare a method with
+the same name), the program is rejected with a diagnostic instructing the user to
+write the canonical qualified call:
+
+```text
+error: ambiguous method `write` on type `BufferWriter`
+  candidates: Writer.write, Logger.write
+  help: use the qualified form `Writer.write(self: mut writer, ...)` or
+        `Logger.write(self: mut writer, ...)`
+```
+
+No priority rules, import-order ranking, or argument-type disambiguation are
+applied. **Unique resolution or rejection** is the only rule.
+
+##### Generic bounds
+
+Receiver-call shorthand works with generic type parameters when a unique protocol
+bound provides the method:
+
+```rust
+fn write_line<W: Writer>(writer: mut W, message: read String) -> Unit {
+    mut writer.write(message: read message)
+}
+```
+
+This resolves to `Writer.write(self: mut writer, message: read message)` because
+`W: Writer` is the only bound providing `write`. If multiple bounds provide the
+same method name, the shorthand is rejected.
+
+##### What is NOT permitted
+
+The following are permanently excluded from receiver-call resolution:
+
+```text
+auto-deref chain          (no Deref-target method search)
+auto-borrow               (no implicit & or &mut insertion)
+implicit protocol coercion (receiver must already satisfy the protocol)
+extension methods          (no methods added from imports)
+method overloading         (no same-name methods with different signatures)
+argument-type overload     (resolution uses only receiver type + method name)
+blanket impl search        (only explicit impl or explicit bound)
+protocol inheritance       (no superprotocol method search)
+import-order priority      (candidate set is unordered)
+dynamic fallback           (no runtime dispatch without explicit protocol-dynamic)
+```
+
+##### Review metadata for receiver-call shorthand
+
+The review map and `rss review --map` JSON must record the canonical expansion
+for every receiver-call expression:
+
+```json
+{
+  "source_call": "mut cache.put(key: read key, value: read value)",
+  "canonical_call": "Cache.put(self: mut cache, key: read key, value: read value)",
+  "receiver_effect": "mut",
+  "resolved_protocol": null,
+  "resolved_function": "Cache.put",
+  "effects": ["retains(key)", "retains(value)"]
+}
+```
+
+For protocol method calls resolved through a generic bound:
+
+```json
+{
+  "source_call": "mut writer.write(message: read msg)",
+  "canonical_call": "Writer.write(self: mut writer, message: read msg)",
+  "receiver_effect": "mut",
+  "resolved_protocol": "Writer",
+  "resolved_function": "BufferWriter.write",
+  "effects": ["retains(message)"]
+}
+```
+
+The source code may use the shorthand, but review artifacts always display the
+fully qualified canonical form. A reviewer never needs to perform method lookup
+manually.
+
+##### Relationship to section 2.8 admission rule
+
+Receiver-call shorthand satisfies the feature admission rule because:
+
+```text
+1. It answers a reviewer question: "which function owns this call, and with
+   what effect on the receiver?" — the answer is visible in both source
+   (effect keyword) and review artifact (canonical expansion).
+2. It uses explicit, named, single-canonical syntax: the effect prefix is
+   mandatory, resolution is deterministic, and the canonical form is unique.
+3. It does NOT require an implicit rule to be ergonomic: the shorthand is
+   explicitly marked with the effect keyword and mechanically expandable.
+```
+
 #### Dynamic dispatch (deferred, not admitted in v0.5)
 
 RSScript v0.5 does not admit protocol-typed dynamic dispatch, trait objects, or
@@ -2497,7 +2644,8 @@ A form that cannot meet them is not admitted:
    contract, so the call's mutation/retention/resource behavior stays known.
 2. Coercion to a protocol-typed value is explicit (e.g. an explicit `as Protocol`
    or wrapper construction), never an implicit upcast.
-3. Calls stay explicit and qualified: `Protocol.method(self: read value, ...)`.
+3. Calls stay explicit and qualified: `Protocol.method(self: read value, ...)`
+   or via receiver-call shorthand `read value.method(...)` (§14.6.1).
 4. A protocol-typed value is an ordinary managed handle (single-isolate, not
    `Send`); its allocation is the normal managed allocation, not hidden boxing.
 5. Review classification: a protocol-dynamic call would need an explicit
@@ -2606,7 +2754,11 @@ the interface function is a declared native binding.
 `use` does not enable auto method resolution, unqualified overload lookup,
 extension methods, or implicit conversion. Calls stay in canonical qualified
 form such as `Protocol.method(self: mut writer, ...)` or
-`PackageContract.hash(contract: read contract)`.
+`PackageContract.hash(contract: read contract)`, or in receiver-call shorthand
+form `mut writer.write(message: read msg)` which resolves identically (§14.6.1).
+A `use` import does not expand the candidate set for receiver-call resolution;
+only explicit `impl Protocol for Type` declarations and generic bounds contribute
+candidates.
 
 ---
 
@@ -3508,6 +3660,56 @@ fn run_queries(url: read Url, queries: read List<Query>) -> Result<Unit, DbError
 }
 ```
 
+### 19.6 Receiver-call shorthand
+
+The same examples above written with receiver-call shorthand (§14.6.1). Both
+forms are semantically identical; the compiler expands the shorthand to the
+canonical qualified call.
+
+File write:
+
+```rust
+fn write_text(path: read Path, text: read String) -> Result<Unit, IOError> {
+    with File.open_write(path: read path)? as file {
+        mut file.write(data: read text)?
+    }
+
+    return Ok(Unit)
+}
+```
+
+Image pipeline:
+
+```rust
+features: local
+
+fn make_thumbnail(input: read Path, output: read Path) -> Result<Unit, ImageError> {
+    local image = Image.load(path: read input)?
+
+    mut image.resize(width: 256, height: 256)
+    mut image.normalize()
+
+    let shared = manage image
+    read shared.save(path: read output)?
+
+    return Ok(Unit)
+}
+```
+
+Generic protocol method:
+
+```rust
+fn write_line<W: Writer>(writer: mut W, message: read String) -> Unit {
+    mut writer.write(message: read message)
+}
+```
+
+Canonical expansion (shown in review output):
+
+```rust
+Writer.write(self: mut writer, message: read message)
+```
+
 ---
 
 ## 20. Implementation Roadmap
@@ -3613,7 +3815,9 @@ must not be adopted:
 cascade operator (..)        hides repeated receiver mutation; RSScript requires
                              visible mut at each call
 extension methods /          conflicts with explicit Type.method(self: ...) calls
-implicit method resolution   and no auto method resolution
+implicit method resolution   and no auto method resolution; receiver-call shorthand
+                             (§14.6.1) is NOT implicit — it requires a visible
+                             effect keyword and unique resolution
 positional records /         conflicts with named-everything canonical style;
 implicit flow promotion       any record-like form must use named fields
 ```
@@ -3646,7 +3850,10 @@ macro-heavy metaprogramming
 
 What is excluded is the *Rust-style* trait-object machinery: implicit coercion,
 auto method resolution, object safety rules, and type-erased dispatch with no
-effect contract. Protocol-typed dynamic dispatch is also not part of v0.5; any
+effect contract. The receiver-call shorthand (§14.6.1) is not auto method
+resolution: it requires a mandatory effect keyword at the call site, resolves
+only when exactly one candidate exists, and expands to a single canonical
+qualified call. Protocol-typed dynamic dispatch is also not part of v0.5; any
 future explicit, effect-carrying form must be admitted as a separate feature
 with source, checker, lowering, package-review, and REIR support (section 14.6).
 

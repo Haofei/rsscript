@@ -573,6 +573,17 @@ impl Formatter {
                 self.out.push('.');
                 self.out.push_str(name);
             }
+            Callee::ReceiverCall {
+                receiver,
+                method,
+                effect,
+            } => {
+                self.out.push_str(effect.as_str());
+                self.out.push(' ');
+                self.out.push_str(receiver);
+                self.out.push('.');
+                self.out.push_str(method);
+            }
         }
     }
 

@@ -1,0 +1,15 @@
+// expect: RS0206
+features: local
+
+struct Cache {
+    data: Map<String, String>
+}
+
+fn Cache.put(self: mut Cache, key: read String, value: read String) -> Unit {
+    Map.insert<String, String>(map: mut self.data, key: read key, value: read value)
+}
+
+fn main() -> Unit {
+    let cache = Cache(data: Map.new<String, String>())
+    cache.put(key: read "hello", value: read "world")
+}

@@ -223,6 +223,7 @@ pub(super) fn executable_declaration_callee_key(callee: &Callee) -> String {
         Callee::Qualified { namespace, name } => {
             format!("{}.{}", type_root_name(namespace), type_root_name(name))
         }
+        Callee::ReceiverCall { method, .. } => type_root_name(method).to_string(),
     }
 }
 
@@ -442,6 +443,7 @@ pub(super) fn native_boundary_callee_key(callee: &Callee) -> String {
         Callee::Qualified { namespace, name } => {
             format!("{}.{}", type_root_name(namespace), type_root_name(name))
         }
+        Callee::ReceiverCall { method, .. } => type_root_name(method).to_string(),
     }
 }
 
@@ -902,6 +904,7 @@ pub(super) fn lower_callee(callee: &Callee) -> String {
             )
         }
         Callee::Qualified { namespace, name } => rust_qualified_function_ident(namespace, name),
+        Callee::ReceiverCall { method, .. } => rust_ident(type_root_name(method)),
     }
 }
 
@@ -911,6 +914,7 @@ pub(super) fn lower_protocol_callee(callee: &Callee) -> String {
             format!("{}::{}", rust_ident(namespace), rust_ident(name))
         }
         Callee::Name(name) => rust_ident(name),
+        Callee::ReceiverCall { method, .. } => rust_ident(method),
     }
 }
 

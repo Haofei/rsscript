@@ -3,8 +3,9 @@ use std::collections::{HashMap, HashSet};
 use crate::diagnostic::Span;
 use crate::interfaces::builtin_interfaces;
 use crate::syntax::ast::{
-    BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl, Item,
-    LetKind, MatchPattern, Param, Program as SyntaxProgram, Stmt, TypeDecl, TypeKind, TypeRef,
+    BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl,
+    GenericBound, Item, LetKind, MatchPattern, Param, Program as SyntaxProgram, Stmt, TypeDecl,
+    TypeKind, TypeRef,
 };
 use crate::syntax::parse_source;
 
@@ -565,6 +566,10 @@ impl Hir {
             Callee::Qualified { namespace, name } => {
                 self.resolve_function(Some(namespace), type_root_name(name))
             }
+            Callee::ReceiverCall { .. } => {
+                // ReceiverCall requires type context; use resolve_receiver_call instead
+                return CallResolution::Unknown;
+            }
         };
         let Some(signature) = signature else {
             return CallResolution::Unknown;
@@ -574,13 +579,54 @@ impl Hir {
                 || function_kind(signature),
                 |type_kind| ResolvedCalleeKind::Constructor { type_kind },
             ),
-            Callee::Qualified { .. } => function_kind(signature),
+            Callee::Qualified { .. } | Callee::ReceiverCall { .. } => function_kind(signature),
         };
 
         CallResolution::Resolved {
             signature: signature.clone(),
             kind,
         }
+    }
+
+    /// Resolve a receiver-call shorthand given the receiver's resolved type.
+    /// Returns the resolution and the namespace used (type or protocol name).
+    /// `value_types` is used to look up protocol bounds for generic type params
+    /// (stored with key `__protocol_bound__<TypeParam>`).
+    pub fn resolve_receiver_call(
+        &self,
+        receiver_type: &str,
+        method: &str,
+        value_types: &HashMap<String, String>,
+    ) -> (CallResolution, Option<String>) {
+        let receiver_root = type_root_name(receiver_type);
+
+        // Try inherent method: Type.method
+        if let Some(sig) = self.resolve_function(Some(receiver_root), method) {
+            return (
+                CallResolution::Resolved {
+                    signature: sig.clone(),
+                    kind: function_kind(sig),
+                },
+                Some(receiver_root.to_string()),
+            );
+        }
+
+        // Try protocol bounds: if receiver is a generic param T: Protocol,
+        // look for Protocol.method using the convention key
+        let bound_key = format!("__protocol_bound__{receiver_root}");
+        if let Some(protocol) = value_types.get(&bound_key) {
+            if let Some(sig) = self.resolve_function(Some(protocol), method) {
+                return (
+                    CallResolution::Resolved {
+                        signature: sig.clone(),
+                        kind: function_kind(sig),
+                    },
+                    Some(protocol.clone()),
+                );
+            }
+        }
+
+        (CallResolution::Unknown, None)
     }
 
     fn insert_function(&mut self, signature: FunctionSig) {
@@ -778,6 +824,16 @@ fn collect_function_body_facts(hir: &Hir, function: &FunctionDecl, facts: &mut B
             HirFeatureUseKind::ResourcePool,
             facts,
         );
+    }
+    // Store protocol bounds for receiver-call shorthand resolution.
+    // Convention: "__protocol_bound__<TypeParam>" -> "<ProtocolName>"
+    for type_param in &function.type_params {
+        if let Some(GenericBound::Protocol(protocol)) = &type_param.bound {
+            value_types.insert(
+                format!("__protocol_bound__{}", type_param.name),
+                protocol.clone(),
+            );
+        }
     }
     let mut lowering_value_types = value_types.clone();
     facts.blocks.insert(
@@ -1089,7 +1145,20 @@ fn lower_hir_expr(
             span: span.clone(),
         },
         Expr::Call { callee, args, span } => {
-            let resolution = hir.resolve_call(callee);
+            let resolution = match callee {
+                Callee::ReceiverCall {
+                    receiver, method, ..
+                } => {
+                    if let Some(receiver_type) = value_types.get(receiver).cloned() {
+                        let (res, _) =
+                            hir.resolve_receiver_call(&receiver_type, method, value_types);
+                        res
+                    } else {
+                        CallResolution::Unknown
+                    }
+                }
+                _ => hir.resolve_call(callee),
+            };
             let events = retain_events_for_call(
                 function_name,
                 callee,
@@ -1434,7 +1503,20 @@ fn collect_body_facts_in_expr(
             collect_body_facts_in_expr(hir, function_name, right, value_types, facts);
         }
         Expr::Call { callee, args, span } => {
-            let resolution = hir.resolve_call(callee);
+            let resolution = match callee {
+                Callee::ReceiverCall {
+                    receiver, method, ..
+                } => {
+                    if let Some(receiver_type) = value_types.get(receiver).cloned() {
+                        let (res, _namespace) =
+                            hir.resolve_receiver_call(&receiver_type, method, value_types);
+                        res
+                    } else {
+                        CallResolution::Unknown
+                    }
+                }
+                _ => hir.resolve_call(callee),
+            };
             if matches!(
                 &resolution,
                 CallResolution::Resolved { signature, .. } if signature.is_async
@@ -1663,20 +1745,35 @@ fn infer_hir_expr_type(
         Expr::Try { value, .. } => {
             infer_hir_expr_type(hir, value, value_types).and_then(|ty| result_ok_type(&ty))
         }
-        Expr::Call { callee, args, .. } => match hir.resolve_call(callee) {
-            CallResolution::Resolved { signature, .. } => {
-                infer_signature_return_type(hir, &signature, callee, args, value_types)
-                    .or(signature.return_type)
+        Expr::Call { callee, args, .. } => {
+            let resolution = match callee {
+                Callee::ReceiverCall {
+                    receiver, method, ..
+                } => {
+                    if let Some(receiver_type) = value_types.get(receiver).cloned() {
+                        hir.resolve_receiver_call(&receiver_type, method, value_types)
+                            .0
+                    } else {
+                        CallResolution::Unknown
+                    }
+                }
+                _ => hir.resolve_call(callee),
+            };
+            match resolution {
+                CallResolution::Resolved { signature, .. } => {
+                    infer_signature_return_type(hir, &signature, callee, args, value_types)
+                        .or(signature.return_type)
+                }
+                CallResolution::Unknown => match callee {
+                    Callee::Name(name) => value_types
+                        .get(name)
+                        .and_then(|type_name| fn_return_type(type_name))
+                        .map(str::to_string),
+                    Callee::Qualified { .. } | Callee::ReceiverCall { .. } => None,
+                },
+                CallResolution::EnumVariant => None,
             }
-            CallResolution::Unknown => match callee {
-                Callee::Name(name) => value_types
-                    .get(name)
-                    .and_then(|type_name| fn_return_type(type_name))
-                    .map(str::to_string),
-                Callee::Qualified { .. } => None,
-            },
-            CallResolution::EnumVariant => None,
-        },
+        }
         Expr::Field { base, name, .. } => {
             let base_type = infer_hir_expr_type(hir, base, value_types)?;
             hir.type_info(&base_type)?
@@ -1735,6 +1832,7 @@ fn collect_callee_type_substitutions(
 ) {
     let type_args = match callee {
         Callee::Name(name) | Callee::Qualified { name, .. } => type_arg_names(name),
+        Callee::ReceiverCall { method, .. } => type_arg_names(method),
     };
     let Some(type_args) = type_args else {
         return;
@@ -2156,6 +2254,7 @@ fn is_enum_variant_call(name: &str) -> bool {
 fn callee_name(callee: &Callee) -> &str {
     match callee {
         Callee::Name(name) | Callee::Qualified { name, .. } => type_root_name(name),
+        Callee::ReceiverCall { method, .. } => method.as_str(),
     }
 }
 
@@ -2163,6 +2262,11 @@ fn callee_display(callee: &Callee) -> String {
     match callee {
         Callee::Name(name) => name.clone(),
         Callee::Qualified { namespace, name } => format!("{namespace}.{name}"),
+        Callee::ReceiverCall {
+            receiver,
+            method,
+            effect,
+        } => format!("{} {receiver}.{method}", effect.as_str()),
     }
 }
 

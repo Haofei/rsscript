@@ -293,6 +293,16 @@ pub enum DataEffect {
     Take,
 }
 
+impl DataEffect {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Mut => "mut",
+            Self::Take => "take",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EffectDecl {
     Name(String),
@@ -495,7 +505,17 @@ pub enum BinaryOp {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Callee {
     Name(String),
-    Qualified { namespace: String, name: String },
+    Qualified {
+        namespace: String,
+        name: String,
+    },
+    /// Receiver-call shorthand: `<effect> receiver.method(args)`
+    /// Desugars to `Type.method(self: <effect> receiver, args)`.
+    ReceiverCall {
+        receiver: String,
+        method: String,
+        effect: DataEffect,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

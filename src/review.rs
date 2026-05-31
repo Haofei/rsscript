@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::Serialize;
 
@@ -9,7 +9,8 @@ use crate::hir::{
 };
 use crate::syntax::ast::{
     Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature, FunctionDecl,
-    Item, LetKind, Param, Program, ProtocolImpl, Stmt, TypeDecl, TypeKind, TypeRef, merge_programs,
+    GenericBound, Item, LetKind, Param, Program, ProtocolImpl, Stmt, TypeDecl, TypeKind, TypeRef,
+    merge_programs,
 };
 use crate::syntax::parse_source;
 
@@ -663,6 +664,20 @@ fn review_map_region_draft(
     total_lines: usize,
 ) -> ReviewMapRegionDraft {
     let mut facts = ReviewMapFacts::default();
+    // Build value_types for receiver-call resolution
+    for param in &function.params {
+        facts
+            .value_types
+            .insert(param.name.clone(), param.ty.name.clone());
+    }
+    for type_param in &function.type_params {
+        if let Some(GenericBound::Protocol(protocol)) = &type_param.bound {
+            facts.value_types.insert(
+                format!("__protocol_bound__{}", type_param.name),
+                protocol.clone(),
+            );
+        }
+    }
     let callback_params = review_map_callback_params(function);
     let local_closure_bindings = review_map_local_closure_bindings(&function.body);
     collect_review_map_facts_block(
@@ -848,6 +863,9 @@ struct ReviewMapFacts {
     unsafe_calls: BTreeSet<String>,
     spawn_captures: BTreeSet<String>,
     managed_closure_captures: BTreeSet<String>,
+    /// Value types for receiver-call resolution (param_name -> type_name,
+    /// plus `__protocol_bound__<T>` -> protocol for generic bounds).
+    value_types: HashMap<String, String>,
 }
 
 fn propagate_review_map_call_classifications(drafts: &mut [ReviewMapRegionDraft]) {
@@ -1235,7 +1253,20 @@ fn collect_review_map_facts_expr(
             if let Some(callback) = review_map_callback_call(callee, callback_params) {
                 facts.callback_calls.insert(callback.to_string());
             } else if review_map_local_closure_call(callee, local_closure_bindings).is_none() {
-                match hir.resolve_call(callee) {
+                let resolution = match callee {
+                    Callee::ReceiverCall {
+                        receiver, method, ..
+                    } => {
+                        if let Some(receiver_type) = facts.value_types.get(receiver).cloned() {
+                            hir.resolve_receiver_call(&receiver_type, method, &facts.value_types)
+                                .0
+                        } else {
+                            CallResolution::Unknown
+                        }
+                    }
+                    _ => hir.resolve_call(callee),
+                };
+                match resolution {
                     CallResolution::Resolved { signature, kind } => {
                         collect_call_boundary_facts(&signature, facts);
                         if kind == ResolvedCalleeKind::UserFunction {
@@ -1375,7 +1406,7 @@ fn review_map_callback_call<'a>(
 ) -> Option<&'a str> {
     match callee {
         Callee::Name(name) => callback_params.get(name).map(String::as_str),
-        Callee::Qualified { .. } => None,
+        Callee::Qualified { .. } | Callee::ReceiverCall { .. } => None,
     }
 }
 
@@ -1385,7 +1416,7 @@ fn review_map_local_closure_call<'a>(
 ) -> Option<&'a str> {
     match callee {
         Callee::Name(name) => local_closure_bindings.get(name).map(String::as_str),
-        Callee::Qualified { .. } => None,
+        Callee::Qualified { .. } | Callee::ReceiverCall { .. } => None,
     }
 }
 
@@ -2014,6 +2045,11 @@ fn review_callee_display(callee: &Callee) -> String {
     match callee {
         Callee::Name(name) => name.clone(),
         Callee::Qualified { namespace, name } => format!("{namespace}.{name}"),
+        Callee::ReceiverCall {
+            receiver,
+            method,
+            effect,
+        } => format!("{} {receiver}.{method}", effect.as_str()),
     }
 }
 
@@ -2021,6 +2057,7 @@ fn is_resource_pool_callee(callee: &Callee) -> bool {
     match callee {
         Callee::Name(name) => type_root_name(name) == "ResourcePool",
         Callee::Qualified { namespace, .. } => type_root_name(namespace) == "ResourcePool",
+        Callee::ReceiverCall { .. } => false,
     }
 }
 

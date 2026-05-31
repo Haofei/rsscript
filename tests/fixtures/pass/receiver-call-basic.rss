@@ -1,0 +1,21 @@
+features: local
+
+class MyCache {
+    entries: Map<String, String>
+}
+
+fn MyCache.put(self: mut MyCache, key: read String, value: read String) -> Unit
+    effects(retains(key), retains(value))
+{
+    Map.insert(map: mut self.entries, key: read key, value: read value)
+}
+
+fn MyCache.get(self: read MyCache, key: read String) -> Option<String> {
+    return Map.get(map: read self.entries, key: read key)
+}
+
+fn use_cache(cache: mut MyCache, key: read String, value: read String) -> Unit
+    effects(retains(key), retains(value))
+{
+    mut cache.put(key: read key, value: read value)
+}
