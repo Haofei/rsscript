@@ -290,6 +290,23 @@ fn append_arg(args: read List<String>, arg: read String) -> fresh List<String> {
     return next
 }
 
+fn rss_binary_command(command: read String) -> String {
+    if String.is_empty(value: read command) {
+        return "target/debug/rss"
+    }
+
+    return String.concat(left: read "", right: read command)
+}
+
+fn rss_run_args(path: read String, program_args: read List<String>) -> fresh List<String> {
+    local args = List<String>.new()
+    List.push(list: mut args, value: read "run")
+    List.push(list: mut args, value: read path)
+    copy_args_from(source: read program_args, index: 0, target: mut args)
+
+    return args
+}
+
 fn command_with_windows_exe_suffix(command: read String) -> fresh String {
     return String.concat(left: read command, right: read ".exe")
 }
@@ -321,6 +338,24 @@ fn run_command_stdout(command: read String, args: read List<String>) -> Result<S
 
 fn run_command_success(command: read String, args: read List<String>) -> Result<Bool, String> {
     match run_command_stdout(command: read command, args: read args) {
+        Ok(_) => {
+            return Ok(true)
+        }
+        Err(error) => {
+            return Err(error)
+        }
+    }
+}
+
+fn run_rss_source_stdout(test: read TestCase) -> Result<String, String> {
+    let command = rss_binary_command(command: read test.command)
+    let args = rss_run_args(path: read test.path, program_args: read test.args)
+
+    return run_command_stdout(command: read command, args: read args)
+}
+
+fn run_rss_source_success(test: read TestCase) -> Result<Bool, String> {
+    match run_rss_source_stdout(test: read test) {
         Ok(_) => {
             return Ok(true)
         }
@@ -462,6 +497,25 @@ fn run_test(test: read TestCase) -> Result<Bool, String> {
 
     if test.kind == "command_success" {
         return run_command_success(command: read test.command, args: read test.args)
+    }
+
+    if test.kind == "rss_run_success" {
+        return run_rss_source_success(test: read test)
+    }
+
+    if test.kind == "rss_run_stdout_contains" {
+        match run_rss_source_stdout(test: read test) {
+            Ok(stdout) => {
+                return text_matches_expectations(
+                    value: read stdout,
+                    contains: read test.contains,
+                    contains_all: read test.contains_all,
+                )
+            }
+            Err(error) => {
+                return Err(error)
+            }
+        }
     }
 
     if test.kind == "command_for_each_path" {

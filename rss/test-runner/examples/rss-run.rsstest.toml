@@ -1,0 +1,5 @@
+[[tests]]
+name = "rss async source runs"
+kind = "rss_run_stdout_contains"
+path = "rss/test-runner/examples/async-smoke.rss"
+contains = "rss async smoke ok"
