@@ -25,10 +25,10 @@ use super::native::{
 use super::source_set::{Manifest, PackageSource, load_package};
 use super::{
     PackageDependencyKind, PackageNativeRustReview, PackageProviderImplementation, PackageReview,
-    PackageReviewAwaitBoundary, PackageReviewAwaitSite, PackageReviewDependency, PackageReviewFile,
-    PackageReviewFileKind, PackageReviewSummary, PackageRisk, collect_dependency_interface_sources,
-    dedup_diagnostics, package_dependency_spec, package_feature_may_change_boundary_risk,
-    package_feature_resolution_diagnostics,
+    PackageReviewAwaitBoundary, PackageReviewAwaitSite, PackageReviewCapability,
+    PackageReviewDependency, PackageReviewFile, PackageReviewFileKind, PackageReviewSummary,
+    PackageRisk, collect_dependency_interface_sources, dedup_diagnostics, package_dependency_spec,
+    package_feature_may_change_boundary_risk, package_feature_resolution_diagnostics,
 };
 
 pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
@@ -201,6 +201,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
             .cmp(&right.kind)
             .then_with(|| left.name.cmp(&right.name))
     });
+    let capabilities = package_review_capabilities(manifest, sources);
 
     Ok(PackageReview {
         package: super::package_identity(manifest),
@@ -213,6 +214,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         summary,
         files,
         exports,
+        capabilities,
         await_sites,
         native_rust,
         review_map,
@@ -606,6 +608,171 @@ fn package_api_effect_summary(
             })
             .count(),
         unknown_apis: package_unknown_api_count(contracts, review_map),
+    }
+}
+
+fn package_review_capabilities(
+    manifest: &Manifest,
+    sources: &[PackageSource],
+) -> Vec<PackageReviewCapability> {
+    let Some(review) = manifest.review.as_ref() else {
+        return Vec::new();
+    };
+    if review.capability_bindings.is_empty() {
+        return Vec::new();
+    }
+
+    let reverse_calls = collect_package_reverse_calls(sources);
+    let mut capabilities = Vec::new();
+    let mut seen = BTreeSet::new();
+    for binding in &review.capability_bindings {
+        let mut queue = vec![(binding.symbol.clone(), vec![binding.symbol.clone()])];
+        while let Some((function, call_chain)) = queue.pop() {
+            if !seen.insert((binding.symbol.clone(), function.clone())) {
+                continue;
+            }
+            capabilities.push(PackageReviewCapability {
+                function: function.clone(),
+                binding_symbol: binding.symbol.clone(),
+                category: binding.category.clone(),
+                provider: binding.provider.clone(),
+                service: binding.service.clone(),
+                action: binding.action.clone(),
+                resource: binding.resource.clone(),
+                call_chain: call_chain.clone(),
+            });
+            if let Some(callers) = reverse_calls.get(&function) {
+                for caller in callers.iter().rev() {
+                    let mut caller_chain = Vec::with_capacity(call_chain.len() + 1);
+                    caller_chain.push(caller.clone());
+                    caller_chain.extend(call_chain.iter().cloned());
+                    queue.push((caller.clone(), caller_chain));
+                }
+            }
+        }
+    }
+    capabilities.sort_by(|left, right| {
+        left.binding_symbol
+            .cmp(&right.binding_symbol)
+            .then_with(|| left.function.cmp(&right.function))
+            .then_with(|| left.call_chain.cmp(&right.call_chain))
+    });
+    capabilities
+}
+
+fn collect_package_reverse_calls(sources: &[PackageSource]) -> BTreeMap<String, BTreeSet<String>> {
+    let mut reverse_calls = BTreeMap::new();
+    for source in sources {
+        let program = parse_source(&source.path, &source.contents);
+        for item in &program.items {
+            let Item::Function(function) = item else {
+                continue;
+            };
+            let mut callees = BTreeSet::new();
+            collect_calls_from_block(&function.body, &mut callees);
+            for callee in callees {
+                reverse_calls
+                    .entry(callee)
+                    .or_insert_with(BTreeSet::new)
+                    .insert(function.name.clone());
+            }
+        }
+    }
+    reverse_calls
+}
+
+fn collect_calls_from_block(block: &Block, calls: &mut BTreeSet<String>) {
+    for statement in &block.statements {
+        collect_calls_from_stmt(statement, calls);
+    }
+}
+
+fn collect_calls_from_stmt(statement: &Stmt, calls: &mut BTreeSet<String>) {
+    match statement {
+        Stmt::Let(stmt) => {
+            if let Some(value) = &stmt.value {
+                collect_calls_from_expr(value, calls);
+            }
+        }
+        Stmt::Return(stmt) => {
+            if let Some(value) = &stmt.value {
+                collect_calls_from_expr(value, calls);
+            }
+        }
+        Stmt::With(stmt) => {
+            collect_calls_from_expr(&stmt.resource, calls);
+            collect_calls_from_block(&stmt.body, calls);
+        }
+        Stmt::If(stmt) => {
+            collect_calls_from_expr(&stmt.condition, calls);
+            collect_calls_from_block(&stmt.then_body, calls);
+            if let Some(else_body) = &stmt.else_body {
+                collect_calls_from_block(else_body, calls);
+            }
+        }
+        Stmt::Loop(stmt) => {
+            if let Some(condition) = &stmt.condition {
+                collect_calls_from_expr(condition, calls);
+            }
+            collect_calls_from_block(&stmt.body, calls);
+        }
+        Stmt::For(stmt) => {
+            collect_calls_from_expr(&stmt.iterable, calls);
+            collect_calls_from_block(&stmt.body, calls);
+        }
+        Stmt::Match(stmt) => {
+            collect_calls_from_expr(&stmt.value, calls);
+            for arm in &stmt.arms {
+                collect_calls_from_block(&arm.body, calls);
+            }
+        }
+        Stmt::TaskGroup(stmt) => collect_calls_from_block(&stmt.body, calls),
+        Stmt::LetElse(stmt) => {
+            collect_calls_from_expr(&stmt.value, calls);
+            collect_calls_from_block(&stmt.else_body, calls);
+        }
+        Stmt::Expr(expr) => collect_calls_from_expr(expr, calls),
+        Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::MalformedWith(_)
+        | Stmt::MalformedIf(_)
+        | Stmt::MalformedLoop(_)
+        | Stmt::MalformedFor(_)
+        | Stmt::MalformedMatch(_)
+        | Stmt::Unknown(_) => {}
+    }
+}
+
+fn collect_calls_from_expr(expr: &Expr, calls: &mut BTreeSet<String>) {
+    match expr {
+        Expr::Call { callee, args, .. } => {
+            calls.insert(callee_label(callee));
+            for arg in args {
+                collect_calls_from_expr(&arg.value, calls);
+            }
+        }
+        Expr::Binary { left, right, .. } => {
+            collect_calls_from_expr(left, calls);
+            collect_calls_from_expr(right, calls);
+        }
+        Expr::Field { base, .. } => collect_calls_from_expr(base, calls),
+        Expr::Index { base, index, .. } => {
+            collect_calls_from_expr(base, calls);
+            collect_calls_from_expr(index, calls);
+        }
+        Expr::Effect { value, .. }
+        | Expr::Manage { value, .. }
+        | Expr::Spawn { value, .. }
+        | Expr::Await { value, .. }
+        | Expr::Try { value, .. } => collect_calls_from_expr(value, calls),
+        Expr::Closure { body, .. } => collect_calls_from_block(body, calls),
+        Expr::Match { value, arms, .. } => {
+            collect_calls_from_expr(value, calls);
+            for arm in arms {
+                collect_calls_from_block(&arm.body, calls);
+            }
+        }
+        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
     }
 }
 

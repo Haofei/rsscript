@@ -81,6 +81,19 @@ pub(super) struct ManifestReview {
     pub(super) feature_policy: ManifestReviewFeaturePolicy,
     #[serde(default)]
     pub(super) expect: ManifestReviewExpect,
+    #[serde(default)]
+    pub(super) capability_bindings: Vec<ManifestCapabilityBinding>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ManifestCapabilityBinding {
+    pub(super) symbol: String,
+    pub(super) category: String,
+    pub(super) provider: Option<String>,
+    pub(super) service: Option<String>,
+    pub(super) action: Option<String>,
+    pub(super) resource: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]

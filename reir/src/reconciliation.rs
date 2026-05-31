@@ -206,8 +206,18 @@ pub fn reconcile_capabilities_for_target(
 
 fn capability_covers(granted: &Capability, required: &Capability) -> bool {
     granted.category == required.category
+        && optional_field_covers(granted.provider.as_deref(), required.provider.as_deref())
+        && optional_field_covers(granted.service.as_deref(), required.service.as_deref())
         && action_covers(granted.action.as_deref(), required.action.as_deref())
         && resource_covers(granted.resource.as_deref(), required.resource.as_deref())
+}
+
+fn optional_field_covers(granted: Option<&str>, required: Option<&str>) -> bool {
+    match (granted, required) {
+        (_, None) => true,
+        (None, Some(_)) => true,
+        (Some(granted), Some(required)) => granted == required,
+    }
 }
 
 fn action_covers(granted: Option<&str>, required: Option<&str>) -> bool {
@@ -227,5 +237,32 @@ fn resource_covers(granted: Option<&str>, required: Option<&str>) -> bool {
             required.starts_with(&granted[..granted.len() - 1])
         }
         (Some(_), Some(_)) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::CapabilityCategory;
+    use std::collections::HashMap;
+
+    fn capability(service: &str) -> Capability {
+        Capability {
+            category: CapabilityCategory::ObjectStorageWrite,
+            provider: Some("aws".to_owned()),
+            service: Some(service.to_owned()),
+            action: Some("s3:PutObject".to_owned()),
+            resource: Some("arn:aws:s3:::reports-prod/*".to_owned()),
+            constraints: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn capability_cover_requires_matching_provider_service_when_required_is_specific() {
+        assert!(capability_covers(&capability("s3"), &capability("s3")));
+        assert!(!capability_covers(
+            &capability("dynamodb"),
+            &capability("s3")
+        ));
     }
 }

@@ -3725,6 +3725,20 @@ It must not infer RSScript semantic contracts from Rust signatures and must not 
 
 Package features declared in `rsspkg.toml` are package selection features. They are not the same as RSScript file features declared with `features:`. If a package feature changes the public surface, package tooling selects a different effective `.rssi` interface and the compiler frontend validates that interface; the package manager still does not define language semantics.
 
+Package review may declare external capability bindings in package metadata, not in RSScript `effects(...)` syntax. A binding attaches one boundary symbol to a REIR capability once:
+
+```toml
+[[review.capability_bindings]]
+symbol = "S3.put_object"
+category = "object_storage.write"
+provider = "aws"
+service = "s3"
+action = "s3:PutObject"
+resource = "arn:aws:s3:::reports-prod/*"
+```
+
+Package review propagates that binding through the RSScript call graph and emits REIR required-capability facts for each calling function, with the call chain preserved as evidence. This is review metadata for cross-layer reconciliation against deployment/IAM grants; it does not add a language-level `effects(requires(...))` form and does not make RSScript source depend on any provider such as AWS.
+
 ---
 
 ## 19. Examples

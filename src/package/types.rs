@@ -18,6 +18,8 @@ pub struct PackageReview {
     pub summary: PackageReviewSummary,
     pub files: Vec<PackageReviewFile>,
     pub exports: Vec<PackageReviewExport>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<PackageReviewCapability>,
     pub await_sites: Vec<PackageReviewAwaitSite>,
     pub native_rust: Option<PackageNativeRustReview>,
     pub review_map: ReviewMap,
@@ -75,6 +77,8 @@ pub struct PackageReviewMetadata {
     pub summary: PackageReviewSummary,
     pub files: Vec<PackageReviewFile>,
     pub exports: Vec<PackageReviewExport>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<PackageReviewCapability>,
     pub await_sites: Vec<PackageReviewAwaitSite>,
     pub native_rust: Option<PackageNativeRustReview>,
     pub review_map: ReviewMap,
@@ -444,6 +448,22 @@ pub struct PackageReviewExport {
     pub function_kind: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub normalized_effects: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageReviewCapability {
+    pub function: String,
+    pub binding_symbol: String,
+    pub category: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
+    pub call_chain: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

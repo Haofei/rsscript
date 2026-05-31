@@ -1,5 +1,6 @@
 mod common;
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -11,6 +12,38 @@ use rsscript::{
     vendor_package_dir,
 };
 use serde_json::Value;
+
+fn mock_iam_grant(action: &str) -> reir::Fact {
+    reir::Fact {
+        schema: "reir.fact.v0.1".to_string(),
+        id: format!("fact.mock_iam.grant.{}", action.replace(':', "_")),
+        kind: reir::FactKind::Capability,
+        role: Some(reir::FactRole::Granted),
+        subject: reir::Subject {
+            kind: reir::SubjectKind::CloudRole,
+            id: "arn:aws:iam::123456789012:role/report-uploader".to_string(),
+            name: Some("report-uploader".to_string()),
+            package: None,
+        },
+        capability: Some(reir::Capability {
+            category: reir::CapabilityCategory::ObjectStorageWrite,
+            provider: Some("aws".to_string()),
+            service: Some("s3".to_string()),
+            action: Some(action.to_string()),
+            resource: Some("arn:aws:s3:::reports-prod/*".to_string()),
+            constraints: HashMap::new(),
+        }),
+        value: reir::FactValue::True,
+        confidence: reir::Confidence {
+            level: reir::ConfidenceLevel::Authoritative,
+            source: Some("mock_iam".to_string()),
+        },
+        acquisition_mode: reir::AcquisitionMode::CloudPolicy,
+        precision: reir::Precision::ResourceScoped,
+        evidence: Vec::new(),
+        unknown_reason: None,
+    }
+}
 
 #[test]
 fn package_review_reads_manifest_and_reports_semantic_risk() {
@@ -1438,6 +1471,100 @@ pub native fn Process.run_stdout(
             .as_array()
             .is_some_and(|slices| { slices.iter().any(|slice| slice["kind"] == "process_slice") })
     );
+}
+
+#[test]
+fn package_review_reir_finds_missing_mock_iam_permission_for_bound_capability() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-review-s3-capability-reir");
+    fs::create_dir_all(temp_dir.join("interface")).expect("interface dir should be created");
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("rsspkg.toml"),
+        r#"[package]
+name = "rss-report-upload"
+version = "0.1.0"
+edition = "2026"
+
+[interfaces]
+paths = ["interface"]
+
+[sources]
+paths = ["src"]
+
+[[review.capability_bindings]]
+symbol = "S3.put_object"
+category = "object_storage.write"
+provider = "aws"
+service = "s3"
+action = "s3:PutObject"
+resource = "arn:aws:s3:::reports-prod/*"
+"#,
+    )
+    .expect("manifest should be written");
+    fs::write(
+        temp_dir.join("interface/s3.rssi"),
+        r#"features: native
+
+native fn S3.put_object(body: read String) -> Result<Unit, String>
+    effects(native)
+"#,
+    )
+    .expect("interface should be written");
+    fs::write(
+        temp_dir.join("src/upload.rss"),
+        r#"fn upload_report(report: read String) -> Result<Unit, String> {
+    return S3.put_object(body: read report)
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let bundle: reir::Bundle =
+        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+            .expect("package review REIR bundle should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    let required = bundle
+        .facts
+        .iter()
+        .find(|fact| {
+            fact.kind == reir::FactKind::Capability
+                && fact.role == Some(reir::FactRole::Required)
+                && fact.subject.id == "rss-report-upload::function::upload_report"
+                && fact
+                    .capability
+                    .as_ref()
+                    .is_some_and(|capability| capability.action.as_deref() == Some("s3:PutObject"))
+        })
+        .expect("upload_report should require s3:PutObject through the S3 binding");
+    assert!(required.evidence.iter().any(|evidence| {
+        evidence.kind == reir::EvidenceKind::BindingManifest
+            && evidence
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("upload_report -> S3.put_object"))
+    }));
+
+    let required_facts = bundle
+        .facts
+        .iter()
+        .filter(|fact| fact.role == Some(reir::FactRole::Required))
+        .cloned()
+        .collect::<Vec<_>>();
+    let granted_facts = vec![mock_iam_grant("s3:GetObject")];
+    let reconciliations =
+        reir::reconcile_capabilities_for_target(&required_facts, &granted_facts, Some("prod"));
+
+    assert!(reconciliations.iter().any(|reconciliation| {
+        reconciliation.kind == reir::ReconciliationKind::MissingCapability
+            && reconciliation.target.as_deref() == Some("prod")
+            && reconciliation
+                .capability
+                .as_ref()
+                .is_some_and(|capability| capability.action.as_deref() == Some("s3:PutObject"))
+            && reconciliation.required_fact.as_ref() == Some(&required.id)
+    }));
 }
 
 #[test]

@@ -80,6 +80,8 @@ pub struct RsScriptPackageReviewInput {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exports: Vec<RsScriptPackageExport>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<RsScriptPackageCapability>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub await_sites: Vec<RsScriptPackageAwaitSite>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<RsScriptDiagnosticInput>,
@@ -97,6 +99,23 @@ pub struct RsScriptPackageReviewInput {
     pub native_author_declaration: Option<RsScriptNativeAuthorDeclaration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_source_scan: Option<RsScriptNativeSourceScan>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RsScriptPackageCapability {
+    pub function: String,
+    pub binding_symbol: String,
+    pub category: CapabilityCategory,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub call_chain: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -752,6 +771,7 @@ pub fn package_review_to_facts(input: &RsScriptPackageReviewInput) -> Vec<Fact> 
     facts.extend(diagnostic_facts(input, &package_subject, &package_slug));
     facts.extend(package_feature_facts(input, &package_slug));
     facts.extend(provider_implementation_facts(input, &package_slug));
+    facts.extend(package_capability_facts(input, &package_slug));
 
     for dependency in &input.dependencies {
         let dependency_subject = dependency_subject(dependency);
@@ -2151,6 +2171,7 @@ fn package_review_input_from_value(value: &Value) -> RsScriptPackageReviewInput 
         implements: package_implements_from_json(value),
         dependencies: package_dependencies_from_json(value),
         exports: package_exports_from_json(&exports),
+        capabilities: package_capabilities_from_json(value),
         await_sites: package_await_sites_from_json(value),
         diagnostics: package_diagnostics_from_json(value),
         public_apis: usize_field(summary, "public_apis").unwrap_or(0),
@@ -2183,6 +2204,33 @@ fn package_implements_from_json(value: &Value) -> Vec<RsScriptProviderImplementa
                         implementation,
                         "interface_effective_hash",
                     ),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn package_capabilities_from_json(value: &Value) -> Vec<RsScriptPackageCapability> {
+    value
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .map(|capabilities| {
+            capabilities
+                .iter()
+                .map(|capability| RsScriptPackageCapability {
+                    function: string_field(capability, "function")
+                        .unwrap_or_else(|| "unknown".to_owned()),
+                    binding_symbol: string_field(capability, "binding_symbol")
+                        .unwrap_or_else(|| "unknown".to_owned()),
+                    category: string_field(capability, "category")
+                        .unwrap_or_else(|| "unknown".to_owned())
+                        .try_into()
+                        .expect("capability category conversion is infallible"),
+                    provider: string_field(capability, "provider"),
+                    service: string_field(capability, "service"),
+                    action: string_field(capability, "action"),
+                    resource: string_field(capability, "resource"),
+                    call_chain: string_array_field(capability, "call_chain"),
                 })
                 .collect()
         })
@@ -2592,6 +2640,15 @@ fn public_contract_subject(package_name: &str, export: &RsScriptPackageExport) -
         kind,
         id: format!("{}::public::{}::{}", package_name, export.kind, export.name),
         name: Some(export.name.clone()),
+        package: Some(package_name.to_owned()),
+    }
+}
+
+fn package_function_subject(package_name: &str, function: &str) -> Subject {
+    Subject {
+        kind: SubjectKind::CodeFunction,
+        id: format!("{package_name}::function::{function}"),
+        name: Some(function.to_owned()),
         package: Some(package_name.to_owned()),
     }
 }
@@ -3671,6 +3728,96 @@ fn export_capability_fact(
             Some(package_export_summary(export)),
         )],
         unknown_reason: None,
+    }
+}
+
+fn package_capability_facts(input: &RsScriptPackageReviewInput, package_slug: &str) -> Vec<Fact> {
+    input
+        .capabilities
+        .iter()
+        .map(|capability| {
+            let subject = package_function_subject(&input.package_name, &capability.function);
+            let mut constraints = HashMap::new();
+            constraints.insert(
+                "binding_symbol".to_owned(),
+                capability.binding_symbol.clone(),
+            );
+            if !capability.call_chain.is_empty() {
+                constraints.insert("call_chain".to_owned(), capability.call_chain.join(" -> "));
+            }
+            Fact {
+                schema: FACT_SCHEMA.to_owned(),
+                id: format!(
+                    "fact.package_capability.{}.{}.{}",
+                    package_slug,
+                    normalized_id(&subject.id),
+                    normalized_id(&capability.binding_symbol)
+                ),
+                kind: FactKind::Capability,
+                role: Some(FactRole::Required),
+                subject,
+                capability: Some(Capability {
+                    category: capability.category.clone(),
+                    provider: capability
+                        .provider
+                        .clone()
+                        .or_else(|| Some("rsscript".to_owned())),
+                    service: capability.service.clone(),
+                    action: capability.action.clone(),
+                    resource: capability.resource.clone(),
+                    constraints,
+                }),
+                value: FactValue::True,
+                confidence: confidence(ConfidenceLevel::Inferred, PACKAGE_REVIEW_SOURCE),
+                acquisition_mode: AcquisitionMode::BindingManifest,
+                precision: if capability.resource.is_some() {
+                    Precision::ResourceScoped
+                } else {
+                    Precision::Category
+                },
+                evidence: vec![binding_manifest_evidence(input, capability)],
+                unknown_reason: None,
+            }
+        })
+        .collect()
+}
+
+fn binding_manifest_evidence(
+    input: &RsScriptPackageReviewInput,
+    capability: &RsScriptPackageCapability,
+) -> Evidence {
+    Evidence {
+        kind: EvidenceKind::BindingManifest,
+        file: None,
+        line: None,
+        column: None,
+        length: None,
+        symbol: Some(capability.function.clone()),
+        reason: Some(format!(
+            "capability binding {} propagated through {}",
+            capability.binding_symbol,
+            if capability.call_chain.is_empty() {
+                capability.function.clone()
+            } else {
+                capability.call_chain.join(" -> ")
+            }
+        )),
+        json_pointer: None,
+        resource: capability
+            .resource
+            .clone()
+            .or_else(|| Some(format!("{}@{}", input.package_name, input.version))),
+        provider: capability.provider.clone(),
+        value: Some(String::from(capability.category.clone())),
+        event_id: None,
+        time: None,
+        source: Some(PACKAGE_REVIEW_SOURCE.to_owned()),
+        event_name: None,
+        principal: None,
+        account: None,
+        policy_arn: None,
+        statement_index: None,
+        action: capability.action.clone(),
     }
 }
 
@@ -4949,6 +5096,7 @@ mod tests {
                 reasons: vec!["public sum type".to_owned(), "variants: 2".to_owned()],
                 normalized_effects: Vec::new(),
             }],
+            capabilities: Vec::new(),
             await_sites: Vec::new(),
             diagnostics: Vec::new(),
             public_apis: 8,
