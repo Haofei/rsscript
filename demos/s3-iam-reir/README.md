@@ -9,8 +9,8 @@ head: 03-code-adds-delete
 PR change:
   Reports.cleanup_old_reports -> S3.delete_object
 
-Existing prod IAM:
-  grants only s3:PutObject
+Existing prod Terraform/OpenTofu IAM:
+  aws_iam_role_policy grants only s3:PutObject
 
 RSScript / REIR result:
   new required capability: s3:DeleteObject
@@ -38,11 +38,18 @@ The comment format is produced by the `reir report-pr` command:
 cargo run --quiet --bin rss -- pkg review --reir \
   demos/s3-iam-reir/scenarios/03-code-adds-delete > /tmp/rsscript-s3-head.reir.json
 
+cargo run --quiet -p reir -- collect \
+  --producer terraform \
+  --from demos/s3-iam-reir/infra/terraform/fixed \
+  --json > /tmp/rsscript-s3-prod-grants.reir.json
+
 cargo run --quiet -p reir -- report-pr \
   --required /tmp/rsscript-s3-head.reir.json \
   --granted demos/s3-iam-reir/expected/prod-grants.reir.json \
   --target prod
 ```
+
+The checked-in granted bundle combines the Terraform/OpenTofu `s3:PutObject` grant above with the runtime grants for `runtime.native` and `network.client`, so the PR comment is isolated to the missing `s3:DeleteObject` deployment capability.
 
 ## Core loop
 
@@ -51,10 +58,11 @@ The underlying REIR loop is:
 1. RSScript code uploads reports to S3 through an async package facade.
 2. `rsspkg.toml` binds the facade symbol `S3.put_object` to one external capability.
 3. Package review propagates that capability through the RSScript call graph.
-4. REIR reconciles required code capabilities against mock IAM grants before deploy.
+4. `reir collect --producer terraform` reads Terraform/OpenTofu IAM policy resources and emits granted capability facts.
+5. REIR reconciles required code capabilities against real IaC grants before deploy.
 
 The RSS source does not write `effects(requires(...))`. The capability binding is declared once at the package boundary.
-`interface/s3.rssi` is the mock native S3 boundary. `src/upload.rss` is ordinary RSS async business code; it is not a native implementation.
+`interface/s3.rssi` is the native S3 facade boundary. `src/upload.rss` is ordinary RSS async business code; it is not a native implementation.
 The runtime path is also executable: `rsscript-runtime` owns the Tokio-backed native async executor, while the demo native wrapper only starts HTTP IO futures.
 
 ## Evidence chain
@@ -64,7 +72,7 @@ flowchart LR
   A["Reports.upload_batch<br/>src/upload.rss"] --> B["upload_report"]
   B --> C["S3.put_object<br/>native facade"]
   C --> D["required capability<br/>s3:PutObject<br/>arn:aws:s3:::reports-prod/*"]
-  E["prod IAM role"] --> F["granted capability<br/>s3:GetObject"]
+  E["Terraform aws_iam_role_policy"] --> F["granted capability<br/>s3:GetObject"]
   D --> G["REIR reconcile"]
   F --> G
   G --> H["FAIL: missing s3:PutObject"]
@@ -88,9 +96,9 @@ cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_fails_preflight_then_pas
 
 Expected flow:
 
-1. REIR fails before deploy because mock IAM grants `s3:GetObject`, not `s3:PutObject`.
-2. The fixed IAM mock grants `s3:PutObject`, and REIR passes.
-3. The excess IAM mock grants `s3:DeleteObject`, and REIR reports an unused security capability.
+1. REIR fails before deploy because Terraform/OpenTofu IAM grants `s3:GetObject`, not `s3:PutObject`.
+2. The fixed Terraform/OpenTofu IAM policy grants `s3:PutObject`, and REIR passes.
+3. The excess Terraform/OpenTofu IAM policy also grants `s3:DeleteObject`, and REIR reports an unused security capability.
 4. The RSS async uploader sends six 256 KiB objects through `rsscript-runtime::spawn_tokio_native`.
 5. A blocking sync client uploads the same number and size of objects sequentially.
 
@@ -111,8 +119,8 @@ s3 iam preflight: missing=s3:PutObject fixed=covered excess=s3:DeleteObject
 This path does not start the mock S3 server or build the native runtime binaries. It only proves the review/security loop:
 
 - required: `object_storage.write aws/s3 s3:PutObject arn:aws:s3:::reports-prod/*`
-- missing grant fixture: `object_storage.read aws/s3 s3:GetObject arn:aws:s3:::reports-prod/*`
-- excess grant fixture: `object_storage.delete aws/s3 s3:DeleteObject arn:aws:s3:::reports-prod/*`
+- missing Terraform/OpenTofu grant: `object_storage.read aws/s3 s3:GetObject arn:aws:s3:::reports-prod/*`
+- excess Terraform/OpenTofu grant: `object_storage.delete aws/s3 s3:DeleteObject arn:aws:s3:::reports-prod/*`
 - evidence: `src/upload.rss:8 upload_report -> S3.put_object`
 
 ## Reviewer scenario matrix
@@ -141,7 +149,7 @@ Expected output includes:
 s3 iam scenarios: fixed=PutObject code-change-adds=DeleteObject fixed-iam=missing-delete excess-iam=covers-delete
 ```
 
-The `03-code-adds-delete` package adds `Reports.cleanup_old_reports -> S3.delete_object` and a package capability binding for `object_storage.delete / s3:DeleteObject`. The test verifies that the old fixed IAM fixture no longer covers the package, while the excess fixture covers the new delete requirement.
+The `03-code-adds-delete` package adds `Reports.cleanup_old_reports -> S3.delete_object` and a package capability binding for `object_storage.delete / s3:DeleteObject`. The test verifies that the old fixed Terraform/OpenTofu IAM policy no longer covers the package, while the excess policy covers the new delete requirement.
 
 Run the native-risk scenario:
 
@@ -173,7 +181,7 @@ The checked-in negative-control output is [expected/missing-capability-binding.t
 
 The prompt in [prompts/add-cleanup.md](prompts/add-cleanup.md) asks for a cleanup function that deletes old reports. The representative generated patch in [ai-output/cleanup.patch](ai-output/cleanup.patch) adds `Reports.cleanup_old_reports -> S3.delete_object`.
 
-That code can be represented in RSScript, but package review turns the new external ability into a semantic fact. With the existing fixed IAM fixture, REIR blocks the PR before deploy because prod grants only `s3:PutObject`.
+That code can be represented in RSScript, but package review turns the new external ability into a semantic fact. With the existing fixed Terraform/OpenTofu IAM policy, REIR blocks the PR before deploy because prod grants only `s3:PutObject`.
 
 ## Review cost shape
 
@@ -186,7 +194,7 @@ Raw artifacts to inspect:
   rsspkg.toml
   native/bindings.rssbind.toml
   native/rust/src/lib.rs
-  infra/mock-iam-fixed.json
+  infra/terraform/fixed/main.tf
 
 RSScript/REIR findings:
   added required capability: s3:DeleteObject
@@ -199,12 +207,12 @@ RSScript/REIR findings:
 
 The e2e test reads these fixture files directly:
 
-- `infra/mock-iam-missing.json`
-- `infra/mock-iam-fixed.json`
-- `infra/mock-iam-excess.json`
+- `infra/terraform/missing/main.tf`
+- `infra/terraform/fixed/main.tf`
+- `infra/terraform/excess/main.tf`
 - `infra/mock-runtime.json`
 
-The missing case fails because mock IAM grants `s3:GetObject`, while the RSS package requires `s3:PutObject`.
+The missing case fails because Terraform/OpenTofu IAM grants `s3:GetObject`, while the RSS package requires `s3:PutObject`.
 The mock runtime grants still cover `runtime.native` and `network.client`, so the failure is isolated to the missing S3 IAM action.
 
 The missing capability evidence points back to RSS call sites, including `Reports.upload_batch -> upload_report -> S3.put_object` and `upload_report -> S3.put_object`.

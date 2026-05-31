@@ -2618,6 +2618,24 @@ fn is_trivia_boundary(token: &Token) -> bool {
     token.symbol(",") || token.symbol(";")
 }
 
+fn ident_name(token: &Token) -> Option<&str> {
+    match &token.kind {
+        TokenKind::Ident(value) => Some(value),
+        TokenKind::Keyword(value) => Some(value),
+        _ => None,
+    }
+}
+
+fn tokens_to_source(tokens: &[Token], start: usize, end: usize) -> String {
+    tokens
+        .iter()
+        .take(end)
+        .skip(start)
+        .map(Token::text)
+        .collect::<Vec<_>>()
+        .join("")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2686,22 +2704,4 @@ fn run() -> Unit {
         );
         assert_eq!(args.len(), 3);
     }
-}
-
-fn ident_name(token: &Token) -> Option<&str> {
-    match &token.kind {
-        TokenKind::Ident(value) => Some(value),
-        TokenKind::Keyword(value) => Some(value),
-        _ => None,
-    }
-}
-
-fn tokens_to_source(tokens: &[Token], start: usize, end: usize) -> String {
-    tokens
-        .iter()
-        .take(end)
-        .skip(start)
-        .map(Token::text)
-        .collect::<Vec<_>>()
-        .join("")
 }

@@ -1,19 +1,35 @@
 {
   "schema": "reir.bundle.v0.2",
   "ontology": "reir.capability_ontology.v0.2",
-  "producers": [],
-  "subjects": [],
+  "producers": [
+    {
+      "name": "terraform",
+      "version": "0.1.0",
+      "adapter": "reir.adapters.terraform",
+      "adapter_version": "0.1",
+      "source": "terraform_iac"
+    }
+  ],
+  "subjects": [
+    {
+      "kind": "cloud.policy",
+      "id": "terraform::aws_iam_role_policy.report_uploader",
+      "name": "aws_iam_role_policy.report_uploader",
+      "package": "terraform"
+    }
+  ],
   "subject_chains": [],
   "facts": [
     {
       "schema": "reir.fact.v0.1",
-      "id": "fact.prod.report_uploader.grants.s3_put_object",
+      "id": "fact.terraform.aws_iam_role_policy.report_uploader.statement_0.s3_putobject.arn_aws_s3___reports_prod__",
       "kind": "capability",
       "role": "granted",
       "subject": {
-        "kind": "cloud_role",
-        "id": "arn:aws:iam::123456789012:role/report-uploader",
-        "name": "report-uploader"
+        "kind": "cloud.policy",
+        "id": "terraform::aws_iam_role_policy.report_uploader",
+        "name": "aws_iam_role_policy.report_uploader",
+        "package": "terraform"
       },
       "capability": {
         "category": "object_storage.write",
@@ -24,16 +40,24 @@
       },
       "value": true,
       "confidence": {
-        "level": "authoritative",
-        "source": "mock_iam"
+        "level": "scanned",
+        "source": "terraform_iac"
       },
-      "acquisition_mode": "cloud_policy",
+      "acquisition_mode": "terraform_plan",
       "precision": "resource_scoped",
       "evidence": [
         {
-          "kind": "manifest_pointer",
-          "file": "infra/mock-iam-fixed.json",
-          "json_pointer": "/grants/0"
+          "kind": "terraform_plan_pointer",
+          "file": "main.tf",
+          "line": 1,
+          "symbol": "aws_iam_role_policy.report_uploader",
+          "reason": "Terraform/OpenTofu aws_iam_role_policy.report_uploader grants s3:PutObject on arn:aws:s3:::reports-prod/*",
+          "json_pointer": "/Statement/0",
+          "resource": "arn:aws:s3:::reports-prod/*",
+          "provider": "aws",
+          "source": "terraform_iac",
+          "statement_index": 0,
+          "action": "s3:PutObject"
         }
       ]
     },

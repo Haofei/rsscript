@@ -1,12 +1,12 @@
 mod common;
 
-use std::collections::HashMap;
 use std::fs::{self, File};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use reir::adapters::terraform::terraform_dir_to_bundle;
 use reir::{
     AcquisitionMode, Capability, CapabilityCategory, Confidence, ConfidenceLevel, Evidence,
     EvidenceKind, Fact, FactKind, FactRole, FactValue, Precision, ReconciliationKind, Subject,
@@ -16,7 +16,6 @@ use rsscript::{
     lower_sources_to_rust_package_with_options, package_lowering_input, review_package_dir,
     write_generated_rust_package,
 };
-use serde::Deserialize;
 
 const OBJECTS: usize = 6;
 const PAYLOAD_BYTES: usize = 256 * 1024;
@@ -34,7 +33,7 @@ fn s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain() {
 
     let missing_reconciliations = reir::reconcile_capabilities_for_target(
         &required_facts,
-        &deployment_grants_from_fixtures(&demo_dir, "mock-iam-missing.json"),
+        &terraform_grants_from_fixture(&demo_dir, "missing"),
         Some("prod"),
     );
     assert!(missing_reconciliations.iter().any(|reconciliation| {
@@ -86,19 +85,19 @@ fn s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain() {
 
     let fixed_reconciliations = reir::reconcile_capabilities_for_target(
         &required_facts,
-        &deployment_grants_from_fixtures(&demo_dir, "mock-iam-fixed.json"),
+        &terraform_grants_from_fixture(&demo_dir, "fixed"),
         Some("prod"),
     );
     assert!(
         fixed_reconciliations
             .iter()
             .all(|reconciliation| reconciliation.kind != ReconciliationKind::MissingCapability),
-        "fixed IAM grants should cover all required capabilities: {fixed_reconciliations:#?}"
+        "fixed Terraform/OpenTofu IAM grants should cover all required capabilities: {fixed_reconciliations:#?}"
     );
 
     let excess_reconciliations = reir::reconcile_capabilities_for_target(
         &required_facts,
-        &deployment_grants_from_fixtures(&demo_dir, "mock-iam-excess.json"),
+        &terraform_grants_from_fixture(&demo_dir, "excess"),
         Some("prod"),
     );
     assert!(excess_reconciliations.iter().any(|reconciliation| {
@@ -169,7 +168,7 @@ fn s3_iam_reir_demo_preflight_reports_missing_fixed_and_excess() {
 
     let missing_reconciliations = reir::reconcile_capabilities_for_target(
         &required_facts,
-        &deployment_grants_from_fixtures(&demo_dir, "mock-iam-missing.json"),
+        &terraform_grants_from_fixture(&demo_dir, "missing"),
         Some("prod"),
     );
     assert!(missing_reconciliations.iter().any(|reconciliation| {
@@ -202,7 +201,7 @@ fn s3_iam_reir_demo_preflight_reports_missing_fixed_and_excess() {
 
     let fixed_reconciliations = reir::reconcile_capabilities_for_target(
         &required_facts,
-        &deployment_grants_from_fixtures(&demo_dir, "mock-iam-fixed.json"),
+        &terraform_grants_from_fixture(&demo_dir, "fixed"),
         Some("prod"),
     );
     assert!(
@@ -214,7 +213,7 @@ fn s3_iam_reir_demo_preflight_reports_missing_fixed_and_excess() {
 
     let excess_reconciliations = reir::reconcile_capabilities_for_target(
         &required_facts,
-        &deployment_grants_from_fixtures(&demo_dir, "mock-iam-excess.json"),
+        &terraform_grants_from_fixture(&demo_dir, "excess"),
         Some("prod"),
     );
     let excess = excess_reconciliations
@@ -233,8 +232,10 @@ fn s3_iam_reir_demo_preflight_reports_missing_fixed_and_excess() {
         excess
             .evidence
             .iter()
-            .any(|evidence| evidence.file.as_deref() == Some("infra/mock-iam-excess.json")),
-        "excess capability should point back to the mock IAM fixture: {excess:#?}"
+            .any(|evidence| evidence.file.as_deref() == Some("main.tf")
+                && evidence.kind == EvidenceKind::TerraformPlanPointer
+                && evidence.action.as_deref() == Some("s3:DeleteObject")),
+        "excess capability should point back to the Terraform/OpenTofu IAM policy: {excess:#?}"
     );
 
     println!("s3 iam preflight: missing=s3:PutObject fixed=covered excess=s3:DeleteObject");
@@ -272,7 +273,7 @@ fn s3_iam_reir_demo_scenarios_report_code_capability_change() {
 
     let fixed_iam_reconciliations = reir::reconcile_capabilities_for_target(
         &adds_delete_required,
-        &deployment_grants_from_fixtures(&demo_dir, "mock-iam-fixed.json"),
+        &terraform_grants_from_fixture(&demo_dir, "fixed"),
         Some("prod"),
     );
     assert!(fixed_iam_reconciliations.iter().any(|reconciliation| {
@@ -285,7 +286,7 @@ fn s3_iam_reir_demo_scenarios_report_code_capability_change() {
 
     let excess_iam_reconciliations = reir::reconcile_capabilities_for_target(
         &adds_delete_required,
-        &deployment_grants_from_fixtures(&demo_dir, "mock-iam-excess.json"),
+        &terraform_grants_from_fixture(&demo_dir, "excess"),
         Some("prod"),
     );
     assert!(
@@ -321,7 +322,7 @@ fn s3_iam_reir_demo_pr_review_comment_matches_golden_output() {
     let adds_delete_dir = demo_dir.join("scenarios/03-code-adds-delete");
 
     let required = required_facts_for_demo(&adds_delete_dir);
-    let grants = deployment_grants_from_fixtures(&demo_dir, "mock-iam-fixed.json");
+    let grants = terraform_grants_from_fixture(&demo_dir, "fixed");
     let reconciliations = reir::reconcile_capabilities_for_target(&required, &grants, Some("prod"));
     let comment = reir::format_pr_review_comment(&required, &grants, &reconciliations);
     assert_eq!(comment, read_demo_text(&demo_dir, "expected/pr-comment.md"));
@@ -478,140 +479,85 @@ fn required_actions(required_facts: &[Fact]) -> std::collections::BTreeSet<&str>
         .collect()
 }
 
-#[derive(Deserialize)]
-struct RuntimeFixture {
-    service: String,
-    grants: Vec<GrantFixture>,
-}
-
-#[derive(Deserialize)]
-struct IamFixture {
-    role: String,
-    grants: Vec<GrantFixture>,
-}
-
-#[derive(Deserialize)]
-struct GrantFixture {
-    category: String,
-    provider: Option<String>,
-    service: Option<String>,
-    action: Option<String>,
-    resource: Option<String>,
-}
-
-fn deployment_grants_from_fixtures(demo_dir: &Path, iam_file: &str) -> Vec<Fact> {
-    let runtime_path = demo_dir.join("infra/mock-runtime.json");
-    let iam_path = demo_dir.join("infra").join(iam_file);
-    let runtime: RuntimeFixture = read_json(&runtime_path);
-    let iam: IamFixture = read_json(&iam_path);
-
-    let mut facts = runtime
-        .grants
-        .into_iter()
-        .enumerate()
-        .map(|(index, grant)| {
-            capability_grant(
-                &format!("fact.mock_runtime.{index}"),
-                SubjectKind::Service,
-                &runtime.service,
-                "report-uploader",
-                capability_from_grant(grant),
-                AcquisitionMode::RenderedManifest,
-                EvidenceKind::RenderedManifestPointer,
-                "infra/mock-runtime.json",
-            )
-        })
-        .collect::<Vec<_>>();
-    facts.extend(iam.grants.into_iter().enumerate().map(|(index, grant)| {
-        capability_grant(
-            &format!("fact.mock_iam.{index}"),
-            SubjectKind::CloudRole,
-            &iam.role,
-            "report-uploader",
-            capability_from_grant(grant),
-            AcquisitionMode::CloudPolicy,
-            EvidenceKind::CloudPolicyPointer,
-            &format!("infra/{iam_file}"),
-        )
-    }));
+fn terraform_grants_from_fixture(demo_dir: &Path, fixture: &str) -> Vec<Fact> {
+    let terraform_dir = demo_dir.join("infra/terraform").join(fixture);
+    let mut facts = terraform_dir_to_bundle(&terraform_dir)
+        .unwrap_or_else(|error| panic!("Terraform fixture {fixture} should collect: {error}"))
+        .facts;
+    facts.extend(runtime_grants());
     facts
 }
 
-fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> T {
-    let contents = fs::read_to_string(path)
-        .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
-    serde_json::from_str(&contents)
-        .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()))
+fn runtime_grants() -> Vec<Fact> {
+    vec![
+        runtime_grant(
+            "fact.mock_runtime.runtime_native",
+            CapabilityCategory::RuntimeNative,
+            Some("rsscript"),
+            None,
+        ),
+        runtime_grant(
+            "fact.mock_runtime.network_client",
+            CapabilityCategory::NetworkClient,
+            None,
+            Some("native_rust_source_scan"),
+        ),
+    ]
 }
 
-fn capability_from_grant(grant: GrantFixture) -> Capability {
-    Capability {
-        category: CapabilityCategory::try_from(grant.category)
-            .expect("capability category conversion should be infallible"),
-        provider: grant.provider,
-        service: grant.service,
-        action: grant.action,
-        resource: grant.resource,
-        constraints: HashMap::new(),
-    }
-}
-
-fn capability_grant(
+fn runtime_grant(
     id: &str,
-    subject_kind: SubjectKind,
-    subject_id: &str,
-    subject_name: &str,
-    capability: Capability,
-    acquisition_mode: AcquisitionMode,
-    evidence_kind: EvidenceKind,
-    evidence_file: &str,
+    category: CapabilityCategory,
+    provider: Option<&str>,
+    service: Option<&str>,
 ) -> Fact {
-    let action = capability.action.clone();
-    let precision = if capability.resource.is_some() {
-        Precision::ResourceScoped
-    } else {
-        Precision::Category
-    };
     Fact {
         schema: "reir.fact.v0.1".to_string(),
         id: id.to_string(),
         kind: FactKind::Capability,
         role: Some(FactRole::Granted),
         subject: Subject {
-            kind: subject_kind,
-            id: subject_id.to_string(),
-            name: Some(subject_name.to_string()),
+            kind: SubjectKind::Service,
+            id: "prod/report-uploader".to_string(),
+            name: Some("report-uploader".to_string()),
             package: None,
         },
-        capability: Some(capability),
+        capability: Some(Capability {
+            category,
+            provider: provider.map(str::to_owned),
+            service: service.map(str::to_owned),
+            action: None,
+            resource: None,
+            constraints: std::collections::HashMap::new(),
+        }),
         value: FactValue::True,
         confidence: Confidence {
             level: ConfidenceLevel::Authoritative,
-            source: Some("mock_deployment".to_string()),
+            source: Some("mock_runtime".to_string()),
         },
-        acquisition_mode,
-        precision,
+        acquisition_mode: AcquisitionMode::RenderedManifest,
+        precision: Precision::Category,
         evidence: vec![Evidence {
-            kind: evidence_kind,
-            file: Some(evidence_file.to_string()),
-            line: None,
+            kind: EvidenceKind::RenderedManifestPointer,
+            file: Some("infra/mock-runtime.json".to_string()),
+            line: Some(1),
             column: None,
             length: None,
             symbol: None,
-            reason: None,
-            resource: None,
-            provider: None,
-            value: None,
+            reason: Some("mock runtime grants RSS native runtime/network execution".to_string()),
             json_pointer: None,
+            resource: None,
+            provider: provider.map(str::to_owned),
+            value: None,
             event_id: None,
             time: None,
-            source: Some("s3_iam_reir_demo_e2e".to_string()),
+            source: Some("mock_runtime".to_string()),
             event_name: None,
             principal: None,
             account: None,
             policy_arn: None,
             statement_index: None,
-            action,
+            action: None,
         }],
         unknown_reason: None,
     }

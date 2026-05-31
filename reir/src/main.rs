@@ -3,6 +3,7 @@ use reir::adapters::rsscript::{
     rsscript_lock_json_to_bundle, rsscript_metadata_json_to_bundle,
     rsscript_publish_json_to_bundle, rsscript_tree_json_to_bundle, rsscript_vendor_json_to_bundle,
 };
+use reir::adapters::terraform::terraform_dir_to_bundle;
 use reir::{
     Bundle, Capability, Diff, DiffItem, DiffItemKind, Evidence, Fact, FactRole, Reconciliation,
     ReconciliationKind, ReconciliationStatus, Slice, SliceKind, compute_diff,
@@ -15,6 +16,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "Usage:
   reir collect --producer rsscript [--review-map review-map.json] [--package-review package-review.json] [--package-check check.json] [--package-lock lock.json] [--lock-update lock-diff.json] [--package-tree tree.json] [--package-publish publish.json] [--package-metadata metadata.json] [--package-vendor vendor.json] [--package-name name] [--out bundle.json] [--json]
+  reir collect --producer terraform --from infra/terraform [--out bundle.json] [--json]
   reir reconcile --required required.json --granted granted.json [--target name] [--json]
   reir reconcile [--bundle bundle.json] [--target name] [--out reconciled.json] [--json]
   reir report-pr --required required.json --granted granted.json [--target name]
@@ -154,14 +156,50 @@ fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
     }
 
     let producer = producer.ok_or_else(|| CliError::usage("missing --producer <name>"))?;
+    if producer == "terraform" {
+        let from_path =
+            from.ok_or_else(|| CliError::usage("terraform collect requires --from <path>"))?;
+        if review_map.is_some()
+            || package_review.is_some()
+            || package_check.is_some()
+            || package_lock.is_some()
+            || lock_update.is_some()
+            || package_tree.is_some()
+            || package_publish.is_some()
+            || package_metadata.is_some()
+            || package_vendor.is_some()
+            || package_name.is_some()
+        {
+            return Err(CliError::usage(
+                "terraform collect only accepts --from, --out, and --json",
+            ));
+        }
+        let bundle =
+            terraform_dir_to_bundle(std::path::Path::new(&from_path)).map_err(|error| {
+                CliError::runtime(format!(
+                    "failed to collect Terraform/OpenTofu evidence: {error}"
+                ))
+            })?;
+        if let Some(out_path) = &out {
+            write_json_file(out_path, &bundle)?;
+            if !json {
+                println!("collected terraform evidence into {out_path}");
+                print_bundle_summary(&bundle);
+            }
+        }
+        if json || out.is_none() {
+            print_json(&bundle)?;
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
     if producer != "rsscript" {
         return Err(CliError::usage(format!(
-            "`reir collect --producer {producer}` is planned; this build only supports `--producer rsscript`."
+            "`reir collect --producer {producer}` is planned; this build supports `rsscript` and `terraform`."
         )));
     }
     if from.is_some() {
         return Err(CliError::usage(
-            "`--from` is only supported by planned non-RSScript collect producers; use RSScript JSON input flags with `--producer rsscript`.",
+            "`--from` is only supported by Terraform/OpenTofu collection; use RSScript JSON input flags with `--producer rsscript`.",
         ));
     }
     if review_map.is_none()
@@ -1626,10 +1664,63 @@ mod tests {
         match error {
             CliError::Usage(message) => assert_eq!(
                 message,
-                "`reir collect --producer k8s` is planned; this build only supports `--producer rsscript`."
+                "`reir collect --producer k8s` is planned; this build supports `rsscript` and `terraform`."
             ),
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn collect_terraform_cli_reads_iam_policy_and_writes_granted_bundle() {
+        let temp_dir = unique_temp_dir("collect-terraform-cli");
+        let out_path = temp_dir.join("terraform.reir.json");
+        std::fs::write(
+            temp_dir.join("main.tf"),
+            r#"resource "aws_iam_role_policy" "report_uploader" {
+  role = "report-uploader"
+  policy = <<POLICY
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::reports-prod/*"
+    }
+  ]
+}
+POLICY
+}
+"#,
+        )
+        .expect("Terraform fixture should be written");
+
+        let args = vec![
+            "--producer".to_owned(),
+            "terraform".to_owned(),
+            "--from".to_owned(),
+            temp_dir.to_string_lossy().into_owned(),
+            "--out".to_owned(),
+            out_path.to_string_lossy().into_owned(),
+            "--json".to_owned(),
+        ];
+
+        let code = try_run_collect(&args).expect("Terraform collect should succeed");
+        assert_eq!(code, ExitCode::SUCCESS);
+
+        let bundle_json =
+            std::fs::read_to_string(&out_path).expect("collect command should write bundle");
+        let bundle = Bundle::from_json(&bundle_json).expect("written bundle should parse");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        assert!(bundle.facts.iter().any(|fact| {
+            fact.role == Some(FactRole::Granted)
+                && fact.acquisition_mode == AcquisitionMode::TerraformPlan
+                && fact.capability.as_ref().is_some_and(|capability| {
+                    capability.action.as_deref() == Some("s3:PutObject")
+                        && capability.resource.as_deref() == Some("arn:aws:s3:::reports-prod/*")
+                })
+        }));
     }
 
     #[test]
@@ -1646,7 +1737,7 @@ mod tests {
         match error {
             CliError::Usage(message) => assert_eq!(
                 message,
-                "`--from` is only supported by planned non-RSScript collect producers; use RSScript JSON input flags with `--producer rsscript`."
+                "`--from` is only supported by Terraform/OpenTofu collection; use RSScript JSON input flags with `--producer rsscript`."
             ),
             other => panic!("unexpected error: {other:?}"),
         }

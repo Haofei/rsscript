@@ -34,7 +34,7 @@ Expected output:
 s3 iam pr review: blocked missing=s3:DeleteObject evidence=src/upload.rss:28
 ```
 
-Fast preflight: RSScript code requires an S3 capability, mock IAM grants are reconciled before deploy.
+Fast preflight: RSScript code requires an S3 capability, Terraform/OpenTofu IAM policy grants are reconciled before deploy.
 
 ```sh
 cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_preflight -- --nocapture
@@ -58,7 +58,7 @@ Release/demo runtime path, including Tokio-backed native async IO and sync compa
 cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain -- --ignored --nocapture
 ```
 
-The demo lives in [`demos/s3-iam-reir`](demos/s3-iam-reir): RSScript source -> package capability binding -> REIR required facts -> mock runtime/IAM grants -> missing/fixed/excess/code-change/native-risk/missing-binding review outcomes.
+The demo lives in [`demos/s3-iam-reir`](demos/s3-iam-reir): RSScript source -> package capability binding -> REIR required facts -> Terraform/OpenTofu IAM grants plus runtime grants -> missing/fixed/excess/code-change/native-risk/missing-binding review outcomes.
 
 ---
 

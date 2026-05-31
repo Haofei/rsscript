@@ -237,10 +237,10 @@ fn missing_profile() -> Profile {
     }
 }
 
-fn find_reconciliation<'a>(
-    reconciliations: &'a [Reconciliation],
+fn find_reconciliation(
+    reconciliations: &[Reconciliation],
     kind: ReconciliationKind,
-) -> &'a Reconciliation {
+) -> &Reconciliation {
     reconciliations
         .iter()
         .find(|reconciliation| reconciliation.kind == kind)
@@ -280,7 +280,10 @@ fn bundle_serialization_round_trip() {
             "arn:aws:s3:::reports-prod/*",
         ),
     );
-    let reconciliations = reconcile_capabilities(&[required.clone()], &[granted.clone()]);
+    let reconciliations = reconcile_capabilities(
+        std::slice::from_ref(&required),
+        std::slice::from_ref(&granted),
+    );
     let policy_results = evaluate_policy(&missing_profile(), &reconciliations);
 
     let bundle_without_diff = Bundle {
@@ -1182,7 +1185,10 @@ fn mvp_cross_layer_capability_reconciliation() {
     );
     let chain = subject_chain();
 
-    let reconciliations = reconcile_capabilities(&[required.clone()], &[granted.clone()]);
+    let reconciliations = reconcile_capabilities(
+        std::slice::from_ref(&required),
+        std::slice::from_ref(&granted),
+    );
     assert!(
         reconciliations
             .iter()
