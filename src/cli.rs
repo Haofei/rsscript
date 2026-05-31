@@ -48,7 +48,7 @@ pub fn run() -> ExitCode {
         "review" => run_review(&args[2..]),
         "pkg" => run_package(&args[2..]),
         "package" => {
-            eprintln!("unknown command `package`; use `rsscript pkg ...`.");
+            eprintln!("unknown command `package`; use `rss pkg ...`.");
             print_usage();
             ExitCode::from(2)
         }
@@ -1816,7 +1816,7 @@ fn run_package_publish(
     registry: Option<&str>,
 ) -> ExitCode {
     if !dry_run {
-        eprintln!("rsscript pkg publish currently requires --dry-run");
+        eprintln!("rss pkg publish currently requires --dry-run");
         return ExitCode::from(2);
     }
     let registry_path = registry.map(Path::new);
@@ -2064,43 +2064,40 @@ fn is_package_directory(path: &str) -> bool {
 
 fn print_usage() {
     eprintln!("usage:");
+    eprintln!("  rss check [--json] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>");
+    eprintln!("  rss check [--json] <package-directory>");
+    eprintln!("  rss lint [--json] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>");
+    eprintln!("  rss check --explain <code>");
+    eprintln!("  rss fmt <file.rss>");
+    eprintln!("  rss lower --rust <file.rss>");
+    eprintln!("  rss lower --rust <file.rss> --out-dir <directory>");
+    eprintln!("  rss run [--json] [--release] <file-or-package-directory> [-- <args>...]");
     eprintln!(
-        "  rsscript check [--json] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>"
+        "  rss run [--json] [--release] <file-or-package-directory> --out-dir <directory> [-- <args>...]"
     );
-    eprintln!("  rsscript check [--json] <package-directory>");
+    eprintln!("  rss remap-rustc [--json] <rsscript-source-map.json> <rustc-json-lines>");
+    eprintln!("  rss verify-rust [--json] <file-or-package-directory>");
+    eprintln!("  rss verify-rust [--json] <file-or-package-directory> --out-dir <directory>");
+    eprintln!("  rss review [--json] --diff <old.rss> <new.rss>");
+    eprintln!("  rss review [--json] --map <file-or-directory>");
+    eprintln!("  rss bbom [--json] <file.rss | directory>");
+    eprintln!("  rss bbom delta [--json] --from <old.rss> --to <new.rss>");
+    eprintln!("  rss bbom policy [--json] --from <old.rss> --to <new.rss>");
+    eprintln!("  rss pkg check [--json|--reir] [package-directory]");
+    eprintln!("  rss pkg review [--json|--reir] [package-directory]");
     eprintln!(
-        "  rsscript lint [--json] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>"
+        "  rss pkg review update [--json|--reir] --from <old-rsspkg.lock> --to <new-rsspkg.lock>"
     );
-    eprintln!("  rsscript check --explain <code>");
-    eprintln!("  rsscript fmt <file.rss>");
-    eprintln!("  rsscript lower --rust <file.rss>");
-    eprintln!("  rsscript lower --rust <file.rss> --out-dir <directory>");
-    eprintln!("  rsscript run [--json] [--release] <file-or-package-directory> [-- <args>...]");
+    eprintln!("  rss pkg lock [--json|--reir] <package-directory>");
+    eprintln!("  rss pkg tree [--json|--reir] [package-directory]");
     eprintln!(
-        "  rsscript run [--json] [--release] <file-or-package-directory> --out-dir <directory> [-- <args>...]"
+        "  rss pkg publish --dry-run [--json|--reir] [--registry <directory>] [package-directory]"
     );
-    eprintln!("  rsscript remap-rustc [--json] <rsscript-source-map.json> <rustc-json-lines>");
-    eprintln!("  rsscript verify-rust [--json] <file-or-package-directory>");
-    eprintln!("  rsscript verify-rust [--json] <file-or-package-directory> --out-dir <directory>");
-    eprintln!("  rsscript review [--json] --diff <old.rss> <new.rss>");
-    eprintln!("  rsscript review [--json] --map <file-or-directory>");
-    eprintln!("  rsscript pkg check [--json|--reir] [package-directory]");
-    eprintln!("  rsscript pkg review [--json|--reir] [package-directory]");
+    eprintln!("  rss pkg vendor [--dry-run] [--json|--reir] [package-directory]");
+    eprintln!("  rss pkg metadata [--dry-run|--verify] [--json|--reir] [package-directory]");
+    eprintln!("  rss pkg diff [--json|--reir] <old-package-directory> <new-package-directory>");
     eprintln!(
-        "  rsscript pkg review update [--json|--reir] --from <old-rsspkg.lock> --to <new-rsspkg.lock>"
-    );
-    eprintln!("  rsscript pkg lock [--json|--reir] <package-directory>");
-    eprintln!("  rsscript pkg tree [--json|--reir] [package-directory]");
-    eprintln!(
-        "  rsscript pkg publish --dry-run [--json|--reir] [--registry <directory>] [package-directory]"
-    );
-    eprintln!("  rsscript pkg vendor [--dry-run] [--json|--reir] [package-directory]");
-    eprintln!("  rsscript pkg metadata [--dry-run|--verify] [--json|--reir] [package-directory]");
-    eprintln!(
-        "  rsscript pkg diff [--json|--reir] <old-package-directory> <new-package-directory>"
-    );
-    eprintln!(
-        "  rsscript pkg reir diff [--json] [--fail-on-change] --from <baseline-reir.json> --to <current-reir.json>"
+        "  rss pkg reir diff [--json] [--fail-on-change] --from <baseline-reir.json> --to <current-reir.json>"
     );
 }
 

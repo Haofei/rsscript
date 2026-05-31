@@ -1,4 +1,11 @@
 #![forbid(unsafe_code)]
+#![allow(
+    clippy::collapsible_if,
+    clippy::needless_borrow,
+    clippy::needless_lifetimes,
+    clippy::question_mark,
+    clippy::redundant_closure
+)]
 
 mod analyzer;
 pub mod bbom;

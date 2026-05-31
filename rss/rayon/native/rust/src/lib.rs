@@ -12,7 +12,7 @@ pub fn count_positive_int(values: &Vec<i64>) -> i64 {
     values.par_iter().filter(|value| **value > 0).count() as i64
 }
 
-pub fn sort_int(values: &mut Vec<i64>) {
+pub fn sort_int(values: &mut [i64]) {
     values.par_sort_unstable();
 }
 

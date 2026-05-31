@@ -57,7 +57,10 @@ may exercise the language, but it must not redefine language semantics.
 These files are intentionally tracked as refactoring targets:
 
 ```text
-tests/checker.rs       integration harness and many fixture assertions
+tests/checker_frontend.rs   frontend checker, parser, diagnostics, and fixtures
+tests/checker_lowering.rs   Rust lowering, source maps, runtime diagnostics
+tests/checker_package.rs    package review, package manager, REIR adapters
+tests/checker_review.rs     review map and semantic diff behavior
 src/package.rs         package domain model, graph, review, lock, publish, vendor
 src/rust_lower.rs      lowering, backend checks, source maps, remapping, intrinsics
 src/analyzer.rs        frontend orchestration
@@ -113,14 +116,15 @@ src/checks/*.rs        large semantic checker implementations
    src/lower/intrinsics.rs
    ```
 
-4. Split integration tests by semantic area:
+4. Integration tests have been split by semantic area:
 
    ```text
-   tests/frontend.rs
-   tests/lowering.rs
-   tests/review.rs
-   tests/package.rs
-   tests/selfhost.rs
+   tests/checker_frontend.rs
+   tests/checker_lowering.rs
+   tests/checker_review.rs
+   tests/checker_package.rs
+   tests/s3_iam_reir_demo_e2e.rs      ignored runtime demo plus fast REIR preflight/scenarios
+   tests/file_upload_benchmark_e2e.rs ignored release/demo benchmark
    ```
 
 5. Only then reduce checker internals further. Checker changes are higher risk

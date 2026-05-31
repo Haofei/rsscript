@@ -23,6 +23,7 @@ const PAYLOAD_BYTES: usize = 256 * 1024;
 const SERVER_DELAY_MS: u64 = 200;
 
 #[test]
+#[ignore = "release/demo e2e; run from rss/test-runner/manifests/demo-e2e.rsstest.toml"]
 fn s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain() {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
     let demo_dir = repo.join("demos/s3-iam-reir");
@@ -521,6 +522,7 @@ fn cargo_build(manifest: &Path, extra_args: &[&str]) {
         .arg("--manifest-path")
         .arg(manifest)
         .args(extra_args)
+        .env_remove("CARGO_TARGET_DIR")
         .output()
         .expect("cargo build should run");
     assert!(

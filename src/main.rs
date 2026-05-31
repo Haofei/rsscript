@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![allow(clippy::question_mark)]
 
 mod cli;
 

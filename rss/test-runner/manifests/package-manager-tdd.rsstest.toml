@@ -5,12 +5,20 @@ command = "cargo"
 args = ["test", "-q", "-p", "rsscript-runtime", "json_runtime_hooks_parse_nested_fields"]
 
 [[tests]]
-name = "package manager focused checker tests"
+name = "package manager focused package tests"
 kind = "command_for_each_path"
 command = "cargo"
-args = ["test", "-q", "--test", "checker", "--", "--exact"]
+args = ["test", "-q", "--test", "checker_package", "--", "--exact"]
 paths = [
-  "rust_lowering_maps_json_core_calls_to_runtime_hooks",
   "package_lowering_input_records_checked_in_rayon_wrapper_dependency",
   "package_tree_expands_path_dependencies_and_marks_unresolved",
+]
+
+[[tests]]
+name = "package manager focused lowering tests"
+kind = "command_for_each_path"
+command = "cargo"
+args = ["test", "-q", "--test", "checker_lowering", "--", "--exact"]
+paths = [
+  "rust_lowering_maps_json_core_calls_to_runtime_hooks",
 ]

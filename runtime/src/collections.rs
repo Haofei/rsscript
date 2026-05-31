@@ -88,7 +88,7 @@ pub fn list_reverse<T: Clone>(list: &[T]) -> Vec<T> {
     result
 }
 
-pub fn list_sort<T: Clone>(list: &mut Vec<T>, mut compare: impl FnMut(T, T) -> i64) {
+pub fn list_sort<T: Clone>(list: &mut [T], mut compare: impl FnMut(T, T) -> i64) {
     list.sort_by(|a, b| {
         let result = compare(a.clone(), b.clone());
         if result < 0 {

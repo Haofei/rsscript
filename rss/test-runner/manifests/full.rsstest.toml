@@ -8,6 +8,7 @@ args = ["fmt", "--check"]
 name = "clippy has no warnings"
 kind = "command_success"
 command = "cargo"
+timeout_ms = 60000
 args = ["clippy", "--workspace", "--", "-D", "warnings"]
 
 [[tests]]
@@ -30,6 +31,7 @@ paths = [
 name = "workspace tests pass"
 kind = "command_success"
 command = "cargo"
+timeout_ms = 60000
 args = ["test", "--workspace"]
 
 [[tests]]
@@ -39,13 +41,18 @@ command = "cargo"
 args = ["build", "--quiet", "--bin", "rss"]
 
 [[tests]]
-name = "rss sources lint"
-kind = "command_for_each_file"
-directory = "core"
-extension = ".rssi"
-recursive = true
-command = "target/debug/rss"
-args = ["lint", "--no-core"]
+name = "core interfaces have no diagnostics"
+kind = "command_success"
+command = "cargo"
+args = [
+  "test",
+  "-q",
+  "--test",
+  "checker_frontend",
+  "core_interface_files_have_no_diagnostics",
+  "--",
+  "--exact",
+]
 
 [[tests]]
 name = "rss examples lint"
@@ -57,13 +64,18 @@ command = "target/debug/rss"
 args = ["lint"]
 
 [[tests]]
-name = "passing root fixtures lint"
-kind = "command_for_each_file"
-directory = "tests/fixtures/pass"
-extension = ".rss"
-recursive = false
-command = "target/debug/rss"
-args = ["lint", "--no-core"]
+name = "passing root fixtures have no diagnostics"
+kind = "command_success"
+command = "cargo"
+args = [
+  "test",
+  "-q",
+  "--test",
+  "checker_frontend",
+  "pass_fixtures_have_no_diagnostics",
+  "--",
+  "--exact",
+]
 
 [[tests]]
 name = "git diff has no whitespace errors"

@@ -20,6 +20,58 @@ That distinction matters more with AI in the loop. When a model writes Rust appl
 
 ---
 
+## Try the review demo
+
+Fast preflight: RSScript code requires an S3 capability, mock IAM grants are reconciled before deploy.
+
+```sh
+cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_preflight -- --nocapture
+```
+
+Expected output:
+
+```text
+s3 iam preflight: missing=s3:PutObject fixed=covered excess=s3:DeleteObject
+```
+
+Reviewer scenario matrix:
+
+```sh
+cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_scenarios -- --nocapture
+```
+
+Release/demo runtime path, including Tokio-backed native async IO and sync comparison:
+
+```sh
+cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain -- --ignored --nocapture
+```
+
+The demo lives in [`demos/s3-iam-reir`](demos/s3-iam-reir): RSScript source -> package capability binding -> REIR required facts -> mock runtime/IAM grants -> missing/fixed/excess/native-risk review outcomes.
+
+---
+
+## Status
+
+```text
+Toolchain crate version: 0.1.x
+Language spec target: v0.5-alpha
+Artifact schemas: unstable unless explicitly marked
+```
+
+Stable enough for demos:
+
+- diagnostics JSON
+- review map JSON
+- package review REIR output
+
+Not stable:
+
+- RSS syntax
+- REIR ontology details
+- package registry metadata
+
+---
+
 ## Why a Review Protocol
 
 The obvious alternative is proc-macros, a Clippy ruleset, and a review tool over Rust directly. The problem is that **Rust's signatures themselves are part of the review cost**. `Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'a>>` carries four bits a reviewer needs and a dozen bits that exist to satisfy the type system. A smaller source language changes the surface itself, instead of asking tools to recover intent afterward. And AI, trained on every clever Rust crate on GitHub, is gradient-descending into that surface every time it generates code.
@@ -291,10 +343,11 @@ rss verify-rust  [--json] <file-or-package-directory> [--out-dir <directory>]
 - `reir collect --producer rsscript` converts existing RSScript JSON artifacts into REIR. Besides `--review-map` and `--package-review`, it accepts package-manager JSON artifacts from `--package-check`, `--package-lock`, `--lock-update`, `--package-tree`, `--package-publish`, `--package-metadata`, and `--package-vendor`, then merges them into one deduped bundle.
 - `reir reconcile <bundle.json> --target <name> --out <reconciled.json>` reconciles required and granted facts from one merged bundle, records the target name on each reconciliation result, writes those results back into the bundle, and recomputes slices for review. The older `--required required.json --granted granted.json --target <name>` form emits the same target field without writing a merged bundle.
 - `reir slice --bundle <bundle.json> --kind <slice-kind>` recomputes review slices from a bundle and can filter any implemented slice kind, using either short names such as `package_risk` or full schema names such as `package_risk_slice`.
-- `rss run` lowers a single file (or a package with `src/main.rss`) to a temporary Rust package and delegates to `cargo run`; package lowering carries enabled `[native.rust]` wrappers through as generated Cargo path dependencies and maps `native/bindings.rssbind.toml` call bindings into generated Rust calls. `--out-dir` keeps the generated package; arguments after `--` reach the program through the core `Args` API.
+- `rss run` lowers a single file (or a package with `src/main.rss`) to a temporary Rust package and delegates to `cargo run`; package lowering carries enabled `[native.rust]` wrappers through as generated Cargo path dependencies and maps `native/bindings.rssbind.toml` call bindings into generated Rust calls. `--release` delegates to Cargo's release profile, `--out-dir` keeps the generated package, and arguments after `--` reach the program through the core `Args` API.
 - `rss verify-rust --out-dir` keeps the generated package and source map so unmappable rustc diagnostics can be inspected against the actual generated Rust.
+- `rss bbom` is an experimental behavior BOM command for capability summaries, deltas, and policy checks over RSScript source.
 
-### Try it
+### Hello world
 
 ```sh
 cargo run -- run examples/hello.rss

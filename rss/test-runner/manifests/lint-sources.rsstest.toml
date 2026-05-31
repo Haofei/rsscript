@@ -1,11 +1,16 @@
 [[tests]]
-name = "core interfaces lint"
-kind = "command_for_each_file"
-directory = "core"
-extension = ".rssi"
-recursive = true
-command = "target/debug/rss"
-args = ["lint", "--no-core"]
+name = "core interfaces have no diagnostics"
+kind = "command_success"
+command = "cargo"
+args = [
+  "test",
+  "-q",
+  "--test",
+  "checker_frontend",
+  "core_interface_files_have_no_diagnostics",
+  "--",
+  "--exact",
+]
 
 [[tests]]
 name = "examples lint"
@@ -17,10 +22,15 @@ command = "target/debug/rss"
 args = ["lint"]
 
 [[tests]]
-name = "passing root fixtures lint"
-kind = "command_for_each_file"
-directory = "tests/fixtures/pass"
-extension = ".rss"
-recursive = false
-command = "target/debug/rss"
-args = ["lint", "--no-core"]
+name = "passing root fixtures have no diagnostics"
+kind = "command_success"
+command = "cargo"
+args = [
+  "test",
+  "-q",
+  "--test",
+  "checker_frontend",
+  "pass_fixtures_have_no_diagnostics",
+  "--",
+  "--exact",
+]

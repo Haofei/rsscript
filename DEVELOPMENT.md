@@ -116,10 +116,21 @@ It is the intended sub-10-second loop while iterating on
 `rss/package-manager/main.rss`; run the full gate only before committing or when
 touching shared lowering/runtime behavior.
 
+Release/demo e2e tests live in a separate opt-in manifest:
+
+```sh
+cargo run --quiet --bin rss -- run rss/test-runner -- rss/test-runner/manifests/demo-e2e.rsstest.toml
+```
+
+These tests may build native demo binaries, start local mock servers, generate
+temporary Rust packages, or run timing-sensitive demo clients. They must be
+marked `#[ignore]` at the Cargo test level so `cargo test --workspace` and the
+default full manifest remain static-first.
+
 CI runs the RSScript test-runner full manifest. It is intentionally static-first:
-it runs the full workspace test suite, generated-package compile checks, and
-RSScript lint checks without executing every example or self-hosted tool as a
-behavior test.
+it runs the unignored workspace test suite, generated-package compile checks,
+and RSScript lint checks without executing every example, release demo, or
+self-hosted tool as a behavior test.
 
 Generated Rust package targets and temporary generated packages are disposable.
 Default local development uses a memory-backed workspace. On macOS, `rss`
@@ -158,13 +169,15 @@ Do not point these paths back at the SSD for normal development; if a test has
 file conflicts, give it an isolated ramdisk subdirectory or copy the ramdisk
 seed target, then clean the copy after the test.
 
-No e2e tests are allowed in this repository. Do not add tests that execute
-RSScript programs through `rss run`, drive `verify-rust` as an end-to-end
-compiler invocation, sweep examples as behavior tests, or run checked-in
-self-hosted scripts as acceptance tests. When behavior needs coverage, test the
-parser, analyzer, lowering, package metadata, source-map, runtime helper, or
-review function directly. Any test that exceeds 10 seconds must be deleted,
-split, or rewritten as a smaller static/unit-level check.
+No unignored e2e tests are allowed in this repository. Do not add default tests
+that execute RSScript programs through `rss run`, drive `verify-rust` as an
+end-to-end compiler invocation, sweep examples as behavior tests, run checked-in
+self-hosted scripts as acceptance tests, build native demo binaries, or start
+mock servers. When behavior needs coverage, test the parser, analyzer,
+lowering, package metadata, source-map, runtime helper, or review function
+directly. Any unignored test that exceeds 10 seconds must be deleted, split, or
+rewritten as a smaller static/unit-level check. Release-grade demos may exist
+only as ignored tests wired through `demo-e2e.rsstest.toml`.
 
 Avoid running multiple workspace Cargo commands in parallel. Cargo's build lock
 makes that slower and noisier. Independent RSScript script checks may run in

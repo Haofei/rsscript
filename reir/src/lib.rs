@@ -1,4 +1,9 @@
 #![forbid(unsafe_code)]
+#![allow(
+    clippy::collapsible_if,
+    clippy::infallible_try_from,
+    clippy::too_many_arguments
+)]
 
 pub mod adapters;
 pub mod bundle;

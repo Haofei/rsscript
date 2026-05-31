@@ -12,6 +12,7 @@ const CONCURRENCY: usize = 8;
 const SERVER_DELAY_MS: u64 = 50;
 
 #[test]
+#[ignore = "release/demo e2e; run from rss/test-runner/manifests/demo-e2e.rsstest.toml"]
 fn file_upload_benchmark_reports_async_and_sync_requests_per_second() {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
     let demo_dir = repo.join("demos/file-upload-benchmark");
@@ -83,6 +84,7 @@ fn cargo_build(manifest: &Path, bin: &str) {
         .arg(manifest)
         .arg("--bin")
         .arg(bin)
+        .env_remove("CARGO_TARGET_DIR")
         .output()
         .expect("cargo build should run");
     assert!(
