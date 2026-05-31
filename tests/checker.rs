@@ -3252,8 +3252,11 @@ async fn main() -> Result<Unit, TimerError> {
     assert!(rust.contains("pub fn main() -> Result<(), rsscript_runtime::TimerError>"));
     assert!(!rust.contains("async fn"));
     assert!(
-        rust.contains("rsscript_runtime::run_pending(rsscript_runtime::timer_sleep_start(1))?;")
+        rust.contains("let mut __rsscript_async_executor = rsscript_runtime::Executor::new();")
     );
+    assert!(rust.contains(
+        "__rsscript_async_executor.run_pending(rsscript_runtime::timer_sleep_start(1))?;"
+    ));
 }
 
 #[test]
@@ -3291,7 +3294,7 @@ async fn main() -> Result<Unit, HostError> {
     assert!(
         package
             .lib_rs
-            .contains("rsscript_runtime::run_pending(timer_native::sleep_start(1))?;")
+            .contains("__rsscript_async_executor.run_pending(timer_native::sleep_start(1))?;")
     );
 }
 

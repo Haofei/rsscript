@@ -644,6 +644,7 @@ struct RustLowerer<'a> {
     mutated_bindings: BTreeSet<String>,
     drop_field_names: BTreeSet<String>,
     current_return_type: Option<TypeRef>,
+    current_async_executor: Option<String>,
     source_map: Vec<RustSourceMapEntry>,
 }
 
@@ -684,6 +685,7 @@ impl<'a> RustLowerer<'a> {
             mutated_bindings: BTreeSet::new(),
             drop_field_names: BTreeSet::new(),
             current_return_type: None,
+            current_async_executor: None,
             source_map: Vec::new(),
         }
     }
@@ -905,6 +907,7 @@ impl<'a> RustLowerer<'a> {
         let previous_retained_params = std::mem::take(&mut self.current_retained_params);
         let previous_mutated_bindings = std::mem::take(&mut self.mutated_bindings);
         let previous_return_type = self.current_return_type.take();
+        let previous_async_executor = self.current_async_executor.take();
         self.param_effects = function
             .params
             .iter()
@@ -931,6 +934,9 @@ impl<'a> RustLowerer<'a> {
             .collect();
         self.mutated_bindings = collect_mutated_bindings(&function.body);
         self.current_return_type = function.return_ty.clone();
+        self.current_async_executor = function
+            .is_async
+            .then(|| "__rsscript_async_executor".to_string());
         self.record_source_marker(out, 0, "function", &function.span);
         let is_public = function.is_public || is_runnable_main(function);
         out.push_str(&format!(
@@ -958,6 +964,11 @@ impl<'a> RustLowerer<'a> {
                 "    // RSScript native/unsafe boundary: review before binding implementation.\n",
             );
         }
+        if let Some(executor) = &self.current_async_executor {
+            out.push_str(&format!(
+                "    let mut {executor} = rsscript_runtime::Executor::new();\n"
+            ));
+        }
         self.lower_block(&function.body, out, 1);
         out.push_str("}\n");
         self.param_effects = previous_param_effects;
@@ -967,6 +978,7 @@ impl<'a> RustLowerer<'a> {
         self.current_retained_params = previous_retained_params;
         self.mutated_bindings = previous_mutated_bindings;
         self.current_return_type = previous_return_type;
+        self.current_async_executor = previous_async_executor;
     }
 
     fn lower_param(&self, param: &Param) -> String {
@@ -1654,7 +1666,11 @@ impl<'a> RustLowerer<'a> {
             Expr::Try { value, .. } => format!("{}?", self.lower_await_expr(value)),
             Expr::Effect { value, .. } => self.lower_await_expr(value),
             Expr::Call { callee, .. } if self.await_call_lowers_to_pending(callee) => {
-                format!("rsscript_runtime::run_pending({})", self.lower_expr(expr))
+                let pending = self.lower_expr(expr);
+                self.current_async_executor
+                    .as_ref()
+                    .map(|executor| format!("{executor}.run_pending({pending})"))
+                    .unwrap_or_else(|| format!("rsscript_runtime::run_pending({pending})"))
             }
             Expr::Call { .. } => self.lower_expr(expr),
             _ => self.lower_expr(expr),
