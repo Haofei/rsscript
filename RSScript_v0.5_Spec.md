@@ -2242,6 +2242,10 @@ cross isolate-local suspension points, but local values, resources, runtime
 read/write guards, noescape closure frames, and unmanaged native borrows may not
 be live across `await`.
 
+Package review metadata records each `await` site with its callee, source span,
+and `live_across_await` name set so reviewers can see which values are carried
+through a suspension boundary.
+
 `spawn` is not executable in v0.5. Future `spawn`/TaskGroup support must lower to
 an isolate-local structured task primitive; it must not imply `Send`, shared heap
 transfer, or multi-threaded execution.

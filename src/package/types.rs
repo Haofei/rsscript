@@ -397,6 +397,7 @@ pub struct PackageReviewExport {
 pub struct PackageReviewAwaitSite {
     pub function: String,
     pub callee: Option<String>,
+    pub live_across_await: Vec<String>,
     pub span: Span,
 }
 

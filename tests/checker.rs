@@ -8952,11 +8952,14 @@ fn package_review_summarizes_async_apis_and_await_sites() {
         r#"features: async, native
 
 struct TimerError
+struct Client
 
 pub async native fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
     effects(native)
 
-pub async fn Api.run() -> Result<Unit, TimerError>
+pub fn Log.done(client: read Client) -> Unit
+
+pub async fn Api.run(client: read Client) -> Result<Unit, TimerError>
 "#,
     );
     fs::create_dir_all(temp_dir.join("src")).expect("src dir should be created");
@@ -8964,8 +8967,9 @@ pub async fn Api.run() -> Result<Unit, TimerError>
         temp_dir.join("src/main.rss"),
         r#"features: async
 
-pub async fn Api.run() -> Result<Unit, TimerError> {
+pub async fn Api.run(client: read Client) -> Result<Unit, TimerError> {
     await Timer.sleep(ms: 1)?
+    Log.done(client: read client)
     return Ok(Unit)
 }
 "#,
@@ -8983,6 +8987,9 @@ pub async fn Api.run() -> Result<Unit, TimerError> {
         await_sites.iter().any(|site| {
             site["function"] == "Api.run"
                 && site["callee"] == "Timer.sleep"
+                && site["live_across_await"]
+                    .as_array()
+                    .is_some_and(|values| values.iter().any(|value| value == "client"))
                 && site["span"]["file"]
                     .as_str()
                     .is_some_and(|file| file.ends_with("src/main.rss"))
@@ -10700,6 +10707,61 @@ native fn Native.two(message: read String) -> String
 
     assert_eq!(old_review.summary.native_apis, 1);
     assert_eq!(new_review.summary.native_apis, 2);
+    assert_ne!(
+        old_lock.packages[0].review_hash,
+        new_lock.packages[0].review_hash
+    );
+}
+
+#[test]
+fn package_lock_review_hash_tracks_await_live_across_changes() {
+    let old_dir = unique_temp_dir("rsscript-package-lock-await-live-old");
+    let new_dir = unique_temp_dir("rsscript-package-lock-await-live-new");
+    let interface = r#"features: async, native
+
+struct TimerError
+struct Client
+
+pub async native fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
+    effects(native)
+
+pub fn Log.done(client: read Client) -> Unit
+
+pub async fn Api.run(client: read Client) -> Result<Unit, TimerError>
+"#;
+    write_package_fixture(&old_dir, "0.1.0", "", interface);
+    write_package_fixture(&new_dir, "0.1.0", "", interface);
+    fs::create_dir_all(old_dir.join("src")).expect("old src dir should be created");
+    fs::write(
+        old_dir.join("src/main.rss"),
+        r#"features: async
+
+pub async fn Api.run(client: read Client) -> Result<Unit, TimerError> {
+    await Timer.sleep(ms: 1)?
+    return Ok(Unit)
+}
+"#,
+    )
+    .expect("old source should be written");
+    fs::create_dir_all(new_dir.join("src")).expect("new src dir should be created");
+    fs::write(
+        new_dir.join("src/main.rss"),
+        r#"features: async
+
+pub async fn Api.run(client: read Client) -> Result<Unit, TimerError> {
+    await Timer.sleep(ms: 1)?
+    Log.done(client: read client)
+    return Ok(Unit)
+}
+"#,
+    )
+    .expect("new source should be written");
+
+    let old_lock = lock_package_dir(&old_dir).expect("old package lock should succeed");
+    let new_lock = lock_package_dir(&new_dir).expect("new package lock should succeed");
+    let _ = fs::remove_dir_all(&old_dir);
+    let _ = fs::remove_dir_all(&new_dir);
+
     assert_ne!(
         old_lock.packages[0].review_hash,
         new_lock.packages[0].review_hash

@@ -550,6 +550,10 @@ fn package_review_hash(review: &PackageReview) -> String {
         input.push('\n');
         input.push_str(await_site.callee.as_deref().unwrap_or(""));
         input.push('\n');
+        for live_value in &await_site.live_across_await {
+            input.push_str(live_value);
+            input.push('\n');
+        }
         input.push_str(&await_site.span.file);
         input.push('\n');
         input.push_str(&await_site.span.line.to_string());

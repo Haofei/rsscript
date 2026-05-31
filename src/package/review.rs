@@ -7,7 +7,7 @@ use crate::analyzer::{
 use crate::diagnostic::{Diagnostic, code};
 use crate::lint::lint_source;
 use crate::review::{ReviewMap, ReviewMapClassification, review_map_sources_with_interfaces};
-use crate::syntax::ast::{Block, Callee, Expr, Item, Stmt, TypeKind};
+use crate::syntax::ast::{Block, Callee, Expr, Item, MatchPattern, Stmt, TypeKind};
 use crate::syntax::parse_source;
 
 use super::contract::{
@@ -552,63 +552,107 @@ fn collect_package_await_sites(sources: &[PackageSource]) -> Vec<PackageReviewAw
 }
 
 fn collect_await_sites_in_block(function: &str, block: &Block) -> Vec<PackageReviewAwaitSite> {
-    block
-        .statements
-        .iter()
-        .flat_map(|statement| collect_await_sites_in_stmt(function, statement))
-        .collect()
-}
-
-fn collect_await_sites_in_stmt(function: &str, statement: &Stmt) -> Vec<PackageReviewAwaitSite> {
     let mut sites = Vec::new();
-    collect_await_sites_from_stmt(function, statement, &mut sites);
+    collect_await_sites_from_block(
+        function,
+        block,
+        &BTreeSet::new(),
+        &BTreeSet::new(),
+        &mut sites,
+    );
     sites
 }
 
 fn collect_await_sites_from_stmt(
     function: &str,
     statement: &Stmt,
+    live_after: &BTreeSet<String>,
+    scoped_live: &BTreeSet<String>,
     sites: &mut Vec<PackageReviewAwaitSite>,
 ) {
     match statement {
         Stmt::Let(stmt) => {
             if let Some(value) = &stmt.value {
-                collect_await_sites_from_expr(function, value, sites);
+                collect_await_sites_from_expr(function, value, live_after, scoped_live, sites);
             }
         }
         Stmt::Return(stmt) => {
             if let Some(value) = &stmt.value {
-                collect_await_sites_from_expr(function, value, sites);
+                collect_await_sites_from_expr(function, value, live_after, scoped_live, sites);
             }
         }
         Stmt::With(stmt) => {
-            collect_await_sites_from_expr(function, &stmt.resource, sites);
-            collect_await_sites_from_block(function, &stmt.body, sites);
+            collect_await_sites_from_expr(function, &stmt.resource, live_after, scoped_live, sites);
+            let mut body_scoped_live = scoped_live.clone();
+            body_scoped_live.insert(stmt.binding.clone());
+            collect_await_sites_from_block(
+                function,
+                &stmt.body,
+                live_after,
+                &body_scoped_live,
+                sites,
+            );
         }
         Stmt::If(stmt) => {
-            collect_await_sites_from_expr(function, &stmt.condition, sites);
-            collect_await_sites_from_block(function, &stmt.then_body, sites);
+            collect_await_sites_from_expr(
+                function,
+                &stmt.condition,
+                live_after,
+                scoped_live,
+                sites,
+            );
+            collect_await_sites_from_block(
+                function,
+                &stmt.then_body,
+                live_after,
+                scoped_live,
+                sites,
+            );
             if let Some(else_body) = &stmt.else_body {
-                collect_await_sites_from_block(function, else_body, sites);
+                collect_await_sites_from_block(function, else_body, live_after, scoped_live, sites);
             }
         }
         Stmt::Loop(stmt) => {
             if let Some(condition) = &stmt.condition {
-                collect_await_sites_from_expr(function, condition, sites);
+                collect_await_sites_from_expr(function, condition, live_after, scoped_live, sites);
             }
-            collect_await_sites_from_block(function, &stmt.body, sites);
+            collect_await_sites_from_block(function, &stmt.body, live_after, scoped_live, sites);
         }
         Stmt::For(stmt) => {
-            collect_await_sites_from_expr(function, &stmt.iterable, sites);
-            collect_await_sites_from_block(function, &stmt.body, sites);
+            collect_await_sites_from_expr(function, &stmt.iterable, live_after, scoped_live, sites);
+            let mut body_scoped_live = scoped_live.clone();
+            body_scoped_live.insert(stmt.binding.clone());
+            collect_await_sites_from_block(
+                function,
+                &stmt.body,
+                live_after,
+                &body_scoped_live,
+                sites,
+            );
         }
         Stmt::Match(stmt) => {
-            collect_await_sites_from_expr(function, &stmt.value, sites);
+            collect_await_sites_from_expr(function, &stmt.value, live_after, scoped_live, sites);
             for arm in &stmt.arms {
-                collect_await_sites_from_block(function, &arm.body, sites);
+                let mut arm_scoped_live = scoped_live.clone();
+                if let MatchPattern::Variant {
+                    binding: Some(binding),
+                    ..
+                } = &arm.pattern
+                {
+                    arm_scoped_live.insert(binding.clone());
+                }
+                collect_await_sites_from_block(
+                    function,
+                    &arm.body,
+                    live_after,
+                    &arm_scoped_live,
+                    sites,
+                );
             }
         }
-        Stmt::Expr(expr) => collect_await_sites_from_expr(function, expr, sites),
+        Stmt::Expr(expr) => {
+            collect_await_sites_from_expr(function, expr, live_after, scoped_live, sites)
+        }
         Stmt::Break(_)
         | Stmt::Continue(_)
         | Stmt::MalformedWith(_)
@@ -623,47 +667,221 @@ fn collect_await_sites_from_stmt(
 fn collect_await_sites_from_block(
     function: &str,
     block: &Block,
+    continuation_uses: &BTreeSet<String>,
+    scoped_live: &BTreeSet<String>,
     sites: &mut Vec<PackageReviewAwaitSite>,
 ) {
-    for statement in &block.statements {
-        collect_await_sites_from_stmt(function, statement, sites);
+    let live_after_statements = block_live_after_statements(block, continuation_uses);
+    for (index, statement) in block.statements.iter().enumerate() {
+        let live_after = live_after_statements
+            .get(index)
+            .unwrap_or(continuation_uses);
+        collect_await_sites_from_stmt(function, statement, live_after, scoped_live, sites);
     }
 }
 
 fn collect_await_sites_from_expr(
     function: &str,
     expr: &Expr,
+    live_after: &BTreeSet<String>,
+    scoped_live: &BTreeSet<String>,
     sites: &mut Vec<PackageReviewAwaitSite>,
 ) {
     match expr {
         Expr::Await { value, span } => {
+            let mut live_across_await = scoped_live.clone();
+            live_across_await.extend(live_after.iter().cloned());
+            collect_expr_uses(value, &mut live_across_await);
             sites.push(PackageReviewAwaitSite {
                 function: function.to_string(),
                 callee: awaited_callee(value),
+                live_across_await: live_across_await.into_iter().collect(),
                 span: span.clone(),
             });
-            collect_await_sites_from_expr(function, value, sites);
+            collect_await_sites_from_expr(function, value, live_after, scoped_live, sites);
         }
         Expr::Effect { value, .. }
         | Expr::Manage { value, .. }
         | Expr::Spawn { value, .. }
-        | Expr::Try { value, .. } => collect_await_sites_from_expr(function, value, sites),
-        Expr::Binary { left, right, .. } => {
-            collect_await_sites_from_expr(function, left, sites);
-            collect_await_sites_from_expr(function, right, sites);
+        | Expr::Try { value, .. } => {
+            collect_await_sites_from_expr(function, value, live_after, scoped_live, sites)
         }
-        Expr::Field { base, .. } => collect_await_sites_from_expr(function, base, sites),
+        Expr::Binary { left, right, .. } => {
+            let mut left_live_after = live_after.clone();
+            collect_expr_uses(right, &mut left_live_after);
+            collect_await_sites_from_expr(function, left, &left_live_after, scoped_live, sites);
+            collect_await_sites_from_expr(function, right, live_after, scoped_live, sites);
+        }
+        Expr::Field { base, .. } => {
+            collect_await_sites_from_expr(function, base, live_after, scoped_live, sites)
+        }
         Expr::Index { base, index, .. } => {
-            collect_await_sites_from_expr(function, base, sites);
-            collect_await_sites_from_expr(function, index, sites);
+            let mut base_live_after = live_after.clone();
+            collect_expr_uses(index, &mut base_live_after);
+            collect_await_sites_from_expr(function, base, &base_live_after, scoped_live, sites);
+            collect_await_sites_from_expr(function, index, live_after, scoped_live, sites);
+        }
+        Expr::Call { args, .. } => {
+            let mut arg_live_after = live_after.clone();
+            for arg in args.iter().rev() {
+                collect_await_sites_from_expr(
+                    function,
+                    &arg.value,
+                    &arg_live_after,
+                    scoped_live,
+                    sites,
+                );
+                collect_expr_uses(&arg.value, &mut arg_live_after);
+            }
+        }
+        Expr::Closure { body, .. } => collect_await_sites_from_block(
+            function,
+            body,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            sites,
+        ),
+        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+    }
+}
+
+fn block_live_after_statements(
+    block: &Block,
+    continuation_uses: &BTreeSet<String>,
+) -> Vec<BTreeSet<String>> {
+    let mut live_after = vec![BTreeSet::new(); block.statements.len()];
+    let mut used = continuation_uses.clone();
+    for (index, statement) in block.statements.iter().enumerate().rev() {
+        live_after[index] = used.clone();
+        collect_stmt_uses(statement, &mut used);
+        remove_stmt_bindings(statement, &mut used);
+    }
+    live_after
+}
+
+fn collect_stmt_uses(statement: &Stmt, uses: &mut BTreeSet<String>) {
+    match statement {
+        Stmt::Let(stmt) => {
+            if let Some(value) = &stmt.value {
+                collect_expr_uses(value, uses);
+            }
+        }
+        Stmt::Return(stmt) => {
+            if let Some(value) = &stmt.value {
+                collect_expr_uses(value, uses);
+            }
+        }
+        Stmt::With(stmt) => {
+            collect_expr_uses(&stmt.resource, uses);
+            collect_block_uses(&stmt.body, uses);
+        }
+        Stmt::If(stmt) => {
+            collect_expr_uses(&stmt.condition, uses);
+            collect_block_uses(&stmt.then_body, uses);
+            if let Some(else_body) = &stmt.else_body {
+                collect_block_uses(else_body, uses);
+            }
+        }
+        Stmt::Loop(stmt) => {
+            if let Some(condition) = &stmt.condition {
+                collect_expr_uses(condition, uses);
+            }
+            collect_block_uses(&stmt.body, uses);
+        }
+        Stmt::For(stmt) => {
+            collect_expr_uses(&stmt.iterable, uses);
+            collect_block_uses(&stmt.body, uses);
+        }
+        Stmt::Match(stmt) => {
+            collect_expr_uses(&stmt.value, uses);
+            for arm in &stmt.arms {
+                collect_block_uses(&arm.body, uses);
+            }
+        }
+        Stmt::Expr(expr) => collect_expr_uses(expr, uses),
+        Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::MalformedWith(_)
+        | Stmt::MalformedIf(_)
+        | Stmt::MalformedLoop(_)
+        | Stmt::MalformedFor(_)
+        | Stmt::MalformedMatch(_)
+        | Stmt::Unknown(_) => {}
+    }
+}
+
+fn collect_block_uses(block: &Block, uses: &mut BTreeSet<String>) {
+    let mut block_uses = BTreeSet::new();
+    for statement in block.statements.iter().rev() {
+        collect_stmt_uses(statement, &mut block_uses);
+        remove_stmt_bindings(statement, &mut block_uses);
+    }
+    uses.extend(block_uses);
+}
+
+fn collect_expr_uses(expr: &Expr, uses: &mut BTreeSet<String>) {
+    match expr {
+        Expr::Ident(name, _) => {
+            uses.insert(name.clone());
+        }
+        Expr::Binary { left, right, .. } => {
+            collect_expr_uses(left, uses);
+            collect_expr_uses(right, uses);
+        }
+        Expr::Field { base, .. } => collect_expr_uses(base, uses),
+        Expr::Index { base, index, .. } => {
+            collect_expr_uses(base, uses);
+            collect_expr_uses(index, uses);
         }
         Expr::Call { args, .. } => {
             for arg in args {
-                collect_await_sites_from_expr(function, &arg.value, sites);
+                collect_expr_uses(&arg.value, uses);
             }
         }
-        Expr::Closure { body, .. } => collect_await_sites_from_block(function, body, sites),
-        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        Expr::Effect { value, .. }
+        | Expr::Manage { value, .. }
+        | Expr::Spawn { value, .. }
+        | Expr::Await { value, .. }
+        | Expr::Try { value, .. } => collect_expr_uses(value, uses),
+        Expr::Closure { body, .. } => collect_block_uses(body, uses),
+        Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+    }
+}
+
+fn remove_stmt_bindings(statement: &Stmt, uses: &mut BTreeSet<String>) {
+    match statement {
+        Stmt::Let(stmt) => {
+            uses.remove(&stmt.name);
+        }
+        Stmt::With(stmt) => {
+            uses.remove(&stmt.binding);
+        }
+        Stmt::For(stmt) => {
+            uses.remove(&stmt.binding);
+        }
+        Stmt::Match(stmt) => {
+            for arm in &stmt.arms {
+                if let MatchPattern::Variant {
+                    binding: Some(binding),
+                    ..
+                } = &arm.pattern
+                {
+                    uses.remove(binding);
+                }
+            }
+        }
+        Stmt::Return(_)
+        | Stmt::If(_)
+        | Stmt::Loop(_)
+        | Stmt::Expr(_)
+        | Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::MalformedWith(_)
+        | Stmt::MalformedIf(_)
+        | Stmt::MalformedLoop(_)
+        | Stmt::MalformedFor(_)
+        | Stmt::MalformedMatch(_)
+        | Stmt::Unknown(_) => {}
     }
 }
 

@@ -2739,6 +2739,7 @@ Schema example:
     {
       "function": "Api.run",
       "callee": "Timer.sleep",
+      "live_across_await": ["client"],
       "span": {
         "file": "src/main.rss",
         "line": 4,
