@@ -891,17 +891,32 @@ fn read_interface_sources(paths: &[&str]) -> Result<Vec<InterfaceSource>, String
 }
 
 fn default_runtime_path() -> Result<PathBuf, String> {
-    let path = env::current_dir()
-        .map_err(|error| format!("failed to read current directory: {error}"))?
-        .join("runtime");
-    if !path.join("Cargo.toml").is_file() {
-        return Err(format!(
-            "failed to locate rsscript-runtime crate at {}",
-            path.display()
-        ));
+    let current_dir =
+        env::current_dir().map_err(|error| format!("failed to read current directory: {error}"))?;
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut candidates = Vec::new();
+    if let Some(path) = env::var_os("RSSCRIPT_RUNTIME_PATH") {
+        candidates.push(("RSSCRIPT_RUNTIME_PATH", PathBuf::from(path)));
     }
-    path.canonicalize()
-        .map_err(|error| format!("failed to canonicalize {}: {error}", path.display()))
+    candidates.push(("current directory", current_dir.join("runtime")));
+    candidates.push(("compiled manifest directory", manifest_dir.join("runtime")));
+    select_runtime_path(candidates)
+}
+
+fn select_runtime_path(candidates: Vec<(&'static str, PathBuf)>) -> Result<PathBuf, String> {
+    let mut checked = Vec::new();
+    for (source, path) in candidates {
+        checked.push(format!("{source}: {}", path.display()));
+        if path.join("Cargo.toml").is_file() {
+            return path
+                .canonicalize()
+                .map_err(|error| format!("failed to canonicalize {}: {error}", path.display()));
+        }
+    }
+    Err(format!(
+        "failed to locate rsscript-runtime crate; checked {}. Set RSSCRIPT_RUNTIME_PATH to the runtime crate directory.",
+        checked.join(", ")
+    ))
 }
 
 fn generated_package_name(path: &str) -> String {
@@ -1568,6 +1583,9 @@ fn print_usage() {
 #[cfg(test)]
 mod tests {
     use super::parse_run_args;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
@@ -1630,5 +1648,52 @@ mod tests {
         let error = parse_run_args(&values).expect_err("missing out-dir should fail");
 
         assert_eq!(error, "missing value for `--out-dir`.");
+    }
+
+    #[test]
+    fn runtime_path_selection_uses_first_valid_candidate() {
+        let root = unique_temp_dir("runtime-path-selection");
+        let invalid = root.join("missing");
+        let valid = root.join("runtime");
+        fs::create_dir_all(&valid).expect("runtime directory should create");
+        fs::write(
+            valid.join("Cargo.toml"),
+            "[package]\nname = \"rsscript-runtime\"\n",
+        )
+        .expect("runtime manifest should write");
+
+        let selected =
+            super::select_runtime_path(vec![("env", invalid), ("manifest", valid.clone())])
+                .expect("valid runtime path should be selected");
+
+        assert_eq!(
+            selected,
+            valid
+                .canonicalize()
+                .expect("valid path should canonicalize")
+        );
+        fs::remove_dir_all(root).expect("temp runtime path should clean up");
+    }
+
+    #[test]
+    fn runtime_path_selection_reports_checked_candidates() {
+        let root = unique_temp_dir("runtime-path-missing");
+        let missing = root.join("missing");
+        let error = super::select_runtime_path(vec![("env", missing.clone())])
+            .expect_err("missing runtime should fail");
+
+        assert!(error.contains("RSSCRIPT_RUNTIME_PATH"));
+        assert!(error.contains(&missing.display().to_string()));
+        fs::remove_dir_all(root).expect("temp runtime path should clean up");
+    }
+
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("{name}-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&path).expect("temp directory should create");
+        path
     }
 }
