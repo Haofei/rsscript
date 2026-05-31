@@ -247,7 +247,8 @@ The spec includes a semantic guarantee table that marks each promise as `static`
 ## CLI
 
 ```sh
-rss check    [--json] [--core|--no-core] [--interface <f.rssi> ...] <file-or-package-directory>
+rss check    [--json] [--core|--no-core] [--interface <f.rssi> ...] <file.rss>
+rss check    [--json] <package-directory>
 rss check    --explain <code>
 rss lint     [--json] [--core|--no-core] [--interface <f.rssi> ...] <file.rss>
 rss fmt      <file.rss>
