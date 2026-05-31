@@ -646,10 +646,32 @@ fn check_match_patterns_match_scrutinee(
     let Some(type_name) = hir_expr_type_name(expr) else {
         return;
     };
-    let allowed_variants: &[&str] = match type_root_name(type_name) {
+    let root = type_root_name(type_name);
+
+    // Determine allowed variants: built-in Option/Result or user-defined sum types
+    let builtin_variants: &[&str] = match root {
         "Option" => &["Some", "None"],
         "Result" => &["Ok", "Err"],
-        _ => return,
+        _ => &[],
+    };
+
+    let allowed_variants: Vec<&str> = if !builtin_variants.is_empty() {
+        builtin_variants.to_vec()
+    } else {
+        // Look up the sum type definition by name
+        let mut found = Vec::new();
+        for item in &analyzer.syntax_program.items {
+            if let Item::SumType(sum) = item {
+                if sum.name == root {
+                    found = sum.variants.iter().map(|v| v.name.as_str()).collect();
+                    break;
+                }
+            }
+        }
+        if found.is_empty() {
+            return; // Not a known sum type; cannot validate
+        }
+        found
     };
 
     for arm in arms {
@@ -667,14 +689,13 @@ fn check_match_patterns_match_scrutinee(
                 "match variant type mismatch",
             )
             .with_cause(
-                "RSScript v0.5 `match` does not coerce between `Option` and `Result` variant families.",
+                "RSScript match patterns must belong to the scrutinee's type.",
             )
             .with_fix(
                 "match_matching_variant_family",
                 format!(
-                    "Use `{}` variants for `{}`.",
-                    allowed_variants.join("`/`"),
-                    type_root_name(type_name)
+                    "Use variants of `{root}`: {}.",
+                    allowed_variants.join(", ")
                 ),
                 "manual",
             ),

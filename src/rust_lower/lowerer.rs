@@ -375,9 +375,14 @@ impl<'a> RustLowerer<'a> {
     fn lower_const_decl(&mut self, decl: &ConstDecl, out: &mut String) {
         let vis = visibility(decl.is_public);
         let ty_str = if let Some(ty) = &decl.type_annotation {
-            self.lower_type_ref(ty, ManagedPosition::Bare)
+            let lowered = self.lower_type_ref(ty, ManagedPosition::Bare);
+            // Rust `const` cannot hold heap-allocated String; use &'static str
+            if lowered == "String" {
+                "&'static str".to_string()
+            } else {
+                lowered
+            }
         } else {
-            // Infer type from value literal
             infer_const_type(&decl.value)
         };
         let value_str = lower_const_value(&decl.value);

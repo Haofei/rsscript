@@ -799,7 +799,7 @@ pub(super) fn lower_match_pattern_qualified(pattern: &MatchPattern, sum_type: &s
             binding: Some(binding),
             ..
         } => format!(
-            "{}::{} {{ {}: {} }}",
+            "{}::{} {{ {}: {}, .. }}",
             rust_ident(sum_type),
             rust_ident(name),
             rust_ident(binding),

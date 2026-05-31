@@ -3287,3 +3287,77 @@ fn first(items: read List<ReviewFacts>) -> String {
     assert!(lowered.contains("for facts in (items).iter()"));
     assert!(!lowered.contains("for facts in (items).iter().cloned()"));
 }
+
+#[test]
+fn checker_reports_sum_type_variant_mismatch_in_match() {
+    let source = r#"
+sum Color {
+    Red
+    Green
+    Blue
+}
+
+sum Size {
+    Small
+    Medium
+    Large
+}
+
+fn describe(s: read Size) -> String {
+    match s {
+        Red => { return "red" }
+        Green => { return "green" }
+        Blue => { return "blue" }
+    }
+}
+"#;
+    let diagnostics = analyze_source("sum-match-mismatch.rss", source);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.code == "RS0209" && d.summary.contains("cannot match scrutinee type")),
+        "should reject matching Size with Color variants: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_accepts_correct_sum_type_match() {
+    let source = r#"
+sum Color {
+    Red
+    Green
+    Blue
+}
+
+fn describe(c: read Color) -> String {
+    match c {
+        Red => { return "red" }
+        Green => { return "green" }
+        Blue => { return "blue" }
+    }
+}
+"#;
+    let diagnostics = analyze_source("sum-match-correct.rss", source);
+    assert!(
+        diagnostics.is_empty(),
+        "should accept matching Color with Color variants: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn type_alias_chain_resolves_correctly() {
+    let source = r#"
+type MyString = String
+type Alias = MyString
+
+fn greet(name: read Alias) -> Alias {
+    return name
+}
+"#;
+    let diagnostics = analyze_source("alias-chain.rss", source);
+    // Should not report unknown type for Alias since it resolves through MyString to String
+    assert!(
+        !diagnostics.iter().any(|d| d.code == "RS0024"),
+        "should resolve type alias chain: {diagnostics:?}"
+    );
+}

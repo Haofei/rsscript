@@ -4419,3 +4419,24 @@ fn receive(url: read Url) -> Unit {
             if matches!(let_stmt.value.as_ref(), Some(Expr::Await { .. }))
     ));
 }
+
+#[test]
+fn const_string_lowers_to_static_str() {
+    let source = r#"
+const GREETING: String = "hello"
+
+fn main() -> Unit {
+    let x = GREETING
+}
+"#;
+    let lowered =
+        lower_source_to_rust("const-string.rss", source).expect("const String should lower");
+    assert!(
+        lowered.contains("&'static str"),
+        "const String should lower to &'static str, got:\n{lowered}"
+    );
+    assert!(
+        !lowered.contains("const GREETING: String"),
+        "should not produce `const X: String` in Rust, got:\n{lowered}"
+    );
+}

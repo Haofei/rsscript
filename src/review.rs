@@ -285,6 +285,131 @@ pub fn review_sources(
         }
     }
 
+    // Track sum type changes
+    let old_sum_types = collect_sum_type_sigs(&old_program.items);
+    let new_sum_types = collect_sum_type_sigs(&new_program.items);
+    let sum_type_names: BTreeSet<_> = old_sum_types
+        .keys()
+        .chain(new_sum_types.keys())
+        .cloned()
+        .collect();
+    for name in sum_type_names {
+        match (old_sum_types.get(&name), new_sum_types.get(&name)) {
+            (Some(old), None) => findings.push(review_finding(
+                code::REVIEW_SUM_TYPE_CHANGED,
+                ReviewRisk::Api,
+                format!("sum type `{name}` was removed."),
+                vec![review_span(&old.span, "removed sum type")],
+                Some(format!("sum {name}")),
+                None,
+            )),
+            (None, Some(new)) => findings.push(review_finding(
+                code::REVIEW_SUM_TYPE_CHANGED,
+                ReviewRisk::Api,
+                format!("sum type `{name}` was added."),
+                vec![review_span(&new.span, "added sum type")],
+                None,
+                Some(format!("sum {name}")),
+            )),
+            (Some(old), Some(new)) if old.variant_names != new.variant_names => {
+                findings.push(review_finding(
+                    code::REVIEW_SUM_TYPE_CHANGED,
+                    ReviewRisk::Api,
+                    format!("sum type `{name}` variants changed."),
+                    paired_spans(
+                        &old.span,
+                        &new.span,
+                        "old sum type",
+                        "new sum type",
+                    ),
+                    Some(format!("variants: {}", old.variant_names.join(", "))),
+                    Some(format!("variants: {}", new.variant_names.join(", "))),
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    // Track const changes
+    let old_consts = collect_const_sigs(&old_program.items);
+    let new_consts = collect_const_sigs(&new_program.items);
+    let const_names: BTreeSet<_> = old_consts
+        .keys()
+        .chain(new_consts.keys())
+        .cloned()
+        .collect();
+    for name in const_names {
+        match (old_consts.get(&name), new_consts.get(&name)) {
+            (Some(old), None) => findings.push(review_finding(
+                code::REVIEW_CONST_CHANGED,
+                ReviewRisk::Api,
+                format!("const `{name}` was removed."),
+                vec![review_span(&old.span, "removed const")],
+                Some(format!("const {name}")),
+                None,
+            )),
+            (None, Some(new)) => findings.push(review_finding(
+                code::REVIEW_CONST_CHANGED,
+                ReviewRisk::Api,
+                format!("const `{name}` was added."),
+                vec![review_span(&new.span, "added const")],
+                None,
+                Some(format!("const {name}")),
+            )),
+            (Some(old), Some(new)) if old.type_name != new.type_name => {
+                findings.push(review_finding(
+                    code::REVIEW_CONST_CHANGED,
+                    ReviewRisk::Api,
+                    format!("const `{name}` type changed."),
+                    paired_spans(&old.span, &new.span, "old const", "new const"),
+                    Some(format!("const {name}: {}", old.type_name)),
+                    Some(format!("const {name}: {}", new.type_name)),
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    // Track type alias changes
+    let old_aliases = collect_type_alias_sigs(&old_program.items);
+    let new_aliases = collect_type_alias_sigs(&new_program.items);
+    let alias_names: BTreeSet<_> = old_aliases
+        .keys()
+        .chain(new_aliases.keys())
+        .cloned()
+        .collect();
+    for name in alias_names {
+        match (old_aliases.get(&name), new_aliases.get(&name)) {
+            (Some(old), None) => findings.push(review_finding(
+                code::REVIEW_TYPE_ALIAS_CHANGED,
+                ReviewRisk::Api,
+                format!("type alias `{name}` was removed."),
+                vec![review_span(&old.span, "removed type alias")],
+                Some(format!("type {name} = {}", old.target)),
+                None,
+            )),
+            (None, Some(new)) => findings.push(review_finding(
+                code::REVIEW_TYPE_ALIAS_CHANGED,
+                ReviewRisk::Api,
+                format!("type alias `{name}` was added."),
+                vec![review_span(&new.span, "added type alias")],
+                None,
+                Some(format!("type {name} = {}", new.target)),
+            )),
+            (Some(old), Some(new)) if old.target != new.target => {
+                findings.push(review_finding(
+                    code::REVIEW_TYPE_ALIAS_CHANGED,
+                    ReviewRisk::Api,
+                    format!("type alias `{name}` target changed."),
+                    paired_spans(&old.span, &new.span, "old alias", "new alias"),
+                    Some(format!("type {name} = {}", old.target)),
+                    Some(format!("type {name} = {}", new.target)),
+                ));
+            }
+            _ => {}
+        }
+    }
+
     findings
 }
 
@@ -1970,6 +2095,18 @@ fn review_fixes(code: &str) -> Vec<ReviewFix> {
             "review_protocol_impl",
             "Review the changed protocol implementation mapping and dispatch target.",
         ),
+        code::REVIEW_SUM_TYPE_CHANGED => (
+            "review_sum_type",
+            "Review the changed sum type variants and update all match sites.",
+        ),
+        code::REVIEW_CONST_CHANGED => (
+            "review_const",
+            "Review the changed constant value or type.",
+        ),
+        code::REVIEW_TYPE_ALIAS_CHANGED => (
+            "review_type_alias",
+            "Review the changed type alias target.",
+        ),
         _ => ("review_change", "Review this source-level contract change."),
     };
     vec![ReviewFix {
@@ -2104,6 +2241,76 @@ fn collect_function_sigs(items: &[Item]) -> BTreeMap<String, FunctionSig> {
         .filter_map(|item| match item {
             Item::Function(function) => Some((function.name.clone(), function_sig(function))),
             Item::Type(_) | Item::Module(_) | Item::Use(_) | Item::SumType(_) | Item::TypeAlias(_) | Item::Const(_) => None,
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SumTypeSig {
+    variant_names: Vec<String>,
+    span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConstSig {
+    type_name: String,
+    span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TypeAliasSig {
+    target: String,
+    span: Span,
+}
+
+fn collect_sum_type_sigs(items: &[Item]) -> BTreeMap<String, SumTypeSig> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            Item::SumType(sum) => Some((
+                sum.name.clone(),
+                SumTypeSig {
+                    variant_names: sum.variants.iter().map(|v| v.name.clone()).collect(),
+                    span: sum.span.clone(),
+                },
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+fn collect_const_sigs(items: &[Item]) -> BTreeMap<String, ConstSig> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Const(decl) => Some((
+                decl.name.clone(),
+                ConstSig {
+                    type_name: decl
+                        .type_annotation
+                        .as_ref()
+                        .map(type_name)
+                        .unwrap_or_else(|| "inferred".to_string()),
+                    span: decl.span.clone(),
+                },
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+fn collect_type_alias_sigs(items: &[Item]) -> BTreeMap<String, TypeAliasSig> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            Item::TypeAlias(decl) => Some((
+                decl.name.clone(),
+                TypeAliasSig {
+                    target: type_name(&decl.target),
+                    span: decl.span.clone(),
+                },
+            )),
+            _ => None,
         })
         .collect()
 }

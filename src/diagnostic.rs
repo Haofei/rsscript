@@ -110,6 +110,9 @@ pub mod code {
     pub const REVIEW_NATIVE_ADDED: &str = "RSR015";
     pub const REVIEW_PROTOCOL_IMPL_CHANGED: &str = "RSR016";
     pub const REVIEW_PARALLEL_ADDED: &str = "RSR017";
+    pub const REVIEW_SUM_TYPE_CHANGED: &str = "RSR018";
+    pub const REVIEW_CONST_CHANGED: &str = "RSR019";
+    pub const REVIEW_TYPE_ALIAS_CHANGED: &str = "RSR020";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

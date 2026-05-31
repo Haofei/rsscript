@@ -200,10 +200,15 @@ impl RuntimeGuarantee {
 
 impl Analyzer<'_> {
     pub(crate) fn resolve_type_alias<'b>(&'b self, type_name: &'b str) -> &'b str {
-        self.type_aliases
-            .get(type_name)
-            .map(|s| s.as_str())
-            .unwrap_or(type_name)
+        let mut current = type_name;
+        // Follow the alias chain with a depth limit to prevent infinite loops
+        for _ in 0..16 {
+            match self.type_aliases.get(current) {
+                Some(resolved) => current = resolved.as_str(),
+                None => break,
+            }
+        }
+        current
     }
 
     fn run(&mut self) {
@@ -1365,7 +1370,10 @@ impl Analyzer<'_> {
     }
 
     fn check_unknown_type_ref(&mut self, ty: &TypeRef, generic_params: &HashSet<&str>) {
-        if !known_type_ref(ty, generic_params, &self.hir) {
+        // Type aliases are known types
+        if self.type_aliases.contains_key(&ty.name) {
+            // Valid - it's a type alias
+        } else if !known_type_ref(ty, generic_params, &self.hir) {
             self.unknown_type_diagnostic(ty);
         }
         for arg in &ty.args {

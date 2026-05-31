@@ -560,3 +560,70 @@ fn process() -> Unit {
                 .any(|reason| reason == "reserved ffi review marker enabled"))
     );
 }
+
+#[test]
+fn review_diff_detects_sum_type_added() {
+    let old_source = r#"
+fn main() -> Unit {
+    return Unit
+}
+"#;
+    let new_source = r#"
+sum Color {
+    Red
+    Green
+    Blue
+}
+
+fn main() -> Unit {
+    return Unit
+}
+"#;
+    let findings = rsscript::review_sources("old.rss", old_source, "new.rss", new_source);
+    assert!(
+        findings.iter().any(|f| f.code == "RSR018" && f.summary.contains("Color")),
+        "should detect sum type addition: {findings:?}"
+    );
+}
+
+#[test]
+fn review_diff_detects_const_added() {
+    let old_source = r#"
+fn main() -> Unit {
+    return Unit
+}
+"#;
+    let new_source = r#"
+const MAX_SIZE: Int = 100
+
+fn main() -> Unit {
+    return Unit
+}
+"#;
+    let findings = rsscript::review_sources("old.rss", old_source, "new.rss", new_source);
+    assert!(
+        findings.iter().any(|f| f.code == "RSR019" && f.summary.contains("MAX_SIZE")),
+        "should detect const addition: {findings:?}"
+    );
+}
+
+#[test]
+fn review_diff_detects_type_alias_added() {
+    let old_source = r#"
+fn main() -> Unit {
+    return Unit
+}
+"#;
+    let new_source = r#"
+type Name = String
+
+fn main() -> Unit {
+    return Unit
+}
+"#;
+    let findings = rsscript::review_sources("old.rss", old_source, "new.rss", new_source);
+    assert!(
+        findings.iter().any(|f| f.code == "RSR020" && f.summary.contains("Name")),
+        "should detect type alias addition: {findings:?}"
+    );
+}
