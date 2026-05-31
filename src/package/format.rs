@@ -224,6 +224,12 @@ pub fn format_package_diff_human(diff: &PackageDiff) -> String {
             output.push_str(&format!("  - {reason}\n"));
         }
     }
+    if diff.old_review.await_sites != diff.new_review.await_sites {
+        output.push_str(&format!(
+            "await sites: {} -> {}\n",
+            diff.old_review.await_sites, diff.new_review.await_sites
+        ));
+    }
     for change in &diff.manifest_changes {
         output.push_str(&format!(
             "{} {}: {} -> {} ({})\n",

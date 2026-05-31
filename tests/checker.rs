@@ -10861,6 +10861,7 @@ pub async fn Api.run() -> Result<Unit, TimerError> {
     let diff = diff_package_dirs(&old_dir, &new_dir).expect("package diff should succeed");
     let json: Value = serde_json::from_str(&rsscript::format_package_diff_json(&diff))
         .expect("package diff JSON should parse");
+    let human = rsscript::format_package_diff_human(&diff);
     let _ = fs::remove_dir_all(&old_dir);
     let _ = fs::remove_dir_all(&new_dir);
 
@@ -10873,6 +10874,7 @@ pub async fn Api.run() -> Result<Unit, TimerError> {
         json["risk"].as_str(),
         Some("elevated" | "high" | "unknown")
     ));
+    assert!(human.contains("await sites: 0 -> 1"), "{human}");
 }
 
 #[test]
