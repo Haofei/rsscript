@@ -31,6 +31,7 @@ pub(super) fn check_package_graph(package_dir: &Path) -> Result<PackageGraphChec
     collect_package_graph_identities(&tree.root, &mut packages_by_name);
 
     let mut reasons = Vec::new();
+    collect_missing_provider_reasons(&tree.root, &mut reasons);
     if tree.summary.unresolved_dependencies > 0 {
         reasons.push(format!(
             "dependency graph contains {} unresolved dependencies",
@@ -66,6 +67,18 @@ pub(super) fn check_package_graph(package_dir: &Path) -> Result<PackageGraphChec
     };
 
     Ok(PackageGraphCheck { ok, risk, reasons })
+}
+
+fn collect_missing_provider_reasons(node: &PackageTreeNode, reasons: &mut Vec<String>) {
+    if node.interface_only && node.dependency_kind == PackageDependencyKind::Normal {
+        reasons.push(format!(
+            "interface-only dependency `{}` requires an implementation provider for executable builds",
+            node.name
+        ));
+    }
+    for dependency in &node.dependencies {
+        collect_missing_provider_reasons(dependency, reasons);
+    }
 }
 
 fn collect_graph_budget_reasons(
@@ -164,6 +177,7 @@ fn package_tree_node(
             risk: PackageRisk::Elevated,
             features,
             native: review.native_rust.is_some(),
+            interface_only: package_is_interface_only(&package.sources),
             dependency_kind,
             reasons: vec!["dependency cycle truncated".to_string()],
             dependencies: Vec::new(),
@@ -193,6 +207,7 @@ fn package_tree_node(
         risk: review.risk,
         features,
         native: review.native_rust.is_some(),
+        interface_only: package_is_interface_only(&package.sources),
         dependency_kind,
         reasons: review.reasons,
         dependencies,
@@ -262,10 +277,21 @@ fn unresolved_dependency_node(
         risk: PackageRisk::Unknown,
         features: spec.features,
         native: false,
+        interface_only: false,
         dependency_kind,
         reasons,
         dependencies: Vec::new(),
     }
+}
+
+fn package_is_interface_only(sources: &[super::PackageSource]) -> bool {
+    let has_interface = sources
+        .iter()
+        .any(|source| source.kind == super::PackageReviewFileKind::Interface);
+    let has_source = sources
+        .iter()
+        .any(|source| source.kind == super::PackageReviewFileKind::Source);
+    has_interface && !has_source
 }
 
 fn collect_package_tree_summary(node: &PackageTreeNode, summary: &mut PackageTreeSummary) {

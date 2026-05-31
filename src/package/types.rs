@@ -209,6 +209,7 @@ pub struct PackageTreeNode {
     pub risk: PackageRisk,
     pub features: Vec<String>,
     pub native: bool,
+    pub interface_only: bool,
     pub dependency_kind: PackageDependencyKind,
     pub reasons: Vec<String>,
     pub dependencies: Vec<PackageTreeNode>,
