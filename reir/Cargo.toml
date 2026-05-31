@@ -1,21 +1,21 @@
 [package]
-name = "rsscript"
+name = "reir"
 version = "0.1.0"
 edition = "2024"
-description = "Reviewable System Script v0.5 review-first front-end checker and Rust lowering prototype"
+description = "Review Evidence IR — language-neutral cross-layer review evidence model"
 license = "MIT OR Apache-2.0"
 
-[workspace]
-members = ["runtime", "reir", "rss/rayon/native/rust"]
+[lib]
+name = "reir"
+path = "src/lib.rs"
 
 [[bin]]
-name = "rss"
+name = "reir"
 path = "src/main.rs"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-toml = "0.8"
 
 [dev-dependencies]
