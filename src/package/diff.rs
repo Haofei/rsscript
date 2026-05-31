@@ -15,9 +15,9 @@ use super::contract::{
 use super::source_set::{ManifestNativeRust, PackageSource, load_package};
 use super::{
     Manifest, PackageDiff, PackageInterfaceChange, PackageInterfaceChangeKind,
-    PackageManifestChange, PackageReviewFileKind, PackageRisk, feature_values_label,
-    package_feature_may_change_boundary_risk, package_identity, package_risk_label,
-    review_package_dir, toml_value_label,
+    PackageManifestChange, PackageReviewAwaitSite, PackageReviewFileKind, PackageRisk,
+    feature_values_label, package_feature_may_change_boundary_risk, package_identity,
+    package_risk_label, review_package_dir, toml_value_label,
 };
 
 pub fn diff_package_dirs(old_dir: &Path, new_dir: &Path) -> Result<PackageDiff, String> {
@@ -66,7 +66,14 @@ pub fn diff_package_dirs(old_dir: &Path, new_dir: &Path) -> Result<PackageDiff, 
     );
 
     let interface_changes = compare_interface_sources(&old_package.sources, &new_package.sources);
+    let await_sites_changed = package_await_sites_changed(
+        old_review.await_sites.as_slice(),
+        new_review.await_sites.as_slice(),
+    );
     let mut reasons = package_diff_reasons(&manifest_changes, &interface_changes);
+    if await_sites_changed {
+        reasons.push("await site review metadata changed".to_string());
+    }
     if old_review.risk != new_review.risk {
         reasons.push(format!(
             "package risk changed from {} to {}",
@@ -81,6 +88,7 @@ pub fn diff_package_dirs(old_dir: &Path, new_dir: &Path) -> Result<PackageDiff, 
         &interface_changes,
         old_review.risk,
         new_review.risk,
+        await_sites_changed,
     );
 
     Ok(PackageDiff {
@@ -403,6 +411,7 @@ fn package_diff_risk(
     interface_changes: &[PackageInterfaceChange],
     old_risk: PackageRisk,
     new_risk: PackageRisk,
+    await_sites_changed: bool,
 ) -> PackageRisk {
     let mut risk = old_risk.max(new_risk);
     for change in manifest_changes {
@@ -411,7 +420,31 @@ fn package_diff_risk(
     for change in interface_changes {
         risk = risk.max(change.risk);
     }
+    if await_sites_changed {
+        risk = risk.max(PackageRisk::Elevated);
+    }
     risk
+}
+
+fn package_await_sites_changed(
+    old_sites: &[PackageReviewAwaitSite],
+    new_sites: &[PackageReviewAwaitSite],
+) -> bool {
+    package_await_site_labels(old_sites) != package_await_site_labels(new_sites)
+}
+
+fn package_await_site_labels(sites: &[PackageReviewAwaitSite]) -> BTreeSet<String> {
+    sites.iter().map(package_await_site_label).collect()
+}
+
+fn package_await_site_label(site: &PackageReviewAwaitSite) -> String {
+    format!(
+        "{}|{}|{}|{}",
+        site.function,
+        site.callee.as_deref().unwrap_or("<unknown>"),
+        site.span.file,
+        site.live_across_await.join(",")
+    )
 }
 
 fn interface_change_risk(findings: &[ReviewFinding]) -> PackageRisk {

@@ -10820,6 +10820,62 @@ pub async fn Api.run(client: read Client) -> Result<Unit, TimerError> {
 }
 
 #[test]
+fn package_diff_reports_await_site_metadata_changes() {
+    let old_dir = unique_temp_dir("rsscript-package-diff-await-old");
+    let new_dir = unique_temp_dir("rsscript-package-diff-await-new");
+    let interface = r#"features: async, native
+
+struct TimerError
+
+pub async native fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
+    effects(native)
+
+pub async fn Api.run() -> Result<Unit, TimerError>
+"#;
+    write_named_package_fixture(&old_dir, "rss-async-diff", "0.1.0", "", interface);
+    write_named_package_fixture(&new_dir, "rss-async-diff", "0.1.0", "", interface);
+    fs::create_dir_all(old_dir.join("src")).expect("old src dir should be created");
+    fs::write(
+        old_dir.join("src/main.rss"),
+        r#"features: async
+
+pub async fn Api.run() -> Result<Unit, TimerError> {
+    return Ok(Unit)
+}
+"#,
+    )
+    .expect("old source should be written");
+    fs::create_dir_all(new_dir.join("src")).expect("new src dir should be created");
+    fs::write(
+        new_dir.join("src/main.rss"),
+        r#"features: async
+
+pub async fn Api.run() -> Result<Unit, TimerError> {
+    await Timer.sleep(ms: 1)?
+    return Ok(Unit)
+}
+"#,
+    )
+    .expect("new source should be written");
+
+    let diff = diff_package_dirs(&old_dir, &new_dir).expect("package diff should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_diff_json(&diff))
+        .expect("package diff JSON should parse");
+    let _ = fs::remove_dir_all(&old_dir);
+    let _ = fs::remove_dir_all(&new_dir);
+
+    assert!(json["reasons"].as_array().is_some_and(|reasons| {
+        reasons
+            .iter()
+            .any(|reason| reason == "await site review metadata changed")
+    }));
+    assert!(matches!(
+        json["risk"].as_str(),
+        Some("elevated" | "high" | "unknown")
+    ));
+}
+
+#[test]
 fn package_lock_records_local_path_dependency_graph() {
     let root_dir = unique_temp_dir("rsscript-package-lock-graph-root");
     let dep_dir = unique_temp_dir("rsscript-package-lock-graph-dep");
