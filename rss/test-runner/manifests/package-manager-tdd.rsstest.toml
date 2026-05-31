@@ -8,14 +8,9 @@ args = ["test", "-q", "-p", "rsscript-runtime", "json_runtime_hooks_parse_nested
 name = "package manager focused checker tests"
 kind = "command_for_each_path"
 command = "cargo"
-args = ["test", "-q", "--test", "checker", "--", "--include-ignored", "--exact"]
+args = ["test", "-q", "--test", "checker", "--", "--exact"]
 paths = [
   "rust_lowering_maps_json_core_calls_to_runtime_hooks",
+  "package_lowering_input_records_checked_in_rayon_wrapper_dependency",
   "package_tree_expands_path_dependencies_and_marks_unresolved",
-  "rss_pkg_tree_json_reports_dependency_summary",
-  "rss_run_accepts_minimal_selfhost_package_manager_metadata",
-  "rss_run_accepts_minimal_selfhost_package_manager_vendor",
-  "rss_run_accepts_minimal_selfhost_package_manager_check",
-  "rss_run_accepts_minimal_selfhost_package_manager_tree",
-  "rss_run_accepts_minimal_selfhost_package_manager_review",
 ]

@@ -1,8 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -10,16 +8,15 @@ use rsscript::syntax::ast::{EffectDecl, Expr, Item};
 use rsscript::syntax::parse_source;
 use rsscript::{
     NativeRustDependency, ReviewMapClassification, ReviewMapFileRisk, ReviewRisk, Severity,
-    analyze_source, analyze_source_with_core, analyze_source_with_interfaces,
-    check_generated_rust_package, check_package_dir, core_interfaces, diff_package_dirs,
-    diff_package_locks, explain_diagnostic_code, format_diagnostic_explanation,
-    format_diagnostics_json, format_package_lock_toml, format_review_human, format_review_json,
-    format_review_map_human, format_review_map_json, lint_source, lock_package_dir,
-    lower_source_to_rust, lower_source_to_rust_package, lower_source_to_rust_with_map,
-    lower_sources_to_rust_package_with_options, package_lowering_input, package_metadata,
-    package_tree, parse_runtime_diagnostics, publish_package_dry_run, remap_rustc_diagnostic_json,
-    remap_rustc_diagnostic_json_lines, review_map_sources, review_package_dir, review_sources,
-    vendor_package_dir, write_generated_rust_package,
+    analyze_source, analyze_source_with_core, analyze_source_with_interfaces, check_package_dir,
+    core_interfaces, diff_package_dirs, diff_package_locks, explain_diagnostic_code,
+    format_diagnostic_explanation, format_diagnostics_json, format_package_lock_toml,
+    format_review_human, format_review_json, format_review_map_human, format_review_map_json,
+    lint_source, lock_package_dir, lower_source_to_rust, lower_source_to_rust_package,
+    lower_source_to_rust_with_map, lower_sources_to_rust_package_with_options,
+    package_lowering_input, package_metadata, package_tree, parse_runtime_diagnostics,
+    remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines, review_map_sources,
+    review_package_dir, review_sources,
 };
 use serde_json::Value;
 
@@ -83,12 +80,13 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
     ("unknown protocol", "RS0027"),
     ("unmappable rustc diagnostic", "RS1102"),
     ("package feature resolution violation", "PKG0101"),
+    ("unsupported package dependency source", "PKG0102"),
     ("package review policy violation", "PKG0501"),
     ("package native binding metadata violation", "PKG0601"),
+    ("package provider declaration violation", "PKG0901"),
 ];
 
 static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
-static RSS_COMMAND_SEED_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn pass_fixtures_have_no_diagnostics() {
@@ -126,8 +124,10 @@ fn required_spec_diagnostics_have_regression_coverage() {
         "RS1102",  // rustc_diagnostics_report_unmappable_generated_spans
         "RS1201",  // runtime_diagnostic_lines_parse_to_rsscript_diagnostics
         "PKG0101", // package feature resolution diagnostics
+        "PKG0102", // unsupported package dependency source diagnostics
         "PKG0501", // package review policy diagnostics
         "PKG0601", // package native binding diagnostics
+        "PKG0901", // package provider declaration diagnostics
     ]);
 
     for &(spec_class, code) in REQUIRED_SPEC_DIAGNOSTICS {
@@ -3709,779 +3709,6 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"#;
 }
 
 #[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_rejects_empty_resource_pool_before_runtime() {
-    let temp_dir = unique_temp_dir("rsscript-runtime-diagnostic");
-    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
-    let source_path = temp_dir.join("empty_pool.rss");
-    write_empty_resource_pool_fixture(&source_path);
-
-    let output = rss_command()
-        .arg("run")
-        .arg(&source_path)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss run should execute");
-    let _ = fs::remove_dir_all(&temp_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(!output.status.success());
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert!(
-        stdout
-            .contains("error[RS0708]: `ResourcePool.new` requires a positive literal `max_size`."),
-        "{stdout}"
-    );
-    assert!(stdout.contains("empty_pool.rss"), "{stdout}");
-    assert!(
-        !stdout.contains("runtime error kind: resource_pool_empty"),
-        "{stdout}"
-    );
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_json_rejects_empty_resource_pool_before_runtime() {
-    let temp_dir = unique_temp_dir("rsscript-runtime-diagnostic-json");
-    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
-    let source_path = temp_dir.join("empty_pool.rss");
-    write_empty_resource_pool_fixture(&source_path);
-
-    let output = rss_command()
-        .arg("run")
-        .arg("--json")
-        .arg(&source_path)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss run should execute");
-    let _ = fs::remove_dir_all(&temp_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: Value = serde_json::from_str(&stdout).expect("stdout should be diagnostics JSON");
-
-    assert!(!output.status.success());
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert_eq!(json[0]["code"], "RS0708");
-    assert_eq!(json[0]["severity"], "error");
-    assert_eq!(
-        json[0]["spans"][0]["file"],
-        source_path.display().to_string()
-    );
-    assert!(
-        !json[0]["causes"]
-            .as_array()
-            .expect("causes should be an array")
-            .iter()
-            .any(|cause| cause == "runtime error kind: resource_pool_empty")
-    );
-}
-
-#[test]
-fn rss_fmt_outputs_canonical_source() {
-    let temp_dir = unique_temp_dir("rsscript-fmt-cli");
-    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
-    let source_path = temp_dir.join("messy.rss");
-    fs::write(
-        &source_path,
-        r#"features:   local
-fn   main( )->Unit{
-local value=String.concat(left:read "hello",right:read " fmt")
-Log.write(message:read value)
-return Unit
-}
-"#,
-    )
-    .expect("source should be written");
-
-    let output = rss_command()
-        .arg("fmt")
-        .arg(&source_path)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss fmt should execute");
-    let _ = fs::remove_dir_all(&temp_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert_eq!(
-        stdout,
-        r#"features: local
-
-fn main() -> Unit {
-    local value = String.concat(left: read "hello", right: read " fmt")
-    Log.write(message: read value)
-    return Unit
-}
-"#
-    );
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_resource_pool_try_new() {
-    let temp_dir = unique_temp_dir("rsscript-run-resource-pool-try-new");
-    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
-    let source_path = temp_dir.join("try_pool.rss");
-    fs::write(
-        &source_path,
-        r#"features: local
-
-fn run_query(url: read Url, sql: read String) -> Result<Unit, DbError> {
-    local pool = ResourcePool<DbConnection>.try_new(
-        create: || DbConnection.try_open(url: read url),
-        max_size: 2,
-    )?
-
-    with ResourcePool.borrow(pool: mut pool) as conn {
-        DbConnection.query(conn: mut conn, sql: read sql)?
-    }
-
-    return Ok(Unit)
-}
-
-fn main() -> Result<Unit, DbError> {
-    let url = Url.from_string(value: read "db://local")
-    run_query(url: read url, sql: read "select 1")?
-    return Ok(Unit)
-}
-"#,
-    )
-    .expect("source should be written");
-
-    let output = rss_command()
-        .arg("run")
-        .arg(&source_path)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss run should execute");
-    let _ = fs::remove_dir_all(&temp_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert!(
-        stdout.contains("db query on db://local: select 1"),
-        "{stdout}"
-    );
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_protocol_static_dispatch() {
-    let temp_dir = unique_temp_dir("rsscript-run-protocol-static-dispatch");
-    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
-    let source_path = temp_dir.join("protocol_dispatch.rss");
-    fs::write(
-        &source_path,
-        r#"features: local
-
-protocol Writer {
-    fn write(
-        self: mut Self,
-        message: read String,
-    ) -> Unit
-        effects(retains(message))
-}
-
-struct BufferWriter {
-    count: Int
-}
-
-fn BufferWriter.write(
-    self: mut BufferWriter,
-    message: read String,
-) -> Unit
-    effects(retains(message))
-{
-    Log.write(message: read message)
-}
-
-impl Writer for BufferWriter {
-    write = BufferWriter.write
-}
-
-fn write_line<W: Writer>(
-    writer: mut W,
-    message: read String,
-) -> Unit {
-    Writer.write(self: mut writer, message: read message)
-}
-
-fn main() -> Unit {
-    local writer = BufferWriter(count: 0)
-    write_line(writer: mut writer, message: read "protocol dispatch ran")
-    return Unit
-}
-"#,
-    )
-    .expect("source should be written");
-
-    let output = rss_command()
-        .arg("run")
-        .arg(&source_path)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss run should execute");
-    let _ = fs::remove_dir_all(&temp_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert_eq!(stdout, "protocol dispatch ran\n");
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_non_consuming_noescape_callback() {
-    let temp_dir = unique_temp_dir("rsscript-run-noescape-fnmut");
-    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
-    let source_path = temp_dir.join("noescape_fnmut.rss");
-    fs::write(
-        &source_path,
-        r#"features: local
-
-fn apply_twice(callback: noescape Fn()) -> Unit {
-    callback()
-    callback()
-    return Unit
-}
-
-fn main() -> Unit {
-    local buffer = Buffer.new(size: 16)
-    apply_twice(callback: || {
-        Buffer.clear(buffer: mut buffer)
-    })
-    Log.write(message: read "noescape fnmut ran")
-    return Unit
-}
-"#,
-    )
-    .expect("source should be written");
-
-    let output = rss_command()
-        .arg("run")
-        .arg(&source_path)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss run should execute");
-    let _ = fs::remove_dir_all(&temp_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert_eq!(stdout, "noescape fnmut ran\n");
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_noescape_callback_managing_callback_local_value() {
-    let output = rss_command()
-        .arg("run")
-        .arg("tests/fixtures/pass/noescape-callback-manage-local.rss")
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss run should execute noescape callback local manage fixture");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stdout.trim().is_empty(), "{stdout}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_noescape_callback_reading_captured_local_value() {
-    let output = rss_command()
-        .arg("run")
-        .arg("tests/fixtures/pass/noescape-local-callback.rss")
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss run should execute noescape local callback fixture");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stdout.contains("image bytes="), "{stdout}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_local_closure_that_mutates_captured_local() {
-    let temp_dir = unique_temp_dir("rsscript-run-local-closure-fnmut");
-    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
-    let source_path = temp_dir.join("local_closure_fnmut.rss");
-    fs::write(
-        &source_path,
-        r#"features: local
-
-fn main() -> Unit {
-    local buffer = Buffer.new(size: 16)
-    local callback = || {
-        Buffer.clear(buffer: mut buffer)
-    }
-    callback()
-    Log.write(message: read "local closure fnmut ran")
-    return Unit
-}
-"#,
-    )
-    .expect("source should be written");
-
-    let output = rss_command()
-        .arg("run")
-        .arg(&source_path)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss run should execute");
-    let _ = fs::remove_dir_all(&temp_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert_eq!(stdout, "local closure fnmut ran\n");
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_package_directory() {
-    let temp_dir = unique_temp_dir("rsscript-run-package-cli");
-    write_named_package_fixture(&temp_dir, "rss-run-package", "0.1.0", "", "");
-    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
-    fs::write(
-        temp_dir.join("src/main.rss"),
-        r#"fn main() -> Unit {
-    Log.write(message: read "hello package")
-}
-"#,
-    )
-    .expect("source should be written");
-
-    let output = rss_command()
-        .arg("run")
-        .arg(&temp_dir)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss run package directory should execute");
-    let _ = fs::remove_dir_all(&temp_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert!(stdout.contains("hello package"), "{stdout}");
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_multi_file_package_directory() {
-    let temp_dir = unique_temp_dir("rsscript-run-multi-package-cli");
-    write_named_package_fixture(
-        &temp_dir,
-        "rss-run-multi-package",
-        "0.1.0",
-        "",
-        "pub fn package_message() -> fresh String\n",
-    );
-    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
-    fs::write(
-        temp_dir.join("src/helper.rss"),
-        r#"pub fn package_message() -> fresh String {
-    return String.concat(left: read "hello", right: read " multi package")
-}
-"#,
-    )
-    .expect("helper source should be written");
-    fs::write(
-        temp_dir.join("src/main.rss"),
-        r#"fn main() -> Unit {
-    let message = package_message()
-    Log.write(message: read message)
-}
-"#,
-    )
-    .expect("main source should be written");
-
-    let output = rss_command()
-        .arg("run")
-        .arg(&temp_dir)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss run package directory should execute");
-    let _ = fs::remove_dir_all(&temp_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert!(stdout.contains("hello multi package"), "{stdout}");
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_checked_in_rayon_wrapper_package_dependency() {
-    let temp_dir = unique_temp_dir("rsscript-run-rayon-package-cli");
-    let rayon_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("rss/rayon");
-    write_named_package_fixture(
-        &temp_dir,
-        "rss-run-rayon-package",
-        "0.1.0",
-        &format!(
-            r#"[dependencies]
-rss-rayon = {{ path = "{}" }}
-"#,
-            toml_path(&rayon_dir)
-        ),
-        "",
-    );
-    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
-    fs::write(
-        temp_dir.join("src/main.rss"),
-        r#"features: native
-
-fn main() -> Unit {
-    let values = List<Int>.new()
-    List.push(list: mut values, value: read 1)
-    List.push(list: mut values, value: read 2)
-    List.push(list: mut values, value: read 3)
-    let sum = Rayon.sum_squares(values: read values)
-    Assert.equal_int(left: sum, right: 14)
-    Log.write(message: read "rayon wrapper sum_squares=14")
-    return Unit
-}
-"#,
-    )
-    .expect("source should be written");
-
-    let output = rss_command()
-        .arg("run")
-        .arg(&temp_dir)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss run package directory should execute");
-    let _ = fs::remove_dir_all(&temp_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert!(stdout.contains("rayon wrapper sum_squares=14"), "{stdout}");
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_rss_test_runner_command_stdout_manifest() {
-    let temp_dir = unique_temp_dir("rsscript-run-rss-test-runner");
-    let manifest_path = temp_dir.join("rss-runner.rsstest.toml");
-    fs::create_dir_all(&temp_dir).expect("test manifest dir should be created");
-    fs::write(
-        &manifest_path,
-        r#"[[tests]]
-name = "test runner captures cargo stdout"
-kind = "command_stdout_contains"
-command = "cargo"
-args = ["--version"]
-contains = "cargo"
-"#,
-    )
-    .expect("test manifest should be written");
-
-    let output = rss_command()
-        .arg("run")
-        .arg("rss/test-runner")
-        .arg("--")
-        .arg(&manifest_path)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss test runner should execute command stdout manifest");
-    let _ = fs::remove_dir_all(&temp_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert!(
-        stdout.contains("pass test runner captures cargo stdout"),
-        "{stdout}"
-    );
-    assert!(
-        stdout.contains("rss test summary total=1 selected=1 passed=1 failed=0 skipped=0"),
-        "{stdout}"
-    );
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_json_remaps_rustc_compile_errors() {
-    let temp_dir = unique_temp_dir("rsscript-run-rustc-remap");
-    write_named_package_fixture(
-        &temp_dir,
-        "rss-run-rustc-remap",
-        "0.1.0",
-        r#"[features]
-streaming = []
-
-[native.rust]
-enabled = true
-path = "native/rust"
-crate = "rss_json_native"
-build_scripts = "forbid"
-proc_macros = "forbid"
-unsafe = "forbid"
-"#,
-        r#"features: native
-
-native fn Native.echo(message: read String) -> String
-    effects(native)
-"#,
-    );
-    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
-    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
-    fs::create_dir_all(temp_dir.join("native")).expect("native dir should be created");
-    fs::write(
-        temp_dir.join("src/main.rss"),
-        r#"features: native
-
-fn main() -> Unit {
-    let message = Native.echo(message: read "hello")
-    Log.write(message: read message)
-}
-"#,
-    )
-    .expect("source should be written");
-    fs::write(
-        temp_dir.join("native/bindings.rssbind.toml"),
-        r#"[bindings]
-"Native.echo" = "rss_json_native::echo"
-"#,
-    )
-    .expect("native binding manifest should be written");
-    fs::write(
-        temp_dir.join("native/rust/Cargo.toml"),
-        "[package]\nname = \"rss_json_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-    )
-    .expect("native Cargo.toml should be written");
-    fs::write(
-        temp_dir.join("native/rust/src/lib.rs"),
-        "pub fn echo(message: String) -> String { message }\n",
-    )
-    .expect("native source should be written");
-
-    let output = rss_command()
-        .arg("run")
-        .arg("--json")
-        .arg(&temp_dir)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss run package directory should execute");
-    let _ = fs::remove_dir_all(&temp_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: Value = serde_json::from_str(&stdout).expect("stdout should be diagnostics JSON");
-
-    assert!(!output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert_eq!(json[0]["code"], "RS1101");
-    assert!(
-        json[0]["spans"][0]["file"]
-            .as_str()
-            .is_some_and(|file| file.replace('\\', "/").ends_with("src/main.rss"))
-    );
-    assert!(
-        json[0]["causes"]
-            .as_array()
-            .expect("causes should be an array")
-            .iter()
-            .any(|cause| cause
-                .as_str()
-                .is_some_and(|cause| cause.contains("rustc code: E0308")))
-    );
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_verify_rust_json_accepts_package_directory() {
-    let temp_dir = unique_temp_dir("rsscript-verify-package-cli");
-    write_named_package_fixture(&temp_dir, "rss-verify-package", "0.1.0", "", "");
-    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
-    fs::write(
-        temp_dir.join("src/main.rss"),
-        r#"fn main() -> Unit {
-    Log.write(message: read "verify package")
-}
-"#,
-    )
-    .expect("source should be written");
-
-    let output = rss_command()
-        .arg("verify-rust")
-        .arg("--json")
-        .arg(&temp_dir)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss verify-rust package directory should execute");
-    let _ = fs::remove_dir_all(&temp_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: Value = serde_json::from_str(&stdout).expect("stdout should be diagnostics JSON");
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert_eq!(json, serde_json::json!([]));
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_verify_rust_accepts_package_native_wrapper_dependency() {
-    let temp_dir = unique_temp_dir("rsscript-verify-native-package-cli");
-    let out_dir = temp_dir.join("generated-rust");
-    write_named_package_fixture(
-        &temp_dir,
-        "rss-verify-native-package",
-        "0.1.0",
-        r#"[features]
-streaming = []
-
-[native.rust]
-enabled = true
-path = "native/rust"
-crate = "rss_json_native"
-build_scripts = "forbid"
-proc_macros = "forbid"
-unsafe = "forbid"
-"#,
-        "",
-    );
-    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
-    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
-    fs::write(
-        temp_dir.join("src/main.rss"),
-        r#"fn main() -> Unit {
-    Log.write(message: read "verify native package")
-}
-"#,
-    )
-    .expect("source should be written");
-    fs::write(
-        temp_dir.join("native/rust/Cargo.toml"),
-        "[package]\nname = \"rss_json_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-    )
-    .expect("native Cargo.toml should be written");
-    fs::write(
-        temp_dir.join("native/rust/src/lib.rs"),
-        "pub fn parse() {}\n",
-    )
-    .expect("native source should be written");
-
-    let output = rss_command()
-        .arg("verify-rust")
-        .arg("--json")
-        .arg(&temp_dir)
-        .arg("--out-dir")
-        .arg(&out_dir)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss verify-rust package directory should execute");
-    let generated_cargo_toml =
-        fs::read_to_string(out_dir.join("Cargo.toml")).expect("generated Cargo.toml should exist");
-    let _ = fs::remove_dir_all(&temp_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: Value = serde_json::from_str(&stdout).expect("stdout should be diagnostics JSON");
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert_eq!(json, serde_json::json!([]));
-    assert!(generated_cargo_toml.contains("\"rss_json_native\" = { path = "));
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_verify_rust_lowers_native_binding_manifest_calls() {
-    let temp_dir = unique_temp_dir("rsscript-verify-native-binding-package-cli");
-    let out_dir = temp_dir.join("generated-rust");
-    write_named_package_fixture(
-        &temp_dir,
-        "rss-verify-native-binding-package",
-        "0.1.0",
-        r#"[native.rust]
-enabled = true
-path = "native/rust"
-crate = "rss_json_native"
-build_scripts = "forbid"
-proc_macros = "forbid"
-unsafe = "forbid"
-"#,
-        r#"features: native
-
-native fn Native.echo(message: read String) -> String
-    effects(native)
-"#,
-    );
-    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
-    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
-    fs::create_dir_all(temp_dir.join("native")).expect("native dir should be created");
-    fs::write(
-        temp_dir.join("src/main.rss"),
-        r#"features: native
-
-fn main() -> Unit {
-    let message = Native.echo(message: read "hello native")
-    Log.write(message: read message)
-    return Unit
-}
-"#,
-    )
-    .expect("source should be written");
-    fs::write(
-        temp_dir.join("native/bindings.rssbind.toml"),
-        r#"[bindings]
-"Native.echo" = "rss_json_native::echo"
-"#,
-    )
-    .expect("native binding manifest should be written");
-    fs::write(
-        temp_dir.join("native/rust/Cargo.toml"),
-        "[package]\nname = \"rss_json_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-    )
-    .expect("native Cargo.toml should be written");
-    fs::write(
-        temp_dir.join("native/rust/src/lib.rs"),
-        "pub fn echo(message: &String) -> String { message.clone() }\n",
-    )
-    .expect("native source should be written");
-
-    let output = rss_command()
-        .arg("verify-rust")
-        .arg("--json")
-        .arg(&temp_dir)
-        .arg("--out-dir")
-        .arg(&out_dir)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss verify-rust package directory should execute");
-    let generated_lib_rs =
-        fs::read_to_string(out_dir.join("src/lib.rs")).expect("generated lib.rs should exist");
-    let _ = fs::remove_dir_all(&temp_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: Value = serde_json::from_str(&stdout).expect("stdout should be diagnostics JSON");
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert_eq!(json, serde_json::json!([]));
-    assert!(generated_lib_rs.contains("rss_json_native::echo"));
-}
-
-#[test]
 fn rust_lowering_targets_runtime_crate_hooks() {
     let source = r#"
 features: local
@@ -4673,52 +3900,6 @@ fn call() -> Int {
 }
 
 #[test]
-fn rust_lowering_maps_weak_class_fields_to_runtime_weak_handles() {
-    let source = r#"
-class User {
-    id: Int
-}
-
-struct Session {
-    owner: weak User
-}
-
-fn make_session() -> Session {
-    let user = User(id: 1)
-    return Session(owner: Weak.from(value: read user))
-}
-
-fn make_session_from_param(user: read User) -> Session {
-    return Session(owner: Weak.from(value: read user))
-}
-"#;
-    let rust = lower_source_to_rust("weak-session.rss", source).expect("source should lower");
-
-    assert!(rust.contains("pub owner: rsscript_runtime::WeakManaged<User>"));
-    assert!(rust.contains("owner: rsscript_runtime::weak(&user)"));
-    assert!(rust.contains("owner: rsscript_runtime::weak(user)"));
-
-    let package = lower_source_to_rust_package(
-        "weak-session.rss",
-        source,
-        "weak-session",
-        &format!("{}/runtime", env!("CARGO_MANIFEST_DIR")),
-    )
-    .expect("source should lower into package");
-    let temp_dir = unique_temp_dir("rsscript-weak-session");
-    write_generated_rust_package(&temp_dir, &package).expect("generated package should be written");
-    let check =
-        check_generated_rust_package(&temp_dir).expect("generated package should be checked");
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(
-        check.success,
-        "diagnostics={:?}\nstderr={}",
-        check.diagnostics, check.stderr
-    );
-}
-
-#[test]
 fn rust_lowering_materializes_constructor_read_fields_as_owned_values() {
     let source = r#"
 features: local
@@ -4880,50 +4061,6 @@ fn promote(id: Int) -> Unit {
 }
 
 #[test]
-fn rust_lowering_reads_managed_class_fields_through_runtime_handle() {
-    let source = r#"
-features: local
-
-class User {
-    id: Int
-}
-
-fn user_id(user: read User) -> Int {
-    return user.id
-}
-
-fn main() -> Unit {
-    let shared = User(id: 42)
-    let id = user_id(user: read shared)
-    Assert.equal(left: read "42", right: read "42")
-    return Unit
-}
-"#;
-    let package = lower_source_to_rust_package(
-        "user.rss",
-        source,
-        "managed-class-field",
-        &format!("{}/runtime", env!("CARGO_MANIFEST_DIR")),
-    )
-    .expect("source should lower into package");
-    assert!(package.lib_rs.contains(
-        "return rsscript_runtime::unwrap_runtime(user.try_read_at(rsscript_runtime::SourceSpan::new(\"user.rss\", 9, 12, 4))).id.clone();"
-    ));
-
-    let temp_dir = unique_temp_dir("rsscript-managed-class-field");
-    write_generated_rust_package(&temp_dir, &package).expect("generated package should be written");
-    let check =
-        check_generated_rust_package(&temp_dir).expect("generated package should be checked");
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(
-        check.success,
-        "diagnostics={:?}\nstderr={}",
-        check.diagnostics, check.stderr
-    );
-}
-
-#[test]
 fn rust_lowering_maps_read_and_mut_effects_to_rust_borrows() {
     let source = r#"
 features: local
@@ -5003,6 +4140,7 @@ fn main() -> Unit {
         &[NativeRustDependency {
             crate_name: "rss_json_native".to_string(),
             path: "/workspace/rss-json/native/rust".to_string(),
+            cargo_features: Vec::new(),
             bindings: BTreeMap::new(),
         }],
     )
@@ -7151,163 +6289,6 @@ fn review_map_selfhost_classifier_has_no_unknown_regions() {
 }
 
 #[test]
-fn rss_review_map_json_reports_app_benchmark_unknown_zero() {
-    let output = rss_command()
-        .arg("review")
-        .arg("--map")
-        .arg("--json")
-        .arg("tests/fixtures/pass/app-review-benchmark.rss")
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss review --map --json should execute");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: Value = serde_json::from_str(&stdout).expect("stdout should be review map JSON");
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert_eq!(json["summary"]["total_functions"], 42);
-    assert_eq!(json["summary"]["unknown"]["functions"], 0);
-    assert_eq!(json["summary"]["unknown"]["lines"], 0);
-    assert_eq!(json["summary"]["unknown_ratio"], 0.0);
-    assert_eq!(json["summary"]["unknown_function_ratio"], 0.0);
-}
-
-#[test]
-fn selfhost_review_facts_match_generated_review_map_output() {
-    let output = rss_command()
-        .arg("review")
-        .arg("--map")
-        .arg("--json")
-        .arg("tests/fixtures/pass/complex-supported-review-map.rss")
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss review --map --json should execute");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let generated: Value = serde_json::from_str(&stdout).expect("stdout should be review map JSON");
-    let checked_in: Value = serde_json::from_str(&read_fixture(Path::new(
-        "tests/fixtures/pass/selfhost-review-facts.json",
-    )))
-    .expect("selfhost review facts should be JSON");
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert_eq!(checked_in, generated);
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_verify_rust_json_accepts_selfhost_classifier() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-review-classifier");
-    let output = rss_command()
-        .arg("verify-rust")
-        .arg("--json")
-        .arg("tests/fixtures/pass/selfhost-review-classifier.rss")
-        .arg("--out-dir")
-        .arg(&temp_dir)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss verify-rust --json should execute");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: Value = serde_json::from_str(&stdout).expect("stdout should be diagnostics JSON");
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert!(json.as_array().is_some_and(|diagnostics| {
-        diagnostics
-            .iter()
-            .all(|diagnostic| diagnostic["severity"] != "error")
-    }));
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_verify_rust_accepts_plain_fn_result_contract_parameter() {
-    let temp_dir = unique_temp_dir("rsscript-verify-plain-fn-result");
-    let source_path = temp_dir.join("fn_result.rss");
-    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
-    fs::write(
-        &source_path,
-        r#"struct BuildError {
-    message: String
-}
-
-fn run(callback: read Fn(Int) -> Result<String, BuildError>) -> Unit {
-    return Unit
-}
-"#,
-    )
-    .expect("source should be written");
-
-    let output = rss_command()
-        .arg("verify-rust")
-        .arg("--json")
-        .arg(&source_path)
-        .arg("--out-dir")
-        .arg(temp_dir.join("out"))
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss verify-rust should execute");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: Value = serde_json::from_str(&stdout).expect("stdout should be diagnostics JSON");
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert!(json.as_array().is_some_and(|diagnostics| {
-        diagnostics
-            .iter()
-            .all(|diagnostic| diagnostic["severity"] != "error")
-    }));
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_verify_rust_accepts_plain_fn_result_direct_call() {
-    let temp_dir = unique_temp_dir("rsscript-verify-plain-fn-result-call");
-    let source_path = temp_dir.join("fn_result_call.rss");
-    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
-    fs::write(
-        &source_path,
-        r#"struct BuildError {
-    message: String
-}
-
-fn run(callback: read Fn(Int) -> Result<String, BuildError>) -> Result<String, BuildError> {
-    return callback(41)
-}
-"#,
-    )
-    .expect("source should be written");
-
-    let output = rss_command()
-        .arg("verify-rust")
-        .arg("--json")
-        .arg(&source_path)
-        .arg("--out-dir")
-        .arg(temp_dir.join("out"))
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss verify-rust should execute");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: Value = serde_json::from_str(&stdout).expect("stdout should be diagnostics JSON");
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert!(json.as_array().is_some_and(|diagnostics| {
-        diagnostics
-            .iter()
-            .all(|diagnostic| diagnostic["severity"] != "error")
-    }));
-}
-
-#[test]
 fn checker_reports_plain_fn_callback_call_argument_type_mismatch() {
     let source = r#"
 struct BuildError {
@@ -7326,1614 +6307,6 @@ fn run(callback: read Fn(Int) -> Result<String, BuildError>) -> Result<String, B
             .any(|diagnostic| diagnostic.code == "RS0207"),
         "{diagnostics:?}"
     );
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_selfhost_classifier() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-run-generated-review-map");
-    let Some(fixture_dir) = prepare_selfhost_run_dir(&temp_dir) else {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return;
-    };
-    let review_json = generated_selfhost_review_map_json();
-    fs::write(
-        fixture_dir.join("selfhost-review-facts.json"),
-        serde_json::to_vec(&review_json).expect("review JSON should serialize"),
-    )
-    .expect("generated review map should write");
-
-    let output = rss_command()
-        .arg("run")
-        .arg("tests/fixtures/pass/selfhost-review-classifier.rss")
-        .current_dir(&temp_dir)
-        .output()
-        .expect("rss run should execute selfhost classifier");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    let expected_stdout = format!(
-        "selfhost review summary total={} must={} low={} unknown={} lines={} mismatches=0 unmodeled_reasons=0 first_mismatch=none",
-        review_json["summary"]["total_functions"],
-        review_json["summary"]["must_review"]["functions"],
-        review_json["summary"]["low_semantic_risk"]["functions"],
-        review_json["summary"]["unknown"]["functions"],
-        review_json["summary"]["suggested_review_lines"],
-    );
-    assert_eq!(stdout.trim(), expected_stdout);
-    assert!(stderr.trim().is_empty(), "{stderr}");
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_reports_selfhost_classification_mismatch_detail() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-run-mismatch");
-    let Some(fixture_dir) = prepare_selfhost_run_dir(&temp_dir) else {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return;
-    };
-    let mut review_json = generated_selfhost_review_map_json();
-    review_json["files"][0]["regions"][0]["classification"] =
-        Value::String("must_review".to_string());
-    fs::write(
-        fixture_dir.join("selfhost-review-facts.json"),
-        serde_json::to_vec(&review_json).expect("review JSON should serialize"),
-    )
-    .expect("mutated review map should write");
-
-    let output = rss_command()
-        .arg("run")
-        .arg("tests/fixtures/pass/selfhost-review-classifier.rss")
-        .current_dir(&temp_dir)
-        .output()
-        .expect("rss run should execute selfhost classifier");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(!output.status.success(), "stdout={stdout}");
-    assert!(
-        stdout.contains("mismatches=1 unmodeled_reasons=0 first_mismatch=ReviewClass.unknown expected=must_review actual=low_semantic_risk"),
-        "{stdout}"
-    );
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_reports_selfhost_unmodeled_reason_count() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-run-unmodeled-reason");
-    let Some(fixture_dir) = prepare_selfhost_run_dir(&temp_dir) else {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return;
-    };
-    let mut review_json = generated_selfhost_review_map_json();
-    review_json["files"][0]["regions"][0]["reasons"]
-        .as_array_mut()
-        .expect("first region reasons should be an array")
-        .push(Value::String("new unmodeled review reason".to_string()));
-    fs::write(
-        fixture_dir.join("selfhost-review-facts.json"),
-        serde_json::to_vec(&review_json).expect("review JSON should serialize"),
-    )
-    .expect("mutated review map should write");
-
-    let output = rss_command()
-        .arg("run")
-        .arg("tests/fixtures/pass/selfhost-review-classifier.rss")
-        .current_dir(&temp_dir)
-        .output()
-        .expect("rss run should execute selfhost classifier");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(!output.status.success(), "stdout={stdout}");
-    assert!(
-        stdout.contains("mismatches=0 unmodeled_reasons=1 first_mismatch=none"),
-        "{stdout}"
-    );
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_current_review_reason_families_in_selfhost_classifier() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-run-current-reasons");
-    let Some(fixture_dir) = prepare_selfhost_run_dir(&temp_dir) else {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return;
-    };
-    let mut review_json = generated_selfhost_review_map_json();
-    let regions = review_json["files"][0]["regions"]
-        .as_array_mut()
-        .expect("first file regions should be an array");
-    let region = regions
-        .iter_mut()
-        .find(|region| region["classification"] == "low_semantic_risk")
-        .expect("selfhost review map should contain a low-risk region");
-    let line_count = region["line_count"]
-        .as_i64()
-        .expect("region line_count should be an integer");
-    region["classification"] = Value::String("must_review".to_string());
-    let reasons = region["reasons"]
-        .as_array_mut()
-        .expect("region reasons should be an array");
-    reasons.extend([
-        Value::String("manage boundary".to_string()),
-        Value::String("take effect".to_string()),
-        Value::String("async function boundary".to_string()),
-        Value::String("await suspension boundary".to_string()),
-        Value::String("spawn task boundary".to_string()),
-        Value::String("spawn retains-until-task-complete `task`".to_string()),
-        Value::String("writes through handle field".to_string()),
-        Value::String("guarantee `no_panic`".to_string()),
-        Value::String("take parameter `buffer`".to_string()),
-    ]);
-    review_json["summary"]["must_review"]["functions"] = Value::from(
-        review_json["summary"]["must_review"]["functions"]
-            .as_i64()
-            .unwrap()
-            + 1,
-    );
-    review_json["summary"]["low_semantic_risk"]["functions"] = Value::from(
-        review_json["summary"]["low_semantic_risk"]["functions"]
-            .as_i64()
-            .unwrap()
-            - 1,
-    );
-    review_json["summary"]["suggested_review_lines"] = Value::from(
-        review_json["summary"]["suggested_review_lines"]
-            .as_i64()
-            .unwrap()
-            + line_count,
-    );
-    fs::write(
-        fixture_dir.join("selfhost-review-facts.json"),
-        serde_json::to_vec(&review_json).expect("review JSON should serialize"),
-    )
-    .expect("mutated review map should write");
-
-    let output = rss_command()
-        .arg("run")
-        .arg("tests/fixtures/pass/selfhost-review-classifier.rss")
-        .current_dir(&temp_dir)
-        .output()
-        .expect("rss run should execute selfhost classifier");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(
-        stdout.contains("mismatches=0 unmodeled_reasons=0 first_mismatch=none"),
-        "{stdout}"
-    );
-    assert!(stderr.trim().is_empty(), "{stderr}");
-}
-
-fn assert_checked_in_selfhost_script_runs(script: &str, expected: &str) {
-    let output = rss_command()
-        .arg("run")
-        .arg(script)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss run should execute checked-in selfhost script");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(
-        output.status.success(),
-        "{script}\nstdout={stdout}\nstderr={stderr}"
-    );
-    assert!(stdout.contains(expected), "{script}\n{stdout}");
-    assert!(stderr.trim().is_empty(), "{script}\n{stderr}");
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_checked_in_selfhost_review_classifier_directly() {
-    assert_checked_in_selfhost_script_runs(
-        "tests/fixtures/pass/selfhost-review-classifier.rss",
-        "selfhost review summary total=14 must=10 low=4 unknown=0",
-    );
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_checked_in_selfhost_package_risk_directly() {
-    assert_checked_in_selfhost_script_runs(
-        "tests/fixtures/pass/selfhost-package-risk.rss",
-        "selfhost package risk cases=5 mismatches=0 unmodeled_reasons=0",
-    );
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_checked_in_selfhost_package_manifest_directly() {
-    assert_checked_in_selfhost_script_runs(
-        "tests/fixtures/pass/selfhost-package-manifest.rss",
-        "selfhost package manifest name=rss-selfhost-manifest version=0.5.0",
-    );
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_checked_in_selfhost_package_root_manifest_directly() {
-    assert_checked_in_selfhost_script_runs(
-        "tests/fixtures/pass/selfhost-package-root-manifest.rss",
-        "selfhost package root manifest name=rss-selfhost-source-set version=0.5.0",
-    );
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_checked_in_selfhost_package_sources_directly() {
-    assert_checked_in_selfhost_script_runs(
-        "tests/fixtures/pass/selfhost-package-sources.rss",
-        "selfhost package sources total=5 manifests=1 interfaces=2 sources=2 public_interfaces=2 public_sources=2 api=1/1 tool=1/1",
-    );
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_checked_in_selfhost_package_exports_directly() {
-    assert_checked_in_selfhost_script_runs(
-        "tests/fixtures/pass/selfhost-package-exports.rss",
-        "selfhost package exports types=2 functions=3 apis=5",
-    );
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_checked_in_selfhost_package_diff_directly() {
-    assert_checked_in_selfhost_script_runs(
-        "tests/fixtures/pass/selfhost-package-diff.rss",
-        "selfhost package diff manifest=8 interface=3 high_manifest=5 high_interface=2 mismatches=0 unmodeled_reasons=0 callback_contract=1",
-    );
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_checked_in_selfhost_package_lock_diff_directly() {
-    assert_checked_in_selfhost_script_runs(
-        "tests/fixtures/pass/selfhost-package-lock-diff.rss",
-        "selfhost package lock diff packages=1 high_packages=1 high_features=1",
-    );
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_checked_in_selfhost_rustc_remap_directly() {
-    assert_checked_in_selfhost_script_runs(
-        "tests/fixtures/pass/selfhost-rustc-remap.rss",
-        "selfhost rustc remap diagnostics=1 mapped=1 rustc_code=1",
-    );
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_checked_in_selfhost_package_manager_directly() {
-    assert_checked_in_selfhost_script_runs(
-        "rss/package-manager/main.rss",
-        "rss package manager metadata rss-selfhost-source-set",
-    );
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_selfhost_package_metadata_writer() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-package-metadata-writer");
-    let output_path = temp_dir.join("metadata/package.txt");
-
-    let output = rss_command()
-        .arg("run")
-        .arg("tests/fixtures/pass/selfhost-package-metadata-writer.rss")
-        .arg("--")
-        .arg(&output_path)
-        .arg("rss-selfhost-written")
-        .arg("0.5.1")
-        .arg("2024")
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss run should execute selfhost package metadata writer");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(
-        stdout.contains("selfhost package metadata wrote rss-selfhost-written"),
-        "{stdout}"
-    );
-    assert!(stderr.trim().is_empty(), "{stderr}");
-
-    let metadata = fs::read_to_string(&output_path)
-        .unwrap_or_else(|error| panic!("metadata file should be written: {error}"));
-    let metadata_json: Value =
-        serde_json::from_str(&metadata).expect("metadata file should be valid JSON");
-    assert_eq!(metadata_json["package"], "rss-selfhost-written");
-    assert_eq!(metadata_json["version"], "0.5.1");
-    assert_eq!(metadata_json["edition"], "2024");
-    assert_eq!(metadata_json["public_apis"], 5);
-    assert_eq!(metadata_json["native_apis"], 1);
-    assert_eq!(metadata_json["unknown_apis"], 0);
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_selfhost_package_vendor_copy() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-package-vendor-copy");
-    let vendor_dir = temp_dir.join("vendor/rss-selfhost-source-set-0.5.0");
-
-    let output = rss_command()
-        .arg("run")
-        .arg("tests/fixtures/pass/selfhost-package-vendor-copy.rss")
-        .arg("--")
-        .arg("tests/fixtures/pass/selfhost-package-source-set")
-        .arg(&vendor_dir)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss run should execute selfhost package vendor copy");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(
-        stdout.contains("selfhost package vendor copied=5 interfaces=2 sources=2 manifests=1"),
-        "{stdout}"
-    );
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert!(vendor_dir.join("rsspkg.toml").is_file());
-    assert!(vendor_dir.join("interface/lib.rssi").is_file());
-    assert!(vendor_dir.join("contracts/tool.rssi").is_file());
-    assert!(vendor_dir.join("src/main.rss").is_file());
-    assert!(vendor_dir.join("tools/check.rss").is_file());
-
-    let manifest = fs::read_to_string(vendor_dir.join("rsspkg.toml"))
-        .expect("vendored manifest should be readable");
-    assert!(manifest.contains("rss-selfhost-source-set"));
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_minimal_selfhost_package_manager_metadata() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-package-manager-metadata");
-    let metadata_path = temp_dir.join("review/package-review.json");
-    let source_root = "tests/fixtures/pass/selfhost-package-source-set";
-
-    let metadata_output = rss_command()
-        .arg("run")
-        .arg("rss/package-manager/main.rss")
-        .arg("--")
-        .arg("metadata")
-        .arg(source_root)
-        .arg(&metadata_path)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss run should execute minimal package manager metadata command");
-    let metadata_stdout = String::from_utf8_lossy(&metadata_output.stdout);
-    let metadata_stderr = String::from_utf8_lossy(&metadata_output.stderr);
-
-    assert!(
-        metadata_output.status.success(),
-        "stdout={metadata_stdout}\nstderr={metadata_stderr}"
-    );
-    assert!(
-        metadata_stdout.contains("rss package manager metadata rss-selfhost-source-set"),
-        "{metadata_stdout}"
-    );
-    assert!(metadata_stderr.trim().is_empty(), "{metadata_stderr}");
-    let metadata = fs::read_to_string(&metadata_path)
-        .unwrap_or_else(|error| panic!("metadata JSON should be written: {error}"));
-    let metadata_json: Value =
-        serde_json::from_str(&metadata).expect("metadata output should be valid JSON");
-    assert_eq!(metadata_json["package"], "rss-selfhost-source-set");
-    assert_eq!(metadata_json["version"], "0.5.0");
-    assert_eq!(metadata_json["edition"], "2024");
-    assert_eq!(metadata_json["interface_paths"], 2);
-    assert_eq!(metadata_json["source_paths"], 2);
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_minimal_selfhost_package_manager_vendor() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-package-manager-vendor");
-    let vendor_dir = temp_dir.join("vendor/rss-selfhost-source-set-0.5.0");
-    let source_root = "tests/fixtures/pass/selfhost-package-source-set";
-
-    let vendor_output = rss_command()
-        .arg("run")
-        .arg("rss/package-manager/main.rss")
-        .arg("--")
-        .arg("vendor")
-        .arg(source_root)
-        .arg(&vendor_dir)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss run should execute minimal package manager vendor command");
-    let vendor_stdout = String::from_utf8_lossy(&vendor_output.stdout);
-    let vendor_stderr = String::from_utf8_lossy(&vendor_output.stderr);
-
-    assert!(
-        vendor_output.status.success(),
-        "stdout={vendor_stdout}\nstderr={vendor_stderr}"
-    );
-    assert!(
-        vendor_stdout
-            .contains("rss package manager vendor copied=5 interfaces=2 sources=2 manifests=1"),
-        "{vendor_stdout}"
-    );
-    assert!(vendor_stderr.trim().is_empty(), "{vendor_stderr}");
-    assert!(vendor_dir.join("rsspkg.toml").is_file());
-    assert!(vendor_dir.join("interface/lib.rssi").is_file());
-    assert!(vendor_dir.join("contracts/tool.rssi").is_file());
-    assert!(vendor_dir.join("src/main.rss").is_file());
-    assert!(vendor_dir.join("tools/check.rss").is_file());
-    let vendor_metadata = fs::read_to_string(vendor_dir.join("rss-vendor.json"))
-        .expect("vendor metadata should be written");
-    let vendor_json: Value =
-        serde_json::from_str(&vendor_metadata).expect("vendor metadata should be valid JSON");
-    assert_eq!(vendor_json["package"], "rss-selfhost-source-set");
-    assert_eq!(vendor_json["copied_files"], 5);
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_minimal_selfhost_package_manager_check() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-package-manager-check");
-    let check_path = temp_dir.join("review/package-check.json");
-    let source_root = "tests/fixtures/pass/selfhost-package-source-set";
-
-    let check_output = rss_command()
-        .arg("run")
-        .arg("rss/package-manager/main.rss")
-        .arg("--")
-        .arg("check")
-        .arg(source_root)
-        .arg(&check_path)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss run should execute minimal package manager check command");
-    let check_stdout = String::from_utf8_lossy(&check_output.stdout);
-    let check_stderr = String::from_utf8_lossy(&check_output.stderr);
-
-    assert!(
-        check_output.status.success(),
-        "stdout={check_stdout}\nstderr={check_stderr}"
-    );
-    assert!(
-        check_stdout
-            .contains("rss package manager check rss-selfhost-source-set interfaces=2 sources=2"),
-        "{check_stdout}"
-    );
-    assert!(check_stderr.trim().is_empty(), "{check_stderr}");
-    let check = fs::read_to_string(&check_path)
-        .unwrap_or_else(|error| panic!("check JSON should be written: {error}"));
-    let check_json: Value =
-        serde_json::from_str(&check).expect("check output should be valid JSON");
-    assert_eq!(check_json["package"], "rss-selfhost-source-set");
-    assert_eq!(check_json["ok"], true);
-    assert_eq!(check_json["interface_roots"], 2);
-    assert_eq!(check_json["source_roots"], 2);
-    assert_eq!(check_json["interface_files"], 2);
-    assert_eq!(check_json["source_files"], 2);
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_minimal_selfhost_package_manager_tree() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-package-manager-tree");
-    let root_dir = temp_dir.join("root");
-    let dep_dir = temp_dir.join("dep");
-    let tree_path = temp_dir.join("review/package-tree.json");
-
-    fs::create_dir_all(root_dir.join("interface")).expect("root interface dir should exist");
-    fs::create_dir_all(root_dir.join("src")).expect("root source dir should exist");
-    fs::create_dir_all(dep_dir.join("interface")).expect("dep interface dir should exist");
-    fs::create_dir_all(dep_dir.join("src")).expect("dep source dir should exist");
-    fs::write(
-        root_dir.join("interface/lib.rssi"),
-        "pub fn main() -> Unit\n",
-    )
-    .expect("root interface should write");
-    fs::write(
-        root_dir.join("src/main.rss"),
-        "pub fn main() -> Unit { return Unit }\n",
-    )
-    .expect("root source should write");
-    fs::write(dep_dir.join("interface/lib.rssi"), "pub fn dep() -> Unit\n")
-        .expect("dep interface should write");
-    fs::write(
-        dep_dir.join("src/lib.rss"),
-        "pub fn dep() -> Unit { return Unit }\n",
-    )
-    .expect("dep source should write");
-    fs::write(
-        root_dir.join("rsspkg.toml"),
-        format!(
-            r#"[package]
-name = "rss-tree-root"
-version = "0.5.0"
-edition = "2026"
-
-[interfaces]
-paths = ["interface"]
-
-[sources]
-paths = ["src"]
-
-[dependencies]
-rss-tree-dep = {{ path = "{}" }}
-rss-remote = "0.5"
-"#,
-            toml_path(&dep_dir)
-        ),
-    )
-    .expect("root manifest should write");
-    fs::write(
-        dep_dir.join("rsspkg.toml"),
-        r#"[package]
-name = "rss-tree-dep"
-version = "0.1.0"
-edition = "2026"
-
-[interfaces]
-paths = ["interface"]
-
-[sources]
-paths = ["src"]
-"#,
-    )
-    .expect("dep manifest should write");
-
-    let tree_output = rss_command()
-        .arg("run")
-        .arg("rss/package-manager/main.rss")
-        .arg("--")
-        .arg("tree")
-        .arg(&root_dir)
-        .arg(&tree_path)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss run should execute minimal package manager tree command");
-    let tree_stdout = String::from_utf8_lossy(&tree_output.stdout);
-    let tree_stderr = String::from_utf8_lossy(&tree_output.stderr);
-
-    assert!(
-        tree_output.status.success(),
-        "stdout={tree_stdout}\nstderr={tree_stderr}"
-    );
-    assert!(
-        tree_stdout
-            .contains("rss package manager tree rss-tree-root packages=3 path=1 unresolved=1"),
-        "{tree_stdout}"
-    );
-    assert!(tree_stderr.trim().is_empty(), "{tree_stderr}");
-    let tree = fs::read_to_string(&tree_path)
-        .unwrap_or_else(|error| panic!("tree JSON should be written: {error}"));
-    let tree_json: Value = serde_json::from_str(&tree).expect("tree output should be valid JSON");
-    assert_eq!(tree_json["package"], "rss-tree-root");
-    assert_eq!(tree_json["packages"], 3);
-    assert_eq!(tree_json["path_dependencies"], 1);
-    assert_eq!(tree_json["unresolved_dependencies"], 1);
-
-    let _ = fs::remove_dir_all(&temp_dir);
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_minimal_selfhost_package_manager_review() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-package-manager-review");
-    let source_root = temp_dir.join("source");
-    let review_path = temp_dir.join("review/package-review.json");
-    fs::create_dir_all(source_root.join("interface")).expect("interface dir should exist");
-    fs::create_dir_all(source_root.join("src")).expect("source dir should exist");
-    fs::write(
-        source_root.join("interface/lib.rssi"),
-        r#"struct ReviewThing
-
-pub fn ReviewThing.new() -> Result<fresh ReviewThing, ReviewError>
-pub fn ReviewThing.update(value: mut ReviewThing, label: read String) -> Unit
-pub fn ReviewThing.cache(value: read ReviewThing, label: read String) -> Unit effects(retains(label))
-pub native fn ReviewThing.native_probe(value: read ReviewThing) -> Bool effects(native)
-"#,
-    )
-    .expect("interface should write");
-    fs::write(
-        source_root.join("src/main.rss"),
-        "pub fn ReviewThing.main() -> Unit { return Unit }\n",
-    )
-    .expect("source should write");
-    fs::write(
-        source_root.join("rsspkg.toml"),
-        r#"[package]
-name = "rss-review-root"
-version = "0.5.0"
-edition = "2026"
-
-[interfaces]
-paths = ["interface"]
-
-[sources]
-paths = ["src"]
-"#,
-    )
-    .expect("manifest should write");
-
-    let review_output = rss_command()
-        .arg("run")
-        .arg("rss/package-manager/main.rss")
-        .arg("--")
-        .arg("review")
-        .arg(&source_root)
-        .arg(&review_path)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss run should execute minimal package manager review command");
-    let review_stdout = String::from_utf8_lossy(&review_output.stdout);
-    let review_stderr = String::from_utf8_lossy(&review_output.stderr);
-
-    assert!(
-        review_output.status.success(),
-        "stdout={review_stdout}\nstderr={review_stderr}"
-    );
-    assert!(
-        review_stdout.contains("rss package manager review rss-review-root risk=native apis=4"),
-        "{review_stdout}"
-    );
-    assert!(review_stderr.trim().is_empty(), "{review_stderr}");
-    let review = fs::read_to_string(&review_path)
-        .unwrap_or_else(|error| panic!("review JSON should be written: {error}"));
-    let review_json: Value =
-        serde_json::from_str(&review).expect("review output should be valid JSON");
-    assert_eq!(review_json["package"], "rss-review-root");
-    assert_eq!(review_json["risk"], "native");
-    assert_eq!(review_json["public_types"], 1);
-    assert_eq!(review_json["public_apis"], 4);
-    assert_eq!(review_json["mutating_apis"], 1);
-    assert_eq!(review_json["retaining_apis"], 1);
-    assert_eq!(review_json["fresh_apis"], 1);
-    assert_eq!(review_json["native_apis"], 1);
-    assert_eq!(review_json["unsafe_apis"], 0);
-    assert_eq!(review_json["unknown_apis"], 0);
-
-    let _ = fs::remove_dir_all(&temp_dir);
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_selfhost_package_manifest_parser_with_input_path() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-package-manifest");
-    let Some(_fixture_dir) =
-        prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-manifest.rss")
-    else {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return;
-    };
-    let package_dir = temp_dir.join("package");
-    fs::create_dir_all(&package_dir).expect("package directory should be created");
-    fs::write(
-        package_dir.join("rsspkg.toml"),
-        r#"[package]
-name = "rss-selfhost-manifest"
-version = "0.5.0"
-edition = "2024"
-
-[interfaces]
-paths = ["interface"]
-
-[dependencies]
-rss-core = "0.5"
-
-[features]
-native-tls = ["native"]
-"#,
-    )
-    .expect("manifest should be written");
-
-    let output = rss_command()
-        .arg("run")
-        .arg("tests/fixtures/pass/selfhost-package-manifest.rss")
-        .arg("--")
-        .arg("package/rsspkg.toml")
-        .current_dir(&temp_dir)
-        .output()
-        .expect("rss run should execute selfhost package manifest parser");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "selfhost package manifest name=rss-selfhost-manifest version=0.5.0 edition=2024 interface_paths=1 dep=0.5 feature_members=1"
-    );
-    assert!(stderr.trim().is_empty(), "{stderr}");
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_selfhost_package_source_set_with_input_path() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-package-sources");
-    let Some(_fixture_dir) =
-        prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-sources.rss")
-    else {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return;
-    };
-    let package_dir = temp_dir.join("package");
-    fs::create_dir_all(package_dir.join("interface")).expect("interface directory should exist");
-    fs::create_dir_all(package_dir.join("contracts")).expect("contracts directory should exist");
-    fs::create_dir_all(package_dir.join("src")).expect("source directory should exist");
-    fs::create_dir_all(package_dir.join("tools")).expect("tools directory should exist");
-    fs::write(
-        package_dir.join("rsspkg.toml"),
-        r#"[package]
-name = "rss-selfhost-source-set"
-version = "0.5.0"
-edition = "2024"
-
-[interfaces]
-paths = ["interface", "contracts"]
-
-[sources]
-paths = ["src", "tools"]
-"#,
-    )
-    .expect("manifest should be written");
-    fs::write(
-        package_dir.join("interface/lib.rssi"),
-        "pub fn Api.run() -> Unit\n",
-    )
-    .expect("interface should be written");
-    fs::write(
-        package_dir.join("contracts/tool.rssi"),
-        "pub fn Tool.run() -> Unit\n",
-    )
-    .expect("second interface should be written");
-    fs::write(
-        package_dir.join("src/main.rss"),
-        "pub fn Api.run() -> Unit {\n    return Unit\n}\n",
-    )
-    .expect("source should be written");
-    fs::write(
-        package_dir.join("tools/check.rss"),
-        "pub fn Tool.run() -> Unit {\n    return Unit\n}\n",
-    )
-    .expect("second source should be written");
-
-    let output = rss_command()
-        .arg("run")
-        .arg("tests/fixtures/pass/selfhost-package-sources.rss")
-        .arg("--")
-        .arg("package")
-        .current_dir(&temp_dir)
-        .output()
-        .expect("rss run should execute selfhost package source-set parser");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "selfhost package sources total=5 manifests=1 interfaces=2 sources=2 public_interfaces=2 public_sources=2 api=1/1 tool=1/1"
-    );
-    assert!(stderr.trim().is_empty(), "{stderr}");
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_selfhost_package_risk_classifier() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-package-risk");
-    let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-risk.rss")
-    else {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return;
-    };
-    let package_review_json = generated_selfhost_package_review_json(&temp_dir);
-    fs::write(
-        fixture_dir.join("selfhost-package-review.json"),
-        serde_json::to_vec(&package_review_json).expect("package review JSON should serialize"),
-    )
-    .expect("generated package review should write");
-
-    let output = rss_command()
-        .arg("run")
-        .arg("tests/fixtures/pass/selfhost-package-risk.rss")
-        .current_dir(&temp_dir)
-        .output()
-        .expect("rss run should execute selfhost package risk classifier");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "selfhost package risk cases=5 mismatches=0 unmodeled_reasons=0 low=1 elevated=1 high=2 unknown=1"
-    );
-    assert!(stderr.trim().is_empty(), "{stderr}");
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_selfhost_package_risk_classifier_with_cli_generated_input_path() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-package-risk-cli-input");
-    let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-risk.rss")
-    else {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return;
-    };
-    let package_review_json = generated_selfhost_package_review_json_via_cli(&temp_dir);
-    let input_path = fixture_dir.join("generated-package-review.json");
-    fs::write(
-        &input_path,
-        serde_json::to_vec(&package_review_json).expect("package review JSON should serialize"),
-    )
-    .expect("CLI generated package review should write");
-
-    let output = rss_command()
-        .arg("run")
-        .arg("tests/fixtures/pass/selfhost-package-risk.rss")
-        .arg("--")
-        .arg(input_path.strip_prefix(&temp_dir).unwrap())
-        .current_dir(&temp_dir)
-        .output()
-        .expect("rss run should execute selfhost package risk classifier");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "selfhost package risk cases=5 mismatches=0 unmodeled_reasons=0 low=1 elevated=1 high=2 unknown=1"
-    );
-    assert!(stderr.trim().is_empty(), "{stderr}");
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_reports_selfhost_package_risk_mismatch() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-package-risk-mismatch");
-    let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-risk.rss")
-    else {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return;
-    };
-    let mut package_review_json = generated_selfhost_package_review_json(&temp_dir);
-    package_review_json[1]["risk"] = Value::String("low".to_string());
-    fs::write(
-        fixture_dir.join("selfhost-package-review.json"),
-        serde_json::to_vec(&package_review_json).expect("package review JSON should serialize"),
-    )
-    .expect("mutated package review should write");
-
-    let output = rss_command()
-        .arg("run")
-        .arg("tests/fixtures/pass/selfhost-package-risk.rss")
-        .current_dir(&temp_dir)
-        .output()
-        .expect("rss run should execute selfhost package risk classifier");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(!output.status.success(), "{stdout}");
-    assert!(
-        stdout.contains("selfhost package risk cases=5 mismatches=1 unmodeled_reasons=0 low=1 elevated=1 high=2 unknown=1"),
-        "{stdout}"
-    );
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_selfhost_package_export_classifier() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-package-exports");
-    let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-exports.rss")
-    else {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return;
-    };
-    let package_review_json = generated_selfhost_package_exports_json(&temp_dir);
-    fs::write(
-        fixture_dir.join("selfhost-package-exports.json"),
-        serde_json::to_vec(&package_review_json).expect("package review JSON should serialize"),
-    )
-    .expect("generated package review should write");
-
-    let output = rss_command()
-        .arg("run")
-        .arg("tests/fixtures/pass/selfhost-package-exports.rss")
-        .current_dir(&temp_dir)
-        .output()
-        .expect("rss run should execute selfhost package export classifier");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "selfhost package exports types=2 functions=3 apis=5 mutating=1 retaining=1 resource=1 fresh=1 unknown=1 mismatches=0 unmodeled_reasons=0"
-    );
-    assert!(stderr.trim().is_empty(), "{stderr}");
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_reports_selfhost_package_export_mismatch() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-package-exports-mismatch");
-    let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-exports.rss")
-    else {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return;
-    };
-    let mut package_review_json = generated_selfhost_package_exports_json(&temp_dir);
-    package_review_json["summary"]["mutating_apis"] = Value::from(0);
-    fs::write(
-        fixture_dir.join("selfhost-package-exports.json"),
-        serde_json::to_vec(&package_review_json).expect("package review JSON should serialize"),
-    )
-    .expect("mutated package review should write");
-
-    let output = rss_command()
-        .arg("run")
-        .arg("tests/fixtures/pass/selfhost-package-exports.rss")
-        .current_dir(&temp_dir)
-        .output()
-        .expect("rss run should execute selfhost package export classifier");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(!output.status.success(), "{stdout}");
-    assert!(
-        stdout.contains("selfhost package exports types=2 functions=3 apis=5 mutating=1 retaining=1 resource=1 fresh=1 unknown=1 mismatches=1 unmodeled_reasons=0"),
-        "{stdout}"
-    );
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_selfhost_package_diff_classifier() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-package-diff");
-    let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-diff.rss")
-    else {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return;
-    };
-    let package_diff_json = generated_selfhost_package_diff_json(&temp_dir);
-    fs::write(
-        fixture_dir.join("selfhost-package-diff.json"),
-        serde_json::to_vec(&package_diff_json).expect("package diff JSON should serialize"),
-    )
-    .expect("generated package diff should write");
-
-    let output = rss_command()
-        .arg("run")
-        .arg("tests/fixtures/pass/selfhost-package-diff.rss")
-        .current_dir(&temp_dir)
-        .output()
-        .expect("rss run should execute selfhost package diff classifier");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "selfhost package diff manifest=8 interface=3 high_manifest=5 high_interface=2 mismatches=0 unmodeled_reasons=0 callback_contract=1"
-    );
-    assert!(stderr.trim().is_empty(), "{stderr}");
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_reports_selfhost_package_diff_mismatch() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-package-diff-mismatch");
-    let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-diff.rss")
-    else {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return;
-    };
-    let mut package_diff_json = generated_selfhost_package_diff_json(&temp_dir);
-    package_diff_json["risk"] = Value::String("elevated".to_string());
-    fs::write(
-        fixture_dir.join("selfhost-package-diff.json"),
-        serde_json::to_vec(&package_diff_json).expect("package diff JSON should serialize"),
-    )
-    .expect("mutated package diff should write");
-
-    let output = rss_command()
-        .arg("run")
-        .arg("tests/fixtures/pass/selfhost-package-diff.rss")
-        .current_dir(&temp_dir)
-        .output()
-        .expect("rss run should execute selfhost package diff classifier");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(!output.status.success(), "{stdout}");
-    assert!(
-        stdout.contains("selfhost package diff manifest=8 interface=3 high_manifest=5 high_interface=2 mismatches=1 unmodeled_reasons=0 callback_contract=1"),
-        "{stdout}"
-    );
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_selfhost_package_lock_diff_classifier() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-package-lock-diff");
-    let Some(fixture_dir) =
-        prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-lock-diff.rss")
-    else {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return;
-    };
-    let package_lock_diff_json = generated_selfhost_package_lock_diff_json(&temp_dir);
-    fs::write(
-        fixture_dir.join("selfhost-package-lock-diff.json"),
-        serde_json::to_vec(&package_lock_diff_json)
-            .expect("package lock diff JSON should serialize"),
-    )
-    .expect("generated package lock diff should write");
-
-    let output = rss_command()
-        .arg("run")
-        .arg("tests/fixtures/pass/selfhost-package-lock-diff.rss")
-        .current_dir(&temp_dir)
-        .output()
-        .expect("rss run should execute selfhost package lock diff classifier");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "selfhost package lock diff packages=1 high_packages=1 high_features=1 mismatches=0 unmodeled_reasons=0"
-    );
-    assert!(stderr.trim().is_empty(), "{stderr}");
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_reports_selfhost_package_lock_diff_mismatch() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-package-lock-diff-mismatch");
-    let Some(fixture_dir) =
-        prepare_selfhost_run_dir_for(&temp_dir, "selfhost-package-lock-diff.rss")
-    else {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return;
-    };
-    let mut package_lock_diff_json = generated_selfhost_package_lock_diff_json(&temp_dir);
-    package_lock_diff_json["risk"] = Value::String("elevated".to_string());
-    fs::write(
-        fixture_dir.join("selfhost-package-lock-diff.json"),
-        serde_json::to_vec(&package_lock_diff_json)
-            .expect("package lock diff JSON should serialize"),
-    )
-    .expect("mutated package lock diff should write");
-
-    let output = rss_command()
-        .arg("run")
-        .arg("tests/fixtures/pass/selfhost-package-lock-diff.rss")
-        .current_dir(&temp_dir)
-        .output()
-        .expect("rss run should execute selfhost package lock diff classifier");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(!output.status.success(), "{stdout}");
-    assert!(
-        stdout.contains("selfhost package lock diff packages=1 high_packages=1 high_features=1 mismatches=1 unmodeled_reasons=0"),
-        "{stdout}"
-    );
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_accepts_selfhost_rustc_remap_classifier() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-rustc-remap");
-    let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-rustc-remap.rss")
-    else {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return;
-    };
-    let diagnostics_json = generated_selfhost_rustc_remap_json(&temp_dir);
-    fs::write(
-        fixture_dir.join("selfhost-rustc-remap.json"),
-        serde_json::to_vec(&diagnostics_json).expect("remap diagnostics JSON should serialize"),
-    )
-    .expect("generated remap diagnostics should write");
-
-    let output = rss_command()
-        .arg("run")
-        .arg("tests/fixtures/pass/selfhost-rustc-remap.rss")
-        .current_dir(&temp_dir)
-        .output()
-        .expect("rss run should execute selfhost rustc remap classifier");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "selfhost rustc remap diagnostics=1 mapped=1 rustc_code=1 source_file=1 source_line=1 source_column=1"
-    );
-    assert!(stderr.trim().is_empty(), "{stderr}");
-}
-
-#[test]
-#[ignore = "expensive RSScript e2e; run rss/test-runner/manifests/slow-tests.rsstest.toml"]
-fn rss_run_reports_selfhost_rustc_remap_mismatch() {
-    let temp_dir = unique_temp_dir("rsscript-selfhost-rustc-remap-mismatch");
-    let Some(fixture_dir) = prepare_selfhost_run_dir_for(&temp_dir, "selfhost-rustc-remap.rss")
-    else {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return;
-    };
-    let mut diagnostics_json = selfhost_rustc_remap_fixture_json();
-    diagnostics_json[0]["code"] = Value::String("RS1102".to_string());
-    fs::write(
-        fixture_dir.join("selfhost-rustc-remap.json"),
-        serde_json::to_vec(&diagnostics_json).expect("remap diagnostics JSON should serialize"),
-    )
-    .expect("mutated remap diagnostics should write");
-
-    let output = rss_command()
-        .arg("run")
-        .arg("tests/fixtures/pass/selfhost-rustc-remap.rss")
-        .current_dir(&temp_dir)
-        .output()
-        .expect("rss run should execute selfhost rustc remap classifier");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(!output.status.success(), "{stdout}");
-    assert!(
-        stdout.contains("selfhost rustc remap diagnostics=1 mapped=0 rustc_code=1 source_file=1 source_line=1 source_column=1"),
-        "{stdout}"
-    );
-}
-
-fn prepare_selfhost_run_dir(temp_dir: &Path) -> Option<PathBuf> {
-    prepare_selfhost_run_dir_for(temp_dir, "selfhost-review-classifier.rss")
-}
-
-fn prepare_selfhost_run_dir_for(temp_dir: &Path, script_name: &str) -> Option<PathBuf> {
-    fs::create_dir_all(temp_dir).expect("temporary root should be created");
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime"),
-            temp_dir.join("runtime"),
-        )
-        .expect("runtime crate symlink should be created");
-    }
-    #[cfg(not(unix))]
-    {
-        let runtime_dir = temp_dir.join("runtime");
-        fs::create_dir_all(&runtime_dir).expect("runtime crate directory should be created");
-        copy_directory_contents(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime"),
-            &runtime_dir,
-        );
-    }
-    let fixture_dir = temp_dir.join("tests/fixtures/pass");
-    fs::create_dir_all(&fixture_dir).expect("fixture directory should be created");
-    fs::copy(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/pass")
-            .join(script_name),
-        fixture_dir.join(script_name),
-    )
-    .expect("selfhost script should copy");
-    Some(fixture_dir)
-}
-
-fn generated_selfhost_review_map_json() -> Value {
-    let review_output = rss_command()
-        .arg("review")
-        .arg("--map")
-        .arg("--json")
-        .arg("tests/fixtures/pass/selfhost-review-classifier.rss")
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss review --map --json should execute");
-    assert!(
-        review_output.status.success(),
-        "stdout={}\nstderr={}",
-        String::from_utf8_lossy(&review_output.stdout),
-        String::from_utf8_lossy(&review_output.stderr)
-    );
-    serde_json::from_slice(&review_output.stdout).expect("review map stdout should be JSON")
-}
-
-fn generated_selfhost_package_review_json(temp_dir: &Path) -> Value {
-    generated_selfhost_package_review_json_with(temp_dir, package_review_json_for_dir)
-}
-
-fn generated_selfhost_package_review_json_via_cli(temp_dir: &Path) -> Value {
-    let low_dir = temp_dir.join("package-low");
-    write_empty_named_package_fixture(&low_dir, "rss-selfhost-low", "0.1.0", "");
-
-    let elevated_dir = temp_dir.join("package-elevated");
-    write_named_package_fixture(
-        &elevated_dir,
-        "rss-selfhost-elevated",
-        "0.1.0",
-        "",
-        r#"pub fn Api.run() -> Unit
-"#,
-    );
-
-    let high_dir = temp_dir.join("package-high");
-    write_named_package_fixture(
-        &high_dir,
-        "rss-selfhost-high",
-        "0.1.0",
-        r#"[native.rust]
-enabled = true
-path = "native/rust"
-crate = "rss_selfhost_native"
-build_scripts = "review"
-proc_macros = "forbid"
-unsafe = "forbid"
-"#,
-        r#"features: native
-
-native fn Native.echo(message: read String) -> String
-    effects(native)
-"#,
-    );
-
-    let unknown_dir = temp_dir.join("package-unknown");
-    write_empty_named_package_fixture(
-        &unknown_dir,
-        "rss-selfhost-unknown",
-        "0.1.0",
-        r#"[review.expect]
-risk = "unknown"
-"#,
-    );
-
-    let feature_high_dir = temp_dir.join("package-feature-high");
-    write_named_package_fixture(
-        &feature_high_dir,
-        "rss-selfhost-feature-high",
-        "0.1.0",
-        r#"[features]
-native-tls = ["native"]
-"#,
-        r#"pub fn Api.run() -> Unit
-"#,
-    );
-
-    Value::Array(vec![
-        package_review_json_for_dir_via_cli(&low_dir),
-        package_review_json_for_dir(&elevated_dir),
-        package_review_json_for_dir(&high_dir),
-        package_review_json_for_dir(&feature_high_dir),
-        package_review_json_for_dir(&unknown_dir),
-    ])
-}
-
-fn generated_selfhost_package_review_json_with(
-    temp_dir: &Path,
-    review_json_for_dir: fn(&Path) -> Value,
-) -> Value {
-    let low_dir = temp_dir.join("package-low");
-    write_empty_named_package_fixture(&low_dir, "rss-selfhost-low", "0.1.0", "");
-
-    let elevated_dir = temp_dir.join("package-elevated");
-    write_named_package_fixture(
-        &elevated_dir,
-        "rss-selfhost-elevated",
-        "0.1.0",
-        "",
-        r#"pub fn Api.run() -> Unit
-"#,
-    );
-
-    let high_dir = temp_dir.join("package-high");
-    write_named_package_fixture(
-        &high_dir,
-        "rss-selfhost-high",
-        "0.1.0",
-        r#"[native.rust]
-enabled = true
-path = "native/rust"
-crate = "rss_selfhost_native"
-build_scripts = "review"
-proc_macros = "forbid"
-unsafe = "forbid"
-"#,
-        r#"features: native
-
-native fn Native.echo(message: read String) -> String
-    effects(native)
-"#,
-    );
-
-    let unknown_dir = temp_dir.join("package-unknown");
-    write_empty_named_package_fixture(
-        &unknown_dir,
-        "rss-selfhost-unknown",
-        "0.1.0",
-        r#"[review.expect]
-risk = "unknown"
-"#,
-    );
-
-    let feature_high_dir = temp_dir.join("package-feature-high");
-    write_named_package_fixture(
-        &feature_high_dir,
-        "rss-selfhost-feature-high",
-        "0.1.0",
-        r#"[features]
-native-tls = ["native"]
-"#,
-        r#"pub fn Api.run() -> Unit
-"#,
-    );
-
-    Value::Array(vec![
-        review_json_for_dir(&low_dir),
-        review_json_for_dir(&elevated_dir),
-        review_json_for_dir(&high_dir),
-        review_json_for_dir(&feature_high_dir),
-        review_json_for_dir(&unknown_dir),
-    ])
-}
-
-fn package_review_json_for_dir(package_dir: &Path) -> Value {
-    let review = review_package_dir(package_dir).expect("package review should succeed");
-    serde_json::from_str(&rsscript::format_package_review_json(&review))
-        .expect("package review JSON should parse")
-}
-
-fn package_review_json_for_dir_via_cli(package_dir: &Path) -> Value {
-    let output = rss_command()
-        .arg("pkg")
-        .arg("review")
-        .arg("--json")
-        .arg(package_dir)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss pkg review --json should execute");
-    assert!(
-        output.status.success(),
-        "stdout={}\nstderr={}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    serde_json::from_slice(&output.stdout).expect("package review CLI stdout should be JSON")
-}
-
-fn generated_selfhost_package_exports_json(temp_dir: &Path) -> Value {
-    let package_dir = temp_dir.join("package-exports");
-    write_named_package_fixture(
-        &package_dir,
-        "rss-selfhost-exports",
-        "0.1.0",
-        "",
-        r#"struct Image
-resource DbConnection
-
-pub fn Image.load(path: read String) -> fresh Image
-pub fn Cache.store(conn: mut DbConnection, image: read Image) -> Unit
-    effects(retains(image))
-pub fn Api.run() -> Unit
-"#,
-    );
-    fs::create_dir_all(package_dir.join("src")).expect("source dir should be created");
-    fs::write(
-        package_dir.join("src/main.rss"),
-        r#"pub fn Api.run() -> Unit {
-    Missing.call()
-    return Unit
-}
-"#,
-    )
-    .expect("source should be written");
-
-    package_review_json_for_dir(&package_dir)
-}
-
-fn generated_selfhost_package_diff_json(temp_dir: &Path) -> Value {
-    let old_dir = temp_dir.join("package-diff-old");
-    let new_dir = temp_dir.join("package-diff-new");
-    write_package_fixture(
-        &old_dir,
-        "0.1.0",
-        r#"[dependencies]
-rss-core = "0.5"
-"#,
-        r#"struct JsonValue
-struct JsonError
-
-pub fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
-"#,
-    );
-    write_package_fixture(
-        &new_dir,
-        "0.2.0",
-        r#"[dependencies]
-rss-core = "0.5"
-rss-cache = "0.1"
-
-[features]
-native-tls = ["native"]
-
-[native.rust]
-enabled = true
-path = "native/rust"
-crate = "rss_json_native"
-build_scripts = "review"
-"#,
-        r#"features: native
-
-struct JsonValue
-struct JsonError
-
-pub fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
-    effects(native)
-"#,
-    );
-    fs::write(
-        new_dir.join("interface/cache.rssi"),
-        r#"pub fn JsonCache.store(cache: mut JsonCache, value: read JsonValue) -> Unit
-    effects(retains(value))
-"#,
-    )
-    .expect("added high-risk interface should be written");
-    fs::write(
-        old_dir.join("interface/scheduler.rssi"),
-        r#"struct Scheduler
-struct BuildError
-
-pub fn Scheduler.run(callback: read Fn(Int) -> Result<String, BuildError>) -> Unit
-"#,
-    )
-    .expect("old callback interface should be written");
-    fs::write(
-        new_dir.join("interface/scheduler.rssi"),
-        r#"struct Scheduler
-struct BuildError
-
-pub fn Scheduler.run(callback: read Fn(Int) -> Result<Int, BuildError>) -> Unit
-"#,
-    )
-    .expect("new callback interface should be written");
-    let diff = diff_package_dirs(&old_dir, &new_dir).expect("package diff should succeed");
-    serde_json::from_str(&rsscript::format_package_diff_json(&diff))
-        .expect("package diff JSON should parse")
-}
-
-fn generated_selfhost_package_lock_diff_json(temp_dir: &Path) -> Value {
-    let lock_dir = temp_dir.join("package-lock-diff");
-    fs::create_dir_all(&lock_dir).expect("lock diff dir should be created");
-    let old_lock_path = lock_dir.join("old.rsspkg.lock");
-    let new_lock_path = lock_dir.join("new.rsspkg.lock");
-    let old_lock = rsscript::PackageLock {
-        version: 1,
-        packages: vec![rsscript::PackageLockPackage {
-            name: "rss-net".to_string(),
-            version: "0.1.0".to_string(),
-            source: "path:.".to_string(),
-            checksum: "sha256:old".to_string(),
-            interface_hash: "sha256:interface".to_string(),
-            review_hash: "sha256:review".to_string(),
-            native_hash: None,
-            features: Vec::new(),
-        }],
-        metadata: rsscript::PackageLockMetadata {
-            rsscript_version: "0.5".to_string(),
-            created_by: "selfhost".to_string(),
-        },
-    };
-    let mut new_lock = old_lock.clone();
-    new_lock.packages[0].features = vec!["native-tls".to_string()];
-    fs::write(&old_lock_path, format_package_lock_toml(&old_lock))
-        .expect("old lock should be written");
-    fs::write(&new_lock_path, format_package_lock_toml(&new_lock))
-        .expect("new lock should be written");
-
-    let diff =
-        diff_package_locks(&old_lock_path, &new_lock_path).expect("lock diff should succeed");
-    serde_json::from_str(&rsscript::format_package_lock_diff_json(&diff))
-        .expect("package lock diff JSON should parse")
-}
-
-fn generated_selfhost_rustc_remap_json(temp_dir: &Path) -> Value {
-    let package_dir = temp_dir.join("remap-package");
-    write_named_package_fixture(
-        &package_dir,
-        "rss-selfhost-rustc-remap",
-        "0.1.0",
-        r#"[native.rust]
-enabled = true
-path = "native/rust"
-crate = "rss_json_native"
-build_scripts = "forbid"
-proc_macros = "forbid"
-unsafe = "forbid"
-"#,
-        r#"features: native
-
-native fn Native.echo(message: read String) -> String
-    effects(native)
-"#,
-    );
-    fs::create_dir_all(package_dir.join("src")).expect("source dir should be created");
-    fs::create_dir_all(package_dir.join("native/rust/src"))
-        .expect("native src dir should be created");
-    fs::create_dir_all(package_dir.join("native")).expect("native dir should be created");
-    fs::write(
-        package_dir.join("src/main.rss"),
-        r#"features: native
-
-fn main() -> Unit {
-    let message = Native.echo(message: read "hello")
-    Log.write(message: read message)
-}
-"#,
-    )
-    .expect("source should be written");
-    fs::write(
-        package_dir.join("native/bindings.rssbind.toml"),
-        r#"[bindings]
-"Native.echo" = "rss_json_native::echo"
-"#,
-    )
-    .expect("native binding manifest should be written");
-    fs::write(
-        package_dir.join("native/rust/Cargo.toml"),
-        "[package]\nname = \"rss_json_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-    )
-    .expect("native Cargo.toml should be written");
-    fs::write(
-        package_dir.join("native/rust/src/lib.rs"),
-        "pub fn echo(message: String) -> String { message }\n",
-    )
-    .expect("native source should be written");
-
-    let output = rss_command()
-        .arg("run")
-        .arg("--json")
-        .arg(&package_dir)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss run --json should execute");
-    assert!(
-        !output.status.success(),
-        "stdout={}\nstderr={}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        String::from_utf8_lossy(&output.stderr).trim().is_empty(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    serde_json::from_slice(&output.stdout).expect("remap diagnostics JSON should parse")
-}
-
-fn selfhost_rustc_remap_fixture_json() -> Value {
-    serde_json::json!([
-        {
-            "code": "RS1101",
-            "severity": "error",
-            "spans": [
-                {
-                    "file": "remap-package/src/main.rss",
-                    "line": 4,
-                    "column": 31
-                }
-            ],
-            "causes": ["rustc code: E0308"]
-        }
-    ])
 }
 
 #[test]
@@ -10683,6 +8056,133 @@ rss-dep = {{ path = "{}", features = ["turbo"] }}
 }
 
 #[test]
+fn package_check_rejects_git_dependency_source() {
+    let temp_dir = unique_temp_dir("rsscript-package-git-dependency-source");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-app",
+        "0.1.0",
+        r#"[dependencies]
+rss-remote = { git = "https://example.invalid/rss-remote.git", rev = "abc123" }
+"#,
+        r#"pub fn App.run() -> Unit
+"#,
+    );
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&temp_dir).expect("package check should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!check.ok);
+    assert!(json["diagnostics"].as_array().is_some_and(|diagnostics| {
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == "PKG0102"
+                && diagnostic["label"] == "unsupported dependency source"
+        })
+    }));
+}
+
+#[test]
+fn package_check_rejects_denied_resolved_dependency_feature() {
+    let root_dir = unique_temp_dir("rsscript-package-denied-feature-root");
+    let dep_dir = unique_temp_dir("rsscript-package-denied-feature-dep");
+    write_named_package_fixture(
+        &dep_dir,
+        "rss-dep",
+        "0.2.0",
+        r#"[features]
+fast = ["unsafe-backend"]
+unsafe-backend = []
+"#,
+        r#"pub fn Dep.parse(text: read String) -> String
+"#,
+    );
+    write_named_package_fixture(
+        &root_dir,
+        "rss-app",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-dep = {{ path = "{}", features = ["fast"] }}
+
+[review.feature_policy]
+deny = ["*/unsafe-backend"]
+"#,
+            toml_path(&dep_dir)
+        ),
+        r#"pub fn App.run() -> Unit
+"#,
+    );
+    fs::write(
+        root_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&root_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&root_dir).expect("package check should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&root_dir);
+    let _ = fs::remove_dir_all(&dep_dir);
+
+    assert!(!check.ok);
+    assert!(json["diagnostics"].as_array().is_some_and(|diagnostics| {
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == "PKG0501" && diagnostic["label"] == "denied package feature"
+        })
+    }));
+}
+
+#[test]
+fn package_check_reports_provider_implementation_declaration() {
+    let temp_dir = unique_temp_dir("rsscript-package-provider-implementation");
+    write_named_package_fixture(
+        &temp_dir,
+        "rss-platform-provider",
+        "0.1.0",
+        r#"[implements."platform-env"]
+interface_features = ["posix"]
+"#,
+        r#"pub fn Env.home() -> String
+"#,
+    );
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&temp_dir).expect("package check should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!check.ok);
+    assert_eq!(json["implements"][0]["interface_package"], "platform-env");
+    assert_eq!(json["implements"][0]["interface_features"][0], "posix");
+    assert!(json["diagnostics"].as_array().is_some_and(|diagnostics| {
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "PKG0901" && diagnostic["label"] == "version")
+            && diagnostics.iter().any(|diagnostic| {
+                diagnostic["code"] == "PKG0901" && diagnostic["label"] == "interface_effective_hash"
+            })
+    }));
+}
+
+#[test]
 fn package_review_reports_missing_interface_implementation() {
     let temp_dir = unique_temp_dir("rsscript-package-missing-interface-impl");
     write_named_package_fixture(
@@ -11050,48 +8550,6 @@ risk = "unknown"
 }
 
 #[test]
-fn rss_pkg_review_json_reports_package_metadata() {
-    let temp_dir = unique_temp_dir("rsscript-package-review-cli");
-    fs::create_dir_all(temp_dir.join("interface")).expect("interface dir should be created");
-    fs::write(
-        temp_dir.join("rsspkg.toml"),
-        r#"[package]
-name = "rss-math"
-version = "0.1.0"
-edition = "2026"
-
-[interfaces]
-paths = ["interface"]
-"#,
-    )
-    .expect("manifest should be written");
-    fs::write(
-        temp_dir.join("interface/math.rssi"),
-        r#"pub fn add(left: Int, right: Int) -> Int
-"#,
-    )
-    .expect("interface should be written");
-
-    let output = rss_command()
-        .arg("pkg")
-        .arg("review")
-        .arg("--json")
-        .arg(&temp_dir)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss pkg review should execute");
-    let _ = fs::remove_dir_all(&temp_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: Value = serde_json::from_str(&stdout).expect("stdout should be package review JSON");
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert_eq!(json["package"]["name"], "rss-math");
-    assert_eq!(json["summary"]["interface_files"], 1);
-}
-
-#[test]
 fn package_review_json_counts_native_and_unsafe_apis_separately() {
     let temp_dir = unique_temp_dir("rsscript-package-review-api-effects");
     write_package_fixture(
@@ -11121,6 +8579,125 @@ fn Native.danger(message: read String) -> String
 
     assert_eq!(json["summary"]["native_apis"], 1);
     assert_eq!(json["summary"]["unsafe_apis"], 1);
+}
+
+#[test]
+fn package_review_json_records_parallel_native_metadata() {
+    let temp_dir = unique_temp_dir("rsscript-package-review-parallel-native");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_parallel_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+        r#"features: native
+
+native fn Parallel.sort(values: mut List<Int>) -> Unit
+    effects(native, parallel)
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
+    fs::write(
+        temp_dir.join("native/rust/Cargo.toml"),
+        "[package]\nname = \"rss_parallel_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n\n[dependencies]\nrayon = \"1.12\"\n",
+    )
+    .expect("native Cargo.toml should be written");
+    fs::write(
+        temp_dir.join("native/rust/src/lib.rs"),
+        "use rayon::prelude::*;\npub fn sort(values: &mut Vec<i64>) { values.par_sort_unstable(); }\n",
+    )
+    .expect("native source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(json["summary"]["native_apis"], 1);
+    assert_eq!(json["summary"]["parallel_apis"], 1);
+    assert_eq!(
+        json["native_rust"]["semantic"]["author_declaration"]["worker_thread_parallelism"],
+        true
+    );
+    assert_eq!(
+        json["native_rust"]["semantic"]["author_declaration"]["native_parallel_backend"],
+        "rayon"
+    );
+    assert_eq!(
+        json["native_rust"]["semantic"]["source_scan_best_effort"]["worker_thread_parallelism_detected"],
+        true
+    );
+    assert!(
+        json["native_rust"]["semantic"]["source_scan_best_effort"]["native_parallel_backends"]
+            .as_array()
+            .is_some_and(|backends| backends.iter().any(|backend| backend == "rayon"))
+    );
+}
+
+#[test]
+fn package_review_json_records_selected_native_cargo_features() {
+    let temp_dir = unique_temp_dir("rsscript-package-review-native-cargo-features");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[features]
+wasm-browser = []
+
+[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_feature_native"
+cargo_features = ["base-native"]
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+
+[native.rust.feature_map]
+wasm-browser = { cargo_features = ["rayon/web_spin_lock"] }
+"#,
+        r#"features: native
+
+native fn Feature.value() -> Int
+    effects(native)
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
+    fs::write(
+        temp_dir.join("native/rust/Cargo.toml"),
+        "[package]\nname = \"rss_feature_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n",
+    )
+    .expect("native Cargo.toml should be written");
+    fs::write(
+        temp_dir.join("native/rust/src/lib.rs"),
+        "pub fn value() -> i64 { 1 }\n",
+    )
+    .expect("native source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let lock = lock_package_dir(&temp_dir).expect("package lock should include native metadata");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    let cargo_features = json["native_rust"]["cargo_features"]
+        .as_array()
+        .expect("native cargo features should be an array");
+    assert!(
+        cargo_features
+            .iter()
+            .any(|feature| feature == "base-native")
+    );
+    assert!(
+        cargo_features
+            .iter()
+            .any(|feature| feature == "rayon/web_spin_lock")
+    );
+    assert!(lock.packages[0].native_hash.is_some());
 }
 
 #[test]
@@ -11659,6 +9236,56 @@ build_execution_default = "sometimes"
 }
 
 #[test]
+fn package_check_reports_invalid_native_rust_policy_values() {
+    let temp_dir = unique_temp_dir("rsscript-package-invalid-native-rust-policy");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[native.rust]
+build_scripts = "sometimes"
+proc_macros = "never"
+unsafe = "maybe"
+
+[native.rust.policy]
+ffi = "trusted"
+wrapper_unsafe_blocks = "audited"
+"#,
+        r#"pub fn Api.run() -> Unit
+"#,
+    );
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&temp_dir).expect("package check should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!check.ok);
+    assert_eq!(json["summary"]["errors"], 5);
+    assert!(json["diagnostics"].as_array().is_some_and(|diagnostics| {
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == "PKG0501" && diagnostic["label"] == "build_scripts"
+        }) && diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == "PKG0501" && diagnostic["label"] == "proc_macros"
+        }) && diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "PKG0501" && diagnostic["label"] == "unsafe")
+            && diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic["code"] == "PKG0501" && diagnostic["label"] == "ffi")
+            && diagnostics.iter().any(|diagnostic| {
+                diagnostic["code"] == "PKG0501" && diagnostic["label"] == "wrapper_unsafe_blocks"
+            })
+    }));
+}
+
+#[test]
 fn package_check_applies_build_execution_default_to_native_wrapper() {
     let temp_dir = unique_temp_dir("rsscript-package-build-default-forbid");
     write_package_fixture(
@@ -11762,6 +9389,102 @@ native fn Native.parse(text: read String) -> String
 }
 
 #[test]
+fn package_review_uses_nested_native_rust_policy() {
+    let temp_dir = unique_temp_dir("rsscript-package-nested-native-policy");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_json_native"
+
+[native.rust.policy]
+build_scripts = "review"
+proc_macros = "forbid"
+wrapper_unsafe_blocks = "review"
+"#,
+        r#"features: native
+
+native fn Native.parse(text: read String) -> String
+    effects(native)
+"#,
+    );
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(json["native_rust"]["build_scripts"], "review");
+    assert_eq!(json["native_rust"]["proc_macros"], "forbid");
+    assert_eq!(json["native_rust"]["unsafe_policy"], "review");
+    assert!(json["reasons"].as_array().is_some_and(|reasons| {
+        reasons
+            .iter()
+            .any(|reason| reason == "native Rust build scripts require review")
+            && reasons
+                .iter()
+                .any(|reason| reason == "native Rust unsafe policy requires review")
+    }));
+}
+
+#[test]
+fn package_review_applies_native_links_and_ffi_policy() {
+    let temp_dir = unique_temp_dir("rsscript-package-native-links-ffi-policy");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_ffi_native"
+links = ["z"]
+
+[native.rust.policy]
+native_links = "allow"
+ffi = "forbid"
+"#,
+        r#"features: native
+
+native fn Native.value() -> Int
+    effects(native)
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
+    fs::write(
+        temp_dir.join("native/rust/Cargo.toml"),
+        "[package]\nname = \"rss_ffi_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n",
+    )
+    .expect("native Cargo.toml should be written");
+    fs::write(
+        temp_dir.join("native/rust/src/lib.rs"),
+        "extern \"C\" { fn abs(input: i32) -> i32; }\npub fn value() -> i64 { 1 }\n",
+    )
+    .expect("native source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(json["native_rust"]["native_links_policy"], "allow");
+    assert_eq!(json["native_rust"]["ffi_policy"], "forbid");
+    assert_eq!(
+        json["native_rust"]["semantic"]["source_scan_best_effort"]["ffi_detected"],
+        true
+    );
+    assert!(json["reasons"].as_array().is_some_and(|reasons| {
+        reasons
+            .iter()
+            .any(|reason| reason == "native Rust FFI usage forbidden")
+            && !reasons
+                .iter()
+                .any(|reason| reason == "native Rust links external libraries")
+    }));
+}
+
+#[test]
 fn package_review_marks_broken_rssi_contract_diagnostics_unknown() {
     let temp_dir = unique_temp_dir("rsscript-package-review-broken-rssi");
     write_package_fixture(
@@ -11854,25 +9577,6 @@ risk = "unknown"
 }
 
 #[test]
-fn rss_package_command_is_rejected() {
-    let output = rss_command()
-        .arg("package")
-        .arg("check")
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss package command should execute");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(!output.status.success(), "stderr={stderr}");
-    assert!(
-        stderr.contains("unknown command `package`; use `rsscript pkg ...`."),
-        "{stderr}"
-    );
-    assert!(stderr.contains("rsscript pkg check"), "{stderr}");
-    assert!(!stderr.contains("rsscript package"), "{stderr}");
-}
-
-#[test]
 fn docs_do_not_reintroduce_legacy_gc_runtime_surface() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let legacy_runtime_name = ["runtime ", "G", "c"].concat();
@@ -11900,44 +9604,6 @@ fn docs_do_not_reintroduce_legacy_gc_runtime_surface() {
             "{relative_path} must emit low_semantic_risk instead of legacy review categories"
         );
     }
-}
-
-#[test]
-fn rss_pkg_metadata_json_writes_review_metadata_file() {
-    let temp_dir = unique_temp_dir("rsscript-package-metadata-cli");
-    write_named_package_fixture(
-        &temp_dir,
-        "rss-metadata",
-        "0.1.0",
-        "",
-        r#"pub fn add(left: Int, right: Int) -> Int
-"#,
-    );
-
-    let output = rss_command()
-        .arg("pkg")
-        .arg("metadata")
-        .arg("--json")
-        .arg(&temp_dir)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss pkg metadata should execute");
-    let metadata_path = temp_dir.join("review").join("package-review.json");
-    let metadata_source =
-        fs::read_to_string(&metadata_path).expect("metadata file should be written");
-    let metadata_file_json: Value =
-        serde_json::from_str(&metadata_source).expect("metadata file JSON should parse");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: Value = serde_json::from_str(&stdout).expect("stdout should be metadata JSON");
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert_eq!(json["written"], true);
-    assert_eq!(json["metadata"]["schema"], "rss.review.package.v1");
-    assert_eq!(metadata_file_json["schema"], "rss.review.package.v1");
-    assert_eq!(metadata_file_json["package"]["name"], "rss-metadata");
 }
 
 #[test]
@@ -12334,54 +10000,6 @@ native-tls = ["native"]
 }
 
 #[test]
-fn rss_pkg_diff_json_reports_dependency_upgrade() {
-    let old_dir = unique_temp_dir("rsscript-package-diff-cli-old");
-    let new_dir = unique_temp_dir("rsscript-package-diff-cli-new");
-    write_package_fixture(
-        &old_dir,
-        "0.1.0",
-        r#"[dependencies]
-rss-core = "0.5"
-"#,
-        r#"pub fn add(left: Int, right: Int) -> Int
-"#,
-    );
-    write_package_fixture(
-        &new_dir,
-        "0.1.1",
-        r#"[dependencies]
-rss-core = "0.6"
-"#,
-        r#"pub fn add(left: Int, right: Int) -> Int
-"#,
-    );
-
-    let output = rss_command()
-        .arg("pkg")
-        .arg("diff")
-        .arg("--json")
-        .arg(&old_dir)
-        .arg(&new_dir)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss pkg diff should execute");
-    let _ = fs::remove_dir_all(&old_dir);
-    let _ = fs::remove_dir_all(&new_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: Value = serde_json::from_str(&stdout).expect("stdout should be package diff JSON");
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert_eq!(json["risk"], "high");
-    assert!(json["manifest_changes"].as_array().is_some_and(|changes| {
-        changes
-            .iter()
-            .any(|change| change["kind"] == "dependency" && change["name"] == "rss-core")
-    }));
-}
-
-#[test]
 fn package_lock_records_contract_review_and_native_hashes() {
     let temp_dir = unique_temp_dir("rsscript-package-lock");
     write_package_fixture(
@@ -12629,46 +10247,6 @@ rss-dep = {{ path = "{}", features = ["fast"] }}
         vec!["fast".to_string(), "simd".to_string()]
     );
     assert_ne!(base_dep.interface_hash, fast_dep.interface_hash);
-}
-
-#[test]
-fn rss_pkg_lock_json_reports_hashes() {
-    let temp_dir = unique_temp_dir("rsscript-package-lock-cli");
-    write_package_fixture(
-        &temp_dir,
-        "0.1.0",
-        "",
-        r#"pub fn add(left: Int, right: Int) -> Int
-"#,
-    );
-
-    let output = rss_command()
-        .arg("pkg")
-        .arg("lock")
-        .arg("--json")
-        .arg(&temp_dir)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss pkg lock should execute");
-    let _ = fs::remove_dir_all(&temp_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: Value = serde_json::from_str(&stdout).expect("stdout should be package lock JSON");
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert_eq!(json["version"], 1);
-    assert_eq!(json["package"][0]["name"], "rss-json");
-    assert!(
-        json["package"][0]["interface_hash"]
-            .as_str()
-            .is_some_and(|hash| hash.starts_with("sha256:"))
-    );
-    assert!(
-        json["package"][0]["review_hash"]
-            .as_str()
-            .is_some_and(|hash| hash.starts_with("sha256:"))
-    );
 }
 
 #[test]
@@ -12949,71 +10527,6 @@ fn package_lock_diff_marks_boundary_feature_selection_high_risk() {
 }
 
 #[test]
-fn rss_pkg_review_update_json_reports_lock_changes() {
-    let old_dir = unique_temp_dir("rsscript-package-update-cli-old");
-    let new_dir = unique_temp_dir("rsscript-package-update-cli-new");
-    let lock_dir = unique_temp_dir("rsscript-package-update-cli-locks");
-    write_package_fixture(
-        &old_dir,
-        "0.1.0",
-        "",
-        r#"pub fn add(left: Int, right: Int) -> Int
-"#,
-    );
-    write_package_fixture(
-        &new_dir,
-        "0.1.1",
-        "",
-        r#"pub fn add(left: Int, right: Int) -> Result<Int, MathError>
-"#,
-    );
-    fs::create_dir_all(&lock_dir).expect("lock dir should be created");
-    let old_lock_path = lock_dir.join("old.rsspkg.lock");
-    let new_lock_path = lock_dir.join("new.rsspkg.lock");
-    fs::write(
-        &old_lock_path,
-        format_package_lock_toml(&lock_package_dir(&old_dir).expect("old lock should be built")),
-    )
-    .expect("old lock should be written");
-    fs::write(
-        &new_lock_path,
-        format_package_lock_toml(&lock_package_dir(&new_dir).expect("new lock should be built")),
-    )
-    .expect("new lock should be written");
-
-    let output = rss_command()
-        .arg("pkg")
-        .arg("review")
-        .arg("update")
-        .arg("--json")
-        .arg("--from")
-        .arg(&old_lock_path)
-        .arg("--to")
-        .arg(&new_lock_path)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss pkg review update should execute");
-    let _ = fs::remove_dir_all(&old_dir);
-    let _ = fs::remove_dir_all(&new_dir);
-    let _ = fs::remove_dir_all(&lock_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: Value =
-        serde_json::from_str(&stdout).expect("stdout should be package review update JSON");
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert_eq!(json["risk"], "high");
-    assert!(
-        json["package_changes"][0]["changes"]
-            .as_array()
-            .is_some_and(|changes| changes
-                .iter()
-                .any(|change| change["field"] == "interface_hash"))
-    );
-}
-
-#[test]
 fn package_check_reports_stale_semantic_lock() {
     let temp_dir = unique_temp_dir("rsscript-package-check-stale");
     write_package_fixture(
@@ -13053,141 +10566,6 @@ pub fn add(left: Int, right: Int) -> Result<Int, MathError>
             .iter()
             .any(|reason| reason == ".rssi interface hash changed")
     }));
-}
-
-#[test]
-fn rss_pkg_check_json_reports_consistent_package() {
-    let temp_dir = unique_temp_dir("rsscript-package-check-cli");
-    write_package_fixture(
-        &temp_dir,
-        "0.1.0",
-        "",
-        r#"pub fn add(left: Int, right: Int) -> Int
-"#,
-    );
-    fs::write(
-        temp_dir.join("rsspkg.lock"),
-        format_package_lock_toml(
-            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
-        ),
-    )
-    .expect("lock should be written");
-
-    let output = rss_command()
-        .arg("pkg")
-        .arg("check")
-        .arg("--json")
-        .arg(&temp_dir)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss pkg check should execute");
-    let _ = fs::remove_dir_all(&temp_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: Value = serde_json::from_str(&stdout).expect("stdout should be package check JSON");
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert_eq!(json["ok"], true);
-    assert_eq!(json["lock"]["present"], true);
-    assert_eq!(json["lock"]["matches"], true);
-}
-
-#[test]
-fn rss_pkg_check_json_accepts_checked_in_rayon_wrapper_package() {
-    let output = rss_command()
-        .arg("pkg")
-        .arg("check")
-        .arg("--json")
-        .arg("rss/rayon")
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss pkg check should execute for checked-in rayon wrapper");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: Value = serde_json::from_str(&stdout).expect("stdout should be package check JSON");
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert_eq!(json["ok"], true);
-    assert_eq!(json["package"]["name"], "rss-rayon");
-    assert_eq!(json["lock"]["matches"], true);
-    assert_eq!(
-        json["native_rust"]["cargo_package_name"],
-        "rss_rayon_native"
-    );
-    assert_eq!(json["native_rust"]["cargo_metadata_ok"], true);
-    assert_eq!(json["native_rust"]["unsafe_detected"], false);
-}
-
-#[test]
-fn rss_check_json_accepts_package_directory() {
-    let temp_dir = unique_temp_dir("rsscript-check-package-cli");
-    write_named_package_fixture(
-        &temp_dir,
-        "rss-check-package",
-        "0.1.0",
-        "",
-        r#"pub fn add(left: Int, right: Int) -> Int
-"#,
-    );
-    fs::write(
-        temp_dir.join("rsspkg.lock"),
-        format_package_lock_toml(
-            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
-        ),
-    )
-    .expect("lock should be written");
-
-    let output = rss_command()
-        .arg("check")
-        .arg("--json")
-        .arg(&temp_dir)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss check package directory should execute");
-    let _ = fs::remove_dir_all(&temp_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: Value = serde_json::from_str(&stdout).expect("stdout should be package check JSON");
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert_eq!(json["ok"], true);
-    assert_eq!(json["package"]["name"], "rss-check-package");
-}
-
-#[test]
-fn rss_pkg_check_fails_when_lock_missing() {
-    let temp_dir = unique_temp_dir("rsscript-package-check-missing-lock");
-    write_package_fixture(
-        &temp_dir,
-        "0.1.0",
-        "",
-        r#"pub fn add(left: Int, right: Int) -> Int
-"#,
-    );
-
-    let output = rss_command()
-        .arg("pkg")
-        .arg("check")
-        .arg("--json")
-        .arg(&temp_dir)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss pkg check should execute");
-    let _ = fs::remove_dir_all(&temp_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let json: Value = serde_json::from_str(&stdout).expect("stdout should be package check JSON");
-
-    assert!(!output.status.success(), "stdout={stdout}");
-    assert_eq!(json["ok"], false);
-    assert_eq!(json["lock"]["present"], false);
-    assert!(
-        json["lock"]["reasons"]
-            .as_array()
-            .is_some_and(|reasons| reasons.iter().any(|reason| reason == "rsspkg.lock missing"))
-    );
 }
 
 #[test]
@@ -13975,6 +11353,66 @@ unsafe = "forbid"
 }
 
 #[test]
+fn package_lowering_input_passes_native_cargo_features_to_generated_cargo() {
+    let temp_dir = unique_temp_dir("rsscript-package-native-lowering-features");
+    write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[features]
+simd = []
+
+[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_feature_native"
+cargo_features = ["base-native"]
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+
+[native.rust.feature_map]
+simd = { cargo_features = ["dep/simd"] }
+"#,
+        "",
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("src/main.rss"),
+        r#"fn main() -> Unit {
+    return Unit
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let input = package_lowering_input(&temp_dir).expect("package should lower");
+    let package = lower_sources_to_rust_package_with_options(
+        &input.sources,
+        &input.package.name,
+        "/workspace/rsscript/runtime",
+        &input.interfaces,
+        &input.native_dependencies,
+    )
+    .expect("package source should lower with native dependency features");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(
+        input.native_dependencies[0].cargo_features,
+        vec!["base-native".to_string(), "dep/simd".to_string()]
+    );
+    assert!(
+        package
+            .cargo_toml
+            .contains("\"rss_feature_native\" = { path = ")
+    );
+    assert!(
+        package
+            .cargo_toml
+            .contains("features = [\"base-native\", \"dep/simd\"]")
+    );
+}
+
+#[test]
 fn package_lowering_input_records_path_dependency_native_wrapper_dependency() {
     let root_dir = unique_temp_dir("rsscript-package-native-dep-root");
     let dep_dir = unique_temp_dir("rsscript-package-native-dep-wrapper");
@@ -14210,448 +11648,6 @@ rss-remote = "0.5"
     assert!(human.contains("`-- rss-remote req 0.5 [unknown]"));
 }
 
-#[test]
-fn rss_pkg_tree_json_reports_dependency_summary() {
-    let root_dir = unique_temp_dir("rsscript-package-tree-cli-root");
-    let dep_dir = unique_temp_dir("rsscript-package-tree-cli-dep");
-    write_named_package_fixture(
-        &dep_dir,
-        "rss-dep",
-        "0.2.0",
-        "",
-        r#"pub fn parse(text: read String) -> String
-"#,
-    );
-    write_package_fixture(
-        &root_dir,
-        "0.1.0",
-        &format!(
-            r#"[dependencies]
-rss-dep = {{ path = "{}" }}
-"#,
-            toml_path(&dep_dir)
-        ),
-        r#"pub fn main() -> Unit
-"#,
-    );
-
-    let output = rss_command()
-        .arg("pkg")
-        .arg("tree")
-        .arg("--json")
-        .arg(&root_dir)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss pkg tree should execute");
-    let _ = fs::remove_dir_all(&root_dir);
-    let _ = fs::remove_dir_all(&dep_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: Value = serde_json::from_str(&stdout).expect("stdout should be package tree JSON");
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert_eq!(json["summary"]["packages"], 2);
-    assert_eq!(json["summary"]["path_dependencies"], 1);
-    assert_eq!(json["root"]["dependencies"][0]["name"], "rss-dep");
-}
-
-#[test]
-fn package_publish_dry_run_reports_ready_package() {
-    let temp_dir = unique_temp_dir("rsscript-package-publish-ready");
-    write_named_package_fixture(
-        &temp_dir,
-        "rss-ready",
-        "0.1.0",
-        "",
-        r#"pub fn add(left: Int, right: Int) -> Int
-"#,
-    );
-    fs::write(
-        temp_dir.join("rsspkg.lock"),
-        format_package_lock_toml(
-            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
-        ),
-    )
-    .expect("lock should be written");
-    fs::create_dir_all(temp_dir.join("target/debug")).expect("target dir should be created");
-    fs::write(temp_dir.join("target/debug/junk"), "do not publish")
-        .expect("target file should be written");
-    fs::create_dir_all(temp_dir.join("review")).expect("review dir should be created");
-    fs::write(temp_dir.join("review/package-review.json"), "{}\n")
-        .expect("generated review metadata should be written");
-
-    let publish = publish_package_dry_run(&temp_dir).expect("publish dry-run should succeed");
-    let publish_again =
-        publish_package_dry_run(&temp_dir).expect("publish dry-run should be deterministic");
-    let registry_dir = temp_dir.join("registry");
-    let publish_with_registry =
-        rsscript::publish_package_dry_run_with_registry(&temp_dir, Some(&registry_dir))
-            .expect("publish dry-run should report registry paths");
-    let json: Value = serde_json::from_str(&rsscript::format_package_publish_json(&publish))
-        .expect("publish JSON should parse");
-    let _ = fs::remove_dir_all(&temp_dir);
-    let archive_paths = publish
-        .archive_files
-        .iter()
-        .map(|file| file.path.as_str())
-        .collect::<Vec<_>>();
-
-    assert!(publish.ready);
-    assert_eq!(publish.archive_hash, publish_again.archive_hash);
-    assert!(
-        publish_with_registry
-            .registry_target
-            .as_ref()
-            .is_some_and(|target| target.index_path.ends_with("index/rss-ready/0.1.0.json"))
-    );
-    assert!(
-        publish_with_registry
-            .registry_target
-            .as_ref()
-            .is_some_and(|target| target
-                .archive_manifest_path
-                .ends_with("archives/rss-ready/0.1.0/archive-manifest.json"))
-    );
-    assert_eq!(json["package"]["name"], "rss-ready");
-    assert_eq!(json["registry_index"]["schema"], "rss.registry.index.v1");
-    assert_eq!(json["registry_index"]["name"], "rss-ready");
-    assert_eq!(json["registry_index"]["version"], "0.1.0");
-    assert_eq!(json["registry_index"]["checksum"], json["archive_hash"]);
-    assert_eq!(json["registry_index"]["risk"], "elevated");
-    assert_eq!(json["registry_index"]["native"], false);
-    assert_eq!(json["registry_index"]["unsafe"], false);
-    assert!(
-        json["registry_index"]["interface_hash"]
-            .as_str()
-            .is_some_and(|hash| hash.starts_with("sha256:"))
-    );
-    assert!(
-        json["registry_index"]["review_hash"]
-            .as_str()
-            .is_some_and(|hash| hash.starts_with("sha256:"))
-    );
-    assert_eq!(json["archive_format"], "rss.package.archive.v1");
-    assert!(
-        json["archive_hash"]
-            .as_str()
-            .is_some_and(|hash| hash.starts_with("sha256:"))
-    );
-    assert!(archive_paths.contains(&"rsspkg.toml"), "{archive_paths:?}");
-    assert!(
-        archive_paths.contains(&"interface/lib.rssi"),
-        "{archive_paths:?}"
-    );
-    assert!(archive_paths.contains(&"rsspkg.lock"), "{archive_paths:?}");
-    assert!(
-        !archive_paths.iter().any(|path| path.starts_with("target/")),
-        "{archive_paths:?}"
-    );
-    assert!(
-        !archive_paths
-            .iter()
-            .any(|path| *path == "review/package-review.json"),
-        "{archive_paths:?}"
-    );
-    assert!(json["archive_files"].as_array().is_some_and(|files| {
-        files.iter().any(|file| {
-            file["path"] == "rsspkg.toml"
-                && file["sha256"]
-                    .as_str()
-                    .is_some_and(|hash| hash.starts_with("sha256:"))
-        })
-    }));
-    assert!(json["checks"].as_array().is_some_and(|checks| {
-        checks
-            .iter()
-            .any(|check| check["name"] == "package archive reproducible" && check["ok"] == true)
-    }));
-}
-
-#[test]
-fn package_publish_dry_run_blocks_unknown_review_risk() {
-    let temp_dir = unique_temp_dir("rsscript-package-publish-unknown-risk");
-    write_named_package_fixture(
-        &temp_dir,
-        "rss-unknown",
-        "0.1.0",
-        r#"[review.expect]
-risk = "unknown"
-"#,
-        r#"pub fn Api.run() -> Unit
-"#,
-    );
-    fs::write(
-        temp_dir.join("rsspkg.lock"),
-        format_package_lock_toml(
-            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
-        ),
-    )
-    .expect("lock should be written");
-
-    let publish = publish_package_dry_run(&temp_dir).expect("publish dry-run should succeed");
-    let json: Value = serde_json::from_str(&rsscript::format_package_publish_json(&publish))
-        .expect("publish JSON should parse");
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(!publish.ready);
-    assert_eq!(json["risk"], "unknown");
-    assert!(json["checks"].as_array().is_some_and(|checks| {
-        checks.iter().any(|check| {
-            check["name"] == "package review risk classified"
-                && check["ok"] == false
-                && check["risk"] == "unknown"
-        })
-    }));
-    assert!(json["reasons"].as_array().is_some_and(|reasons| {
-        reasons
-            .iter()
-            .any(|reason| reason == "package review risk classified failed: review risk unknown")
-    }));
-}
-
-#[test]
-fn rss_pkg_publish_dry_run_reports_local_registry_target() {
-    let temp_dir = unique_temp_dir("rsscript-package-publish-registry-cli");
-    let registry_dir = unique_temp_dir("rsscript-package-publish-registry-target");
-    write_named_package_fixture(
-        &temp_dir,
-        "rss-registry",
-        "0.1.0",
-        "",
-        r#"pub fn Registry.value() -> Int
-"#,
-    );
-    fs::write(
-        temp_dir.join("rsspkg.lock"),
-        format_package_lock_toml(
-            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
-        ),
-    )
-    .expect("lock should be written");
-
-    let output = rss_command()
-        .arg("pkg")
-        .arg("publish")
-        .arg("--dry-run")
-        .arg("--json")
-        .arg("--registry")
-        .arg(&registry_dir)
-        .arg(&temp_dir)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss pkg publish should execute");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: Value = serde_json::from_str(&stdout).expect("stdout should be publish JSON");
-    let index_written = registry_dir
-        .join("index")
-        .join("rss-registry")
-        .join("0.1.0.json")
-        .exists();
-    let _ = fs::remove_dir_all(&temp_dir);
-    let _ = fs::remove_dir_all(&registry_dir);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert_eq!(
-        json["registry_target"]["index_path"]
-            .as_str()
-            .map(|path| path.ends_with("index/rss-registry/0.1.0.json")),
-        Some(true)
-    );
-    assert_eq!(
-        json["registry_target"]["archive_manifest_path"]
-            .as_str()
-            .map(|path| path.ends_with("archives/rss-registry/0.1.0/archive-manifest.json")),
-        Some(true)
-    );
-    assert!(!index_written);
-}
-
-#[test]
-fn package_publish_dry_run_reports_registry_index_dependencies() {
-    let root_dir = unique_temp_dir("rsscript-package-publish-index-root");
-    let dep_dir = unique_temp_dir("rsscript-package-publish-index-dep");
-    write_named_package_fixture(
-        &dep_dir,
-        "rss-dep",
-        "0.2.0",
-        "",
-        r#"pub fn Dep.value() -> Int
-"#,
-    );
-    write_named_package_fixture(
-        &root_dir,
-        "rss-index-root",
-        "0.1.0",
-        &format!(
-            r#"[dependencies]
-rss-dep = {{ version = "0.2.0", path = "{}" }}
-"#,
-            toml_path(&dep_dir)
-        ),
-        r#"pub fn Root.value() -> Int
-"#,
-    );
-    fs::write(
-        root_dir.join("rsspkg.lock"),
-        format_package_lock_toml(
-            &lock_package_dir(&root_dir).expect("initial lock should be generated"),
-        ),
-    )
-    .expect("lock should be written");
-
-    let publish = publish_package_dry_run(&root_dir).expect("publish dry-run should succeed");
-    let json: Value = serde_json::from_str(&rsscript::format_package_publish_json(&publish))
-        .expect("publish JSON should parse");
-    let _ = fs::remove_dir_all(&root_dir);
-    let _ = fs::remove_dir_all(&dep_dir);
-
-    assert!(publish.ready);
-    assert_eq!(json["registry_index"]["dependencies"]["rss-dep"], "0.2.0");
-}
-
-#[test]
-fn rss_pkg_publish_dry_run_json_reports_unresolved_dependency() {
-    let temp_dir = unique_temp_dir("rsscript-package-publish-blocked");
-    write_named_package_fixture(
-        &temp_dir,
-        "rss-blocked",
-        "0.1.0",
-        r#"[dependencies]
-rss-remote = "0.5.0"
-"#,
-        r#"pub fn main() -> Unit
-"#,
-    );
-    fs::write(
-        temp_dir.join("rsspkg.lock"),
-        format_package_lock_toml(
-            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
-        ),
-    )
-    .expect("lock should be written");
-
-    let output = rss_command()
-        .arg("pkg")
-        .arg("publish")
-        .arg("--dry-run")
-        .arg("--json")
-        .arg(&temp_dir)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss pkg publish should execute");
-    let _ = fs::remove_dir_all(&temp_dir);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let json: Value = serde_json::from_str(&stdout).expect("stdout should be publish JSON");
-
-    assert!(!output.status.success(), "stdout={stdout}");
-    assert_eq!(json["ready"], false);
-    assert_eq!(json["risk"], "unknown");
-    assert!(json["checks"].as_array().is_some_and(|checks| {
-        checks
-            .iter()
-            .any(|check| check["name"] == "dependency graph review" && check["ok"] == false)
-    }));
-}
-
-#[test]
-fn package_vendor_dry_run_reports_path_and_unresolved_dependencies() {
-    let root_dir = unique_temp_dir("rsscript-package-vendor-root");
-    let dep_dir = unique_temp_dir("rsscript-package-vendor-dep");
-    write_named_package_fixture(
-        &dep_dir,
-        "rss-dep",
-        "0.2.0",
-        "",
-        r#"pub fn parse(text: read String) -> String
-"#,
-    );
-    write_package_fixture(
-        &root_dir,
-        "0.1.0",
-        &format!(
-            r#"[dependencies]
-rss-dep = {{ path = "{}" }}
-rss-remote = "0.5.0"
-"#,
-            toml_path(&dep_dir)
-        ),
-        r#"pub fn main() -> Unit
-"#,
-    );
-
-    let vendor =
-        vendor_package_dir(&root_dir, true).expect("vendor dry-run should produce a report");
-    let json: Value = serde_json::from_str(&rsscript::format_package_vendor_json(&vendor))
-        .expect("vendor JSON should parse");
-    let vendor_dir_exists = root_dir.join("vendor").exists();
-    let _ = fs::remove_dir_all(&root_dir);
-    let _ = fs::remove_dir_all(&dep_dir);
-
-    assert!(!vendor.ok);
-    assert!(!vendor_dir_exists);
-    assert_eq!(json["dry_run"], true);
-    assert_eq!(json["entries"][0]["name"], "rss-dep");
-    assert_eq!(json["unresolved"][0]["name"], "rss-remote");
-    assert_eq!(json["risk"], "unknown");
-}
-
-#[test]
-fn rss_pkg_vendor_json_writes_vendor_directory_and_metadata() {
-    let root_dir = unique_temp_dir("rsscript-package-vendor-cli-root");
-    let dep_dir = unique_temp_dir("rsscript-package-vendor-cli-dep");
-    write_named_package_fixture(
-        &dep_dir,
-        "rss-dep",
-        "0.2.0",
-        "",
-        r#"pub fn parse(text: read String) -> String
-"#,
-    );
-    write_package_fixture(
-        &root_dir,
-        "0.1.0",
-        &format!(
-            r#"[dependencies]
-rss-dep = {{ path = "{}" }}
-"#,
-            toml_path(&dep_dir)
-        ),
-        r#"pub fn main() -> Unit
-"#,
-    );
-
-    let output = rss_command()
-        .arg("pkg")
-        .arg("vendor")
-        .arg("--json")
-        .arg(&root_dir)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("rss pkg vendor should execute");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: Value = serde_json::from_str(&stdout).expect("stdout should be vendor JSON");
-    let vendored_manifest = root_dir
-        .join("vendor")
-        .join("rss-dep-0.2.0")
-        .join("rsspkg.toml");
-    let vendor_metadata = root_dir.join("vendor").join("rss-vendor.json");
-    let vendored_manifest_exists = vendored_manifest.exists();
-    let vendor_metadata_exists = vendor_metadata.exists();
-    let _ = fs::remove_dir_all(&root_dir);
-    let _ = fs::remove_dir_all(&dep_dir);
-
-    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
-    assert!(stderr.trim().is_empty(), "{stderr}");
-    assert_eq!(json["ok"], true);
-    assert_eq!(json["entries"][0]["name"], "rss-dep");
-    assert!(vendored_manifest_exists);
-    assert!(vendor_metadata_exists);
-}
-
 fn fixture_paths(directory: &str) -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = fs::read_dir(directory)
         .unwrap_or_else(|error| panic!("failed to read {directory}: {error}"))
@@ -14724,143 +11720,6 @@ fn toml_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-fn directory_has_entries(path: &Path) -> bool {
-    fs::read_dir(path)
-        .map(|mut entries| entries.next().is_some())
-        .unwrap_or(false)
-}
-
-fn copy_directory_contents(source: &Path, destination: &Path) {
-    if !source.is_dir() || !directory_has_entries(source) {
-        return;
-    }
-
-    for entry in fs::read_dir(source)
-        .unwrap_or_else(|error| panic!("failed to read {}: {error}", source.display()))
-    {
-        let entry = entry.expect("directory entry should be readable");
-        let source_path = entry.path();
-        let destination_path = destination.join(entry.file_name());
-        let file_type = entry
-            .file_type()
-            .unwrap_or_else(|error| panic!("failed to inspect {}: {error}", source_path.display()));
-        if file_type.is_dir() {
-            fs::create_dir_all(&destination_path).unwrap_or_else(|error| {
-                panic!("failed to create {}: {error}", destination_path.display())
-            });
-            copy_directory_contents(&source_path, &destination_path);
-        } else if file_type.is_file() {
-            fs::copy(&source_path, &destination_path).unwrap_or_else(|error| {
-                panic!(
-                    "failed to copy {} to {}: {error}",
-                    source_path.display(),
-                    destination_path.display()
-                )
-            });
-        }
-    }
-}
-
-fn generated_target_seed_dir() -> Option<PathBuf> {
-    std::env::var_os("RSSCRIPT_GENERATED_TARGET_DIR")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("RSSCRIPT_RAMDISK_PATH")
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from)
-                .map(|root| root.join("rsscript-generated-target"))
-        })
-        .filter(|path| path.is_dir())
-}
-
-fn shared_generated_target_dir() -> Option<PathBuf> {
-    let path = std::env::var_os("RSSCRIPT_GENERATED_TARGET_DIR")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("RSSCRIPT_RAMDISK_PATH")
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from)
-                .map(|root| root.join("rsscript-generated-target"))
-        })?;
-    fs::create_dir_all(&path).expect("shared generated target dir should be created");
-    Some(path)
-}
-
-struct RssCommand {
-    command: Command,
-    command_dir: PathBuf,
-    generated_target: PathBuf,
-}
-
-impl RssCommand {
-    fn arg<T: AsRef<std::ffi::OsStr>>(&mut self, arg: T) -> &mut Self {
-        self.command.arg(arg);
-        self
-    }
-
-    fn current_dir<T: AsRef<Path>>(&mut self, directory: T) -> &mut Self {
-        self.command.current_dir(directory);
-        self
-    }
-
-    fn output(&mut self) -> std::io::Result<Output> {
-        let output = self.command.output();
-        if output.as_ref().is_ok_and(|output| output.status.success()) {
-            populate_generated_target_seed(&self.generated_target);
-        }
-        output
-    }
-}
-
-impl Drop for RssCommand {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.command_dir);
-    }
-}
-
-fn rss_command() -> RssCommand {
-    let command_dir = unique_temp_dir("rsscript-command");
-    let temp_dir = command_dir.join("temp");
-    fs::create_dir_all(&temp_dir).expect("rss command temp dir should be created");
-    let generated_target = shared_generated_target_dir().unwrap_or_else(|| {
-        let generated_target = command_dir.join("generated-target");
-        fs::create_dir_all(&generated_target).expect("rss command target dir should be created");
-        if let Some(seed_dir) =
-            generated_target_seed_dir().filter(|path| directory_has_entries(path))
-        {
-            copy_directory_contents(&seed_dir, &generated_target);
-        }
-        generated_target
-    });
-
-    let mut command = Command::new(env!("CARGO_BIN_EXE_rss"));
-    command.env("RSSCRIPT_TEMP_DIR", &temp_dir);
-    command.env("RSSCRIPT_GENERATED_TARGET_DIR", &generated_target);
-    RssCommand {
-        command,
-        command_dir,
-        generated_target,
-    }
-}
-
-fn populate_generated_target_seed(source: &Path) {
-    if !source.is_dir() || !directory_has_entries(source) {
-        return;
-    }
-    let Some(seed_dir) = generated_target_seed_dir() else {
-        return;
-    };
-    let _guard = RSS_COMMAND_SEED_LOCK
-        .lock()
-        .expect("RSS command seed lock should not be poisoned");
-    if directory_has_entries(&seed_dir) {
-        return;
-    }
-    copy_directory_contents(source, &seed_dir);
-}
-
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -14915,51 +11774,6 @@ paths = ["interface"]
     .expect("package manifest should be written");
     fs::write(directory.join("interface/lib.rssi"), interface_source)
         .expect("interface should be written");
-}
-
-fn write_empty_named_package_fixture(
-    directory: &Path,
-    name: &str,
-    version: &str,
-    extra_manifest: &str,
-) {
-    fs::create_dir_all(directory).expect("package dir should be created");
-    fs::write(
-        directory.join("rsspkg.toml"),
-        format!(
-            r#"[package]
-name = "{name}"
-version = "{version}"
-edition = "2026"
-
-{extra_manifest}
-"#
-        ),
-    )
-    .expect("package manifest should be written");
-}
-
-fn write_empty_resource_pool_fixture(path: &Path) {
-    fs::write(
-        path,
-        r#"features: local
-
-fn main() -> Unit {
-    let url = Url.from_string(value: read "db://local")
-    local pool = ResourcePool<DbConnection>.new(
-        create: || DbConnection.open(url: read url),
-        max_size: 0,
-    )
-
-    with ResourcePool.borrow(pool: mut pool) as conn {
-        Log.write(message: read "unreachable")
-    }
-
-    return Unit
-}
-"#,
-    )
-    .expect("runtime diagnostic fixture should be written");
 }
 
 fn expected_codes(source: &str) -> Vec<String> {

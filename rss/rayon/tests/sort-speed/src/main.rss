@@ -1,0 +1,84 @@
+features: native, local
+
+struct TimedSort {
+    elapsed_ns: Int
+    first: Int
+    last: Int
+    len: Int
+}
+
+fn time_serial_sort(size: Int, seed: Int) -> fresh TimedSort {
+    local values = SortFixture.random_ints(size: size, seed: seed)
+    let start = SortFixture.now_ns()
+    SortFixture.sort_int_serial(values: mut values)
+    let end = SortFixture.now_ns()
+    let len = List.len(list: read values)
+
+    return TimedSort(
+        elapsed_ns: end - start,
+        first: List.get(list: read values, index: 0),
+        last: List.get(list: read values, index: len - 1),
+        len: len,
+    )
+}
+
+fn time_rayon_sort(size: Int, seed: Int) -> fresh TimedSort {
+    local values = SortFixture.random_ints(size: size, seed: seed)
+    let start = SortFixture.now_ns()
+    Rayon.sort_int(values: mut values)
+    let end = SortFixture.now_ns()
+    let len = List.len(list: read values)
+
+    return TimedSort(
+        elapsed_ns: end - start,
+        first: List.get(list: read values, index: 0),
+        last: List.get(list: read values, index: len - 1),
+        len: len,
+    )
+}
+
+fn warm_rayon() -> Unit {
+    local values = SortFixture.random_ints(size: 10000, seed: 1)
+    Rayon.sort_int(values: mut values)
+    return Unit
+}
+
+fn log_metric(name: read String, value: Int) -> Unit {
+    local line = StringBuilder.new()
+    StringBuilder.push(builder: mut line, value: read name)
+    StringBuilder.push(builder: mut line, value: read "=")
+    StringBuilder.push(builder: mut line, value: read String.from_int(value: value))
+    Log.write(message: read StringBuilder.finish(builder: take line))
+    return Unit
+}
+
+fn assert_same_result(serial: read TimedSort, rayon: read TimedSort) -> Unit {
+    Assert.equal_int(left: rayon.len, right: serial.len)
+    Assert.equal_int(left: rayon.first, right: serial.first)
+    Assert.equal_int(left: rayon.last, right: serial.last)
+    return Unit
+}
+
+fn assert_rayon_speedup(serial: read TimedSort, rayon: read TimedSort) -> Unit {
+    let rayon_scaled = rayon.elapsed_ns * 100
+    let serial_scaled = serial.elapsed_ns * 95
+    let faster = rayon_scaled < serial_scaled
+    Assert.equal_bool(left: faster, right: true)
+    return Unit
+}
+
+fn main() -> Unit {
+    warm_rayon()
+
+    let size = 5000000
+    let seed = 20260530
+    let serial = time_serial_sort(size: size, seed: seed)
+    let rayon = time_rayon_sort(size: size, seed: seed)
+
+    assert_same_result(serial: read serial, rayon: read rayon)
+    log_metric(name: read "serial_sort_ns", value: serial.elapsed_ns)
+    log_metric(name: read "rayon_sort_ns", value: rayon.elapsed_ns)
+    assert_rayon_speedup(serial: read serial, rayon: read rayon)
+
+    return Unit
+}

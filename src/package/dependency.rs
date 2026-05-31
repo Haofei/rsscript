@@ -4,8 +4,8 @@ use std::path::Path;
 use crate::diagnostic::{Diagnostic, code};
 
 use super::source_set::{
-    Manifest, PackageSource, load_package_manifest, load_package_with_features,
-    resolve_package_features,
+    Manifest, ManifestReviewFeaturePolicy, PackageSource, load_package_manifest,
+    load_package_with_features, resolve_package_features,
 };
 use super::{PackageReviewFileKind, canonical_path_label, toml_value_label};
 
@@ -39,15 +39,21 @@ pub(super) fn package_feature_resolution_diagnostics(
     manifest: &Manifest,
 ) -> Result<Vec<Diagnostic>, String> {
     let mut diagnostics = Vec::new();
+    let feature_policy = manifest
+        .review
+        .as_ref()
+        .map(|review| &review.feature_policy);
     collect_dependency_feature_resolution_diagnostics_from_map(
         package_dir,
         &manifest.dependencies,
+        feature_policy,
         &mut BTreeSet::new(),
         &mut diagnostics,
     )?;
     collect_dependency_feature_resolution_diagnostics_from_map(
         package_dir,
         &manifest.dev_dependencies,
+        feature_policy,
         &mut BTreeSet::new(),
         &mut diagnostics,
     )?;
@@ -57,11 +63,19 @@ pub(super) fn package_feature_resolution_diagnostics(
 fn collect_dependency_feature_resolution_diagnostics_from_map(
     package_dir: &Path,
     dependencies: &BTreeMap<String, toml::Value>,
+    feature_policy: Option<&ManifestReviewFeaturePolicy>,
     visiting: &mut BTreeSet<String>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), String> {
     for (name, value) in dependencies {
         let spec = package_dependency_spec(name, value);
+        if spec.git.is_some() {
+            diagnostics.push(package_unsupported_dependency_source_diagnostic(
+                package_dir,
+                name,
+                "git",
+            ));
+        }
         let Some(path) = &spec.path else {
             continue;
         };
@@ -82,21 +96,71 @@ fn collect_dependency_feature_resolution_diagnostics_from_map(
                 &feature,
             ));
         }
+        if let Some(feature_policy) = feature_policy {
+            for feature in &resolved.selected {
+                if package_feature_denied(feature_policy, name, feature) {
+                    diagnostics.push(package_denied_feature_diagnostic(
+                        package_dir,
+                        name,
+                        feature,
+                    ));
+                }
+            }
+        }
         collect_dependency_feature_resolution_diagnostics_from_map(
             &dependency_dir,
             &dependency_manifest.dependencies,
+            feature_policy,
             visiting,
             diagnostics,
         )?;
         collect_dependency_feature_resolution_diagnostics_from_map(
             &dependency_dir,
             &dependency_manifest.dev_dependencies,
+            feature_policy,
             visiting,
             diagnostics,
         )?;
         visiting.remove(&canonical);
     }
     Ok(())
+}
+
+fn package_unsupported_dependency_source_diagnostic(
+    package_dir: &Path,
+    dependency: &str,
+    source: &str,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::PACKAGE_UNSUPPORTED_DEPENDENCY_SOURCE,
+        format!("dependency `{dependency}` uses unsupported package source `{source}`."),
+        super::package_dependency_span(package_dir, dependency),
+        "unsupported dependency source",
+    )
+    .with_cause("Git dependencies are not part of the v0.5 accepted dependency-source grammar.")
+    .with_fix(
+        "use_supported_dependency_source",
+        "Use a registry version requirement or a local path dependency.",
+        "manual",
+    )
+}
+
+fn package_feature_denied(
+    feature_policy: &ManifestReviewFeaturePolicy,
+    package: &str,
+    feature: &str,
+) -> bool {
+    feature_policy
+        .deny
+        .iter()
+        .any(|pattern| package_feature_deny_pattern_matches(pattern, package, feature))
+}
+
+fn package_feature_deny_pattern_matches(pattern: &str, package: &str, feature: &str) -> bool {
+    let Some((package_pattern, feature_pattern)) = pattern.split_once('/') else {
+        return pattern == feature;
+    };
+    (package_pattern == "*" || package_pattern == package) && feature_pattern == feature
 }
 
 fn package_unknown_feature_diagnostic(
@@ -114,6 +178,27 @@ fn package_unknown_feature_diagnostic(
     .with_fix(
         "fix_dependency_features",
         format!("Remove `{feature}` from the dependency feature list, or declare it in the dependency package."),
+        "manual",
+    )
+}
+
+fn package_denied_feature_diagnostic(
+    package_dir: &Path,
+    dependency: &str,
+    feature: &str,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::PACKAGE_REVIEW_POLICY_VIOLATION,
+        format!("dependency `{dependency}` selects denied package feature `{feature}`."),
+        super::package_dependency_span(package_dir, dependency),
+        "denied package feature",
+    )
+    .with_cause("Selected dependency features must satisfy `[review.feature_policy]`.")
+    .with_fix(
+        "fix_dependency_features",
+        format!(
+            "Remove `{feature}` from the dependency feature list, or choose another dependency."
+        ),
         "manual",
     )
 }

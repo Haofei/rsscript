@@ -56,6 +56,13 @@ fn collect_regular_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), St
         let entry = entry
             .map_err(|error| format!("failed to read entry in {}: {error}", path.display()))?;
         let path = entry.path();
+        let name = entry.file_name();
+        if matches!(
+            name.to_string_lossy().as_ref(),
+            "target" | ".git" | ".DS_Store" | "Cargo.lock"
+        ) {
+            continue;
+        }
         if path.is_dir() {
             collect_regular_files(&path, files)?;
         } else if path.is_file() {

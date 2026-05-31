@@ -84,8 +84,10 @@ pub mod code {
     pub const LINT_DUPLICATE_EFFECT: &str = "RSL002";
 
     pub const PACKAGE_FEATURE_RESOLUTION: &str = "PKG0101";
+    pub const PACKAGE_UNSUPPORTED_DEPENDENCY_SOURCE: &str = "PKG0102";
     pub const PACKAGE_REVIEW_POLICY_VIOLATION: &str = "PKG0501";
     pub const PACKAGE_NATIVE_BINDING: &str = "PKG0601";
+    pub const PACKAGE_PROVIDER_DECLARATION: &str = "PKG0901";
 
     pub const REVIEW_FEATURES_CHANGED: &str = "RSR001";
     pub const REVIEW_FUNCTION_REMOVED: &str = "RSR002";
@@ -103,6 +105,7 @@ pub mod code {
     pub const REVIEW_FUNCTION_KIND_CHANGED: &str = "RSR014";
     pub const REVIEW_NATIVE_ADDED: &str = "RSR015";
     pub const REVIEW_PROTOCOL_IMPL_CHANGED: &str = "RSR016";
+    pub const REVIEW_PARALLEL_ADDED: &str = "RSR017";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -654,6 +657,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         explanation: "Selected package features must be declared by the target package. Declared features may depend on other declared features; feature resolution is additive and deterministic.",
     },
     DiagnosticExplanation {
+        code: code::PACKAGE_UNSUPPORTED_DEPENDENCY_SOURCE,
+        title: "unsupported package dependency source",
+        explanation: "RSScript v0.5 accepts registry and local path package dependencies. Future-looking dependency source forms such as git must be rejected with a stable package-manager diagnostic.",
+    },
+    DiagnosticExplanation {
         code: code::PACKAGE_REVIEW_POLICY_VIOLATION,
         title: "package review policy violation",
         explanation: "`[review.policy]` turns package review facts such as unknown risk, native boundaries, and unsafe APIs into package-manager errors.",
@@ -662,6 +670,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::PACKAGE_NATIVE_BINDING,
         title: "package native binding metadata mismatch",
         explanation: "`native/bindings.rssbind.toml` and `[native.rust]` metadata must point from declared native `.rssi` functions to Rust wrapper functions in the configured native Rust crate. This is a package-manager diagnostic, not an RSScript frontend diagnostic.",
+    },
+    DiagnosticExplanation {
+        code: code::PACKAGE_PROVIDER_DECLARATION,
+        title: "package provider declaration mismatch",
+        explanation: "`[implements.\"<interface-package>\"]` provider declarations must bind a provider to one interface package version, selected interface feature set, and effective interface hash.",
     },
     DiagnosticExplanation {
         code: code::LINT_SIGNATURE_COMPLEXITY,

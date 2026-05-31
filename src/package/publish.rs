@@ -236,7 +236,7 @@ fn package_index_unsafe_boundary(
         .native
         .as_ref()
         .and_then(|native| native.rust.as_ref())
-        .and_then(|native| native.unsafe_policy.as_deref())
+        .and_then(|native| native.effective_unsafe_policy())
         .is_some_and(|policy| policy != "forbid")
         || native_check.is_some_and(|native| native.unsafe_detected)
 }

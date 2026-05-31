@@ -1864,6 +1864,14 @@ RSScript read/mut views <-> adapter-managed read/write views
 The bridge is not a general FFI surface. It is generated for declared `.rssi`
 contracts and native binding manifests.
 
+Native implementation features are not RSScript language features. If a wrapper
+maps a package or target choice to Cargo features, package metadata records the
+selected native Cargo features, target, and risk reason separately from
+RSScript `features:` declarations. For example, a Rayon wrapper may expose an
+RSScript package feature or target profile that selects the native Cargo feature
+`rayon/web_spin_lock` for a wasm browser build, but RSScript source must not
+observe `web_spin_lock` as a language capability.
+
 ### 9.7 Native conformance levels
 
 Native wrapper conformance is reported as independent facets. A higher facet
@@ -1886,13 +1894,14 @@ Level 2: adapter type-checked
 
 Level 3D: semantic declarations recorded
   - native wrapper author declarations record whether the implementation may
-    retain, block, allocate, panic, spawn, use env, access filesystem/network,
-    or call FFI.
+    retain, block, allocate, panic, spawn, execute worker-thread parallelism, use
+    env, access filesystem/network, or call FFI.
   - these are declarations, not machine proof.
 
 Level 3S: semantic source scan recorded
   - best-effort scans record facts such as unsafe blocks, obvious FFI usage,
-    build script presence, or suspicious IO calls.
+    build script presence, native parallel backends such as Rayon, or suspicious
+    IO calls.
   - scans are tool-specific, may be incomplete, and must be labeled with source,
     tool, version, and selected graph.
 

@@ -4,10 +4,10 @@ version = 1
 name = "rss-rayon"
 version = "0.1.0"
 source = "path+rss/rayon"
-checksum = "sha256:0e3a1414676fa558d1aebbb86a7e2aabccb9569777df4190f178f074efc5e8ee"
-interface_hash = "sha256:68c0144670f889ccf4872a8cf385d7c4c6c305f9ea1d5a54c4ddfbcd3ef94dea"
-review_hash = "sha256:9ffed2899d2fa0eaf3c1a697d873eeabe3885484e0c86998d29e80017156c395"
-native_hash = "sha256:c8523588f9ac3cc5ea1421a935ff105060cddebb57de56697f17aecb39fc4cb9"
+checksum = "sha256:dd44d39934957c996740775ad66320b620b0405a4cd077d5da3fa4d578c4bc14"
+interface_hash = "sha256:7ebfd975892c2819dbb3736bd08e25ef4f3110cc9ea1050dc90349a568a04fa4"
+review_hash = "sha256:e5c28bb5ffe48f3fd056875ec9af6fe0fbff9de368162b32d2af929af36a932b"
+native_hash = "sha256:79297ed45f2f5c36beab1dd7150aaf908a0770816e9fa6d5f8ae3227348a3dd0"
 features = []
 
 [metadata]

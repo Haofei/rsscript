@@ -65,6 +65,7 @@ pub(super) fn collect_manifest_review_policy_diagnostics(
     sources: &[PackageSource],
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
+    diagnostics.extend(native_rust_policy_value_diagnostics(package_dir, manifest));
     let Some(review_policy) = manifest.review.as_ref() else {
         return diagnostics;
     };
@@ -142,6 +143,54 @@ pub(super) fn collect_manifest_review_policy_diagnostics(
         sources,
     ));
     diagnostics.extend(package_review_policy_value_diagnostics(package_dir, policy));
+    diagnostics
+}
+
+fn native_rust_policy_value_diagnostics(
+    package_dir: &Path,
+    manifest: &Manifest,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let Some(native) = manifest
+        .native
+        .as_ref()
+        .and_then(|native| native.rust.as_ref())
+    else {
+        return diagnostics;
+    };
+
+    for (key, value) in [
+        ("build_scripts", native.build_scripts.as_deref()),
+        ("proc_macros", native.proc_macros.as_deref()),
+        ("unsafe", native.unsafe_policy.as_deref()),
+        ("build_scripts", native.policy.build_scripts.as_deref()),
+        ("proc_macros", native.policy.proc_macros.as_deref()),
+        ("native_links", native.policy.native_links.as_deref()),
+        ("ffi", native.policy.ffi.as_deref()),
+        ("rss_unsafe_apis", native.policy.rss_unsafe_apis.as_deref()),
+        (
+            "wrapper_unsafe_blocks",
+            native.policy.wrapper_unsafe_blocks.as_deref(),
+        ),
+        (
+            "transitive_unsafe_blocks",
+            native.policy.transitive_unsafe_blocks.as_deref(),
+        ),
+    ] {
+        let Some(value) = value else {
+            continue;
+        };
+        if !matches!(value, "forbid" | "review" | "allow") {
+            diagnostics.push(package_review_policy_diagnostic(
+                package_dir,
+                key,
+                format!("native Rust policy has invalid `{key}`."),
+                key,
+                format!("`{key}` must be `forbid`, `review`, or `allow`."),
+            ));
+        }
+    }
+
     diagnostics
 }
 

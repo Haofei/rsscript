@@ -13,6 +13,7 @@ pub struct PackageReview {
     pub risk: PackageRisk,
     pub reasons: Vec<String>,
     pub features: Vec<String>,
+    pub implements: Vec<PackageProviderImplementation>,
     pub summary: PackageReviewSummary,
     pub files: Vec<PackageReviewFile>,
     pub exports: Vec<PackageReviewExport>,
@@ -53,6 +54,7 @@ pub struct PackageReviewMetadata {
     pub risk: PackageRisk,
     pub reasons: Vec<String>,
     pub features: Vec<String>,
+    pub implements: Vec<PackageProviderImplementation>,
     pub summary: PackageReviewSummary,
     pub files: Vec<PackageReviewFile>,
     pub exports: Vec<PackageReviewExport>,
@@ -80,6 +82,7 @@ pub struct PackageCheck {
     pub ok: bool,
     pub risk: PackageRisk,
     pub reasons: Vec<String>,
+    pub implements: Vec<PackageProviderImplementation>,
     pub summary: PackageReviewSummary,
     pub graph: PackageGraphCheck,
     pub lock: PackageCheckLock,
@@ -358,6 +361,7 @@ pub struct PackageReviewSummary {
     pub resource_apis: usize,
     pub fresh_returning_apis: usize,
     pub native_apis: usize,
+    pub parallel_apis: usize,
     pub unsafe_apis: usize,
     pub unknown_apis: usize,
 }
@@ -376,6 +380,14 @@ pub struct PackageReviewExport {
     pub reasons: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageProviderImplementation {
+    pub interface_package: String,
+    pub version: Option<String>,
+    pub interface_features: Vec<String>,
+    pub interface_effective_hash: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageReviewFileKind {
@@ -390,5 +402,35 @@ pub struct PackageNativeRustReview {
     pub build_scripts: Option<String>,
     pub proc_macros: Option<String>,
     pub unsafe_policy: Option<String>,
+    pub native_links_policy: Option<String>,
+    pub ffi_policy: Option<String>,
     pub links: Vec<String>,
+    pub cargo_features: Vec<String>,
+    pub semantic: PackageNativeRustSemanticReview,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageNativeRustSemanticReview {
+    pub author_declaration: PackageNativeRustAuthorDeclaration,
+    pub source_scan_best_effort: PackageNativeRustSourceScan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageNativeRustAuthorDeclaration {
+    pub worker_thread_parallelism: bool,
+    pub native_parallel_backend: Option<String>,
+    pub risk_reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageNativeRustSourceScan {
+    pub tool: String,
+    pub selected_graph: String,
+    pub worker_thread_parallelism_detected: bool,
+    pub native_parallel_backends: Vec<String>,
+    pub unsafe_detected: bool,
+    pub ffi_detected: bool,
+    pub filesystem_detected: bool,
+    pub network_detected: bool,
+    pub build_script_present: bool,
 }

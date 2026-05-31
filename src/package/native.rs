@@ -17,9 +17,11 @@ use super::contract::collect_package_function_contracts;
 use super::dependency::package_dependency_spec;
 use super::source_set::{
     load_package_manifest, load_package_with_features, resolve_package_features,
+    selected_root_package_features,
 };
 use super::{
-    Manifest, ManifestNativeRust, PackageNativeRustCheck, PackageNativeRustReview,
+    Manifest, ManifestNativeRust, PackageNativeRustAuthorDeclaration, PackageNativeRustCheck,
+    PackageNativeRustReview, PackageNativeRustSemanticReview, PackageNativeRustSourceScan,
     PackageReviewFileKind, PackageRisk, PackageSource, canonical_path_label,
 };
 
@@ -51,9 +53,11 @@ pub(super) fn package_native_rust_dependencies(
 ) -> Result<Vec<NativeRustDependency>, String> {
     let mut visited = BTreeSet::new();
     let mut dependencies = Vec::new();
+    let selected_features = selected_root_package_features(manifest);
     collect_package_native_rust_dependencies(
         package_dir,
         manifest,
+        &selected_features,
         &mut visited,
         &mut dependencies,
     )?;
@@ -63,6 +67,7 @@ pub(super) fn package_native_rust_dependencies(
 fn collect_package_native_rust_dependencies(
     package_dir: &Path,
     manifest: &Manifest,
+    selected_features: &[String],
     visited: &mut BTreeSet<String>,
     dependencies: &mut Vec<NativeRustDependency>,
 ) -> Result<(), String> {
@@ -70,7 +75,11 @@ fn collect_package_native_rust_dependencies(
     if !visited.insert(canonical) {
         return Ok(());
     }
-    dependencies.extend(package_own_native_rust_dependencies(package_dir, manifest)?);
+    dependencies.extend(package_own_native_rust_dependencies(
+        package_dir,
+        manifest,
+        selected_features,
+    )?);
     for (name, value) in &manifest.dependencies {
         let spec = package_dependency_spec(name, value);
         let Some(path) = &spec.path else {
@@ -87,6 +96,7 @@ fn collect_package_native_rust_dependencies(
         collect_package_native_rust_dependencies(
             &dependency_dir,
             &dependency_package.manifest,
+            &selected_features.selected,
             visited,
             dependencies,
         )?;
@@ -97,6 +107,7 @@ fn collect_package_native_rust_dependencies(
 fn package_own_native_rust_dependencies(
     package_dir: &Path,
     manifest: &Manifest,
+    selected_features: &[String],
 ) -> Result<Vec<NativeRustDependency>, String> {
     let Some(native) = manifest
         .native
@@ -118,12 +129,15 @@ fn package_own_native_rust_dependencies(
         })?;
     let native_path = native.path.as_deref().unwrap_or("native/rust");
     let bindings = package_native_bindings(package_dir)?;
+    let cargo_features =
+        selected_native_cargo_features_for_package_features(native, selected_features);
     Ok(vec![NativeRustDependency {
         crate_name: crate_name.to_string(),
         path: absolute_package_path(package_dir)
             .join(native_path)
             .display()
             .to_string(),
+        cargo_features,
         bindings,
     }])
 }
@@ -131,19 +145,26 @@ fn package_own_native_rust_dependencies(
 fn dedup_native_rust_dependencies(
     dependencies: Vec<NativeRustDependency>,
 ) -> Result<Vec<NativeRustDependency>, String> {
-    let mut by_crate = BTreeMap::new();
-    let mut deduped = Vec::new();
-    for dependency in dependencies {
-        if let Some(existing_path) = by_crate.get(&dependency.crate_name) {
-            if existing_path != &dependency.path {
+    let mut by_crate: BTreeMap<String, usize> = BTreeMap::new();
+    let mut deduped: Vec<NativeRustDependency> = Vec::new();
+    for mut dependency in dependencies {
+        if let Some(existing_index) = by_crate.get(&dependency.crate_name).copied() {
+            if deduped[existing_index].path != dependency.path {
                 return Err(format!(
                     "native Rust dependency crate `{}` is provided by both `{}` and `{}`.",
-                    dependency.crate_name, existing_path, dependency.path
+                    dependency.crate_name, deduped[existing_index].path, dependency.path
                 ));
             }
+            deduped[existing_index]
+                .cargo_features
+                .append(&mut dependency.cargo_features);
+            deduped[existing_index].cargo_features.sort();
+            deduped[existing_index].cargo_features.dedup();
             continue;
         }
-        by_crate.insert(dependency.crate_name.clone(), dependency.path.clone());
+        dependency.cargo_features.sort();
+        dependency.cargo_features.dedup();
+        by_crate.insert(dependency.crate_name.clone(), deduped.len());
         deduped.push(dependency);
     }
     Ok(deduped)
@@ -474,6 +495,189 @@ pub(super) fn check_package_native_rust(
         risk,
         reasons,
     }))
+}
+
+pub(super) fn package_native_rust_review(
+    package_dir: &Path,
+    manifest: &Manifest,
+    sources: &[PackageSource],
+    native: &ManifestNativeRust,
+) -> PackageNativeRustReview {
+    let path = native
+        .path
+        .clone()
+        .unwrap_or_else(|| "native/rust".to_string());
+    let native_root = package_dir.join(&path);
+    let cargo_toml = native_root.join("Cargo.toml");
+    let cargo_source = fs::read_to_string(&cargo_toml).unwrap_or_default();
+    let cargo_features = selected_native_cargo_features(manifest, native);
+    let scan = scan_native_rust_semantics(&native_root, &cargo_source);
+    let author_parallel = package_declares_parallel_native_api(sources);
+    let backend = scan.native_parallel_backends.first().cloned();
+    let mut risk_reasons = Vec::new();
+    if author_parallel {
+        risk_reasons.push("native API declares parallel worker execution".to_string());
+    }
+    if let Some(backend) = &backend {
+        risk_reasons.push(format!("native parallel backend `{backend}` detected"));
+    }
+    if !cargo_features.is_empty() {
+        risk_reasons.push("native Cargo features selected".to_string());
+    }
+
+    PackageNativeRustReview {
+        path,
+        crate_name: native.crate_name.clone(),
+        build_scripts: native_effective_build_policy(manifest, native.effective_build_scripts()),
+        proc_macros: native_effective_build_policy(manifest, native.effective_proc_macros()),
+        unsafe_policy: native.effective_unsafe_policy().map(str::to_string),
+        native_links_policy: native.effective_native_links().map(str::to_string),
+        ffi_policy: native.effective_ffi().map(str::to_string),
+        links: native.links.clone(),
+        cargo_features,
+        semantic: PackageNativeRustSemanticReview {
+            author_declaration: PackageNativeRustAuthorDeclaration {
+                worker_thread_parallelism: author_parallel,
+                native_parallel_backend: backend,
+                risk_reasons,
+            },
+            source_scan_best_effort: scan,
+        },
+    }
+}
+
+fn package_declares_parallel_native_api(sources: &[PackageSource]) -> bool {
+    collect_package_function_contracts(sources, PackageReviewFileKind::Interface)
+        .values()
+        .any(|contract| {
+            contract.effects.iter().any(|effect| effect == "native")
+                && contract.effects.iter().any(|effect| effect == "parallel")
+        })
+}
+
+fn selected_native_cargo_features(manifest: &Manifest, native: &ManifestNativeRust) -> Vec<String> {
+    let selected_features = selected_root_package_features(manifest);
+    selected_native_cargo_features_for_package_features(native, &selected_features)
+}
+
+fn selected_native_cargo_features_for_package_features(
+    native: &ManifestNativeRust,
+    selected_features: &[String],
+) -> Vec<String> {
+    let mut features = native.cargo_features.clone();
+    for package_feature in selected_features {
+        if let Some(mapping) = native.feature_map.get(package_feature.as_str()) {
+            features.extend(mapping.cargo_features.iter().cloned());
+        }
+    }
+    features.sort();
+    features.dedup();
+    features
+}
+
+fn scan_native_rust_semantics(
+    native_root: &Path,
+    cargo_source: &str,
+) -> PackageNativeRustSourceScan {
+    let mut files = Vec::new();
+    if native_root.exists() {
+        let _ = super::collect_regular_files(native_root, &mut files);
+    }
+    let mut scan = NativeSemanticScanAccumulator {
+        native_parallel_backends: native_parallel_backends_from_cargo(cargo_source),
+        build_script_present: files
+            .iter()
+            .any(|file| file.file_name().and_then(|name| name.to_str()) == Some("build.rs")),
+        ..NativeSemanticScanAccumulator::default()
+    };
+    for file in files {
+        let Ok(source) = fs::read_to_string(&file) else {
+            continue;
+        };
+        scan_source_semantics(&source, &mut scan);
+    }
+    scan.native_parallel_backends.sort();
+    scan.native_parallel_backends.dedup();
+    let worker_thread_parallelism_detected = !scan.native_parallel_backends.is_empty()
+        || scan.thread_detected
+        || scan.rayon_usage_detected;
+    PackageNativeRustSourceScan {
+        tool: "rss-native-source-scan".to_string(),
+        selected_graph: "package-native-rust".to_string(),
+        worker_thread_parallelism_detected,
+        native_parallel_backends: scan.native_parallel_backends,
+        unsafe_detected: scan.unsafe_detected,
+        ffi_detected: scan.ffi_detected,
+        filesystem_detected: scan.filesystem_detected,
+        network_detected: scan.network_detected,
+        build_script_present: scan.build_script_present,
+    }
+}
+
+#[derive(Default)]
+struct NativeSemanticScanAccumulator {
+    native_parallel_backends: Vec<String>,
+    rayon_usage_detected: bool,
+    thread_detected: bool,
+    unsafe_detected: bool,
+    ffi_detected: bool,
+    filesystem_detected: bool,
+    network_detected: bool,
+    build_script_present: bool,
+}
+
+fn native_parallel_backends_from_cargo(cargo_source: &str) -> Vec<String> {
+    let Ok(value) = cargo_source.parse::<toml::Value>() else {
+        return Vec::new();
+    };
+    let mut backends = Vec::new();
+    for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
+        let Some(dependencies) = value.get(section).and_then(toml::Value::as_table) else {
+            continue;
+        };
+        if dependencies.contains_key("rayon") {
+            backends.push("rayon".to_string());
+        }
+    }
+    backends
+}
+
+fn scan_source_semantics(source: &str, scan: &mut NativeSemanticScanAccumulator) {
+    let stripped = source_without_rust_comments(source);
+    if stripped.contains("rayon::") || stripped.contains("use rayon") {
+        scan.rayon_usage_detected = true;
+        scan.native_parallel_backends.push("rayon".to_string());
+    }
+    if stripped.contains("std::thread")
+        || stripped.contains("thread::spawn")
+        || stripped.contains(".spawn(")
+    {
+        scan.thread_detected = true;
+    }
+    if source_contains_rust_unsafe_keyword(&stripped) {
+        scan.unsafe_detected = true;
+    }
+    if stripped.contains("extern \"C\"") || stripped.contains("extern \"system\"") {
+        scan.ffi_detected = true;
+    }
+    if stripped.contains("std::fs") || stripped.contains("fs::") || stripped.contains("File::") {
+        scan.filesystem_detected = true;
+    }
+    let lower = stripped.to_ascii_lowercase();
+    if [
+        "reqwest",
+        "ureq",
+        "curl",
+        "tcpstream",
+        "udpsocket",
+        "http://",
+        "https://",
+    ]
+    .iter()
+    .any(|pattern| lower.contains(pattern))
+    {
+        scan.network_detected = true;
+    }
 }
 
 #[derive(Debug, Default)]
@@ -808,6 +1012,6 @@ pub(super) fn manifest_native_unsafe_boundary(manifest: &Manifest) -> bool {
         .native
         .as_ref()
         .and_then(|native| native.rust.as_ref())
-        .and_then(|native| native.unsafe_policy.as_deref())
+        .and_then(|native| native.effective_unsafe_policy())
         .is_some_and(|policy| policy != "forbid")
 }

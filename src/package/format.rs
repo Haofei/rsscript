@@ -55,7 +55,7 @@ pub fn format_package_review_human(review: &PackageReview) -> String {
         package_risk_label(review.risk)
     ));
     output.push_str(&format!(
-        "summary: {} interface files; {} source files; {} dependencies; {} package features; {} public types; {} public functions; {} public APIs; {} mutating APIs; {} retaining APIs; {} resource APIs; {} fresh-returning APIs; {} native APIs; {} unsafe APIs; {} unknown APIs; {} diagnostics ({} errors)\n",
+        "summary: {} interface files; {} source files; {} dependencies; {} package features; {} public types; {} public functions; {} public APIs; {} mutating APIs; {} retaining APIs; {} resource APIs; {} fresh-returning APIs; {} native APIs; {} parallel APIs; {} unsafe APIs; {} unknown APIs; {} diagnostics ({} errors)\n",
         review.summary.interface_files,
         review.summary.source_files,
         review.summary.dependencies,
@@ -68,6 +68,7 @@ pub fn format_package_review_human(review: &PackageReview) -> String {
         review.summary.resource_apis,
         review.summary.fresh_returning_apis,
         review.summary.native_apis,
+        review.summary.parallel_apis,
         review.summary.unsafe_apis,
         review.summary.unknown_apis,
         review.summary.diagnostics,
@@ -90,6 +91,21 @@ pub fn format_package_review_human(review: &PackageReview) -> String {
         if let Some(crate_name) = &native.crate_name {
             output.push_str(&format!(" crate {crate_name}"));
         }
+        if !native
+            .semantic
+            .source_scan_best_effort
+            .native_parallel_backends
+            .is_empty()
+        {
+            output.push_str(&format!(
+                " parallel_backend {}",
+                native
+                    .semantic
+                    .source_scan_best_effort
+                    .native_parallel_backends
+                    .join(",")
+            ));
+        }
         output.push('\n');
     }
     output.push_str(&format_package_review_exports_human(&review.exports));
@@ -107,7 +123,7 @@ pub fn format_package_metadata_human(metadata: &PackageMetadataReport) -> String
     ));
     output.push_str(&format!("metadata path: {}\n", metadata.metadata_path));
     output.push_str(&format!(
-        "summary: {} interface files; {} source files; {} public types; {} public functions; {} public APIs; {} mutating APIs; {} retaining APIs; {} resource APIs; {} fresh-returning APIs; {} native APIs; {} unsafe APIs; {} unknown APIs; {} diagnostics ({} errors)\n",
+        "summary: {} interface files; {} source files; {} public types; {} public functions; {} public APIs; {} mutating APIs; {} retaining APIs; {} resource APIs; {} fresh-returning APIs; {} native APIs; {} parallel APIs; {} unsafe APIs; {} unknown APIs; {} diagnostics ({} errors)\n",
         metadata.metadata.summary.interface_files,
         metadata.metadata.summary.source_files,
         metadata.metadata.summary.public_types,
@@ -118,6 +134,7 @@ pub fn format_package_metadata_human(metadata: &PackageMetadataReport) -> String
         metadata.metadata.summary.resource_apis,
         metadata.metadata.summary.fresh_returning_apis,
         metadata.metadata.summary.native_apis,
+        metadata.metadata.summary.parallel_apis,
         metadata.metadata.summary.unsafe_apis,
         metadata.metadata.summary.unknown_apis,
         metadata.metadata.summary.diagnostics,
@@ -206,7 +223,7 @@ pub fn format_package_check_human(check: &PackageCheck) -> String {
         package_risk_label(check.risk)
     ));
     output.push_str(&format!(
-        "summary: {} interface files; {} source files; {} dependencies; {} package features; {} public types; {} public functions; {} public APIs; {} mutating APIs; {} retaining APIs; {} resource APIs; {} fresh-returning APIs; {} native APIs; {} unsafe APIs; {} unknown APIs; {} diagnostics ({} errors)\n",
+        "summary: {} interface files; {} source files; {} dependencies; {} package features; {} public types; {} public functions; {} public APIs; {} mutating APIs; {} retaining APIs; {} resource APIs; {} fresh-returning APIs; {} native APIs; {} parallel APIs; {} unsafe APIs; {} unknown APIs; {} diagnostics ({} errors)\n",
         check.summary.interface_files,
         check.summary.source_files,
         check.summary.dependencies,
@@ -219,6 +236,7 @@ pub fn format_package_check_human(check: &PackageCheck) -> String {
         check.summary.resource_apis,
         check.summary.fresh_returning_apis,
         check.summary.native_apis,
+        check.summary.parallel_apis,
         check.summary.unsafe_apis,
         check.summary.unknown_apis,
         check.summary.diagnostics,

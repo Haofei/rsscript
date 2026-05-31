@@ -39,6 +39,7 @@ struct PackageReviewFacts {
     resource_apis: Int
     fresh_apis: Int
     native_apis: Int
+    parallel_apis: Int
     unsafe_apis: Int
     unknown_apis: Int
 }
@@ -507,6 +508,9 @@ fn package_review_json(facts: read PackageReviewFacts) -> fresh String {
     StringBuilder.push(builder: mut builder, value: read ",\n  \"native_apis\": ")
     let native = String.from_int(value: facts.native_apis)
     StringBuilder.push(builder: mut builder, value: read native)
+    StringBuilder.push(builder: mut builder, value: read ",\n  \"parallel_apis\": ")
+    let parallel = String.from_int(value: facts.parallel_apis)
+    StringBuilder.push(builder: mut builder, value: read parallel)
     StringBuilder.push(builder: mut builder, value: read ",\n  \"unsafe_apis\": ")
     let unsafe_count = String.from_int(value: facts.unsafe_apis)
     StringBuilder.push(builder: mut builder, value: read unsafe_count)
@@ -528,6 +532,7 @@ fn empty_package_review_facts(package_name: read String) -> fresh PackageReviewF
         resource_apis: 0,
         fresh_apis: 0,
         native_apis: 0,
+        parallel_apis: 0,
         unsafe_apis: 0,
         unknown_apis: 0,
     )
@@ -543,6 +548,7 @@ fn copy_package_review_facts(facts: read PackageReviewFacts) -> fresh PackageRev
         resource_apis: facts.resource_apis,
         fresh_apis: facts.fresh_apis,
         native_apis: facts.native_apis,
+        parallel_apis: facts.parallel_apis,
         unsafe_apis: facts.unsafe_apis,
         unknown_apis: facts.unknown_apis,
     )
@@ -562,6 +568,7 @@ fn add_review_line(facts: read PackageReviewFacts, line: read String) -> fresh P
     let has_resource = has_resource_pool || has_resource_name
     let has_fresh = String.contains(value: read trimmed, needle: read "fresh ")
     let has_native = is_native_fn || String.contains(value: read trimmed, needle: read "effects(native")
+    let has_parallel = String.contains(value: read trimmed, needle: read "parallel")
     let has_unsafe = String.contains(value: read trimmed, needle: read "unsafe")
     let has_unknown = String.contains(value: read trimmed, needle: read "unknown")
 
@@ -574,6 +581,7 @@ fn add_review_line(facts: read PackageReviewFacts, line: read String) -> fresh P
         resource_apis: facts.resource_apis + bool_count(value: is_api && has_resource),
         fresh_apis: facts.fresh_apis + bool_count(value: is_api && has_fresh),
         native_apis: facts.native_apis + bool_count(value: is_api && has_native),
+        parallel_apis: facts.parallel_apis + bool_count(value: is_api && has_parallel),
         unsafe_apis: facts.unsafe_apis + bool_count(value: is_api && has_unsafe),
         unknown_apis: facts.unknown_apis + bool_count(value: is_api && has_unknown),
     )

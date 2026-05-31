@@ -6,7 +6,8 @@ args = ["pkg", "check", "--json", "rss/rayon"]
 contains_all = [
   "\"ok\":true",
   "\"name\":\"rss-rayon\"",
-  "\"native_apis\":1",
+  "\"native_apis\":4",
+  "\"parallel_apis\":4",
   "\"cargo_package_name\":\"rss_rayon_native\"",
 ]
 

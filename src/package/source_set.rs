@@ -23,6 +23,8 @@ pub(super) struct Manifest {
     pub(super) review: Option<ManifestReview>,
     #[serde(default)]
     pub(super) native: Option<ManifestNative>,
+    #[serde(default)]
+    pub(super) implements: BTreeMap<String, ManifestProviderImplementation>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,6 +58,8 @@ pub(super) struct ManifestReview {
     #[serde(default)]
     pub(super) policy: ManifestReviewPolicy,
     #[serde(default)]
+    pub(super) feature_policy: ManifestReviewFeaturePolicy,
+    #[serde(default)]
     pub(super) expect: ManifestReviewExpect,
 }
 
@@ -69,6 +73,13 @@ pub(super) struct ManifestReviewPolicy {
     pub(super) max_nested_type_depth: Option<usize>,
     pub(super) native_api_risk: Option<String>,
     pub(super) build_execution_default: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ManifestReviewFeaturePolicy {
+    #[serde(default)]
+    pub(super) deny: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -90,12 +101,72 @@ pub(super) struct ManifestNativeRust {
     pub(super) path: Option<String>,
     #[serde(rename = "crate")]
     pub(super) crate_name: Option<String>,
+    #[serde(default)]
+    pub(super) cargo_features: Vec<String>,
+    #[serde(default)]
+    pub(super) feature_map: BTreeMap<String, ManifestNativeRustFeature>,
+    #[serde(default)]
+    pub(super) policy: ManifestNativeRustPolicy,
     pub(super) build_scripts: Option<String>,
     pub(super) proc_macros: Option<String>,
     #[serde(rename = "unsafe")]
     pub(super) unsafe_policy: Option<String>,
     #[serde(default)]
     pub(super) links: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct ManifestNativeRustFeature {
+    #[serde(default)]
+    pub(super) cargo_features: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct ManifestNativeRustPolicy {
+    pub(super) build_scripts: Option<String>,
+    pub(super) proc_macros: Option<String>,
+    pub(super) native_links: Option<String>,
+    pub(super) ffi: Option<String>,
+    pub(super) rss_unsafe_apis: Option<String>,
+    pub(super) wrapper_unsafe_blocks: Option<String>,
+    pub(super) transitive_unsafe_blocks: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct ManifestProviderImplementation {
+    pub(super) version: Option<String>,
+    #[serde(default)]
+    pub(super) interface_features: Vec<String>,
+    pub(super) interface_effective_hash: Option<String>,
+}
+
+impl ManifestNativeRust {
+    pub(super) fn effective_build_scripts(&self) -> Option<&str> {
+        self.build_scripts
+            .as_deref()
+            .or(self.policy.build_scripts.as_deref())
+    }
+
+    pub(super) fn effective_proc_macros(&self) -> Option<&str> {
+        self.proc_macros
+            .as_deref()
+            .or(self.policy.proc_macros.as_deref())
+    }
+
+    pub(super) fn effective_unsafe_policy(&self) -> Option<&str> {
+        self.unsafe_policy
+            .as_deref()
+            .or(self.policy.wrapper_unsafe_blocks.as_deref())
+            .or(self.policy.rss_unsafe_apis.as_deref())
+    }
+
+    pub(super) fn effective_native_links(&self) -> Option<&str> {
+        self.policy.native_links.as_deref()
+    }
+
+    pub(super) fn effective_ffi(&self) -> Option<&str> {
+        self.policy.ffi.as_deref()
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -828,6 +828,7 @@ impl Analyzer<'_> {
                     || effect_name == "pure"
                     || effect_name == "unsafe"
                     || effect_name == "native"
+                    || effect_name == "parallel"
                     || matches!(effect, EffectDecl::Retains(_));
                 if !valid {
                     self.diagnostics.push(Diagnostic::warning(

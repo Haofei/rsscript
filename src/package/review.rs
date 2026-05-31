@@ -4,7 +4,7 @@ use std::path::Path;
 use crate::analyzer::{
     analyze_source_with_interfaces, analyze_sources_with_interfaces, core_interfaces,
 };
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, code};
 use crate::lint::lint_source;
 use crate::review::{ReviewMap, ReviewMapClassification, review_map_sources};
 use crate::syntax::ast::TypeKind;
@@ -16,14 +16,15 @@ use super::contract::{
     package_review_exports,
 };
 use super::native::{
-    native_binding_interface_sources, native_effective_build_policy,
-    package_native_binding_diagnostics, package_native_bindings,
+    native_binding_interface_sources, package_native_binding_diagnostics, package_native_bindings,
+    package_native_rust_review,
 };
 use super::source_set::{Manifest, PackageSource, load_package};
 use super::{
-    PackageNativeRustReview, PackageReview, PackageReviewFile, PackageReviewFileKind,
-    PackageReviewSummary, PackageRisk, collect_dependency_interface_sources, dedup_diagnostics,
-    package_feature_may_change_boundary_risk, package_feature_resolution_diagnostics,
+    PackageNativeRustReview, PackageProviderImplementation, PackageReview, PackageReviewFile,
+    PackageReviewFileKind, PackageReviewSummary, PackageRisk, collect_dependency_interface_sources,
+    dedup_diagnostics, package_feature_may_change_boundary_risk,
+    package_feature_resolution_diagnostics,
 };
 
 pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
@@ -73,6 +74,10 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         package_dir,
         manifest,
     )?);
+    diagnostics.extend(package_provider_implementation_diagnostics(
+        package_dir,
+        manifest,
+    ));
     diagnostics.extend(interface_frontend_diagnostics);
     diagnostics.extend(analyze_sources_with_interfaces(
         &source_refs,
@@ -105,17 +110,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         .as_ref()
         .and_then(|native| native.rust.as_ref())
         .filter(|native| native.enabled)
-        .map(|native| PackageNativeRustReview {
-            path: native
-                .path
-                .clone()
-                .unwrap_or_else(|| "native/rust".to_string()),
-            crate_name: native.crate_name.clone(),
-            build_scripts: native_effective_build_policy(manifest, native.build_scripts.as_deref()),
-            proc_macros: native_effective_build_policy(manifest, native.proc_macros.as_deref()),
-            unsafe_policy: native.unsafe_policy.clone(),
-            links: native.links.clone(),
-        });
+        .map(|native| package_native_rust_review(package_dir, manifest, sources, native));
 
     let mut reasons = Vec::new();
     collect_manifest_review_reasons(manifest, &mut reasons);
@@ -172,6 +167,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         resource_apis: api_summary.resource_apis,
         fresh_returning_apis: api_summary.fresh_returning_apis,
         native_apis: api_summary.native_apis,
+        parallel_apis: api_summary.parallel_apis,
         unsafe_apis: api_summary.unsafe_apis,
         unknown_apis: api_summary.unknown_apis + interface_diagnostic_exports.len(),
     };
@@ -183,6 +179,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         })
         .collect();
     let features = manifest.features.keys().cloned().collect::<Vec<_>>();
+    let implements = package_provider_implementations(manifest);
     let mut exports = package_review_exports(sources, &review_map);
     exports.extend(interface_diagnostic_exports);
     exports.sort_by(|left, right| {
@@ -197,6 +194,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         risk,
         reasons,
         features,
+        implements,
         summary,
         files,
         exports,
@@ -211,6 +209,74 @@ fn package_lint_diagnostics(sources: &[PackageSource]) -> Vec<Diagnostic> {
         .iter()
         .flat_map(|source| lint_source(&source.path, &source.contents))
         .collect()
+}
+
+fn package_provider_implementations(manifest: &Manifest) -> Vec<PackageProviderImplementation> {
+    manifest
+        .implements
+        .iter()
+        .map(
+            |(interface_package, implementation)| PackageProviderImplementation {
+                interface_package: interface_package.clone(),
+                version: implementation.version.clone(),
+                interface_features: implementation.interface_features.clone(),
+                interface_effective_hash: implementation.interface_effective_hash.clone(),
+            },
+        )
+        .collect()
+}
+
+fn package_provider_implementation_diagnostics(
+    package_dir: &Path,
+    manifest: &Manifest,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for (interface_package, implementation) in &manifest.implements {
+        if implementation.version.as_deref().is_none_or(str::is_empty) {
+            diagnostics.push(package_provider_implementation_diagnostic(
+                package_dir,
+                interface_package,
+                "version",
+                "provider implementation is missing `version`.",
+                "`version` must declare the interface package version requirement this provider implements.",
+            ));
+        }
+        if implementation
+            .interface_effective_hash
+            .as_deref()
+            .is_none_or(str::is_empty)
+        {
+            diagnostics.push(package_provider_implementation_diagnostic(
+                package_dir,
+                interface_package,
+                "interface_effective_hash",
+                "provider implementation is missing `interface_effective_hash`.",
+                "`interface_effective_hash` must bind the provider to one normalized interface contract.",
+            ));
+        }
+    }
+    diagnostics
+}
+
+fn package_provider_implementation_diagnostic(
+    package_dir: &Path,
+    interface_package: &str,
+    key: &str,
+    summary: impl Into<String>,
+    cause: impl Into<String>,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::PACKAGE_PROVIDER_DECLARATION,
+        summary,
+        super::package_manifest_key_span(package_dir, interface_package),
+        key,
+    )
+    .with_cause(cause)
+    .with_fix(
+        "fix_provider_declaration",
+        format!("Add `[implements.\"{interface_package}\"].{key}` with the reviewed value."),
+        "manual",
+    )
 }
 
 fn collect_manifest_review_reasons(manifest: &Manifest, reasons: &mut Vec<String>) {
@@ -260,8 +326,43 @@ fn collect_native_reasons(native: Option<&PackageNativeRustReview>, reasons: &mu
     {
         reasons.push("native Rust unsafe policy requires review".to_string());
     }
-    if !native.links.is_empty() {
-        reasons.push("native Rust links external libraries".to_string());
+    if !native.links.is_empty()
+        && native
+            .native_links_policy
+            .as_deref()
+            .is_none_or(|policy| policy != "allow")
+    {
+        if native.native_links_policy.as_deref() == Some("forbid") {
+            reasons.push("native Rust links external libraries forbidden".to_string());
+        } else {
+            reasons.push("native Rust links external libraries".to_string());
+        }
+    }
+    if native.semantic.source_scan_best_effort.ffi_detected
+        && native
+            .ffi_policy
+            .as_deref()
+            .is_none_or(|policy| policy != "allow")
+    {
+        if native.ffi_policy.as_deref() == Some("forbid") {
+            reasons.push("native Rust FFI usage forbidden".to_string());
+        } else {
+            reasons.push("native Rust FFI usage requires review".to_string());
+        }
+    }
+    if native.semantic.author_declaration.worker_thread_parallelism {
+        reasons.push("native Rust parallel worker execution requires review".to_string());
+    }
+    if !native
+        .semantic
+        .source_scan_best_effort
+        .native_parallel_backends
+        .is_empty()
+    {
+        reasons.push("native Rust parallel backend detected".to_string());
+    }
+    if !native.cargo_features.is_empty() {
+        reasons.push("native Rust Cargo features require review".to_string());
     }
 }
 
@@ -284,6 +385,7 @@ struct PackageApiSummary {
     resource_apis: usize,
     fresh_returning_apis: usize,
     native_apis: usize,
+    parallel_apis: usize,
     unsafe_apis: usize,
     unknown_apis: usize,
 }
@@ -355,6 +457,15 @@ fn package_api_effect_summary(
                     .effects
                     .iter()
                     .any(|effect| effect.as_str() == "native")
+            })
+            .count(),
+        parallel_apis: contracts
+            .values()
+            .filter(|contract| {
+                contract
+                    .effects
+                    .iter()
+                    .any(|effect| effect.as_str() == "parallel")
             })
             .count(),
         unsafe_apis: contracts
@@ -429,7 +540,16 @@ fn package_risk(
                 .unsafe_policy
                 .as_deref()
                 .is_some_and(|policy| policy != "forbid")
-            || !native.links.is_empty())
+            || (!native.links.is_empty()
+                && native
+                    .native_links_policy
+                    .as_deref()
+                    .is_none_or(|policy| policy != "allow"))
+            || (native.semantic.source_scan_best_effort.ffi_detected
+                && native
+                    .ffi_policy
+                    .as_deref()
+                    .is_none_or(|policy| policy != "allow")))
     {
         return PackageRisk::High;
     }

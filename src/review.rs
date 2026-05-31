@@ -501,7 +501,7 @@ fn review_map_region_draft(
     for effect in &function.effects {
         match effect {
             EffectDecl::Retains(param) => reasons.push(format!("retains `{param}`")),
-            EffectDecl::Name(name) if matches!(name.as_str(), "native" | "unsafe") => {
+            EffectDecl::Name(name) if matches!(name.as_str(), "native" | "unsafe" | "parallel") => {
                 reasons.push(format!("{name} boundary"))
             }
             EffectDecl::Name(name) if is_runtime_guarantee_boundary(name) => {
@@ -2134,6 +2134,25 @@ fn compare_function(old: &FunctionSig, new: &FunctionSig, findings: &mut Vec<Rev
                 "<none>".to_string()
             }),
             Some("native".to_string()),
+        ));
+    }
+    if !has_effect(&old.effects, "parallel") && has_effect(&new.effects, "parallel") {
+        findings.push(review_finding(
+            code::REVIEW_PARALLEL_ADDED,
+            ReviewRisk::Boundary,
+            format!("function `{}` added parallel boundary.", old.name),
+            paired_spans(
+                &old.span,
+                &new.span,
+                "old function",
+                "new parallel boundary",
+            ),
+            Some(if has_effect(&old.effects, "parallel") {
+                "parallel".to_string()
+            } else {
+                "<none>".to_string()
+            }),
+            Some("parallel".to_string()),
         ));
     }
     let old_guarantees = guarantee_effects(&old.effects);

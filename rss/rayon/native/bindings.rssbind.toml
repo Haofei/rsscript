@@ -1,2 +1,5 @@
 [bindings]
+"Rayon.sum_int" = "rss_rayon_native::sum_int"
 "Rayon.sum_squares" = "rss_rayon_native::sum_squares"
+"Rayon.count_positive_int" = "rss_rayon_native::count_positive_int"
+"Rayon.sort_int" = "rss_rayon_native::sort_int"

@@ -117,6 +117,7 @@ fn package_review_metadata_from_review(review: &PackageReview) -> PackageReviewM
         risk: review.risk,
         reasons: review.reasons.clone(),
         features: review.features.clone(),
+        implements: review.implements.clone(),
         summary: review.summary.clone(),
         files: review.files.clone(),
         exports: review.exports.clone(),

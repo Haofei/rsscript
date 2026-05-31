@@ -494,6 +494,23 @@ fn package_review_hash(review: &PackageReview) -> String {
         input.push_str(feature);
         input.push('\n');
     }
+    for implementation in &review.implements {
+        input.push_str(&implementation.interface_package);
+        input.push('\n');
+        input.push_str(implementation.version.as_deref().unwrap_or(""));
+        input.push('\n');
+        for feature in &implementation.interface_features {
+            input.push_str(feature);
+            input.push('\n');
+        }
+        input.push_str(
+            implementation
+                .interface_effective_hash
+                .as_deref()
+                .unwrap_or(""),
+        );
+        input.push('\n');
+    }
     input.push_str(&format!(
         "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}\n",
         review.summary.interface_files,
@@ -564,11 +581,43 @@ pub(super) fn package_native_hash(
     input.push('\n');
     input.push_str(native.crate_name.as_deref().unwrap_or(""));
     input.push('\n');
+    for feature in &native.cargo_features {
+        input.push_str(feature);
+        input.push('\n');
+    }
+    for (feature, mapping) in &native.feature_map {
+        input.push_str(feature);
+        input.push('\n');
+        for cargo_feature in &mapping.cargo_features {
+            input.push_str(cargo_feature);
+            input.push('\n');
+        }
+    }
     input.push_str(native.build_scripts.as_deref().unwrap_or(""));
+    input.push('\n');
+    input.push_str(native.policy.build_scripts.as_deref().unwrap_or(""));
     input.push('\n');
     input.push_str(native.proc_macros.as_deref().unwrap_or(""));
     input.push('\n');
+    input.push_str(native.policy.proc_macros.as_deref().unwrap_or(""));
+    input.push('\n');
     input.push_str(native.unsafe_policy.as_deref().unwrap_or(""));
+    input.push('\n');
+    input.push_str(native.policy.rss_unsafe_apis.as_deref().unwrap_or(""));
+    input.push('\n');
+    input.push_str(native.policy.wrapper_unsafe_blocks.as_deref().unwrap_or(""));
+    input.push('\n');
+    input.push_str(
+        native
+            .policy
+            .transitive_unsafe_blocks
+            .as_deref()
+            .unwrap_or(""),
+    );
+    input.push('\n');
+    input.push_str(native.policy.native_links.as_deref().unwrap_or(""));
+    input.push('\n');
+    input.push_str(native.policy.ffi.as_deref().unwrap_or(""));
     input.push('\n');
     for link in &native.links {
         input.push_str(link);

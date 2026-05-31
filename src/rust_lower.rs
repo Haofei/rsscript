@@ -28,6 +28,7 @@ pub struct GeneratedRustPackage {
 pub struct NativeRustDependency {
     pub crate_name: String,
     pub path: String,
+    pub cargo_features: Vec<String>,
     pub bindings: BTreeMap<String, String>,
 }
 
@@ -174,10 +175,24 @@ pub fn lower_sources_to_rust_package_with_options(
     let native_dependency_toml = native_dependencies
         .iter()
         .map(|dependency| {
+            let feature_toml = if dependency.cargo_features.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    ", features = [{}]",
+                    dependency
+                        .cargo_features
+                        .iter()
+                        .map(|feature| format!("\"{}\"", toml_string(feature)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
             format!(
-                "\"{}\" = {{ path = \"{}\" }}\n",
+                "\"{}\" = {{ path = \"{}\"{} }}\n",
                 toml_string(&dependency.crate_name),
-                toml_string(&dependency.path)
+                toml_string(&dependency.path),
+                feature_toml
             )
         })
         .collect::<String>();

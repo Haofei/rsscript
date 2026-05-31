@@ -474,9 +474,11 @@ fn run_generated_rust(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
     let mut cargo = Command::new("cargo");
+    cargo.arg("run").arg("--quiet");
+    if options.release {
+        cargo.arg("--release");
+    }
     cargo
-        .arg("run")
-        .arg("--quiet")
         .arg("--manifest-path")
         .arg(package_dir.join("Cargo.toml"))
         .arg("--")
@@ -668,6 +670,7 @@ struct LowerOptions<'a> {
 
 struct RunOptions<'a> {
     json: bool,
+    release: bool,
     path: Option<&'a str>,
     out_dir: Option<&'a str>,
     program_args: Vec<&'a str>,
@@ -746,6 +749,7 @@ fn parse_lower_args(args: &[String]) -> LowerOptions<'_> {
 
 fn parse_run_args(args: &[String]) -> RunOptions<'_> {
     let mut json = false;
+    let mut release = false;
     let mut path = None;
     let mut out_dir = None;
     let mut program_args = Vec::new();
@@ -757,6 +761,8 @@ fn parse_run_args(args: &[String]) -> RunOptions<'_> {
             break;
         } else if arg == "--json" {
             json = true;
+        } else if arg == "--release" {
+            release = true;
         } else if arg == "--out-dir" {
             index += 1;
             out_dir = args.get(index).map(String::as_str);
@@ -770,6 +776,7 @@ fn parse_run_args(args: &[String]) -> RunOptions<'_> {
 
     RunOptions {
         json,
+        release,
         path,
         out_dir,
         program_args,
@@ -876,6 +883,57 @@ fn ramdisk_root_dir() -> Option<PathBuf> {
     env::var_os("RSSCRIPT_RAMDISK_PATH")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
+        .or_else(default_ramdisk_root_dir)
+}
+
+#[cfg(target_os = "macos")]
+fn default_ramdisk_root_dir() -> Option<PathBuf> {
+    let path = PathBuf::from("/Volumes/RSScriptRAMDisk");
+    if path.is_dir() {
+        return Some(path);
+    }
+
+    let gib = env::var("RSSCRIPT_RAMDISK_GIB")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(8);
+    let sectors = gib
+        .saturating_mul(1024)
+        .saturating_mul(1024)
+        .saturating_mul(1024)
+        / 512;
+    let attach = Command::new("hdiutil")
+        .arg("attach")
+        .arg("-nomount")
+        .arg(format!("ram://{sectors}"))
+        .output()
+        .ok()?;
+    if !attach.status.success() {
+        return None;
+    }
+    let device = String::from_utf8_lossy(&attach.stdout).trim().to_string();
+    if device.is_empty() {
+        return None;
+    }
+
+    let erase = Command::new("diskutil")
+        .arg("erasevolume")
+        .arg("HFS+")
+        .arg("RSScriptRAMDisk")
+        .arg(device)
+        .output()
+        .ok()?;
+    if !erase.status.success() || !path.is_dir() {
+        return None;
+    }
+
+    Some(path)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn default_ramdisk_root_dir() -> Option<PathBuf> {
+    None
 }
 
 fn cleanup_temp_dir(path: &Path) {
@@ -1423,9 +1481,9 @@ fn print_usage() {
     eprintln!("  rsscript fmt <file.rss>");
     eprintln!("  rsscript lower --rust <file.rss>");
     eprintln!("  rsscript lower --rust <file.rss> --out-dir <directory>");
-    eprintln!("  rsscript run [--json] <file-or-package-directory> [-- <args>...]");
+    eprintln!("  rsscript run [--json] [--release] <file-or-package-directory> [-- <args>...]");
     eprintln!(
-        "  rsscript run [--json] <file-or-package-directory> --out-dir <directory> [-- <args>...]"
+        "  rsscript run [--json] [--release] <file-or-package-directory> --out-dir <directory> [-- <args>...]"
     );
     eprintln!("  rsscript remap-rustc [--json] <rsscript-source-map.json> <rustc-json-lines>");
     eprintln!("  rsscript verify-rust [--json] <file-or-package-directory>");
@@ -1445,4 +1503,40 @@ fn print_usage() {
     eprintln!("  rsscript pkg vendor [--dry-run] [--json] [package-directory]");
     eprintln!("  rsscript pkg metadata [--dry-run] [--json] [package-directory]");
     eprintln!("  rsscript pkg diff [--json] <old-package-directory> <new-package-directory>");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_run_args;
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn parse_run_args_accepts_release_before_path() {
+        let values = args(&[
+            "--json",
+            "--release",
+            "rss/rayon/tests/sort-speed",
+            "--",
+            "input",
+        ]);
+        let options = parse_run_args(&values);
+
+        assert!(options.json);
+        assert!(options.release);
+        assert_eq!(options.path, Some("rss/rayon/tests/sort-speed"));
+        assert_eq!(options.program_args, vec!["input"]);
+    }
+
+    #[test]
+    fn parse_run_args_treats_release_after_separator_as_program_arg() {
+        let values = args(&["rss/rayon/tests/sort-speed", "--", "--release"]);
+        let options = parse_run_args(&values);
+
+        assert!(!options.release);
+        assert_eq!(options.path, Some("rss/rayon/tests/sort-speed"));
+        assert_eq!(options.program_args, vec!["--release"]);
+    }
 }

@@ -1542,10 +1542,29 @@ Standard effects:
 | `no_block` | function does not call known blocking APIs |
 | `pure` | no observable external side effects and no reachable managed mutation through known RSScript calls |
 | `native` | function crosses a native/Rust implementation boundary |
+| `parallel` | function may execute work concurrently on worker threads |
 | `unsafe` | function exposes behavior requiring unsafe review |
 | `retains(x)` | function may retain a managed value derived from parameter `x` after returning |
 
 Guarantees are checked only over RSScript-known constructs and trusted signature metadata. They are not whole-program proofs over arbitrary native or runtime internals.
+
+`parallel` is a review-visible boundary effect, not a safety guarantee. It means
+the function may use worker threads or a native parallel backend during the call.
+RSScript managed handles, runtime read/write guards, resources, and ordinary
+local values must not be moved into worker threads implicitly. A native
+parallel facade may copy or snapshot approved scalar data into backend-owned
+storage, run the parallel operation, then write results back after the worker
+work has joined. The backend's thread pool, work-stealing model, `Send`/`Sync`
+rules, trait extension APIs, and lifetime machinery are not part of the RSScript
+surface.
+
+The only v0.5 admitted parallel surface is fixed native facade functions whose
+contracts mark both `native` and `parallel`, for example numeric reductions or
+sorts over `List<Int>`. User-provided parallel closures, parallel iterators,
+structured joins/scopes, thread-pool configuration, and partitioned mutable
+views are future features. When those are admitted, they must use RSScript-native
+contracts such as a `parallel Fn` closure kind with explicit capture and effect
+rules; they must not expose Rust's Rayon traits or `Send`/`Sync` vocabulary.
 
 `pure` is call-time observational purity, not Haskell-style referential
 transparency over mutable identity and not a memoization guarantee. It means the
@@ -2912,6 +2931,8 @@ part of the specification contract: implementations must not present a
 | Weak field target kind and explicit upgrade requirement | static | frontend checker |
 | Managed alias conflicts not visible from source roots | dynamic | runtime managed-access diagnostics |
 | `no_panic`, `noalloc`, `no_block`, and `pure` over RSScript-known calls | static over known constructs; review-only over native/runtime internals | frontend checker + trusted signatures |
+| Fixed native parallel facades marked `effects(native, parallel)` | review-only boundary + package/native metadata | package/native metadata, trusted signatures, and audits |
+| User-provided parallel closures, parallel iterators, joins/scopes, and thread-pool configuration | unsupported | future `features: parallel` capability |
 | Native wrapper semantic behavior beyond declared `.rssi` effects | review-only | package/native metadata, audits, and policy |
 | Executable `async` bodies, `await`, and `spawn` | unsupported | frontend diagnostic before lowering |
 | Rust build scripts, proc macros, native links, and transitive native facts | package review-only unless specifically scanned or checked | package metadata and policy |

@@ -219,24 +219,46 @@ fn compare_native_rust(
         PackageRisk::Elevated,
         changes,
     );
+    let old_cargo_features = old.map(|native| feature_values_label(&native.cargo_features));
+    let new_cargo_features = new.map(|native| feature_values_label(&native.cargo_features));
+    if old_cargo_features != new_cargo_features {
+        changes.push(manifest_change(
+            "native-rust",
+            "cargo_features",
+            old_cargo_features,
+            new_cargo_features,
+            PackageRisk::Elevated,
+        ));
+    }
+    let old_feature_map = old.map(native_feature_map_label);
+    let new_feature_map = new.map(native_feature_map_label);
+    if old_feature_map != new_feature_map {
+        changes.push(manifest_change(
+            "native-rust",
+            "feature_map",
+            old_feature_map,
+            new_feature_map,
+            PackageRisk::Elevated,
+        ));
+    }
     compare_optional_native_field(
         "build_scripts",
-        old.and_then(|native| native.build_scripts.as_deref()),
-        new.and_then(|native| native.build_scripts.as_deref()),
+        old.and_then(|native| native.effective_build_scripts()),
+        new.and_then(|native| native.effective_build_scripts()),
         PackageRisk::High,
         changes,
     );
     compare_optional_native_field(
         "proc_macros",
-        old.and_then(|native| native.proc_macros.as_deref()),
-        new.and_then(|native| native.proc_macros.as_deref()),
+        old.and_then(|native| native.effective_proc_macros()),
+        new.and_then(|native| native.effective_proc_macros()),
         PackageRisk::High,
         changes,
     );
     compare_optional_native_field(
         "unsafe",
-        old.and_then(|native| native.unsafe_policy.as_deref()),
-        new.and_then(|native| native.unsafe_policy.as_deref()),
+        old.and_then(|native| native.effective_unsafe_policy()),
+        new.and_then(|native| native.effective_unsafe_policy()),
         PackageRisk::High,
         changes,
     );
@@ -251,6 +273,21 @@ fn compare_native_rust(
             PackageRisk::High,
         ));
     }
+}
+
+fn native_feature_map_label(native: &ManifestNativeRust) -> String {
+    native
+        .feature_map
+        .iter()
+        .map(|(feature, mapping)| {
+            format!(
+                "{}:{}",
+                feature,
+                feature_values_label(&mapping.cargo_features)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn compare_optional_native_field(

@@ -80,7 +80,7 @@ cargo test -q
 If that fails, run the specific failing test while editing. After the fix, return
 to the broad check instead of stacking many single-test passes.
 
-Before committing a semantic change, run the full local gate:
+Before committing a semantic change, run the static local gate:
 
 ```sh
 cargo fmt --check
@@ -89,16 +89,19 @@ cargo test -q --workspace
 cargo run --quiet --bin rss -- run rss/test-runner -- rss/test-runner/manifests/check.rsstest.toml
 cargo build --quiet --bin rss
 target/debug/rss run rss/test-runner -- rss/test-runner/manifests/lint-sources.rsstest.toml
-target/debug/rss run rss/test-runner -- rss/test-runner/manifests/run-examples.rsstest.toml
-target/debug/rss run rss/test-runner -- rss/test-runner/manifests/run-selfhost.rsstest.toml
 git diff --check
 ```
 
-For a release-like verification, use:
+For the default full development gate, use:
 
 ```sh
 cargo run --quiet --bin rss -- run rss/test-runner -- rss/test-runner/manifests/full.rsstest.toml
 ```
+
+This full manifest must stay static-first. Do not add executable examples,
+checked-in self-hosted tool runs, ignored checker tests, or any other e2e test
+back into the default development loop. Static language, lowering,
+package-review, and lint coverage carry development verification.
 
 For package-manager dogfood work, use the focused TDD gate first:
 
@@ -106,26 +109,27 @@ For package-manager dogfood work, use the focused TDD gate first:
 cargo run --quiet --bin rss -- run rss/test-runner -- rss/test-runner/manifests/package-manager-tdd.rsstest.toml
 ```
 
-This runs the package-manager-focused Rust tests, the core JSON/lowering hooks
-needed by the RSS implementation, and the executable RSScript package-manager
-e2e commands. It is the intended sub-10-second loop while iterating on
+This runs package-manager-focused static tests, the core JSON/lowering hooks
+needed by the RSS implementation, and the checked-in Rayon package wrapper
+facts. It intentionally avoids executable self-hosted package-manager sweeps.
+It is the intended sub-10-second loop while iterating on
 `rss/package-manager/main.rss`; run the full gate only before committing or when
 touching shared lowering/runtime behavior.
 
-CI runs the RSScript test-runner full manifest, which runs the full workspace
-test suite, executes every `examples/*.rss` file, and runs the checked-in
-self-hosted RSScript tools through `rss run`.
+CI runs the RSScript test-runner full manifest. It is intentionally static-first:
+it runs the full workspace test suite, generated-package compile checks, and
+RSScript lint checks without executing every example or self-hosted tool as a
+behavior test.
 
 Generated Rust package targets and temporary generated packages are disposable.
-Set `RSSCRIPT_RAMDISK_PATH` to a memory-backed workspace when running large
-local gates repeatedly. `rss` derives `rsscript-generated-target` and
-`rsscript-temp` under that root. You can still override the derived paths
-directly with `RSSCRIPT_GENERATED_TARGET_DIR` and `RSSCRIPT_TEMP_DIR`.
+Default local development uses a memory-backed workspace. On macOS, `rss`
+automatically creates or reuses `/Volumes/RSScriptRAMDisk` and derives
+`rsscript-generated-target` and `rsscript-temp` under that root. Set
+`RSSCRIPT_RAMDISK_GIB=N` to change the default macOS size.
 
-On macOS, mount a RAM disk and point `RSSCRIPT_RAMDISK_PATH` at it:
+You can still override the memory-backed root directly:
 
 ```sh
-diskutil erasevolume HFS+ RSScriptRAMDisk "$(hdiutil attach -nomount ram://16777216)"
 export RSSCRIPT_RAMDISK_PATH=/Volumes/RSScriptRAMDisk
 ```
 
@@ -154,20 +158,13 @@ Do not point these paths back at the SSD for normal development; if a test has
 file conflicts, give it an isolated ramdisk subdirectory or copy the ramdisk
 seed target, then clean the copy after the test.
 
-No individual checker integration test may exceed 10 seconds. Expensive tests
-must be split, moved out of the hot path, or restructured until they fit the
-limit. Run the duration gate when changing RSScript execution, Rust
-verification, source-map remapping, package-manager dogfood, or self-hosted
-scripts:
-
-```sh
-cargo run --quiet --bin rss -- run rss/test-runner -- rss/test-runner/manifests/slow-tests.rsstest.toml
-```
-
-The RSScript manifest runs the ignored checker e2e tests through Rust's test
-harness. To narrow the run locally, pass a filter as the second test-runner
-argument, or run the equivalent `cargo test --test checker ...` command
-directly while diagnosing.
+No e2e tests are allowed in this repository. Do not add tests that execute
+RSScript programs through `rss run`, drive `verify-rust` as an end-to-end
+compiler invocation, sweep examples as behavior tests, or run checked-in
+self-hosted scripts as acceptance tests. When behavior needs coverage, test the
+parser, analyzer, lowering, package metadata, source-map, runtime helper, or
+review function directly. Any test that exceeds 10 seconds must be deleted,
+split, or rewritten as a smaller static/unit-level check.
 
 Avoid running multiple workspace Cargo commands in parallel. Cargo's build lock
 makes that slower and noisier. Independent RSScript script checks may run in
