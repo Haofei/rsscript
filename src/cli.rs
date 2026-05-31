@@ -231,7 +231,13 @@ fn run_check(args: &[String]) -> ExitCode {
 }
 
 fn run_fmt(args: &[String]) -> ExitCode {
-    let (_, path) = parse_path_args(args);
+    let (_, path) = match parse_path_args(args) {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
     let Some(path) = path else {
         print_usage();
         return ExitCode::from(2);
@@ -597,7 +603,13 @@ fn generated_target_dir_from_env() -> Option<PathBuf> {
 }
 
 fn run_remap_rustc(args: &[String]) -> ExitCode {
-    let (json, paths) = parse_multi_path_args(args);
+    let (json, paths) = match parse_multi_path_args(args) {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
     let [source_map_path, rustc_json_path] = paths.as_slice() else {
         print_usage();
         return ExitCode::from(2);
@@ -668,34 +680,40 @@ fn parse_explain_args(args: &[String]) -> Option<&str> {
     (flag == "--explain").then_some(code.as_str())
 }
 
-fn parse_path_args(args: &[String]) -> (bool, Option<&str>) {
+fn parse_path_args(args: &[String]) -> Result<(bool, Option<&str>), String> {
     let mut json = false;
     let mut path = None;
 
     for arg in args {
         if arg == "--json" {
             json = true;
+        } else if arg.starts_with("--") {
+            return Err(format!("unknown argument `{arg}`."));
         } else if path.is_none() {
             path = Some(arg.as_str());
+        } else {
+            return Err(format!("unexpected extra path `{arg}`."));
         }
     }
 
-    (json, path)
+    Ok((json, path))
 }
 
-fn parse_multi_path_args(args: &[String]) -> (bool, Vec<&str>) {
+fn parse_multi_path_args(args: &[String]) -> Result<(bool, Vec<&str>), String> {
     let mut json = false;
     let mut paths = Vec::new();
 
     for arg in args {
         if arg == "--json" {
             json = true;
+        } else if arg.starts_with("--") {
+            return Err(format!("unknown argument `{arg}`."));
         } else {
             paths.push(arg.as_str());
         }
     }
 
-    (json, paths)
+    Ok((json, paths))
 }
 
 #[derive(Debug)]
@@ -1778,6 +1796,22 @@ pub fn Api.run(message: read String) -> String {
         let error = parse_run_args(&values).expect_err("missing out-dir should fail");
 
         assert_eq!(error, "missing value for `--out-dir`.");
+    }
+
+    #[test]
+    fn parse_path_args_rejects_extra_paths() {
+        let values = args(&["one.rss", "two.rss"]);
+        let error = super::parse_path_args(&values).expect_err("extra path should fail");
+
+        assert_eq!(error, "unexpected extra path `two.rss`.");
+    }
+
+    #[test]
+    fn parse_multi_path_args_rejects_unknown_flags() {
+        let values = args(&["--wat", "source-map.json", "rustc.json"]);
+        let error = super::parse_multi_path_args(&values).expect_err("unknown flag should fail");
+
+        assert_eq!(error, "unknown argument `--wat`.");
     }
 
     #[test]
