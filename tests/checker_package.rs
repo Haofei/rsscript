@@ -1608,7 +1608,48 @@ fn s3_iam_reir_demo_preserves_call_site_for_missing_permission() {
                 .as_deref()
                 .is_some_and(|reason| reason.contains("upload_report -> S3.put_object"))
     }));
-    assert_eq!(review.summary.await_sites, 4);
+    assert_eq!(review.summary.await_sites, 5);
+}
+
+#[test]
+fn s3_iam_reir_demo_lowers_native_s3_binding_to_runtime_tokio_pending() {
+    let demo_dir = Path::new("demos/s3-iam-reir");
+    let input = package_lowering_input(demo_dir).expect("demo package should lower");
+    let package = lower_sources_to_rust_package_with_options(
+        &input.sources,
+        &input.package.name,
+        "/workspace/rsscript/runtime",
+        &input.interfaces,
+        &input.native_dependencies,
+    )
+    .expect("demo package source should lower");
+
+    assert_eq!(input.native_dependencies.len(), 1);
+    assert_eq!(
+        input.native_dependencies[0].crate_name,
+        "rss_s3_demo_native"
+    );
+    assert!(
+        input.native_dependencies[0]
+            .bindings
+            .iter()
+            .any(|(symbol, target)| {
+                symbol == "S3.put_object" && target == "rss_s3_demo_native::put_object_start"
+            })
+    );
+    assert!(
+        package
+            .lib_rs
+            .contains("run_pending(rss_s3_demo_native::put_object_start"),
+        "async native S3 call should lower through RSScript Pending runtime:\n{}",
+        package.lib_rs
+    );
+    assert!(
+        package
+            .cargo_toml
+            .contains("\"rss_s3_demo_native\" = { path = "),
+        "generated package should depend on native S3 wrapper"
+    );
 }
 
 #[test]

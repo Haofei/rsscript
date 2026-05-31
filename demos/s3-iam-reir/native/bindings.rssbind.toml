@@ -1,0 +1,2 @@
+[bindings]
+"S3.put_object" = "rss_s3_demo_native::put_object_start"

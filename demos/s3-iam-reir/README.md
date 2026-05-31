@@ -9,6 +9,16 @@ This demo shows the core REIR loop:
 
 The RSS source does not write `effects(requires(...))`. The capability binding is declared once at the package boundary.
 `src/s3.rss` is the mock native S3 boundary. `src/upload.rss` is ordinary RSS async business code; it is not a native implementation.
+The runtime path is also executable: `rsscript-runtime` owns the Tokio-backed native async executor, while the demo native wrapper only starts HTTP IO futures.
+
+## Run the concurrent runtime demo
+
+```sh
+demos/s3-iam-reir/scripts/run-runtime-demo.sh
+```
+
+Expected result: the script starts a Tokio multi-thread mock S3 HTTP server, lowers the RSS package, and runs three `task_group` uploads concurrently through `rsscript-runtime::spawn_tokio_native`.
+The mock server log is written to `demos/s3-iam-reir/review/mock-s3-server.log`; the `in_flight` values should show overlapping requests.
 
 ## Run the failing deployment check
 
@@ -35,6 +45,7 @@ cargo run -p reir -- reconcile \
 ```
 
 Expected result: reconciliation fails because mock IAM grants `s3:GetObject`, while the RSS package requires `s3:PutObject`.
+The mock runtime grants still cover `runtime.native` and `network.client`, so the failure is isolated to the missing S3 IAM action.
 
 The missing capability evidence points back to the RSS call site, for example `src/upload.rss` inside `upload_report`, with the propagated call chain `upload_report -> S3.put_object`.
 

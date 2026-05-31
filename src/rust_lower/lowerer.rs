@@ -623,8 +623,22 @@ impl<'a> RustLowerer<'a> {
                     }
                 }
                 _ => {
-                    // All other statements lower normally
-                    self.lower_stmt(statement, out, indent);
+                    if let Stmt::Expr(expr) = statement
+                        && let Some(pending_name) =
+                            self.extract_task_group_await(expr, &async_let_names)
+                    {
+                        let executor = self
+                            .current_async_executor
+                            .clone()
+                            .unwrap_or_else(|| "__rsscript_async_executor".to_string());
+                        let try_suffix = if is_try_wrapped(expr) { "?" } else { "" };
+                        out.push_str(&format!(
+                            "{pad}{executor}.run_pending(&mut __rsscript_pending_{pending_name}){try_suffix};\n"
+                        ));
+                    } else {
+                        // All other statements lower normally
+                        self.lower_stmt(statement, out, indent);
+                    }
                 }
             }
         }

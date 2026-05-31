@@ -53,6 +53,34 @@ cat <<JSON
     },
     {
       "schema": "reir.fact.v0.1",
+      "id": "fact.mock_runtime.network_client_allowed",
+      "kind": "capability",
+      "role": "granted",
+      "subject": {
+        "kind": "service",
+        "id": "prod/report-uploader",
+        "name": "report-uploader"
+      },
+      "capability": {
+        "category": "network.client"
+      },
+      "value": true,
+      "confidence": {
+        "level": "authoritative",
+        "source": "mock_runtime"
+      },
+      "acquisition_mode": "rendered_manifest",
+      "precision": "category",
+      "evidence": [
+        {
+          "kind": "rendered_manifest_pointer",
+          "file": "infra/mock-runtime.json",
+          "source": "mock_runtime"
+        }
+      ]
+    },
+    {
+      "schema": "reir.fact.v0.1",
       "id": "fact.mock_iam.report_uploader.${mode}",
       "kind": "capability",
       "role": "granted",

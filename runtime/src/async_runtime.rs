@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -158,6 +159,15 @@ pub trait Pending<T> {
     fn poll(&mut self, cx: &mut Context<'_>) -> AsyncPoll<T>;
 }
 
+impl<T, P> Pending<T> for &mut P
+where
+    P: Pending<T> + ?Sized,
+{
+    fn poll(&mut self, cx: &mut Context<'_>) -> AsyncPoll<T> {
+        (**self).poll(cx)
+    }
+}
+
 pub fn run_pending<T>(pending: impl Pending<T>) -> T {
     Executor::new().run_pending(pending)
 }
@@ -192,6 +202,44 @@ pub fn native_async_pending<T>(
             wake,
         },
     )
+}
+
+static TOKIO_NATIVE_RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> =
+    std::sync::OnceLock::new();
+
+pub fn tokio_native_runtime() -> &'static tokio::runtime::Runtime {
+    TOKIO_NATIVE_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .thread_name("rsscript-runtime-tokio")
+            .enable_all()
+            .build()
+            .expect("rsscript tokio runtime should start")
+    })
+}
+
+pub fn spawn_tokio_native<T, F>(future: F) -> NativeAsyncPending<T>
+where
+    T: Send + 'static,
+    F: Future<Output = T> + Send + 'static,
+{
+    spawn_tokio_native_with_cancellation(CancellationToken::new(), future)
+}
+
+pub fn spawn_tokio_native_with_cancellation<T, F>(
+    cancellation: CancellationToken,
+    future: F,
+) -> NativeAsyncPending<T>
+where
+    T: Send + 'static,
+    F: Future<Output = T> + Send + 'static,
+{
+    let (pending, completer) = native_async_pending(cancellation);
+    tokio_native_runtime().spawn(async move {
+        let value = future.await;
+        completer.complete(value);
+    });
+    pending
 }
 
 impl<T> NativeAsyncCompleter<T> {
@@ -424,4 +472,52 @@ pub fn timer_sleep_native_start_with_cancellation(
         }
     });
     pending
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn tokio_native_pending_completes_on_runtime() {
+        let mut executor = Executor::new();
+        let pending = spawn_tokio_native(async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            42
+        });
+
+        assert_eq!(executor.run_pending(pending), 42);
+    }
+
+    #[test]
+    fn tokio_native_pending_can_run_concurrently_in_task_group() {
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let max_in_flight = Arc::new(AtomicUsize::new(0));
+        let mut group = TaskGroup::new();
+
+        for index in 0..8 {
+            let in_flight = in_flight.clone();
+            let max_in_flight = max_in_flight.clone();
+            group.spawn_pending(spawn_tokio_native(async move {
+                let current = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                max_in_flight.fetch_max(current, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(40)).await;
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+                index
+            }));
+        }
+
+        let mut executor = Executor::new();
+        let mut outputs = group.join(&mut executor);
+        outputs.sort();
+
+        assert_eq!(outputs, (0..8).collect::<Vec<_>>());
+        assert!(
+            max_in_flight.load(Ordering::SeqCst) > 1,
+            "tokio-backed native pending work should overlap"
+        );
+    }
 }

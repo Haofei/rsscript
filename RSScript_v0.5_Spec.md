@@ -2319,6 +2319,12 @@ and timeout joins so native wrappers can build nonblocking drivers without
 exposing Rust `Future`/`Waker` types. These are runtime implementation hooks, not
 RSScript source features.
 
+The v0.5 runtime may also host Rust async IO futures behind that pending ABI.
+The reference runtime provides a Tokio-backed native future adapter for Rust
+wrappers that need high-concurrency IO. Tokio remains a runtime dependency and
+native-wrapper implementation detail: RSScript source still sees only
+`async fn`, `await`, `task_group`, and lexical async-let handles.
+
 Package review metadata records each `await` site with its callee, source span,
 and `live_across_await` name set so reviewers can see which values are carried
 through a suspension boundary. For `task_group` handles, review metadata

@@ -1,0 +1,17 @@
+[package]
+name = "rss_s3_demo_native"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "mock_s3_server"
+path = "src/bin/mock_s3_server.rs"
+
+[dependencies]
+rsscript-runtime = { path = "../../../../runtime" }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }

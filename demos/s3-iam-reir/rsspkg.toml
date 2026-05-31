@@ -6,6 +6,16 @@ edition = "2026"
 [sources]
 paths = ["src"]
 
+[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_s3_demo_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+native_links = "forbid"
+ffi = "forbid"
+
 [[review.capability_bindings]]
 symbol = "S3.put_object"
 category = "object_storage.write"

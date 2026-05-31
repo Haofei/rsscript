@@ -4608,7 +4608,7 @@ async fn load(id: read Int) -> Result<String, NetworkError> {
         async let profile = fetch_profile(id: read id)
 
         let u = await user?
-        let p = await profile?
+        await profile?
     }
     return Ok("done")
 }
@@ -4625,6 +4625,11 @@ async fn load(id: read Int) -> Result<String, NetworkError> {
     assert!(
         lowered.contains("run_pending"),
         "await should produce run_pending call, got:\n{lowered}"
+    );
+    assert!(
+        lowered
+            .contains("__rsscript_async_executor.run_pending(&mut __rsscript_pending_profile)?;"),
+        "expression-statement await should poll the task_group pending, got:\n{lowered}"
     );
     assert!(
         lowered.contains("__rsscript_async_executor"),
