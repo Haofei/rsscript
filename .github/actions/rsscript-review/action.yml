@@ -78,12 +78,6 @@ runs:
         } >> "$GITHUB_OUTPUT"
         echo "comment_file=$COMMENT_FILE" >> "$GITHUB_OUTPUT"
 
-        if [ $EXIT_CODE -ne 0 ]; then
-          echo "status=fail" >> $GITHUB_OUTPUT
-        else
-          echo "status=pass" >> $GITHUB_OUTPUT
-        fi
-
         # Also produce CI JSON for structured consumption
         set +e
         rss review-pr \
@@ -98,6 +92,15 @@ runs:
           exit $CI_JSON_EXIT_CODE
         fi
         echo "ci_json=/tmp/rsscript-ci-gate.json" >> $GITHUB_OUTPUT
+
+        if [ -s /tmp/rsscript-ci-gate.json ]; then
+          REVIEW_STATUS=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status","unknown"))' /tmp/rsscript-ci-gate.json)
+        elif [ $EXIT_CODE -ne 0 ]; then
+          REVIEW_STATUS="fail"
+        else
+          REVIEW_STATUS="pass"
+        fi
+        echo "status=$REVIEW_STATUS" >> $GITHUB_OUTPUT
 
     - name: Post PR comment
       if: inputs.post-comment == 'true' && github.event_name == 'pull_request'
