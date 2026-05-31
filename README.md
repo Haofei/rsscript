@@ -94,7 +94,7 @@ Files are managed-only unless they declare otherwise:
 features: local
 ```
 
-`local`, `native`, `unsafe`, and `async` are recognized as review capability gates today. `local` enables local ownership features; `native`, `unsafe`, and `async` must be declared before a file can expose those boundaries. Bodyless `native fn` declarations are native-wrapper bindings; executable `native fn` and `async fn` bodies are still outside the v0.5 runtime and are reported before Rust lowering. Async signatures remain useful in interfaces and review diffs. `device`, `ffi`, and `reflection` are reserved review markers: they raise review risk when present, but they do not unlock syntax, lowering, or runtime behavior in v0.5. Ordinary libraries (JSON, File, Image, HTTP, Map, Regex) stay as libraries. Repeated or unknown names are diagnostics so capability boundaries stay explicit.
+`local`, `native`, `unsafe`, and `async` are recognized as review capability gates today. `local` enables local ownership features; `native`, `unsafe`, and `async` must be declared before a file can expose those boundaries. Bodyless `native fn` declarations are native-wrapper bindings; executable `native fn` bodies remain outside the v0.5 runtime and are reported before Rust lowering. `async fn` bodies support the restricted v0.5 executable MVP: direct `await` inside an async function, single-isolate cooperative runtime polling, no public `Future`/`Waker` surface, and no `spawn`/TaskGroup yet. `device`, `ffi`, and `reflection` are reserved review markers: they raise review risk when present, but they do not unlock syntax, lowering, or runtime behavior in v0.5. Ordinary libraries (JSON, File, Image, HTTP, Map, Regex) stay as libraries. Repeated or unknown names are diagnostics so capability boundaries stay explicit.
 
 ---
 
@@ -311,9 +311,9 @@ Package-management hardening: keep implemented commands documented under their a
 
 Longer term: deeper semantic review tooling, a larger core library, agent and runtime examples, stronger optimization paths, optional native ABI adapter checks, graph-level audit-surface reporting, and an experimental self-hosted frontend.
 
-Post-v0.5 design directions (see spec §20.1) build on the single-isolate, non-`Send` managed model, which is what lets async stay ergonomic without exposing Rust's `Pin`/`Poll`/`Waker`:
+Post-v0.5 design directions (see spec §20.1) build on the single-isolate, non-`Send` managed model, which is what lets RSScript extend async without exposing Rust's `Pin`/`Poll`/`Waker`:
 
-- **Ergonomic async.** `Future<T>` as an ordinary isolate-local managed handle, `await`, and a `Stream<T>` / `await for` async-sequence form, on a single-threaded cooperative executor per isolate. Read/mut guards may not cross `await`.
+- **Extended async.** Structured TaskGroup/spawn, async closures, optional isolate-local task handles, and a `Stream<T>` / `await for` async-sequence form. Read/mut guards may not cross `await`.
 - **Cross-isolate messaging with zero-copy transfer.** Explicit typed channels between isolates; `take`-based moves are the zero-copy transfer path, with single ownership enforced at compile time. Managed handles never cross isolates — only explicit messages do.
 - **Two-tier execution.** A HIR-level interpreter for the managed subset gives a fast edit-run loop; Rust lowering stays the production/AOT path. Both observe identical semantics and diagnostics.
 - **Structured-fix tooling.** An `rss fix` command applying machine-applicable fixes, plus an analysis server streaming diagnostics and fixes to both human editors and AI repair agents.

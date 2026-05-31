@@ -309,6 +309,7 @@ read / mut / take effects
 resource values through with
 ResourcePool<T: Resource>
 bodyless native declarations through package binding metadata
+restricted executable async bodies and direct await
 Rust source lowering with source maps
 review map / review diff metadata
 ```
@@ -318,8 +319,6 @@ review map / review diff metadata
 The following may be parsed and surfaced for review but are not executable lowering targets in v0.5:
 
 ```text
-async fn bodies
-await
 spawn
 future task runtime
 full user-defined enum system beyond standard Option/Result-like variants
@@ -327,13 +326,24 @@ general user FFI
 advanced protocol/dynamic dispatch model
 ```
 
-`async fn` signatures are review-visible contracts. Executable async bodies, `await`, and `spawn` must be rejected before lowering in v0.5.
+`async fn` signatures are review-visible contracts. v0.5 admits a restricted
+executable async MVP: `await` may appear only inside an `async fn`, and it must
+directly consume an async call. RSScript does not expose `Future`, `Pin`, `Poll`,
+`Waker`, Rust executor internals, or task handles as source-level types.
 
-Future executable async is expected to follow the same single-isolate model:
-`spawn` means isolate-local cooperative task creation, not Rust `std::thread`
-or multi-threaded `tokio::spawn`. Managed values may cross isolate-local
-suspension and task boundaries; local values, resources, and runtime read/write
-guards may not cross `await`. Cross-isolate or cross-thread work must use an
+The v0.5 execution target is single-isolate and cooperative. `await` is a
+suspension boundary in the async function frame: Copy values and managed handles
+may cross it, but local values, resources, with-bound resource leases, runtime
+read/write guards, noescape closure frames, and unmanaged native borrows must
+not. `await` inside an ordinary closure is not in the surrounding async frame and
+is rejected unless a future async-closure form is explicitly introduced.
+
+`spawn` remains review-visible but not executable in v0.5. It is reserved for a
+future structured task API and must be rejected before lowering.
+
+Future task support must follow the same single-isolate model: `spawn` means
+isolate-local cooperative task creation, not Rust `std::thread` or
+multi-threaded `tokio::spawn`. Cross-isolate or cross-thread work must use an
 explicit message/channel API rather than shared managed handles.
 
 ### 3.3 Unsupported syntax must not lower to placeholders
@@ -2194,28 +2204,47 @@ fn load(path: read Path) -> Result<Image, ImageError>
     effects(fresh)
 ```
 
-### 14.4 Async signatures in v0.5
+### 14.4 Executable async MVP in v0.5
 
-`async fn` is a review-visible signature boundary. Executable async function bodies, `await`, and `spawn` are unsupported before lowering in v0.5.
+`async fn` is a review-visible signature boundary and a restricted executable
+function kind in v0.5.
 
-`features: async` permits declaring review-visible `async fn` signatures only; it
-does not permit executable async bodies.
+`features: async` permits declaring `async fn` signatures and writing executable
+async bodies that use direct `await`.
 
-In v0.5 executable code, a call to an `async fn` is always rejected before
-lowering, because the only consumers of an async call — `await` and `spawn` — are
-themselves unsupported in v0.5. There is therefore no valid v0.5 fix for an async
-call other than removing it. The diagnostic "async call not consumed by await or
-spawn" describes the contract of the future executable-async milestone, where a
-consumer exists; in v0.5 it should be read as "async calls are not executable
-yet," not as a fixable omission.
+In executable code, a call to an `async fn` must be consumed by `await`. The
+source language does not expose future/task values, so `await` must directly
+consume an async call, optionally through the ordinary `?` error boundary:
 
-Future executable async must not expose Rust's `Future`, `Pin`, `Poll`, `Waker`, executor internals, or lifetime-across-await machinery to RSScript users.
+```rust
+async fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
 
-The future execution target is a single-isolate cooperative executor. `spawn`
-lowers to an isolate-local task primitive such as `spawn_local`; it must not
-imply `Send`, shared heap transfer, or multi-threaded execution. Managed values
-may cross isolate-local suspension points, but local values, resources, and
-runtime read/write guards may not be live across `await`.
+async fn main() -> Result<Unit, TimerError> {
+    await Timer.sleep(ms: 1)?
+    return Ok(Unit)
+}
+```
+
+`async` is not an effect and must not be written in `effects(...)`. Internally,
+normalized metadata may record async functions as `function_kind: async` and
+`effects: ["suspends"]` so review tools can reason about suspension uniformly,
+but `suspends` is not a user-authored effect in v0.5.
+
+`await` may appear only inside an `async fn` body. It does not become valid inside
+ordinary inline closures nested in an async function; those closures have their
+own non-async frame unless a future async-closure syntax is admitted.
+
+RSScript async must not expose Rust's `Future`, `Pin`, `Poll`, `Waker`, executor
+internals, or lifetime-across-await machinery to RSScript users.
+
+The execution target is a single-isolate cooperative executor. Managed values may
+cross isolate-local suspension points, but local values, resources, runtime
+read/write guards, noescape closure frames, and unmanaged native borrows may not
+be live across `await`.
+
+`spawn` is not executable in v0.5. Future `spawn`/TaskGroup support must lower to
+an isolate-local structured task primitive; it must not imply `Send`, shared heap
+transfer, or multi-threaded execution.
 
 ### 14.5 Generics
 
@@ -2796,8 +2825,11 @@ implicit conversion attempt
 operator overload attempt
 feature violation
 unsupported syntax
-async body / await / spawn used in v0.5 executable lowering
+spawn used before structured async task support
 async call not consumed by await or spawn
+await outside async function
+await non-async expression
+local or resource value live across await
 unmappable rustc diagnostic
 native boundary violation
 ```
@@ -2810,7 +2842,7 @@ the v0.5 allocation (it reflects the implemented codes, not an idealized scheme)
 
 ```text
 RS00xx  signature / declaration / syntax / effect validity, match exhaustiveness,
-        unsupported syntax, async-call-not-consumed
+        unsupported syntax, async-call-not-consumed, await placement/operand/liveness
 RS01xx  file-feature violations (local / native / unsafe / async gating, incl.
         declaring or calling an effects(unsafe) function without features: unsafe)
 RS02xx  call arguments: named/missing/unknown/duplicate args, missing data
@@ -2934,7 +2966,8 @@ part of the specification contract: implementations must not present a
 | Fixed native parallel facades marked `effects(native, parallel)` | review-only boundary + package/native metadata | package/native metadata, trusted signatures, and audits |
 | User-provided parallel closures, parallel iterators, joins/scopes, and thread-pool configuration | unsupported | future `features: parallel` capability |
 | Native wrapper semantic behavior beyond declared `.rssi` effects | review-only | package/native metadata, audits, and policy |
-| Executable `async` bodies, `await`, and `spawn` | unsupported | frontend diagnostic before lowering |
+| Restricted executable `async` bodies and direct `await` | static + dynamic runtime polling | frontend checker, Rust lowering, runtime pending ABI |
+| `spawn`, TaskGroup, select, timeout, cancellation, async streams, and public future/task handles | unsupported | frontend diagnostic before lowering |
 | Rust build scripts, proc macros, native links, and transitive native facts | package review-only unless specifically scanned or checked | package metadata and policy |
 
 ---
@@ -3388,13 +3421,11 @@ across threads either, so RSScript can expose ergonomic async boundaries without
 Rust's `Pin`/`Poll`/`Waker` machinery leaking into source.
 
 ```text
-A. Ergonomic async surface (executable async milestone)
+A. Extended async surface beyond the v0.5 MVP
    - Async operation/task handles, if exposed, are isolate-local managed handles,
      not a user-facing Future/Pin/Poll type system.
-   - await and a stream / "await for" async-sequence form.
+   - async closures and a stream / "await for" async-sequence form.
    - single-threaded cooperative executor per isolate.
-   - read/mut guards must not be held across await (section 10.2 becomes a
-     checker rule when async lowering lands).
    - must not expose Future / Pin / Poll / Waker to RSScript users (section 14.4).
 
 B. Cross-isolate message API with zero-copy transfer
