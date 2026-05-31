@@ -433,8 +433,13 @@ fn package_await_sites_changed(
     package_await_site_labels(old_sites) != package_await_site_labels(new_sites)
 }
 
-fn package_await_site_labels(sites: &[PackageReviewAwaitSite]) -> BTreeSet<String> {
-    sites.iter().map(package_await_site_label).collect()
+fn package_await_site_labels(sites: &[PackageReviewAwaitSite]) -> Vec<String> {
+    let mut labels = sites
+        .iter()
+        .map(package_await_site_label)
+        .collect::<Vec<_>>();
+    labels.sort();
+    labels
 }
 
 fn package_await_site_label(site: &PackageReviewAwaitSite) -> String {
