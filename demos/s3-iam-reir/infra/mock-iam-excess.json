@@ -1,0 +1,22 @@
+{
+  "role": "arn:aws:iam::123456789012:role/report-uploader",
+  "grants": [
+    {
+      "category": "object_storage.write",
+      "provider": "aws",
+      "service": "s3",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::reports-prod/*"
+    },
+    {
+      "category": "object_storage.write",
+      "provider": "aws",
+      "service": "s3",
+      "action": "s3:DeleteObject",
+      "resource": "arn:aws:s3:::reports-prod/*"
+    },
+    {
+      "category": "network.client"
+    }
+  ]
+}

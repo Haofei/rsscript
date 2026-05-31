@@ -29,16 +29,7 @@ fn s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain() {
     let temp_dir = common::unique_temp_dir("rsscript-s3-iam-demo-e2e");
     fs::create_dir_all(&temp_dir).expect("e2e temp dir should be created");
 
-    let review = review_package_dir(&demo_dir).expect("demo package review should succeed");
-    let bundle: reir::Bundle =
-        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
-            .expect("demo package review REIR should parse");
-    let required_facts = bundle
-        .facts
-        .iter()
-        .filter(|fact| fact.role == Some(FactRole::Required))
-        .cloned()
-        .collect::<Vec<_>>();
+    let required_facts = required_facts_for_demo(&demo_dir);
 
     let missing_reconciliations = reir::reconcile_capabilities_for_target(
         &required_facts,
@@ -47,6 +38,7 @@ fn s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain() {
     );
     assert!(missing_reconciliations.iter().any(|reconciliation| {
         reconciliation.kind == ReconciliationKind::MissingCapability
+            && reconciliation.target.as_deref() == Some("prod")
             && reconciliation
                 .capability
                 .as_ref()
@@ -103,6 +95,19 @@ fn s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain() {
         "fixed IAM grants should cover all required capabilities: {fixed_reconciliations:#?}"
     );
 
+    let excess_reconciliations = reir::reconcile_capabilities_for_target(
+        &required_facts,
+        &deployment_grants_from_fixtures(&demo_dir, "mock-iam-excess.json"),
+        Some("prod"),
+    );
+    assert!(excess_reconciliations.iter().any(|reconciliation| {
+        reconciliation.kind == ReconciliationKind::ExcessCapability
+            && reconciliation
+                .capability
+                .as_ref()
+                .is_some_and(|capability| capability.action.as_deref() == Some("s3:DeleteObject"))
+    }));
+
     let addr = available_local_addr();
     let native_manifest = demo_dir.join("native/rust/Cargo.toml");
     cargo_build(&native_manifest, &["--bin", "mock_s3_server"]);
@@ -153,6 +158,97 @@ fn s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain() {
     );
 
     let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn s3_iam_reir_demo_preflight_reports_missing_fixed_and_excess() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let demo_dir = repo.join("demos/s3-iam-reir");
+    let required_facts = required_facts_for_demo(&demo_dir);
+
+    let missing_reconciliations = reir::reconcile_capabilities_for_target(
+        &required_facts,
+        &deployment_grants_from_fixtures(&demo_dir, "mock-iam-missing.json"),
+        Some("prod"),
+    );
+    assert!(missing_reconciliations.iter().any(|reconciliation| {
+        reconciliation.kind == ReconciliationKind::MissingCapability
+            && reconciliation
+                .capability
+                .as_ref()
+                .is_some_and(|capability| capability.action.as_deref() == Some("s3:PutObject"))
+            && reconciliation.evidence.iter().any(|evidence| {
+                evidence.file.as_deref() == Some("src/upload.rss")
+                    && evidence.line == Some(8)
+                    && evidence
+                        .reason
+                        .as_deref()
+                        .is_some_and(|reason| reason.contains("upload_report -> S3.put_object"))
+            })
+    }));
+    assert!(missing_reconciliations.iter().any(|reconciliation| {
+        reconciliation.kind == ReconciliationKind::MissingCapability
+            && reconciliation
+                .capability
+                .as_ref()
+                .is_some_and(|capability| capability.action.as_deref() == Some("s3:PutObject"))
+            && reconciliation.evidence.iter().any(|evidence| {
+                evidence.reason.as_deref().is_some_and(|reason| {
+                    reason.contains("Reports.upload_batch -> upload_report -> S3.put_object")
+                })
+            })
+    }));
+
+    let fixed_reconciliations = reir::reconcile_capabilities_for_target(
+        &required_facts,
+        &deployment_grants_from_fixtures(&demo_dir, "mock-iam-fixed.json"),
+        Some("prod"),
+    );
+    assert!(
+        fixed_reconciliations
+            .iter()
+            .all(|reconciliation| reconciliation.kind != ReconciliationKind::MissingCapability),
+        "fixed fixture should cover every required capability: {fixed_reconciliations:#?}"
+    );
+
+    let excess_reconciliations = reir::reconcile_capabilities_for_target(
+        &required_facts,
+        &deployment_grants_from_fixtures(&demo_dir, "mock-iam-excess.json"),
+        Some("prod"),
+    );
+    let excess = excess_reconciliations
+        .iter()
+        .find(|reconciliation| {
+            reconciliation.kind == ReconciliationKind::ExcessCapability
+                && reconciliation
+                    .capability
+                    .as_ref()
+                    .is_some_and(|capability| {
+                        capability.action.as_deref() == Some("s3:DeleteObject")
+                    })
+        })
+        .expect("excess fixture should warn on unused S3 DeleteObject grant");
+    assert!(
+        excess
+            .evidence
+            .iter()
+            .any(|evidence| evidence.file.as_deref() == Some("infra/mock-iam-excess.json")),
+        "excess capability should point back to the mock IAM fixture: {excess:#?}"
+    );
+
+    println!("s3 iam preflight: missing=s3:PutObject fixed=covered excess=s3:DeleteObject");
+}
+
+fn required_facts_for_demo(demo_dir: &Path) -> Vec<Fact> {
+    let review = review_package_dir(demo_dir).expect("demo package review should succeed");
+    let bundle: reir::Bundle =
+        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+            .expect("demo package review REIR should parse");
+    bundle
+        .facts
+        .into_iter()
+        .filter(|fact| fact.role == Some(FactRole::Required))
+        .collect()
 }
 
 #[derive(Deserialize)]
@@ -244,6 +340,11 @@ fn capability_grant(
     evidence_file: &str,
 ) -> Fact {
     let action = capability.action.clone();
+    let precision = if capability.resource.is_some() {
+        Precision::ResourceScoped
+    } else {
+        Precision::Category
+    };
     Fact {
         schema: "reir.fact.v0.1".to_string(),
         id: id.to_string(),
@@ -262,7 +363,7 @@ fn capability_grant(
             source: Some("mock_deployment".to_string()),
         },
         acquisition_mode,
-        precision: Precision::Category,
+        precision,
         evidence: vec![Evidence {
             kind: evidence_kind,
             file: Some(evidence_file.to_string()),

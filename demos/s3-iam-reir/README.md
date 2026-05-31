@@ -26,12 +26,32 @@ Expected flow:
 
 The test runner starts the Tokio mock S3 server, builds the generated RSS package, times a warmed async upload, times the blocking sync client, and asserts that the server saw overlapping async requests. It does not use shell scripts.
 
+## Run the fast preflight only
+
+```sh
+cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_preflight -- --nocapture
+```
+
+Expected output includes:
+
+```text
+s3 iam preflight: missing=s3:PutObject fixed=covered excess=s3:DeleteObject
+```
+
+This path does not start the mock S3 server or build the native runtime binaries. It only proves the review/security loop:
+
+- required: `object_storage.write aws/s3 s3:PutObject arn:aws:s3:::reports-prod/*`
+- missing grant fixture: `object_storage.write aws/s3 s3:GetObject arn:aws:s3:::reports-prod/*`
+- excess grant fixture: `object_storage.write aws/s3 s3:DeleteObject arn:aws:s3:::reports-prod/*`
+- evidence: `src/upload.rss:8 upload_report -> S3.put_object`
+
 ## What the preflight proves
 
 The e2e test reads these fixture files directly:
 
 - `infra/mock-iam-missing.json`
 - `infra/mock-iam-fixed.json`
+- `infra/mock-iam-excess.json`
 - `infra/mock-runtime.json`
 
 The missing case fails because mock IAM grants `s3:GetObject`, while the RSS package requires `s3:PutObject`.
@@ -39,6 +59,7 @@ The mock runtime grants still cover `runtime.native` and `network.client`, so th
 
 The missing capability evidence points back to RSS call sites, including `Reports.upload_batch -> upload_report -> S3.put_object` and `upload_report -> S3.put_object`.
 The fixed case grants `s3:PutObject`, and the REIR reconciliation has no missing capabilities.
+The excess case also grants `s3:DeleteObject`, and REIR reports it as an unused security-relevant capability.
 
 ## Async note
 
