@@ -356,6 +356,7 @@ pub enum AsyncPoll<T> {
 pub struct Executor {
     polls: usize,
     yields: usize,
+    next_wake: Option<Instant>,
 }
 
 impl Executor {
@@ -381,8 +382,7 @@ impl Executor {
             match poll {
                 AsyncPoll::Ready(value) => return value,
                 AsyncPoll::Pending => {
-                    let mut cx = Context { executor: self };
-                    cx.yield_now();
+                    self.park_or_yield(None);
                 }
             }
         }
@@ -390,6 +390,32 @@ impl Executor {
 
     pub fn run_task_group<T>(&mut self, group: TaskGroup<T>) -> Vec<T> {
         group.join(self)
+    }
+
+    fn request_wake_at(&mut self, deadline: Instant) {
+        self.next_wake = Some(
+            self.next_wake
+                .map_or(deadline, |current| current.min(deadline)),
+        );
+    }
+
+    fn park_or_yield(&mut self, limit: Option<Instant>) {
+        self.yields += 1;
+        let next_wake = self.next_wake.take();
+        let target = match (next_wake, limit) {
+            (Some(wake), Some(limit)) => Some(wake.min(limit)),
+            (Some(wake), None) => Some(wake),
+            (None, Some(limit)) => Some(limit),
+            (None, None) => None,
+        };
+        if let Some(deadline) = target {
+            let now = Instant::now();
+            if deadline > now {
+                std::thread::sleep(deadline.saturating_duration_since(now));
+                return;
+            }
+        }
+        std::thread::yield_now();
     }
 }
 
@@ -405,6 +431,14 @@ impl Context<'_> {
 
     pub fn sleep_for(&mut self, duration: Duration) {
         std::thread::sleep(duration);
+    }
+
+    pub fn wake_at(&mut self, deadline: Instant) {
+        self.executor.request_wake_at(deadline);
+    }
+
+    pub fn wake_after(&mut self, duration: Duration) {
+        self.wake_at(Instant::now() + duration);
     }
 }
 
@@ -468,8 +502,7 @@ impl<T> TaskGroup<T> {
                 }
             }
             if remaining > 0 && !made_progress {
-                let mut cx = Context { executor };
-                cx.yield_now();
+                executor.park_or_yield(None);
             }
         }
         outputs
@@ -506,8 +539,7 @@ impl<T> TaskGroup<T> {
                 }
             }
             if remaining > 0 && !made_progress {
-                let mut cx = Context { executor };
-                cx.yield_now();
+                executor.park_or_yield(Some(deadline));
             }
         }
         TaskGroupJoin::Completed(
@@ -536,7 +568,7 @@ impl Pending<Result<(), TimerError>> for TimerSleepPending {
             return AsyncPoll::Ready(Ok(()));
         }
         let remaining = self.deadline.saturating_duration_since(now);
-        cx.sleep_for(remaining.min(Duration::from_millis(1)));
+        cx.wake_after(remaining);
         AsyncPoll::Pending
     }
 }
