@@ -545,6 +545,20 @@ fn package_review_hash(review: &PackageReview) -> String {
             input.push('\n');
         }
     }
+    for await_site in &review.await_sites {
+        input.push_str(&await_site.function);
+        input.push('\n');
+        input.push_str(await_site.callee.as_deref().unwrap_or(""));
+        input.push('\n');
+        input.push_str(&await_site.span.file);
+        input.push('\n');
+        input.push_str(&await_site.span.line.to_string());
+        input.push(':');
+        input.push_str(&await_site.span.column.to_string());
+        input.push(':');
+        input.push_str(&await_site.span.length.to_string());
+        input.push('\n');
+    }
     if let Some(native) = &review.native_rust {
         input.push_str(&native.path);
         input.push('\n');

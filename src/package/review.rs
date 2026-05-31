@@ -7,7 +7,7 @@ use crate::analyzer::{
 use crate::diagnostic::{Diagnostic, code};
 use crate::lint::lint_source;
 use crate::review::{ReviewMap, ReviewMapClassification, review_map_sources_with_interfaces};
-use crate::syntax::ast::{Block, Expr, Item, Stmt, TypeKind};
+use crate::syntax::ast::{Block, Callee, Expr, Item, Stmt, TypeKind};
 use crate::syntax::parse_source;
 
 use super::contract::{
@@ -22,10 +22,10 @@ use super::native::{
 };
 use super::source_set::{Manifest, PackageSource, load_package};
 use super::{
-    PackageNativeRustReview, PackageProviderImplementation, PackageReview, PackageReviewFile,
-    PackageReviewFileKind, PackageReviewSummary, PackageRisk, collect_dependency_interface_sources,
-    dedup_diagnostics, package_feature_may_change_boundary_risk,
-    package_feature_resolution_diagnostics,
+    PackageNativeRustReview, PackageProviderImplementation, PackageReview, PackageReviewAwaitSite,
+    PackageReviewFile, PackageReviewFileKind, PackageReviewSummary, PackageRisk,
+    collect_dependency_interface_sources, dedup_diagnostics,
+    package_feature_may_change_boundary_risk, package_feature_resolution_diagnostics,
 };
 
 pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
@@ -132,7 +132,8 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
     reasons.sort();
     reasons.dedup();
 
-    let api_summary = package_api_effect_summary(sources, &review_map);
+    let await_sites = collect_package_await_sites(sources);
+    let api_summary = package_api_effect_summary(sources, &review_map, &await_sites);
     let risk = if interface_diagnostic_exports.is_empty() {
         package_risk(
             manifest,
@@ -204,6 +205,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         summary,
         files,
         exports,
+        await_sites,
         native_rust,
         review_map,
         diagnostics,
@@ -403,6 +405,7 @@ struct PackageApiSummary {
 fn package_api_effect_summary(
     sources: &[PackageSource],
     review_map: &ReviewMap,
+    await_sites: &[PackageReviewAwaitSite],
 ) -> PackageApiSummary {
     let interface_contracts =
         collect_package_function_contracts(sources, PackageReviewFileKind::Interface);
@@ -492,7 +495,7 @@ fn package_api_effect_summary(
             .values()
             .filter(|contract| contract.is_async)
             .count(),
-        await_sites: package_await_site_count(sources),
+        await_sites: await_sites.len(),
         parallel_apis: contracts
             .values()
             .filter(|contract| {
@@ -515,62 +518,97 @@ fn package_api_effect_summary(
     }
 }
 
-fn package_await_site_count(sources: &[PackageSource]) -> usize {
-    sources
+fn collect_package_await_sites(sources: &[PackageSource]) -> Vec<PackageReviewAwaitSite> {
+    let mut await_sites = sources
         .iter()
         .filter(|source| source.kind == PackageReviewFileKind::Source)
-        .map(|source| {
+        .flat_map(|source| {
             let program = parse_source(&source.path, &source.contents);
             program
                 .items
                 .iter()
-                .map(|item| match item {
-                    Item::Function(function) => count_await_sites_in_block(&function.body),
-                    Item::Type(type_decl) => type_decl
-                        .drop_body
-                        .as_ref()
-                        .map_or(0, count_await_sites_in_block),
+                .flat_map(|item| match item {
+                    Item::Function(function) => {
+                        collect_await_sites_in_block(&function.name, &function.body)
+                    }
+                    Item::Type(type_decl) => {
+                        type_decl.drop_body.as_ref().map_or_else(Vec::new, |body| {
+                            collect_await_sites_in_block(&format!("drop {}", type_decl.name), body)
+                        })
+                    }
                 })
-                .sum::<usize>()
+                .collect::<Vec<_>>()
         })
-        .sum()
+        .collect::<Vec<_>>();
+    await_sites.sort_by(|left, right| {
+        left.span
+            .file
+            .cmp(&right.span.file)
+            .then_with(|| left.span.line.cmp(&right.span.line))
+            .then_with(|| left.span.column.cmp(&right.span.column))
+            .then_with(|| left.function.cmp(&right.function))
+    });
+    await_sites
 }
 
-fn count_await_sites_in_block(block: &Block) -> usize {
-    block.statements.iter().map(count_await_sites_in_stmt).sum()
+fn collect_await_sites_in_block(function: &str, block: &Block) -> Vec<PackageReviewAwaitSite> {
+    block
+        .statements
+        .iter()
+        .flat_map(|statement| collect_await_sites_in_stmt(function, statement))
+        .collect()
 }
 
-fn count_await_sites_in_stmt(statement: &Stmt) -> usize {
+fn collect_await_sites_in_stmt(function: &str, statement: &Stmt) -> Vec<PackageReviewAwaitSite> {
+    let mut sites = Vec::new();
+    collect_await_sites_from_stmt(function, statement, &mut sites);
+    sites
+}
+
+fn collect_await_sites_from_stmt(
+    function: &str,
+    statement: &Stmt,
+    sites: &mut Vec<PackageReviewAwaitSite>,
+) {
     match statement {
-        Stmt::Let(stmt) => stmt.value.as_ref().map_or(0, count_await_sites_in_expr),
-        Stmt::Return(stmt) => stmt.value.as_ref().map_or(0, count_await_sites_in_expr),
+        Stmt::Let(stmt) => {
+            if let Some(value) = &stmt.value {
+                collect_await_sites_from_expr(function, value, sites);
+            }
+        }
+        Stmt::Return(stmt) => {
+            if let Some(value) = &stmt.value {
+                collect_await_sites_from_expr(function, value, sites);
+            }
+        }
         Stmt::With(stmt) => {
-            count_await_sites_in_expr(&stmt.resource) + count_await_sites_in_block(&stmt.body)
+            collect_await_sites_from_expr(function, &stmt.resource, sites);
+            collect_await_sites_from_block(function, &stmt.body, sites);
         }
         Stmt::If(stmt) => {
-            count_await_sites_in_expr(&stmt.condition)
-                + count_await_sites_in_block(&stmt.then_body)
-                + stmt
-                    .else_body
-                    .as_ref()
-                    .map_or(0, count_await_sites_in_block)
+            collect_await_sites_from_expr(function, &stmt.condition, sites);
+            collect_await_sites_from_block(function, &stmt.then_body, sites);
+            if let Some(else_body) = &stmt.else_body {
+                collect_await_sites_from_block(function, else_body, sites);
+            }
         }
         Stmt::Loop(stmt) => {
-            stmt.condition.as_ref().map_or(0, count_await_sites_in_expr)
-                + count_await_sites_in_block(&stmt.body)
+            if let Some(condition) = &stmt.condition {
+                collect_await_sites_from_expr(function, condition, sites);
+            }
+            collect_await_sites_from_block(function, &stmt.body, sites);
         }
         Stmt::For(stmt) => {
-            count_await_sites_in_expr(&stmt.iterable) + count_await_sites_in_block(&stmt.body)
+            collect_await_sites_from_expr(function, &stmt.iterable, sites);
+            collect_await_sites_from_block(function, &stmt.body, sites);
         }
         Stmt::Match(stmt) => {
-            count_await_sites_in_expr(&stmt.value)
-                + stmt
-                    .arms
-                    .iter()
-                    .map(|arm| count_await_sites_in_block(&arm.body))
-                    .sum::<usize>()
+            collect_await_sites_from_expr(function, &stmt.value, sites);
+            for arm in &stmt.arms {
+                collect_await_sites_from_block(function, &arm.body, sites);
+            }
         }
-        Stmt::Expr(expr) => count_await_sites_in_expr(expr),
+        Stmt::Expr(expr) => collect_await_sites_from_expr(function, expr, sites),
         Stmt::Break(_)
         | Stmt::Continue(_)
         | Stmt::MalformedWith(_)
@@ -578,30 +616,69 @@ fn count_await_sites_in_stmt(statement: &Stmt) -> usize {
         | Stmt::MalformedLoop(_)
         | Stmt::MalformedFor(_)
         | Stmt::MalformedMatch(_)
-        | Stmt::Unknown(_) => 0,
+        | Stmt::Unknown(_) => {}
     }
 }
 
-fn count_await_sites_in_expr(expr: &Expr) -> usize {
+fn collect_await_sites_from_block(
+    function: &str,
+    block: &Block,
+    sites: &mut Vec<PackageReviewAwaitSite>,
+) {
+    for statement in &block.statements {
+        collect_await_sites_from_stmt(function, statement, sites);
+    }
+}
+
+fn collect_await_sites_from_expr(
+    function: &str,
+    expr: &Expr,
+    sites: &mut Vec<PackageReviewAwaitSite>,
+) {
     match expr {
-        Expr::Await { value, .. } => 1 + count_await_sites_in_expr(value),
+        Expr::Await { value, span } => {
+            sites.push(PackageReviewAwaitSite {
+                function: function.to_string(),
+                callee: awaited_callee(value),
+                span: span.clone(),
+            });
+            collect_await_sites_from_expr(function, value, sites);
+        }
         Expr::Effect { value, .. }
         | Expr::Manage { value, .. }
         | Expr::Spawn { value, .. }
-        | Expr::Try { value, .. } => count_await_sites_in_expr(value),
+        | Expr::Try { value, .. } => collect_await_sites_from_expr(function, value, sites),
         Expr::Binary { left, right, .. } => {
-            count_await_sites_in_expr(left) + count_await_sites_in_expr(right)
+            collect_await_sites_from_expr(function, left, sites);
+            collect_await_sites_from_expr(function, right, sites);
         }
-        Expr::Field { base, .. } => count_await_sites_in_expr(base),
+        Expr::Field { base, .. } => collect_await_sites_from_expr(function, base, sites),
         Expr::Index { base, index, .. } => {
-            count_await_sites_in_expr(base) + count_await_sites_in_expr(index)
+            collect_await_sites_from_expr(function, base, sites);
+            collect_await_sites_from_expr(function, index, sites);
         }
-        Expr::Call { args, .. } => args
-            .iter()
-            .map(|arg| count_await_sites_in_expr(&arg.value))
-            .sum(),
-        Expr::Closure { body, .. } => count_await_sites_in_block(body),
-        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => 0,
+        Expr::Call { args, .. } => {
+            for arg in args {
+                collect_await_sites_from_expr(function, &arg.value, sites);
+            }
+        }
+        Expr::Closure { body, .. } => collect_await_sites_from_block(function, body, sites),
+        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+    }
+}
+
+fn awaited_callee(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Call { callee, .. } => Some(callee_label(callee)),
+        Expr::Effect { value, .. } | Expr::Try { value, .. } => awaited_callee(value),
+        _ => None,
+    }
+}
+
+fn callee_label(callee: &Callee) -> String {
+    match callee {
+        Callee::Name(name) => name.clone(),
+        Callee::Qualified { namespace, name } => format!("{namespace}.{name}"),
     }
 }
 

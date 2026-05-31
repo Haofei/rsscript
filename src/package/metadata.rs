@@ -121,6 +121,7 @@ fn package_review_metadata_from_review(review: &PackageReview) -> PackageReviewM
         summary: review.summary.clone(),
         files: review.files.clone(),
         exports: review.exports.clone(),
+        await_sites: review.await_sites.clone(),
         native_rust: review.native_rust.clone(),
         review_map: review.review_map.clone(),
         diagnostics: review.diagnostics.clone(),

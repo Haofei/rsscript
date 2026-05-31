@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, Span};
 use crate::review::{ReviewFinding, ReviewMap};
 use crate::rust_lower::NativeRustDependency;
 
@@ -17,6 +17,7 @@ pub struct PackageReview {
     pub summary: PackageReviewSummary,
     pub files: Vec<PackageReviewFile>,
     pub exports: Vec<PackageReviewExport>,
+    pub await_sites: Vec<PackageReviewAwaitSite>,
     pub native_rust: Option<PackageNativeRustReview>,
     pub review_map: ReviewMap,
     pub diagnostics: Vec<Diagnostic>,
@@ -58,6 +59,7 @@ pub struct PackageReviewMetadata {
     pub summary: PackageReviewSummary,
     pub files: Vec<PackageReviewFile>,
     pub exports: Vec<PackageReviewExport>,
+    pub await_sites: Vec<PackageReviewAwaitSite>,
     pub native_rust: Option<PackageNativeRustReview>,
     pub review_map: ReviewMap,
     pub diagnostics: Vec<Diagnostic>,
@@ -389,6 +391,13 @@ pub struct PackageReviewExport {
     pub kind: String,
     pub classification: String,
     pub reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageReviewAwaitSite {
+    pub function: String,
+    pub callee: Option<String>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

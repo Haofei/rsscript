@@ -8851,6 +8851,15 @@ pub async fn Api.run() -> Result<Unit, TimerError> {
 
     assert_eq!(json["summary"]["async_apis"], 2);
     assert_eq!(json["summary"]["await_sites"], 1);
+    assert!(json["await_sites"].as_array().is_some_and(|await_sites| {
+        await_sites.iter().any(|site| {
+            site["function"] == "Api.run"
+                && site["callee"] == "Timer.sleep"
+                && site["span"]["file"]
+                    .as_str()
+                    .is_some_and(|file| file.ends_with("src/main.rss"))
+        })
+    }));
     assert!(json["exports"].as_array().is_some_and(|exports| {
         exports.iter().any(|export| {
             export["name"] == "Api.run"
