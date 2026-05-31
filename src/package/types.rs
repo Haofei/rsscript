@@ -464,6 +464,8 @@ pub struct PackageReviewCapability {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource: Option<String>,
     pub call_chain: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span: Option<Span>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

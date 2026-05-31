@@ -116,6 +116,8 @@ pub struct RsScriptPackageCapability {
     pub resource: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub call_chain: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub span: Option<RsScriptDiagnosticSpan>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2231,6 +2233,9 @@ fn package_capabilities_from_json(value: &Value) -> Vec<RsScriptPackageCapabilit
                     action: string_field(capability, "action"),
                     resource: string_field(capability, "resource"),
                     call_chain: string_array_field(capability, "call_chain"),
+                    span: capability
+                        .get("span")
+                        .map(|span| diagnostic_span_from_json(span, String::new())),
                 })
                 .collect()
         })
@@ -2507,7 +2512,10 @@ fn classify_review_required(reasons: &[String]) -> FactKind {
         .map(|reason| reason.to_ascii_lowercase())
         .collect::<Vec<_>>();
 
-    if lower_reasons.iter().any(|reason| reason.contains("native")) {
+    if lower_reasons
+        .iter()
+        .any(|reason| matches!(reason.as_str(), "native boundary" | "native bridge"))
+    {
         FactKind::NativeBoundary
     } else if lower_reasons.iter().any(|reason| reason.contains("retain")) {
         FactKind::Retention
@@ -3788,10 +3796,13 @@ fn binding_manifest_evidence(
 ) -> Evidence {
     Evidence {
         kind: EvidenceKind::BindingManifest,
-        file: None,
-        line: None,
-        column: None,
-        length: None,
+        file: capability
+            .span
+            .as_ref()
+            .and_then(|span| (!span.file.is_empty()).then(|| span.file.clone())),
+        line: capability.span.as_ref().map(|span| span.line.max(1)),
+        column: capability.span.as_ref().map(|span| span.column.max(1)),
+        length: capability.span.as_ref().map(|span| span.length),
         symbol: Some(capability.function.clone()),
         reason: Some(format!(
             "capability binding {} propagated through {}",

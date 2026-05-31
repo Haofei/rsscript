@@ -3737,7 +3737,7 @@ action = "s3:PutObject"
 resource = "arn:aws:s3:::reports-prod/*"
 ```
 
-Package review propagates that binding through the RSScript call graph and emits REIR required-capability facts for each calling function, with the call chain preserved as evidence. This is review metadata for cross-layer reconciliation against deployment/IAM grants; it does not add a language-level `effects(requires(...))` form and does not make RSScript source depend on any provider such as AWS.
+Package review propagates that binding through the RSScript call graph and emits REIR required-capability facts for each calling function, with the call chain and source span preserved as evidence. This is review metadata for cross-layer reconciliation against deployment/IAM grants; it does not add a language-level `effects(requires(...))` form and does not make RSScript source depend on any provider such as AWS.
 
 ---
 

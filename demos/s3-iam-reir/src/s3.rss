@@ -1,0 +1,10 @@
+features: async, native
+
+struct S3Error
+
+pub async native fn S3.put_object(
+    bucket: read String,
+    key: read String,
+    body: read String,
+) -> Result<Unit, S3Error>
+    effects(native)

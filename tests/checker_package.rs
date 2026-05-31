@@ -1540,6 +1540,8 @@ native fn S3.put_object(body: read String) -> Result<Unit, String>
         .expect("upload_report should require s3:PutObject through the S3 binding");
     assert!(required.evidence.iter().any(|evidence| {
         evidence.kind == reir::EvidenceKind::BindingManifest
+            && evidence.file.as_deref() == Some("src/upload.rss")
+            && evidence.line == Some(2)
             && evidence
                 .reason
                 .as_deref()
@@ -1565,6 +1567,48 @@ native fn S3.put_object(body: read String) -> Result<Unit, String>
                 .is_some_and(|capability| capability.action.as_deref() == Some("s3:PutObject"))
             && reconciliation.required_fact.as_ref() == Some(&required.id)
     }));
+}
+
+#[test]
+fn s3_iam_reir_demo_preserves_call_site_for_missing_permission() {
+    let demo_dir = Path::new("demos/s3-iam-reir");
+    let review = review_package_dir(demo_dir).expect("demo package review should succeed");
+    let bundle: reir::Bundle =
+        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+            .expect("demo package REIR bundle should parse");
+
+    let required = bundle
+        .facts
+        .iter()
+        .find(|fact| {
+            fact.kind == reir::FactKind::Capability
+                && fact.role == Some(reir::FactRole::Required)
+                && fact.subject.id == "rss-s3-uploader::function::upload_report"
+                && fact
+                    .capability
+                    .as_ref()
+                    .is_some_and(|capability| capability.action.as_deref() == Some("s3:PutObject"))
+        })
+        .expect("demo upload_report should require s3:PutObject");
+
+    assert!(bundle.facts.iter().any(|fact| {
+        fact.kind == reir::FactKind::NativeBoundary
+            && fact.subject.id == "rss-s3-uploader::S3.put_object"
+    }));
+    assert!(!bundle.facts.iter().any(|fact| {
+        fact.kind == reir::FactKind::NativeBoundary
+            && fact.subject.id == "rss-s3-uploader::upload_report"
+    }));
+    assert!(required.evidence.iter().any(|evidence| {
+        evidence.kind == reir::EvidenceKind::BindingManifest
+            && evidence.file.as_deref() == Some("src/upload.rss")
+            && evidence.line == Some(8)
+            && evidence
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("upload_report -> S3.put_object"))
+    }));
+    assert_eq!(review.summary.await_sites, 4);
 }
 
 #[test]

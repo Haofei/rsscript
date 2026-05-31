@@ -1,0 +1,38 @@
+features: async
+
+async fn upload_report(
+    bucket: read String,
+    key: read String,
+    body: read String,
+) -> Result<Unit, S3Error> {
+    await S3.put_object(bucket: read bucket, key: read key, body: read body)?
+    return Ok(Unit)
+}
+
+pub async fn Reports.upload_batch(
+    bucket: read String,
+    day: read String,
+) -> Result<Unit, S3Error> {
+    task_group {
+        async let summary = upload_report(
+            bucket: read bucket,
+            key: read "reports/summary.json",
+            body: read day,
+        )
+        async let audit = upload_report(
+            bucket: read bucket,
+            key: read "reports/audit.json",
+            body: read day,
+        )
+        async let metrics = upload_report(
+            bucket: read bucket,
+            key: read "reports/metrics.json",
+            body: read day,
+        )
+
+        await summary?
+        await audit?
+        await metrics?
+    }
+    return Ok(Unit)
+}
