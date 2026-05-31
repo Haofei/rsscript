@@ -1019,12 +1019,21 @@ pub fn process_run_stdout(command: &str, args: &[String]) -> Result<String, Stri
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = stdout.trim();
+    let stderr = stderr.trim();
+    let details = if stdout.is_empty() {
+        stderr.to_string()
+    } else if stderr.is_empty() {
+        stdout.to_string()
+    } else {
+        format!("{stdout}\n{stderr}")
+    };
     let code = output
         .status
         .code()
         .map(|code| code.to_string())
         .unwrap_or_else(|| "signal".to_string());
-    Err(format!("`{command}` exited with {code}: {}", stderr.trim()))
+    Err(format!("`{command}` exited with {code}: {details}"))
 }
 
 pub fn process_run_many_stdout(
