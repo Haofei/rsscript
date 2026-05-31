@@ -1,4 +1,5 @@
 use crate::*;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt::Write;
 
@@ -175,6 +176,265 @@ pub fn format_pr_review_comment(
         .unwrap();
     }
     output
+}
+
+/// CI gate output conforming to `reir.ci.v0.2` stable schema.
+/// This is the primary machine-readable output for CI/CD integration.
+#[derive(Debug, Clone, Serialize)]
+pub struct CiGateOutput {
+    pub schema: &'static str,
+    pub status: CiGateStatus,
+    pub summary: CiGateSummary,
+    pub required_capabilities: Vec<CiCapabilityFact>,
+    pub granted_capabilities: Vec<CiCapabilityFact>,
+    pub missing_capabilities: Vec<CiReconciliation>,
+    pub excess_capabilities: Vec<CiReconciliation>,
+    pub unknown_capabilities: Vec<CiCapabilityFact>,
+    pub review_decision: CiReviewDecision,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CiGateStatus {
+    Pass,
+    Fail,
+    Warn,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CiGateSummary {
+    pub total_required: usize,
+    pub total_granted: usize,
+    pub total_missing: usize,
+    pub total_excess: usize,
+    pub total_unknown: usize,
+    pub unknown_ratio: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CiCapabilityFact {
+    pub id: String,
+    pub category: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
+    pub subject: CiSubject,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<CiEvidence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unknown_reason: Option<String>,
+    pub confidence: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CiSubject {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CiEvidence {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CiReconciliation {
+    pub capability: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub required_by: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<CiEvidence>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CiReviewDecision {
+    pub action: String,
+    pub reason: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub missing_summary: Vec<String>,
+}
+
+/// Produce CI gate JSON output from reconciliation results.
+pub fn format_ci_gate_output(
+    required_facts: &[Fact],
+    granted_facts: &[Fact],
+    reconciliations: &[Reconciliation],
+) -> CiGateOutput {
+    let missing: Vec<_> = reconciliations
+        .iter()
+        .filter(|r| r.kind == ReconciliationKind::MissingCapability)
+        .collect();
+    let excess: Vec<_> = reconciliations
+        .iter()
+        .filter(|r| r.kind == ReconciliationKind::ExcessCapability)
+        .collect();
+    let unknown_facts: Vec<_> = required_facts
+        .iter()
+        .filter(|f| f.value == FactValue::Unknown)
+        .collect();
+
+    let total_required = required_facts
+        .iter()
+        .filter(|f| f.role == Some(FactRole::Required))
+        .count();
+    let total_granted = granted_facts
+        .iter()
+        .filter(|f| f.role == Some(FactRole::Granted))
+        .count();
+    let total_missing = missing.len();
+    let total_excess = excess.len();
+    let total_unknown = unknown_facts.len();
+    let unknown_ratio = if total_required > 0 {
+        total_unknown as f64 / total_required as f64
+    } else {
+        0.0
+    };
+
+    let status = if !missing.is_empty() {
+        CiGateStatus::Fail
+    } else if !unknown_facts.is_empty() {
+        CiGateStatus::Warn
+    } else {
+        CiGateStatus::Pass
+    };
+
+    let required_capabilities: Vec<_> = required_facts
+        .iter()
+        .filter(|f| f.role == Some(FactRole::Required))
+        .map(fact_to_ci_capability)
+        .collect();
+
+    let granted_capabilities: Vec<_> = granted_facts
+        .iter()
+        .filter(|f| f.role == Some(FactRole::Granted))
+        .map(fact_to_ci_capability)
+        .collect();
+
+    let missing_capabilities: Vec<_> = missing
+        .iter()
+        .filter_map(|r| {
+            let cap = r.capability.as_ref()?;
+            Some(CiReconciliation {
+                capability: pr_missing_capability_label(cap),
+                status: "missing".to_owned(),
+                required_by: r.required_fact.iter().cloned().collect(),
+                evidence: r.evidence.iter().map(evidence_to_ci).collect(),
+            })
+        })
+        .collect();
+
+    let excess_capabilities: Vec<_> = excess
+        .iter()
+        .filter_map(|r| {
+            let cap = r.capability.as_ref()?;
+            Some(CiReconciliation {
+                capability: pr_missing_capability_label(cap),
+                status: "excess".to_owned(),
+                required_by: vec![],
+                evidence: r.evidence.iter().map(evidence_to_ci).collect(),
+            })
+        })
+        .collect();
+
+    let unknown_capabilities: Vec<_> = unknown_facts
+        .iter()
+        .map(|f| fact_to_ci_capability(f))
+        .collect();
+
+    let missing_summary: Vec<_> = missing_capabilities
+        .iter()
+        .map(|r| r.capability.clone())
+        .collect();
+
+    let (action, reason) = if !missing.is_empty() {
+        ("block", "Required capabilities not granted by deployment.")
+    } else if !unknown_facts.is_empty() {
+        ("warn", "Some capabilities have unknown coverage.")
+    } else {
+        ("approve", "All required capabilities are granted.")
+    };
+
+    CiGateOutput {
+        schema: "reir.ci.v0.2",
+        status,
+        summary: CiGateSummary {
+            total_required,
+            total_granted,
+            total_missing,
+            total_excess,
+            total_unknown,
+            unknown_ratio,
+        },
+        required_capabilities,
+        granted_capabilities,
+        missing_capabilities,
+        excess_capabilities,
+        unknown_capabilities,
+        review_decision: CiReviewDecision {
+            action: action.to_owned(),
+            reason: reason.to_owned(),
+            missing_summary,
+        },
+    }
+}
+
+/// Serialize CI gate output to JSON.
+pub fn format_ci_gate_json(output: &CiGateOutput) -> String {
+    serde_json::to_string_pretty(output).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
+}
+
+fn fact_to_ci_capability(fact: &Fact) -> CiCapabilityFact {
+    let (category, provider, service, action, resource) =
+        if let Some(cap) = fact.capability.as_ref() {
+            (
+                capability_category_label(&cap.category),
+                cap.provider.clone(),
+                cap.service.clone(),
+                cap.action.clone(),
+                cap.resource.clone(),
+            )
+        } else {
+            ("unknown".to_owned(), None, None, None, None)
+        };
+    CiCapabilityFact {
+        id: fact.id.clone(),
+        category,
+        provider,
+        service,
+        action,
+        resource,
+        subject: CiSubject {
+            id: fact.subject.id.clone(),
+            kind: Some(String::from(fact.subject.kind.clone())),
+            name: fact.subject.name.clone(),
+        },
+        evidence: fact.evidence.iter().map(evidence_to_ci).collect(),
+        unknown_reason: fact.unknown_reason.clone(),
+        confidence: String::from(fact.confidence.level.clone()),
+    }
+}
+
+fn evidence_to_ci(evidence: &Evidence) -> CiEvidence {
+    CiEvidence {
+        file: evidence.file.clone(),
+        line: evidence.line,
+        description: evidence.reason.clone().or_else(|| evidence.symbol.clone()),
+    }
 }
 
 struct PrMissingGroup<'a> {

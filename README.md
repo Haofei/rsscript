@@ -1,22 +1,72 @@
 # RSScript
 
-**A constrained, review-first source format for AI-generated systems code with Rust-backed execution.**
+**Semantic review evidence for AI-generated code. Turns behavior changes into PR-reviewable, CI-gateable proof.**
 
 ```text
-AI codegen target.
-Semantic review protocol.
-Rust lowering backend.
+AI writes code → RSScript checks semantic boundaries → REIR produces evidence →
+CI blocks/approves the PR based on capability, mutation, and deployment proof.
 ```
 
-This came out of reviewing 100k+ lines of AI-generated Rust over six months. The same shapes kept hurting: `Arc<Mutex<HashMap<...>>>` stacked four deep, signatures with eight trait bounds where one would do, `Pin<Box<dyn Future<...>>>` blocking the view of what a function actually does, retention buried three call levels down, four hundred lines of correct-but-dense code in a single PR where the important ten percent was hard to find. The Rust compiler accepted it. Review still took too much human attention.
+## What it does in one command
 
-There's also a long-standing wishlist for managed-by-default app code, explicit performance escapes, and a direct path back to native systems work. The request shows up in `/r/rust` threads and language-design posts regularly. AI review pain is what finally made the cost/benefit click for me.
+```sh
+# Does the PR's code require capabilities the deployment doesn't grant?
+rss review-pr --head my-service/ --grants prod-iam.reir.json --format markdown
+```
 
-RSScript is an AI codegen target and semantic review protocol that lowers to Rust. It keeps rustc, Cargo, and the crate ecosystem; it compresses the source surface so a reviewer's first read costs less, and pushes mutation, retention, resources, and native boundaries into the signature where review can see them. Advanced Rust remains available through `features: native` as an explicit review boundary.
+Output:
 
-Rust is excellent at library boundaries: generic abstractions, precise ownership, trait-driven APIs, async runtimes, and zero-cost escape hatches. Application code usually wants a different register: concrete data, direct control flow, visible mutation, visible retention, and few abstraction choices. RSScript makes that application register the default surface for AI-generated code, while keeping Rust as the place for library implementation and native wrapper work.
+```markdown
+## RSScript / REIR deployment review
 
-That distinction matters more with AI in the loop. When a model writes Rust application code, it often reaches for library-author patterns: broad generics, layered traits, deeply nested shared state, and future-proof abstractions before the app needs them. RSScript narrows the default shape toward app-developer code, then uses `features: local` and `features: native` when the implementation really needs to cross into lower-level Rust.
+Status: FAIL
+
+### Required capabilities needing deployment grant
+
+- subject: Reports.cleanup_old_reports
+  capability: object_storage.delete aws/s3 s3:DeleteObject arn:aws:s3:::reports-prod/*
+  evidence: src/upload.rss:28 Reports.cleanup_old_reports -> S3.delete_object
+
+### Missing capabilities
+
+- s3:DeleteObject on arn:aws:s3:::reports-prod/*
+
+### Review decision
+
+Block this PR before deploy.
+```
+
+Formats: `markdown` (PR comment), `ci-json` (stable schema for CI gates), `sarif` (GitHub code scanning).
+
+## GitHub Action
+
+```yaml
+- uses: Haofei/rsscript-action@v0
+  with:
+    head: my-service/
+    grants: infra/prod-grants.reir.json
+    target: prod
+```
+
+The action posts a PR comment with the review decision and exits non-zero on missing capabilities.
+
+---
+
+## Why this exists
+
+AI makes writing code cheap. Reviewing AI-generated code is now the bottleneck.
+
+RSScript is a **constrained source format** and **semantic review protocol** for AI-generated systems code, backed by Rust execution. It pushes mutation, retention, resource ownership, native/unsafe boundaries, and external capabilities into the signature — where review can see them and CI can gate on them.
+
+The product core is not the language. It's the **evidence pipeline**:
+
+```text
+.rss source → compiler semantic checks → review map + REIR bundle →
+  capability reconciliation against deployment grants →
+  PR comment / CI gate / SARIF report
+```
+
+RSScript is the constrained AI codegen target that makes these artifacts reliable. REIR (Review Evidence IR) is the cross-layer evidence format that connects source analysis to deployment reality.
 
 ---
 

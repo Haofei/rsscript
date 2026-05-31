@@ -1,0 +1,129 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/Haofei/rsscript/schemas/reir-ci-v0.2.json",
+  "title": "REIR CI Schema v0.2",
+  "description": "Stable subset of REIR facts consumed by CI gates and PR review bots. Fields in this schema are subject to backwards-compatible evolution only.",
+  "type": "object",
+  "required": ["schema", "status", "required_capabilities", "granted_capabilities", "missing_capabilities"],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "reir.ci.v0.2",
+      "description": "Schema identifier for CI consumers."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail", "warn", "unknown"],
+      "description": "Overall CI gate decision. 'fail' blocks merge, 'warn' annotates, 'pass' is clean, 'unknown' means evidence is incomplete."
+    },
+    "summary": {
+      "type": "object",
+      "required": ["total_required", "total_granted", "total_missing", "total_unknown"],
+      "properties": {
+        "total_required": { "type": "integer", "description": "Count of capabilities the code requires." },
+        "total_granted": { "type": "integer", "description": "Count of capabilities deployment grants." },
+        "total_missing": { "type": "integer", "description": "Count of required capabilities not granted." },
+        "total_excess": { "type": "integer", "description": "Count of granted capabilities not required." },
+        "total_unknown": { "type": "integer", "description": "Count of capabilities with unknown coverage." },
+        "unknown_ratio": { "type": "number", "description": "Fraction of capabilities that are unknown (0.0–1.0)." }
+      }
+    },
+    "required_capabilities": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/ci_capability_fact" },
+      "description": "Capabilities the code requires, derived from source analysis."
+    },
+    "granted_capabilities": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/ci_capability_fact" },
+      "description": "Capabilities the deployment environment grants."
+    },
+    "missing_capabilities": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/ci_reconciliation" },
+      "description": "Required capabilities not covered by any grant."
+    },
+    "excess_capabilities": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/ci_reconciliation" },
+      "description": "Granted capabilities not required by any code path."
+    },
+    "unknown_capabilities": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/ci_capability_fact" },
+      "description": "Capabilities whose coverage cannot be determined."
+    },
+    "review_decision": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["block", "warn", "approve"] },
+        "reason": { "type": "string" },
+        "missing_summary": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  },
+  "definitions": {
+    "ci_capability_fact": {
+      "type": "object",
+      "required": ["id", "category", "subject"],
+      "properties": {
+        "id": { "type": "string", "description": "Stable fact identifier." },
+        "category": {
+          "type": "string",
+          "description": "Capability category (e.g., object_storage, compute, network, secret_access, unknown)."
+        },
+        "provider": { "type": "string", "description": "Cloud/infra provider (e.g., aws, gcp, azure)." },
+        "service": { "type": "string", "description": "Provider service (e.g., s3, iam, kms)." },
+        "action": { "type": "string", "description": "Specific action (e.g., s3:PutObject, s3:DeleteObject)." },
+        "resource": { "type": "string", "description": "Target resource ARN or path." },
+        "subject": {
+          "type": "object",
+          "required": ["id"],
+          "properties": {
+            "id": { "type": "string" },
+            "kind": { "type": "string" },
+            "name": { "type": "string" }
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "file": { "type": "string" },
+              "line": { "type": "integer" },
+              "description": { "type": "string" },
+              "call_chain": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "unknown_reason": { "type": "string", "description": "Why this capability is unknown, if applicable." },
+        "confidence": { "type": "string", "enum": ["high", "medium", "low", "unknown"] }
+      }
+    },
+    "ci_reconciliation": {
+      "type": "object",
+      "required": ["capability", "status"],
+      "properties": {
+        "capability": { "type": "string", "description": "Human-readable capability label (e.g., 's3:DeleteObject on arn:aws:s3:::reports-prod/*')." },
+        "status": { "type": "string", "enum": ["missing", "excess", "covered", "unknown"] },
+        "required_by": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Subject IDs that require this capability."
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "file": { "type": "string" },
+              "line": { "type": "integer" },
+              "description": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

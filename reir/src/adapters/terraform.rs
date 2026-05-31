@@ -372,6 +372,209 @@ fn line_for_offset(text: &str, offset: usize) -> usize {
     text[..offset].bytes().filter(|byte| *byte == b'\n').count() + 1
 }
 
+/// Parse `terraform plan -json` (or `terraform show -json`) output into REIR grant facts.
+/// This handles the structured JSON plan format (resource_changes with after values).
+pub fn terraform_plan_json_to_bundle(plan_json: &str) -> Result<Bundle, String> {
+    let plan: Value = serde_json::from_str(plan_json)
+        .map_err(|e| format!("failed to parse terraform plan JSON: {e}"))?;
+
+    let mut facts = Vec::new();
+
+    // Handle both `terraform show -json` (has .values.root_module.resources)
+    // and `terraform plan -json` (has .resource_changes)
+    if let Some(changes) = plan.get("resource_changes").and_then(|v| v.as_array()) {
+        for change in changes {
+            let resource_type = change.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            let name = change.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let address = change.get("address").and_then(|v| v.as_str()).unwrap_or("");
+
+            if !matches!(
+                resource_type,
+                "aws_iam_role_policy"
+                    | "aws_iam_policy"
+                    | "aws_s3_bucket_policy"
+                    | "aws_iam_user_policy"
+                    | "aws_iam_group_policy"
+            ) {
+                continue;
+            }
+
+            let after = change
+                .get("change")
+                .and_then(|c| c.get("after"))
+                .unwrap_or(&Value::Null);
+
+            if let Some(policy_str) = after.get("policy").and_then(|v| v.as_str()) {
+                if let Ok(policy) = serde_json::from_str::<Value>(policy_str) {
+                    let block = TerraformResourceBlock {
+                        file: "terraform-plan".to_owned(),
+                        resource_type: resource_type.to_owned(),
+                        name: name.to_owned(),
+                        body: String::new(),
+                        line: 0,
+                    };
+                    facts.extend(policy_grant_facts_with_address(&block, &policy, address));
+                }
+            }
+        }
+    }
+
+    // Also handle `terraform show -json` state format
+    if let Some(values) = plan.get("values") {
+        if let Some(resources) = values
+            .get("root_module")
+            .and_then(|m| m.get("resources"))
+            .and_then(|r| r.as_array())
+        {
+            for resource in resources {
+                let resource_type = resource.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                let name = resource.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let address = resource
+                    .get("address")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                if !matches!(
+                    resource_type,
+                    "aws_iam_role_policy"
+                        | "aws_iam_policy"
+                        | "aws_s3_bucket_policy"
+                        | "aws_iam_user_policy"
+                        | "aws_iam_group_policy"
+                ) {
+                    continue;
+                }
+
+                let values_obj = resource.get("values").unwrap_or(&Value::Null);
+                if let Some(policy_str) = values_obj.get("policy").and_then(|v| v.as_str()) {
+                    if let Ok(policy) = serde_json::from_str::<Value>(policy_str) {
+                        let block = TerraformResourceBlock {
+                            file: "terraform-state".to_owned(),
+                            resource_type: resource_type.to_owned(),
+                            name: name.to_owned(),
+                            body: String::new(),
+                            line: 0,
+                        };
+                        facts.extend(policy_grant_facts_with_address(&block, &policy, address));
+                    }
+                }
+            }
+        }
+    }
+
+    let mut bundle = Bundle::new();
+    bundle.producers.push(crate::subject::Producer {
+        name: "terraform-plan".to_owned(),
+        version: PRODUCER_VERSION.to_owned(),
+        adapter: Some("reir.adapters.terraform_plan".to_owned()),
+        adapter_version: Some(ADAPTER_VERSION.to_owned()),
+        source: Some("terraform_plan_json".to_owned()),
+    });
+    bundle.facts = facts;
+    bundle.subjects = bundle
+        .facts
+        .iter()
+        .map(|fact| fact.subject.clone())
+        .collect();
+    bundle.slices = crate::slice_by_kind(&bundle);
+    Ok(bundle)
+}
+
+fn policy_grant_facts_with_address(
+    block: &TerraformResourceBlock,
+    policy: &Value,
+    address: &str,
+) -> Vec<Fact> {
+    let mut facts = Vec::new();
+    let statement_values = statements(policy);
+    for (statement_index, statement_value) in statement_values.iter().enumerate() {
+        let effect = statement_value
+            .get("Effect")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if effect != "Allow" {
+            continue;
+        }
+        let actions = json_string_or_array(statement_value, "Action");
+        let resources = json_string_or_array(statement_value, "Resource");
+
+        for action in &actions {
+            for resource in &resources {
+                let subject_id = format!("terraform::{}.{}", block.resource_type, block.name);
+                let subject = Subject {
+                    kind: SubjectKind::CloudPolicy,
+                    id: subject_id.clone(),
+                    name: Some(format!("{}.{}", block.resource_type, block.name)),
+                    package: Some("terraform".to_owned()),
+                };
+                facts.push(Fact {
+                    schema: FACT_SCHEMA.to_owned(),
+                    id: format!(
+                        "{}::{}::grant::{}::{}",
+                        subject_id,
+                        statement_index,
+                        sanitize_id(action),
+                        sanitize_id(resource)
+                    ),
+                    kind: FactKind::Capability,
+                    role: Some(FactRole::Granted),
+                    subject,
+                    capability: Some(Capability {
+                        category: capability_category_for_action(action),
+                        provider: Some("aws".to_owned()),
+                        service: Some(service_for_action(action).to_owned()),
+                        action: Some(action.clone()),
+                        resource: Some(resource.clone()),
+                        constraints: HashMap::new(),
+                    }),
+                    value: FactValue::True,
+                    confidence: Confidence {
+                        level: ConfidenceLevel::Computed,
+                        source: Some("terraform_plan_json".to_owned()),
+                    },
+                    acquisition_mode: AcquisitionMode::CloudPolicy,
+                    precision: Precision::ResourceScoped,
+                    evidence: vec![Evidence {
+                        kind: EvidenceKind::Extension("terraform_plan_resource".to_owned()),
+                        file: Some(block.file.clone()),
+                        line: Some(block.line),
+                        column: None,
+                        length: None,
+                        symbol: Some(address.to_owned()),
+                        reason: Some(format!("{address} grants {action} on {resource}")),
+                        json_pointer: None,
+                        resource: Some(resource.clone()),
+                        provider: Some("aws".to_owned()),
+                        value: None,
+                        event_id: None,
+                        time: None,
+                        source: Some("terraform_plan".to_owned()),
+                        event_name: None,
+                        principal: None,
+                        account: None,
+                        policy_arn: None,
+                        statement_index: Some(statement_index),
+                        action: Some(action.clone()),
+                    }],
+                    unknown_reason: None,
+                });
+            }
+        }
+    }
+    facts
+}
+
+fn json_string_or_array(obj: &Value, key: &str) -> Vec<String> {
+    match obj.get(key) {
+        Some(Value::String(s)) => vec![s.clone()],
+        Some(Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
+        _ => vec![],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,0 +1,104 @@
+name: 'RSScript PR Review'
+description: 'Run RSScript/REIR capability review on a PR and post a review comment'
+inputs:
+  head:
+    description: 'Path to the package directory to review'
+    required: true
+  grants:
+    description: 'Path to REIR grants bundle (deployment capabilities)'
+    required: true
+  target:
+    description: 'Deployment target name (e.g., prod, staging)'
+    required: false
+    default: 'prod'
+  format:
+    description: 'Output format: markdown, ci-json, sarif'
+    required: false
+    default: 'markdown'
+  post-comment:
+    description: 'Whether to post a PR comment (requires GITHUB_TOKEN)'
+    required: false
+    default: 'true'
+  fail-on-missing:
+    description: 'Fail the action if capabilities are missing'
+    required: false
+    default: 'true'
+
+outputs:
+  status:
+    description: 'Review status: pass, fail, warn, unknown'
+  comment:
+    description: 'The review comment text'
+  ci-json:
+    description: 'CI gate JSON output path'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install RSScript toolchain
+      shell: bash
+      run: |
+        if ! command -v rss &> /dev/null; then
+          echo "::group::Building RSScript from source"
+          cargo build --quiet --release --bin rss -p rsscript
+          cargo build --quiet --release --bin reir -p reir
+          echo "${{ github.workspace }}/target/release" >> $GITHUB_PATH
+          echo "::endgroup::"
+        fi
+
+    - name: Run review-pr
+      id: review
+      shell: bash
+      run: |
+        set +e
+        REVIEW_OUTPUT=$(rss review-pr \
+          --head "${{ inputs.head }}" \
+          --grants "${{ inputs.grants }}" \
+          --target "${{ inputs.target }}" \
+          --format "${{ inputs.format }}")
+        EXIT_CODE=$?
+        set -e
+
+        # Write outputs
+        echo "comment<<EOF" >> $GITHUB_OUTPUT
+        echo "$REVIEW_OUTPUT" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+        if [ $EXIT_CODE -ne 0 ]; then
+          echo "status=fail" >> $GITHUB_OUTPUT
+        else
+          echo "status=pass" >> $GITHUB_OUTPUT
+        fi
+
+        # Also produce CI JSON for structured consumption
+        CI_JSON=$(rss review-pr \
+          --head "${{ inputs.head }}" \
+          --grants "${{ inputs.grants }}" \
+          --target "${{ inputs.target }}" \
+          --format ci-json)
+        echo "$CI_JSON" > /tmp/rsscript-ci-gate.json
+        echo "ci-json=/tmp/rsscript-ci-gate.json" >> $GITHUB_OUTPUT
+
+    - name: Post PR comment
+      if: inputs.post-comment == 'true' && github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        COMMENT_BODY="${{ steps.review.outputs.comment }}"
+        if [ -n "$COMMENT_BODY" ]; then
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --body "$COMMENT_BODY" \
+            --edit-last || \
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --body "$COMMENT_BODY"
+        fi
+
+    - name: Gate on missing capabilities
+      if: inputs.fail-on-missing == 'true'
+      shell: bash
+      run: |
+        if [ "${{ steps.review.outputs.status }}" = "fail" ]; then
+          echo "::error::RSScript review found missing deployment capabilities. See PR comment for details."
+          exit 1
+        fi

@@ -3,7 +3,7 @@ use reir::adapters::rsscript::{
     rsscript_lock_json_to_bundle, rsscript_metadata_json_to_bundle,
     rsscript_publish_json_to_bundle, rsscript_tree_json_to_bundle, rsscript_vendor_json_to_bundle,
 };
-use reir::adapters::terraform::terraform_dir_to_bundle;
+use reir::adapters::terraform::{terraform_dir_to_bundle, terraform_plan_json_to_bundle};
 use reir::{
     Bundle, Capability, Diff, DiffItem, DiffItemKind, Evidence, Fact, FactRole, Reconciliation,
     ReconciliationKind, ReconciliationStatus, Slice, SliceKind, compute_diff,
@@ -17,6 +17,7 @@ use std::process::ExitCode;
 const USAGE: &str = "Usage:
   reir collect --producer rsscript [--review-map review-map.json] [--package-review package-review.json] [--package-check check.json] [--package-lock lock.json] [--lock-update lock-diff.json] [--package-tree tree.json] [--package-publish publish.json] [--package-metadata metadata.json] [--package-vendor vendor.json] [--package-name name] [--out bundle.json] [--json]
   reir collect --producer terraform --from infra/terraform [--out bundle.json] [--json]
+  reir collect --producer terraform-plan --from plan.json [--out bundle.json] [--json]
   reir reconcile --required required.json --granted granted.json [--target name] [--json]
   reir reconcile [--bundle bundle.json] [--target name] [--out reconciled.json] [--json]
   reir report-pr --required required.json --granted granted.json [--target name]
@@ -192,6 +193,28 @@ fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
         }
         return Ok(ExitCode::SUCCESS);
     }
+    if producer == "terraform-plan" {
+        let from_path = from
+            .ok_or_else(|| CliError::usage("terraform-plan collect requires --from <plan.json>"))?;
+        let plan_json = fs::read_to_string(&from_path)
+            .map_err(|error| CliError::runtime(format!("failed to read {from_path}: {error}")))?;
+        let bundle = terraform_plan_json_to_bundle(&plan_json).map_err(|error| {
+            CliError::runtime(format!(
+                "failed to collect Terraform plan JSON evidence: {error}"
+            ))
+        })?;
+        if let Some(out_path) = &out {
+            write_json_file(out_path, &bundle)?;
+            if !json {
+                println!("collected terraform plan evidence into {out_path}");
+                print_bundle_summary(&bundle);
+            }
+        }
+        if json || out.is_none() {
+            print_json(&bundle)?;
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
     if producer != "rsscript" {
         return Err(CliError::usage(format!(
             "`reir collect --producer {producer}` is planned; this build supports `rsscript` and `terraform`."
@@ -263,6 +286,7 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
     let mut required = None;
     let mut granted = None;
     let mut target = None;
+    let mut ci_json = false;
     let mut index = 0;
 
     while index < args.len() {
@@ -270,6 +294,7 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
             "--required" => required = Some(take_value(args, &mut index, "--required")?),
             "--granted" => granted = Some(take_value(args, &mut index, "--granted")?),
             "--target" => target = Some(take_value(args, &mut index, "--target")?),
+            "--ci-json" => ci_json = true,
             unknown => {
                 return Err(CliError::usage(format!(
                     "unknown report-pr flag `{unknown}`"
@@ -288,12 +313,22 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
         &granted_bundle.facts,
         target.as_deref(),
     );
-    let comment = format_pr_review_comment(
-        &required_bundle.facts,
-        &granted_bundle.facts,
-        &reconciliations,
-    );
-    Ok((exit_for_reconciliations(&reconciliations), comment))
+
+    let output = if ci_json {
+        let ci_output = reir::format_ci_gate_output(
+            &required_bundle.facts,
+            &granted_bundle.facts,
+            &reconciliations,
+        );
+        reir::format_ci_gate_json(&ci_output)
+    } else {
+        format_pr_review_comment(
+            &required_bundle.facts,
+            &granted_bundle.facts,
+            &reconciliations,
+        )
+    };
+    Ok((exit_for_reconciliations(&reconciliations), output))
 }
 
 fn try_run_reconcile(args: &[String]) -> Result<ExitCode, CliError> {
