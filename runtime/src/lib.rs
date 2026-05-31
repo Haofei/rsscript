@@ -9,7 +9,10 @@ use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 use std::str::Utf8Error;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{
+    Arc, Condvar, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, Instant};
 
 pub const RUNTIME_DIAGNOSTIC_PREFIX: &str = "RSSCRIPT_RUNTIME_DIAGNOSTIC:";
@@ -498,6 +501,26 @@ pub fn run_pending<T>(pending: impl Pending<T>) -> T {
 
 pub struct TaskGroup<T> {
     tasks: Vec<Box<dyn Pending<T>>>,
+    cancellation: CancellationToken,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CancellationToken {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl CancellationToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -511,7 +534,10 @@ pub enum TaskGroupJoin<T> {
 
 impl<T> TaskGroup<T> {
     pub fn new() -> Self {
-        Self { tasks: Vec::new() }
+        Self {
+            tasks: Vec::new(),
+            cancellation: CancellationToken::new(),
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -524,6 +550,14 @@ impl<T> TaskGroup<T> {
 
     pub fn spawn_pending(&mut self, pending: impl Pending<T> + 'static) {
         self.tasks.push(Box::new(pending));
+    }
+
+    pub fn cancellation_token(&self) -> CancellationToken {
+        self.cancellation.clone()
+    }
+
+    pub fn cancel(&self) {
+        self.cancellation.cancel();
     }
 
     pub fn join(self, executor: &mut Executor) -> Vec<T> {
@@ -558,11 +592,13 @@ impl<T> TaskGroup<T> {
     }
 
     pub fn join_until(self, executor: &mut Executor, deadline: Instant) -> TaskGroupJoin<T> {
+        let cancellation = self.cancellation.clone();
         let mut tasks = self.tasks;
         let mut outputs = (0..tasks.len()).map(|_| None).collect::<Vec<_>>();
         let mut remaining = tasks.len();
         while remaining > 0 {
             if Instant::now() >= deadline {
+                cancellation.cancel();
                 return TaskGroupJoin::TimedOut {
                     completed: outputs,
                     pending: remaining,
@@ -3016,6 +3052,36 @@ mod tests {
                 pending: 1
             } if completed == vec![Some(10), None]
         ));
+    }
+
+    #[test]
+    fn task_group_join_until_cancels_pending_tasks_on_timeout() {
+        struct NeverReady;
+
+        impl super::Pending<usize> for NeverReady {
+            fn poll(&mut self, _cx: &mut super::Context<'_>) -> super::AsyncPoll<usize> {
+                super::AsyncPoll::Pending
+            }
+        }
+
+        let mut group = super::TaskGroup::new();
+        let cancellation = group.cancellation_token();
+        group.spawn_pending(NeverReady);
+
+        let mut executor = super::Executor::new();
+        let outcome = group.join_until(
+            &mut executor,
+            std::time::Instant::now() + std::time::Duration::from_millis(1),
+        );
+
+        assert!(matches!(
+            outcome,
+            super::TaskGroupJoin::TimedOut {
+                completed,
+                pending: 1
+            } if completed == vec![None]
+        ));
+        assert!(cancellation.is_cancelled());
     }
 
     #[test]
