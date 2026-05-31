@@ -7325,6 +7325,28 @@ fn run(items: read List<Int>) -> Unit {
 }
 
 #[test]
+fn rust_lowering_for_loop_uses_read_view_for_non_copy_items() {
+    let source = r#"
+struct ReviewFacts {
+    name: String
+}
+
+fn first(items: read List<ReviewFacts>) -> String {
+    for facts in items {
+        return facts.name
+    }
+    return "none"
+}
+"#;
+    let diagnostics = analyze_source("for-read-view.rss", source);
+    assert_eq!(diagnostics, Vec::new());
+
+    let lowered = lower_source_to_rust("for-read-view.rss", source).expect("for should lower");
+    assert!(lowered.contains("for facts in (items).iter()"));
+    assert!(!lowered.contains("for facts in (items).iter().cloned()"));
+}
+
+#[test]
 fn review_map_marks_public_rssi_signatures_review_required() {
     let source = r#"
 struct JsonValue

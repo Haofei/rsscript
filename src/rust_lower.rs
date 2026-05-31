@@ -638,6 +638,7 @@ struct RustLowerer<'a> {
     param_effects: BTreeMap<String, DataEffect>,
     value_types: BTreeMap<String, TypeRef>,
     managed_bindings: BTreeSet<String>,
+    read_view_bindings: BTreeSet<String>,
     current_retained_params: BTreeSet<String>,
     mutated_bindings: BTreeSet<String>,
     drop_field_names: BTreeSet<String>,
@@ -675,6 +676,7 @@ impl<'a> RustLowerer<'a> {
             param_effects: BTreeMap::new(),
             value_types: BTreeMap::new(),
             managed_bindings: BTreeSet::new(),
+            read_view_bindings: BTreeSet::new(),
             current_retained_params: BTreeSet::new(),
             mutated_bindings: BTreeSet::new(),
             drop_field_names: BTreeSet::new(),
@@ -896,6 +898,7 @@ impl<'a> RustLowerer<'a> {
         let previous_param_effects = std::mem::take(&mut self.param_effects);
         let previous_value_types = std::mem::take(&mut self.value_types);
         let previous_managed_bindings = std::mem::take(&mut self.managed_bindings);
+        let previous_read_view_bindings = std::mem::take(&mut self.read_view_bindings);
         let previous_retained_params = std::mem::take(&mut self.current_retained_params);
         let previous_mutated_bindings = std::mem::take(&mut self.mutated_bindings);
         let previous_return_type = self.current_return_type.take();
@@ -959,6 +962,7 @@ impl<'a> RustLowerer<'a> {
         self.param_effects = previous_param_effects;
         self.value_types = previous_value_types;
         self.managed_bindings = previous_managed_bindings;
+        self.read_view_bindings = previous_read_view_bindings;
         self.current_retained_params = previous_retained_params;
         self.mutated_bindings = previous_mutated_bindings;
         self.current_return_type = previous_return_type;
@@ -1096,11 +1100,12 @@ impl<'a> RustLowerer<'a> {
                 let iterable = self.lower_expr(&stmt.iterable);
                 let previous_type = self.value_types.get(&stmt.binding).cloned();
                 let previous_managed = self.managed_bindings.contains(&stmt.binding);
-                if let Some(item_type) = self
+                let previous_read_view = self.read_view_bindings.contains(&stmt.binding);
+                let item_type = self
                     .infer_expr_type(&stmt.iterable)
                     .as_ref()
-                    .and_then(list_element_type_ref)
-                {
+                    .and_then(list_element_type_ref);
+                if let Some(item_type) = item_type.clone() {
                     if self.is_class_type(&item_type) {
                         self.managed_bindings.insert(stmt.binding.clone());
                     } else {
@@ -1108,8 +1113,15 @@ impl<'a> RustLowerer<'a> {
                     }
                     self.value_types.insert(stmt.binding.clone(), item_type);
                 }
+                let iterator = if item_type.as_ref().is_some_and(is_copy_type_ref) {
+                    self.read_view_bindings.remove(&stmt.binding);
+                    format!("({iterable}).iter().cloned()")
+                } else {
+                    self.read_view_bindings.insert(stmt.binding.clone());
+                    format!("({iterable}).iter()")
+                };
                 out.push_str(&format!(
-                    "{pad}for {} in ({iterable}).iter().cloned() {{\n",
+                    "{pad}for {} in {iterator} {{\n",
                     rust_ident(&stmt.binding)
                 ));
                 self.lower_block(&stmt.body, out, indent + 1);
@@ -1126,6 +1138,11 @@ impl<'a> RustLowerer<'a> {
                     self.managed_bindings.insert(stmt.binding.clone());
                 } else {
                     self.managed_bindings.remove(&stmt.binding);
+                }
+                if previous_read_view {
+                    self.read_view_bindings.insert(stmt.binding.clone());
+                } else {
+                    self.read_view_bindings.remove(&stmt.binding);
                 }
             }
             Stmt::Match(stmt) => {
@@ -1335,6 +1352,13 @@ impl<'a> RustLowerer<'a> {
             Expr::Ident(name, _) => {
                 if self.drop_field_names.contains(name) {
                     format!("self.{}", rust_ident(name))
+                } else if self.read_view_bindings.contains(name)
+                    && self
+                        .value_types
+                        .get(name)
+                        .is_some_and(|ty| !is_copy_type_ref(ty))
+                {
+                    format!("{}.clone()", rust_value_ident(name))
                 } else {
                     lower_builtin_value_ident(name)
                         .map(str::to_string)
@@ -1383,6 +1407,20 @@ impl<'a> RustLowerer<'a> {
                         lower_source_span(span),
                         rust_ident(name)
                     )
+                } else if self.expr_is_read_view(base) {
+                    let lowered = format!(
+                        "{}.{}",
+                        self.lower_read_view_base_expr(base),
+                        rust_ident(name)
+                    );
+                    if self
+                        .infer_expr_type(expr)
+                        .is_some_and(|ty| !is_copy_type_ref(&ty))
+                    {
+                        format!("{lowered}.clone()")
+                    } else {
+                        lowered
+                    }
                 } else {
                     format!("{}.{}", self.lower_expr(base), rust_ident(name))
                 }
@@ -1505,7 +1543,9 @@ impl<'a> RustLowerer<'a> {
                 span,
             } => match effect {
                 DataEffect::Read => {
-                    if self.expr_lowers_to_managed_non_class_handle(value) {
+                    if self.expr_is_read_view(value) {
+                        self.lower_read_view_expr(value)
+                    } else if self.expr_lowers_to_managed_non_class_handle(value) {
                         format!(
                             "&*rsscript_runtime::unwrap_runtime({}.try_read_at({}))",
                             self.lower_expr(value),
@@ -1598,6 +1638,40 @@ impl<'a> RustLowerer<'a> {
                 ..
             } => self.lower_expr(value),
             _ => self.lower_expr(expr),
+        }
+    }
+
+    fn expr_is_read_view(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Ident(name, _) => self.read_view_bindings.contains(name),
+            Expr::Field { base, .. } => self.expr_is_read_view(base),
+            Expr::Effect { value, .. } | Expr::Try { value, .. } => self.expr_is_read_view(value),
+            _ => false,
+        }
+    }
+
+    fn lower_read_view_base_expr(&mut self, expr: &Expr) -> String {
+        match expr {
+            Expr::Ident(name, _) if self.read_view_bindings.contains(name) => {
+                rust_value_ident(name)
+            }
+            _ => self.lower_expr(expr),
+        }
+    }
+
+    fn lower_read_view_expr(&mut self, expr: &Expr) -> String {
+        match expr {
+            Expr::Ident(name, _) if self.read_view_bindings.contains(name) => {
+                rust_value_ident(name)
+            }
+            Expr::Field { base, name, .. } if self.expr_is_read_view(base) => {
+                format!(
+                    "&{}.{}",
+                    self.lower_read_view_base_expr(base),
+                    rust_ident(name)
+                )
+            }
+            _ => format!("&{}", self.lower_expr(expr)),
         }
     }
 
@@ -2070,6 +2144,30 @@ fn list_element_type_ref(ty: &TypeRef) -> Option<TypeRef> {
     } else {
         None
     }
+}
+
+fn is_copy_type_ref(ty: &TypeRef) -> bool {
+    ty.args.is_empty()
+        && matches!(
+            ty.name.as_str(),
+            "Bool"
+                | "Byte"
+                | "Char"
+                | "Float"
+                | "Float32"
+                | "Float64"
+                | "Int"
+                | "Int8"
+                | "Int16"
+                | "Int32"
+                | "Int64"
+                | "UInt"
+                | "UInt8"
+                | "UInt16"
+                | "UInt32"
+                | "UInt64"
+                | "Unit"
+        )
 }
 
 fn is_result_constructor_expr(expr: &Expr) -> bool {
