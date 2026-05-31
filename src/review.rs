@@ -9,7 +9,7 @@ use crate::hir::{
 };
 use crate::syntax::ast::{
     Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature, FunctionDecl,
-    Item, LetKind, Param, ProtocolImpl, Stmt, TypeDecl, TypeKind, TypeRef,
+    Item, LetKind, Param, Program, ProtocolImpl, Stmt, TypeDecl, TypeKind, TypeRef, merge_programs,
 };
 use crate::syntax::parse_source;
 
@@ -310,10 +310,41 @@ pub fn format_review_json(findings: &[ReviewFinding]) -> String {
 }
 
 pub fn review_map_sources(sources: Vec<(&str, &str)>) -> ReviewMap {
-    let files: Vec<ReviewMapFile> = sources
+    let parsed_sources = sources
         .into_iter()
-        .map(|(file, source)| review_map_file(file, source))
-        .collect();
+        .map(|(file, source)| ReviewMapParsedSource {
+            file: file.to_string(),
+            total_lines: source.lines().count().max(1),
+            program: parse_source(file, source),
+        })
+        .collect::<Vec<_>>();
+    let merged_program = merge_programs(parsed_sources.iter().map(|source| source.program.clone()));
+    let hir = Hir::from_syntax(&merged_program);
+    let mut region_drafts = parsed_sources
+        .iter()
+        .flat_map(|source| review_map_file_region_drafts(source, &hir))
+        .collect::<Vec<_>>();
+    propagate_review_map_call_classifications(&mut region_drafts);
+
+    let files = parsed_sources
+        .iter()
+        .map(|source| {
+            let regions = region_drafts
+                .iter()
+                .filter(|draft| draft.file == source.file)
+                .map(|draft| draft.region.clone())
+                .collect();
+            let features = feature_names(&source.program.features);
+            ReviewMapFile {
+                file: source.file.clone(),
+                features,
+                risk: review_map_file_risk(&source.program.features),
+                reasons: review_map_file_reasons(&source.program.features),
+                regions,
+            }
+        })
+        .collect::<Vec<_>>();
+
     ReviewMap {
         summary: review_map_summary(&files),
         files,
@@ -397,10 +428,19 @@ fn review_map_summary(files: &[ReviewMapFile]) -> ReviewMapSummary {
     summary
 }
 
-fn review_map_file(file: &str, source: &str) -> ReviewMapFile {
-    let program = parse_source(file, source);
-    let hir = Hir::from_syntax(&program);
-    let mut function_lines = program
+#[derive(Debug, Clone)]
+struct ReviewMapParsedSource {
+    file: String,
+    total_lines: usize,
+    program: Program,
+}
+
+fn review_map_file_region_drafts(
+    source: &ReviewMapParsedSource,
+    hir: &Hir,
+) -> Vec<ReviewMapRegionDraft> {
+    let mut function_lines = source
+        .program
         .items
         .iter()
         .filter_map(|item| match item {
@@ -409,38 +449,26 @@ fn review_map_file(file: &str, source: &str) -> ReviewMapFile {
         })
         .collect::<Vec<_>>();
     function_lines.sort_by_key(|(_, line)| *line);
-    let total_lines = source.lines().count().max(1);
 
-    let mut region_drafts = program
+    source
+        .program
         .items
         .iter()
         .filter_map(|item| match item {
             Item::Function(function) => Some(review_map_region_draft(
+                &source.file,
                 function,
                 &hir,
                 &function_lines,
-                total_lines,
+                source.total_lines,
             )),
             Item::Type(_) => None,
         })
-        .collect::<Vec<_>>();
-    propagate_review_map_call_classifications(&mut region_drafts);
-    let regions = region_drafts
-        .into_iter()
-        .map(|draft| draft.region)
-        .collect();
-
-    let features = feature_names(&program.features);
-    ReviewMapFile {
-        file: file.to_string(),
-        features,
-        risk: review_map_file_risk(&program.features),
-        reasons: review_map_file_reasons(&program.features),
-        regions,
-    }
+        .collect()
 }
 
 fn review_map_region_draft(
+    file: &str,
     function: &FunctionDecl,
     hir: &Hir,
     function_lines: &[(String, usize)],
@@ -588,6 +616,7 @@ fn review_map_region_draft(
     };
 
     ReviewMapRegionDraft {
+        file: file.to_string(),
         region: ReviewMapRegion {
             function: function.name.clone(),
             classification,
@@ -606,6 +635,7 @@ fn review_map_region_draft(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReviewMapRegionDraft {
+    file: String,
     region: ReviewMapRegion,
     facts: ReviewMapFacts,
 }

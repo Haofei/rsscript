@@ -7,21 +7,22 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rsscript::{
     Diagnostic, analyze_source, analyze_source_with_interfaces,
     analyze_source_with_interfaces_without_core, analyze_source_without_core,
-    check_generated_rust_package, check_package_dir, core_interfaces, diff_package_dirs,
-    diff_package_locks, explain_diagnostic_code, format_diagnostic_explanation,
-    format_diagnostics_human, format_diagnostics_json, format_package_check_human,
-    format_package_check_json, format_package_diff_human, format_package_diff_json,
-    format_package_lock_diff_human, format_package_lock_diff_json, format_package_lock_json,
-    format_package_lock_toml, format_package_metadata_human, format_package_metadata_json,
-    format_package_publish_human, format_package_publish_json, format_package_review_human,
-    format_package_review_json, format_package_tree_human, format_package_tree_json,
-    format_package_vendor_human, format_package_vendor_json, format_review_human,
-    format_review_json, format_review_map_human, format_review_map_json, format_source,
-    lint_source, lock_package_dir, lower_source_to_rust, lower_source_to_rust_package,
-    lower_sources_to_rust_package_with_options, package_lowering_input, package_metadata,
-    package_tree, parse_runtime_diagnostics, parse_source_map_json,
-    publish_package_dry_run_with_registry, remap_rustc_diagnostic_json_lines, review_map_sources,
-    review_package_dir, review_sources, vendor_package_dir, write_generated_rust_package,
+    analyze_sources_with_interfaces, check_generated_rust_package, check_package_dir,
+    core_interfaces, diff_package_dirs, diff_package_locks, explain_diagnostic_code,
+    format_diagnostic_explanation, format_diagnostics_human, format_diagnostics_json,
+    format_package_check_human, format_package_check_json, format_package_diff_human,
+    format_package_diff_json, format_package_lock_diff_human, format_package_lock_diff_json,
+    format_package_lock_json, format_package_lock_toml, format_package_metadata_human,
+    format_package_metadata_json, format_package_publish_human, format_package_publish_json,
+    format_package_review_human, format_package_review_json, format_package_tree_human,
+    format_package_tree_json, format_package_vendor_human, format_package_vendor_json,
+    format_review_human, format_review_json, format_review_map_human, format_review_map_json,
+    format_source, lint_source, lock_package_dir, lower_source_to_rust,
+    lower_source_to_rust_package, lower_sources_to_rust_package_with_options,
+    package_lowering_input, package_metadata, package_tree, parse_runtime_diagnostics,
+    parse_source_map_json, publish_package_dry_run_with_registry,
+    remap_rustc_diagnostic_json_lines, review_map_sources, review_package_dir, review_sources,
+    vendor_package_dir, write_generated_rust_package,
 };
 
 pub fn run() -> ExitCode {
@@ -1184,10 +1185,11 @@ fn run_review_map(json: bool, path: &str) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let diagnostics = sources
+    let source_refs = sources
         .iter()
-        .flat_map(|source| analyze_source(&source.path, &source.contents))
+        .map(|source| (source.path.as_str(), source.contents.as_str()))
         .collect::<Vec<_>>();
+    let diagnostics = analyze_sources_with_interfaces(source_refs.as_slice(), &[]);
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity.is_error())
@@ -1196,10 +1198,6 @@ fn run_review_map(json: bool, path: &str) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let source_refs = sources
-        .iter()
-        .map(|source| (source.path.as_str(), source.contents.as_str()))
-        .collect();
     let map = review_map_sources(source_refs);
     if json {
         println!("{}", format_review_map_json(&map));

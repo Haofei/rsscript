@@ -7447,6 +7447,32 @@ fn wrapper(value: read Int) -> Int {
 }
 
 #[test]
+fn review_map_resolves_calls_across_source_sets() {
+    let helper = r#"
+fn helper() -> Unit {
+    return Unit
+}
+"#;
+    let entry = r#"
+fn entry() -> Unit {
+    helper()
+    return Unit
+}
+"#;
+    let map = review_map_sources(vec![("helper.rss", helper), ("entry.rss", entry)]);
+
+    assert_eq!(map.summary.total_functions, 2);
+    assert_eq!(map.summary.unknown.functions, 0);
+    assert!(map.files.iter().any(|file| {
+        file.file == "entry.rss"
+            && file.regions.iter().any(|region| {
+                region.function == "entry"
+                    && region.classification == ReviewMapClassification::Foldable
+            })
+    }));
+}
+
+#[test]
 fn review_map_marks_private_entry_functions_review_required() {
     let source = r#"
 fn helper(value: read Int) -> Int {
