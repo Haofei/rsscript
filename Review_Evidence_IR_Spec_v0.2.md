@@ -366,7 +366,7 @@ Example chain:
 
 ```json
 {
-  "schema": "reir.subject_chain.v0.1",
+  "schema": "reir.subject_chain.v0.2",
   "id": "chain.checkout.report_uploader.prod",
   "kind": "execution_subject_chain",
   "nodes": [
@@ -452,7 +452,7 @@ Minimal fact:
 
 ```json
 {
-  "schema": "reir.fact.v0.1",
+  "schema": "reir.fact.v0.2",
   "id": "fact.checkout.report_uploader.requires.s3_put_object",
   "kind": "capability",
   "role": "required",
@@ -540,7 +540,7 @@ Example:
 
 ```json
 {
-  "schema": "reir.fact.v0.1",
+  "schema": "reir.fact.v0.2",
   "id": "fact.checkout.role.grants.s3_put_object.unknown",
   "kind": "capability",
   "role": "granted",
@@ -887,7 +887,7 @@ k8s hostPath mount     -> container.host_access / filesystem.read/write dependin
 The capability ontology is versioned:
 
 ```text
-reir.capability_ontology.v0.1
+reir.capability_ontology.v0.2
 ```
 
 A REIR bundle must state which ontology version it uses. Adapters may emit
@@ -974,7 +974,7 @@ Minimal edge:
 
 ```json
 {
-  "schema": "reir.edge.v0.1",
+  "schema": "reir.edge.v0.2",
   "id": "edge.checkout.upload.requires.s3_put_object",
   "kind": "requires_capability",
   "from": { "kind": "code.function", "id": "checkout::ReportUploader.upload" },
@@ -1109,7 +1109,7 @@ proof of absence unless the observation source states sufficient coverage.
 
 ```json
 {
-  "schema": "reir.reconciliation.v0.1",
+  "schema": "reir.reconciliation.v0.2",
   "id": "recon.checkout.missing.s3_put_object.prod",
   "kind": "missing_capability",
   "status": "fail",
@@ -1375,14 +1375,14 @@ max_unknown_coverage = 0
 max_excess_grants = 5
 ```
 
-Complex condition languages are non-goals for REIR v0.1. External policy engines
+Complex condition languages are non-goals for REIR v0.2. External policy engines
 may consume REIR facts if projects need richer policy.
 
 ### 11.2 PolicyResult
 
 ```json
 {
-  "schema": "reir.policy_result.v0.1",
+  "schema": "reir.policy_result.v0.2",
   "id": "policy.prod.checkout.missing_capability.fail",
   "kind": "policy_result",
   "status": "fail",
@@ -1458,7 +1458,7 @@ Adapters should emit a coverage statement:
 
 ```json
 {
-  "schema": "reir.coverage.v0.1",
+  "schema": "reir.coverage.v0.2",
   "producer": "k8s-rendered-manifest",
   "covers": ["k8s desired state", "service account binding", "secret mounts"],
   "does_not_cover": ["mutating admission webhook result", "cloud load balancer final state"],
@@ -2177,7 +2177,7 @@ merged-bundle form shown above. In merged-bundle mode it reads required and
 granted facts by `role`, writes reconciliation results back into the bundle when
 `--out` is provided, and recomputes derived review slices.
 When `--target <name>` is supplied, the implemented CLI records that target name
-on each emitted `reir.reconciliation.v0.1` item and includes it in human output.
+on each emitted `reir.reconciliation.v0.2` item and includes it in human output.
 This is provenance for CI/review display; it does not filter facts by target.
 `reir diff` and `rss pkg reir diff` compare facts, edges, subject chains,
 reconciliations, slices, embedded diff artifacts, policy results, profile rules,
@@ -2214,8 +2214,8 @@ Bundle skeleton:
 
 ```json
 {
-  "schema": "reir.bundle.v0.1",
-  "ontology": "reir.capability_ontology.v0.1",
+  "schema": "reir.bundle.v0.2",
+  "ontology": "reir.capability_ontology.v0.2",
   "producers": [],
   "subjects": [],
   "subject_chains": [],
@@ -2297,7 +2297,7 @@ regeneration from source artifacts over trusting committed REIR facts.
 Fact
 Evidence
 Confidence / acquisition / precision
-Capability ontology v0.1
+Capability ontology v0.2
 SubjectChain
 ReconciliationResult
 Bundle
@@ -2354,7 +2354,7 @@ richer package capability metadata
 ## 24. Open Questions
 
 ```text
-1. How canonical should provider-specific capability mappings be in v0.1?
+1. How canonical should provider-specific capability mappings be in v0.2?
 2. Should provider IAM coverage be delegated to cloud-native analyzers or implemented in REIR tools?
 3. What is the minimum stable subject chain for the first MVP?
 4. How should symbolic resources be compared to concrete grants?
@@ -2366,7 +2366,7 @@ richer package capability metadata
 10. What is the right boundary between REIR policy evaluation and external policy engines?
 ```
 
-Not open for v0.1:
+Not open for v0.2:
 
 ```text
 - REIR is not executable.

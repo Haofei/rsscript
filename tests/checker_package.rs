@@ -4051,7 +4051,7 @@ fn rss_spec_keeps_protocol_dynamic_dispatch_deferred() {
             "v0.5 protocol dynamic dispatch must remain deferred, found `{forbidden}`"
         );
     }
-    assert!(spec.contains("Dynamic dispatch (deferred, not admitted in v0.5)"));
+    assert!(spec.contains("Dynamic dispatch (deferred, not admitted in v0.6)"));
     assert!(spec.contains("The only implemented and specified protocol call form is"));
     assert!(spec.contains("explicit `Protocol.method(...)` dispatch"));
 }

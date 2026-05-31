@@ -2154,7 +2154,7 @@ with ResourcePool.borrow(pool: mut pool) as a {
 }
 ```
 
-*v0.5 enforcement status: exhausted borrow is enforced at runtime (an empty pool
+*v0.6 enforcement status: exhausted borrow is enforced at runtime (an empty pool
 produces a resource-pool-empty diagnostic with a source span). The static active
 lease rule is a frontend obligation: nested borrow and any other read/mut/take
 or manage use of the same pool root inside the lease body are diagnostics before
@@ -2216,7 +2216,7 @@ Local containers may hold local struct values. Container elements do not partici
 
 ### 13.3 Resource containers
 
-Only approved resource containers may store resources. In v0.5, the standard resource container is:
+Only approved resource containers may store resources. In v0.6, the standard resource container is:
 
 ```text
 ResourcePool<T: Resource>
@@ -2293,13 +2293,13 @@ fn load(path: read Path) -> Result<Image, ImageError>
     effects(fresh)
 ```
 
-### 14.4 Executable async MVP in v0.5
+### 14.4 Executable async MVP
 
 `async fn` is a review-visible signature boundary and a restricted executable
-function kind in v0.5.
+function kind in v0.6.
 
 `features: async` permits declaring `async fn` signatures and writing executable
-async bodies that use direct `await`. It also permits the v0.5 structured
+async bodies that use direct `await`. It also permits the v0.6 structured
 `task_group { ... }` form with `async let` bindings; the group is isolate-local
 and exists only to make concurrent suspension boundaries explicit.
 
@@ -2319,7 +2319,7 @@ async fn main() -> Result<Unit, TimerError> {
 `async` is not an effect and must not be written in `effects(...)`. Internally,
 normalized metadata may record async functions as `function_kind: async` and
 `effects: ["suspends"]` so review tools can reason about suspension uniformly,
-but `suspends` is not a user-authored effect in v0.5.
+but `suspends` is not a user-authored effect in v0.6.
 
 `await` may appear only inside an `async fn` body. It does not become valid inside
 ordinary inline closures nested in an async function; those closures have their
@@ -2360,7 +2360,7 @@ and timeout joins so native wrappers can build nonblocking drivers without
 exposing Rust `Future`/`Waker` types. These are runtime implementation hooks, not
 RSScript source features.
 
-The v0.5 runtime may also host Rust async IO futures behind that pending ABI.
+The v0.6 runtime may also host Rust async IO futures behind that pending ABI.
 The reference runtime provides a Tokio-backed native future adapter for Rust
 wrappers that need high-concurrency IO. Tokio remains a runtime dependency and
 native-wrapper implementation detail: RSScript source still sees only
@@ -2373,10 +2373,10 @@ resolves `await handle` back to the `async let handle = callee(...)`
 initializer so the package review and REIR `async_boundary` fact still name the
 concrete awaited callee rather than only the lexical handle name.
 
-`spawn` is not executable in v0.5. Future unstructured task support must lower to
+`spawn` is not executable in v0.6. Future unstructured task support must lower to
 an isolate-local primitive or an explicit cross-isolate message API; it must not
 imply `Send`, shared heap transfer, or multi-threaded execution. Streams,
-channels, async closures, and public task handles remain post-v0.5 design work.
+channels, async closures, and public task handles remain post-v0.6 design work.
 
 ### 14.5 Generics
 
@@ -2468,10 +2468,10 @@ contracts raised to the type level — but they are not the same thing, and the
 shared word must not be reused for the language feature.
 
 A `protocol` is an app-layer capability contract, not a general trait system.
-The v0.5 MVP supports the static contract surface: protocol declarations,
+The v0.6 MVP supports the static contract surface: protocol declarations,
 protocol method signatures, protocol generic bounds, and explicit
 `Protocol.method(...)` calls checked against those signatures. Dynamic dispatch
-is not admitted in v0.5 source or package contracts.
+is not admitted in v0.6 source or package contracts.
 
 #### Positive model (what a protocol is)
 
@@ -2704,21 +2704,21 @@ Receiver-call shorthand satisfies the feature admission rule because:
    explicitly marked with the effect keyword and mechanically expandable.
 ```
 
-#### Dynamic dispatch (deferred, not admitted in v0.5)
+#### Dynamic dispatch (deferred, not admitted in v0.6)
 
-RSScript v0.5 does not admit protocol-typed dynamic dispatch, trait objects, or
+RSScript v0.6 does not admit protocol-typed dynamic dispatch, trait objects, or
 protocol-typed values. The only implemented and specified protocol call form is
 static, explicit `Protocol.method(...)` dispatch backed by an explicit generic
 bound or an explicit `impl Protocol for Type` declaration.
 
-Future protocol dynamic dispatch is a design target, not a v0.5 promise. It must
+Future protocol dynamic dispatch is a design target, not a v0.6 promise. It must
 go through feature admission again and must not be described as implemented,
 settled, or available to package contracts until syntax, checking, lowering,
 review evidence, and package metadata exist together.
 
 Closed sets should still prefer sealed sum types with exhaustive match
 (section 20.1), which are strictly more reviewable. For open sets such as
-runtime-registered plugins or third-party extensions, v0.5 packages should use
+runtime-registered plugins or third-party extensions, v0.6 packages should use
 explicit `.rssi` wrapper contracts and native/review boundaries rather than
 pretending that RSScript source has Rust trait-object power.
 
@@ -2738,11 +2738,11 @@ A form that cannot meet them is not admitted:
 5. Review classification: a protocol-dynamic call would need an explicit
    must-review reason owned by that future feature, with effects bounded by the
    protocol contract. It must not be treated as implemented package metadata in
-   v0.5.
+   v0.6.
 ```
 
 These constraints are necessary but not sufficient. They explain the review bar
-for a future feature; they do not grant v0.5 source, `.rssi`, package review, or
+for a future feature; they do not grant v0.6 source, `.rssi`, package review, or
 REIR permission to model protocol values or dynamic protocol calls.
 
 ### 14.7 `.rssi` interface files
@@ -2760,7 +2760,7 @@ feature set, but it must then ask the frontend to validate the effective
 interface. Package tooling must not implement an independent semantic
 normalizer and must not infer RSScript effects from Rust signatures.
 
-Provisional v0.5 interface-only surface:
+Provisional v0.6 interface-only surface:
 
 ```text
 features: <file features>       # same file-feature gate as source files
@@ -2779,7 +2779,7 @@ package public contract. New `.rssi` examples should prefer explicit `pub` for
 ordinary RSScript contracts, while `native fn ... effects(native)` remains the
 accepted bodyless native-wrapper shorthand.
 
-There is no package-level `namespace` shorthand in v0.5. Public contract symbols
+There is no package-level `namespace` shorthand in v0.6. Public contract symbols
 use the same fully-qualified canonical names as source files:
 
 ```rust
@@ -2818,7 +2818,7 @@ use rss.review.ReviewMap
 
 The module path is the file's declared package/module identity. A `use` path
 names an imported contract or module symbol and must be fully qualified. In the
-v0.5 prototype these declarations are parsed, preserved by formatting, and
+v0.6 prototype these declarations are parsed, preserved by formatting, and
 available to package/review tooling as organization metadata. `rss review map
 --json` includes them in a top-level `modules` array with exact source locations
 so downstream REIR tooling can emit `module_declaration` and `use_declaration`
@@ -2855,7 +2855,7 @@ candidates.
 
 A file without a `features:` declaration is managed-only.
 
-Recognized v0.5 active capability gates:
+Recognized v0.6 active capability gates:
 
 ```text
 local
@@ -2864,7 +2864,7 @@ unsafe
 async
 ```
 
-Reserved v0.5 review markers:
+Reserved v0.6 review markers:
 
 ```text
 device
@@ -2873,7 +2873,7 @@ reflection
 ```
 
 The reserved markers may be parsed and reported as review risk, but they do not
-unlock syntax, lowering, runtime behavior, or package-manager semantics in v0.5.
+unlock syntax, lowering, runtime behavior, or package-manager semantics in v0.6.
 Feature names are semantic capability gates or reserved review markers, not
 library categories. `Json`, `HTTP`, `Image`, and `Regex` are not file features.
 
@@ -2916,7 +2916,7 @@ native module File {
 }
 ```
 
-`native fn` declarations are bodyless in v0.5. A function with an RSScript body may be marked `effects(native)` only when its contract crosses a native boundary through calls or package wrapper bindings.
+`native fn` declarations are bodyless in v0.6. A function with an RSScript body may be marked `effects(native)` only when its contract crosses a native boundary through calls or package wrapper bindings.
 
 Native implementations must preserve RSScript semantics:
 
@@ -2935,9 +2935,9 @@ must preserve source location hooks where applicable
 
 The safe RSScript surface has no specified undefined behavior. Managed aliasing conflicts, resource-pool borrow conflicts, and runtime ownership conflicts must become diagnostics or runtime errors, not unchecked memory behavior.
 
-#### 15.4.1 v0.5 unsafe enforcement
+#### 15.4.1 v0.6 unsafe enforcement
 
-This is what the v0.5 checker enforces, with no contradiction:
+This is what the v0.6 checker enforces, with no contradiction:
 
 ```text
 - Declaring an effects(unsafe) function requires features: unsafe.
@@ -2945,14 +2945,14 @@ This is what the v0.5 checker enforces, with no contradiction:
   file, so a file cannot touch unsafe while looking feature-clean.
 - A function that contains an unsafe call is classified must-review (§16.3), and
   so is the file (file-level unsafe feature is high risk).
-- No per-call `unsafe` marker is accepted or required in v0.5. There is no
-  "missing unsafe marker" diagnostic in v0.5.
+- No per-call `unsafe` marker is accepted or required in v0.6. There is no
+  "missing unsafe marker" diagnostic in v0.6.
 ```
 
 A function that contains an unsafe call is **not** forced to declare
 `effects(unsafe)` itself: establishing a safe, reviewed abstraction over unsafe
 operations is the purpose of `unsafe`, the same way a safe function may contain a
-Rust `unsafe` block. In v0.5 what keeps unsafe from hiding is the `features:
+Rust `unsafe` block. In v0.6 what keeps unsafe from hiding is the `features:
 unsafe` file gate plus must-review classification; a function may still propagate
 `effects(unsafe)` when its own contract is unsafe.
 
@@ -2960,7 +2960,7 @@ unsafe` file gate plus must-review classification; a function may still propagat
 
 A future version may add a per-call `unsafe` marker for call-site-line locality
 (every unsafe crossing visible where it is read, like `read`/`mut`). It is
-deferred, not excluded; v0.5 ships no unsafe code, so it is scheduled for when
+deferred, not excluded; v0.6 ships no unsafe code, so it is scheduled for when
 unsafe usage makes line-level locality worth its cost. Its fixed contract:
 
 ```text
@@ -3282,7 +3282,7 @@ This table records the enforcement tier for the main v0.6 promises. The tier is
 part of the specification contract: implementations must not present a
 `review-only` or `unsupported` fact as a static safety guarantee.
 
-| Promise / behavior | v0.5 tier | Enforcement source |
+| Promise / behavior | v0.6 tier | Enforcement source |
 |---|---:|---|
 | Named arguments and required `read` / `mut` / `take` data effects | static | frontend checker |
 | Same-call conflict roots, including constructor and variant call-like forms | static | frontend checker |

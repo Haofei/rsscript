@@ -1296,7 +1296,7 @@ Normative hashing rules for v0.6:
 ```text
 algorithm: SHA-256
 encoding: UTF-8 canonical JSON emitted by the compiler frontend
-schema tag: included as the first field, e.g. "rss.interface.v0.5"
+schema tag: included as the first field, e.g. "rss.interface.v0.6"
 object keys: sorted lexicographically
 sets/maps: serialized as arrays sorted by canonical key
 feature sets: sorted lexicographically by feature name
@@ -1395,7 +1395,7 @@ the public surface.
 
 ```text
 effective_interface_hash = sha256(canonical_json({
-  schema: "rss.effective_interface.v0.5",
+  schema: "rss.effective_interface.v0.6",
   package: package_name,
   selected_features: sorted_feature_set,
   interface_content_hash: interface_content_hash,
@@ -2328,7 +2328,7 @@ transitive footprint exceeds policy
 duplicate capability exceeds policy
 ```
 
-The exact graph-cost formula is intentionally not standardized in v0.5. Tools
+The exact graph-cost formula is intentionally not standardized in v0.6. Tools
 may experiment, but they must report raw facts separately from any score.
 
 ---
@@ -2461,7 +2461,7 @@ rss pkg reir diff --json --fail-on-change --from review/reir-baseline.json --to 
 ```
 
 Registry-coordinate diffs, `--lockfile`/`--new-lockfile`, and update-plan diff
-UX are design targets, not part of the implemented v0.5 prototype surface.
+UX are design targets, not part of the implemented v0.6 prototype surface.
 
 ### 13.2 Diff inputs
 
@@ -2803,7 +2803,7 @@ Implemented v1 schema shape:
   ],
   "native_rust": null,
   "review_map": {
-    "schema": "rss.review.v0.5",
+    "schema": "rss.review.v0.6",
     "source": "package",
     "findings": []
   },
@@ -2824,7 +2824,7 @@ For async exports, `function_kind` is `"async"` and `normalized_effects` include
 `"suspends"` even though `suspends` is not a user-authored RSS effect.
 Future package metadata schemas may add nested `tool`, `interface`, and richer
 native conformance summaries, but those fields are not part of the implemented
-`rss.review.package.v1` artifact and must not be required by v0.5 registry or CI
+`rss.review.package.v1` artifact and must not be required by v0.6 registry or CI
 consumers.
 
 The implemented CLI also provides a direct REIR projection:
@@ -3213,7 +3213,7 @@ must be displayed and included in semantic dependency diff.
 ## 17. CLI Design
 
 Canonical package-management commands live under `rss pkg`. The implemented
-v0.5 prototype surface uses `--json` for package-manager JSON and `--reir` for
+v0.6 prototype surface uses `--json` for package-manager JSON and `--reir` for
 REIR bundle or diff JSON where listed:
 
 ```sh
@@ -3229,8 +3229,8 @@ rss pkg diff     [--json|--reir] <old-package-directory> <new-package-directory>
 rss pkg reir diff [--json] [--fail-on-change] --from <baseline-reir.json> --to <current-reir.json>
 ```
 
-No `rss package ...` command is defined for v0.5 tooling. No `rss review deps`
-alias is normative in v0.5. New dependency-review workflows should stay under
+No `rss package ...` command is defined for v0.6 tooling. No `rss review deps`
+alias is normative in v0.6. New dependency-review workflows should stay under
 `rss pkg diff`, `rss pkg review`, `rss pkg review update`, or future tested
 `rss pkg` subcommands; they should not introduce parallel command namespaces.
 
@@ -3420,7 +3420,7 @@ vendor/<name>-<version>/
 vendor/rss-vendor.json
 ```
 
-Registry support depends on resolver availability. Git dependencies are unsupported in v0.5 and must be rejected with a stable
+Registry support depends on resolver availability. Git dependencies are unsupported in v0.6 and must be rejected with a stable
 unsupported dependency-source diagnostic if encountered.
 
 In the implemented prototype, `--reir` converts the vendor report into a REIR
@@ -4047,7 +4047,7 @@ The following questions remain open for post-MVP design or implementation policy
     lockfile contract identity, or package acceptance decisions.
 ```
 
-Not open in v0.5:
+Not open in v0.6:
 
 ```text
 - .rssi normalization belongs to the compiler frontend, not an independent
@@ -4063,7 +4063,7 @@ Not open in v0.5:
 - provider implementation risk is not part of an interface effective hash;
   provider substitution is reported as graph-risk / implementation delta, not as
   a public contract delta.
-- v0.5 defines no package override, patch, or feature-pinning mechanism.
+- v0.6 defines no package override, patch, or feature-pinning mechanism.
 ```
 
 ---
