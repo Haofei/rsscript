@@ -94,7 +94,13 @@ fn run_package(args: &[String]) -> ExitCode {
 }
 
 fn run_lint(args: &[String]) -> ExitCode {
-    let options = parse_check_args(args);
+    let options = match parse_check_args(args) {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
     let Some(path) = options.path else {
         print_usage();
         return ExitCode::from(2);
@@ -158,7 +164,13 @@ fn run_check(args: &[String]) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let options = parse_check_args(args);
+    let options = match parse_check_args(args) {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
     let Some(path) = options.path else {
         print_usage();
         return ExitCode::from(2);
@@ -258,7 +270,13 @@ fn run_review(args: &[String]) -> ExitCode {
 }
 
 fn run_lower(args: &[String]) -> ExitCode {
-    let options = parse_lower_args(args);
+    let options = match parse_lower_args(args) {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
     if !options.emit_rust {
         print_usage();
         return ExitCode::from(2);
@@ -366,7 +384,13 @@ fn lower_cli_input_to_rust_package(
 }
 
 fn run_verify_rust(args: &[String]) -> ExitCode {
-    let options = parse_verify_args(args);
+    let options = match parse_verify_args(args) {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
     let Some(path) = options.path else {
         print_usage();
         return ExitCode::from(2);
@@ -440,7 +464,13 @@ fn run_verify_rust(args: &[String]) -> ExitCode {
 }
 
 fn run_generated_rust(args: &[String]) -> ExitCode {
-    let options = parse_run_args(args);
+    let options = match parse_run_args(args) {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
     let Some(path) = options.path else {
         print_usage();
         return ExitCode::from(2);
@@ -664,12 +694,14 @@ fn parse_multi_path_args(args: &[String]) -> (bool, Vec<&str>) {
     (json, paths)
 }
 
+#[derive(Debug)]
 struct LowerOptions<'a> {
     emit_rust: bool,
     path: Option<&'a str>,
     out_dir: Option<&'a str>,
 }
 
+#[derive(Debug)]
 struct RunOptions<'a> {
     json: bool,
     release: bool,
@@ -678,12 +710,14 @@ struct RunOptions<'a> {
     program_args: Vec<&'a str>,
 }
 
+#[derive(Debug)]
 struct VerifyOptions<'a> {
     json: bool,
     path: Option<&'a str>,
     out_dir: Option<&'a str>,
 }
 
+#[derive(Debug)]
 struct CheckOptions<'a> {
     json: bool,
     use_core: bool,
@@ -691,7 +725,7 @@ struct CheckOptions<'a> {
     interfaces: Vec<&'a str>,
 }
 
-fn parse_check_args(args: &[String]) -> CheckOptions<'_> {
+fn parse_check_args(args: &[String]) -> Result<CheckOptions<'_>, String> {
     let mut json = false;
     let mut use_core = true;
     let mut path = None;
@@ -707,24 +741,27 @@ fn parse_check_args(args: &[String]) -> CheckOptions<'_> {
             use_core = false;
         } else if arg == "--interface" {
             index += 1;
-            if let Some(interface) = args.get(index) {
-                interfaces.push(interface.as_str());
-            }
+            let interface = required_flag_value(args, index, "--interface")?;
+            interfaces.push(interface);
+        } else if arg.starts_with("--") {
+            return Err(format!("unknown argument `{arg}`."));
         } else if path.is_none() {
             path = Some(arg.as_str());
+        } else {
+            return Err(format!("unexpected extra path `{arg}`."));
         }
         index += 1;
     }
 
-    CheckOptions {
+    Ok(CheckOptions {
         json,
         use_core,
         path,
         interfaces,
-    }
+    })
 }
 
-fn parse_lower_args(args: &[String]) -> LowerOptions<'_> {
+fn parse_lower_args(args: &[String]) -> Result<LowerOptions<'_>, String> {
     let mut emit_rust = false;
     let mut path = None;
     let mut out_dir = None;
@@ -735,21 +772,25 @@ fn parse_lower_args(args: &[String]) -> LowerOptions<'_> {
             emit_rust = true;
         } else if arg == "--out-dir" {
             index += 1;
-            out_dir = args.get(index).map(String::as_str);
+            out_dir = Some(required_flag_value(args, index, "--out-dir")?);
+        } else if arg.starts_with("--") {
+            return Err(format!("unknown argument `{arg}`."));
         } else if path.is_none() {
             path = Some(arg.as_str());
+        } else {
+            return Err(format!("unexpected extra path `{arg}`."));
         }
         index += 1;
     }
 
-    LowerOptions {
+    Ok(LowerOptions {
         emit_rust,
         path,
         out_dir,
-    }
+    })
 }
 
-fn parse_run_args(args: &[String]) -> RunOptions<'_> {
+fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
     let mut json = false;
     let mut release = false;
     let mut path = None;
@@ -767,7 +808,9 @@ fn parse_run_args(args: &[String]) -> RunOptions<'_> {
             release = true;
         } else if arg == "--out-dir" {
             index += 1;
-            out_dir = args.get(index).map(String::as_str);
+            out_dir = Some(required_flag_value(args, index, "--out-dir")?);
+        } else if arg.starts_with("--") && path.is_none() {
+            return Err(format!("unknown argument `{arg}`."));
         } else if path.is_none() {
             path = Some(arg.as_str());
         } else {
@@ -776,16 +819,16 @@ fn parse_run_args(args: &[String]) -> RunOptions<'_> {
         index += 1;
     }
 
-    RunOptions {
+    Ok(RunOptions {
         json,
         release,
         path,
         out_dir,
         program_args,
-    }
+    })
 }
 
-fn parse_verify_args(args: &[String]) -> VerifyOptions<'_> {
+fn parse_verify_args(args: &[String]) -> Result<VerifyOptions<'_>, String> {
     let mut json = false;
     let mut path = None;
     let mut out_dir = None;
@@ -796,18 +839,36 @@ fn parse_verify_args(args: &[String]) -> VerifyOptions<'_> {
             json = true;
         } else if arg == "--out-dir" {
             index += 1;
-            out_dir = args.get(index).map(String::as_str);
+            out_dir = Some(required_flag_value(args, index, "--out-dir")?);
+        } else if arg.starts_with("--") {
+            return Err(format!("unknown argument `{arg}`."));
         } else if path.is_none() {
             path = Some(arg.as_str());
+        } else {
+            return Err(format!("unexpected extra path `{arg}`."));
         }
         index += 1;
     }
 
-    VerifyOptions {
+    Ok(VerifyOptions {
         json,
         path,
         out_dir,
+    })
+}
+
+fn required_flag_value<'a>(
+    args: &'a [String],
+    index: usize,
+    flag: &str,
+) -> Result<&'a str, String> {
+    let Some(value) = args.get(index) else {
+        return Err(format!("missing value for `{flag}`."));
+    };
+    if value.starts_with("--") {
+        return Err(format!("missing value for `{flag}`."));
     }
+    Ok(value.as_str())
 }
 
 struct InterfaceSource {
@@ -1521,7 +1582,7 @@ mod tests {
             "--",
             "input",
         ]);
-        let options = parse_run_args(&values);
+        let options = parse_run_args(&values).expect("arguments should parse");
 
         assert!(options.json);
         assert!(options.release);
@@ -1532,10 +1593,42 @@ mod tests {
     #[test]
     fn parse_run_args_treats_release_after_separator_as_program_arg() {
         let values = args(&["rss/rayon/tests/sort-speed", "--", "--release"]);
-        let options = parse_run_args(&values);
+        let options = parse_run_args(&values).expect("arguments should parse");
 
         assert!(!options.release);
         assert_eq!(options.path, Some("rss/rayon/tests/sort-speed"));
         assert_eq!(options.program_args, vec!["--release"]);
+    }
+
+    #[test]
+    fn parse_check_args_rejects_missing_interface_value() {
+        let values = args(&["--interface", "--json", "demo.rss"]);
+        let error = super::parse_check_args(&values).expect_err("missing interface should fail");
+
+        assert_eq!(error, "missing value for `--interface`.");
+    }
+
+    #[test]
+    fn parse_lower_args_rejects_unknown_flags() {
+        let values = args(&["--rust", "--wat", "demo.rss"]);
+        let error = super::parse_lower_args(&values).expect_err("unknown flag should fail");
+
+        assert_eq!(error, "unknown argument `--wat`.");
+    }
+
+    #[test]
+    fn parse_verify_args_rejects_extra_paths() {
+        let values = args(&["one.rss", "two.rss"]);
+        let error = super::parse_verify_args(&values).expect_err("extra path should fail");
+
+        assert_eq!(error, "unexpected extra path `two.rss`.");
+    }
+
+    #[test]
+    fn parse_run_args_rejects_missing_out_dir_value() {
+        let values = args(&["demo.rss", "--out-dir"]);
+        let error = parse_run_args(&values).expect_err("missing out-dir should fail");
+
+        assert_eq!(error, "missing value for `--out-dir`.");
     }
 }
