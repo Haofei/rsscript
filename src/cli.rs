@@ -5,7 +5,7 @@ use std::process::{Command, ExitCode};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rsscript::{
-    Diagnostic, analyze_source, analyze_source_with_interfaces,
+    Diagnostic, ReviewMap, analyze_source, analyze_source_with_interfaces,
     analyze_source_with_interfaces_without_core, analyze_source_without_core,
     analyze_sources_with_interfaces, check_generated_rust_package, check_package_dir,
     core_interfaces, diff_package_dirs, diff_package_locks, explain_diagnostic_code,
@@ -1272,18 +1272,13 @@ fn run_review_diff(json: bool, old_path: &str, new_path: &str) -> ExitCode {
 }
 
 fn run_review_map(json: bool, path: &str) -> ExitCode {
-    let sources = match read_review_map_sources(path) {
-        Ok(sources) => sources,
+    let (map, diagnostics) = match review_map_for_path(path) {
+        Ok(result) => result,
         Err(error) => {
             eprintln!("{error}");
             return ExitCode::from(2);
         }
     };
-    let source_refs = sources
-        .iter()
-        .map(|source| (source.path.as_str(), source.contents.as_str()))
-        .collect::<Vec<_>>();
-    let diagnostics = analyze_sources_with_interfaces(source_refs.as_slice(), &[]);
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity.is_error())
@@ -1292,13 +1287,31 @@ fn run_review_map(json: bool, path: &str) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let map = review_map_sources(source_refs);
     if json {
         println!("{}", format_review_map_json(&map));
     } else {
         print!("{}", format_review_map_human(&map));
     }
     ExitCode::SUCCESS
+}
+
+fn review_map_for_path(path: &str) -> Result<(ReviewMap, Vec<Diagnostic>), String> {
+    if is_package_directory(path) {
+        let review = review_package_dir(Path::new(path))?;
+        return Ok((review.review_map, review.diagnostics));
+    }
+
+    let sources = match read_review_map_sources(path) {
+        Ok(sources) => sources,
+        Err(error) => return Err(error),
+    };
+    let source_refs = sources
+        .iter()
+        .map(|source| (source.path.as_str(), source.contents.as_str()))
+        .collect::<Vec<_>>();
+    let diagnostics = analyze_sources_with_interfaces(source_refs.as_slice(), &[]);
+    let map = review_map_sources(source_refs);
+    Ok((map, diagnostics))
 }
 
 fn run_package_check(json: bool, path: &str) -> ExitCode {
@@ -1663,6 +1676,87 @@ mod tests {
     }
 
     #[test]
+    fn review_map_for_path_uses_package_review_environment() {
+        let dep = unique_temp_dir("review-map-package-dep");
+        fs::create_dir_all(dep.join("interface")).expect("dependency interface dir should create");
+        fs::write(
+            dep.join("rsspkg.toml"),
+            r#"[package]
+name = "rss-review-map-dep"
+version = "0.1.0"
+edition = "2026"
+
+[interfaces]
+paths = ["interface"]
+"#,
+        )
+        .expect("dependency manifest should write");
+        fs::write(
+            dep.join("interface/lib.rssi"),
+            r#"features: native
+
+native fn Dep.echo(message: read String) -> String
+    effects(native)
+"#,
+        )
+        .expect("dependency interface should write");
+
+        let root = unique_temp_dir("review-map-package-root");
+        fs::create_dir_all(root.join("interface")).expect("root interface dir should create");
+        fs::create_dir_all(root.join("src")).expect("root source dir should create");
+        fs::write(
+            root.join("rsspkg.toml"),
+            format!(
+                r#"[package]
+name = "rss-review-map-root"
+version = "0.1.0"
+edition = "2026"
+
+[interfaces]
+paths = ["interface"]
+
+[dependencies]
+rss-review-map-dep = {{ path = "{}" }}
+"#,
+                toml_path(&dep)
+            ),
+        )
+        .expect("root manifest should write");
+        fs::write(
+            root.join("interface/lib.rssi"),
+            "pub fn Api.run(message: read String) -> String\n",
+        )
+        .expect("root interface should write");
+        fs::write(
+            root.join("src/main.rss"),
+            r#"features: native
+
+pub fn Api.run(message: read String) -> String {
+    return Dep.echo(message: read message)
+}
+"#,
+        )
+        .expect("root source should write");
+
+        let (map, diagnostics) = super::review_map_for_path(root.to_str().expect("utf-8 path"))
+            .expect("package review map should load");
+        fs::remove_dir_all(root).expect("root temp package should clean up");
+        fs::remove_dir_all(dep).expect("dependency temp package should clean up");
+
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(map.summary.unknown.functions, 0);
+        assert!(map.files.iter().any(|file| {
+            file.regions.iter().any(|region| {
+                region.function == "Api.run"
+                    && region
+                        .reasons
+                        .iter()
+                        .any(|reason| reason == "native call `Dep.echo`")
+            })
+        }));
+    }
+
+    #[test]
     fn parse_lower_args_rejects_unknown_flags() {
         let values = args(&["--rust", "--wat", "demo.rss"]);
         let error = super::parse_lower_args(&values).expect_err("unknown flag should fail");
@@ -1731,5 +1825,9 @@ mod tests {
         let path = std::env::temp_dir().join(format!("{name}-{}-{nanos}", std::process::id()));
         fs::create_dir_all(&path).expect("temp directory should create");
         path
+    }
+
+    fn toml_path(path: &std::path::Path) -> String {
+        path.display().to_string().replace('\\', "\\\\")
     }
 }
