@@ -490,11 +490,14 @@ fn package_function_review_export(
             reasons.push(effect.clone());
         } else if matches!(effect.as_str(), "native" | "unsafe") {
             reasons.push(format!("{effect} boundary"));
-        } else if matches!(
-            effect.as_str(),
-            "no_panic" | "noalloc" | "no_block" | "pure"
-        ) {
-            reasons.push(format!("guarantee `{effect}`"));
+        } else if is_guarantee_effect(effect) {
+            if contract.effects.contains("native") {
+                reasons.push(format!(
+                    "review-only guarantee `{effect}` on native boundary"
+                ));
+            } else {
+                reasons.push(format!("guarantee `{effect}`"));
+            }
         }
     }
     let classification = if package_review_map_function_is_unknown(&contract.name, review_map) {
@@ -535,6 +538,10 @@ fn package_protocol_impl_review_export(
         classification: "review_if_changed".to_string(),
         reasons,
     }
+}
+
+fn is_guarantee_effect(effect: &str) -> bool {
+    matches!(effect, "no_panic" | "noalloc" | "no_block" | "pure")
 }
 
 fn package_review_map_function_is_unknown(function: &str, review_map: &ReviewMap) -> bool {

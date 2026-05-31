@@ -166,6 +166,8 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         retaining_apis: api_summary.retaining_apis,
         resource_apis: api_summary.resource_apis,
         fresh_returning_apis: api_summary.fresh_returning_apis,
+        guarantee_apis: api_summary.guarantee_apis,
+        native_guarantee_apis: api_summary.native_guarantee_apis,
         native_apis: api_summary.native_apis,
         parallel_apis: api_summary.parallel_apis,
         unsafe_apis: api_summary.unsafe_apis,
@@ -384,6 +386,8 @@ struct PackageApiSummary {
     retaining_apis: usize,
     resource_apis: usize,
     fresh_returning_apis: usize,
+    guarantee_apis: usize,
+    native_guarantee_apis: usize,
     native_apis: usize,
     parallel_apis: usize,
     unsafe_apis: usize,
@@ -450,6 +454,25 @@ fn package_api_effect_summary(
             .values()
             .filter(|contract| contract.returns_fresh)
             .count(),
+        guarantee_apis: contracts
+            .values()
+            .filter(|contract| {
+                contract
+                    .effects
+                    .iter()
+                    .any(|effect| is_guarantee_effect(effect))
+            })
+            .count(),
+        native_guarantee_apis: contracts
+            .values()
+            .filter(|contract| {
+                contract.effects.iter().any(|effect| effect == "native")
+                    && contract
+                        .effects
+                        .iter()
+                        .any(|effect| is_guarantee_effect(effect))
+            })
+            .count(),
         native_apis: contracts
             .values()
             .filter(|contract| {
@@ -479,6 +502,10 @@ fn package_api_effect_summary(
             .count(),
         unknown_apis: package_unknown_api_count(contracts, review_map),
     }
+}
+
+fn is_guarantee_effect(effect: &str) -> bool {
+    matches!(effect, "no_panic" | "noalloc" | "no_block" | "pure")
 }
 
 fn package_unknown_api_count(

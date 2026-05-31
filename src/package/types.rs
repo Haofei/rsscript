@@ -367,6 +367,8 @@ pub struct PackageReviewSummary {
     pub retaining_apis: usize,
     pub resource_apis: usize,
     pub fresh_returning_apis: usize,
+    pub guarantee_apis: usize,
+    pub native_guarantee_apis: usize,
     pub native_apis: usize,
     pub parallel_apis: usize,
     pub unsafe_apis: usize,

@@ -8682,6 +8682,18 @@ pub fn Api.overloaded<A, B, C, D>(
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert_eq!(json["summary"]["errors"], 0);
+    assert_eq!(json["summary"]["guarantee_apis"], 1);
+    assert_eq!(json["summary"]["native_guarantee_apis"], 1);
+    assert!(json["exports"].as_array().is_some_and(|exports| {
+        exports.iter().any(|export| {
+            export["name"] == "Api.overloaded"
+                && export["reasons"].as_array().is_some_and(|reasons| {
+                    reasons
+                        .iter()
+                        .any(|reason| reason == "review-only guarantee `pure` on native boundary")
+                })
+        })
+    }));
     assert!(json["reasons"].as_array().is_some_and(|reasons| {
         reasons
             .iter()
