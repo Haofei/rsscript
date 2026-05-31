@@ -33,8 +33,8 @@ pub struct Bundle {
 impl Bundle {
     pub fn new() -> Self {
         Self {
-            schema: "reir.bundle.v0.1".to_string(),
-            ontology: "reir.capability_ontology.v0.1".to_string(),
+            schema: "reir.bundle.v0.2".to_string(),
+            ontology: "reir.capability_ontology.v0.2".to_string(),
             producers: Vec::new(),
             subjects: Vec::new(),
             subject_chains: Vec::new(),

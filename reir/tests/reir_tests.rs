@@ -284,8 +284,8 @@ fn bundle_serialization_round_trip() {
     let policy_results = evaluate_policy(&missing_profile(), &reconciliations);
 
     let bundle_without_diff = Bundle {
-        schema: "reir.bundle.v0.1".to_owned(),
-        ontology: "reir.capability_ontology.v0.1".to_owned(),
+        schema: "reir.bundle.v0.2".to_owned(),
+        ontology: "reir.capability_ontology.v0.2".to_owned(),
         producers: vec![producer()],
         subjects: vec![required.subject.clone(), granted.subject.clone()],
         subject_chains: vec![chain],
@@ -933,7 +933,11 @@ fn diff_detects_review_artifact_additions_and_removals() {
 
 #[test]
 fn diff_detects_bundle_metadata_changes() {
-    let baseline = Bundle::new();
+    let baseline = Bundle {
+        schema: "reir.bundle.v0.1".to_owned(),
+        ontology: "reir.capability_ontology.v0.1".to_owned(),
+        ..Bundle::new()
+    };
     let current = Bundle {
         schema: "reir.bundle.v0.2".to_owned(),
         ontology: "reir.capability_ontology.v0.2".to_owned(),

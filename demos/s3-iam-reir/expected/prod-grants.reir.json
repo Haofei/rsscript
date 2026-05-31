@@ -1,6 +1,6 @@
 {
-  "schema": "reir.bundle.v0.1",
-  "ontology": "reir.capability_ontology.v0.1",
+  "schema": "reir.bundle.v0.2",
+  "ontology": "reir.capability_ontology.v0.2",
   "producers": [],
   "subjects": [],
   "subject_chains": [],

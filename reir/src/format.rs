@@ -1,5 +1,5 @@
 use crate::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Write;
 
 /// Format reconciliation results as human-readable text.
@@ -94,54 +94,44 @@ pub fn format_pr_review_comment(
     reconciliations: &[Reconciliation],
 ) -> String {
     let mut output = String::new();
-    let mut seen_missing = HashSet::new();
-    let missing = reconciliations
-        .iter()
-        .filter(|reconciliation| reconciliation.kind == ReconciliationKind::MissingCapability)
-        .filter(|reconciliation| {
-            reconciliation
-                .capability
-                .as_ref()
-                .is_none_or(|capability| seen_missing.insert(pr_capability_label(capability)))
-        })
-        .collect::<Vec<_>>();
-    let required = if missing.is_empty() {
+    let missing_groups = pr_missing_groups(required_facts, reconciliations);
+    let covered_required = missing_groups.is_empty().then(|| {
         required_facts
             .iter()
             .filter(|fact| fact.role == Some(FactRole::Required))
             .collect::<Vec<_>>()
-    } else {
-        missing
-            .iter()
-            .filter_map(|reconciliation| reconciliation.required_fact.as_deref())
-            .filter_map(|id| required_facts.iter().find(|fact| fact.id == id))
-            .collect::<Vec<_>>()
-    };
+    });
 
     writeln!(output, "## RSScript / REIR deployment review\n").unwrap();
     writeln!(
         output,
         "Status: {}\n",
-        if missing.is_empty() { "PASS" } else { "FAIL" }
+        if missing_groups.is_empty() {
+            "PASS"
+        } else {
+            "FAIL"
+        }
     )
     .unwrap();
 
-    writeln!(
-        output,
-        "### Required capabilities needing deployment grant\n"
-    )
-    .unwrap();
-    if required.is_empty() {
-        writeln!(output, "- none\n").unwrap();
+    if let Some(required) = covered_required {
+        writeln!(output, "### Covered required capabilities\n").unwrap();
+        if required.is_empty() {
+            writeln!(output, "- none\n").unwrap();
+        } else {
+            for fact in &required {
+                write_pr_required_fact(&mut output, fact);
+            }
+            writeln!(output).unwrap();
+        }
     } else {
-        for fact in &required {
-            writeln!(output, "- subject: {}", pr_subject_name(fact)).unwrap();
-            if let Some(capability) = &fact.capability {
-                writeln!(output, "  capability: {}", pr_capability_label(capability)).unwrap();
-            }
-            if let Some(evidence) = fact.evidence.first() {
-                writeln!(output, "  evidence: {}", pr_evidence_label(evidence)).unwrap();
-            }
+        writeln!(
+            output,
+            "### Required capabilities needing deployment grant\n"
+        )
+        .unwrap();
+        for group in &missing_groups {
+            write_pr_missing_group(&mut output, group);
         }
         writeln!(output).unwrap();
     }
@@ -175,19 +165,17 @@ pub fn format_pr_review_comment(
     }
 
     writeln!(output, "### Missing capabilities\n").unwrap();
-    if missing.is_empty() {
+    if missing_groups.is_empty() {
         writeln!(output, "- none\n").unwrap();
     } else {
-        for reconciliation in &missing {
-            if let Some(capability) = &reconciliation.capability {
-                writeln!(output, "- {}", pr_missing_capability_label(capability)).unwrap();
-            }
+        for group in &missing_groups {
+            write_pr_missing_group(&mut output, group);
         }
         writeln!(output).unwrap();
     }
 
     writeln!(output, "### Review decision\n").unwrap();
-    if missing.is_empty() {
+    if missing_groups.is_empty() {
         writeln!(output, "No missing deployment capability was found.").unwrap();
     } else {
         writeln!(
@@ -197,6 +185,78 @@ pub fn format_pr_review_comment(
         .unwrap();
     }
     output
+}
+
+struct PrMissingGroup<'a> {
+    capability_label: String,
+    missing_label: String,
+    required_facts: Vec<&'a Fact>,
+}
+
+fn pr_missing_groups<'a>(
+    required_facts: &'a [Fact],
+    reconciliations: &[Reconciliation],
+) -> Vec<PrMissingGroup<'a>> {
+    let mut group_indexes = HashMap::new();
+    let mut groups = Vec::new();
+    for reconciliation in reconciliations
+        .iter()
+        .filter(|reconciliation| reconciliation.kind == ReconciliationKind::MissingCapability)
+    {
+        let Some(capability) = &reconciliation.capability else {
+            continue;
+        };
+        let capability_label = pr_capability_label(capability);
+        let group_index = *group_indexes
+            .entry(capability_label.clone())
+            .or_insert_with(|| {
+                groups.push(PrMissingGroup {
+                    capability_label,
+                    missing_label: pr_missing_capability_label(capability),
+                    required_facts: Vec::new(),
+                });
+                groups.len() - 1
+            });
+        let Some(required_fact) = reconciliation
+            .required_fact
+            .as_deref()
+            .and_then(|id| required_facts.iter().find(|fact| fact.id == id))
+        else {
+            continue;
+        };
+        if !groups[group_index]
+            .required_facts
+            .iter()
+            .any(|fact| fact.id == required_fact.id)
+        {
+            groups[group_index].required_facts.push(required_fact);
+        }
+    }
+    groups
+}
+
+fn write_pr_required_fact(output: &mut String, fact: &Fact) {
+    writeln!(output, "- subject: {}", pr_subject_name(fact)).unwrap();
+    if let Some(capability) = &fact.capability {
+        writeln!(output, "  capability: {}", pr_capability_label(capability)).unwrap();
+    }
+    if let Some(evidence) = fact.evidence.first() {
+        writeln!(output, "  evidence: {}", pr_evidence_label(evidence)).unwrap();
+    }
+}
+
+fn write_pr_missing_group(output: &mut String, group: &PrMissingGroup<'_>) {
+    writeln!(output, "- {}", group.missing_label).unwrap();
+    writeln!(output, "  capability: {}", group.capability_label).unwrap();
+    if !group.required_facts.is_empty() {
+        writeln!(output, "  required by:").unwrap();
+        for fact in &group.required_facts {
+            writeln!(output, "    - subject: {}", pr_subject_name(fact)).unwrap();
+            if let Some(evidence) = fact.evidence.first() {
+                writeln!(output, "      evidence: {}", pr_evidence_label(evidence)).unwrap();
+            }
+        }
+    }
 }
 
 /// Format a diff as human-readable text (spec section 9.4 format).

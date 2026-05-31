@@ -169,8 +169,8 @@ pub fn NativeBridge.run(value: read Int) -> Int
         .expect("package review REIR JSON should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 
-    assert_eq!(bundle["schema"], "reir.bundle.v0.1");
-    assert_eq!(bundle["ontology"], "reir.capability_ontology.v0.1");
+    assert_eq!(bundle["schema"], "reir.bundle.v0.2");
+    assert_eq!(bundle["ontology"], "reir.capability_ontology.v0.2");
     assert!(bundle["facts"].as_array().is_some_and(|facts| {
         facts
             .iter()
@@ -3571,7 +3571,7 @@ pub fn NativeBridge.run(value: read Int) -> Int
     assert!(metadata.written);
     assert!(!metadata.verified);
     assert_eq!(package_review["package"]["name"], "rss-metadata-reir");
-    assert_eq!(reir["schema"], "reir.bundle.v0.1");
+    assert_eq!(reir["schema"], "reir.bundle.v0.2");
     assert!(reir["facts"].as_array().is_some_and(|facts| {
         facts.iter().any(|fact| fact["kind"] == "package_risk")
             && facts.iter().any(|fact| fact["kind"] == "native_boundary")
@@ -3758,7 +3758,7 @@ fn package_publish_archive_excludes_generated_review_artifacts() {
             .join("review")
             .join("reir")
             .join("rsscript-check.json"),
-        "{\"schema\":\"reir.bundle.v0.1\",\"producer\":\"check\"}",
+        "{\"schema\":\"reir.bundle.v0.2\",\"producer\":\"check\"}",
     )
     .expect("additional REIR CI artifact should be written");
     fs::create_dir_all(temp_dir.join("review").join("reir").join("ci"))
@@ -3769,7 +3769,7 @@ fn package_publish_archive_excludes_generated_review_artifacts() {
             .join("reir")
             .join("ci")
             .join("rsscript-metadata-verify.json"),
-        "{\"schema\":\"reir.bundle.v0.1\",\"producer\":\"metadata\"}",
+        "{\"schema\":\"reir.bundle.v0.2\",\"producer\":\"metadata\"}",
     )
     .expect("nested REIR CI artifact should be written");
     let publish = publish_package_dry_run(&temp_dir).expect("publish dry-run should succeed");
