@@ -385,6 +385,10 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "rsscript_runtime::string_builder_push",
     ),
     runtime_intrinsic("Toml", "parse_file", "rsscript_runtime::toml_parse_file"),
-    runtime_intrinsic("Timer", "sleep", "rsscript_runtime::timer_sleep_start"),
+    runtime_intrinsic(
+        "Timer",
+        "sleep",
+        "rsscript_runtime::timer_sleep_native_start",
+    ),
     runtime_intrinsic("Url", "from_string", "rsscript_runtime::url_from_string"),
 ];

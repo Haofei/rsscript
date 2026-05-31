@@ -3255,7 +3255,7 @@ async fn main() -> Result<Unit, TimerError> {
         rust.contains("let mut __rsscript_async_executor = rsscript_runtime::Executor::new();")
     );
     assert!(rust.contains(
-        "__rsscript_async_executor.run_pending(rsscript_runtime::timer_sleep_start(1))?;"
+        "__rsscript_async_executor.run_pending(rsscript_runtime::timer_sleep_native_start(1))?;"
     ));
 }
 
