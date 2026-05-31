@@ -635,16 +635,14 @@ pub fn process_run_many_stdout(
                     command_args.push(appended_arg.clone());
                     match process_run_stdout(command, &command_args) {
                         Ok(stdout) => {
-                            *results[index]
-                                .lock()
-                                .expect("process result lock should not be poisoned") =
-                                Some(stdout);
+                            if let Ok(mut result) = results[index].lock() {
+                                *result = Some(stdout);
+                            }
                         }
                         Err(error) => {
-                            errors
-                                .lock()
-                                .expect("process error lock should not be poisoned")
-                                .push(format!("command {index}: {error}"));
+                            if let Ok(mut errors) = errors.lock() {
+                                errors.push(format!("command {index}: {error}"));
+                            }
                         }
                     }
                 }
@@ -654,7 +652,7 @@ pub fn process_run_many_stdout(
 
     let errors = errors
         .lock()
-        .expect("process error lock should not be poisoned");
+        .map_err(|_| "process error lock poisoned".to_string())?;
     if !errors.is_empty() {
         return Err(errors.join("\n"));
     }
@@ -665,7 +663,7 @@ pub fn process_run_many_stdout(
         .map(|result| {
             result
                 .lock()
-                .expect("process result lock should not be poisoned")
+                .map_err(|_| "process result lock poisoned".to_string())?
                 .clone()
                 .ok_or_else(|| "missing process result".to_string())
         })
@@ -2029,8 +2027,10 @@ impl<T: Resource> ResourcePool<T> {
     }
 
     pub fn borrow(&self) -> ResourceLease<'_, T> {
-        self.try_borrow()
-            .expect("RSScript resource pool conflict should be reported through diagnostics")
+        match self.try_borrow() {
+            Ok(lease) => lease,
+            Err(error) => panic_runtime_error(error),
+        }
     }
 }
 
@@ -2202,6 +2202,14 @@ mod tests {
             .expect_err("second borrow should conflict");
 
         assert_eq!(error.kind, RuntimeErrorKind::ResourcePoolBorrowConflict);
+    }
+
+    #[test]
+    #[should_panic(expected = "RSSCRIPT_RUNTIME_DIAGNOSTIC:")]
+    fn resource_pool_borrow_conflict_uses_runtime_diagnostic() {
+        let pool = ResourcePool::new(vec![FileHandle(7)]);
+        let _lease = pool.try_borrow().expect("initial borrow should succeed");
+        let _conflict = pool.borrow();
     }
 
     #[test]
