@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use super::source_set::{
-    ManifestDependencyBudget, load_package_manifest, load_package_with_features,
-    resolve_package_features, selected_root_package_features,
+    ManifestDependencyBudget, ManifestProviderChoice, load_package_manifest,
+    load_package_with_features, resolve_package_features, selected_root_package_features,
 };
 use super::{
     PackageDependencyKind, PackageDependencySpec, PackageGraphCheck, PackageRisk, PackageTree,
@@ -31,7 +31,12 @@ pub(super) fn check_package_graph(package_dir: &Path) -> Result<PackageGraphChec
     collect_package_graph_identities(&tree.root, &mut packages_by_name);
 
     let mut reasons = Vec::new();
-    collect_missing_provider_reasons(&tree.root, &mut reasons);
+    collect_missing_provider_reasons(
+        &tree.root,
+        &tree.root,
+        &root_manifest.providers,
+        &mut reasons,
+    );
     if tree.summary.unresolved_dependencies > 0 {
         reasons.push(format!(
             "dependency graph contains {} unresolved dependencies",
@@ -69,21 +74,88 @@ pub(super) fn check_package_graph(package_dir: &Path) -> Result<PackageGraphChec
     Ok(PackageGraphCheck { ok, risk, reasons })
 }
 
-fn collect_missing_provider_reasons(node: &PackageTreeNode, reasons: &mut Vec<String>) {
+fn collect_missing_provider_reasons(
+    root: &PackageTreeNode,
+    node: &PackageTreeNode,
+    provider_choices: &BTreeMap<String, ManifestProviderChoice>,
+    reasons: &mut Vec<String>,
+) {
     if node.interface_only
         && node.dependency_kind == PackageDependencyKind::Normal
         && !node.compile_only
         && !node.test_only
         && !node.platform_provided
     {
+        collect_missing_provider_reason(root, node, provider_choices, reasons);
+    }
+    for dependency in &node.dependencies {
+        collect_missing_provider_reasons(root, dependency, provider_choices, reasons);
+    }
+}
+
+fn collect_missing_provider_reason(
+    root: &PackageTreeNode,
+    node: &PackageTreeNode,
+    provider_choices: &BTreeMap<String, ManifestProviderChoice>,
+    reasons: &mut Vec<String>,
+) {
+    let Some(choice) = provider_choices.get(&node.name) else {
         reasons.push(format!(
             "interface-only dependency `{}` requires an implementation provider for executable builds",
             node.name
         ));
+        return;
+    };
+    let Some(provider_package) = choice.package.as_deref() else {
+        reasons.push(format!(
+            "provider choice for interface-only dependency `{}` is missing package",
+            node.name
+        ));
+        return;
+    };
+    let Some(provider) = find_package_tree_node_by_name(root, provider_package) else {
+        reasons.push(format!(
+            "provider `{provider_package}` for interface-only dependency `{}` is not resolved in dependency graph",
+            node.name
+        ));
+        return;
+    };
+    if choice
+        .version
+        .as_deref()
+        .is_some_and(|version| provider.version.as_deref() != Some(version))
+    {
+        reasons.push(format!(
+            "provider `{provider_package}` for interface-only dependency `{}` does not match requested version",
+            node.name
+        ));
+        return;
+    }
+    if !provider
+        .implements
+        .iter()
+        .any(|interface| interface == &node.name)
+    {
+        reasons.push(format!(
+            "provider `{provider_package}` does not declare implementation for interface-only dependency `{}`",
+            node.name
+        ));
+    }
+}
+
+fn find_package_tree_node_by_name<'a>(
+    node: &'a PackageTreeNode,
+    name: &str,
+) -> Option<&'a PackageTreeNode> {
+    if node.name == name {
+        return Some(node);
     }
     for dependency in &node.dependencies {
-        collect_missing_provider_reasons(dependency, reasons);
+        if let Some(found) = find_package_tree_node_by_name(dependency, name) {
+            return Some(found);
+        }
     }
+    None
 }
 
 fn collect_graph_budget_reasons(
@@ -186,6 +258,7 @@ fn package_tree_node(
             compile_only: false,
             test_only: false,
             platform_provided: false,
+            implements: package_provider_interfaces(&package.manifest),
             dependency_kind,
             reasons: vec!["dependency cycle truncated".to_string()],
             dependencies: Vec::new(),
@@ -219,6 +292,7 @@ fn package_tree_node(
         compile_only: false,
         test_only: false,
         platform_provided: false,
+        implements: package_provider_interfaces(&package.manifest),
         dependency_kind,
         reasons: review.reasons,
         dependencies,
@@ -295,10 +369,15 @@ fn unresolved_dependency_node(
         compile_only: spec.compile_only,
         test_only: spec.test_only,
         platform_provided: spec.platform_provided,
+        implements: Vec::new(),
         dependency_kind,
         reasons,
         dependencies: Vec::new(),
     }
+}
+
+fn package_provider_interfaces(manifest: &super::Manifest) -> Vec<String> {
+    manifest.implements.keys().cloned().collect()
 }
 
 fn package_is_interface_only(sources: &[super::PackageSource]) -> bool {

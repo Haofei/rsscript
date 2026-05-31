@@ -213,6 +213,7 @@ pub struct PackageTreeNode {
     pub compile_only: bool,
     pub test_only: bool,
     pub platform_provided: bool,
+    pub implements: Vec<String>,
     pub dependency_kind: PackageDependencyKind,
     pub reasons: Vec<String>,
     pub dependencies: Vec<PackageTreeNode>,

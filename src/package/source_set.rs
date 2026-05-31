@@ -27,6 +27,8 @@ pub(super) struct Manifest {
     pub(super) native: Option<ManifestNative>,
     #[serde(default)]
     pub(super) implements: BTreeMap<String, ManifestProviderImplementation>,
+    #[serde(default)]
+    pub(super) providers: BTreeMap<String, ManifestProviderChoice>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -156,6 +158,12 @@ pub(super) struct ManifestProviderImplementation {
     #[serde(default)]
     pub(super) interface_features: Vec<String>,
     pub(super) interface_effective_hash: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct ManifestProviderChoice {
+    pub(super) package: Option<String>,
+    pub(super) version: Option<String>,
 }
 
 impl ManifestNativeRust {

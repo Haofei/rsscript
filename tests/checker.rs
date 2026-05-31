@@ -11753,6 +11753,83 @@ platform-env = {{ path = "{}" }}
 }
 
 #[test]
+fn package_check_accepts_selected_provider_for_interface_only_dependency() {
+    let root_dir = unique_temp_dir("rsscript-package-selected-provider-root");
+    let interface_dir = unique_temp_dir("rsscript-package-selected-interface-dep");
+    let provider_dir = unique_temp_dir("rsscript-package-selected-provider-dep");
+    write_named_package_fixture(
+        &interface_dir,
+        "platform-env",
+        "0.1.0",
+        "",
+        r#"pub fn Env.home() -> String
+"#,
+    );
+    write_named_package_fixture(
+        &provider_dir,
+        "posix-env",
+        "0.1.0",
+        r#"[implements."platform-env"]
+version = "0.1"
+interface_features = []
+interface_effective_hash = "sha256:test"
+"#,
+        r#"pub fn PosixEnv.ready() -> Unit
+"#,
+    );
+    fs::create_dir_all(provider_dir.join("src")).expect("provider source dir should be created");
+    fs::write(
+        provider_dir.join("src/lib.rss"),
+        r#"pub fn PosixEnv.ready() -> Unit {
+    return Unit
+}
+"#,
+    )
+    .expect("provider source should be written");
+    write_named_package_fixture(
+        &root_dir,
+        "rss-app",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+platform-env = {{ path = "{}" }}
+posix-env = {{ path = "{}" }}
+
+[providers]
+platform-env = {{ package = "posix-env", version = "0.1.0" }}
+"#,
+            toml_path(&interface_dir),
+            toml_path(&provider_dir)
+        ),
+        r#"pub fn App.run() -> Unit
+"#,
+    );
+    fs::write(
+        root_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&root_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&root_dir).expect("package check should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&root_dir);
+    let _ = fs::remove_dir_all(&interface_dir);
+    let _ = fs::remove_dir_all(&provider_dir);
+
+    assert!(check.ok);
+    assert_eq!(json["graph"]["ok"], true);
+    assert!(json["graph"]["reasons"].as_array().is_some_and(|reasons| {
+        reasons.iter().all(|reason| {
+            reason
+                != "interface-only dependency `platform-env` requires an implementation provider for executable builds"
+        })
+    }));
+}
+
+#[test]
 fn package_check_allows_platform_provided_interface_only_dependency() {
     let root_dir = unique_temp_dir("rsscript-package-platform-provider-root");
     let interface_dir = unique_temp_dir("rsscript-package-platform-interface-dep");
