@@ -118,6 +118,8 @@ pub struct RsScriptPackageCapability {
     pub call_chain: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub span: Option<RsScriptDiagnosticSpan>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unknown_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2236,6 +2238,7 @@ fn package_capabilities_from_json(value: &Value) -> Vec<RsScriptPackageCapabilit
                     span: capability
                         .get("span")
                         .map(|span| diagnostic_span_from_json(span, String::new())),
+                    unknown_reason: string_field(capability, "unknown_reason"),
                 })
                 .collect()
         })
@@ -3775,8 +3778,19 @@ fn package_capability_facts(input: &RsScriptPackageReviewInput, package_slug: &s
                     resource: capability.resource.clone(),
                     constraints,
                 }),
-                value: FactValue::True,
-                confidence: confidence(ConfidenceLevel::Inferred, PACKAGE_REVIEW_SOURCE),
+                value: if capability.unknown_reason.is_some() {
+                    FactValue::Unknown
+                } else {
+                    FactValue::True
+                },
+                confidence: confidence(
+                    if capability.unknown_reason.is_some() {
+                        ConfidenceLevel::Unknown
+                    } else {
+                        ConfidenceLevel::Inferred
+                    },
+                    PACKAGE_REVIEW_SOURCE,
+                ),
                 acquisition_mode: AcquisitionMode::BindingManifest,
                 precision: if capability.resource.is_some() {
                     Precision::ResourceScoped
@@ -3784,7 +3798,7 @@ fn package_capability_facts(input: &RsScriptPackageReviewInput, package_slug: &s
                     Precision::Category
                 },
                 evidence: vec![binding_manifest_evidence(input, capability)],
-                unknown_reason: None,
+                unknown_reason: capability.unknown_reason.clone(),
             }
         })
         .collect()
@@ -3805,7 +3819,12 @@ fn binding_manifest_evidence(
         length: capability.span.as_ref().map(|span| span.length),
         symbol: Some(capability.function.clone()),
         reason: Some(format!(
-            "capability binding {} propagated through {}",
+            "{} {} propagated through {}",
+            if capability.unknown_reason.is_some() {
+                "unknown capability binding"
+            } else {
+                "capability binding"
+            },
             capability.binding_symbol,
             if capability.call_chain.is_empty() {
                 capability.function.clone()

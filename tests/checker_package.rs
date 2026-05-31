@@ -1570,6 +1570,94 @@ native fn S3.put_object(body: read String) -> Result<Unit, String>
 }
 
 #[test]
+fn package_review_reir_marks_unbound_native_facade_capability_unknown() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-review-unbound-native-capability");
+    fs::create_dir_all(temp_dir.join("interface")).expect("interface dir should be created");
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("rsspkg.toml"),
+        r#"[package]
+name = "rss-report-upload"
+version = "0.1.0"
+edition = "2026"
+
+[interfaces]
+paths = ["interface"]
+
+[sources]
+paths = ["src"]
+
+[review.policy]
+deny_unknown = true
+"#,
+    )
+    .expect("manifest should be written");
+    fs::write(
+        temp_dir.join("interface/s3.rssi"),
+        r#"features: native
+
+native fn S3.put_object(body: read String) -> Result<Unit, String>
+    effects(native)
+"#,
+    )
+    .expect("interface should be written");
+    fs::write(
+        temp_dir.join("src/upload.rss"),
+        r#"fn upload_report(report: read String) -> Result<Unit, String> {
+    return S3.put_object(body: read report)
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let review_json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let bundle: reir::Bundle =
+        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+            .expect("package review REIR bundle should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(review.risk, rsscript::PackageRisk::Unknown);
+    assert_eq!(review_json["summary"]["unknown_apis"], 1);
+    assert!(review_json["reasons"].as_array().is_some_and(|reasons| {
+        reasons
+            .iter()
+            .any(|reason| reason == "native/external capability binding unknown")
+    }));
+    assert!(
+        review_json["capabilities"]
+            .as_array()
+            .is_some_and(|capabilities| {
+                capabilities.iter().any(|capability| {
+                    capability["function"] == "upload_report"
+                        && capability["binding_symbol"] == "S3.put_object"
+                        && capability["category"] == "unknown"
+                        && capability["unknown_reason"]
+                            == "native/external facade has no review.capability_bindings entry"
+                        && capability["call_chain"].as_array().is_some_and(|chain| {
+                            chain
+                                == &vec![Value::from("upload_report"), Value::from("S3.put_object")]
+                        })
+                })
+            })
+    );
+
+    assert!(bundle.facts.iter().any(|fact| {
+        fact.kind == reir::FactKind::Capability
+            && fact.role == Some(reir::FactRole::Required)
+            && fact.value == reir::FactValue::Unknown
+            && fact.subject.id == "rss-report-upload::function::upload_report"
+            && fact.unknown_reason.as_deref()
+                == Some("native/external facade has no review.capability_bindings entry")
+            && fact.capability.as_ref().is_some_and(|capability| {
+                capability.category == reir::CapabilityCategory::Unknown
+                    && capability.action.as_deref() == Some("S3.put_object")
+            })
+    }));
+}
+
+#[test]
 fn s3_iam_reir_demo_preserves_call_site_for_missing_permission() {
     let demo_dir = Path::new("demos/s3-iam-reir");
     let review = review_package_dir(demo_dir).expect("demo package review should succeed");

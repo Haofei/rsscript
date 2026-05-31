@@ -2,7 +2,7 @@
 name = "S3 IAM REIR full runtime demo"
 kind = "command_success"
 command = "cargo"
-timeout_ms = 30000
+timeout_ms = 120000
 args = [
   "test",
   "--test",
@@ -17,7 +17,7 @@ args = [
 name = "file upload async vs sync benchmark demo"
 kind = "command_success"
 command = "cargo"
-timeout_ms = 30000
+timeout_ms = 120000
 args = [
   "test",
   "--test",

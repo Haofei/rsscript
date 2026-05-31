@@ -6,7 +6,7 @@ use reir::adapters::rsscript::{
 use reir::{
     Bundle, Capability, Diff, DiffItem, DiffItemKind, Evidence, Fact, FactRole, Reconciliation,
     ReconciliationKind, ReconciliationStatus, Slice, SliceKind, compute_diff,
-    reconcile_capabilities_for_target, slice_by_kind,
+    format_pr_review_comment, reconcile_capabilities_for_target, slice_by_kind,
 };
 use std::collections::BTreeMap;
 use std::env;
@@ -17,6 +17,7 @@ const USAGE: &str = "Usage:
   reir collect --producer rsscript [--review-map review-map.json] [--package-review package-review.json] [--package-check check.json] [--package-lock lock.json] [--lock-update lock-diff.json] [--package-tree tree.json] [--package-publish publish.json] [--package-metadata metadata.json] [--package-vendor vendor.json] [--package-name name] [--out bundle.json] [--json]
   reir reconcile --required required.json --granted granted.json [--target name] [--json]
   reir reconcile [--bundle bundle.json] [--target name] [--out reconciled.json] [--json]
+  reir report-pr --required required.json --granted granted.json [--target name]
   reir diff --baseline baseline.json --current current.json [--json] [--fail-on-change]
   reir slice --bundle bundle.json [--kind <slice-kind>] [--json]
   reir merge file1.json file2.json [...] --out merged.json
@@ -32,6 +33,7 @@ fn main() -> ExitCode {
     match command {
         "collect" => run_collect(&args[2..]),
         "reconcile" => run_reconcile(&args[2..]),
+        "report-pr" => run_report_pr(&args[2..]),
         "diff" => run_diff(&args[2..]),
         "slice" => run_slice(&args[2..]),
         "merge" => run_merge(&args[2..]),
@@ -73,6 +75,13 @@ fn run_reconcile(args: &[String]) -> ExitCode {
 
 fn run_collect(args: &[String]) -> ExitCode {
     match try_run_collect(args) {
+        Ok(code) => code,
+        Err(error) => report_error(error),
+    }
+}
+
+fn run_report_pr(args: &[String]) -> ExitCode {
+    match try_run_report_pr(args) {
         Ok(code) => code,
         Err(error) => report_error(error),
     }
@@ -202,6 +211,51 @@ fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
     }
 
     Ok(ExitCode::SUCCESS)
+}
+
+fn try_run_report_pr(args: &[String]) -> Result<ExitCode, CliError> {
+    if wants_help(args) {
+        print_usage();
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let mut required = None;
+    let mut granted = None;
+    let mut target = None;
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--required" => required = Some(take_value(args, &mut index, "--required")?),
+            "--granted" => granted = Some(take_value(args, &mut index, "--granted")?),
+            "--target" => target = Some(take_value(args, &mut index, "--target")?),
+            unknown => {
+                return Err(CliError::usage(format!(
+                    "unknown report-pr flag `{unknown}`"
+                )));
+            }
+        }
+        index += 1;
+    }
+
+    let required_path = required.ok_or_else(|| CliError::usage("missing --required <file>"))?;
+    let granted_path = granted.ok_or_else(|| CliError::usage("missing --granted <file>"))?;
+    let required_bundle = read_bundle(&required_path)?;
+    let granted_bundle = read_bundle(&granted_path)?;
+    let reconciliations = reconcile_capabilities_for_target(
+        &required_bundle.facts,
+        &granted_bundle.facts,
+        target.as_deref(),
+    );
+    print!(
+        "{}",
+        format_pr_review_comment(
+            &required_bundle.facts,
+            &granted_bundle.facts,
+            &reconciliations
+        )
+    );
+    Ok(exit_for_reconciliations(&reconciliations))
 }
 
 fn try_run_reconcile(args: &[String]) -> Result<ExitCode, CliError> {

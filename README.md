@@ -58,7 +58,7 @@ Release/demo runtime path, including Tokio-backed native async IO and sync compa
 cargo test --test s3_iam_reir_demo_e2e s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain -- --ignored --nocapture
 ```
 
-The demo lives in [`demos/s3-iam-reir`](demos/s3-iam-reir): RSScript source -> package capability binding -> REIR required facts -> mock runtime/IAM grants -> missing/fixed/excess/native-risk review outcomes.
+The demo lives in [`demos/s3-iam-reir`](demos/s3-iam-reir): RSScript source -> package capability binding -> REIR required facts -> mock runtime/IAM grants -> missing/fixed/excess/code-change/native-risk/missing-binding review outcomes.
 
 ---
 

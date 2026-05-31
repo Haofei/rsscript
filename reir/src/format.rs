@@ -87,6 +87,96 @@ pub fn format_reconciliations_human(reconciliations: &[Reconciliation]) -> Strin
     output
 }
 
+/// Format a deployment review as a PR-bot style comment.
+pub fn format_pr_review_comment(
+    required_facts: &[Fact],
+    granted_facts: &[Fact],
+    reconciliations: &[Reconciliation],
+) -> String {
+    let mut output = String::new();
+    let missing = reconciliations
+        .iter()
+        .find(|reconciliation| reconciliation.kind == ReconciliationKind::MissingCapability);
+    let required = missing
+        .and_then(|reconciliation| reconciliation.required_fact.as_deref())
+        .and_then(|id| required_facts.iter().find(|fact| fact.id == id))
+        .or_else(|| {
+            required_facts
+                .iter()
+                .find(|fact| fact.role == Some(FactRole::Required))
+        });
+
+    writeln!(output, "## RSScript / REIR deployment review\n").unwrap();
+    writeln!(
+        output,
+        "Status: {}\n",
+        if missing.is_some() { "FAIL" } else { "PASS" }
+    )
+    .unwrap();
+
+    if let Some(required) = required {
+        writeln!(output, "### Added required capability\n").unwrap();
+        writeln!(output, "- subject: {}", pr_subject_name(required)).unwrap();
+        if let Some(capability) = &required.capability {
+            writeln!(output, "- capability: {}", pr_capability_label(capability)).unwrap();
+        }
+        if let Some(evidence) = required.evidence.first() {
+            writeln!(output, "- evidence: {}\n", pr_evidence_label(evidence)).unwrap();
+        } else {
+            writeln!(output).unwrap();
+        }
+    }
+
+    writeln!(output, "### Current prod grants\n").unwrap();
+    let cloud_policy_grants = granted_facts
+        .iter()
+        .filter(|fact| fact.acquisition_mode == AcquisitionMode::CloudPolicy)
+        .collect::<Vec<_>>();
+    let grant_source = if cloud_policy_grants.is_empty() {
+        granted_facts.iter().collect::<Vec<_>>()
+    } else {
+        cloud_policy_grants
+    };
+    let mut grants = grant_source
+        .into_iter()
+        .filter(|fact| fact.role == Some(FactRole::Granted))
+        .filter_map(|fact| fact.capability.as_ref())
+        .filter(|capability| capability.action.is_some())
+        .map(pr_capability_label)
+        .collect::<Vec<_>>();
+    grants.sort();
+    grants.dedup();
+    if grants.is_empty() {
+        writeln!(output, "- none\n").unwrap();
+    } else {
+        for grant in grants {
+            writeln!(output, "- {grant}").unwrap();
+        }
+        writeln!(output).unwrap();
+    }
+
+    writeln!(output, "### Missing capability\n").unwrap();
+    if let Some(capability) = missing.and_then(|reconciliation| reconciliation.capability.as_ref())
+    {
+        writeln!(output, "- {}\n", pr_missing_capability_label(capability)).unwrap();
+    } else {
+        writeln!(output, "- none\n").unwrap();
+    }
+
+    writeln!(output, "### Review decision\n").unwrap();
+    if let Some(required) = required {
+        writeln!(
+            output,
+            "Block this PR before deploy. Either remove {}, or update IAM and review why delete access is needed.",
+            pr_subject_name(required)
+        )
+        .unwrap();
+    } else {
+        writeln!(output, "No missing deployment capability was found.").unwrap();
+    }
+    output
+}
+
 /// Format a diff as human-readable text (spec section 9.4 format).
 pub fn format_diff_human(diff: &Diff) -> String {
     let mut output = String::new();
@@ -124,6 +214,54 @@ pub fn format_diff_human(diff: &Diff) -> String {
     writeln!(output, "review result:").unwrap();
     writeln!(output, "  {}", diff_review_result_label(diff)).unwrap();
     output
+}
+
+fn pr_subject_name(fact: &Fact) -> String {
+    fact.subject
+        .name
+        .clone()
+        .or_else(|| fact.subject.id.rsplit("::").next().map(str::to_owned))
+        .unwrap_or_else(|| fact.subject.id.clone())
+}
+
+fn pr_capability_label(capability: &Capability) -> String {
+    format!(
+        "{} {}/{} {} {}",
+        capability_category_label(&capability.category),
+        capability.provider.as_deref().unwrap_or("unknown"),
+        capability.service.as_deref().unwrap_or("unknown"),
+        capability.action.as_deref().unwrap_or("unknown"),
+        capability.resource.as_deref().unwrap_or("unknown")
+    )
+}
+
+fn pr_missing_capability_label(capability: &Capability) -> String {
+    match (capability.action.as_deref(), capability.resource.as_deref()) {
+        (Some(action), Some(resource)) => format!("{action} on {resource}"),
+        (Some(action), None) => action.to_string(),
+        _ => pr_capability_label(capability),
+    }
+}
+
+fn pr_evidence_label(evidence: &Evidence) -> String {
+    let location = match (evidence.file.as_deref(), evidence.line) {
+        (Some(file), Some(line)) => format!("{file}:{line}"),
+        (Some(file), None) => file.to_string(),
+        _ => "unknown".to_string(),
+    };
+    let reason = evidence
+        .reason
+        .as_deref()
+        .and_then(|reason| {
+            reason
+                .split_once(" propagated through ")
+                .map(|(_, chain)| chain)
+        })
+        .or(evidence.reason.as_deref());
+    match reason {
+        Some(reason) => format!("{location} {reason}"),
+        None => location,
+    }
 }
 
 /// Format slices as human-readable text (spec section 10.3 format).

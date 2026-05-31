@@ -117,10 +117,19 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         .filter(|native| native.enabled)
         .map(|native| package_native_rust_review(package_dir, manifest, sources, native));
 
+    let capabilities = package_review_capabilities(manifest, sources);
+    let unknown_capability_bindings = capabilities
+        .iter()
+        .filter(|capability| capability.unknown_reason.is_some())
+        .map(|capability| capability.binding_symbol.as_str())
+        .collect::<BTreeSet<_>>()
+        .len();
+
     let mut reasons = Vec::new();
     collect_manifest_review_reasons(manifest, &mut reasons);
     collect_native_reasons(native_rust.as_ref(), &mut reasons);
     collect_review_map_reasons(&review_map, &mut reasons);
+    collect_unknown_capability_binding_reasons(&capabilities, &mut reasons);
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity.is_error())
@@ -144,6 +153,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
             &review_map,
             &diagnostics,
             api_summary.native_apis,
+            unknown_capability_bindings,
         )
     } else {
         PackageRisk::Unknown
@@ -182,7 +192,9 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         await_sites: api_summary.await_sites,
         parallel_apis: api_summary.parallel_apis,
         unsafe_apis: api_summary.unsafe_apis,
-        unknown_apis: api_summary.unknown_apis + interface_diagnostic_exports.len(),
+        unknown_apis: api_summary.unknown_apis
+            + interface_diagnostic_exports.len()
+            + unknown_capability_bindings,
     };
     let files = sources
         .iter()
@@ -201,7 +213,6 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
             .cmp(&right.kind)
             .then_with(|| left.name.cmp(&right.name))
     });
-    let capabilities = package_review_capabilities(manifest, sources);
 
     Ok(PackageReview {
         package: super::package_identity(manifest),
@@ -436,6 +447,18 @@ fn collect_review_map_reasons(review_map: &ReviewMap, reasons: &mut Vec<String>)
     }
 }
 
+fn collect_unknown_capability_binding_reasons(
+    capabilities: &[PackageReviewCapability],
+    reasons: &mut Vec<String>,
+) {
+    if capabilities
+        .iter()
+        .any(|capability| capability.unknown_reason.is_some())
+    {
+        reasons.push("native/external capability binding unknown".to_string());
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct PackageApiSummary {
     public_types: usize,
@@ -615,63 +638,86 @@ fn package_review_capabilities(
     manifest: &Manifest,
     sources: &[PackageSource],
 ) -> Vec<PackageReviewCapability> {
-    let Some(review) = manifest.review.as_ref() else {
-        return Vec::new();
-    };
-    if review.capability_bindings.is_empty() {
-        return Vec::new();
-    }
-
     let call_graph = collect_package_call_graph(sources);
     let mut capabilities = BTreeMap::new();
     let mut best_chain_lengths = BTreeMap::new();
-    for binding in &review.capability_bindings {
-        let mut queue = vec![(
-            binding.symbol.clone(),
-            vec![binding.symbol.clone()],
-            call_graph.function_spans.get(&binding.symbol).cloned(),
-        )];
-        while let Some((function, call_chain, span)) = queue.pop() {
-            let key = (binding.symbol.clone(), function.clone());
-            let chain_len = call_chain.len();
-            if best_chain_lengths
-                .get(&key)
-                .is_some_and(|best_len| *best_len >= chain_len)
-            {
-                continue;
-            }
-            best_chain_lengths.insert(key.clone(), chain_len);
-            capabilities.insert(
-                key,
-                PackageReviewCapability {
-                    function: function.clone(),
+
+    if let Some(review) = manifest.review.as_ref() {
+        for binding in &review.capability_bindings {
+            propagate_package_capability(
+                &call_graph,
+                &mut capabilities,
+                &mut best_chain_lengths,
+                PackageCapabilitySeed {
                     binding_symbol: binding.symbol.clone(),
                     category: binding.category.clone(),
                     provider: binding.provider.clone(),
                     service: binding.service.clone(),
                     action: binding.action.clone(),
                     resource: binding.resource.clone(),
-                    call_chain: call_chain.clone(),
-                    span,
+                    span: call_graph.function_spans.get(&binding.symbol).cloned(),
+                    unknown_reason: None,
                 },
             );
-            if let Some(callers) = call_graph.reverse_calls.get(&function) {
-                for caller in callers.iter().rev() {
-                    if call_chain.contains(&caller.function) {
-                        continue;
-                    }
-                    let mut caller_chain = Vec::with_capacity(call_chain.len() + 1);
-                    caller_chain.push(caller.function.clone());
-                    caller_chain.extend(call_chain.iter().cloned());
-                    queue.push((
-                        caller.function.clone(),
-                        caller_chain,
-                        Some(caller.span.clone()),
-                    ));
-                }
-            }
         }
     }
+
+    let should_emit_unknown_bindings = manifest
+        .review
+        .as_ref()
+        .is_some_and(|review| review.policy.deny_unknown == Some(true));
+    if !should_emit_unknown_bindings {
+        let mut capabilities = capabilities.into_values().collect::<Vec<_>>();
+        capabilities.sort_by(|left, right| {
+            left.binding_symbol
+                .cmp(&right.binding_symbol)
+                .then_with(|| left.function.cmp(&right.function))
+                .then_with(|| left.call_chain.cmp(&right.call_chain))
+        });
+        return capabilities;
+    }
+
+    let bound_symbols = manifest
+        .review
+        .as_ref()
+        .map(|review| {
+            review
+                .capability_bindings
+                .iter()
+                .map(|binding| binding.symbol.as_str())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let mut native_contracts =
+        collect_package_function_contracts(sources, PackageReviewFileKind::Interface);
+    for (name, contract) in
+        collect_package_function_contracts(sources, PackageReviewFileKind::Source)
+    {
+        native_contracts.entry(name).or_insert(contract);
+    }
+    for contract in native_contracts.values() {
+        if !contract.effects.contains("native") || bound_symbols.contains(contract.name.as_str()) {
+            continue;
+        }
+        propagate_package_capability(
+            &call_graph,
+            &mut capabilities,
+            &mut best_chain_lengths,
+            PackageCapabilitySeed {
+                binding_symbol: contract.name.clone(),
+                category: "unknown".to_string(),
+                provider: None,
+                service: None,
+                action: Some(contract.name.clone()),
+                resource: None,
+                span: Some(contract.span.clone()),
+                unknown_reason: Some(
+                    "native/external facade has no review.capability_bindings entry".to_string(),
+                ),
+            },
+        );
+    }
+
     let mut capabilities = capabilities.into_values().collect::<Vec<_>>();
     capabilities.sort_by(|left, right| {
         left.binding_symbol
@@ -680,6 +726,71 @@ fn package_review_capabilities(
             .then_with(|| left.call_chain.cmp(&right.call_chain))
     });
     capabilities
+}
+
+struct PackageCapabilitySeed {
+    binding_symbol: String,
+    category: String,
+    provider: Option<String>,
+    service: Option<String>,
+    action: Option<String>,
+    resource: Option<String>,
+    span: Option<Span>,
+    unknown_reason: Option<String>,
+}
+
+fn propagate_package_capability(
+    call_graph: &PackageCallGraph,
+    capabilities: &mut BTreeMap<(String, String), PackageReviewCapability>,
+    best_chain_lengths: &mut BTreeMap<(String, String), usize>,
+    seed: PackageCapabilitySeed,
+) {
+    let mut queue = vec![(
+        seed.binding_symbol.clone(),
+        vec![seed.binding_symbol.clone()],
+        seed.span.clone(),
+    )];
+    while let Some((function, call_chain, span)) = queue.pop() {
+        let key = (seed.binding_symbol.clone(), function.clone());
+        let chain_len = call_chain.len();
+        if best_chain_lengths
+            .get(&key)
+            .is_some_and(|best_len| *best_len >= chain_len)
+        {
+            continue;
+        }
+        best_chain_lengths.insert(key.clone(), chain_len);
+        capabilities.insert(
+            key,
+            PackageReviewCapability {
+                function: function.clone(),
+                binding_symbol: seed.binding_symbol.clone(),
+                category: seed.category.clone(),
+                provider: seed.provider.clone(),
+                service: seed.service.clone(),
+                action: seed.action.clone(),
+                resource: seed.resource.clone(),
+                call_chain: call_chain.clone(),
+                span,
+                unknown_reason: seed.unknown_reason.clone(),
+            },
+        );
+        if let Some(callers) = call_graph.reverse_calls.get(&function) {
+            for caller in callers.iter().rev() {
+                if call_chain.contains(&caller.function) {
+                    continue;
+                }
+                let mut caller_chain = Vec::with_capacity(call_chain.len() + 1);
+                caller_chain.push(caller.function.clone());
+                caller_chain.extend(call_chain.iter().cloned());
+                queue.push((
+                    caller.function.clone(),
+                    caller_chain,
+                    Some(caller.span.clone()),
+                ));
+            }
+        }
+    }
 }
 
 struct PackageCallGraph {
@@ -1579,6 +1690,7 @@ fn package_risk(
     review_map: &ReviewMap,
     diagnostics: &[Diagnostic],
     native_apis: usize,
+    unknown_capability_bindings: usize,
 ) -> PackageRisk {
     if manifest
         .review
@@ -1586,6 +1698,7 @@ fn package_risk(
         .and_then(|review| review.expect.risk.as_deref())
         == Some("unknown")
         || review_map.summary.unknown.functions > 0
+        || unknown_capability_bindings > 0
     {
         return PackageRisk::Unknown;
     }

@@ -32,6 +32,11 @@ s3 iam pr review: blocked missing=s3:DeleteObject evidence=src/upload.rss:28
 ```
 
 The checked-in PR comment is [expected/pr-comment.md](expected/pr-comment.md).
+The comment format is produced by the `reir report-pr` command:
+
+```sh
+reir report-pr --required head.reir.json --granted prod-grants.reir.json --target prod
+```
 
 ## Core loop
 
@@ -115,6 +120,7 @@ Scenario                 Reviewer question                         Expected REIR
 02-excess-iam            Is the service overprivileged?              DeleteObject excess
 03-code-adds-delete      Did the PR add a new external ability?      new DeleteObject requirement
 04-native-risk           Is native risk hidden in the wrapper?       build/unsafe policies require review
+05-missing-capability-binding  Does absent metadata become safe?     unknown binding; fail deny_unknown
 ```
 
 Run the scenario-only test:

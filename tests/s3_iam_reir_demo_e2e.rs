@@ -323,7 +323,7 @@ fn s3_iam_reir_demo_pr_review_comment_matches_golden_output() {
     let required = required_facts_for_demo(&adds_delete_dir);
     let grants = deployment_grants_from_fixtures(&demo_dir, "mock-iam-fixed.json");
     let reconciliations = reir::reconcile_capabilities_for_target(&required, &grants, Some("prod"));
-    let comment = pr_change_comment(&required, &grants, &reconciliations);
+    let comment = reir::format_pr_review_comment(&required, &grants, &reconciliations);
     assert_eq!(comment, read_demo_text(&demo_dir, "expected/pr-comment.md"));
 
     println!("s3 iam pr review: blocked missing=s3:DeleteObject evidence=src/upload.rss:28");
@@ -337,15 +337,39 @@ fn s3_iam_reir_demo_missing_capability_binding_is_unknown_not_safe() {
     let review = review_package_dir(&missing_binding_dir)
         .expect("missing-binding scenario review should still parse");
 
+    assert_eq!(review.risk, rsscript::PackageRisk::Unknown);
+    assert_eq!(review.summary.unknown_apis, 1);
     assert!(
-        review.capabilities.is_empty(),
-        "no package capability facts should be inferred without a binding: {:#?}",
-        review.capabilities
+        review
+            .reasons
+            .iter()
+            .any(|reason| { reason == "native/external capability binding unknown" })
     );
     assert!(
         review.summary.native_apis > 0,
         "native facade should still be visible even without capability binding"
     );
+    assert!(review.capabilities.iter().any(|capability| {
+        capability.binding_symbol == "S3.put_object"
+            && capability.category == "unknown"
+            && capability.unknown_reason.as_deref()
+                == Some("native/external facade has no review.capability_bindings entry")
+            && capability.call_chain == ["upload_report", "S3.put_object"]
+    }));
+    let bundle: reir::Bundle =
+        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+            .expect("missing-binding package review should lower to REIR");
+    assert!(bundle.facts.iter().any(|fact| {
+        fact.kind == reir::FactKind::Capability
+            && fact.role == Some(reir::FactRole::Required)
+            && fact.value == reir::FactValue::Unknown
+            && fact.unknown_reason.as_deref()
+                == Some("native/external facade has no review.capability_bindings entry")
+            && fact.capability.as_ref().is_some_and(|capability| {
+                capability.category == reir::CapabilityCategory::Unknown
+                    && capability.action.as_deref() == Some("S3.put_object")
+            })
+    }));
 
     let report = missing_capability_binding_report(&review);
     assert_eq!(
@@ -354,6 +378,25 @@ fn s3_iam_reir_demo_missing_capability_binding_is_unknown_not_safe() {
     );
 
     println!("s3 iam negative-control: missing capability binding is unknown");
+}
+
+#[test]
+fn s3_iam_reir_demo_ai_cleanup_patch_matches_code_adds_delete_scenario() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let demo_dir = repo.join("demos/s3-iam-reir");
+    let patch = read_demo_text(&demo_dir, "ai-output/cleanup.patch");
+    let scenario = read_demo_text(&demo_dir, "scenarios/03-code-adds-delete/src/upload.rss");
+
+    for expected in ["Reports.cleanup_old_reports", "S3.delete_object"] {
+        assert!(
+            patch.contains(expected),
+            "AI patch should contain {expected}"
+        );
+        assert!(
+            scenario.contains(expected),
+            "code-adds-delete scenario should contain {expected}"
+        );
+    }
 }
 
 #[test]
@@ -396,57 +439,6 @@ fn required_facts_for_demo(demo_dir: &Path) -> Vec<Fact> {
         .collect()
 }
 
-fn pr_change_comment(
-    required: &[Fact],
-    grants: &[Fact],
-    reconciliations: &[reir::Reconciliation],
-) -> String {
-    let delete_required = required
-        .iter()
-        .find(|fact| capability_action(fact) == Some("s3:DeleteObject"))
-        .expect("PR scenario should require DeleteObject");
-    let delete_evidence = delete_required
-        .evidence
-        .iter()
-        .find(|evidence| {
-            evidence
-                .reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("Reports.cleanup_old_reports"))
-        })
-        .expect("DeleteObject requirement should carry cleanup evidence");
-    let put_grant = grants
-        .iter()
-        .find(|fact| capability_action(fact) == Some("s3:PutObject"))
-        .expect("fixed IAM fixture should grant PutObject");
-    assert!(reconciliations.iter().any(|reconciliation| {
-        reconciliation.kind == ReconciliationKind::MissingCapability
-            && reconciliation
-                .capability
-                .as_ref()
-                .is_some_and(|capability| capability.action.as_deref() == Some("s3:DeleteObject"))
-    }));
-
-    format!(
-        "## RSScript / REIR deployment review\n\n\
-Status: FAIL\n\n\
-### Added required capability\n\n\
-- subject: Reports.cleanup_old_reports\n\
-- capability: {}\n\
-- evidence: {}:{} Reports.cleanup_old_reports -> S3.delete_object\n\n\
-### Current prod grants\n\n\
-- {}\n\n\
-### Missing capability\n\n\
-- s3:DeleteObject on arn:aws:s3:::reports-prod/*\n\n\
-### Review decision\n\n\
-Block this PR before deploy. Either remove Reports.cleanup_old_reports, or update IAM and review why delete access is needed.\n",
-        capability_label(delete_required),
-        delete_evidence.file.as_deref().unwrap_or("<unknown>"),
-        delete_evidence.line.unwrap_or(0),
-        capability_label(put_grant)
-    )
-}
-
 fn missing_capability_binding_report(review: &rsscript::PackageReview) -> String {
     let native_symbol = review
         .exports
@@ -472,25 +464,6 @@ fn missing_capability_binding_report(review: &rsscript::PackageReview) -> String
         "",
     ]
     .join("\n")
-}
-
-fn capability_action(fact: &Fact) -> Option<&str> {
-    fact.capability.as_ref()?.action.as_deref()
-}
-
-fn capability_label(fact: &Fact) -> String {
-    let capability = fact
-        .capability
-        .as_ref()
-        .expect("capability fact should carry capability");
-    format!(
-        "{} {}/{} {} {}",
-        String::from(capability.category.clone()),
-        capability.provider.as_deref().unwrap_or("unknown"),
-        capability.service.as_deref().unwrap_or("unknown"),
-        capability.action.as_deref().unwrap_or("unknown"),
-        capability.resource.as_deref().unwrap_or("unknown"),
-    )
 }
 
 fn read_demo_text(demo_dir: &Path, relative_path: &str) -> String {

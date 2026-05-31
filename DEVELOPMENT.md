@@ -169,15 +169,18 @@ Do not point these paths back at the SSD for normal development; if a test has
 file conflicts, give it an isolated ramdisk subdirectory or copy the ramdisk
 seed target, then clean the copy after the test.
 
-No unignored e2e tests are allowed in this repository. Do not add default tests
-that execute RSScript programs through `rss run`, drive `verify-rust` as an
-end-to-end compiler invocation, sweep examples as behavior tests, run checked-in
-self-hosted scripts as acceptance tests, build native demo binaries, or start
-mock servers. When behavior needs coverage, test the parser, analyzer,
-lowering, package metadata, source-map, runtime helper, or review function
-directly. Any unignored test that exceeds 10 seconds must be deleted, split, or
-rewritten as a smaller static/unit-level check. Release-grade demos may exist
-only as ignored tests wired through `demo-e2e.rsstest.toml`.
+No unignored runtime/demo e2e tests are allowed in this repository. Do not add
+default tests that execute RSScript programs through `rss run`, drive
+`verify-rust` as an end-to-end compiler invocation, sweep examples as behavior
+tests, run checked-in self-hosted scripts as acceptance tests, build native demo
+binaries, or start mock servers. Fast semantic demo tests are allowed when they
+only exercise review/package/REIR functions and do not build native binaries,
+start servers, run generated packages, or depend on timing. When behavior needs
+coverage, test the parser, analyzer, lowering, package metadata, source-map,
+runtime helper, or review function directly. Any unignored test that exceeds 10
+seconds must be deleted, split, or rewritten as a smaller static/unit-level
+check. Release-grade demos may exist only as ignored tests wired through
+`demo-e2e.rsstest.toml`.
 
 Avoid running multiple workspace Cargo commands in parallel. Cargo's build lock
 makes that slower and noisier. Independent RSScript script checks may run in
