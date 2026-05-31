@@ -98,7 +98,11 @@
           }
         },
         "unknown_reason": { "type": "string", "description": "Why this capability is unknown, if applicable." },
-        "confidence": { "type": "string", "enum": ["high", "medium", "low", "unknown"] }
+        "confidence": {
+          "type": "string",
+          "enum": ["authoritative", "computed", "declared", "scanned", "inferred", "observed", "partial", "unknown", "not_run"],
+          "description": "Evidence confidence level from the stable REIR confidence vocabulary."
+        }
       }
     },
     "ci_reconciliation": {

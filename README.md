@@ -41,7 +41,7 @@ Formats: `markdown` (PR comment), `ci-json` (stable schema for CI gates), `sarif
 ## GitHub Action
 
 ```yaml
-- uses: Haofei/rsscript-action@v0
+- uses: Haofei/rsscript/.github/actions/rsscript-review@v0
   with:
     head: my-service/
     grants: infra/prod-grants.reir.json

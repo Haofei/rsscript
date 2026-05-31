@@ -27,10 +27,16 @@ inputs:
 outputs:
   status:
     description: 'Review status: pass, fail, warn, unknown'
+    value: ${{ steps.review.outputs.status }}
   comment:
     description: 'The review comment text'
-  ci-json:
+    value: ${{ steps.review.outputs.comment }}
+  ci_json:
     description: 'CI gate JSON output path'
+    value: ${{ steps.review.outputs.ci_json }}
+  comment_file:
+    description: 'PR comment markdown output path'
+    value: ${{ steps.review.outputs.comment_file }}
 
 runs:
   using: 'composite'
@@ -40,9 +46,10 @@ runs:
       run: |
         if ! command -v rss &> /dev/null; then
           echo "::group::Building RSScript from source"
-          cargo build --quiet --release --bin rss -p rsscript
-          cargo build --quiet --release --bin reir -p reir
-          echo "${{ github.workspace }}/target/release" >> $GITHUB_PATH
+          RSSCRIPT_ACTION_ROOT="$(cd "$GITHUB_ACTION_PATH/../../.." && pwd)"
+          cargo build --quiet --release --manifest-path "$RSSCRIPT_ACTION_ROOT/Cargo.toml" --bin rss -p rsscript
+          cargo build --quiet --release --manifest-path "$RSSCRIPT_ACTION_ROOT/Cargo.toml" --bin reir -p reir
+          echo "$RSSCRIPT_ACTION_ROOT/target/release" >> $GITHUB_PATH
           echo "::endgroup::"
         fi
 
@@ -50,19 +57,26 @@ runs:
       id: review
       shell: bash
       run: |
+        REVIEW_OUTPUT_FILE="${RUNNER_TEMP:-/tmp}/rsscript-review-output.txt"
         set +e
-        REVIEW_OUTPUT=$(rss review-pr \
+        rss review-pr \
           --head "${{ inputs.head }}" \
           --grants "${{ inputs.grants }}" \
           --target "${{ inputs.target }}" \
-          --format "${{ inputs.format }}")
+          --format "${{ inputs.format }}" > "$REVIEW_OUTPUT_FILE"
         EXIT_CODE=$?
         set -e
+        REVIEW_OUTPUT=$(cat "$REVIEW_OUTPUT_FILE")
+        COMMENT_FILE="${RUNNER_TEMP:-/tmp}/rsscript-pr-comment.md"
+        cp "$REVIEW_OUTPUT_FILE" "$COMMENT_FILE"
 
         # Write outputs
-        echo "comment<<EOF" >> $GITHUB_OUTPUT
-        echo "$REVIEW_OUTPUT" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
+        {
+          echo "comment<<RSSCRIPT_REVIEW_EOF"
+          cat "$REVIEW_OUTPUT_FILE"
+          echo "RSSCRIPT_REVIEW_EOF"
+        } >> "$GITHUB_OUTPUT"
+        echo "comment_file=$COMMENT_FILE" >> "$GITHUB_OUTPUT"
 
         if [ $EXIT_CODE -ne 0 ]; then
           echo "status=fail" >> $GITHUB_OUTPUT
@@ -71,13 +85,19 @@ runs:
         fi
 
         # Also produce CI JSON for structured consumption
-        CI_JSON=$(rss review-pr \
+        set +e
+        rss review-pr \
           --head "${{ inputs.head }}" \
           --grants "${{ inputs.grants }}" \
           --target "${{ inputs.target }}" \
-          --format ci-json)
-        echo "$CI_JSON" > /tmp/rsscript-ci-gate.json
-        echo "ci-json=/tmp/rsscript-ci-gate.json" >> $GITHUB_OUTPUT
+          --format ci-json > /tmp/rsscript-ci-gate.json
+        CI_JSON_EXIT_CODE=$?
+        set -e
+        if [ $CI_JSON_EXIT_CODE -ne 0 ] && [ ! -s /tmp/rsscript-ci-gate.json ]; then
+          echo "::error::rss review-pr --format ci-json failed without producing CI JSON"
+          exit $CI_JSON_EXIT_CODE
+        fi
+        echo "ci_json=/tmp/rsscript-ci-gate.json" >> $GITHUB_OUTPUT
 
     - name: Post PR comment
       if: inputs.post-comment == 'true' && github.event_name == 'pull_request'
@@ -85,13 +105,13 @@ runs:
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
-        COMMENT_BODY="${{ steps.review.outputs.comment }}"
-        if [ -n "$COMMENT_BODY" ]; then
+        COMMENT_FILE="${{ steps.review.outputs.comment_file }}"
+        if [ -s "$COMMENT_FILE" ]; then
           gh pr comment ${{ github.event.pull_request.number }} \
-            --body "$COMMENT_BODY" \
+            --body-file "$COMMENT_FILE" \
             --edit-last || \
           gh pr comment ${{ github.event.pull_request.number }} \
-            --body "$COMMENT_BODY"
+            --body-file "$COMMENT_FILE"
         fi
 
     - name: Gate on missing capabilities

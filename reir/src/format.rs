@@ -283,19 +283,26 @@ pub fn format_ci_gate_output(
         .iter()
         .filter(|r| r.kind == ReconciliationKind::ExcessCapability)
         .collect();
-    let unknown_facts: Vec<_> = required_facts
+    let required_capability_facts = required_facts
         .iter()
-        .filter(|f| f.value == FactValue::Unknown)
+        .filter(|fact| is_capability_fact(fact, FactRole::Required))
+        .collect::<Vec<_>>();
+    let granted_capability_facts = granted_facts
+        .iter()
+        .filter(|fact| is_capability_fact(fact, FactRole::Granted))
+        .collect::<Vec<_>>();
+    let unknown_facts: Vec<_> = required_capability_facts
+        .iter()
+        .copied()
+        .filter(|f| {
+            f.value == FactValue::Unknown
+                || f.unknown_reason.is_some()
+                || f.confidence.level == ConfidenceLevel::Unknown
+        })
         .collect();
 
-    let total_required = required_facts
-        .iter()
-        .filter(|f| f.role == Some(FactRole::Required))
-        .count();
-    let total_granted = granted_facts
-        .iter()
-        .filter(|f| f.role == Some(FactRole::Granted))
-        .count();
+    let total_required = required_capability_facts.len();
+    let total_granted = granted_capability_facts.len();
     let total_missing = missing.len();
     let total_excess = excess.len();
     let total_unknown = unknown_facts.len();
@@ -313,15 +320,15 @@ pub fn format_ci_gate_output(
         CiGateStatus::Pass
     };
 
-    let required_capabilities: Vec<_> = required_facts
+    let required_capabilities: Vec<_> = required_capability_facts
         .iter()
-        .filter(|f| f.role == Some(FactRole::Required))
+        .copied()
         .map(fact_to_ci_capability)
         .collect();
 
-    let granted_capabilities: Vec<_> = granted_facts
+    let granted_capabilities: Vec<_> = granted_capability_facts
         .iter()
-        .filter(|f| f.role == Some(FactRole::Granted))
+        .copied()
         .map(fact_to_ci_capability)
         .collect();
 
@@ -396,6 +403,10 @@ pub fn format_ci_gate_output(
 /// Serialize CI gate output to JSON.
 pub fn format_ci_gate_json(output: &CiGateOutput) -> String {
     serde_json::to_string_pretty(output).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
+}
+
+fn is_capability_fact(fact: &Fact, role: FactRole) -> bool {
+    fact.kind == FactKind::Capability && fact.role == Some(role) && fact.capability.is_some()
 }
 
 fn fact_to_ci_capability(fact: &Fact) -> CiCapabilityFact {
@@ -1304,6 +1315,46 @@ mod tests {
         }
     }
 
+    fn capability_fact(id: &str, role: FactRole, value: FactValue) -> Fact {
+        Fact {
+            schema: "reir.fact.v0.1".to_string(),
+            id: id.to_string(),
+            kind: FactKind::Capability,
+            role: Some(role),
+            subject: report_uploader(),
+            capability: Some(put_object_capability()),
+            value,
+            confidence: Confidence {
+                level: ConfidenceLevel::Inferred,
+                source: Some("test".to_string()),
+            },
+            acquisition_mode: AcquisitionMode::CompilerContract,
+            precision: Precision::ResourceScoped,
+            evidence: vec![source_evidence("src/report_upload.rs", 88)],
+            unknown_reason: None,
+        }
+    }
+
+    fn diagnostic_fact(id: &str) -> Fact {
+        Fact {
+            schema: "reir.fact.v0.1".to_string(),
+            id: id.to_string(),
+            kind: FactKind::Diagnostic,
+            role: None,
+            subject: report_uploader(),
+            capability: None,
+            value: FactValue::Unknown,
+            confidence: Confidence {
+                level: ConfidenceLevel::Authoritative,
+                source: Some("test".to_string()),
+            },
+            acquisition_mode: AcquisitionMode::CompilerContract,
+            precision: Precision::Exact,
+            evidence: vec![source_evidence("src/report_upload.rs", 12)],
+            unknown_reason: Some("diagnostic error".to_string()),
+        }
+    }
+
     #[test]
     fn capability_subject_and_evidence_helpers_are_human_readable() {
         let capability = put_object_capability();
@@ -1330,6 +1381,29 @@ mod tests {
             format_evidence_label(&evidence),
             "rendered/prod/deployment.yaml#/spec/template/spec/serviceAccountName"
         );
+    }
+
+    #[test]
+    fn ci_gate_output_reports_only_capability_facts() {
+        let required = capability_fact("fact.req.upload", FactRole::Required, FactValue::True);
+        let granted = capability_fact("fact.grant.upload", FactRole::Granted, FactValue::True);
+        let diagnostic = diagnostic_fact("fact.diagnostic.error");
+        let required_facts = vec![required.clone(), diagnostic];
+        let output = format_ci_gate_output(
+            &required_facts,
+            std::slice::from_ref(&granted),
+            &[missing_reconciliation()],
+        );
+
+        assert_eq!(output.summary.total_required, 1);
+        assert_eq!(output.summary.total_granted, 1);
+        assert_eq!(output.summary.total_unknown, 0);
+        assert_eq!(output.required_capabilities.len(), 1);
+        assert_eq!(output.required_capabilities[0].id, required.id);
+        assert_eq!(output.granted_capabilities.len(), 1);
+        assert_eq!(output.granted_capabilities[0].id, granted.id);
+        assert!(output.unknown_capabilities.is_empty());
+        assert_eq!(output.required_capabilities[0].confidence, "inferred");
     }
 
     #[test]

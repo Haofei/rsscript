@@ -409,7 +409,11 @@ pub fn behavior_bom_to_reir_bundle(bom: &BehaviorBom, source_paths: &[&str]) -> 
     for m in &bom.mutations {
         facts.push(reir::Fact {
             schema: "reir.fact.v0.2".to_owned(),
-            id: format!("contract-mut-{}-{}", sanitize(&m.function), sanitize(&m.target)),
+            id: format!(
+                "contract-mut-{}-{}",
+                sanitize(&m.function),
+                sanitize(&m.target)
+            ),
             kind: reir::FactKind::Mutation,
             role: Some(reir::FactRole::Required),
             subject: reir::Subject {
@@ -594,7 +598,13 @@ fn contract_evidence(file: &str, symbol: Option<&str>, reason: &str) -> reir::Ev
 
 fn sanitize(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect()
 }
 
