@@ -499,6 +499,81 @@ pub fn run_pending<T>(pending: impl Pending<T>) -> T {
     Executor::new().run_pending(pending)
 }
 
+pub struct NativeAsyncPending<T> {
+    result: Arc<Mutex<Option<T>>>,
+    cancellation: CancellationToken,
+    wake: Arc<Mutex<Option<WakeHandle>>>,
+}
+
+#[derive(Clone)]
+pub struct NativeAsyncCompleter<T> {
+    result: Arc<Mutex<Option<T>>>,
+    cancellation: CancellationToken,
+    wake: Arc<Mutex<Option<WakeHandle>>>,
+}
+
+pub fn native_async_pending<T>(
+    cancellation: CancellationToken,
+) -> (NativeAsyncPending<T>, NativeAsyncCompleter<T>) {
+    let result = Arc::new(Mutex::new(None));
+    let wake = Arc::new(Mutex::new(None));
+    (
+        NativeAsyncPending {
+            result: result.clone(),
+            cancellation: cancellation.clone(),
+            wake: wake.clone(),
+        },
+        NativeAsyncCompleter {
+            result,
+            cancellation,
+            wake,
+        },
+    )
+}
+
+impl<T> NativeAsyncCompleter<T> {
+    pub fn complete(&self, value: T) -> bool {
+        if self.cancellation.is_cancelled() {
+            return false;
+        }
+        let mut result = self
+            .result
+            .lock()
+            .expect("native async result lock poisoned");
+        if result.is_some() {
+            return false;
+        }
+        *result = Some(value);
+        drop(result);
+        if let Some(wake) = self
+            .wake
+            .lock()
+            .expect("native async wake lock poisoned")
+            .as_ref()
+        {
+            wake.wake();
+        }
+        true
+    }
+}
+
+impl<T> Pending<T> for NativeAsyncPending<T> {
+    fn poll(&mut self, cx: &mut Context<'_>) -> AsyncPoll<T> {
+        if self.cancellation.is_cancelled() {
+            return AsyncPoll::Pending;
+        }
+        let mut result = self
+            .result
+            .lock()
+            .expect("native async result lock poisoned");
+        if let Some(value) = result.take() {
+            return AsyncPoll::Ready(value);
+        }
+        *self.wake.lock().expect("native async wake lock poisoned") = Some(cx.wake_handle());
+        AsyncPoll::Pending
+    }
+}
+
 pub struct TaskGroup<T> {
     tasks: Vec<Box<dyn Pending<T>>>,
     cancellation: CancellationToken,
@@ -3212,6 +3287,33 @@ mod tests {
         ));
         assert!(cancellation.is_cancelled());
         assert!(ready.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn native_async_pending_completes_from_background_worker() {
+        let cancellation = super::CancellationToken::new();
+        let (pending, completer) = super::native_async_pending(cancellation);
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            assert!(completer.complete(99));
+        });
+
+        let mut executor = super::Executor::new();
+        let started = std::time::Instant::now();
+        let value = executor.run_pending(pending);
+
+        assert_eq!(value, 99);
+        assert!(started.elapsed() < std::time::Duration::from_millis(500));
+    }
+
+    #[test]
+    fn native_async_completer_rejects_completion_after_cancellation() {
+        let cancellation = super::CancellationToken::new();
+        let (_pending, completer) = super::native_async_pending::<usize>(cancellation.clone());
+
+        cancellation.cancel();
+
+        assert!(!completer.complete(99));
     }
 
     #[test]
