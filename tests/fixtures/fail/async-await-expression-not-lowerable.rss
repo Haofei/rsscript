@@ -1,0 +1,12 @@
+// expect: RS0411
+
+features: async
+
+async fn text() -> Result<fresh String, TimerError> {
+    return Ok("x")
+}
+
+async fn bad() -> Result<fresh String, TimerError> {
+    let value = String.concat(left: read "a", right: read await text()?)
+    return Ok(value)
+}

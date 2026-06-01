@@ -1324,9 +1324,10 @@ impl Analyzer<'_> {
         }
     }
 
-    /// A user `async fn` lowers to a `Pending` chain. Reject awaits nested in
-    /// control flow (RS0411, deferred until full state-machine lowering) rather
-    /// than silently mis-lowering them.
+    /// A user `async fn` lowers to a `Pending` chain. Control-flow statements
+    /// with awaits lower as explicit statement boundaries; keep rejecting
+    /// awaits embedded in ordinary expression positions where the lowering
+    /// would otherwise hide an executor boundary inside an expression.
     fn check_async_fn_lowerable(&mut self) {
         use crate::syntax::ast::Item;
         let mut diagnostics = Vec::new();
@@ -1340,8 +1341,8 @@ impl Analyzer<'_> {
             if let Some(span) = async_block_nonlinear_await(&function.body) {
                 diagnostics.push(async_not_lowerable_diagnostic(
                     span,
-                    "this `await` is inside control flow, which needs full async lowering",
-                    "Restructure so every `await` is a top-level statement in the async function body. Awaits inside `loop`/`if`/`match`/`with` are deferred.",
+                    "this `await` is inside an expression that needs full async expression lowering",
+                    "Move the await to a statement boundary, or put it inside an `if`/`loop`/`match` body where RSScript can create an explicit async boundary.",
                 ));
             }
             // Independent of lowerability: a `Task.cancellation_token()` call in
@@ -4337,11 +4338,8 @@ fn async_block_nonlinear_await(block: &Block) -> Option<crate::diagnostic::Span>
                 },
                 None => None,
             },
-            Stmt::Select(stmt) => select_boundary_nonlinear_await(stmt),
-            Stmt::For(stmt) if stmt.is_async => {
-                expr_first_await(&stmt.iterable).or_else(|| block_first_await(&stmt.body))
-            }
-            Stmt::TaskGroup(_) => None,
+            Stmt::Select(_) | Stmt::For(_) | Stmt::TaskGroup(_) => None,
+            Stmt::If(_) | Stmt::Loop(_) | Stmt::Match(_) | Stmt::With(_) => None,
             other => stmt_first_await_ast(other),
         };
         if nested.is_some() {
@@ -4349,18 +4347,6 @@ fn async_block_nonlinear_await(block: &Block) -> Option<crate::diagnostic::Span>
         }
     }
     None
-}
-
-fn select_boundary_nonlinear_await(
-    stmt: &crate::syntax::ast::SelectStmt,
-) -> Option<crate::diagnostic::Span> {
-    stmt.arms.iter().find_map(|arm| {
-        let operation_nested = match async_await_inner_ast(&arm.operation) {
-            Some(inner) => expr_first_await(inner),
-            None => expr_first_await(&arm.operation),
-        };
-        operation_nested.or_else(|| block_first_await(&arm.body))
-    })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -4645,23 +4631,8 @@ impl<'a> AssignChecker<'a> {
                 self.diagnostics
                     .push(invalid_assignment_diagnostic(span, label, cause));
             }
-            Expr::Field { .. } | Expr::Index { .. } if assign_place_root(&stmt.target).is_some() => {
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        code::ASSIGNMENT_TARGET_DEFERRED,
-                        "field and index assignment are not yet supported.",
-                        span,
-                        "field/index assignment is deferred in this version",
-                    )
-                    .with_cause(
-                        "Field assignment (`obj.field = e`) and index assignment (`list[i] = e`) are recognized controlled-assignment forms but are not yet executable.",
-                    )
-                    .with_fix(
-                        "use_mut_parameter",
-                        "Update the value through a function that takes the base as a `mut` parameter, or use a `let mut` local for now.",
-                        "manual",
-                    ),
-                );
+            Expr::Field { .. } | Expr::Index { .. } => {
+                self.validate_compound_assignment(stmt, &span);
             }
             _ => self.diagnostics.push(invalid_assignment_diagnostic(
                 span,
@@ -4706,6 +4677,113 @@ impl<'a> AssignChecker<'a> {
             );
         }
     }
+
+    fn validate_compound_assignment(&mut self, stmt: &AssignStmt, span: &crate::diagnostic::Span) {
+        let Some(root) = assign_place_root(&stmt.target) else {
+            self.diagnostics.push(invalid_assignment_diagnostic(
+                span.clone(),
+                "the left side of `=` is not rooted in a local place".to_string(),
+                "Field and index assignment must start from a local binding, such as `user.name` or `items[i]`."
+                    .to_string(),
+            ));
+            return;
+        };
+        match self.resolve(root) {
+            Some(AssignBinding::MutLocal) => {}
+            Some(AssignBinding::ImmutableLocal) => {
+                self.diagnostics.push(invalid_assignment_diagnostic(
+                    span.clone(),
+                    format!("`{root}` is an immutable binding"),
+                    format!("Declare `{root}` with `let mut` before assigning through one of its fields or indexes."),
+                ));
+                return;
+            }
+            Some(AssignBinding::Param) => {
+                self.diagnostics.push(invalid_assignment_diagnostic(
+                    span.clone(),
+                    format!("`{root}` is a parameter, not a reassignable local"),
+                    "Assign through a `mut` API parameter explicitly, or bind the value to a `let mut` local first."
+                        .to_string(),
+                ));
+                return;
+            }
+            None => {
+                self.diagnostics.push(invalid_assignment_diagnostic(
+                    span.clone(),
+                    format!("`{root}` is not a binding in scope"),
+                    "The assignment target's root must be a `let mut` local in scope.".to_string(),
+                ));
+                return;
+            }
+        }
+
+        if matches!(stmt.target, Expr::Index { .. }) {
+            let Some(index_base) = assign_index_base(&stmt.target) else {
+                return;
+            };
+            let Some(base_type) = self.infer_type(index_base) else {
+                return;
+            };
+            if type_root_name(&base_type) != "List" {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::ASSIGNMENT_TARGET_DEFERRED,
+                        "index assignment is only supported for List values.",
+                        span.clone(),
+                        format!("cannot assign through `{base_type}` index"),
+                    )
+                    .with_cause(
+                        "`list[i] = value` has clear in-place list update semantics. Other indexed types still require explicit APIs such as `Map.insert`.",
+                    )
+                    .with_fix(
+                        "use_explicit_update_api",
+                        "Use the collection's explicit mutating API for this indexed assignment.",
+                        "manual",
+                    ),
+                );
+                return;
+            }
+        }
+
+        self.check_assignment_place_type(&stmt.target, &stmt.value, span);
+    }
+
+    fn check_assignment_place_type(
+        &mut self,
+        target: &Expr,
+        value: &Expr,
+        span: &crate::diagnostic::Span,
+    ) {
+        let Some(target_type) = self.infer_type(target) else {
+            return;
+        };
+        let Some(value_type) = self.infer_type(value) else {
+            return;
+        };
+        if crate::checks::calls::unresolved_generic_type(&target_type)
+            || crate::checks::calls::unresolved_generic_type(&value_type)
+        {
+            return;
+        }
+        if !crate::checks::calls::argument_type_matches(&target_type, &value_type) {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::ASSIGNMENT_TYPE_MISMATCH,
+                    format!("cannot assign `{value_type}` to `{target_type}` place."),
+                    span.clone(),
+                    "assignment type mismatch",
+                )
+                .with_cause(
+                    "The assigned value's type must match the field or indexed element type before Rust lowering.",
+                )
+                .with_fix(
+                    "match_assignment_type",
+                    format!("Assign a `{target_type}` value to this place."),
+                    "manual",
+                ),
+            );
+        }
+    }
 }
 
 fn invalid_assignment_diagnostic(
@@ -4729,6 +4807,14 @@ fn assign_place_root(expr: &Expr) -> Option<&str> {
     match expr {
         Expr::Ident(name, _) => Some(name.as_str()),
         Expr::Field { base, .. } | Expr::Index { base, .. } => assign_place_root(base),
+        _ => None,
+    }
+}
+
+fn assign_index_base(expr: &Expr) -> Option<&Expr> {
+    match expr {
+        Expr::Index { base, .. } => Some(base),
+        Expr::Field { base, .. } => assign_index_base(base),
         _ => None,
     }
 }
@@ -5325,10 +5411,13 @@ fn is_builtin_type_name(name: &str) -> bool {
             | "Float32"
             | "Float64"
             | "String"
+            | "StringView"
             | "Url"
             | "Fd"
             | "Bytes"
+            | "BytesView"
             | "Buffer"
+            | "BufferView"
             | "Path"
             | "Result"
             | "Option"

@@ -2,6 +2,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use crate::async_runtime::{NativeAsyncPending, spawn_tokio_native};
+use crate::channel::{ChannelError, RssStream, stream_from_iterator};
 use crate::diagnostics::Resource;
 
 pub struct File {
@@ -76,6 +77,12 @@ impl RuntimeBytes for Vec<u8> {
     }
 }
 
+impl RuntimeBytes for [u8] {
+    fn as_bytes_slice(&self) -> &[u8] {
+        self
+    }
+}
+
 impl RuntimeBytes for String {
     fn as_bytes_slice(&self) -> &[u8] {
         self.as_bytes()
@@ -126,6 +133,53 @@ pub fn file_read_into(file: &mut File, buffer: &mut Vec<u8>) -> std::io::Result<
     buffer.clear();
     let bytes_read = file.inner.read_to_end(buffer)?;
     Ok(bytes_read > 0)
+}
+
+pub fn file_bytes_stream<P: RuntimePath + ?Sized>(
+    path: &P,
+    chunk_size: i64,
+) -> Result<RssStream<Vec<u8>>, ChannelError> {
+    let file = std::fs::File::open(path.as_path())
+        .map_err(|error| ChannelError::new(&format!("file byte stream open failed: {error}")))?;
+    let chunk_size = chunk_size.max(1) as usize;
+    Ok(stream_from_iterator(FileBytesIterator {
+        file,
+        chunk_size,
+        done: false,
+    }))
+}
+
+struct FileBytesIterator {
+    file: std::fs::File,
+    chunk_size: usize,
+    done: bool,
+}
+
+impl Iterator for FileBytesIterator {
+    type Item = Result<Vec<u8>, ChannelError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        let mut buffer = vec![0; self.chunk_size];
+        match self.file.read(&mut buffer) {
+            Ok(0) => {
+                self.done = true;
+                None
+            }
+            Ok(bytes_read) => {
+                buffer.truncate(bytes_read);
+                Some(Ok(buffer))
+            }
+            Err(error) => {
+                self.done = true;
+                Some(Err(ChannelError::new(&format!(
+                    "file byte stream read failed: {error}"
+                ))))
+            }
+        }
+    }
 }
 
 pub fn file_write<B: RuntimeBytes + ?Sized>(file: &mut File, data: &B) -> std::io::Result<()> {

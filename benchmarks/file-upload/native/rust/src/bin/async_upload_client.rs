@@ -12,6 +12,7 @@ const DEFAULT_ENDPOINT: &str = "127.0.0.1:39190";
 const DEFAULT_REQUESTS: usize = 24;
 const DEFAULT_PAYLOAD_BYTES: usize = 64 * 1024;
 const DEFAULT_CONCURRENCY: usize = 8;
+const DEFAULT_AWAITS_PER_UPLOAD: usize = 4;
 static TRACE_INIT: Once = Once::new();
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
@@ -22,6 +23,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let requests = env_usize("RSS_FILE_UPLOAD_REQUESTS", DEFAULT_REQUESTS);
     let payload_bytes = env_usize("RSS_FILE_UPLOAD_PAYLOAD_BYTES", DEFAULT_PAYLOAD_BYTES);
     let concurrency = env_usize("RSS_FILE_UPLOAD_CONCURRENCY", DEFAULT_CONCURRENCY).max(1);
+    let awaits_per_upload =
+        env_usize("RSS_FILE_UPLOAD_AWAITS_PER_UPLOAD", DEFAULT_AWAITS_PER_UPLOAD).max(1);
     let payload = Arc::new(payload(payload_bytes));
     let started = Instant::now();
 
@@ -33,7 +36,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             let endpoint = endpoint.clone();
             let payload = payload.clone();
             tasks.push(tokio::spawn(async move {
-                upload_one(&endpoint, index, &payload).await
+                upload_with_stages(&endpoint, index, &payload, awaits_per_upload).await
             }));
         }
         for task in tasks {
@@ -45,9 +48,98 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let elapsed = started.elapsed();
     let rps = requests as f64 / elapsed.as_secs_f64();
     println!(
-        "mode=rust_async requests={requests} payload_bytes={payload_bytes} concurrency={concurrency} elapsed_ms={} rps={rps:.2}",
+        "mode=rust_async requests={requests} payload_bytes={payload_bytes} concurrency={concurrency} awaits_per_upload={awaits_per_upload} elapsed_ms={} rps={rps:.2}",
         elapsed.as_millis()
     );
+    Ok(())
+}
+
+async fn upload_with_stages(
+    endpoint: &str,
+    index: usize,
+    payload: &[u8],
+    awaits_per_upload: usize,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    match awaits_per_upload {
+        1 => upload_stage_0(endpoint, index, payload).await,
+        2 => upload_stage_1(endpoint, index, payload).await,
+        3 => upload_stage_2(endpoint, index, payload).await,
+        4 => upload_stage_3(endpoint, index, payload).await,
+        5 => upload_stage_4(endpoint, index, payload).await,
+        6 => upload_stage_5(endpoint, index, payload).await,
+        7 => upload_stage_6(endpoint, index, payload).await,
+        _ => upload_stage_7(endpoint, index, payload).await,
+    }
+}
+
+async fn upload_stage_0(
+    endpoint: &str,
+    index: usize,
+    payload: &[u8],
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    upload_one(endpoint, index, payload).await
+}
+
+async fn upload_stage_1(
+    endpoint: &str,
+    index: usize,
+    payload: &[u8],
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    upload_stage_0(endpoint, index, payload).await?;
+    Ok(())
+}
+
+async fn upload_stage_2(
+    endpoint: &str,
+    index: usize,
+    payload: &[u8],
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    upload_stage_1(endpoint, index, payload).await?;
+    Ok(())
+}
+
+async fn upload_stage_3(
+    endpoint: &str,
+    index: usize,
+    payload: &[u8],
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    upload_stage_2(endpoint, index, payload).await?;
+    Ok(())
+}
+
+async fn upload_stage_4(
+    endpoint: &str,
+    index: usize,
+    payload: &[u8],
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    upload_stage_3(endpoint, index, payload).await?;
+    Ok(())
+}
+
+async fn upload_stage_5(
+    endpoint: &str,
+    index: usize,
+    payload: &[u8],
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    upload_stage_4(endpoint, index, payload).await?;
+    Ok(())
+}
+
+async fn upload_stage_6(
+    endpoint: &str,
+    index: usize,
+    payload: &[u8],
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    upload_stage_5(endpoint, index, payload).await?;
+    Ok(())
+}
+
+async fn upload_stage_7(
+    endpoint: &str,
+    index: usize,
+    payload: &[u8],
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    upload_stage_6(endpoint, index, payload).await?;
     Ok(())
 }
 

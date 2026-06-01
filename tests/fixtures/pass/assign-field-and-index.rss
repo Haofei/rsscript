@@ -1,0 +1,19 @@
+struct Account derives(Clone) {
+    balance: Int
+}
+
+fn deposit() -> Int {
+    let mut account = Account(balance: 0)
+    account.balance = 10
+
+    let mut items = List<Int>.new()
+    List.push(list: mut items, value: read 1)
+    items[0] = account.balance
+
+    return List.get(list: read items, index: 0)
+}
+
+fn main() -> Unit {
+    let value = deposit()
+    return Unit
+}

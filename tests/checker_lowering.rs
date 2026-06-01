@@ -105,6 +105,53 @@ struct User derives(Clone, Eq, Ord, Hash, JsonEncode, JsonDecode, Schema) {
 }
 
 #[test]
+fn rust_lowering_supports_controlled_field_and_list_index_assignment() {
+    let source = r#"
+struct Account {
+    balance: Int
+}
+
+fn run() -> Int {
+    let mut account = Account(balance: 0)
+    account.balance = 10
+
+    let mut items = List<Int>.new()
+    List.push(list: mut items, value: read 1)
+    items[0] = account.balance
+    return List.get(list: read items, index: 0)
+}
+"#;
+    let rust = lower_source_to_rust("assign-compound.rss", source).expect("source should lower");
+
+    assert!(rust.contains("let mut account = Account { balance: 0 };"));
+    assert!(rust.contains("account.balance = 10;"));
+    assert!(rust.contains("items[0 as usize] = account.balance;"));
+}
+
+#[test]
+fn rust_lowering_wraps_async_control_flow_with_await_in_pending_boundary() {
+    let source = r#"
+features: async
+
+async fn run(flag: Bool) -> Result<Unit, TimerError> {
+    if flag {
+        await Timer.sleep(ms: 1)?
+    } else {
+        await Timer.sleep(ms: 2)?
+    }
+    return Ok(Unit)
+}
+"#;
+    let rust = lower_source_to_rust("async-control.rss", source).expect("source should lower");
+
+    assert!(
+        rust.contains("impl rsscript_runtime::Pending<Result<(), rsscript_runtime::TimerError>>")
+    );
+    assert!(rust.contains("rsscript_runtime::pending_defer(move ||"));
+    assert!(rust.contains("__rsscript_async_executor.run_pending"));
+}
+
+#[test]
 fn rust_package_adds_serde_for_json_derives() {
     let source = r#"
 struct User derives(JsonEncode, JsonDecode) {
@@ -1148,6 +1195,50 @@ fn main() -> Unit {
     );
     assert!(rust.contains("let built = rsscript_runtime::string_builder_finish(builder);"));
     assert!(rust.contains("rsscript_runtime::log_write(&message);"));
+}
+
+#[test]
+fn rust_lowering_maps_string_and_bytes_views_to_borrowed_slices() {
+    let source = r#"
+features: local
+
+fn parse_header(line: read String, bytes: read Bytes, buffer: read Buffer) -> Result<String, Unit> {
+    let head = String.view(value: read line, start: 0, len: 12)
+    let key = StringView.before(value: read head, delimiter: read ":")
+    let bytes_head = Bytes.view(value: read bytes, start: 0, len: 4)
+    let buffer_head = Buffer.view(buffer: read buffer, start: 0, len: 4)
+    let copied = BytesView.to_bytes(value: read bytes_head)
+    let copied_buffer = BufferView.to_bytes(value: read buffer_head)
+    let _ = BytesView.len(value: read bytes_head)
+    let _ = BufferView.len(value: read buffer_head)
+    match key {
+        Some(value) => return Ok(StringView.to_string(value: read value))
+        None => return Ok(StringView.to_string(value: read head))
+    }
+}
+
+fn write_views(file: mut File, bytes: read Bytes, buffer: read Buffer) -> Result<Unit, FileError> {
+    let bytes_head = Bytes.view(value: read bytes, start: 0, len: 4)
+    let buffer_head = Buffer.view(buffer: read buffer, start: 0, len: 4)
+    File.write_bytes_view(file: mut file, data: read bytes_head)?
+    File.write_buffer_view(file: mut file, buffer: read buffer_head)?
+    return Ok(Unit)
+}
+"#;
+    let rust = lower_source_to_rust("view-lower.rss", source).expect("source should lower");
+
+    assert!(rust.contains("let head = rsscript_runtime::string_view(&line, 0, 12);"));
+    assert!(
+        rust.contains("let key = rsscript_runtime::string_view_before(&head, &\":\".to_string());")
+    );
+    assert!(rust.contains("let bytes_head = rsscript_runtime::bytes_view(&bytes, 0, 4);"));
+    assert!(rust.contains("let buffer_head = rsscript_runtime::buffer_view(&buffer, 0, 4);"));
+    assert!(rust.contains("rsscript_runtime::bytes_view_to_bytes(&bytes_head)"));
+    assert!(rust.contains("rsscript_runtime::buffer_view_to_bytes(&buffer_head)"));
+    assert!(rust.contains("rsscript_runtime::file_write(file, &bytes_head)?;"));
+    assert!(rust.contains("rsscript_runtime::file_write(file, &buffer_head)?;"));
+    assert!(rust.contains("return Ok(rsscript_runtime::string_view_to_string(&value));"));
+    assert!(!rust.contains("dyn"));
 }
 
 #[test]
@@ -5061,8 +5152,8 @@ fn load(id: read Int) -> Result<String, NetworkError> {
     );
     assert!(
         lowered.contains("__rsscript_async_executor.poll_once_keyed(__rsscript_key_user")
-            && lowered.contains("__rsscript_async_executor.wait_for_wake()"),
-        "task_group should drive siblings from keyed wakes, got:\n{lowered}"
+            && lowered.contains("__rsscript_async_executor.yield_once()"),
+        "task_group should cooperatively drive siblings from keyed polls, got:\n{lowered}"
     );
     assert!(
         lowered
@@ -5323,6 +5414,48 @@ fn run() -> Result<Unit, ChannelError> {
         lowered.contains("rsscript_runtime::stream_next(&stream)"),
         "Stream.next should lower to a pending runtime hook, got:\n{lowered}"
     );
+}
+
+#[test]
+fn stream_sources_and_collect_list_lower_to_runtime_pipeline_hooks() {
+    let source = r#"
+features: async, local
+
+fn collect_numbers() -> Result<fresh List<Int>, ChannelError> {
+    local items = List<Int>.new()
+    List.push(list: mut items, value: read 1)
+    List.push(list: mut items, value: read 2)
+    let stream: Stream<Int> = Stream.from_list(items: take items)
+    return Stream.collect_list(stream: read stream)?
+}
+
+fn read_chunks(path: read Path) -> Result<Unit, ChannelError> {
+    let chunks: Stream<Bytes> = File.bytes_stream(path: read path, chunk_size: 4096)?
+    await for chunk in chunks {
+        Log.write(message: read "chunk")
+    }
+    return Ok(Unit)
+}
+
+fn read_rows(path: read Path) -> Result<Unit, ChannelError> {
+    let rows: Stream<Row> = Csv.rows(path: read path, buffer_size: 8192)?
+    await for row in rows {
+        let name = Row.field_string(row: read row, index: 0)
+        Log.write(message: read "row")
+    }
+    return Ok(Unit)
+}
+"#;
+    let lowered =
+        lower_source_to_rust("stream-sources.rss", source).expect("stream sources should lower");
+
+    assert!(lowered.contains("rsscript_runtime::stream_from_list(items)"));
+    assert!(lowered.contains("rsscript_runtime::stream_collect_list(&stream)"));
+    assert!(lowered.contains("rsscript_runtime::file_bytes_stream(&path, 4096)?"));
+    assert!(lowered.contains("let chunks: rsscript_runtime::RssStream<Vec<u8>> ="));
+    assert!(lowered.contains("rsscript_runtime::csv_rows(&path, 8192)?"));
+    assert!(lowered.contains("let rows: rsscript_runtime::RssStream<rsscript_runtime::Row> ="));
+    assert!(lowered.matches("rsscript_runtime::stream_next(&").count() >= 2);
 }
 
 #[test]

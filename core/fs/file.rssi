@@ -14,11 +14,20 @@ pub fn File.read_all_string(file: mut File) -> Result<String, FileError>
 
 pub fn File.read_into(file: mut File, buffer: mut Buffer) -> Result<Bool, FileError>
 
+pub fn File.bytes_stream(
+    path: read Path,
+    chunk_size: Int,
+) -> Result<fresh Stream<Bytes>, ChannelError>
+
 pub fn File.write(file: mut File, data: read Bytes) -> Result<Unit, FileError>
+
+pub fn File.write_bytes_view(file: mut File, data: read BytesView) -> Result<Unit, FileError>
 
 pub fn File.write_string(file: mut File, text: read String) -> Result<Unit, FileError>
 
 pub fn File.write_buffer(file: mut File, buffer: read Buffer) -> Result<Unit, FileError>
+
+pub fn File.write_buffer_view(file: mut File, buffer: read BufferView) -> Result<Unit, FileError>
 
 pub async native fn File.read_all_async(path: read Path) -> Result<fresh Bytes, FileError>
     effects(native)

@@ -900,7 +900,7 @@ impl<'a> RustLowerer<'a> {
         out.push_str(&format!(
             "{pad}        if __rsscript_result_{target}.is_some() {{ break; }}\n"
         ));
-        out.push_str(&format!("{pad}        {executor}.wait_for_wake();\n"));
+        out.push_str(&format!("{pad}        {executor}.yield_once();\n"));
         out.push_str(&format!(
             "{pad}        let __rsscript_woken_keys = {executor}.drain_ready_wake_keys();\n"
         ));
@@ -943,7 +943,7 @@ impl<'a> RustLowerer<'a> {
             out.push_str(&format!("{pad}    }}\n"));
         }
         out.push_str(&format!("{pad}    if __rsscript_all_done {{ break; }}\n"));
-        out.push_str(&format!("{pad}    {executor}.wait_for_wake();\n"));
+        out.push_str(&format!("{pad}    {executor}.yield_once();\n"));
         out.push_str(&format!(
             "{pad}    let __rsscript_woken_keys = {executor}.drain_ready_wake_keys();\n"
         ));
@@ -1155,6 +1155,36 @@ impl<'a> RustLowerer<'a> {
                     )
                 }
             }
+            Stmt::Loop(stmt) if stmt_contains_await(head) => {
+                let boundary = self.lower_async_loop_boundary(stmt);
+                let rest = self.lower_async_chain(tail);
+                if boundary.returns_result {
+                    format!(
+                        "rsscript_runtime::pending_try({pending}, move |_rsscript_unit| {{ {rest} }})",
+                        pending = boundary.pending
+                    )
+                } else {
+                    format!(
+                        "rsscript_runtime::pending_then({pending}, move |_rsscript_unit| {{ {rest} }})",
+                        pending = boundary.pending
+                    )
+                }
+            }
+            Stmt::If(_) | Stmt::Match(_) | Stmt::With(_) if stmt_contains_await(head) => {
+                let boundary = self.lower_async_statement_boundary(head);
+                let rest = self.lower_async_chain(tail);
+                if boundary.returns_result {
+                    format!(
+                        "rsscript_runtime::pending_try({pending}, move |_rsscript_unit| {{ {rest} }})",
+                        pending = boundary.pending
+                    )
+                } else {
+                    format!(
+                        "rsscript_runtime::pending_then({pending}, move |_rsscript_unit| {{ {rest} }})",
+                        pending = boundary.pending
+                    )
+                }
+            }
             other => {
                 let mut statement_out = String::new();
                 self.lower_stmt(other, &mut statement_out, 0);
@@ -1210,6 +1240,170 @@ impl<'a> RustLowerer<'a> {
         AsyncTaskGroupBoundary {
             pending: format!("rsscript_runtime::pending_defer(move || {body})"),
             returns_result,
+        }
+    }
+
+    fn lower_async_loop_boundary(
+        &mut self,
+        stmt: &crate::syntax::ast::LoopStmt,
+    ) -> AsyncTaskGroupBoundary {
+        let Some(error_ty) = self.current_result_error_type_rust() else {
+            return self.lower_async_statement_boundary(&Stmt::Loop(stmt.clone()));
+        };
+        if let Some(boundary) = self.lower_async_poll_loop_boundary(stmt, &error_ty) {
+            return boundary;
+        }
+        let condition = stmt
+            .condition
+            .as_ref()
+            .map(|condition| self.lower_expr(condition))
+            .unwrap_or_else(|| "true".to_string());
+        let body = self.lower_async_loop_body_chain(&stmt.body.statements, &error_ty);
+        AsyncTaskGroupBoundary {
+            pending: format!(
+                "rsscript_runtime::pending_loop_result::<{error_ty}, _>(move || {{
+                    if !({condition}) {{
+                        Box::new(rsscript_runtime::pending_ready(Ok::<rsscript_runtime::LoopControl, {error_ty}>(rsscript_runtime::LoopControl::Break))) as Box<dyn rsscript_runtime::Pending<Result<rsscript_runtime::LoopControl, {error_ty}>> + '_>
+                    }} else {{
+                        Box::new({body}) as Box<dyn rsscript_runtime::Pending<Result<rsscript_runtime::LoopControl, {error_ty}>> + '_>
+                    }}
+                }})"
+            ),
+            returns_result: true,
+        }
+    }
+
+    fn lower_async_poll_loop_boundary(
+        &mut self,
+        stmt: &crate::syntax::ast::LoopStmt,
+        error_ty: &str,
+    ) -> Option<AsyncTaskGroupBoundary> {
+        let (await_stmt, rest) = split_loop_body_at_first_await(&stmt.body.statements)?;
+        if rest.iter().any(stmt_contains_await) {
+            return None;
+        }
+        let condition = stmt
+            .condition
+            .as_ref()
+            .map(|condition| self.lower_expr(condition))
+            .unwrap_or_else(|| "true".to_string());
+        let prefix = format!("__rsscript_loop_{}_{}", stmt.span.line, stmt.span.column);
+        let (pending_expr, binding, is_try) = match await_stmt {
+            Stmt::Let(let_stmt) => {
+                let value = let_stmt.value.as_ref()?;
+                let inner = async_await_inner(value)?;
+                (
+                    self.lower_expr(inner),
+                    Some(rust_ident(&let_stmt.name)),
+                    async_await_is_try(value),
+                )
+            }
+            Stmt::Expr(expr) => {
+                let inner = async_await_inner(expr)?;
+                (self.lower_expr(inner), None, async_await_is_try(expr))
+            }
+            _ => return None,
+        };
+        let mut rest_body = String::new();
+        for statement in rest {
+            self.lower_stmt(statement, &mut rest_body, 4);
+        }
+        let value_bind = match (binding, is_try) {
+            (Some(binding), true) => format!(
+                "let {binding} = match {prefix}_value {{
+                    Ok(__rsscript_ok) => __rsscript_ok,
+                    Err(__rsscript_error) => return rsscript_runtime::AsyncPoll::Ready(Err(__rsscript_error)),
+                }};"
+            ),
+            (Some(binding), false) => format!("let {binding} = {prefix}_value;"),
+            (None, true) => format!(
+                "if let Err(__rsscript_error) = {prefix}_value {{
+                    return rsscript_runtime::AsyncPoll::Ready(Err(__rsscript_error));
+                }}"
+            ),
+            (None, false) => format!("let _ = {prefix}_value;"),
+        };
+        let pending = format!(
+            "{{
+                let mut {prefix}_pending = None;
+                rsscript_runtime::pending_poll_fn(move |{prefix}_cx| {{
+                    loop {{
+                        if !({condition}) {{
+                            return rsscript_runtime::AsyncPoll::Ready(Ok::<(), {error_ty}>(()));
+                        }}
+                        if {prefix}_pending.is_none() {{
+                            {prefix}_pending = Some({pending_expr});
+                        }}
+                        match rsscript_runtime::Pending::poll(
+                            {prefix}_pending.as_mut().expect(\"loop await pending exists\"),
+                            {prefix}_cx,
+                        ) {{
+                            rsscript_runtime::AsyncPoll::Ready({prefix}_value) => {{
+                                {prefix}_pending = None;
+                                {value_bind}
+{rest_body}
+                            }}
+                            rsscript_runtime::AsyncPoll::Pending => {{
+                                return rsscript_runtime::AsyncPoll::Pending;
+                            }}
+                        }}
+                    }}
+                }})
+            }}"
+        );
+        Some(AsyncTaskGroupBoundary {
+            pending,
+            returns_result: true,
+        })
+    }
+
+    fn lower_async_loop_body_chain(&mut self, statements: &[Stmt], error_ty: &str) -> String {
+        let Some((head, tail)) = statements.split_first() else {
+            return format!(
+                "rsscript_runtime::pending_ready(Ok::<rsscript_runtime::LoopControl, {error_ty}>(rsscript_runtime::LoopControl::Continue))"
+            );
+        };
+        match head {
+            Stmt::Break(_) => format!(
+                "rsscript_runtime::pending_ready(Ok::<rsscript_runtime::LoopControl, {error_ty}>(rsscript_runtime::LoopControl::Break))"
+            ),
+            Stmt::Continue(_) => format!(
+                "rsscript_runtime::pending_ready(Ok::<rsscript_runtime::LoopControl, {error_ty}>(rsscript_runtime::LoopControl::Continue))"
+            ),
+            Stmt::Let(stmt)
+                if stmt
+                    .value
+                    .as_ref()
+                    .and_then(|value| async_await_inner(value))
+                    .is_some() =>
+            {
+                let value = stmt.value.as_ref().expect("await let has a value");
+                let combinator = if async_await_is_try(value) {
+                    "pending_try"
+                } else {
+                    "pending_then"
+                };
+                let pending = self.lower_expr(async_await_inner(value).expect("await inner"));
+                let bind = rust_ident(&stmt.name);
+                let rest = self.lower_async_loop_body_chain(tail, error_ty);
+                format!("rsscript_runtime::{combinator}({pending}, |{bind}| {{ {rest} }})")
+            }
+            Stmt::Expr(expr) if async_await_inner(expr).is_some() => {
+                let combinator = if async_await_is_try(expr) {
+                    "pending_try"
+                } else {
+                    "pending_then"
+                };
+                let pending = self.lower_expr(async_await_inner(expr).expect("await inner"));
+                let rest = self.lower_async_loop_body_chain(tail, error_ty);
+                format!("rsscript_runtime::{combinator}({pending}, |_rsscript_unit| {{ {rest} }})")
+            }
+            other => {
+                let mut statement_out = String::new();
+                self.lower_stmt(other, &mut statement_out, 0);
+                let rest = self.lower_async_loop_body_chain(tail, error_ty);
+                format!("{{ {} {rest} }}", statement_out.trim())
+            }
         }
     }
 
@@ -1468,7 +1662,7 @@ impl<'a> RustLowerer<'a> {
             Stmt::Continue(_) => out.push_str(&format!("{pad}continue;\n")),
             Stmt::Assign(stmt) => out.push_str(&format!(
                 "{pad}{} = {};\n",
-                self.lower_expr(&stmt.target),
+                self.lower_assignment_target(&stmt.target),
                 self.lower_expr(&stmt.value)
             )),
             Stmt::Expr(expr) => out.push_str(&format!("{pad}{};\n", self.lower_expr(expr))),
@@ -2133,6 +2327,39 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
+    fn lower_assignment_target(&mut self, expr: &Expr) -> String {
+        match expr {
+            Expr::Field { base, name, span } => {
+                let base_is_managed_class = self
+                    .infer_expr_type(base)
+                    .is_some_and(|ty| self.is_class_type(&ty));
+                if base_is_managed_class || self.expr_lowers_to_managed_non_class_handle(base) {
+                    format!(
+                        "rsscript_runtime::unwrap_runtime({}.try_write_at({})).{}",
+                        self.lower_expr(base),
+                        lower_source_span(span),
+                        rust_ident(name)
+                    )
+                } else {
+                    format!(
+                        "{}.{}",
+                        self.lower_assignment_target(base),
+                        rust_ident(name)
+                    )
+                }
+            }
+            Expr::Index { base, index, .. } => {
+                format!(
+                    "{}[{} as usize]",
+                    self.lower_assignment_target(base),
+                    self.lower_expr(index)
+                )
+            }
+            Expr::Ident(..) => self.lower_expr(expr),
+            _ => self.lower_expr(expr),
+        }
+    }
+
     fn expr_is_read_view(&self, expr: &Expr) -> bool {
         match expr {
             Expr::Ident(name, _) => self.read_view_bindings.contains(name),
@@ -2495,9 +2722,19 @@ impl<'a> RustLowerer<'a> {
             "Float32" => "f32".to_string(),
             "Float64" => "f64".to_string(),
             "String" => "String".to_string(),
+            "StringView" if position == ManagedPosition::Nested => "&str".to_string(),
+            "StringView" if position == ManagedPosition::Return => "&str".to_string(),
+            "StringView" => "str".to_string(),
             "StringBuilder" => "String".to_string(),
             "Url" => "String".to_string(),
             "Fd" => "i64".to_string(),
+            "BytesView" | "BufferView" if position == ManagedPosition::Nested => {
+                "&[u8]".to_string()
+            }
+            "BytesView" | "BufferView" if position == ManagedPosition::Return => {
+                "&[u8]".to_string()
+            }
+            "BytesView" | "BufferView" => "[u8]".to_string(),
             "Bytes" | "Buffer" => "Vec<u8>".to_string(),
             "Path" => "std::path::PathBuf".to_string(),
             "Cache" if !self.type_kinds.contains_key("Cache") => {
@@ -2803,6 +3040,83 @@ fn type_ref_display_name(ty: &TypeRef) -> String {
             .collect::<Vec<_>>()
             .join(", ")
     )
+}
+
+fn stmt_contains_await(statement: &Stmt) -> bool {
+    match statement {
+        Stmt::Let(stmt) => stmt.value.as_ref().is_some_and(expr_contains_await),
+        Stmt::Return(stmt) => stmt.value.as_ref().is_some_and(expr_contains_await),
+        Stmt::With(stmt) => expr_contains_await(&stmt.resource) || block_contains_await(&stmt.body),
+        Stmt::If(stmt) => {
+            expr_contains_await(&stmt.condition)
+                || block_contains_await(&stmt.then_body)
+                || stmt.else_body.as_ref().is_some_and(block_contains_await)
+        }
+        Stmt::Loop(stmt) => {
+            stmt.condition.as_ref().is_some_and(expr_contains_await)
+                || block_contains_await(&stmt.body)
+        }
+        Stmt::For(stmt) => {
+            stmt.is_async || expr_contains_await(&stmt.iterable) || block_contains_await(&stmt.body)
+        }
+        Stmt::TaskGroup(_) | Stmt::Select(_) => true,
+        Stmt::Match(stmt) => {
+            expr_contains_await(&stmt.value)
+                || stmt.arms.iter().any(|arm| block_contains_await(&arm.body))
+        }
+        Stmt::LetElse(stmt) => {
+            expr_contains_await(&stmt.value) || block_contains_await(&stmt.else_body)
+        }
+        Stmt::Assign(stmt) => expr_contains_await(&stmt.target) || expr_contains_await(&stmt.value),
+        Stmt::Expr(expr) => expr_contains_await(expr),
+        Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::MalformedWith(_)
+        | Stmt::MalformedIf(_)
+        | Stmt::MalformedLoop(_)
+        | Stmt::MalformedFor(_)
+        | Stmt::MalformedMatch(_)
+        | Stmt::Unknown(_) => false,
+    }
+}
+
+fn block_contains_await(block: &Block) -> bool {
+    block.statements.iter().any(stmt_contains_await)
+}
+
+fn split_loop_body_at_first_await(statements: &[Stmt]) -> Option<(&Stmt, &[Stmt])> {
+    for (index, statement) in statements.iter().enumerate() {
+        match statement {
+            Stmt::Let(stmt) if stmt.value.as_ref().and_then(async_await_inner).is_some() => {
+                return Some((statement, &statements[index + 1..]));
+            }
+            Stmt::Expr(expr) if async_await_inner(expr).is_some() => {
+                return Some((statement, &statements[index + 1..]));
+            }
+            other if stmt_contains_await(other) => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+fn expr_contains_await(expr: &Expr) -> bool {
+    match expr {
+        Expr::Await { .. } => true,
+        Expr::Try { value, .. }
+        | Expr::Effect { value, .. }
+        | Expr::Manage { value, .. }
+        | Expr::Spawn { value, .. } => expr_contains_await(value),
+        Expr::Binary { left, right, .. } => expr_contains_await(left) || expr_contains_await(right),
+        Expr::Call { args, .. } => args.iter().any(|arg| expr_contains_await(&arg.value)),
+        Expr::Field { base, .. } => expr_contains_await(base),
+        Expr::Index { base, index, .. } => expr_contains_await(base) || expr_contains_await(index),
+        Expr::Closure { body, .. } => block_contains_await(body),
+        Expr::Match { value, arms, .. } => {
+            expr_contains_await(value) || arms.iter().any(|arm| block_contains_await(&arm.body))
+        }
+        Expr::Ident(..) | Expr::Number(..) | Expr::String(..) | Expr::Unknown(_) => false,
+    }
 }
 
 fn generated_line_count(generated: &str) -> usize {

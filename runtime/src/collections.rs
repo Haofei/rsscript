@@ -441,10 +441,74 @@ pub fn bytes_from_buffer(buffer: &[u8]) -> Vec<u8> {
     buffer.to_vec()
 }
 
+pub fn bytes_view(value: &[u8], start: i64, len: i64) -> &[u8] {
+    bytes_view_range(value, start, len)
+}
+
 pub fn bytes_consume(bytes: Vec<u8>) {
     drop(bytes);
 }
 
+pub fn bytes_view_slice(value: &[u8], start: i64, len: i64) -> &[u8] {
+    bytes_view_range(value, start, len)
+}
+
+pub fn bytes_view_len(value: &[u8]) -> i64 {
+    value.len() as i64
+}
+
+pub fn bytes_view_is_empty(value: &[u8]) -> bool {
+    value.is_empty()
+}
+
+pub fn bytes_view_to_bytes(value: &[u8]) -> Vec<u8> {
+    value.to_vec()
+}
+
+pub fn bytes_view_starts_with(value: &[u8], prefix: &[u8]) -> bool {
+    value.starts_with(prefix)
+}
+
+pub fn buffer_view(buffer: &[u8], start: i64, len: i64) -> &[u8] {
+    bytes_view_range(buffer, start, len)
+}
+
+pub fn buffer_view_slice(value: &[u8], start: i64, len: i64) -> &[u8] {
+    bytes_view_range(value, start, len)
+}
+
+pub fn buffer_view_len(value: &[u8]) -> i64 {
+    value.len() as i64
+}
+
+pub fn buffer_view_is_empty(value: &[u8]) -> bool {
+    value.is_empty()
+}
+
+pub fn buffer_view_to_bytes(value: &[u8]) -> Vec<u8> {
+    value.to_vec()
+}
+
+fn bytes_view_range(value: &[u8], start: i64, len: i64) -> &[u8] {
+    let start = (start.max(0) as usize).min(value.len());
+    let end = start.saturating_add(len.max(0) as usize).min(value.len());
+    &value[start..end]
+}
+
 pub fn url_from_string(value: &str) -> String {
     value.to_string()
+}
+
+#[cfg(test)]
+mod view_tests {
+    use super::*;
+
+    #[test]
+    fn bytes_and_buffer_views_clamp_to_available_range() {
+        let bytes = b"abcdef";
+
+        assert_eq!(bytes_view(bytes, 2, 3), b"cde");
+        assert_eq!(bytes_view(bytes, 20, 3), b"");
+        assert_eq!(buffer_view(bytes, 4, 20), b"ef");
+    }
 }

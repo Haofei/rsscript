@@ -616,6 +616,32 @@ mod tests {
     }
 
     #[test]
+    fn file_bytes_stream_reads_chunks_lazily() {
+        let path = std::env::temp_dir().join(format!(
+            "rsscript-runtime-file-stream-{}.txt",
+            std::process::id()
+        ));
+
+        {
+            let mut file = crate::file_open_write(&path).expect("file should open for write");
+            crate::file_write(&mut file, &"abcdef").expect("write should succeed");
+        }
+
+        let stream = crate::file_bytes_stream(&path, 2).expect("stream should open");
+        let mut executor = crate::Executor::new();
+
+        assert_eq!(
+            executor.run_pending(crate::stream_next(&stream)).unwrap(),
+            Some(b"ab".to_vec())
+        );
+        assert_eq!(
+            crate::stream_collect_list(&stream).unwrap(),
+            vec![b"cd".to_vec(), b"ef".to_vec()]
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn directory_runtime_hooks_cover_package_manager_fs_checks() {
         let root =
             std::env::temp_dir().join(format!("rsscript-runtime-directory-{}", std::process::id()));
@@ -781,6 +807,38 @@ mod tests {
         let name = crate::row_field_string(&row, 0).expect("field should exist");
 
         assert_eq!(name, "RSScript");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn csv_rows_stream_reads_rows_lazily() {
+        let path = std::env::temp_dir().join(format!(
+            "rsscript-runtime-csv-stream-{}.csv",
+            std::process::id()
+        ));
+
+        {
+            let mut file = crate::file_open_write(&path).expect("file should open for write");
+            crate::file_write(&mut file, &"name,amount\nRSScript,42\nReview,7\n")
+                .expect("write should succeed");
+        }
+
+        let stream = crate::csv_rows(&path, 64).expect("CSV stream should open");
+        let mut executor = crate::Executor::new();
+        let row = executor
+            .run_pending(crate::stream_next(&stream))
+            .expect("stream next should succeed")
+            .expect("first row should exist");
+        assert_eq!(
+            crate::row_field_string(&row, 0).expect("field should exist"),
+            "RSScript"
+        );
+        let rows = crate::stream_collect_list(&stream).expect("collect should succeed");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            crate::row_field_string(&rows[0], 1).expect("field should exist"),
+            "7"
+        );
         let _ = std::fs::remove_file(path);
     }
 

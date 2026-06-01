@@ -1,0 +1,7 @@
+// expect: RS0312
+
+fn update_map() -> Unit {
+    let mut values = Map<String, Int>.new()
+    values["a"] = 1
+    return Unit
+}

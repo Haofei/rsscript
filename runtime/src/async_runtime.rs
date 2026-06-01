@@ -86,7 +86,8 @@ impl Executor {
     }
 
     pub fn yield_once(&mut self) {
-        self.park_or_yield(None);
+        self.yields += 1;
+        std::thread::yield_now();
     }
 
     pub fn wait_for_wake(&mut self) {
@@ -430,6 +431,82 @@ where
                     AsyncPoll::Pending => return AsyncPoll::Pending,
                 },
                 TryState::Done => panic!("try pending polled after completion"),
+            }
+        }
+    }
+}
+
+pub enum LoopControl {
+    Continue,
+    Break,
+}
+
+enum LoopResultState<'a, E> {
+    Start,
+    Body(Box<dyn Pending<Result<LoopControl, E>> + 'a>),
+    Done,
+}
+
+pub struct LoopResultPending<'a, F, E> {
+    body: F,
+    state: LoopResultState<'a, E>,
+}
+
+pub fn pending_loop_result<'a, E, F>(body: F) -> LoopResultPending<'a, F, E>
+where
+    F: FnMut() -> Box<dyn Pending<Result<LoopControl, E>> + 'a>,
+{
+    LoopResultPending {
+        body,
+        state: LoopResultState::Start,
+    }
+}
+
+pub struct PollFnPending<F> {
+    poll: F,
+}
+
+pub fn pending_poll_fn<T, F>(poll: F) -> PollFnPending<F>
+where
+    F: FnMut(&mut Context<'_>) -> AsyncPoll<T>,
+{
+    PollFnPending { poll }
+}
+
+impl<T, F> Pending<T> for PollFnPending<F>
+where
+    F: FnMut(&mut Context<'_>) -> AsyncPoll<T>,
+{
+    fn poll(&mut self, cx: &mut Context<'_>) -> AsyncPoll<T> {
+        (self.poll)(cx)
+    }
+}
+
+impl<'a, E, F> Pending<Result<(), E>> for LoopResultPending<'a, F, E>
+where
+    F: FnMut() -> Box<dyn Pending<Result<LoopControl, E>> + 'a>,
+{
+    fn poll(&mut self, cx: &mut Context<'_>) -> AsyncPoll<Result<(), E>> {
+        loop {
+            match &mut self.state {
+                LoopResultState::Start => {
+                    self.state = LoopResultState::Body((self.body)());
+                }
+                LoopResultState::Body(pending) => match pending.poll(cx) {
+                    AsyncPoll::Ready(Ok(LoopControl::Continue)) => {
+                        self.state = LoopResultState::Start;
+                    }
+                    AsyncPoll::Ready(Ok(LoopControl::Break)) => {
+                        self.state = LoopResultState::Done;
+                        return AsyncPoll::Ready(Ok(()));
+                    }
+                    AsyncPoll::Ready(Err(error)) => {
+                        self.state = LoopResultState::Done;
+                        return AsyncPoll::Ready(Err(error));
+                    }
+                    AsyncPoll::Pending => return AsyncPoll::Pending,
+                },
+                LoopResultState::Done => panic!("loop pending polled after completion"),
             }
         }
     }

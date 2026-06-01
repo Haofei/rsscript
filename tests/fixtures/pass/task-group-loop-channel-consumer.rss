@@ -1,0 +1,34 @@
+features: async, local
+
+async fn produce(sender: read Sender<Int>) -> Result<Unit, ChannelError> {
+    local first = 1
+    await Sender.send(sender: read sender, value: take first)?
+    local second = 2
+    await Sender.send(sender: read sender, value: take second)?
+    return Ok(Unit)
+}
+
+async fn consume(receiver: read Receiver<Int>) -> Result<Int, ChannelError> {
+    let mut count = 0
+    while count < 2 {
+        let item = await Receiver.recv(receiver: read receiver)?
+        count = count + 1
+    }
+    return Ok(2)
+}
+
+fn main() -> Result<Unit, ChannelError> {
+    let mut channel = Channel.bounded<Int>(capacity: 1)?
+    let sender = Channel.sender(channel: read channel)
+    let receiver = Channel.receiver(channel: mut channel)?
+
+    task_group {
+        async let producer = produce(sender: read sender)
+        async let consumer = consume(receiver: read receiver)
+
+        let count = await consumer?
+        await producer?
+    }
+
+    return Ok(Unit)
+}

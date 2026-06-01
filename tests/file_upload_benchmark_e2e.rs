@@ -16,6 +16,7 @@ const DEFAULT_REQUESTS: usize = 256;
 const DEFAULT_PAYLOAD_BYTES: usize = 256 * 1024;
 const DEFAULT_CONCURRENCY: usize = 16;
 const DEFAULT_SERVER_DELAY_MS: u64 = 10;
+const DEFAULT_AWAITS_PER_UPLOAD: usize = 4;
 
 #[test]
 #[ignore = "release/demo e2e; run from rss/test-runner/manifests/demo-e2e.rsstest.toml"]
@@ -58,10 +59,16 @@ fn file_upload_benchmark_reports_async_and_sync_requests_per_second() {
         &rust_async_bin,
         addr,
         &config,
-        &[(
-            "RSS_FILE_UPLOAD_CONCURRENCY",
-            config.concurrency.to_string(),
-        )],
+        &[
+            (
+                "RSS_FILE_UPLOAD_CONCURRENCY",
+                config.concurrency.to_string(),
+            ),
+            (
+                "RSS_FILE_UPLOAD_AWAITS_PER_UPLOAD",
+                config.awaits_per_upload.to_string(),
+            ),
+        ],
     );
 
     let rss_async_result = run_client(&rss_async_bin, addr, &config, &[]);
@@ -69,10 +76,16 @@ fn file_upload_benchmark_reports_async_and_sync_requests_per_second() {
         &rust_async_bin,
         addr,
         &config,
-        &[(
-            "RSS_FILE_UPLOAD_CONCURRENCY",
-            config.concurrency.to_string(),
-        )],
+        &[
+            (
+                "RSS_FILE_UPLOAD_CONCURRENCY",
+                config.concurrency.to_string(),
+            ),
+            (
+                "RSS_FILE_UPLOAD_AWAITS_PER_UPLOAD",
+                config.awaits_per_upload.to_string(),
+            ),
+        ],
     );
     let sync_result = run_client(&sync_bin, addr, &config, &[]);
 
@@ -111,10 +124,11 @@ fn file_upload_benchmark_reports_async_and_sync_requests_per_second() {
         "rust_client_or_noise"
     };
     println!(
-        "file upload benchmark: requests={} payload_bytes={} concurrency={} server_delay_ms={} rss_async_rps={:.2} rust_async_rps={:.2} sync_rps={:.2} rss_async_ms={} rust_async_ms={} sync_ms={} rss_async_max_in_flight={} rust_async_max_in_flight={} sync_max_in_flight={} rust_to_rss_rps_ratio={:.3} likely_bottleneck={}",
+        "file upload benchmark: requests={} payload_bytes={} concurrency={} awaits_per_upload={} server_delay_ms={} rss_async_rps={:.2} rust_async_rps={:.2} sync_rps={:.2} rss_async_ms={} rust_async_ms={} sync_ms={} rss_async_max_in_flight={} rust_async_max_in_flight={} sync_max_in_flight={} rust_to_rss_rps_ratio={:.3} likely_bottleneck={}",
         config.requests,
         config.payload_bytes,
         config.concurrency,
+        config.awaits_per_upload,
         config.server_delay_ms,
         rss_async_result.rps,
         rust_async_result.rps,
@@ -139,6 +153,7 @@ struct BenchmarkConfig {
     requests: usize,
     payload_bytes: usize,
     concurrency: usize,
+    awaits_per_upload: usize,
     server_delay_ms: u64,
 }
 
@@ -148,6 +163,11 @@ impl BenchmarkConfig {
             requests: env_usize("RSS_FILE_UPLOAD_REQUESTS", DEFAULT_REQUESTS),
             payload_bytes: env_usize("RSS_FILE_UPLOAD_PAYLOAD_BYTES", DEFAULT_PAYLOAD_BYTES),
             concurrency: env_usize("RSS_FILE_UPLOAD_CONCURRENCY", DEFAULT_CONCURRENCY).max(1),
+            awaits_per_upload: env_usize(
+                "RSS_FILE_UPLOAD_AWAITS_PER_UPLOAD",
+                DEFAULT_AWAITS_PER_UPLOAD,
+            )
+            .max(1),
             server_delay_ms: env_u64("RSS_FILE_UPLOAD_DELAY_MS", DEFAULT_SERVER_DELAY_MS),
         }
     }
@@ -304,6 +324,23 @@ resource = "http://127.0.0.1/upload/*"
 
 fn rss_benchmark_source(config: &BenchmarkConfig) -> String {
     let mut source = String::from("features: async\n\n");
+    source.push_str(
+        "async fn upload_stage_0(path: read String, body: read String) -> Result<Unit, String> {\n",
+    );
+    source.push_str("    return await Upload.put(path: read path, body: read body)\n");
+    source.push_str("}\n\n");
+    for stage in 1..config.awaits_per_upload {
+        let previous = stage - 1;
+        source.push_str(&format!(
+            "async fn upload_stage_{stage}(path: read String, body: read String) -> Result<Unit, String> {{\n"
+        ));
+        source.push_str(&format!(
+            "    await upload_stage_{previous}(path: read path, body: read body)?\n"
+        ));
+        source.push_str("    return Ok(Unit)\n");
+        source.push_str("}\n\n");
+    }
+    let entry_stage = config.awaits_per_upload - 1;
     let mut request = 0usize;
     let mut batch = 0usize;
     while request < config.requests {
@@ -311,10 +348,16 @@ fn rss_benchmark_source(config: &BenchmarkConfig) -> String {
         source.push_str(&format!(
             "async fn upload_batch_{batch}() -> Result<Unit, String> {{\n"
         ));
+        source.push_str("    let body = \"rss payload seed\"\n");
+        for index in request..end {
+            source.push_str(&format!(
+                "    let path_{index} = \"/upload/rss-{index}.bin\"\n"
+            ));
+        }
         source.push_str("    task_group {\n");
         for index in request..end {
             source.push_str(&format!(
-                "        async let upload_{index} = Upload.put(path: read \"/upload/rss-{index}.bin\", body: read \"rss payload seed\")\n"
+                "        async let upload_{index} = upload_stage_{entry_stage}(path: read path_{index}, body: read body)\n"
             ));
         }
         source.push('\n');

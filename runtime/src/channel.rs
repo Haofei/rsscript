@@ -19,7 +19,7 @@ pub struct ChannelError {
 }
 
 impl ChannelError {
-    fn new(message: &str) -> Self {
+    pub(crate) fn new(message: &str) -> Self {
         Self {
             message: message.to_string(),
         }
@@ -56,7 +56,12 @@ pub struct RssReceiver<T> {
 }
 
 pub struct RssStream<T> {
-    receiver: RssReceiver<T>,
+    backend: RefCell<RssStreamBackend<T>>,
+}
+
+enum RssStreamBackend<T> {
+    Receiver(RssReceiver<T>),
+    Iterator(Box<dyn Iterator<Item = Result<T, ChannelError>>>),
 }
 
 // A `Sender` clone is another producer with its own closed flag and its own slot
@@ -135,7 +140,25 @@ pub fn receiver_close<T>(receiver: &mut RssReceiver<T>) {
 }
 
 pub fn receiver_into_stream<T>(receiver: RssReceiver<T>) -> RssStream<T> {
-    RssStream { receiver }
+    RssStream {
+        backend: RefCell::new(RssStreamBackend::Receiver(receiver)),
+    }
+}
+
+pub fn stream_from_list<T: 'static>(items: Vec<T>) -> RssStream<T> {
+    RssStream {
+        backend: RefCell::new(RssStreamBackend::Iterator(Box::new(
+            items.into_iter().map(Ok),
+        ))),
+    }
+}
+
+pub fn stream_from_iterator<T: 'static>(
+    items: impl Iterator<Item = Result<T, ChannelError>> + 'static,
+) -> RssStream<T> {
+    RssStream {
+        backend: RefCell::new(RssStreamBackend::Iterator(Box::new(items))),
+    }
 }
 
 pub struct SendPending<T> {
@@ -205,8 +228,8 @@ pub fn receiver_recv<T>(receiver: &RssReceiver<T>) -> RecvPending<T> {
     }
 }
 
-pub fn stream_next<T>(stream: &RssStream<T>) -> RecvPending<T> {
-    receiver_recv(&stream.receiver)
+pub fn stream_next<T>(stream: &RssStream<T>) -> StreamNextPending<'_, T> {
+    StreamNextPending { stream }
 }
 
 pub fn receiver_recv_cancellable<T>(
@@ -235,6 +258,46 @@ impl<T> Pending<Result<Option<T>, ChannelError>> for RecvPending<T> {
             return AsyncPoll::Ready(Ok(None));
         }
         AsyncPoll::Pending
+    }
+}
+
+pub struct StreamNextPending<'a, T> {
+    stream: &'a RssStream<T>,
+}
+
+impl<T> Pending<Result<Option<T>, ChannelError>> for StreamNextPending<'_, T> {
+    fn poll(&mut self, cx: &mut Context<'_>) -> AsyncPoll<Result<Option<T>, ChannelError>> {
+        let mut backend = self.stream.backend.borrow_mut();
+        match &mut *backend {
+            RssStreamBackend::Receiver(receiver) => receiver_recv(receiver).poll(cx),
+            RssStreamBackend::Iterator(iterator) => AsyncPoll::Ready(iterator.next().transpose()),
+        }
+    }
+}
+
+pub fn stream_collect_list<T>(stream: &RssStream<T>) -> Result<Vec<T>, ChannelError> {
+    let mut values = Vec::new();
+    let mut backend = stream.backend.borrow_mut();
+    match &mut *backend {
+        RssStreamBackend::Iterator(iterator) => {
+            for item in iterator {
+                values.push(item?);
+            }
+            Ok(values)
+        }
+        RssStreamBackend::Receiver(receiver) => {
+            let mut state = receiver.state.borrow_mut();
+            while let Some(value) = state.queue.pop_front() {
+                values.push(value);
+            }
+            if state.senders == 0 {
+                Ok(values)
+            } else {
+                Err(ChannelError::new(
+                    "stream collect_list would block on an open channel stream",
+                ))
+            }
+        }
     }
 }
 
@@ -371,5 +434,14 @@ mod tests {
             Some(11)
         );
         assert_eq!(executor.run_pending(stream_next(&stream)).unwrap(), None);
+    }
+
+    #[test]
+    fn stream_from_list_and_collect_round_trip() {
+        let stream = stream_from_list(vec![1_i64, 2, 3]);
+        let mut executor = Executor::new();
+
+        assert_eq!(executor.run_pending(stream_next(&stream)).unwrap(), Some(1));
+        assert_eq!(stream_collect_list(&stream).unwrap(), vec![2, 3]);
     }
 }

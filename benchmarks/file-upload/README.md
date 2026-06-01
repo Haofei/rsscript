@@ -24,6 +24,7 @@ per second for all clients. The default workload is:
 requests=256
 payload_bytes=262144
 concurrency=16
+awaits_per_upload=4
 server_delay_ms=10
 ```
 
@@ -34,6 +35,7 @@ run or a larger local benchmark:
 RSS_FILE_UPLOAD_REQUESTS=512 \
 RSS_FILE_UPLOAD_PAYLOAD_BYTES=1048576 \
 RSS_FILE_UPLOAD_CONCURRENCY=32 \
+RSS_FILE_UPLOAD_AWAITS_PER_UPLOAD=8 \
 RSS_FILE_UPLOAD_DELAY_MS=5 \
 cargo test --test file_upload_benchmark_e2e -- --ignored --nocapture
 ```
@@ -52,14 +54,18 @@ also reports RSS runtime phases such as `task_group_join` and
 `executor_run_pending` with elapsed time, poll count, and yield count.
 
 The RSS and Rust async paths both use Tokio for actual socket IO and hit the
-same server with the same request count and payload size. The benchmark reports
-the Rust/RSS async RPS ratio so regressions show whether the difference is in
-RSScript lowering/runtime scheduling rather than the server or network setup.
+same server with the same request count, payload size, concurrency, and
+per-upload async wrapper depth. `RSS_FILE_UPLOAD_AWAITS_PER_UPLOAD` controls how
+many source-level awaits each upload crosses before the native socket operation,
+so the benchmark can amplify RSScript pending-chain overhead independently of
+payload construction or network setup. The benchmark reports the Rust/RSS async
+RPS ratio so regressions show whether the difference is in RSScript
+lowering/runtime scheduling rather than the shared server or socket IO.
 
 Representative local output:
 
 ```text
-file upload benchmark: requests=256 payload_bytes=262144 concurrency=16 server_delay_ms=10 rss_async_rps=...
+file upload benchmark: requests=256 payload_bytes=262144 concurrency=16 awaits_per_upload=4 server_delay_ms=10 rss_async_rps=...
 ```
 
 When `rust_to_rss_rps_ratio` stays near `1.0` and both async clients reach the

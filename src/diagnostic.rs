@@ -610,7 +610,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::ASSIGNMENT_TARGET_DEFERRED,
         title: "assignment target deferred",
-        explanation: "Field assignment (`obj.field = e`) and index assignment (`list[i] = e`) are recognized controlled-assignment forms but are not yet executable in this version. They are deferred, not excluded: local reassignment (`x = e` on a `let mut` local) is supported now, and field/index updates will require the base to be `mut` and, for index updates, a controlled index-set semantics.",
+        explanation: "Field assignment (`obj.field = e`) and `List` index assignment (`list[i] = e`) are executable controlled-assignment forms when rooted at a `let mut` local. Other indexed targets are still deferred: use explicit APIs such as `Map.insert` until the language defines controlled index-set semantics for that type.",
     },
     DiagnosticExplanation {
         code: code::ASSIGNMENT_TYPE_MISMATCH,
@@ -625,7 +625,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::ASYNC_FN_NOT_LOWERABLE,
         title: "async function not lowerable",
-        explanation: "In this version a user `async fn` lowers to a `Pending` chain. Top-level `await`, `task_group`, `select`, and `await for` statements are supported through explicit pending boundaries. An `await` nested inside ordinary control flow such as `loop`/`if`/`match`/`with` is still rejected instead of being silently mis-lowered because it needs full async state-machine lowering. Restructure so each suspension boundary is a top-level async statement.",
+        explanation: "In this version a user `async fn` lowers to a `Pending` chain. Top-level `await`, `task_group`, `select`, `await for`, and control-flow statements (`if`/`loop`/`match`/`with`) that contain awaits are supported through explicit pending boundaries. An `await` embedded inside an ordinary expression argument is still rejected instead of being silently mis-lowered because it needs full async expression lowering. Move the await to a statement boundary first.",
     },
     DiagnosticExplanation {
         code: code::CANCELLATION_TOKEN_OUTSIDE_TASK_GROUP,

@@ -52,6 +52,19 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Buffer", "clear", "rsscript_runtime::buffer_clear"),
     runtime_intrinsic("Buffer", "consume", "rsscript_runtime::buffer_consume"),
     runtime_intrinsic("Buffer", "new", "rsscript_runtime::buffer_new"),
+    runtime_intrinsic("Buffer", "view", "rsscript_runtime::buffer_view"),
+    runtime_intrinsic(
+        "BufferView",
+        "is_empty",
+        "rsscript_runtime::buffer_view_is_empty",
+    ),
+    runtime_intrinsic("BufferView", "len", "rsscript_runtime::buffer_view_len"),
+    runtime_intrinsic("BufferView", "slice", "rsscript_runtime::buffer_view_slice"),
+    runtime_intrinsic(
+        "BufferView",
+        "to_bytes",
+        "rsscript_runtime::buffer_view_to_bytes",
+    ),
     runtime_intrinsic("Bytes", "consume", "rsscript_runtime::bytes_consume"),
     runtime_intrinsic(
         "Bytes",
@@ -62,6 +75,24 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "Bytes",
         "from_string",
         "rsscript_runtime::bytes_from_string",
+    ),
+    runtime_intrinsic("Bytes", "view", "rsscript_runtime::bytes_view"),
+    runtime_intrinsic(
+        "BytesView",
+        "is_empty",
+        "rsscript_runtime::bytes_view_is_empty",
+    ),
+    runtime_intrinsic("BytesView", "len", "rsscript_runtime::bytes_view_len"),
+    runtime_intrinsic("BytesView", "slice", "rsscript_runtime::bytes_view_slice"),
+    runtime_intrinsic(
+        "BytesView",
+        "starts_with",
+        "rsscript_runtime::bytes_view_starts_with",
+    ),
+    runtime_intrinsic(
+        "BytesView",
+        "to_bytes",
+        "rsscript_runtime::bytes_view_to_bytes",
     ),
     runtime_intrinsic("Cache", "get", "rsscript_runtime::cache_get"),
     runtime_intrinsic("Cache", "insert", "rsscript_runtime::cache_insert"),
@@ -190,6 +221,12 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "into_stream",
         "rsscript_runtime::receiver_into_stream",
     ),
+    runtime_intrinsic(
+        "Stream",
+        "collect_list",
+        "rsscript_runtime::stream_collect_list",
+    ),
+    runtime_intrinsic("Stream", "from_list", "rsscript_runtime::stream_from_list"),
     runtime_intrinsic("Stream", "next", "rsscript_runtime::stream_next"),
     runtime_intrinsic(
         "ChannelError",
@@ -242,6 +279,7 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Csv", "open_read", "rsscript_runtime::csv_open_read"),
     runtime_intrinsic("Csv", "parse_row", "rsscript_runtime::csv_parse_row"),
     runtime_intrinsic("Csv", "read_into", "rsscript_runtime::csv_read_into"),
+    runtime_intrinsic("Csv", "rows", "rsscript_runtime::csv_rows"),
     runtime_intrinsic("Db", "close", "rsscript_runtime::db_close"),
     runtime_intrinsic(
         "DbConnection",
@@ -307,8 +345,14 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "read_all_string",
         "rsscript_runtime::file_read_all_string",
     ),
+    runtime_intrinsic(
+        "File",
+        "bytes_stream",
+        "rsscript_runtime::file_bytes_stream",
+    ),
     runtime_intrinsic("File", "read_into", "rsscript_runtime::file_read_into"),
     runtime_intrinsic("File", "write", "rsscript_runtime::file_write"),
+    runtime_intrinsic("File", "write_bytes_view", "rsscript_runtime::file_write"),
     runtime_intrinsic(
         "File",
         "write_string",
@@ -319,6 +363,7 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "write_buffer",
         "rsscript_runtime::file_write_buffer",
     ),
+    runtime_intrinsic("File", "write_buffer_view", "rsscript_runtime::file_write"),
     runtime_intrinsic(
         "File",
         "read_all_async",
@@ -656,6 +701,35 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "rsscript_runtime::string_to_uppercase",
     ),
     runtime_intrinsic("String", "trim", "rsscript_runtime::string_trim"),
+    runtime_intrinsic("String", "view", "rsscript_runtime::string_view"),
+    runtime_intrinsic("StringView", "after", "rsscript_runtime::string_view_after"),
+    runtime_intrinsic(
+        "StringView",
+        "before",
+        "rsscript_runtime::string_view_before",
+    ),
+    runtime_intrinsic(
+        "StringView",
+        "contains",
+        "rsscript_runtime::string_view_contains",
+    ),
+    runtime_intrinsic(
+        "StringView",
+        "is_empty",
+        "rsscript_runtime::string_view_is_empty",
+    ),
+    runtime_intrinsic("StringView", "len", "rsscript_runtime::string_view_len"),
+    runtime_intrinsic("StringView", "slice", "rsscript_runtime::string_view_slice"),
+    runtime_intrinsic(
+        "StringView",
+        "starts_with",
+        "rsscript_runtime::string_view_starts_with",
+    ),
+    runtime_intrinsic(
+        "StringView",
+        "to_string",
+        "rsscript_runtime::string_view_to_string",
+    ),
     runtime_intrinsic(
         "StringBuilder",
         "finish",

@@ -3913,7 +3913,7 @@ async fn run() -> Result<Unit, TimerError> {
 }
 
 #[test]
-fn async_fn_rejects_await_inside_select_arm_body() {
+fn async_fn_allows_await_inside_select_arm_body() {
     let source = r#"
 features: async
 
@@ -3927,9 +3927,13 @@ async fn run() -> Result<Unit, TimerError> {
 }
 "#;
     let diagnostics = analyze_source("select-body-await.rss", source);
+    let errors: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .collect();
     assert!(
-        diagnostics.iter().any(|d| d.code == "RS0411"),
-        "await nested in select arm body should still be rejected: {diagnostics:?}"
+        errors.is_empty(),
+        "await nested in select arm body should pass through an async boundary: {errors:?}"
     );
 }
 
@@ -3956,6 +3960,46 @@ fn run() -> Result<Unit, ChannelError> {
         .filter(|d| d.severity == Severity::Error)
         .collect();
     assert!(errors.is_empty(), "stream next should pass: {errors:?}");
+}
+
+#[test]
+fn stream_sources_and_collect_list_pass_checker() {
+    let source = r#"
+features: async, local
+
+fn collect_numbers() -> Result<fresh List<Int>, ChannelError> {
+    local items = List<Int>.new()
+    List.push(list: mut items, value: read 1)
+    List.push(list: mut items, value: read 2)
+    let stream: Stream<Int> = Stream.from_list(items: take items)
+    return Stream.collect_list(stream: read stream)?
+}
+
+fn read_chunks(path: read Path) -> Result<Unit, ChannelError> {
+    let chunks: Stream<Bytes> = File.bytes_stream(path: read path, chunk_size: 4096)?
+    await for chunk in chunks {
+        Log.write(message: read "chunk")
+    }
+    return Ok(Unit)
+}
+
+fn read_rows(path: read Path) -> Result<Unit, ChannelError> {
+    let rows: Stream<Row> = Csv.rows(path: read path, buffer_size: 8192)?
+    await for row in rows {
+        Log.write(message: read "row")
+    }
+    return Ok(Unit)
+}
+"#;
+    let diagnostics = analyze_source("stream-sources.rss", source);
+    let errors: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "stream source APIs should pass: {errors:?}"
+    );
 }
 
 #[test]

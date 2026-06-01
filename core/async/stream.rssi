@@ -9,5 +9,11 @@ struct Stream<T>
 pub native fn Receiver.into_stream<T>(receiver: take Receiver<T>) -> fresh Stream<T>
     effects(native)
 
+pub native fn Stream.from_list<T>(items: take List<T>) -> fresh Stream<T>
+    effects(native)
+
 pub async native fn Stream.next<T>(stream: read Stream<T>) -> Result<Option<T>, ChannelError>
+    effects(native)
+
+pub native fn Stream.collect_list<T>(stream: read Stream<T>) -> Result<fresh List<T>, ChannelError>
     effects(native)

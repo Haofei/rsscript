@@ -68,6 +68,59 @@ pub fn string_split(value: &str, delimiter: &str) -> Vec<String> {
     value.split(delimiter).map(str::to_string).collect()
 }
 
+pub fn string_view(value: &str, start: i64, len: i64) -> &str {
+    string_view_range(value, start, len)
+}
+
+pub fn string_view_slice(value: &str, start: i64, len: i64) -> &str {
+    string_view_range(value, start, len)
+}
+
+pub fn string_view_len(value: &str) -> i64 {
+    value.len() as i64
+}
+
+pub fn string_view_is_empty(value: &str) -> bool {
+    value.is_empty()
+}
+
+pub fn string_view_to_string(value: &str) -> String {
+    value.to_string()
+}
+
+pub fn string_view_starts_with(value: &str, prefix: &str) -> bool {
+    value.starts_with(prefix)
+}
+
+pub fn string_view_contains(value: &str, needle: &str) -> bool {
+    value.contains(needle)
+}
+
+pub fn string_view_before<'a>(value: &'a str, delimiter: &str) -> Option<&'a str> {
+    let index = value.find(delimiter)?;
+    Some(&value[..index])
+}
+
+pub fn string_view_after<'a>(value: &'a str, delimiter: &str) -> Option<&'a str> {
+    let (_, right) = value.split_once(delimiter)?;
+    Some(right)
+}
+
+fn string_view_range(value: &str, start: i64, len: i64) -> &str {
+    let byte_start = clamp_to_char_boundary(value, start.max(0) as usize);
+    let requested_end = byte_start.saturating_add(len.max(0) as usize);
+    let byte_end = clamp_to_char_boundary(value, requested_end.min(value.len()));
+    &value[byte_start..byte_end]
+}
+
+fn clamp_to_char_boundary(value: &str, mut index: usize) -> usize {
+    index = index.min(value.len());
+    while index > 0 && !value.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
 pub fn string_builder_new() -> String {
     String::new()
 }
@@ -78,4 +131,18 @@ pub fn string_builder_push(builder: &mut String, value: &str) {
 
 pub fn string_builder_finish(builder: String) -> String {
     builder
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn string_view_clamps_to_utf8_boundaries() {
+        let value = "aébc";
+
+        assert_eq!(string_view(value, 0, 3), "aé");
+        assert_eq!(string_view(value, 2, 2), "é");
+        assert_eq!(string_view_slice(value, 100, 5), "");
+    }
 }

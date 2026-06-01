@@ -2,7 +2,8 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 
 use crate::async_runtime::{NativeAsyncPending, spawn_tokio_native};
-use std::io::Read;
+use crate::channel::{ChannelError, RssStream, stream_from_iterator};
+use std::io::{BufRead, Read};
 use std::str::Utf8Error;
 
 use crate::diagnostics::Resource;
@@ -1104,6 +1105,21 @@ pub fn csv_open_read<P: RuntimePath + ?Sized>(path: &P) -> Result<File, CsvError
     file_open_read(path).map_err(CsvError::from)
 }
 
+pub fn csv_rows<P: RuntimePath + ?Sized>(
+    path: &P,
+    buffer_size: i64,
+) -> Result<RssStream<Row>, ChannelError> {
+    let file = std::fs::File::open(path.as_path())
+        .map_err(|error| ChannelError::new(&format!("CSV row stream open failed: {error}")))?;
+    let capacity = buffer_size.max(1) as usize;
+    Ok(stream_from_iterator(CsvRowsIterator {
+        reader: std::io::BufReader::with_capacity(capacity, file),
+        line: String::new(),
+        skipped_header: false,
+        done: false,
+    }))
+}
+
 pub fn csv_parse_row(buffer: &RowBuffer) -> Result<Row, CsvError> {
     let text = std::str::from_utf8(&buffer.bytes)?;
     let Some(line) = text
@@ -1121,6 +1137,58 @@ pub fn csv_parse_row(buffer: &RowBuffer) -> Result<Row, CsvError> {
             .map(|field| field.trim().to_string())
             .collect(),
     })
+}
+
+struct CsvRowsIterator {
+    reader: std::io::BufReader<std::fs::File>,
+    line: String,
+    skipped_header: bool,
+    done: bool,
+}
+
+impl Iterator for CsvRowsIterator {
+    type Item = Result<Row, ChannelError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        loop {
+            self.line.clear();
+            match self.reader.read_line(&mut self.line) {
+                Ok(0) => {
+                    self.done = true;
+                    return None;
+                }
+                Ok(_) => {
+                    let line = self.line.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    if !self.skipped_header {
+                        self.skipped_header = true;
+                        continue;
+                    }
+                    return Some(Ok(parse_csv_row_line(line)));
+                }
+                Err(error) => {
+                    self.done = true;
+                    return Some(Err(ChannelError::new(&format!(
+                        "CSV row stream read failed: {error}"
+                    ))));
+                }
+            }
+        }
+    }
+}
+
+fn parse_csv_row_line(line: &str) -> Row {
+    Row {
+        fields: line
+            .split(',')
+            .map(|field| field.trim().to_string())
+            .collect(),
+    }
 }
 
 pub fn row_field_string(row: &Row, index: i64) -> Result<String, CsvError> {

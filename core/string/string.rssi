@@ -2,6 +2,8 @@ features: local
 
 struct StringBuilder
 
+struct StringView
+
 pub fn String.concat(left: read String, right: read String) -> fresh String
     effects(pure)
 
@@ -82,6 +84,53 @@ pub fn String.split(
     value: read String,
     delimiter: read String,
 ) -> fresh List<String>
+    effects(pure)
+
+pub fn String.view(
+    value: read String,
+    start: Int,
+    len: Int,
+) -> StringView
+    effects(pure)
+
+pub fn StringView.slice(
+    value: read StringView,
+    start: Int,
+    len: Int,
+) -> StringView
+    effects(pure)
+
+pub fn StringView.len(value: read StringView) -> Int
+    effects(pure)
+
+pub fn StringView.is_empty(value: read StringView) -> Bool
+    effects(pure)
+
+pub fn StringView.to_string(value: read StringView) -> fresh String
+    effects(pure)
+
+pub fn StringView.starts_with(
+    value: read StringView,
+    prefix: read String,
+) -> Bool
+    effects(pure)
+
+pub fn StringView.contains(
+    value: read StringView,
+    needle: read String,
+) -> Bool
+    effects(pure)
+
+pub fn StringView.before(
+    value: read StringView,
+    delimiter: read String,
+) -> Option<StringView>
+    effects(pure)
+
+pub fn StringView.after(
+    value: read StringView,
+    delimiter: read String,
+) -> Option<StringView>
     effects(pure)
 
 pub fn StringBuilder.new() -> fresh StringBuilder

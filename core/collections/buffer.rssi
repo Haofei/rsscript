@@ -1,7 +1,27 @@
 features: local
 
+struct BufferView
+
 pub fn Buffer.new(size: Int) -> fresh Buffer
 
 pub fn Buffer.clear(buffer: mut Buffer) -> Unit
 
+pub fn Buffer.view(
+    buffer: read Buffer,
+    start: Int,
+    len: Int,
+) -> BufferView
+
 pub fn Buffer.consume(buffer: take Buffer) -> Unit
+
+pub fn BufferView.slice(
+    value: read BufferView,
+    start: Int,
+    len: Int,
+) -> BufferView
+
+pub fn BufferView.len(value: read BufferView) -> Int
+
+pub fn BufferView.is_empty(value: read BufferView) -> Bool
+
+pub fn BufferView.to_bytes(value: read BufferView) -> fresh Bytes

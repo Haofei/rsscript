@@ -1,7 +1,29 @@
 features: local
 
+struct BytesView
+
 pub fn Bytes.from_string(value: read String) -> fresh Bytes
 
 pub fn Bytes.from_buffer(buffer: read Buffer) -> fresh Bytes
 
+pub fn Bytes.view(
+    value: read Bytes,
+    start: Int,
+    len: Int,
+) -> BytesView
+
 pub fn Bytes.consume(bytes: take Bytes) -> Unit
+
+pub fn BytesView.slice(
+    value: read BytesView,
+    start: Int,
+    len: Int,
+) -> BytesView
+
+pub fn BytesView.len(value: read BytesView) -> Int
+
+pub fn BytesView.is_empty(value: read BytesView) -> Bool
+
+pub fn BytesView.to_bytes(value: read BytesView) -> fresh Bytes
+
+pub fn BytesView.starts_with(value: read BytesView, prefix: read BytesView) -> Bool
