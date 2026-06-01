@@ -46,6 +46,15 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
             }
             check_resource_pool_bindings(analyzer, body);
             check_local_class_bindings(analyzer, body);
+            if let Some(block) = body.block.as_ref() {
+                check_resource_pool_discards(analyzer, block, &mut Vec::new());
+                let bindings: std::collections::HashMap<String, HirBindingKind> = body
+                    .bindings
+                    .iter()
+                    .map(|binding| (binding.name.clone(), binding.kind))
+                    .collect();
+                check_lazy_factory_captures_block(analyzer, block, &bindings);
+            }
         }
         let mut state = local_analysis.initial_state();
         if let Some(block) = hir_body.as_ref().and_then(|body| body.block.as_ref()) {
@@ -2558,6 +2567,8 @@ fn type_ref_name(ty: &TypeRef) -> String {
     };
     let name = if ty.is_noescape {
         format!("noescape {base}")
+    } else if ty.is_owned {
+        format!("owned {base}")
     } else {
         base
     };
@@ -3290,7 +3301,7 @@ fn check_resource_pool_lease_expr(
         HirExpr::Call {
             callee, args, span, ..
         } => {
-            if !within_with_resource && is_resource_pool_borrow(callee) {
+            if !within_with_resource && is_resource_pool_lease_producer(callee) {
                 resource_pool_lease_escape_diagnostic(analyzer, span.clone());
             }
             for arg in args {
@@ -3530,7 +3541,7 @@ fn check_resource_pool_new_factory_contract(
     callee: &Callee,
     args: &[HirCallArg],
 ) {
-    if !is_resource_pool_new(callee) {
+    if !is_resource_pool_infallible_constructor(callee) {
         return;
     }
     let Some(create) = args
@@ -3552,7 +3563,7 @@ fn check_resource_pool_try_new_factory_contract(
     callee: &Callee,
     args: &[HirCallArg],
 ) {
-    if !is_resource_pool_try_new(callee) {
+    if !is_resource_pool_fallible_constructor(callee) {
         return;
     }
     let Some(create) = args
@@ -3579,6 +3590,11 @@ fn check_resource_pool_constructor_max_size_contract(
     if !is_resource_pool_constructor(callee) {
         return;
     }
+    // Lazy pools create on demand, so `max_size` is a runtime soft cap and may be
+    // any `Int` (e.g. a config-derived value).
+    if is_resource_pool_lazy(callee) || is_resource_pool_try_lazy(callee) {
+        return;
+    }
     let Some(max_size) = args
         .iter()
         .find(|arg| arg.name.as_deref() == Some("max_size"))
@@ -3586,12 +3602,32 @@ fn check_resource_pool_constructor_max_size_contract(
     else {
         return;
     };
-    let HirExpr::Number { value, span } = &max_size.value else {
+    // Eager pools allocate up front, so `max_size` must be a statically known
+    // positive value: a positive `Int` literal, or a reference to a positive
+    // `Int` `const` (a reviewable, controlled constant).
+    if resource_pool_static_positive_int(analyzer, &max_size.value).is_none() {
         resource_pool_invalid_max_size_diagnostic(analyzer, hir_expr_span(&max_size.value).clone());
-        return;
-    };
-    if value.parse::<i64>().ok().is_none_or(|value| value <= 0) {
-        resource_pool_invalid_max_size_diagnostic(analyzer, span.clone());
+    }
+}
+
+/// Resolve `expr` to a statically known positive `i64`: a positive `Int` literal,
+/// or an `Ident` naming a `const` whose value is a positive `Int` literal.
+fn resource_pool_static_positive_int(analyzer: &Analyzer<'_>, expr: &HirExpr) -> Option<i64> {
+    match expr {
+        HirExpr::Number { value, .. } => value.parse::<i64>().ok().filter(|value| *value > 0),
+        HirExpr::Ident { name, .. } => analyzer.syntax_program.items.iter().find_map(|item| {
+            let Item::Const(decl) = item else {
+                return None;
+            };
+            if &decl.name != name {
+                return None;
+            }
+            let crate::syntax::ast::Expr::Number(literal, _) = &decl.value else {
+                return None;
+            };
+            literal.parse::<i64>().ok().filter(|value| *value > 0)
+        }),
+        _ => None,
     }
 }
 
@@ -3856,9 +3892,472 @@ fn push_resource_pool_factory_capture(
     }
 }
 
+/// Reject lazy pool factories (`owned Fn`) that capture anything other than an
+/// owned `local`: the factory is stored and called on demand, so it must own what
+/// it captures. A parameter is borrowed; a managed binding is shared/refcounted —
+/// neither is a clean owned value to move in. Names that are not bindings (globals,
+/// consts, functions) are `'static` and allowed.
+fn check_lazy_factory_captures_block(
+    analyzer: &mut Analyzer<'_>,
+    block: &HirBlock,
+    bindings: &std::collections::HashMap<String, HirBindingKind>,
+) {
+    for statement in &block.statements {
+        check_lazy_factory_captures_stmt(analyzer, statement, bindings);
+    }
+}
+
+fn check_lazy_factory_captures_stmt(
+    analyzer: &mut Analyzer<'_>,
+    statement: &HirStmt,
+    bindings: &std::collections::HashMap<String, HirBindingKind>,
+) {
+    match statement {
+        HirStmt::Let { value, .. } | HirStmt::Return { value, .. } => {
+            if let Some(value) = value {
+                check_lazy_factory_captures_expr(analyzer, value, bindings);
+            }
+        }
+        HirStmt::Expr(value) => check_lazy_factory_captures_expr(analyzer, value, bindings),
+        HirStmt::With { resource, body, .. } => {
+            check_lazy_factory_captures_expr(analyzer, resource, bindings);
+            check_lazy_factory_captures_block(analyzer, body, bindings);
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            check_lazy_factory_captures_expr(analyzer, condition, bindings);
+            check_lazy_factory_captures_block(analyzer, then_body, bindings);
+            if let Some(else_body) = else_body {
+                check_lazy_factory_captures_block(analyzer, else_body, bindings);
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                check_lazy_factory_captures_expr(analyzer, condition, bindings);
+            }
+            check_lazy_factory_captures_block(analyzer, body, bindings);
+        }
+        HirStmt::For { iterable, body, .. } => {
+            check_lazy_factory_captures_expr(analyzer, iterable, bindings);
+            check_lazy_factory_captures_block(analyzer, body, bindings);
+        }
+        HirStmt::Match { value, arms, .. } => {
+            check_lazy_factory_captures_expr(analyzer, value, bindings);
+            for arm in arms {
+                check_lazy_factory_captures_block(analyzer, &arm.body, bindings);
+            }
+        }
+        HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                check_lazy_factory_captures_expr(analyzer, &arm.operation, bindings);
+                check_lazy_factory_captures_block(analyzer, &arm.body, bindings);
+            }
+        }
+        HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn check_lazy_factory_captures_expr(
+    analyzer: &mut Analyzer<'_>,
+    expr: &HirExpr,
+    bindings: &std::collections::HashMap<String, HirBindingKind>,
+) {
+    if let HirExpr::Call { callee, args, .. } = expr
+        && (is_resource_pool_lazy(callee) || is_resource_pool_try_lazy(callee))
+    {
+        if let Some(create) = args
+            .iter()
+            .find(|arg| arg.name.as_deref() == Some("create"))
+            .or_else(|| args.first())
+            && let HirExpr::Closure { params, body, .. } = &create.value
+        {
+            let mut captures = Vec::new();
+            collect_lazy_factory_capture_idents(params, body, &mut captures);
+            for (name, span) in captures {
+                match bindings.get(&name) {
+                    // Owned local: the only kind that can be cleanly moved in.
+                    Some(HirBindingKind::LocalLet) => {}
+                    // Not a binding at all (global/const/function): `'static`, fine.
+                    None => {}
+                    Some(kind) => {
+                        resource_pool_lazy_factory_capture_diagnostic(analyzer, &name, *kind, span);
+                    }
+                }
+            }
+        }
+    }
+    // Recurse so nested lazy constructors are also checked.
+    match expr {
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                check_lazy_factory_captures_expr(analyzer, &arg.value, bindings);
+            }
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. } => check_lazy_factory_captures_expr(analyzer, value, bindings),
+        HirExpr::Binary { left, right, .. } => {
+            check_lazy_factory_captures_expr(analyzer, left, bindings);
+            check_lazy_factory_captures_expr(analyzer, right, bindings);
+        }
+        HirExpr::Field { base, .. } => check_lazy_factory_captures_expr(analyzer, base, bindings),
+        HirExpr::Index { base, index, .. } => {
+            check_lazy_factory_captures_expr(analyzer, base, bindings);
+            check_lazy_factory_captures_expr(analyzer, index, bindings);
+        }
+        HirExpr::Closure { body, .. } => {
+            check_lazy_factory_captures_block(analyzer, body, bindings)
+        }
+        HirExpr::Match { value, arms, .. } => {
+            check_lazy_factory_captures_expr(analyzer, value, bindings);
+            for arm in arms {
+                check_lazy_factory_captures_block(analyzer, &arm.body, bindings);
+            }
+        }
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn collect_lazy_factory_capture_idents(
+    params: &[String],
+    block: &HirBlock,
+    captures: &mut Vec<(String, Span)>,
+) {
+    let mut bound = params.iter().cloned().collect();
+    collect_lazy_factory_capture_idents_block(block, &mut bound, captures);
+}
+
+fn collect_lazy_factory_capture_idents_block(
+    block: &HirBlock,
+    bound: &mut HashSet<String>,
+    captures: &mut Vec<(String, Span)>,
+) {
+    for statement in &block.statements {
+        collect_lazy_factory_capture_idents_stmt(statement, bound, captures);
+    }
+}
+
+fn collect_lazy_factory_capture_idents_stmt(
+    statement: &HirStmt,
+    bound: &mut HashSet<String>,
+    captures: &mut Vec<(String, Span)>,
+) {
+    match statement {
+        HirStmt::Let {
+            name,
+            value: Some(value),
+            ..
+        } => {
+            collect_lazy_factory_capture_idents_expr(value, bound, captures);
+            bound.insert(name.clone());
+        }
+        HirStmt::Let {
+            name, value: None, ..
+        } => {
+            bound.insert(name.clone());
+        }
+        HirStmt::Return {
+            value: Some(value), ..
+        }
+        | HirStmt::Expr(value) => collect_lazy_factory_capture_idents_expr(value, bound, captures),
+        HirStmt::With {
+            resource,
+            binding,
+            body,
+            ..
+        } => {
+            collect_lazy_factory_capture_idents_expr(resource, bound, captures);
+            let mut scoped = bound.clone();
+            scoped.insert(binding.clone());
+            collect_lazy_factory_capture_idents_block(body, &mut scoped, captures);
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            collect_lazy_factory_capture_idents_expr(condition, bound, captures);
+            collect_lazy_factory_capture_idents_block(then_body, &mut bound.clone(), captures);
+            if let Some(else_body) = else_body {
+                collect_lazy_factory_capture_idents_block(else_body, &mut bound.clone(), captures);
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                collect_lazy_factory_capture_idents_expr(condition, bound, captures);
+            }
+            collect_lazy_factory_capture_idents_block(body, &mut bound.clone(), captures);
+        }
+        HirStmt::For {
+            binding,
+            iterable,
+            body,
+            ..
+        } => {
+            collect_lazy_factory_capture_idents_expr(iterable, bound, captures);
+            let mut scoped = bound.clone();
+            scoped.insert(binding.clone());
+            collect_lazy_factory_capture_idents_block(body, &mut scoped, captures);
+        }
+        HirStmt::Match { value, arms, .. } => {
+            collect_lazy_factory_capture_idents_expr(value, bound, captures);
+            for arm in arms {
+                let mut scoped = bound.clone();
+                if let MatchPattern::Variant {
+                    binding: Some(binding),
+                    ..
+                } = &arm.pattern
+                {
+                    scoped.insert(binding.clone());
+                }
+                collect_lazy_factory_capture_idents_block(&arm.body, &mut scoped, captures);
+            }
+        }
+        HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                collect_lazy_factory_capture_idents_expr(&arm.operation, bound, captures);
+                let mut scoped = bound.clone();
+                if arm.binding != "_" {
+                    scoped.insert(arm.binding.clone());
+                }
+                collect_lazy_factory_capture_idents_block(&arm.body, &mut scoped, captures);
+            }
+        }
+        HirStmt::Return { value: None, .. }
+        | HirStmt::Break(_)
+        | HirStmt::Continue(_)
+        | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn collect_lazy_factory_capture_idents_expr(
+    expr: &HirExpr,
+    bound: &HashSet<String>,
+    captures: &mut Vec<(String, Span)>,
+) {
+    match expr {
+        HirExpr::Ident { name, span, .. } => {
+            if !bound.contains(name) {
+                push_resource_pool_factory_capture(captures, name.clone(), span.clone());
+            }
+        }
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                collect_lazy_factory_capture_idents_expr(&arg.value, bound, captures);
+            }
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. } => {
+            collect_lazy_factory_capture_idents_expr(value, bound, captures);
+        }
+        HirExpr::Binary { left, right, .. } => {
+            collect_lazy_factory_capture_idents_expr(left, bound, captures);
+            collect_lazy_factory_capture_idents_expr(right, bound, captures);
+        }
+        HirExpr::Field { base, .. } => {
+            collect_lazy_factory_capture_idents_expr(base, bound, captures)
+        }
+        HirExpr::Index { base, index, .. } => {
+            collect_lazy_factory_capture_idents_expr(base, bound, captures);
+            collect_lazy_factory_capture_idents_expr(index, bound, captures);
+        }
+        HirExpr::Closure { params, body, .. } => {
+            let mut scoped = bound.clone();
+            scoped.extend(params.iter().cloned());
+            collect_lazy_factory_capture_idents_block(body, &mut scoped, captures);
+        }
+        HirExpr::Match { value, arms, .. } => {
+            collect_lazy_factory_capture_idents_expr(value, bound, captures);
+            for arm in arms {
+                let mut scoped = bound.clone();
+                if let MatchPattern::Variant {
+                    binding: Some(binding),
+                    ..
+                } = &arm.pattern
+                {
+                    scoped.insert(binding.clone());
+                }
+                collect_lazy_factory_capture_idents_block(&arm.body, &mut scoped, captures);
+            }
+        }
+        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn is_resource_pool_discard(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && type_root_name(name) == "discard")
+}
+
+/// `discard`'s argument must be a bare local binding that is an active lease — the
+/// root identifier of `mut <name>` (peeling the effect wrapper).
+fn discard_lease_root(expr: &HirExpr) -> Option<&str> {
+    match expr {
+        HirExpr::Effect { value, .. } => discard_lease_root(value),
+        HirExpr::Ident { name, .. } => Some(name),
+        _ => None,
+    }
+}
+
+/// Validate that every `ResourcePool.discard` targets a binding introduced by an
+/// enclosing `with ResourcePool.borrow/try_borrow(...) as name`. `lease_bindings`
+/// is the stack of such names currently in scope.
+fn check_resource_pool_discards(
+    analyzer: &mut Analyzer<'_>,
+    block: &HirBlock,
+    lease_bindings: &mut Vec<String>,
+) {
+    for statement in &block.statements {
+        check_resource_pool_discards_stmt(analyzer, statement, lease_bindings);
+    }
+}
+
+fn check_resource_pool_discards_stmt(
+    analyzer: &mut Analyzer<'_>,
+    statement: &HirStmt,
+    lease_bindings: &mut Vec<String>,
+) {
+    match statement {
+        HirStmt::Let { value, .. } | HirStmt::Return { value, .. } => {
+            if let Some(value) = value {
+                check_resource_pool_discards_expr(analyzer, value, lease_bindings);
+            }
+        }
+        HirStmt::Expr(value) => check_resource_pool_discards_expr(analyzer, value, lease_bindings),
+        HirStmt::With {
+            resource,
+            binding,
+            body,
+            ..
+        } => {
+            check_resource_pool_discards_expr(analyzer, resource, lease_bindings);
+            // A `with` over a pool lease producer makes `binding` a lease.
+            if resource_pool_borrow_pool_path(resource).is_some() {
+                lease_bindings.push(binding.clone());
+                check_resource_pool_discards(analyzer, body, lease_bindings);
+                lease_bindings.pop();
+            } else {
+                check_resource_pool_discards(analyzer, body, lease_bindings);
+            }
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            check_resource_pool_discards_expr(analyzer, condition, lease_bindings);
+            check_resource_pool_discards(analyzer, then_body, lease_bindings);
+            if let Some(else_body) = else_body {
+                check_resource_pool_discards(analyzer, else_body, lease_bindings);
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                check_resource_pool_discards_expr(analyzer, condition, lease_bindings);
+            }
+            check_resource_pool_discards(analyzer, body, lease_bindings);
+        }
+        HirStmt::For { iterable, body, .. } => {
+            check_resource_pool_discards_expr(analyzer, iterable, lease_bindings);
+            check_resource_pool_discards(analyzer, body, lease_bindings);
+        }
+        HirStmt::Match { value, arms, .. } => {
+            check_resource_pool_discards_expr(analyzer, value, lease_bindings);
+            for arm in arms {
+                check_resource_pool_discards(analyzer, &arm.body, lease_bindings);
+            }
+        }
+        HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                check_resource_pool_discards_expr(analyzer, &arm.operation, lease_bindings);
+                check_resource_pool_discards(analyzer, &arm.body, lease_bindings);
+            }
+        }
+        HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn check_resource_pool_discards_expr(
+    analyzer: &mut Analyzer<'_>,
+    expr: &HirExpr,
+    lease_bindings: &mut Vec<String>,
+) {
+    match expr {
+        HirExpr::Call {
+            callee, args, span, ..
+        } => {
+            if is_resource_pool_discard(callee) {
+                let targets_lease = args
+                    .iter()
+                    .find(|arg| arg.name.as_deref() == Some("lease"))
+                    .or_else(|| args.first())
+                    .and_then(|arg| discard_lease_root(&arg.value))
+                    .is_some_and(|root| lease_bindings.iter().any(|name| name == root));
+                if !targets_lease {
+                    resource_pool_discard_not_lease_diagnostic(analyzer, span.clone());
+                }
+            }
+            for arg in args {
+                check_resource_pool_discards_expr(analyzer, &arg.value, lease_bindings);
+            }
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. } => {
+            check_resource_pool_discards_expr(analyzer, value, lease_bindings);
+        }
+        HirExpr::Binary { left, right, .. } => {
+            check_resource_pool_discards_expr(analyzer, left, lease_bindings);
+            check_resource_pool_discards_expr(analyzer, right, lease_bindings);
+        }
+        HirExpr::Field { base, .. } => {
+            check_resource_pool_discards_expr(analyzer, base, lease_bindings)
+        }
+        HirExpr::Index { base, index, .. } => {
+            check_resource_pool_discards_expr(analyzer, base, lease_bindings);
+            check_resource_pool_discards_expr(analyzer, index, lease_bindings);
+        }
+        HirExpr::Closure { body, .. } => {
+            // A closure escapes the lease scope, so it carries no lease bindings.
+            check_resource_pool_discards(analyzer, body, &mut Vec::new());
+        }
+        HirExpr::Match { value, arms, .. } => {
+            check_resource_pool_discards_expr(analyzer, value, lease_bindings);
+            for arm in arms {
+                check_resource_pool_discards(analyzer, &arm.body, lease_bindings);
+            }
+        }
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
 fn resource_pool_borrow_pool_path(expr: &HirExpr) -> Option<PlacePath> {
     match expr {
-        HirExpr::Call { callee, args, .. } if is_resource_pool_borrow(callee) => args
+        HirExpr::Call { callee, args, .. } if is_resource_pool_lease_producer(callee) => args
             .iter()
             .find(|arg| arg.name.as_deref() == Some("pool"))
             .or_else(|| args.first())
@@ -4319,6 +4818,16 @@ fn is_resource_pool_borrow(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && type_root_name(name) == "borrow")
 }
 
+fn is_resource_pool_try_borrow(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && type_root_name(name) == "try_borrow")
+}
+
+/// Both `borrow` and `try_borrow` produce a scoped lease, so both are subject to
+/// the same "must be consumed by `with`" and active-lease rules.
+fn is_resource_pool_lease_producer(callee: &Callee) -> bool {
+    is_resource_pool_borrow(callee) || is_resource_pool_try_borrow(callee)
+}
+
 fn is_resource_pool_new(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && type_root_name(name) == "new")
 }
@@ -4327,8 +4836,26 @@ fn is_resource_pool_try_new(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && type_root_name(name) == "try_new")
 }
 
+fn is_resource_pool_lazy(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && type_root_name(name) == "lazy")
+}
+
+fn is_resource_pool_try_lazy(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && type_root_name(name) == "try_lazy")
+}
+
+/// Infallible factory contract (`new`/`lazy`): the `create` closure returns a
+/// bare resource. `try_new`/`try_lazy` are the fallible counterparts.
+fn is_resource_pool_infallible_constructor(callee: &Callee) -> bool {
+    is_resource_pool_new(callee) || is_resource_pool_lazy(callee)
+}
+
+fn is_resource_pool_fallible_constructor(callee: &Callee) -> bool {
+    is_resource_pool_try_new(callee) || is_resource_pool_try_lazy(callee)
+}
+
 fn is_resource_pool_constructor(callee: &Callee) -> bool {
-    is_resource_pool_new(callee) || is_resource_pool_try_new(callee)
+    is_resource_pool_infallible_constructor(callee) || is_resource_pool_fallible_constructor(callee)
 }
 
 fn type_root_name(type_name: &str) -> &str {
@@ -4481,6 +5008,63 @@ fn resource_pool_infallible_try_factory_diagnostic(
     );
 }
 
+fn resource_pool_lazy_factory_capture_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    name: &str,
+    kind: HirBindingKind,
+    span: crate::diagnostic::Span,
+) {
+    let (noun, why) = match kind {
+        HirBindingKind::Param => (
+            "parameter",
+            "a parameter is borrowed and would not outlive the pool",
+        ),
+        HirBindingKind::ManagedLet => (
+            "managed binding",
+            "a managed binding is shared/refcounted, not a clean owned value",
+        ),
+        HirBindingKind::LocalLet => ("binding", "it is not a clean owned local"),
+    };
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::RESOURCE_POOL_LAZY_FACTORY_CAPTURE,
+            format!("lazy pool factory captures {noun} `{name}`."),
+            span,
+            "non-owned binding captured by stored factory",
+        )
+        .with_cause(format!(
+            "A lazy (`owned Fn`) factory is stored in the pool and called on demand, so it must own its captures, but {why}."
+        ))
+        .with_fix(
+            "capture_owned_local",
+            format!("Bind an owned `local` from `{name}` before constructing the pool and capture that local instead."),
+            "manual",
+        ),
+    );
+}
+
+fn resource_pool_discard_not_lease_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    span: crate::diagnostic::Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::RESOURCE_POOL_DISCARD_NOT_LEASE,
+            "`ResourcePool.discard` requires a pool lease binding.",
+            span,
+            "not a pool lease",
+        )
+        .with_cause(
+            "`discard` evicts a checked-out lease, so its argument must be the binding of an enclosing `with ResourcePool.borrow(...) as name` or `with ResourcePool.try_borrow(...)? as name`.",
+        )
+        .with_fix(
+            "discard_lease_binding",
+            "Call `discard` on the `with`-lease binding, e.g. `ResourcePool.discard(lease: mut conn)` inside `with ... as conn`.",
+            "manual",
+        ),
+    );
+}
+
 fn resource_pool_active_lease_conflict_diagnostic(
     analyzer: &mut Analyzer<'_>,
     effect: ParamEffect,
@@ -4501,7 +5085,7 @@ fn resource_pool_active_lease_conflict_diagnostic(
         .with_cause(format!(
             "This `{effect}` use targets the same pool root as an active `ResourcePool.borrow` lease."
         ))
-        .with_cause("v0.6 permits one active lease per pool; borrow, stats, reset, take, and manage of the same pool root are rejected until the `with` scope exits.")
+        .with_cause("As a conservative policy the language permits one active lease per pool: borrow, stats, reset, take, and manage of the same pool root are rejected until the `with` scope exits. (The runtime checkout model can track several leases at once; surfacing concurrent leases in the language is a deliberate future step.)")
         .with_fix(
             "end_pool_lease_scope",
             "Move this pool use after the `with ResourcePool.borrow(...)` block, or use a different pool.",

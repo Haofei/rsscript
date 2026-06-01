@@ -672,6 +672,11 @@ impl Hir {
                 candidates.push((protocol.clone(), sig.clone()));
             }
         }
+        if let Some(protocol) = capability_protocol(receiver_type)
+            && let Some(sig) = self.resolve_function(Some(protocol), method)
+        {
+            candidates.push((protocol.to_string(), sig.clone()));
+        }
 
         for protocol_impl in &self.protocol_impls {
             if protocol_impl.type_name != receiver_root {
@@ -2254,9 +2259,18 @@ fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str>> {
     match root {
         "List" | "Set" | "Option" | "ResourcePool" | "Channel" | "Sender" | "Receiver"
         | "Stream" => Some(vec!["T"]),
+        "Capability" => Some(vec!["P"]),
         "Map" | "Result" => Some(vec!["K", "V"]),
         _ => None,
     }
+}
+
+fn capability_protocol(type_name: &str) -> Option<&str> {
+    let root = type_root_name(type_name);
+    if root != "Capability" {
+        return None;
+    }
+    type_arg_names(type_name).and_then(|args| args.first().copied())
 }
 
 fn fn_return_type(type_name: &str) -> Option<&str> {
@@ -2582,6 +2596,8 @@ fn type_ref_name(ty: &TypeRef) -> String {
     };
     let name = if ty.is_noescape {
         format!("noescape {base}")
+    } else if ty.is_owned {
+        format!("owned {base}")
     } else {
         base
     };

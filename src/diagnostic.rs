@@ -79,6 +79,8 @@ pub mod code {
     pub const RESOURCE_POOL_FALLIBLE_FACTORY: &str = "RS0707";
     pub const RESOURCE_POOL_INVALID_MAX_SIZE: &str = "RS0708";
     pub const RESOURCE_POOL_ACTIVE_LEASE_CONFLICT: &str = "RS0709";
+    pub const RESOURCE_POOL_DISCARD_NOT_LEASE: &str = "RS0710";
+    pub const RESOURCE_POOL_LAZY_FACTORY_CAPTURE: &str = "RS0711";
     pub const LOCAL_CAPTURED_BY_MANAGED_CLOSURE: &str = "RS0801";
     pub const NOESCAPE_CALLBACK_ESCAPE: &str = "RS0802";
     pub const LOCAL_CLOSURE_ESCAPE: &str = "RS0803";
@@ -697,13 +699,23 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     },
     DiagnosticExplanation {
         code: code::RESOURCE_POOL_INVALID_MAX_SIZE,
-        title: "ResourcePool max_size not a positive Int literal",
-        explanation: "`ResourcePool.new` is eager and infallible in v0.6, so `max_size` must be a positive `Int` literal checked before lowering.",
+        title: "ResourcePool max_size not statically positive",
+        explanation: "Eager pools (`ResourcePool.new`/`try_new`) allocate every resource up front, so `max_size` must be a statically known positive value: a positive `Int` literal, or a reference to a positive `Int` `const`. Lazy pools (`ResourcePool.lazy`/`try_lazy`) create on demand and accept any `Int`, including a configuration-derived value.",
     },
     DiagnosticExplanation {
         code: code::RESOURCE_POOL_ACTIVE_LEASE_CONFLICT,
         title: "ResourcePool active lease conflict",
         explanation: "While a `ResourcePool.borrow` lease is active, the same pool root cannot be read, mutated, taken, managed, or borrowed again inside the lease body.",
+    },
+    DiagnosticExplanation {
+        code: code::RESOURCE_POOL_DISCARD_NOT_LEASE,
+        title: "discard requires a pool lease",
+        explanation: "`ResourcePool.discard` evicts a checked-out lease, so its argument must be the binding of an enclosing `with ResourcePool.borrow(...) as name` / `with ResourcePool.try_borrow(...)? as name`. It cannot be applied to an ordinary resource value, which is not a lease and would not have the lease handle the runtime requires.",
+    },
+    DiagnosticExplanation {
+        code: code::RESOURCE_POOL_LAZY_FACTORY_CAPTURE,
+        title: "lazy factory capture",
+        explanation: "A lazy pool factory (`ResourcePool.lazy`/`try_lazy`, an `owned Fn`) is stored in the pool and called on demand, so it must own what it captures: only an owned `local` may be captured (it is moved into the factory). A parameter is borrowed, and a managed binding is shared/refcounted, so neither may be captured; names that are not bindings (globals, consts, functions) are `'static` and fine. Bind an owned `local` from the parameter/managed value first and capture that.",
     },
     DiagnosticExplanation {
         code: code::LOCAL_CAPTURED_BY_MANAGED_CLOSURE,

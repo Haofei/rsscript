@@ -1121,10 +1121,14 @@ impl Analyzer<'_> {
                     );
                 }
                 for param in &function.params {
-                    self.check_unsupported_syntax_type_ref(&param.ty, true);
+                    self.check_unsupported_syntax_type_ref(
+                        &param.ty,
+                        true,
+                        owned_fn_param_allowed(&function.name, &param.name),
+                    );
                 }
                 if let Some(return_ty) = &function.return_ty {
-                    self.check_unsupported_syntax_type_ref(return_ty, false);
+                    self.check_unsupported_syntax_type_ref(return_ty, false, false);
                 }
                 self.check_unsupported_syntax_block(&function.body);
             }
@@ -1162,7 +1166,7 @@ impl Analyzer<'_> {
                     );
                 }
                 for field in &type_decl.fields {
-                    self.check_unsupported_syntax_type_ref(&field.ty, false);
+                    self.check_unsupported_syntax_type_ref(&field.ty, false, false);
                 }
                 if type_decl.kind != TypeKind::Resource
                     && let Some(drop_body) = &type_decl.drop_body
@@ -1402,12 +1406,24 @@ impl Analyzer<'_> {
         map
     }
 
-    fn check_unsupported_syntax_type_ref(&mut self, ty: &TypeRef, allow_noescape_param: bool) {
+    fn check_unsupported_syntax_type_ref(
+        &mut self,
+        ty: &TypeRef,
+        allow_noescape_param: bool,
+        allow_owned_param: bool,
+    ) {
         if ty.is_noescape && (!allow_noescape_param || ty.name != "Fn") {
             self.unsupported_syntax(
                 ty.span.clone(),
                 "unsupported noescape position",
                 "`noescape Fn(...)` is only supported as a direct function parameter type.",
+            );
+        }
+        if ty.is_owned && (!allow_owned_param || ty.name != "Fn") {
+            self.unsupported_syntax(
+                ty.span.clone(),
+                "unsupported owned position",
+                "`owned Fn(...)` is currently reserved for compiler-owned stored factory contracts such as `ResourcePool.lazy(create: owned Fn(...))`.",
             );
         }
         for span in &ty.malformed_arg_spans {
@@ -1418,7 +1434,7 @@ impl Analyzer<'_> {
             );
         }
         for arg in &ty.args {
-            self.check_unsupported_syntax_type_ref(arg, false);
+            self.check_unsupported_syntax_type_ref(arg, false, false);
         }
     }
 
@@ -1991,6 +2007,7 @@ impl Analyzer<'_> {
                     && !param.ty.name.is_empty()
                     && param.ty.name != "share"
                     && !type_ref_is_noescape(&param.ty)
+                    && !type_ref_is_owned(&param.ty)
                     && !type_ref_is_closure_effect_exempt(&param.ty)
                     && !type_ref_has_surface_reference(&param.ty, self.tokens)
                     && !type_ref_contains_name(&param.ty, "Fd")
@@ -2556,6 +2573,16 @@ impl Analyzer<'_> {
     }
 
     fn check_unknown_type_ref(&mut self, ty: &TypeRef, generic_params: &HashSet<&str>) {
+        if ty.name == "Capability" {
+            self.check_capability_type_ref(ty, generic_params);
+            for param in &ty.fn_params {
+                self.check_unknown_type_ref(param, generic_params);
+            }
+            if let Some(return_ty) = &ty.fn_return {
+                self.check_unknown_type_ref(return_ty, generic_params);
+            }
+            return;
+        }
         // Type aliases are known types
         if self.type_aliases.contains_key(&ty.name) {
             // Valid - it's a type alias
@@ -2570,6 +2597,30 @@ impl Analyzer<'_> {
         }
         if let Some(return_ty) = &ty.fn_return {
             self.check_unknown_type_ref(return_ty, generic_params);
+        }
+    }
+
+    fn check_capability_type_ref(&mut self, ty: &TypeRef, generic_params: &HashSet<&str>) {
+        if ty.args.len() != 1 {
+            self.unknown_type_name_diagnostic(&type_ref_name(ty), &ty.span);
+            return;
+        }
+        let protocol = &ty.args[0];
+        if !protocol.args.is_empty()
+            || !protocol.fn_params.is_empty()
+            || protocol.fn_return.is_some()
+            || protocol.is_fresh
+            || protocol.is_noescape
+            || protocol.is_owned
+        {
+            self.unknown_type_name_diagnostic(&type_ref_name(ty), &ty.span);
+            return;
+        }
+        if generic_params.contains(protocol.name.as_str()) {
+            return;
+        }
+        if !self.protocol_name_is_visible(&protocol.name) {
+            self.unknown_protocol_diagnostic(&protocol.name, &protocol.span);
         }
     }
 
@@ -2839,7 +2890,8 @@ impl Analyzer<'_> {
         bounds: &HashMap<String, Option<GenericBound>>,
         in_resource_pool: bool,
     ) {
-        let next_in_resource_pool = in_resource_pool || ty.name == "ResourcePool";
+        let next_in_resource_pool =
+            in_resource_pool || self.is_approved_resource_container(&ty.name);
         if !next_in_resource_pool
             && bounds.get(&ty.name).and_then(Option::as_ref) == Some(&GenericBound::Resource)
         {
@@ -3118,6 +3170,16 @@ impl Analyzer<'_> {
                 ),
             );
         }
+    }
+
+    /// A type allowed to hold `T: Resource` directly. For now this is only the
+    /// built-in `ResourcePool`: it owns the lease/return/discard machinery that
+    /// keeps resource access scoped. A user-facing extension is deferred — a plain
+    /// marker `impl` would be a self-service whitelist that bypasses `RS0701` with
+    /// none of those guarantees, so any extension must be a compiler-recognized
+    /// declaration with explicit approval conditions, not an open `impl`.
+    fn is_approved_resource_container(&self, type_name: &str) -> bool {
+        type_name == "ResourcePool"
     }
 
     fn check_resource_fields(&mut self) {
@@ -3525,7 +3587,7 @@ impl Analyzer<'_> {
             Expr::Call { callee, args, span } => {
                 if let Callee::Qualified { namespace, .. } = callee
                     && let Some((root, args)) = generic_namespace_args(namespace)
-                    && root != "ResourcePool"
+                    && !self.is_approved_resource_container(root)
                 {
                     for arg in args {
                         if self.hir.type_kind(arg) == Some(HirTypeKind::Resource) {
@@ -5234,7 +5296,7 @@ fn known_type_ref(ty: &TypeRef, generic_params: &HashSet<&str>, hir: &Hir) -> bo
     if ty.name.is_empty() {
         return true;
     }
-    if ty.is_noescape {
+    if ty.is_noescape || ty.is_owned {
         return ty.name == "Fn";
     }
     generic_params.contains(ty.name.as_str())
@@ -5273,6 +5335,7 @@ fn is_builtin_type_name(name: &str) -> bool {
             | "List"
             | "Map"
             | "Set"
+            | "Capability"
             | "Fn"
             | "Closure"
             | "Cache"
@@ -5332,6 +5395,8 @@ fn type_ref_name(ty: &TypeRef) -> String {
     };
     let name = if ty.is_noescape {
         format!("noescape {base}")
+    } else if ty.is_owned {
+        format!("owned {base}")
     } else {
         base
     };
@@ -5344,6 +5409,17 @@ fn type_ref_name(ty: &TypeRef) -> String {
 
 fn type_ref_is_noescape(ty: &TypeRef) -> bool {
     ty.is_noescape || ty.args.iter().any(type_ref_is_noescape)
+}
+
+fn type_ref_is_owned(ty: &TypeRef) -> bool {
+    ty.is_owned || ty.args.iter().any(type_ref_is_owned)
+}
+
+fn owned_fn_param_allowed(function_name: &str, param_name: &str) -> bool {
+    matches!(
+        (function_name, param_name),
+        ("ResourcePool.lazy" | "ResourcePool.try_lazy", "create")
+    )
 }
 
 fn type_ref_is_copy(ty: &TypeRef) -> bool {

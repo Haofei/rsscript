@@ -1,110 +1,307 @@
-use std::cell::{RefCell, RefMut};
+use std::cell::RefCell;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 
 use crate::diagnostics::Resource;
 use crate::error::{RuntimeError, RuntimeErrorKind, SourceSpan, panic_runtime_error};
 
-pub struct ResourcePool<T: Resource> {
-    values: RefCell<Vec<T>>,
+/// Borrow-time pool failure surfaced to RSScript: either the pool is exhausted
+/// (all `max_size` resources are checked out) or a lazy factory failed to create
+/// one. Opaque, like `ChannelError`; `?` propagation and `message()` are the
+/// intended patterns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PoolError {
+    message: String,
 }
 
-impl<T: Resource> ResourcePool<T> {
-    pub fn new(values: Vec<T>) -> Self {
+impl PoolError {
+    pub fn exhausted() -> Self {
         Self {
-            values: RefCell::new(values),
+            message: "resource pool is exhausted".to_string(),
         }
     }
 
+    pub fn factory_failed(message: impl Into<String>) -> Self {
+        Self {
+            message: format!("resource pool factory failed: {}", message.into()),
+        }
+    }
+
+    pub fn invalid_capacity(max_size: i64) -> Self {
+        Self {
+            message: format!("resource pool max_size must be positive, got {max_size}"),
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for PoolError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+pub fn pool_error_message(error: &PoolError) -> String {
+    error.message.clone()
+}
+
+/// A snapshot of pool occupancy, returned by `ResourcePool.stats`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PoolStats {
+    capacity: i64,
+    created: i64,
+    available: i64,
+    in_use: i64,
+}
+
+pub fn pool_stats_capacity(stats: &PoolStats) -> i64 {
+    stats.capacity
+}
+
+pub fn pool_stats_created(stats: &PoolStats) -> i64 {
+    stats.created
+}
+
+pub fn pool_stats_available(stats: &PoolStats) -> i64 {
+    stats.available
+}
+
+pub fn pool_stats_in_use(stats: &PoolStats) -> i64 {
+    stats.in_use
+}
+
+pub fn pool_stats<T: Resource>(pool: &ResourcePool<T>) -> PoolStats {
+    pool.stats()
+}
+
+type LazyFactory<T> = Box<dyn FnMut() -> Result<T, PoolError>>;
+
+struct PoolState<T: Resource> {
+    /// Returned, ready-to-reuse resources.
+    idle: Vec<T>,
+    /// Resources currently checked out via a live lease.
+    in_use: usize,
+    /// Live resources (`idle.len() + in_use`).
+    created: usize,
+    /// Hard cap on `created`.
+    max_size: usize,
+    /// Present iff the pool creates resources on demand (lazy).
+    factory: Option<LazyFactory<T>>,
+    /// Set when a lazy pool was constructed with a non-positive `max_size`: such a
+    /// pool can never hand out a resource, so `try_borrow` reports this explicitly
+    /// (`PoolError::invalid_capacity`) rather than masquerading as "exhausted".
+    invalid_capacity: Option<i64>,
+}
+
+pub struct ResourcePool<T: Resource> {
+    state: RefCell<PoolState<T>>,
+}
+
+impl<T: Resource> ResourcePool<T> {
+    fn from_state(state: PoolState<T>) -> Self {
+        Self {
+            state: RefCell::new(state),
+        }
+    }
+
+    /// Eager pool seeded with explicit resources (used by tests).
+    pub fn new(values: Vec<T>) -> Self {
+        let created = values.len();
+        Self::from_state(PoolState {
+            idle: values,
+            in_use: 0,
+            created,
+            max_size: created,
+            factory: None,
+            invalid_capacity: None,
+        })
+    }
+
+    /// Eager infallible: create exactly `max_size` resources up front.
     pub fn from_factory<F>(max_size: i64, mut create: F) -> Self
     where
         F: FnMut() -> T,
     {
         let count = max_size.max(0) as usize;
-        let values = (0..count).map(|_| create()).collect();
-        Self::new(values)
+        let idle: Vec<T> = (0..count).map(|_| create()).collect();
+        Self::new(idle)
     }
 
+    /// Eager fallible: create `max_size` resources up front, short-circuiting on
+    /// the first factory error (the user's typed `E`).
     pub fn try_from_factory<E, F>(max_size: i64, mut create: F) -> Result<Self, E>
     where
         F: FnMut() -> Result<T, E>,
     {
         let count = max_size.max(0) as usize;
-        let mut values = Vec::with_capacity(count);
+        let mut idle = Vec::with_capacity(count);
         for _ in 0..count {
-            values.push(create()?);
+            idle.push(create()?);
         }
-        Ok(Self::new(values))
+        Ok(Self::new(idle))
+    }
+
+    /// Lazy infallible: create resources on demand, up to `max_size`.
+    pub fn lazy_from_factory<F>(max_size: i64, mut create: F) -> Self
+    where
+        F: FnMut() -> T + 'static,
+    {
+        let factory: LazyFactory<T> = Box::new(move || Ok(create()));
+        Self::from_state(PoolState {
+            idle: Vec::new(),
+            in_use: 0,
+            created: 0,
+            max_size: max_size.max(0) as usize,
+            factory: Some(factory),
+            invalid_capacity: (max_size <= 0).then_some(max_size),
+        })
+    }
+
+    /// Lazy fallible: create resources on demand; factory failures surface as
+    /// `PoolError` at `try_borrow` time.
+    pub fn try_lazy_from_factory<F>(max_size: i64, create: F) -> Self
+    where
+        F: FnMut() -> Result<T, PoolError> + 'static,
+    {
+        Self::from_state(PoolState {
+            idle: Vec::new(),
+            in_use: 0,
+            created: 0,
+            max_size: max_size.max(0) as usize,
+            factory: Some(Box::new(create)),
+            invalid_capacity: (max_size <= 0).then_some(max_size),
+        })
     }
 
     pub fn empty() -> Self {
         Self::new(Vec::new())
     }
 
-    pub fn try_push(&self, value: T) -> Result<(), RuntimeError> {
-        let mut values = self.values.try_borrow_mut().map_err(|_| RuntimeError {
-            kind: RuntimeErrorKind::ResourcePoolBorrowConflict,
-            message: "resource pool is already borrowed".to_string(),
-            span: None,
-        })?;
-        values.push(value);
-        Ok(())
+    /// Check out a resource: reuse an idle one, else lazily create one if under
+    /// `max_size`, else report exhaustion. The accounting supports several live
+    /// leases, though the language currently gates pools to one active lease (RS0709).
+    pub fn try_borrow(&self) -> Result<ResourceLease<'_, T>, PoolError> {
+        let value = {
+            let mut state = self.state.borrow_mut();
+            if let Some(max_size) = state.invalid_capacity {
+                return Err(PoolError::invalid_capacity(max_size));
+            }
+            if let Some(value) = state.idle.pop() {
+                value
+            } else if state.created < state.max_size {
+                let Some(factory) = state.factory.as_mut() else {
+                    return Err(PoolError::exhausted());
+                };
+                let value = factory()?;
+                state.created += 1;
+                value
+            } else {
+                return Err(PoolError::exhausted());
+            }
+        };
+        self.state.borrow_mut().in_use += 1;
+        Ok(ResourceLease {
+            pool: self,
+            value: Some(value),
+            discarded: false,
+        })
     }
 
-    pub fn push(&self, value: T) {
-        if let Err(error) = self.try_push(value) {
-            panic_runtime_error(error);
-        }
-    }
-
-    pub fn try_borrow(&self) -> Result<ResourceLease<'_, T>, RuntimeError> {
-        let values = self.values.try_borrow_mut().map_err(|_| RuntimeError {
-            kind: RuntimeErrorKind::ResourcePoolBorrowConflict,
-            message: "resource pool is already borrowed".to_string(),
-            span: None,
-        })?;
-        if values.is_empty() {
-            return Err(RuntimeError {
-                kind: RuntimeErrorKind::ResourcePoolEmpty,
-                message: "resource pool has no available resources".to_string(),
-                span: None,
-            });
-        }
-        Ok(ResourceLease { values, index: 0 })
-    }
-
-    pub fn try_borrow_at(&self, span: SourceSpan) -> Result<ResourceLease<'_, T>, RuntimeError> {
-        self.try_borrow().map_err(|error| error.with_span(span))
-    }
-
+    /// The infallible `with pool.borrow() as x` path: exhaustion panics with a
+    /// runtime diagnostic carrying the `with` site span.
     pub fn borrow_at(pool: &Self, span: SourceSpan) -> Result<ResourceLease<'_, T>, RuntimeError> {
-        pool.try_borrow_at(span)
+        pool.try_borrow().map_err(|error| {
+            RuntimeError {
+                kind: RuntimeErrorKind::ResourcePoolEmpty,
+                message: error.message,
+                span: None,
+            }
+            .with_span(span)
+        })
     }
 
     pub fn borrow(&self) -> ResourceLease<'_, T> {
         match self.try_borrow() {
             Ok(lease) => lease,
-            Err(error) => panic_runtime_error(error),
+            Err(error) => panic_runtime_error(RuntimeError {
+                kind: RuntimeErrorKind::ResourcePoolEmpty,
+                message: error.message,
+                span: None,
+            }),
         }
+    }
+
+    pub fn stats(&self) -> PoolStats {
+        let state = self.state.borrow();
+        PoolStats {
+            capacity: state.max_size as i64,
+            created: state.created as i64,
+            available: state.idle.len() as i64,
+            in_use: state.in_use as i64,
+        }
+    }
+
+    fn check_in(&self, value: T) {
+        let mut state = self.state.borrow_mut();
+        state.in_use = state.in_use.saturating_sub(1);
+        state.idle.push(value);
+    }
+
+    fn evict(&self) {
+        let mut state = self.state.borrow_mut();
+        state.in_use = state.in_use.saturating_sub(1);
+        state.created = state.created.saturating_sub(1);
     }
 }
 
 pub struct ResourceLease<'a, T: Resource> {
-    values: RefMut<'a, Vec<T>>,
-    index: usize,
+    pool: &'a ResourcePool<T>,
+    /// The checked-out resource; `None` only transiently during return.
+    value: Option<T>,
+    /// When set, the resource is dropped on scope exit instead of returned, so a
+    /// lazy pool can recreate it (transaction rollback / broken-resource eviction).
+    discarded: bool,
+}
+
+/// Mark a leased resource broken so it is evicted (not returned to the pool) when
+/// the lease scope ends. A lazy pool can then create a fresh one on the next
+/// `try_borrow`.
+pub fn resource_lease_discard<T: Resource>(lease: &mut ResourceLease<'_, T>) {
+    lease.discarded = true;
 }
 
 impl<T: Resource> Deref for ResourceLease<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        &self.values[self.index]
+        self.value
+            .as_ref()
+            .expect("resource lease used after return")
     }
 }
 
 impl<T: Resource> DerefMut for ResourceLease<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.values[self.index]
+        self.value
+            .as_mut()
+            .expect("resource lease used after return")
+    }
+}
+
+impl<T: Resource> Drop for ResourceLease<'_, T> {
+    fn drop(&mut self) {
+        let Some(value) = self.value.take() else {
+            return;
+        };
+        if self.discarded {
+            drop(value);
+            self.pool.evict();
+        } else {
+            self.pool.check_in(value);
+        }
     }
 }
 
@@ -115,7 +312,7 @@ where
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_tuple("ResourceLease")
-            .field(&self.values[self.index])
+            .field(&self.value)
             .finish()
     }
 }
@@ -242,41 +439,118 @@ mod tests {
     }
 
     #[test]
-    fn resource_pool_reports_empty_pool() {
+    fn resource_pool_reports_exhaustion() {
         let pool = ResourcePool::<FileHandle>::empty();
         let error = pool.try_borrow().expect_err("empty pool should error");
 
-        assert_eq!(error.kind, RuntimeErrorKind::ResourcePoolEmpty);
+        assert!(error.message().contains("exhausted"), "{}", error.message());
     }
 
     #[test]
-    fn resource_pool_reports_borrow_conflict() {
-        let pool = ResourcePool::new(vec![FileHandle(7)]);
-        let _lease = pool.try_borrow().expect("initial borrow should succeed");
-        let error = pool
-            .try_borrow()
-            .expect_err("second borrow should conflict");
+    fn resource_pool_tracks_in_use_and_available() {
+        // Internal lease accounting: each checkout decrements `available` and
+        // increments `in_use`. NOTE: this exercises the runtime mechanism only —
+        // the RSScript language currently permits one active lease per pool
+        // (RS0709), so holding two leases at once is not reachable from RSScript.
+        let pool = ResourcePool::new(vec![FileHandle(7), FileHandle(8)]);
+        let first = pool.try_borrow().expect("first borrow should succeed");
+        let second = pool.try_borrow().expect("second borrow should succeed");
 
-        assert_eq!(error.kind, RuntimeErrorKind::ResourcePoolBorrowConflict);
+        assert_eq!(first.0 + second.0, 15);
+        let stats = pool.stats();
+        assert_eq!(stats.in_use, 2);
+        assert_eq!(stats.available, 0);
+    }
+
+    #[test]
+    fn resource_pool_returns_lease_on_scope_exit() {
+        let pool = ResourcePool::new(vec![FileHandle(7)]);
+        {
+            let _lease = pool.try_borrow().expect("borrow should succeed");
+            assert_eq!(pool.stats().in_use, 1);
+        }
+        assert_eq!(pool.stats().in_use, 0);
+        assert_eq!(pool.stats().available, 1);
     }
 
     #[test]
     #[should_panic(expected = "RSSCRIPT_RUNTIME_DIAGNOSTIC:")]
-    fn resource_pool_borrow_conflict_uses_runtime_diagnostic() {
-        let pool = ResourcePool::new(vec![FileHandle(7)]);
-        let _lease = pool.try_borrow().expect("initial borrow should succeed");
-        let _conflict = pool.borrow();
+    fn resource_pool_borrow_panics_on_exhaustion() {
+        let pool = ResourcePool::<FileHandle>::empty();
+        let _exhausted = pool.borrow();
     }
 
     #[test]
-    fn resource_pool_reports_push_borrow_conflict() {
-        let pool = ResourcePool::new(vec![FileHandle(7)]);
-        let _lease = pool.try_borrow().expect("initial borrow should succeed");
-        let error = pool
-            .try_push(FileHandle(8))
-            .expect_err("push during borrow should conflict");
+    fn resource_pool_lazy_creates_on_demand_up_to_max_size() {
+        let mut next = 0;
+        let pool = ResourcePool::lazy_from_factory(2, move || {
+            next += 1;
+            FileHandle(next)
+        });
+        assert_eq!(pool.stats().created, 0);
 
-        assert_eq!(error.kind, RuntimeErrorKind::ResourcePoolBorrowConflict);
+        let first = pool.try_borrow().expect("first lazy borrow should create");
+        assert_eq!(first.0, 1);
+        assert_eq!(pool.stats().created, 1);
+        let _second = pool.try_borrow().expect("second lazy borrow should create");
+        assert_eq!(pool.stats().created, 2);
+        let exhausted = pool.try_borrow().expect_err("third borrow should exhaust");
+        assert!(exhausted.message().contains("exhausted"));
+    }
+
+    #[test]
+    fn resource_pool_discard_evicts_and_lazy_recreates() {
+        let mut next = 0;
+        let pool = ResourcePool::lazy_from_factory(1, move || {
+            next += 1;
+            FileHandle(next)
+        });
+        {
+            let mut lease = pool.try_borrow().expect("borrow should create #1");
+            assert_eq!(lease.0, 1);
+            resource_lease_discard(&mut lease);
+        }
+        // The discarded resource was evicted, so the lazy pool recreates a fresh
+        // one rather than reporting exhaustion.
+        assert_eq!(pool.stats().created, 0);
+        let fresh = pool.try_borrow().expect("borrow should create #2");
+        assert_eq!(fresh.0, 2);
+    }
+
+    #[test]
+    fn resource_pool_lazy_non_positive_max_size_reports_invalid_capacity() {
+        // A misconfigured (<= 0) lazy capacity reports an explicit invalid-capacity
+        // error instead of masquerading as a perpetually-exhausted pool.
+        let pool = ResourcePool::lazy_from_factory(0, || FileHandle(1));
+        let error = pool
+            .try_borrow()
+            .expect_err("zero-capacity lazy pool should be invalid");
+        assert!(
+            error.message().contains("must be positive"),
+            "{}",
+            error.message()
+        );
+
+        let negative = ResourcePool::lazy_from_factory(-3, || FileHandle(1));
+        let error = negative
+            .try_borrow()
+            .expect_err("negative-capacity lazy pool should be invalid");
+        assert!(error.message().contains("-3"), "{}", error.message());
+    }
+
+    #[test]
+    fn resource_pool_try_lazy_surfaces_factory_failure() {
+        let pool = ResourcePool::<FileHandle>::try_lazy_from_factory(2, || {
+            Err(PoolError::factory_failed("connect refused"))
+        });
+        let error = pool
+            .try_borrow()
+            .expect_err("factory failure should surface");
+        assert!(
+            error.message().contains("connect refused"),
+            "{}",
+            error.message()
+        );
     }
 
     #[test]
@@ -1010,7 +1284,7 @@ mod tests {
             crate::db_connection_query(&mut conn, "select 1").expect("query should run");
         }
 
-        assert_eq!(pool.values.borrow().len(), 2);
+        assert_eq!(pool.stats().created, 2);
     }
 
     #[test]

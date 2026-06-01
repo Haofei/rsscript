@@ -680,7 +680,7 @@ fn review_map_region_draft(
     for param in &function.params {
         facts
             .value_types
-            .insert(param.name.clone(), param.ty.name.clone());
+            .insert(param.name.clone(), type_ref_display_name(&param.ty));
     }
     for type_param in &function.type_params {
         if let Some(GenericBound::Protocol(protocol)) = &type_param.bound {
@@ -810,6 +810,12 @@ fn review_map_region_draft(
     if facts.has_error_boundary {
         reasons.push("error handling boundary".to_string());
     }
+    if facts.has_capability_object {
+        reasons.push("capability object construction".to_string());
+    }
+    if facts.has_dynamic_protocol_dispatch {
+        reasons.push("dynamic protocol dispatch".to_string());
+    }
     for callback in &facts.callback_calls {
         reasons.push(format!("noescape callback call `{callback}`"));
     }
@@ -869,6 +875,8 @@ struct ReviewMapFacts {
     has_handle_field_write: bool,
     has_managed_state_write: bool,
     has_error_boundary: bool,
+    has_capability_object: bool,
+    has_dynamic_protocol_dispatch: bool,
     user_calls: BTreeSet<String>,
     unresolved_calls: BTreeSet<String>,
     callback_calls: BTreeSet<String>,
@@ -1127,6 +1135,11 @@ fn collect_review_map_facts_stmt(
             if stmt.kind == LetKind::Local {
                 facts.has_local = true;
             }
+            if let Some(ty) = &stmt.type_annotation {
+                facts
+                    .value_types
+                    .insert(stmt.name.clone(), type_ref_display_name(ty));
+            }
             if let Some(value) = &stmt.value {
                 collect_review_map_facts_expr(
                     value,
@@ -1327,6 +1340,9 @@ fn collect_review_map_facts_expr(
             if is_resource_pool_callee(callee) {
                 facts.has_resource_pool = true;
             }
+            if is_capability_from_callee(callee) {
+                facts.has_capability_object = true;
+            }
             if let Some(callback) = review_map_callback_call(callee, callback_params) {
                 facts.callback_calls.insert(callback.to_string());
             } else if review_map_local_closure_call(callee, local_closure_bindings).is_none() {
@@ -1342,6 +1358,11 @@ fn collect_review_map_facts_expr(
                                 method,
                                 &facts.value_types,
                             );
+                            if capability_protocol_name(&receiver_type)
+                                .is_some_and(|protocol| namespace.as_deref() == Some(protocol))
+                            {
+                                facts.has_dynamic_protocol_dispatch = true;
+                            }
                             facts.receiver_calls.push(ReviewMapReceiverCall {
                                 line: span.line,
                                 column: span.column,
@@ -1370,6 +1391,9 @@ fn collect_review_map_facts_expr(
                 match resolution {
                     CallResolution::Resolved { signature, kind } => {
                         collect_call_boundary_facts(&signature, facts);
+                        if is_capability_protocol_call(callee, args, &facts.value_types) {
+                            facts.has_dynamic_protocol_dispatch = true;
+                        }
                         if kind == ResolvedCalleeKind::UserFunction {
                             facts.user_calls.insert(function_sig_key(&signature));
                         }
@@ -2252,8 +2276,60 @@ fn is_resource_pool_callee(callee: &Callee) -> bool {
     }
 }
 
+fn is_capability_from_callee(callee: &Callee) -> bool {
+    matches!(
+        callee,
+        Callee::Qualified { namespace, name }
+            if type_root_name(namespace) == "Capability" && type_root_name(name) == "from"
+    )
+}
+
+fn is_capability_protocol_call(
+    callee: &Callee,
+    args: &[CallArg],
+    value_types: &HashMap<String, String>,
+) -> bool {
+    let Callee::Qualified { namespace, .. } = callee else {
+        return false;
+    };
+    let Some(self_arg) = args
+        .iter()
+        .find(|arg| arg.name.as_deref() == Some("self"))
+        .or_else(|| args.first())
+    else {
+        return false;
+    };
+    expr_ident_name(&self_arg.value)
+        .and_then(|name| value_types.get(name))
+        .and_then(|type_name| capability_protocol_name(type_name))
+        .is_some_and(|protocol| protocol == namespace)
+}
+
+fn expr_ident_name(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Ident(name, _) => Some(name),
+        Expr::Effect { value, .. } | Expr::Try { value, .. } => expr_ident_name(value),
+        _ => None,
+    }
+}
+
 fn type_ref_contains_name(ty: &TypeRef, name: &str) -> bool {
     ty.name == name || ty.args.iter().any(|arg| type_ref_contains_name(arg, name))
+}
+
+fn type_ref_display_name(ty: &TypeRef) -> String {
+    if ty.args.is_empty() {
+        return ty.name.clone();
+    }
+    format!(
+        "{}<{}>",
+        ty.name,
+        ty.args
+            .iter()
+            .map(type_ref_display_name)
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 fn type_root_name(type_name: &str) -> &str {
@@ -2264,6 +2340,39 @@ fn type_root_name(type_name: &str) -> &str {
     type_name
         .split_once('<')
         .map_or(type_name, |(root, _)| root)
+}
+
+fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
+    let inner = type_name
+        .split_once('<')
+        .and_then(|(_, rest)| rest.strip_suffix('>'))?;
+    Some(split_top_level_type_args(inner))
+}
+
+fn split_top_level_type_args(args: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0usize;
+    for (index, ch) in args.char_indices() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(args[start..index].trim());
+                start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    parts.push(args[start..].trim());
+    parts
+}
+
+fn capability_protocol_name(type_name: &str) -> Option<&str> {
+    if type_root_name(type_name) != "Capability" {
+        return None;
+    }
+    type_arg_names(type_name).and_then(|args| args.first().copied())
 }
 
 fn review_map_line_count(
@@ -3081,6 +3190,8 @@ fn type_name(ty: &TypeRef) -> String {
     };
     if ty.is_noescape {
         format!("noescape {name}")
+    } else if ty.is_owned {
+        format!("owned {name}")
     } else {
         name
     }

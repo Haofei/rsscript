@@ -621,7 +621,14 @@ pub(super) fn collect_mutated_bindings_from_expr(expr: &Expr, names: &mut BTreeS
             collect_mutated_bindings_from_expr(base, names);
             collect_mutated_bindings_from_expr(index, names);
         }
-        Expr::Call { args, .. } => {
+        Expr::Call { callee, args, .. } => {
+            if let Callee::ReceiverCall {
+                receiver, effect, ..
+            } = callee
+                && *effect == DataEffect::Mut
+            {
+                names.insert(receiver.clone());
+            }
             for arg in args {
                 collect_mutated_bindings_from_expr(&arg.value, names);
             }
@@ -1136,6 +1143,18 @@ pub(super) fn is_resource_pool_try_new_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && type_root_name(name) == "try_new")
 }
 
+pub(super) fn is_resource_pool_lazy_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && type_root_name(name) == "lazy")
+}
+
+pub(super) fn is_resource_pool_try_lazy_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && type_root_name(name) == "try_lazy")
+}
+
+pub(super) fn is_resource_pool_try_borrow_callee(callee: &Callee) -> bool {
+    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && type_root_name(name) == "try_borrow")
+}
+
 pub(super) fn is_resource_pool_borrow_expr(expr: &Expr) -> bool {
     matches!(expr, Expr::Call { callee, .. } if is_resource_pool_borrow_callee(callee))
 }
@@ -1172,6 +1191,42 @@ pub(super) fn lower_resource_pool_try_new_call(
     let create = lower_required_call_arg(lowerer, args, "create", 0, call_span);
     let max_size = lower_required_call_arg(lowerer, args, "max_size", 1, call_span);
     format!("rsscript_runtime::ResourcePool::try_from_factory({max_size}, {create})")
+}
+
+pub(super) fn lower_resource_pool_lazy_call(
+    lowerer: &mut RustLowerer<'_>,
+    args: &[CallArg],
+    call_span: &Span,
+) -> String {
+    let create = lower_resource_pool_owning_factory(lowerer, args, call_span);
+    let max_size = lower_required_call_arg(lowerer, args, "max_size", 1, call_span);
+    format!("rsscript_runtime::ResourcePool::lazy_from_factory({max_size}, {create})")
+}
+
+pub(super) fn lower_resource_pool_try_lazy_call(
+    lowerer: &mut RustLowerer<'_>,
+    args: &[CallArg],
+    call_span: &Span,
+) -> String {
+    let create = lower_resource_pool_owning_factory(lowerer, args, call_span);
+    let max_size = lower_required_call_arg(lowerer, args, "max_size", 1, call_span);
+    format!("rsscript_runtime::ResourcePool::try_lazy_from_factory({max_size}, {create})")
+}
+
+/// A lazy factory is stored in the pool and must own its captures (`'static`), so
+/// its closure is lowered with `move`. The eager factories run immediately and
+/// keep borrowing semantics.
+fn lower_resource_pool_owning_factory(
+    lowerer: &mut RustLowerer<'_>,
+    args: &[CallArg],
+    call_span: &Span,
+) -> String {
+    let create = lower_required_call_arg(lowerer, args, "create", 0, call_span);
+    if create.trim_start().starts_with('|') {
+        format!("move {create}")
+    } else {
+        create
+    }
 }
 
 pub(super) fn lower_builtin_value_ident(name: &str) -> Option<&'static str> {
@@ -1239,6 +1294,32 @@ pub(super) fn rust_qualified_function_ident(namespace: &str, name: &str) -> Stri
 pub(super) fn type_root_name(name: &str) -> &str {
     let name = name.trim().strip_prefix("fresh ").unwrap_or(name.trim());
     name.split('<').next().unwrap_or(name)
+}
+
+pub(super) fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
+    let inner = type_name
+        .split_once('<')
+        .and_then(|(_, rest)| rest.strip_suffix('>'))?;
+    Some(split_top_level_type_args(inner))
+}
+
+fn split_top_level_type_args(args: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0usize;
+    for (index, ch) in args.char_indices() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(args[start..index].trim());
+                start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    parts.push(args[start..].trim());
+    parts
 }
 
 pub(super) fn rust_path_segment(segment: &str) -> String {

@@ -1,0 +1,43 @@
+features: local
+
+// A lazy, config-sized connection pool. `max_size` is a runtime `Int` (here it
+// stands in for a value loaded from configuration), so the pool is not pinned to
+// a compile-time literal. Connections are created on demand up to that cap.
+//
+// A lazy factory is stored in the pool, so it must own what it captures: the
+// pool's URL is an owned local moved into the factory closure.
+fn serve(host: read String, sql: read String, max_connections: Int) -> Result<Unit, PoolError> {
+    local pool_url = Url.from_string(value: read host)
+    local pool = ResourcePool<DbConnection>.lazy(
+        create: || DbConnection.open(url: read pool_url),
+        max_size: max_connections,
+    )
+
+    // Graceful checkout: `try_borrow` reports exhaustion as a `PoolError` instead
+    // of panicking. On a failed query we `discard` the connection so it is evicted
+    // (not returned), letting the lazy pool create a fresh one next time.
+    with ResourcePool.try_borrow(pool: mut pool)? as conn {
+        match DbConnection.query(conn: mut conn, sql: read sql) {
+            Ok(_) => {
+                Log.write(message: read "query ok")
+            }
+            Err(_) => {
+                ResourcePool.discard(lease: mut conn)
+                Log.write(message: read "connection discarded")
+            }
+        }
+    }
+
+    // Stats are read between leases (the pool root is free here).
+    let snapshot = ResourcePool.stats(pool: mut pool)
+    if PoolStats.created(stats: read snapshot) > 0 {
+        Log.write(message: read "pool has live connections")
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, PoolError> {
+    serve(host: read "db://local", sql: read "select 1", max_connections: 4)?
+    Log.write(message: read "lazy db pool ran")
+    return Ok(Unit)
+}

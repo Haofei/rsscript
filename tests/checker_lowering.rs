@@ -758,6 +758,48 @@ fn run_query(url: read Url, sql: read String) -> Result<Unit, DbError> {
 }
 
 #[test]
+fn rust_lowering_maps_lazy_pool_try_borrow_discard_and_stats() {
+    let source = r#"
+features: local
+
+fn serve(host: read String, max_connections: Int) -> Result<Unit, PoolError> {
+    local pool_url = Url.from_string(value: read host)
+    local pool = ResourcePool<DbConnection>.lazy(
+        create: || DbConnection.open(url: read pool_url),
+        max_size: max_connections,
+    )
+    with ResourcePool.try_borrow(pool: mut pool)? as conn {
+        ResourcePool.discard(lease: mut conn)
+    }
+    let snapshot = ResourcePool.stats(pool: mut pool)
+    let _ = PoolStats.in_use(stats: read snapshot)
+    return Ok(Unit)
+}
+"#;
+    let rust = lower_source_to_rust("pool.rss", source).expect("lazy pool source should lower");
+
+    // Lazy factories are stored, so they own their captures via a `move` closure
+    // and `max_size` may be a runtime value.
+    assert!(
+        rust.contains("rsscript_runtime::ResourcePool::lazy_from_factory(max_connections, move || rsscript_runtime::db_connection_open(&pool_url))"),
+        "lazy factory should lower to a moving, runtime-sized factory, got:\n{rust}"
+    );
+    // Graceful checkout returns a `Result` propagated by `?`.
+    assert!(
+        rust.contains("rsscript_runtime::ResourcePool::try_borrow(&mut pool)"),
+        "try_borrow should lower to the fallible checkout, got:\n{rust}"
+    );
+    assert!(
+        rust.contains("rsscript_runtime::resource_lease_discard(&mut conn)"),
+        "discard should lower to lease eviction, got:\n{rust}"
+    );
+    assert!(
+        rust.contains("rsscript_runtime::pool_stats(&mut pool)"),
+        "stats should lower to the pool stats hook, got:\n{rust}"
+    );
+}
+
+#[test]
 fn rust_lowering_maps_resource_pool_try_new_to_runtime_hooks() {
     let source = r#"
 features: local
@@ -1807,6 +1849,8 @@ fn render(name: read String) -> fresh User {
 #[test]
 fn rust_lowering_maps_protocol_static_dispatch_to_rust_traits() {
     let source = r#"
+features: local
+
 protocol Writer {
     fn write(
         self: mut Self,
@@ -1852,6 +1896,8 @@ fn write_line<W: Writer>(
 #[test]
 fn rust_lowering_uses_trait_qualified_ufcs_for_receiver_protocol_calls() {
     let source = r#"
+features: local
+
 protocol Writer {
     fn write(self: mut Self, message: read String) -> Unit
 }
@@ -1882,6 +1928,8 @@ fn write_line<W: Writer>(writer: mut W, message: read String) -> Unit {
 #[test]
 fn rust_lowering_uses_trait_qualified_ufcs_for_concrete_receiver_protocol_impl_calls() {
     let source = r#"
+features: local
+
 protocol Writer {
     fn write(self: mut Self, message: read String) -> Unit
 }
@@ -1907,6 +1955,150 @@ fn write_line(writer: mut BufferWriter, message: read String) -> Unit {
 
     assert!(rust.contains("<BufferWriter as Writer>::write(&mut writer, &message);"));
     assert!(!rust.contains("BufferWriter::write(&mut writer, &message);"));
+}
+
+#[test]
+fn rust_lowering_generates_sealed_capability_object_for_protocol_impls() {
+    let source = r#"
+features: local
+
+protocol Writer {
+    fn write(self: mut Self, message: read String) -> Unit
+}
+
+struct BufferWriter {
+    count: Int
+}
+
+fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit {
+    Log.write(message: read message)
+}
+
+impl Writer for BufferWriter {
+    write = BufferWriter.write
+}
+
+fn write_dynamic(writer: take BufferWriter, message: read String) -> Unit {
+    local cap: Capability<Writer> = Capability<Writer>.from(value: take writer)
+    Writer.write(self: mut cap, message: read message)
+}
+"#;
+    let rust =
+        lower_source_to_rust("capability-object-lower.rss", source).expect("source should lower");
+
+    assert!(rust.contains("pub enum CapabilityWriter"));
+    assert!(rust.contains("BufferWriter(BufferWriter)"));
+    assert!(rust.contains("impl Writer for CapabilityWriter"));
+    assert!(rust.contains("CapabilityWriter::BufferWriter(writer)"));
+    assert!(rust.contains("Writer::write(&mut cap, &message);"));
+    assert!(!rust.contains("dyn Writer"));
+}
+
+#[test]
+fn rust_lowering_resolves_receiver_calls_through_capability_object_protocol() {
+    let source = r#"
+features: local
+
+protocol Writer {
+    fn write(self: mut Self, message: read String) -> Unit
+}
+
+struct BufferWriter {
+    count: Int
+}
+
+fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit {
+    Log.write(message: read message)
+}
+
+impl Writer for BufferWriter {
+    write = BufferWriter.write
+}
+
+fn write_dynamic(writer: take BufferWriter, message: read String) -> Unit {
+    local cap: Capability<Writer> = Capability<Writer>.from(value: take writer)
+    mut cap.write(message: read message)
+}
+"#;
+    let rust =
+        lower_source_to_rust("capability-receiver-lower.rss", source).expect("source should lower");
+
+    assert!(rust.contains("<CapabilityWriter as Writer>::write(&mut cap, &message);"));
+}
+
+#[test]
+fn checker_rejects_capability_object_without_visible_protocol_impl() {
+    let source = r#"
+protocol Writer {
+    fn write(self: mut Self, message: read String) -> Unit
+}
+
+struct NotWriter {
+    count: Int
+}
+
+fn write_dynamic(writer: take NotWriter) -> Unit {
+    local cap: Capability<Writer> = Capability<Writer>.from(value: take writer)
+}
+"#;
+    let diagnostics = analyze_source_with_core("capability-reject.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0032"
+                && diagnostic.summary.contains("Capability<Writer>")),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn review_map_marks_capability_construction_and_dynamic_protocol_dispatch() {
+    let source = r#"
+protocol Writer {
+    fn write(self: mut Self, message: read String) -> Unit
+}
+
+struct BufferWriter {
+    count: Int
+}
+
+fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit {
+    Log.write(message: read message)
+}
+
+impl Writer for BufferWriter {
+    write = BufferWriter.write
+}
+
+fn write_dynamic(writer: take BufferWriter, message: read String) -> Unit {
+    local cap: Capability<Writer> = Capability<Writer>.from(value: take writer)
+    mut cap.write(message: read message)
+}
+"#;
+    let map = review_map_sources(vec![("capability-review.rss", source)]);
+    let region = map.files[0]
+        .regions
+        .iter()
+        .find(|region| region.function == "write_dynamic")
+        .expect("write_dynamic should be present");
+
+    assert_eq!(
+        region.classification,
+        ReviewMapClassification::ReviewRequired
+    );
+    assert!(
+        region
+            .reasons
+            .iter()
+            .any(|reason| reason == "capability object construction")
+    );
+    assert!(
+        region
+            .reasons
+            .iter()
+            .any(|reason| reason == "dynamic protocol dispatch")
+    );
 }
 
 #[test]

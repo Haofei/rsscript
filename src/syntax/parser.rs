@@ -993,6 +993,7 @@ fn parse_params(tokens: &[Token], start: usize, end: usize) -> ParsedParams {
                     malformed_arg_spans: Vec::new(),
                     is_fresh: false,
                     is_noescape: false,
+                    is_owned: false,
                     fn_params: Vec::new(),
                     fn_return: None,
                     span: tokens[start].span.clone(),
@@ -1012,6 +1013,7 @@ fn parse_params(tokens: &[Token], start: usize, end: usize) -> ParsedParams {
             malformed_arg_spans: Vec::new(),
             is_fresh: false,
             is_noescape: false,
+            is_owned: false,
             fn_params: Vec::new(),
             fn_return: None,
             span: tokens[start].span.clone(),
@@ -2435,11 +2437,15 @@ fn parse_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<TypeRef>
         .get(start)
         .and_then(ident_name)
         .is_some_and(|name| name == "noescape");
+    let is_owned = tokens
+        .get(start)
+        .and_then(ident_name)
+        .is_some_and(|name| name == "owned");
     let name_index = (start..end).find(|index| {
         ident_name(&tokens[*index]).is_some_and(|name| {
             !matches!(
                 name,
-                "read" | "mut" | "take" | "fresh" | "handle" | "weak" | "noescape"
+                "read" | "mut" | "take" | "fresh" | "handle" | "weak" | "noescape" | "owned"
             )
         })
     })?;
@@ -2498,6 +2504,7 @@ fn parse_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<TypeRef>
         malformed_arg_spans,
         is_fresh,
         is_noescape,
+        is_owned,
         fn_params,
         fn_return,
         span: tokens[name_index].span.clone(),
@@ -2546,6 +2553,8 @@ fn type_ref_name(ty: &TypeRef) -> String {
     };
     let name = if ty.is_noescape {
         format!("noescape {base}")
+    } else if ty.is_owned {
+        format!("owned {base}")
     } else {
         base
     };

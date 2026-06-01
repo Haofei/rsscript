@@ -944,6 +944,7 @@ fn check_call_args(
         check_enum_variant_form(analyzer, callee, args, call_span);
         return;
     }
+    check_capability_from_call(analyzer, function, callee, args, call_span);
 
     for arg in args {
         if arg.name.is_none() {
@@ -1278,6 +1279,11 @@ fn type_satisfies_protocol_bound(
     protocol: &str,
 ) -> bool {
     let actual_root = type_root_name(strip_fresh_type(actual));
+    if capability_protocol(actual)
+        .is_some_and(|capability_protocol| capability_protocol == protocol)
+    {
+        return true;
+    }
     if protocol == "Ord" && builtin_type_is_ord(actual_root) {
         return true;
     }
@@ -1303,6 +1309,55 @@ fn type_satisfies_protocol_bound(
     type_derives_protocol(&analyzer.syntax_program.items, actual_root, protocol)
 }
 
+fn check_capability_from_call(
+    analyzer: &mut Analyzer<'_>,
+    function: &FunctionDecl,
+    callee: &Callee,
+    args: &[HirCallArg],
+    call_span: &Span,
+) {
+    let Some(protocol) = capability_from_protocol(callee) else {
+        return;
+    };
+    if !analyzer.protocol_name_is_visible(protocol) {
+        return;
+    }
+    let Some(value_arg) = args
+        .iter()
+        .find(|arg| arg.name.as_deref() == Some("value"))
+        .or_else(|| args.first())
+    else {
+        return;
+    };
+    let Some(value_type) = hir_expr_type_name(&value_arg.value) else {
+        analyzer.diagnostics.push(capability_from_diagnostic(
+            protocol,
+            "<unknown>",
+            call_span.clone(),
+            "Capability construction requires a typed value binding.",
+        ));
+        return;
+    };
+    let value_type = strip_fresh_type(value_type);
+    if capability_protocol(value_type).is_some() {
+        analyzer.diagnostics.push(capability_from_diagnostic(
+            protocol,
+            value_type,
+            call_span.clone(),
+            "Nested capability objects are not supported; wrap a concrete implementation value.",
+        ));
+        return;
+    }
+    if !type_satisfies_protocol_bound(analyzer, function, value_type, protocol) {
+        analyzer.diagnostics.push(capability_from_diagnostic(
+            protocol,
+            value_type,
+            call_span.clone(),
+            "The wrapped value must satisfy the capability protocol via an explicit impl.",
+        ));
+    }
+}
+
 fn builtin_type_is_ord(type_name: &str) -> bool {
     matches!(type_name, "Int" | "String" | "Bool")
 }
@@ -1320,6 +1375,47 @@ fn type_derives_protocol(items: &[Item], type_name: &str, protocol: &str) -> boo
         }
         _ => false,
     })
+}
+
+fn capability_protocol(type_name: &str) -> Option<&str> {
+    let root = type_root_name(strip_fresh_type(type_name));
+    if root != "Capability" {
+        return None;
+    }
+    type_arg_names(type_name).and_then(|args| args.first().copied())
+}
+
+fn capability_from_protocol(callee: &Callee) -> Option<&str> {
+    let Callee::Qualified { namespace, name } = callee else {
+        return None;
+    };
+    if type_root_name(namespace) != "Capability" || type_root_name(name) != "from" {
+        return None;
+    }
+    type_arg_names(namespace).and_then(|args| args.first().copied())
+}
+
+fn capability_from_diagnostic(
+    protocol: &str,
+    value_type: &str,
+    span: Span,
+    cause: &'static str,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::PROTOCOL_NOT_SATISFIED,
+        format!("cannot construct `Capability<{protocol}>` from `{value_type}`."),
+        span,
+        "capability protocol not satisfied",
+    )
+    .with_cause(cause)
+    .with_cause(
+        "Capability objects are explicit dynamic protocol boundaries; construction requires a concrete value with a visible protocol implementation.",
+    )
+    .with_fix(
+        "add_protocol_impl",
+        format!("Declare `impl {protocol} for {value_type} {{ ... }}` or wrap a value that already satisfies `{protocol}`."),
+        "manual",
+    )
 }
 
 fn check_enum_variant_form(
@@ -3867,6 +3963,8 @@ fn type_ref_name(ty: &TypeRef) -> String {
     };
     let name = if ty.is_noescape {
         format!("noescape {base}")
+    } else if ty.is_owned {
+        format!("owned {base}")
     } else {
         base
     };
@@ -3917,6 +4015,7 @@ fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str>> {
     match root {
         "List" | "Set" | "Option" | "ResourcePool" | "Channel" | "Sender" | "Receiver"
         | "Stream" => Some(vec!["T"]),
+        "Capability" => Some(vec!["P"]),
         "Map" | "Result" => Some(vec!["K", "V"]),
         _ => None,
     }

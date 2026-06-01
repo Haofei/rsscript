@@ -254,6 +254,10 @@ pub struct TypeRef {
     pub malformed_arg_spans: Vec<Span>,
     pub is_fresh: bool,
     pub is_noescape: bool,
+    /// `owned Fn(...)`: an owning/stored closure (e.g. a lazy pool factory that the
+    /// pool retains and calls on demand). Unlike `noescape`, it escapes the call
+    /// and may consume its captures, so it must capture owned values.
+    pub is_owned: bool,
     pub fn_params: Vec<TypeRef>,
     pub fn_return: Option<Box<TypeRef>>,
     pub span: Span,

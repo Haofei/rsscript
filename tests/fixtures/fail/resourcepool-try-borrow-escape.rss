@@ -1,0 +1,24 @@
+// expect: RS0702
+features: local
+
+resource Session {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+fn Session.open(host: read String) -> Session
+
+// `try_borrow` produces a scoped lease just like `borrow`, so it must be consumed
+// by `with`. Binding it to a value lets the lease escape the scoped model.
+fn run(host: read String) -> Result<Unit, PoolError> {
+    local pool_host = String.concat(left: read host, right: read "")
+    local pool = ResourcePool<Session>.lazy(
+        create: || Session.open(host: read pool_host),
+        max_size: 2,
+    )
+    let lease = ResourcePool.try_borrow(pool: mut pool)?
+    return Ok(Unit)
+}

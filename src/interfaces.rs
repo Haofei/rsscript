@@ -24,6 +24,10 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../core/channel/channel.rssi"),
     ),
     (
+        "core/capability/capability.rssi",
+        include_str!("../core/capability/capability.rssi"),
+    ),
+    (
         "core/cache/cache.rssi",
         include_str!("../core/cache/cache.rssi"),
     ),

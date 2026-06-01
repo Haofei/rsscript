@@ -1,0 +1,39 @@
+features: local
+
+// An eager pool may size `max_size` from a `const` (a reviewable, controlled
+// constant) as well as a literal. `try_borrow` returns a `PoolError` on
+// exhaustion, and `stats` reports occupancy.
+
+const POOL_SIZE: Int = 4
+
+resource Session {
+    fd: Int
+
+    drop {
+        OS.close(fd: fd)
+    }
+}
+
+fn Session.open(host: read String) -> Session
+fn Session.ping(session: mut Session) -> Result<Unit, PoolError>
+
+fn run(host: read String) -> Result<Unit, PoolError> {
+    local pool = ResourcePool<Session>.new(
+        create: || Session.open(host: read host),
+        max_size: POOL_SIZE,
+    )
+
+    with ResourcePool.try_borrow(pool: mut pool)? as conn {
+        Session.ping(session: mut conn)?
+    }
+
+    let snapshot = ResourcePool.stats(pool: mut pool)
+    if PoolStats.available(stats: read snapshot) > 0 {
+        Log.write(message: read "pool has idle connections")
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Unit {
+    return Unit
+}

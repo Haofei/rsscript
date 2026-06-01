@@ -196,6 +196,33 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "message",
         "rsscript_runtime::channel_error_message",
     ),
+    runtime_intrinsic("ResourcePool", "stats", "rsscript_runtime::pool_stats"),
+    runtime_intrinsic(
+        "ResourcePool",
+        "discard",
+        "rsscript_runtime::resource_lease_discard",
+    ),
+    runtime_intrinsic(
+        "PoolStats",
+        "capacity",
+        "rsscript_runtime::pool_stats_capacity",
+    ),
+    runtime_intrinsic(
+        "PoolStats",
+        "created",
+        "rsscript_runtime::pool_stats_created",
+    ),
+    runtime_intrinsic(
+        "PoolStats",
+        "available",
+        "rsscript_runtime::pool_stats_available",
+    ),
+    runtime_intrinsic("PoolStats", "in_use", "rsscript_runtime::pool_stats_in_use"),
+    runtime_intrinsic(
+        "PoolError",
+        "message",
+        "rsscript_runtime::pool_error_message",
+    ),
     runtime_intrinsic(
         "Deadline",
         "after_ms",

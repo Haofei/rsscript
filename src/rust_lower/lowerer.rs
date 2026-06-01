@@ -136,6 +136,7 @@ impl<'a> RustLowerer<'a> {
             }
         }
         self.lower_protocol_traits(&mut out);
+        self.lower_capability_enums(&mut out);
         for item in &self.program.items {
             match item {
                 Item::Type(_)
@@ -152,6 +153,7 @@ impl<'a> RustLowerer<'a> {
             }
         }
         self.lower_protocol_impls(&mut out);
+        self.lower_capability_impls(&mut out);
         while out.ends_with("\n\n") {
             out.pop();
         }
@@ -245,6 +247,96 @@ impl<'a> RustLowerer<'a> {
             }
             out.push_str("}\n\n");
         }
+    }
+
+    fn lower_capability_enums(&mut self, out: &mut String) {
+        for protocol in &self.program.protocols {
+            let impls = self.protocol_capability_impls(&protocol.name);
+            if impls.is_empty() {
+                continue;
+            }
+            out.push_str(&format!(
+                "pub enum {} {{\n",
+                capability_enum_name(&protocol.name)
+            ));
+            for protocol_impl in impls {
+                out.push_str(&format!(
+                    "    {}({}),\n",
+                    rust_ident(&protocol_impl.type_name),
+                    rust_ident(&protocol_impl.type_name)
+                ));
+            }
+            out.push_str("}\n\n");
+        }
+    }
+
+    fn lower_capability_impls(&mut self, out: &mut String) {
+        for protocol in &self.program.protocols {
+            let impls = self.protocol_capability_impls(&protocol.name);
+            if impls.is_empty() {
+                continue;
+            }
+            out.push_str(&format!(
+                "impl {} for {} {{\n",
+                rust_ident(&protocol.name),
+                capability_enum_name(&protocol.name)
+            ));
+            for method in protocol_methods(self.program, &protocol.name) {
+                out.push_str("    fn ");
+                out.push_str(&rust_ident(protocol_method_name(&method.name)));
+                out.push('(');
+                out.push_str(&self.lower_protocol_trait_params(method));
+                out.push(')');
+                let returns_unit = method
+                    .return_ty
+                    .as_ref()
+                    .is_none_or(|return_ty| return_ty.name == "Unit");
+                if let Some(return_ty) = &method.return_ty {
+                    out.push_str(" -> ");
+                    out.push_str(&self.lower_return_type(return_ty, method.returns_fresh));
+                }
+                out.push_str(" {\n        ");
+                if !returns_unit {
+                    out.push_str("return ");
+                }
+                out.push_str("match self {\n");
+                for protocol_impl in &impls {
+                    let Some(mapping) = protocol_impl
+                        .mappings
+                        .iter()
+                        .find(|mapping| mapping.method == protocol_method_name(&method.name))
+                    else {
+                        continue;
+                    };
+                    out.push_str(&format!(
+                        "            {}::{}(inner) => {}({}),\n",
+                        capability_enum_name(&protocol.name),
+                        rust_ident(&protocol_impl.type_name),
+                        rust_function_ident(&mapping.target),
+                        method
+                            .params
+                            .iter()
+                            .map(capability_impl_forward_arg)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+                out.push_str("        }");
+                if returns_unit {
+                    out.push(';');
+                }
+                out.push_str("\n    }\n");
+            }
+            out.push_str("}\n\n");
+        }
+    }
+
+    fn protocol_capability_impls(&self, protocol: &str) -> Vec<&crate::syntax::ast::ProtocolImpl> {
+        self.program
+            .protocol_impls
+            .iter()
+            .filter(|protocol_impl| protocol_impl.protocol == protocol)
+            .collect()
     }
 
     fn protocol_impl_namespace(&self, receiver_type: &str, method: &str) -> Option<String> {
@@ -1161,7 +1253,7 @@ impl<'a> RustLowerer<'a> {
                         rust_ident(&stmt.name),
                         lowered
                     ));
-                    if let Some(ty) = inferred_ty {
+                    if let Some(ty) = stmt.type_annotation.clone().or(inferred_ty) {
                         self.value_types.insert(stmt.name.clone(), ty);
                     }
                     if self.expr_lowers_to_managed_handle(value) {
@@ -1791,11 +1883,15 @@ impl<'a> RustLowerer<'a> {
                     effect,
                 } = callee
                 {
-                    let receiver_type_name = self
-                        .value_types
-                        .get(receiver)
-                        .map(|ty| ty.name.clone())
+                    let receiver_type = self.value_types.get(receiver).cloned();
+                    let receiver_type_name = receiver_type
+                        .as_ref()
+                        .map(type_ref_display_name)
                         .unwrap_or_else(|| receiver.clone());
+                    let receiver_rust_type = receiver_type
+                        .as_ref()
+                        .map(|ty| self.lower_type_ref(ty, ManagedPosition::Bare))
+                        .unwrap_or_else(|| rust_ident(&receiver_type_name));
                     // Resolve namespace: check generic protocol bounds first,
                     // then concrete protocol impls, then fall back to the type
                     // name itself. This mirrors HIR receiver-call resolution for
@@ -1804,6 +1900,9 @@ impl<'a> RustLowerer<'a> {
                         .generic_protocol_bounds
                         .get(&receiver_type_name)
                         .cloned()
+                        .or_else(|| {
+                            capability_protocol_name(&receiver_type_name).map(str::to_string)
+                        })
                         .or_else(|| self.protocol_impl_namespace(&receiver_type_name, method))
                         .unwrap_or(receiver_type_name.clone());
                     let is_protocol = self.protocol_names.contains(&namespace);
@@ -1825,7 +1924,7 @@ impl<'a> RustLowerer<'a> {
                     let callee_str = if is_protocol {
                         format!(
                             "<{} as {}>::{}",
-                            rust_ident(&receiver_type_name),
+                            receiver_rust_type,
                             rust_ident(&namespace),
                             rust_ident(method)
                         )
@@ -1858,6 +1957,15 @@ impl<'a> RustLowerer<'a> {
                 if is_resource_pool_try_new_callee(callee) {
                     return lower_resource_pool_try_new_call(self, args, span);
                 }
+                if is_resource_pool_lazy_callee(callee) {
+                    return lower_resource_pool_lazy_call(self, args, span);
+                }
+                if is_resource_pool_try_lazy_callee(callee) {
+                    return lower_resource_pool_try_lazy_call(self, args, span);
+                }
+                if let Some(protocol) = capability_from_protocol(callee) {
+                    return self.lower_capability_from_call(protocol, args);
+                }
                 if self.is_protocol_callee(callee) {
                     let lowered_callee = lower_protocol_callee(callee);
                     let args = args
@@ -1871,6 +1979,8 @@ impl<'a> RustLowerer<'a> {
                 let is_resource_pool_borrow = is_resource_pool_borrow_callee(callee);
                 let lowered_callee = if is_resource_pool_borrow {
                     "rsscript_runtime::ResourcePool::borrow_at".to_string()
+                } else if is_resource_pool_try_borrow_callee(callee) {
+                    "rsscript_runtime::ResourcePool::try_borrow".to_string()
                 } else {
                     lower_callee(callee)
                 };
@@ -2087,6 +2197,28 @@ impl<'a> RustLowerer<'a> {
         self.lower_expr(&arg.value)
     }
 
+    fn lower_capability_from_call(&mut self, protocol: &str, args: &[CallArg]) -> String {
+        let Some(value_arg) = args
+            .iter()
+            .find(|arg| arg.name.as_deref() == Some("value"))
+            .or_else(|| args.first())
+        else {
+            return format!("{}::/* missing value */", capability_enum_name(protocol));
+        };
+        let value_type = self.infer_expr_type(&value_arg.value);
+        let value_type_name = value_type
+            .as_ref()
+            .map(type_ref_display_name)
+            .unwrap_or_else(|| "Unknown".to_string());
+        let value_type_root = type_root_name(&value_type_name);
+        format!(
+            "{}::{}({})",
+            capability_enum_name(protocol),
+            rust_ident(value_type_root),
+            self.lower_expr(&value_arg.value)
+        )
+    }
+
     fn call_arg_is_retained(&self, callee: &Callee, arg: &CallArg, _index: usize) -> bool {
         let Some(name) = arg.name.as_deref() else {
             return false;
@@ -2172,10 +2304,35 @@ impl<'a> RustLowerer<'a> {
                 malformed_arg_spans: Vec::new(),
                 is_fresh: false,
                 is_noescape: false,
+                is_owned: false,
                 fn_params: Vec::new(),
                 fn_return: None,
                 span: span.clone(),
             }),
+            Expr::Call { callee, span, .. } if capability_from_protocol(callee).is_some() => {
+                let protocol = capability_from_protocol(callee)?;
+                Some(TypeRef {
+                    name: "Capability".to_string(),
+                    args: vec![TypeRef {
+                        name: protocol.to_string(),
+                        args: Vec::new(),
+                        malformed_arg_spans: Vec::new(),
+                        is_fresh: false,
+                        is_noescape: false,
+                        is_owned: false,
+                        fn_params: Vec::new(),
+                        fn_return: None,
+                        span: span.clone(),
+                    }],
+                    malformed_arg_spans: Vec::new(),
+                    is_fresh: false,
+                    is_noescape: false,
+                    is_owned: false,
+                    fn_params: Vec::new(),
+                    fn_return: None,
+                    span: span.clone(),
+                })
+            }
             Expr::Call {
                 callee: Callee::Name(name),
                 ..
@@ -2193,6 +2350,7 @@ impl<'a> RustLowerer<'a> {
                 .function_return_types
                 .get(&native_boundary_callee_key(callee))
                 .cloned(),
+            Expr::Effect { value, .. } => self.infer_expr_type(value),
             Expr::Manage { value, .. } => self.infer_expr_type(value),
             Expr::Try { value, .. } => self
                 .infer_expr_type(value)
@@ -2283,6 +2441,7 @@ impl<'a> RustLowerer<'a> {
             "Option",
             "Result",
             "ResourcePool",
+            "Capability",
         ];
         if ty.args.is_empty() || !GENERIC_CONTAINERS.contains(&ty.name.as_str()) {
             return None;
@@ -2305,7 +2464,10 @@ impl<'a> RustLowerer<'a> {
                 )
             });
             let return_ty = return_ty.unwrap_or_default();
-            return match (ty.is_noescape, position) {
+            // `owned Fn` is a stored/owning closure; like `noescape` here it lowers
+            // to an `FnMut` surface (lazy pool factories, its only use today, are
+            // special-cased in the call lowerer, so this is a forward-compat path).
+            return match (ty.is_noescape || ty.is_owned, position) {
                 (true, ManagedPosition::Param) => {
                     format!("impl FnMut({params}){return_ty}")
                 }
@@ -2373,6 +2535,8 @@ impl<'a> RustLowerer<'a> {
                 self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
             ),
             "ChannelError" => "rsscript_runtime::ChannelError".to_string(),
+            "PoolStats" => "rsscript_runtime::PoolStats".to_string(),
+            "PoolError" => "rsscript_runtime::PoolError".to_string(),
             "Regex" => "rsscript_runtime::RssRegex".to_string(),
             "RegexError" => "rsscript_runtime::RegexError".to_string(),
             "TempDir" => "rsscript_runtime::TempDir".to_string(),
@@ -2429,6 +2593,7 @@ impl<'a> RustLowerer<'a> {
                 "rsscript_runtime::ResourcePool<{}>",
                 self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
             ),
+            "Capability" if ty.args.len() == 1 => capability_enum_name(&ty.args[0].name),
             _ => {
                 let name = rust_ident(&ty.name);
                 if ty.args.is_empty() {
@@ -2594,6 +2759,50 @@ fn match_pattern_span(pattern: &MatchPattern) -> Span {
     match pattern {
         MatchPattern::Variant { span, .. } | MatchPattern::Wildcard(span) => span.clone(),
     }
+}
+
+fn capability_enum_name(protocol: &str) -> String {
+    format!("Capability{}", rust_ident(protocol))
+}
+
+fn capability_impl_forward_arg(param: &Param) -> String {
+    if param.name == "self" {
+        "inner".to_string()
+    } else {
+        rust_value_ident(&param.name)
+    }
+}
+
+fn capability_from_protocol(callee: &Callee) -> Option<&str> {
+    let Callee::Qualified { namespace, name } = callee else {
+        return None;
+    };
+    if type_root_name(namespace) != "Capability" || type_root_name(name) != "from" {
+        return None;
+    }
+    type_arg_names(namespace).and_then(|args| args.first().copied())
+}
+
+fn capability_protocol_name(type_name: &str) -> Option<&str> {
+    if type_root_name(type_name) != "Capability" {
+        return None;
+    }
+    type_arg_names(type_name).and_then(|args| args.first().copied())
+}
+
+fn type_ref_display_name(ty: &TypeRef) -> String {
+    if ty.args.is_empty() {
+        return ty.name.clone();
+    }
+    format!(
+        "{}<{}>",
+        ty.name,
+        ty.args
+            .iter()
+            .map(type_ref_display_name)
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 fn generated_line_count(generated: &str) -> usize {

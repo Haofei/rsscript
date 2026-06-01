@@ -1,0 +1,14 @@
+features: local
+
+// Explicit dynamic capability object. The protocol argument is a protocol name,
+// not a Rust trait object; lowering uses a compiler-owned sealed dispatch enum.
+//
+// Construct with:
+//   local cap: Capability<Writer> =
+//       Capability<Writer>.from(value: take concrete_writer)
+//
+// Call through the existing explicit protocol surface:
+//   Writer.write(self: mut cap, message: read msg)
+struct Capability<P>
+
+pub fn Capability.from<P, T>(value: take T) -> fresh Capability<P>

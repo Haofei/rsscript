@@ -711,6 +711,8 @@ fn type_ref_text(ty: &TypeRef) -> String {
     };
     if ty.is_noescape {
         format!("noescape {text}")
+    } else if ty.is_owned {
+        format!("owned {text}")
     } else {
         text
     }

@@ -58,6 +58,8 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
     ("ResourcePool factory contract violation", "RS0707"),
     ("ResourcePool max_size not a positive Int literal", "RS0708"),
     ("ResourcePool active lease conflict", "RS0709"),
+    ("discard requires a pool lease", "RS0710"),
+    ("lazy factory capture", "RS0711"),
     ("local captured by managed closure", "RS0801"),
     ("Fd used outside native/resource internals", "RS0023"),
     ("noescape callback escape", "RS0802"),
@@ -3210,7 +3212,7 @@ fn parser_keeps_top_level_fresh_as_function_contract() {
 }
 
 #[test]
-fn resource_pool_core_signatures_use_typed_noescape_factories() {
+fn resource_pool_core_signatures_use_typed_factory_closures() {
     let program = core_interfaces()
         .iter()
         .find_map(|(file, source)| {
@@ -3243,8 +3245,27 @@ fn resource_pool_core_signatures_use_typed_noescape_factories() {
         .iter()
         .find(|param| param.name == "create")
         .expect("ResourcePool.try_new should have create parameter");
+    let lazy_signature = functions
+        .iter()
+        .find(|function| function.name == "ResourcePool.lazy")
+        .expect("ResourcePool.lazy should be available from core interfaces");
+    let lazy_create = lazy_signature
+        .params
+        .iter()
+        .find(|param| param.name == "create")
+        .expect("ResourcePool.lazy should have create parameter");
+    let try_lazy_signature = functions
+        .iter()
+        .find(|function| function.name == "ResourcePool.try_lazy")
+        .expect("ResourcePool.try_lazy should be available from core interfaces");
+    let try_lazy_create = try_lazy_signature
+        .params
+        .iter()
+        .find(|param| param.name == "create")
+        .expect("ResourcePool.try_lazy should have create parameter");
 
     assert!(new_create.ty.is_noescape);
+    assert!(!new_create.ty.is_owned);
     assert_eq!(new_create.ty.name, "Fn");
     assert_eq!(
         new_create
@@ -3255,6 +3276,7 @@ fn resource_pool_core_signatures_use_typed_noescape_factories() {
         Some("T")
     );
     assert!(try_create.ty.is_noescape);
+    assert!(!try_create.ty.is_owned);
     assert_eq!(try_create.ty.name, "Fn");
     assert_eq!(
         try_create
@@ -3263,6 +3285,54 @@ fn resource_pool_core_signatures_use_typed_noescape_factories() {
             .as_ref()
             .map(|return_ty| return_ty.name.as_str()),
         Some("Result")
+    );
+    assert!(lazy_create.ty.is_owned);
+    assert!(!lazy_create.ty.is_noescape);
+    assert_eq!(lazy_create.ty.name, "Fn");
+    assert!(try_lazy_create.ty.is_owned);
+    assert!(!try_lazy_create.ty.is_noescape);
+    assert_eq!(try_lazy_create.ty.name, "Fn");
+}
+
+#[test]
+fn checker_rejects_user_authored_owned_fn_parameter_until_general_semantics_exist() {
+    let source = r#"
+fn Keep.store(callback: owned Fn() -> Unit) -> Unit
+"#;
+    let diagnostics = analyze_source("owned-fn.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0015"
+                && diagnostic.label == "unsupported owned position"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_allows_lazy_factory_internal_bindings_without_treating_them_as_captures() {
+    let source = r#"
+features: local
+
+fn run(max_connections: Int) -> Result<Unit, PoolError> {
+    local pool = ResourcePool<DbConnection>.lazy(
+        create: || {
+            local host = Url.from_string(value: read "db://local")
+            DbConnection.open(url: read host)
+        },
+        max_size: max_connections,
+    )
+    return Ok(Unit)
+}
+"#;
+    let diagnostics = analyze_source("lazy-internal-binding.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "RS0711"),
+        "{diagnostics:?}"
     );
 }
 
