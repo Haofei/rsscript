@@ -2177,8 +2177,9 @@ pub fn RuleLoader.load_rules(path: read Path) -> Result<fresh List<Rule>, Config
 }
 
 #[test]
-fn package_review_reir_maps_file_json_and_toml_facades_to_filesystem_capabilities() {
-    let temp_dir = common::unique_temp_dir("rsscript-package-review-file-json-toml-facades-reir");
+fn package_review_reir_maps_file_json_toml_and_yaml_facades_to_filesystem_capabilities() {
+    let temp_dir =
+        common::unique_temp_dir("rsscript-package-review-file-json-toml-yaml-facades-reir");
     common::write_named_package_fixture(
         &temp_dir,
         "rss-file-json-toml-facades",
@@ -2198,6 +2199,8 @@ pub fn Json.parse_file(path: read Path) -> Result<fresh JsonValue, JsonError>
 
 pub native fn Toml.parse_file(path: read Path) -> Result<fresh JsonValue, JsonError>
     effects(native)
+
+pub fn Yaml.parse_file(path: read Path) -> Result<fresh JsonValue, JsonError>
 "#,
     );
 
@@ -2213,6 +2216,7 @@ pub native fn Toml.parse_file(path: read Path) -> Result<fresh JsonValue, JsonEr
             "File.read_all_string",
             "Json.parse_file",
             "Toml.parse_file",
+            "Yaml.parse_file",
         ]
         .iter()
         .all(|name| {

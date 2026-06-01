@@ -1,0 +1,3 @@
+pub fn Yaml.parse(text: read String) -> Result<fresh JsonValue, JsonError>
+
+pub fn Yaml.parse_file(path: read Path) -> Result<fresh JsonValue, JsonError>

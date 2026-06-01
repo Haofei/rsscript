@@ -135,6 +135,10 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         "core/weak/weak.rssi",
         include_str!("../core/weak/weak.rssi"),
     ),
+    (
+        "core/yaml/yaml.rssi",
+        include_str!("../core/yaml/yaml.rssi"),
+    ),
 ];
 
 pub(crate) fn builtin_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {

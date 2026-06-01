@@ -784,6 +784,18 @@ pub fn toml_parse_file<P: RuntimePath + ?Sized>(path: &P) -> Result<JsonValue, J
     Ok(JsonValue { inner })
 }
 
+pub fn yaml_parse(text: &str) -> Result<JsonValue, JsonError> {
+    let value: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(text).map_err(|error| JsonError::new(error.to_string()))?;
+    let inner = serde_json::to_value(value)?;
+    Ok(JsonValue { inner })
+}
+
+pub fn yaml_parse_file<P: RuntimePath + ?Sized>(path: &P) -> Result<JsonValue, JsonError> {
+    let text = std::fs::read_to_string(path.as_path())?;
+    yaml_parse(&text)
+}
+
 pub fn json_field(value: &JsonValue, name: &str) -> Result<JsonValue, JsonError> {
     let Some(field) = value.inner.get(name) else {
         return Err(JsonError::new(format!("missing JSON field `{name}`")));
@@ -1052,4 +1064,30 @@ pub fn row_field_string(row: &Row, index: i64) -> Result<String, CsvError> {
         .get(index)
         .cloned()
         .ok_or_else(|| CsvError::new(format!("CSV field index `{index}` is out of bounds")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn yaml_parse_reuses_json_value_accessors() {
+        let value = yaml_parse("name: rss\nports:\n  - 8080\n  - 9090\n")
+            .expect("YAML should parse into a JsonValue");
+
+        let name = json_field(&value, "name").expect("name field exists");
+        assert_eq!(json_as_string(&name).expect("name is a string"), "rss");
+
+        let ports = json_field(&value, "ports").expect("ports field exists");
+        assert_eq!(json_array_len(&ports).expect("ports is an array"), 2);
+    }
+
+    #[test]
+    fn yaml_parse_reports_error_text() {
+        let error = yaml_parse("name: [unterminated\n").expect_err("invalid YAML should error");
+        assert!(
+            !json_error_message(&error).is_empty(),
+            "YAML parse error should carry a message"
+        );
+    }
 }

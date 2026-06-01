@@ -1,0 +1,18 @@
+fn main() -> Result<Unit, JsonError> {
+    let document = Yaml.parse(
+        text: read "service:\n  name: rss\n  port: 8080\ntags:\n  - cli\n  - server\n",
+    )?
+
+    let service = Json.field(value: read document, name: read "service")?
+    let name = Json.field_string(value: read service, name: read "name")?
+    let port = Json.field_int(value: read service, name: read "port")?
+
+    let tags = Json.field(value: read document, name: read "tags")?
+    let tag_count = Json.array_len(value: read tags)?
+
+    Assert.equal(left: read name, right: read "rss")
+    Assert.equal_int(left: port, right: 8080)
+    Assert.equal_int(left: tag_count, right: 2)
+    Log.write(message: read name)
+    return Ok(Unit)
+}

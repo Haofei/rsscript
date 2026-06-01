@@ -564,4 +564,6 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "rsscript_runtime::timer_sleep_native_start",
     ),
     runtime_intrinsic("Url", "from_string", "rsscript_runtime::url_from_string"),
+    runtime_intrinsic("Yaml", "parse", "rsscript_runtime::yaml_parse"),
+    runtime_intrinsic("Yaml", "parse_file", "rsscript_runtime::yaml_parse_file"),
 ];

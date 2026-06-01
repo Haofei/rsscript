@@ -4563,6 +4563,7 @@ fn standard_library_export_capabilities(export: &RsScriptPackageExport) -> Vec<C
         | "Image.load"
         | "Json.parse_file"
         | "Toml.parse_file"
+        | "Yaml.parse_file"
         | "File.open_read"
         | "File.read_all"
         | "File.read_all_string"
@@ -5302,6 +5303,13 @@ mod tests {
                 classification: "review_if_changed".to_owned(),
                 reasons: vec!["public function".to_owned()],
                 normalized_effects: vec!["native".to_owned()],
+            },
+            RsScriptPackageExport {
+                name: "Yaml.parse_file".to_owned(),
+                kind: "function".to_owned(),
+                classification: "review_if_changed".to_owned(),
+                reasons: vec!["public function".to_owned()],
+                normalized_effects: Vec::new(),
             },
             RsScriptPackageExport {
                 name: "File.open".to_owned(),
