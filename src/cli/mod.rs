@@ -11,6 +11,7 @@ use rsscript::{
 
 mod bbom;
 mod check;
+mod dev;
 mod fmt;
 mod lint;
 mod lower;
@@ -18,6 +19,7 @@ mod package;
 mod remap;
 mod review;
 mod run_cmd;
+mod test_cmd;
 mod verify;
 
 pub fn run() -> ExitCode {
@@ -29,6 +31,7 @@ pub fn run() -> ExitCode {
 
     match command {
         "check" => check::run_check(&args[2..]),
+        "dev" => dev::run_dev(&args[2..]),
         "bbom" => bbom::run_bbom(&args[2..]),
         "lint" => lint::run_lint(&args[2..]),
         "fmt" => fmt::run_fmt(&args[2..]),
@@ -43,6 +46,7 @@ pub fn run() -> ExitCode {
         }
         "lower" => lower::run_lower(&args[2..]),
         "run" => run_cmd::run_generated_rust(&args[2..]),
+        "test" => test_cmd::run_test(&args[2..]),
         "remap-rustc" => remap::run_remap_rustc(&args[2..]),
         "verify-rust" => verify::run_verify_rust(&args[2..]),
         _ => {
@@ -308,6 +312,9 @@ pub(crate) fn print_usage() {
     eprintln!("  rss check [--json] <package-directory>");
     eprintln!("  rss lint [--json] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>");
     eprintln!("  rss check --explain <code>");
+    eprintln!(
+        "  rss dev [--lint] [--run] [--release] [--json] [--once] [--core|--no-core] [--interface <file.rssi> ...] <file-or-package-directory>"
+    );
     eprintln!("  rss fmt <file.rss>");
     eprintln!("  rss lower --rust <file.rss>");
     eprintln!("  rss lower --rust <file.rss> --out-dir <directory>");
@@ -315,6 +322,7 @@ pub(crate) fn print_usage() {
     eprintln!(
         "  rss run [--json] [--release] <file-or-package-directory> --out-dir <directory> [-- <args>...]"
     );
+    eprintln!("  rss test [--json] [--filter <substring>] <manifest.rsstest.toml> [filter]");
     eprintln!("  rss remap-rustc [--json] <rsscript-source-map.json> <rustc-json-lines>");
     eprintln!("  rss verify-rust [--json] <file-or-package-directory>");
     eprintln!("  rss verify-rust [--json] <file-or-package-directory> --out-dir <directory>");

@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::fs;
+
 use serde::{Deserialize, Serialize};
 
 pub mod code {
@@ -238,34 +241,90 @@ pub fn format_diagnostic_explanation(explanation: &DiagnosticExplanation) -> Str
 }
 
 pub fn format_diagnostics_human(diagnostics: &[Diagnostic]) -> String {
+    let mut sources = SourceCache::default();
     let mut output = String::new();
     for diagnostic in diagnostics {
-        output.push_str(&format!(
-            "{}[{}]: {}\n\n",
-            diagnostic.severity.as_str(),
-            diagnostic.code,
-            diagnostic.summary
-        ));
-        output.push_str(&format!(
-            "  {}:{}:{}\n    {}{}\n",
-            diagnostic.span.file,
-            diagnostic.span.line,
-            diagnostic.span.column,
-            " ".repeat(diagnostic.span.column.saturating_sub(1)),
-            "^".repeat(diagnostic.span.length.max(1))
-        ));
-        if !diagnostic.label.is_empty() {
-            output.push_str(&format!("    {}\n", diagnostic.label));
+        format_one_diagnostic(&mut output, diagnostic, &mut sources);
+        output.push('\n');
+    }
+    output
+}
+
+/// Reads each referenced source file at most once so a diagnostics list with
+/// many entries in one file does not re-read it per diagnostic.
+#[derive(Default)]
+struct SourceCache {
+    files: HashMap<String, Option<Vec<String>>>,
+}
+
+impl SourceCache {
+    fn line(&mut self, file: &str, line: usize) -> Option<String> {
+        let lines = self
+            .files
+            .entry(file.to_string())
+            .or_insert_with(|| {
+                fs::read_to_string(file)
+                    .ok()
+                    .map(|contents| contents.lines().map(str::to_string).collect())
+            })
+            .as_ref()?;
+        line.checked_sub(1)
+            .and_then(|index| lines.get(index))
+            .cloned()
+    }
+}
+
+fn format_one_diagnostic(output: &mut String, diagnostic: &Diagnostic, sources: &mut SourceCache) {
+    let span = &diagnostic.span;
+    output.push_str(&format!(
+        "{}[{}]: {}\n",
+        diagnostic.severity.as_str(),
+        diagnostic.code,
+        diagnostic.summary
+    ));
+    output.push_str(&format!(
+        "  --> {}:{}:{}\n",
+        span.file, span.line, span.column
+    ));
+
+    let caret = format!(
+        "{}{}",
+        " ".repeat(span.column.saturating_sub(1)),
+        "^".repeat(span.length.max(1))
+    );
+    let labeled_caret = if diagnostic.label.is_empty() {
+        caret.clone()
+    } else {
+        format!("{caret} {}", diagnostic.label)
+    };
+
+    let has_notes = !diagnostic.causes.is_empty() || !diagnostic.fixes.is_empty();
+    if let Some(source_line) = sources.line(&span.file, span.line) {
+        // rustc-style gutter: the offending source line above an aligned caret.
+        let gutter = span.line.to_string();
+        let pad = " ".repeat(gutter.len());
+        output.push_str(&format!("{pad} |\n"));
+        output.push_str(&format!("{gutter} | {source_line}\n"));
+        output.push_str(&format!("{pad} | {labeled_caret}\n"));
+        if has_notes {
+            output.push_str(&format!("{pad} |\n"));
+            for cause in &diagnostic.causes {
+                output.push_str(&format!("{pad} = note: {cause}\n"));
+            }
+            for fix in &diagnostic.fixes {
+                output.push_str(&format!("{pad} = help: {}\n", fix.title));
+            }
         }
+    } else {
+        // Source unavailable (synthetic span or unreadable file): caret only.
+        output.push_str(&format!("    {labeled_caret}\n"));
         for cause in &diagnostic.causes {
-            output.push_str(&format!("\n  note: {cause}\n"));
+            output.push_str(&format!("  note: {cause}\n"));
         }
         for fix in &diagnostic.fixes {
             output.push_str(&format!("  help: {}\n", fix.title));
         }
-        output.push('\n');
     }
-    output
 }
 
 static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
@@ -762,5 +821,75 @@ impl<'a> From<&'a Diagnostic> for JsonDiagnostic<'a> {
             causes: &diagnostic.causes,
             fixes: &diagnostic.fixes,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_source(name: &str, contents: &str) -> String {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("{name}-{}-{nanos}.rss", std::process::id()));
+        fs::write(&path, contents).expect("temp source should write");
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn human_format_renders_source_context_line() {
+        let file = temp_source(
+            "diag-context",
+            "fn main() -> Unit {\n    read missing.value\n}\n",
+        );
+        let diagnostic = Diagnostic::error(
+            code::UNKNOWN_BINDING,
+            "unknown binding `missing`",
+            Span {
+                file: file.clone(),
+                line: 2,
+                column: 10,
+                length: 7,
+            },
+            "value identifier is not in scope",
+        )
+        .with_cause("bindings must resolve before lowering");
+
+        let rendered = format_diagnostics_human(std::slice::from_ref(&diagnostic));
+
+        assert!(rendered.contains("error[RS0026]: unknown binding `missing`"));
+        assert!(rendered.contains(&format!("--> {file}:2:10")));
+        // The offending source line is shown in the gutter.
+        assert!(rendered.contains("2 |     read missing.value"));
+        // Caret is aligned under column 10 and is 7 wide, with the label inline.
+        assert!(rendered.contains("^^^^^^^ value identifier is not in scope"));
+        assert!(rendered.contains("= note: bindings must resolve before lowering"));
+
+        fs::remove_file(file).ok();
+    }
+
+    #[test]
+    fn human_format_falls_back_when_source_missing() {
+        let diagnostic = Diagnostic::error(
+            code::UNKNOWN_BINDING,
+            "unknown binding `missing`",
+            Span {
+                file: "/nonexistent/path/does-not-exist.rss".to_string(),
+                line: 2,
+                column: 3,
+                length: 4,
+            },
+            "not in scope",
+        );
+
+        let rendered = format_diagnostics_human(std::slice::from_ref(&diagnostic));
+
+        assert!(rendered.contains("--> /nonexistent/path/does-not-exist.rss:2:3"));
+        // No gutter line; caret-only fallback with the label inline.
+        assert!(!rendered.contains(" | "));
+        assert!(rendered.contains("  ^^^^ not in scope"));
     }
 }

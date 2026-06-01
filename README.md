@@ -367,6 +367,10 @@ rss check    [--json] [--core|--no-core] [--interface <f.rssi> ...] <file.rss>
 rss check    [--json] <package-directory>
 rss check    --explain <code>
 rss lint     [--json] [--core|--no-core] [--interface <f.rssi> ...] <file.rss>
+rss dev      [--once] [--core|--no-core] [--interface <f.rssi> ...] <file-or-package-directory>
+rss dev      --lint [--once] [--core|--no-core] [--interface <f.rssi> ...] <file-or-package-directory>
+rss dev      --run [--release] [--once] <file-or-package-directory>
+rss dev      --json --once [...]   # --json requires --once
 rss fmt      <file.rss>
 rss review   [--json] --diff <old.rss> <new.rss>
 rss review   [--json] --map  <file-or-directory>
@@ -382,6 +386,7 @@ rss pkg      diff   [--json|--reir] <old-package-directory> <new-package-directo
 rss pkg      reir diff [--json] [--fail-on-change] --from <baseline-reir.json> --to <current-reir.json>
 rss lower    --rust  <file.rss> [--out-dir <directory>]
 rss run      [--json] <file-or-package-directory> [--out-dir <directory>] [-- <args>...]
+rss test     [--json] [--filter <substring>] <manifest.rsstest.toml> [filter]
 rss remap-rustc  [--json] <rsscript-source-map.json> <rustc-json-lines>
 rss verify-rust  [--json] <file-or-package-directory> [--out-dir <directory>]
 ```
@@ -390,6 +395,9 @@ rss verify-rust  [--json] <file-or-package-directory> [--out-dir <directory>]
 
 - `rss check` loads bundled core `.rssi` signatures by default for single files; pointed at a directory with `rsspkg.toml`, it runs package check.
 - `rss lint` reuses the frontend checks and emits warnings. The first lint is `RSL001` — public signatures over the review budget for parameter count, generics, effects, or nested-type depth.
+- `rss dev` is the inner-loop watcher: it reruns `rss check` (add `--lint`, or `--run` for the cargo-backed run path) on every save, polling source modification times with no extra dependency. The default `check` loop never invokes cargo, so frontend feedback stays in the tens-of-milliseconds range; `--once` runs a single pass for scripts and CI. It watches `.rss`, `.rssi`, `.toml`, and `.lock` files, skipping `target/`, `.git/`, and generated directories. To keep behavior unambiguous, `rss dev` rejects flag combinations it would otherwise ignore: `--json` requires `--once` (watch mode interleaves human status lines that would corrupt JSON); `--lint` runs the lint loop alone and is mutually exclusive with `--run`; `--release` applies only to `--run`; and `--run` does not accept `--core`/`--no-core`/`--interface` (those apply only to the check loop).
+- `rss test` is the native runner for `.rsstest.toml` manifests, mirroring the self-hosted `rss/test-runner` semantics (the `file_contains`, `command_success`, `command_stdout_contains`, `rss_run_success`, `rss_run_stdout_contains`, `rss_run_failure_contains`, `command_for_each_path`, and `command_for_each_file` kinds) without bootstrapping the self-hosted runner through cargo. `--filter` (or a second positional) selects tests by name substring, `--json` emits a machine-readable summary, and `command_for_each_*` kinds run in parallel (`jobs >= 1` fixes the worker count; `jobs <= 0` auto-sizes). The self-hosted `rss/test-runner` remains the dogfooding proof that RSScript can express its own runner.
+- Human diagnostics render the offending source line in a rustc-style gutter with an aligned caret and inline label (falling back to a caret-only view when the source file is unavailable, e.g. synthetic spans). `--json` output is unchanged.
 - `rss review --map` validates inputs first, so files with frontend errors get diagnostics instead of misleading classifications. `--json` reports `unknown_ratio` and `unknown_function_ratio` directly.
 - `rss pkg check` validates a local package: loads local path dependency `.rssi` contracts, checks package `.rssi` contracts against implementations or native bindings, rejects unresolved or conflicting dependency graphs, runs package review, compares the semantic lock against `rsspkg.lock`, and scans enabled native Rust wrappers with Cargo metadata. `[review.policy] deny_unknown = true` makes unknown review risk fail the check. `--reir` emits the CI gate status, graph/lock/native check facts, lock-change facts, native unsafe/build-time facts, and diagnostics as a REIR bundle.
 - `rss pkg review` treats `.rssi` files as the public semantic contract and summarizes public type/function/API counts plus direct dependency identities, mutating, retaining, resource, fresh-returning, native, unsafe, and unknown APIs, with per-export classifications. Frontend errors in `.rssi` contracts count as unknown exports. `--reir` emits package risk facts, direct dependency facts/edges, native boundary facts, and capability facts as a REIR bundle so it can feed `reir show`, `reir diff`, `reir merge`, `reir slice`, and bundle-mode `reir reconcile` directly.
