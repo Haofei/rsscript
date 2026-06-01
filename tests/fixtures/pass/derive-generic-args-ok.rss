@@ -1,0 +1,17 @@
+struct Key<T> derives(Eq, Hash) {
+    value: T
+}
+
+struct ConcreteHolder derives(Eq) {
+    key: Key<Int>
+    nested: Map<List<Int>, String>
+}
+
+struct GenericHolder<T> derives(Eq) {
+    key: Key<T>
+    direct: T
+}
+
+fn main() -> Unit {
+    return Unit
+}

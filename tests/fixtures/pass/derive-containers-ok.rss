@@ -1,0 +1,13 @@
+struct Settings derives(Eq, JsonEncode, JsonDecode) {
+    by_name: Map<String, Int>
+    labels: List<String>
+}
+
+struct Metrics derives(JsonEncode, JsonDecode) {
+    ratios: List<Float>
+    weights: Map<String, Float>
+}
+
+fn main() -> Unit {
+    return Unit
+}

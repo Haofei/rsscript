@@ -333,8 +333,18 @@ pub enum Stmt {
     Break(Span),
     Continue(Span),
     LetElse(LetElseStmt),
+    Assign(AssignStmt),
     Expr(Expr),
     Unknown(Span),
+}
+
+/// Controlled ordinary assignment to a mutable place: `x = e`, `obj.field = e`,
+/// or `list[i] = e`. The `target` is validated to be a place during checking.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssignStmt {
+    pub target: Expr,
+    pub value: Expr,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -350,6 +360,7 @@ pub struct LetStmt {
     pub type_annotation: Option<TypeRef>,
     pub value: Option<Expr>,
     pub is_async: bool,
+    pub is_mut: bool,
     pub malformed: bool,
     pub span: Span,
 }

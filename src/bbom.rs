@@ -8,7 +8,9 @@
 use serde::Serialize;
 
 use crate::review::{ReviewMapClassification, review_map_sources_with_interfaces};
-use crate::syntax::ast::{DataEffect, EffectDecl, FunctionDecl, Item, Program, TypeRef};
+use crate::syntax::ast::{
+    Block, DataEffect, EffectDecl, Expr, FunctionDecl, Item, Program, Stmt, TypeRef,
+};
 use crate::syntax::parse_source;
 
 #[derive(Debug, Clone, Serialize)]
@@ -49,6 +51,7 @@ pub enum BomMutationKind {
     TakeParameter,
     HandleFieldWrite,
     ManagedStateWrite,
+    LocalReassignment,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -203,6 +206,49 @@ pub fn behavior_bom_sources_with_interfaces(
     }
 }
 
+fn collect_assignment_mutations(block: &Block, function: &str, mutations: &mut Vec<BomMutation>) {
+    for statement in &block.statements {
+        match statement {
+            Stmt::Assign(stmt) => {
+                if let Some(root) = assign_target_root(&stmt.target) {
+                    mutations.push(BomMutation {
+                        target: root.to_string(),
+                        function: function.to_string(),
+                        kind: BomMutationKind::LocalReassignment,
+                    });
+                }
+            }
+            Stmt::With(stmt) => collect_assignment_mutations(&stmt.body, function, mutations),
+            Stmt::If(stmt) => {
+                collect_assignment_mutations(&stmt.then_body, function, mutations);
+                if let Some(else_body) = &stmt.else_body {
+                    collect_assignment_mutations(else_body, function, mutations);
+                }
+            }
+            Stmt::Loop(stmt) => collect_assignment_mutations(&stmt.body, function, mutations),
+            Stmt::For(stmt) => collect_assignment_mutations(&stmt.body, function, mutations),
+            Stmt::Match(stmt) => {
+                for arm in &stmt.arms {
+                    collect_assignment_mutations(&arm.body, function, mutations);
+                }
+            }
+            Stmt::TaskGroup(stmt) => collect_assignment_mutations(&stmt.body, function, mutations),
+            Stmt::LetElse(stmt) => {
+                collect_assignment_mutations(&stmt.else_body, function, mutations)
+            }
+            _ => {}
+        }
+    }
+}
+
+fn assign_target_root(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Ident(name, _) => Some(name.as_str()),
+        Expr::Field { base, .. } | Expr::Index { base, .. } => assign_target_root(base),
+        _ => None,
+    }
+}
+
 fn collect_function_behaviors(
     function: &FunctionDecl,
     mutations: &mut Vec<BomMutation>,
@@ -229,6 +275,10 @@ fn collect_function_behaviors(
             _ => {}
         }
     }
+
+    // Body-level controlled assignments (`x = e` on a `let mut` local) are
+    // review-visible mutations alongside parameter effects.
+    collect_assignment_mutations(&function.body, fname, mutations);
 
     // Effects declarations
     for effect in &function.effects {

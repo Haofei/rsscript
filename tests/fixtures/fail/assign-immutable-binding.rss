@@ -1,0 +1,7 @@
+// expect: RS0311
+
+fn main() -> Unit {
+    let count = 0
+    count = count + 1
+    return Unit
+}

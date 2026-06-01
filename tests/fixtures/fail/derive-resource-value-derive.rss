@@ -1,0 +1,9 @@
+// expect: RS0212
+
+resource ResourceValueDeriveSample derives(Eq) {
+    id: Int
+}
+
+fn main() -> Unit {
+    return Unit
+}

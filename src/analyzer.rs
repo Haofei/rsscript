@@ -10,8 +10,8 @@ use crate::interfaces::CORE_INTERFACES;
 use crate::lexer::{Token, lex};
 use crate::syntax::ast::merge_programs;
 use crate::syntax::ast::{
-    Block, Callee, DataEffect, EffectDecl, Expr, FunctionDecl, GenericBound, GenericParam, Item,
-    MatchPattern, Param, Stmt, TypeKind, TypeRef,
+    AssignStmt, Block, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl, GenericBound,
+    GenericParam, Item, MatchPattern, Param, Stmt, TypeKind, TypeRef,
 };
 use crate::syntax::parse_source;
 
@@ -245,6 +245,10 @@ fn collect_task_group_async_lets(
                 collect_task_group_async_lets_expr(&stmt.value, async_lets);
                 collect_task_group_async_lets(&stmt.else_body, async_lets);
             }
+            Stmt::Assign(stmt) => {
+                collect_task_group_async_lets_expr(&stmt.target, async_lets);
+                collect_task_group_async_lets_expr(&stmt.value, async_lets);
+            }
             Stmt::Expr(expr) => collect_task_group_async_lets_expr(expr, async_lets),
             Stmt::TaskGroup(_)
             | Stmt::MalformedWith(_)
@@ -300,6 +304,10 @@ fn collect_nested_task_group_async_lets(
             Stmt::LetElse(stmt) => {
                 collect_all_async_let_spans_expr(&stmt.value, async_lets);
                 collect_all_async_let_spans(&stmt.else_body, async_lets);
+            }
+            Stmt::Assign(stmt) => {
+                collect_all_async_let_spans_expr(&stmt.target, async_lets);
+                collect_all_async_let_spans_expr(&stmt.value, async_lets);
             }
             Stmt::Expr(expr) => collect_all_async_let_spans_expr(expr, async_lets),
             Stmt::Return(crate::syntax::ast::ReturnStmt {
@@ -367,6 +375,10 @@ fn collect_all_async_let_spans(block: &Block, async_lets: &mut Vec<crate::diagno
             Stmt::LetElse(stmt) => {
                 collect_all_async_let_spans_expr(&stmt.value, async_lets);
                 collect_all_async_let_spans(&stmt.else_body, async_lets);
+            }
+            Stmt::Assign(stmt) => {
+                collect_all_async_let_spans_expr(&stmt.target, async_lets);
+                collect_all_async_let_spans_expr(&stmt.value, async_lets);
             }
             Stmt::Expr(expr) => collect_all_async_let_spans_expr(expr, async_lets),
             Stmt::TaskGroup(_)
@@ -493,6 +505,10 @@ fn collect_task_group_awaited_handles(block: &Block, awaited: &mut HashSet<Strin
                 collect_task_group_awaited_handles_expr(&stmt.value, awaited);
                 collect_task_group_awaited_handles(&stmt.else_body, awaited);
             }
+            Stmt::Assign(stmt) => {
+                collect_task_group_awaited_handles_expr(&stmt.target, awaited);
+                collect_task_group_awaited_handles_expr(&stmt.value, awaited);
+            }
             Stmt::Expr(expr) => collect_task_group_awaited_handles_expr(expr, awaited),
             Stmt::TaskGroup(_)
             | Stmt::MalformedWith(_)
@@ -514,6 +530,10 @@ fn collect_direct_task_group_awaited_handles(block: &Block, awaited: &mut HashSe
                 if let Some(value) = &stmt.value {
                     collect_task_group_awaited_handles_expr(value, awaited);
                 }
+            }
+            Stmt::Assign(stmt) => {
+                collect_task_group_awaited_handles_expr(&stmt.target, awaited);
+                collect_task_group_awaited_handles_expr(&stmt.value, awaited);
             }
             Stmt::Expr(expr) => collect_task_group_awaited_handles_expr(expr, awaited),
             _ => {}
@@ -594,6 +614,13 @@ fn find_nested_task_group_await_span<'a>(
             Stmt::Return(stmt) => {
                 if let Some(value) = &stmt.value
                     && let Some(span) = find_nested_task_group_await_span_expr(value, name)
+                {
+                    return Some(span);
+                }
+            }
+            Stmt::Assign(stmt) => {
+                if let Some(span) = find_nested_task_group_await_span_expr(&stmt.target, name)
+                    .or_else(|| find_nested_task_group_await_span_expr(&stmt.value, name))
                 {
                     return Some(span);
                 }
@@ -691,6 +718,13 @@ fn find_task_group_await_span<'a>(
                     return Some(span);
                 }
                 if let Some(span) = find_task_group_await_span(&stmt.else_body, name) {
+                    return Some(span);
+                }
+            }
+            Stmt::Assign(stmt) => {
+                if let Some(span) = find_nested_task_group_await_span_expr(&stmt.target, name)
+                    .or_else(|| find_nested_task_group_await_span_expr(&stmt.value, name))
+                {
                     return Some(span);
                 }
             }
@@ -831,6 +865,8 @@ impl Analyzer<'_> {
         self.check_duplicate_file_features();
         self.check_removed_profile_declarations();
         self.check_unsupported_syntax();
+        self.check_derive_field_requirements();
+        self.check_assignments();
         self.check_match_exhaustiveness();
         self.check_duplicate_declarations();
         self.check_protocol_contracts();
@@ -1047,6 +1083,9 @@ impl Analyzer<'_> {
             }
             Item::Type(type_decl) => {
                 self.check_supported_derives(&type_decl.derives, &type_decl.span);
+                if type_decl.kind == TypeKind::Resource {
+                    self.check_resource_derives(&type_decl.derives, &type_decl.span);
+                }
                 for span in &type_decl.malformed_generic_param_spans {
                     self.unsupported_syntax(
                         span.clone(),
@@ -1106,6 +1145,182 @@ impl Analyzer<'_> {
                 "This name is not a compiler-owned RSScript derive. Supported derives are Debug, Clone, Eq, Ord, Hash, JsonEncode, JsonDecode, Schema, and ReviewSchema.",
             );
         }
+    }
+
+    /// Resources are move-only RAII values that default to `Debug` only. Value
+    /// derives (`Clone`, `Eq`, `Ord`, `Hash`, `JsonEncode`, `JsonDecode`) would
+    /// expand into generated Rust that copies or compares the resource — which
+    /// contradicts the move-only model and can leak a backend trait-bound error
+    /// — so only the implicit `Debug` and the review-only markers are allowed.
+    fn check_resource_derives(&mut self, derives: &[String], span: &crate::diagnostic::Span) {
+        for derive in derives {
+            // Unknown names are already reported by `check_supported_derives`.
+            if !supported_compiler_derive(derive)
+                || matches!(derive.as_str(), "Debug" | "Schema" | "ReviewSchema")
+            {
+                continue;
+            }
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::RESOURCE_DERIVE_UNSUPPORTED,
+                    format!("`{derive}` derive is not allowed on a resource."),
+                    span.clone(),
+                    "resources support only `Debug`, `Schema`, and `ReviewSchema`",
+                )
+                .with_cause(
+                    "Resources are move-only RAII values. Value derives such as `Clone`, `Eq`, `Ord`, `Hash`, `JsonEncode`, and `JsonDecode` would copy or compare the resource, which contradicts its move-only model.",
+                )
+                .with_fix(
+                    "remove_resource_derive",
+                    format!("Remove `{derive}` from the resource, or model the data as a `struct`."),
+                    "manual",
+                ),
+            );
+        }
+    }
+
+    /// A compiler-owned derive expands to generated Rust, so every field must
+    /// support it. This reports an RSScript diagnostic before lowering instead
+    /// of letting a `Float: Eq` style trait-bound error leak from rustc.
+    fn check_derive_field_requirements(&mut self) {
+        use crate::syntax::ast::Item;
+        let local_types = self.collect_local_value_types();
+        let mut violations: Vec<(crate::diagnostic::Span, String, String, &'static str)> =
+            Vec::new();
+
+        for item in &self.syntax_program.items {
+            let (derives, type_params, field_sets): (
+                &[String],
+                &[GenericParam],
+                Vec<&[FieldDecl]>,
+            ) = match item {
+                // Resources default to `Debug` only and hold special internal
+                // fields, so they are not part of structural-derive checking.
+                Item::Type(type_decl) if type_decl.kind != TypeKind::Resource => (
+                    &type_decl.derives,
+                    &type_decl.type_params,
+                    vec![type_decl.fields.as_slice()],
+                ),
+                Item::SumType(sum) => (
+                    &sum.derives,
+                    &sum.type_params,
+                    sum.variants
+                        .iter()
+                        .map(|variant| variant.fields.as_slice())
+                        .collect(),
+                ),
+                _ => continue,
+            };
+
+            let required = required_field_derives(derives);
+            if required.is_empty() {
+                continue;
+            }
+            let generic_params: HashSet<&str> = type_params
+                .iter()
+                .map(|param| param.name.as_str())
+                .collect();
+
+            for fields in &field_sets {
+                for field in fields.iter() {
+                    // `handle`/`weak` fields lower to `Managed<T>`/`WeakManaged<T>`,
+                    // which implement only `Clone`/`Debug` — never `Eq`, `Ord`,
+                    // `Hash`, or serde — so any required derive is unsupported.
+                    let managed = field.is_handle || field.is_weak;
+                    for &derive in &required {
+                        let supported = if managed {
+                            DeriveSupport::No
+                        } else {
+                            field_supports_derive(&field.ty, derive, &local_types, &generic_params)
+                        };
+                        if supported == DeriveSupport::No {
+                            let type_name = if field.is_handle {
+                                format!("handle {}", type_ref_name(&field.ty))
+                            } else if field.is_weak {
+                                format!("weak {}", type_ref_name(&field.ty))
+                            } else {
+                                type_ref_name(&field.ty)
+                            };
+                            violations.push((
+                                field.span.clone(),
+                                field.name.clone(),
+                                type_name,
+                                derive,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        for (span, field_name, type_name, derive) in violations {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::DERIVE_FIELD_UNSUPPORTED,
+                    format!("`{derive}` derive is not supported by field `{field_name}`."),
+                    span,
+                    format!("`{type_name}` does not support the `{derive}` derive"),
+                )
+                .with_cause(derive_requirement_cause(derive))
+                .with_fix(
+                    "remove_or_change_derive",
+                    format!(
+                        "Remove `{derive}` from the derive list, or change `{field_name}` to a type that supports it."
+                    ),
+                    "manual",
+                ),
+            );
+        }
+    }
+
+    /// Controlled ordinary assignment: `x = e` updates a `let mut` local. The
+    /// left side must be a place whose root is a reassignable local, and `mut`
+    /// must appear in the binding so mutation stays visible to the type system.
+    fn check_assignments(&mut self) {
+        use crate::syntax::ast::Item;
+        let diagnostics = {
+            let mut checker = AssignChecker::new(&self.hir);
+            for item in &self.syntax_program.items {
+                if let Item::Function(function) = item {
+                    checker.check_function(function);
+                }
+            }
+            checker.diagnostics
+        };
+        self.diagnostics.extend(diagnostics);
+    }
+
+    /// Map locally declared type names to whether they are value types (struct
+    /// or sum) and which derives they carry. Only locally declared types get a
+    /// definite verdict; interface/runtime types have hand-written impls and are
+    /// left to the backend.
+    fn collect_local_value_types(&self) -> HashMap<String, LocalTypeDerives> {
+        use crate::syntax::ast::Item;
+        let mut map = HashMap::new();
+        for item in &self.syntax_program.items {
+            match item {
+                Item::Type(type_decl) => {
+                    map.insert(
+                        type_decl.name.clone(),
+                        LocalTypeDerives {
+                            is_value: type_decl.kind == TypeKind::Struct,
+                            derives: type_decl.derives.iter().cloned().collect(),
+                        },
+                    );
+                }
+                Item::SumType(sum) => {
+                    map.insert(
+                        sum.name.clone(),
+                        LocalTypeDerives {
+                            is_value: true,
+                            derives: sum.derives.iter().cloned().collect(),
+                        },
+                    );
+                }
+                _ => {}
+            }
+        }
+        map
     }
 
     fn check_unsupported_syntax_type_ref(&mut self, ty: &TypeRef, allow_noescape_param: bool) {
@@ -1231,6 +1446,10 @@ impl Analyzer<'_> {
                 "malformed match statement",
                 "`match` statements must use `match value { pattern => ... }`.",
             ),
+            Stmt::Assign(stmt) => {
+                self.check_unsupported_syntax_expr(&stmt.target);
+                self.check_unsupported_syntax_expr(&stmt.value);
+            }
             Stmt::Expr(expr) => self.check_unsupported_syntax_expr(expr),
             Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Unknown(span) => self.unsupported_syntax(
@@ -2585,6 +2804,10 @@ impl Analyzer<'_> {
                     self.check_runtime_guarantee_expr(guarantee, function_name, value);
                 }
             }
+            Stmt::Assign(stmt) => {
+                self.check_runtime_guarantee_expr(guarantee, function_name, &stmt.target);
+                self.check_runtime_guarantee_expr(guarantee, function_name, &stmt.value);
+            }
             Stmt::Expr(value) => self.check_runtime_guarantee_expr(guarantee, function_name, value),
             Stmt::With(stmt) => {
                 if guarantee == RuntimeGuarantee::Pure {
@@ -2970,6 +3193,10 @@ impl Analyzer<'_> {
                     self.check_resource_pool_calls_in_expr(value);
                 }
             }
+            Stmt::Assign(stmt) => {
+                self.check_resource_pool_calls_in_expr(&stmt.target);
+                self.check_resource_pool_calls_in_expr(&stmt.value);
+            }
             Stmt::Expr(value) => self.check_resource_pool_calls_in_expr(value),
             Stmt::With(stmt) => {
                 self.check_resource_pool_calls_in_expr(&stmt.resource);
@@ -3080,6 +3307,10 @@ impl Analyzer<'_> {
                 if let Some(value) = &stmt.value {
                     self.check_resource_generic_calls_in_expr(value);
                 }
+            }
+            Stmt::Assign(stmt) => {
+                self.check_resource_generic_calls_in_expr(&stmt.target);
+                self.check_resource_generic_calls_in_expr(&stmt.value);
             }
             Stmt::Expr(value) => self.check_resource_generic_calls_in_expr(value),
             Stmt::With(stmt) => {
@@ -3670,14 +3901,637 @@ fn generic_bounds(params: &[GenericParam]) -> HashMap<String, Option<GenericBoun
         .collect()
 }
 
+#[derive(Debug, Clone, Copy)]
+enum AssignBinding {
+    MutLocal,
+    ImmutableLocal,
+    Param,
+}
+
+#[derive(Clone)]
+struct AssignScopeEntry {
+    binding: AssignBinding,
+    type_name: Option<String>,
+}
+
+/// Validates controlled assignments: place/mutability rules plus a type check
+/// (the value's type must match the place's type when both are known), so an
+/// `Int = String` style error is reported in RSScript instead of leaking from
+/// rustc. Binding kinds and their types are stored per lexical scope so an
+/// inner shadow does not pollute the type of an outer same-named binding.
+struct AssignChecker<'a> {
+    hir: &'a Hir,
+    scopes: Vec<HashMap<String, AssignScopeEntry>>,
+    diagnostics: Vec<Diagnostic>,
+}
+
+impl<'a> AssignChecker<'a> {
+    fn new(hir: &'a Hir) -> Self {
+        Self {
+            hir,
+            scopes: Vec::new(),
+            diagnostics: Vec::new(),
+        }
+    }
+
+    fn check_function(&mut self, function: &FunctionDecl) {
+        self.scopes.clear();
+        self.push_scope();
+        for param in &function.params {
+            self.insert(
+                param.name.clone(),
+                AssignBinding::Param,
+                Some(type_ref_name(&param.ty)),
+            );
+        }
+        self.block(&function.body);
+        self.pop_scope();
+    }
+
+    fn push_scope(&mut self) {
+        self.scopes.push(HashMap::new());
+    }
+
+    fn pop_scope(&mut self) {
+        self.scopes.pop();
+    }
+
+    fn insert(&mut self, name: String, binding: AssignBinding, type_name: Option<String>) {
+        if name.is_empty() {
+            return;
+        }
+        if let Some(top) = self.scopes.last_mut() {
+            top.insert(name, AssignScopeEntry { binding, type_name });
+        }
+    }
+
+    fn resolve(&self, name: &str) -> Option<AssignBinding> {
+        self.scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name).map(|entry| entry.binding))
+    }
+
+    /// The type of the innermost binding named `name` (its own type, even when
+    /// that is unknown), so a shadowing binding does not expose an outer type.
+    fn resolve_type(&self, name: &str) -> Option<String> {
+        self.scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name))
+            .and_then(|entry| entry.type_name.clone())
+    }
+
+    /// A flattened view of every currently-visible binding's type, with inner
+    /// scopes shadowing outer ones — including an untyped inner binding hiding
+    /// an outer type — for inferring the type of a value expression.
+    fn current_value_types(&self) -> HashMap<String, String> {
+        let mut value_types = HashMap::new();
+        for scope in &self.scopes {
+            for (name, entry) in scope {
+                match &entry.type_name {
+                    Some(type_name) => {
+                        value_types.insert(name.clone(), type_name.clone());
+                    }
+                    None => {
+                        value_types.remove(name);
+                    }
+                }
+            }
+        }
+        value_types
+    }
+
+    fn block(&mut self, block: &Block) {
+        self.push_scope();
+        for statement in &block.statements {
+            self.stmt(statement);
+        }
+        self.pop_scope();
+    }
+
+    fn stmt(&mut self, statement: &Stmt) {
+        match statement {
+            Stmt::Assign(stmt) => {
+                self.validate_assignment(stmt);
+                self.expr(&stmt.value);
+            }
+            Stmt::Let(stmt) => {
+                if let Some(value) = &stmt.value {
+                    self.expr(value);
+                }
+                let type_name = stmt
+                    .type_annotation
+                    .as_ref()
+                    .map(type_ref_name)
+                    .or_else(|| stmt.value.as_ref().and_then(|value| self.infer_type(value)));
+                self.insert(
+                    stmt.name.clone(),
+                    if stmt.is_mut {
+                        AssignBinding::MutLocal
+                    } else {
+                        AssignBinding::ImmutableLocal
+                    },
+                    type_name,
+                );
+            }
+            Stmt::Return(stmt) => {
+                if let Some(value) = &stmt.value {
+                    self.expr(value);
+                }
+            }
+            Stmt::With(stmt) => {
+                self.expr(&stmt.resource);
+                self.push_scope();
+                self.insert(stmt.binding.clone(), AssignBinding::ImmutableLocal, None);
+                self.block(&stmt.body);
+                self.pop_scope();
+            }
+            Stmt::If(stmt) => {
+                self.expr(&stmt.condition);
+                self.block(&stmt.then_body);
+                if let Some(else_body) = &stmt.else_body {
+                    self.block(else_body);
+                }
+            }
+            Stmt::Loop(stmt) => {
+                if let Some(condition) = &stmt.condition {
+                    self.expr(condition);
+                }
+                self.block(&stmt.body);
+            }
+            Stmt::For(stmt) => {
+                self.expr(&stmt.iterable);
+                self.push_scope();
+                self.insert(stmt.binding.clone(), AssignBinding::ImmutableLocal, None);
+                self.block(&stmt.body);
+                self.pop_scope();
+            }
+            Stmt::Match(stmt) => {
+                self.expr(&stmt.value);
+                self.match_arms(&stmt.arms);
+            }
+            Stmt::TaskGroup(stmt) => self.block(&stmt.body),
+            Stmt::LetElse(stmt) => {
+                self.expr(&stmt.value);
+                self.block(&stmt.else_body);
+                self.insert(
+                    stmt.binding_name.clone(),
+                    AssignBinding::ImmutableLocal,
+                    None,
+                );
+            }
+            Stmt::Expr(expr) => self.expr(expr),
+            Stmt::Break(_)
+            | Stmt::Continue(_)
+            | Stmt::MalformedWith(_)
+            | Stmt::MalformedIf(_)
+            | Stmt::MalformedLoop(_)
+            | Stmt::MalformedFor(_)
+            | Stmt::MalformedMatch(_)
+            | Stmt::Unknown(_) => {}
+        }
+    }
+
+    /// Walk into expressions that carry nested blocks (closures and match arms)
+    /// so assignments inside them are validated against the right scope.
+    fn expr(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Closure { params, body, .. } => {
+                self.push_scope();
+                for param in params {
+                    self.insert(param.clone(), AssignBinding::ImmutableLocal, None);
+                }
+                self.block(body);
+                self.pop_scope();
+            }
+            Expr::Match { value, arms, .. } => {
+                self.expr(value);
+                self.match_arms(arms);
+            }
+            Expr::Binary { left, right, .. } => {
+                self.expr(left);
+                self.expr(right);
+            }
+            Expr::Field { base, .. } => self.expr(base),
+            Expr::Index { base, index, .. } => {
+                self.expr(base);
+                self.expr(index);
+            }
+            Expr::Call { args, .. } => {
+                for arg in args {
+                    self.expr(&arg.value);
+                }
+            }
+            Expr::Effect { value, .. }
+            | Expr::Manage { value, .. }
+            | Expr::Spawn { value, .. }
+            | Expr::Await { value, .. }
+            | Expr::Try { value, .. } => self.expr(value),
+            Expr::Ident(..) | Expr::Number(..) | Expr::String(..) | Expr::Unknown(_) => {}
+        }
+    }
+
+    fn match_arms(&mut self, arms: &[crate::syntax::ast::MatchArm]) {
+        for arm in arms {
+            self.push_scope();
+            if let MatchPattern::Variant {
+                binding: Some(binding),
+                ..
+            } = &arm.pattern
+            {
+                self.insert(binding.clone(), AssignBinding::ImmutableLocal, None);
+            }
+            self.block(&arm.body);
+            self.pop_scope();
+        }
+    }
+
+    fn infer_type(&self, value: &Expr) -> Option<String> {
+        crate::hir::infer_hir_expr_type(self.hir, value, &self.current_value_types())
+    }
+
+    fn validate_assignment(&mut self, stmt: &AssignStmt) {
+        let span = stmt.target.span().clone();
+        match &stmt.target {
+            Expr::Ident(name, _) => {
+                let (label, cause) = match self.resolve(name) {
+                    Some(AssignBinding::MutLocal) => {
+                        self.check_assignment_type(name, &stmt.value, &span);
+                        return;
+                    }
+                    Some(AssignBinding::ImmutableLocal) => (
+                        format!("`{name}` is an immutable binding"),
+                        format!("Declare `{name}` with `let mut` to allow reassignment."),
+                    ),
+                    Some(AssignBinding::Param) => (
+                        format!("`{name}` is a parameter, not a reassignable local"),
+                        "Parameters are not reassignable. Bind a `let mut` local, or mutate through a `mut` parameter."
+                            .to_string(),
+                    ),
+                    None => (
+                        format!("`{name}` is not a binding in scope"),
+                        "The left side of `=` must be a `let mut` local in scope.".to_string(),
+                    ),
+                };
+                self.diagnostics
+                    .push(invalid_assignment_diagnostic(span, label, cause));
+            }
+            Expr::Field { .. } | Expr::Index { .. } if assign_place_root(&stmt.target).is_some() => {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::ASSIGNMENT_TARGET_DEFERRED,
+                        "field and index assignment are not yet supported.",
+                        span,
+                        "field/index assignment is deferred in this version",
+                    )
+                    .with_cause(
+                        "Field assignment (`obj.field = e`) and index assignment (`list[i] = e`) are recognized controlled-assignment forms but are not yet executable.",
+                    )
+                    .with_fix(
+                        "use_mut_parameter",
+                        "Update the value through a function that takes the base as a `mut` parameter, or use a `let mut` local for now.",
+                        "manual",
+                    ),
+                );
+            }
+            _ => self.diagnostics.push(invalid_assignment_diagnostic(
+                span,
+                "the left side of `=` is not a place".to_string(),
+                "Assignment targets must be a place: a local, a field, or an index — not a call result or literal."
+                    .to_string(),
+            )),
+        }
+    }
+
+    /// When both the place's type and the value's type are known, they must
+    /// match. Unknown value types (such as the result of an unchecked binary
+    /// expression) are left to the existing checks.
+    fn check_assignment_type(&mut self, name: &str, value: &Expr, span: &crate::diagnostic::Span) {
+        let Some(target_type) = self.resolve_type(name) else {
+            return;
+        };
+        let Some(value_type) = self.infer_type(value) else {
+            return;
+        };
+        if crate::checks::calls::unresolved_generic_type(&target_type)
+            || crate::checks::calls::unresolved_generic_type(&value_type)
+        {
+            return;
+        }
+        if !crate::checks::calls::argument_type_matches(&target_type, &value_type) {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::ASSIGNMENT_TYPE_MISMATCH,
+                    format!("cannot assign `{value_type}` to `{name}` of type `{target_type}`."),
+                    span.clone(),
+                    "assignment type mismatch",
+                )
+                .with_cause(
+                    "The assigned value's type must match the place's type before Rust lowering.",
+                )
+                .with_fix(
+                    "match_assignment_type",
+                    format!("Assign a `{target_type}` value to `{name}`."),
+                    "manual",
+                ),
+            );
+        }
+    }
+}
+
+fn invalid_assignment_diagnostic(
+    span: crate::diagnostic::Span,
+    label: String,
+    cause: String,
+) -> Diagnostic {
+    Diagnostic::error(code::INVALID_ASSIGNMENT, "invalid assignment.", span, label)
+        .with_cause(cause)
+        .with_fix(
+            "declare_let_mut",
+            "Declare the target as a `let mut` local, or remove the assignment.",
+            "manual",
+        )
+}
+
+/// The root place identifier of an assignment target, following field/index
+/// bases. Returns `None` when the target bottoms out at a non-place such as a
+/// call result (`get_user().name = ...`).
+fn assign_place_root(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Ident(name, _) => Some(name.as_str()),
+        Expr::Field { base, .. } | Expr::Index { base, .. } => assign_place_root(base),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeriveSupport {
+    Yes,
+    No,
+    Unknown,
+}
+
+struct LocalTypeDerives {
+    is_value: bool,
+    derives: HashSet<String>,
+}
+
+/// The derives that impose a per-field requirement. `Debug`/`Clone` are
+/// satisfied by every field type the checker accepts, and `Schema`/`ReviewSchema`
+/// are review-only markers, so they impose nothing. `Ord` implies `Eq` in the
+/// generated Rust, so a single `Ord` check covers both.
+fn required_field_derives(derives: &[String]) -> Vec<&'static str> {
+    let has = |name: &str| derives.iter().any(|derive| derive == name);
+    let mut required = Vec::new();
+    if has("Ord") {
+        required.push("Ord");
+    } else if has("Eq") {
+        required.push("Eq");
+    }
+    if has("Hash") {
+        required.push("Hash");
+    }
+    if has("JsonEncode") {
+        required.push("JsonEncode");
+    }
+    if has("JsonDecode") {
+        required.push("JsonDecode");
+    }
+    required
+}
+
+fn derive_requirement_cause(derive: &str) -> &'static str {
+    match derive {
+        "Eq" => {
+            "`Eq` is total equality, so every field's type must be `Eq` (for example `Float` is not, and a struct or sum field must itself derive `Eq`)."
+        }
+        "Ord" => {
+            "`Ord` is total ordering, so every field's type must be `Ord` (for example `Float` is not, and a struct or sum field must itself derive `Ord`)."
+        }
+        "Hash" => {
+            "`Hash` requires hashable fields, so every field's type must be `Hash` (`Float`, `Map`, and `Set` are not, and a struct or sum field must itself derive `Hash`)."
+        }
+        "JsonEncode" => {
+            "`JsonEncode` requires every struct or sum field's type to also derive `JsonEncode`."
+        }
+        "JsonDecode" => {
+            "`JsonDecode` requires every struct or sum field's type to also derive `JsonDecode`."
+        }
+        _ => "Every field must support the derived trait.",
+    }
+}
+
+fn combine_support(left: DeriveSupport, right: DeriveSupport) -> DeriveSupport {
+    match (left, right) {
+        (DeriveSupport::No, _) | (_, DeriveSupport::No) => DeriveSupport::No,
+        (DeriveSupport::Unknown, _) | (_, DeriveSupport::Unknown) => DeriveSupport::Unknown,
+        _ => DeriveSupport::Yes,
+    }
+}
+
+/// Whether a field of type `ty` supports `derive`. Returns `Unknown` whenever
+/// the verdict is not certain, so the checker only rejects known-bad cases and
+/// never a program the backend would accept.
+fn field_supports_derive(
+    ty: &TypeRef,
+    derive: &str,
+    local_types: &HashMap<String, LocalTypeDerives>,
+    generic_params: &HashSet<&str>,
+) -> DeriveSupport {
+    let root = type_root_name(&ty.name);
+    if generic_params.contains(root) {
+        // `#[derive(..)]` adds the matching `T: Trait` bound, so a generic
+        // parameter field is valid at the definition site.
+        return DeriveSupport::Unknown;
+    }
+    match derive {
+        "Eq" | "Ord" | "Hash" => structural_support(ty, root, derive, local_types, generic_params),
+        "JsonEncode" | "JsonDecode" => json_support(ty, root, derive, local_types, generic_params),
+        _ => DeriveSupport::Unknown,
+    }
+}
+
+fn structural_support(
+    ty: &TypeRef,
+    root: &str,
+    derive: &str,
+    local_types: &HashMap<String, LocalTypeDerives>,
+    generic_params: &HashSet<&str>,
+) -> DeriveSupport {
+    match root {
+        "Float" | "Float32" | "Float64" => DeriveSupport::No,
+        "Int" | "Int8" | "Int16" | "Int32" | "Int64" | "UInt" | "UInt8" | "UInt16" | "UInt32"
+        | "UInt64" | "Bool" | "Byte" | "Char" | "Unit" | "String" => DeriveSupport::Yes,
+        "List" | "Option" => match ty.args.first() {
+            Some(arg) => field_supports_derive(arg, derive, local_types, generic_params),
+            None => DeriveSupport::Unknown,
+        },
+        "Result" if !ty.args.is_empty() => ty.args.iter().fold(DeriveSupport::Yes, |acc, arg| {
+            combine_support(
+                acc,
+                field_supports_derive(arg, derive, local_types, generic_params),
+            )
+        }),
+        // `HashSet<T>: Eq` requires `T: Eq + Hash`, so the element must be both.
+        "Set" if derive == "Eq" => match ty.args.first() {
+            Some(elem) => combine_support(
+                field_supports_derive(elem, "Eq", local_types, generic_params),
+                hash_key_support(elem, local_types, generic_params),
+            ),
+            None => DeriveSupport::Unknown,
+        },
+        // `HashMap<K, V>: Eq` requires `K: Eq + Hash` and `V: Eq`.
+        "Map" if derive == "Eq" => match (ty.args.first(), ty.args.get(1)) {
+            (Some(key), Some(value)) => combine_support(
+                combine_support(
+                    field_supports_derive(key, "Eq", local_types, generic_params),
+                    hash_key_support(key, local_types, generic_params),
+                ),
+                field_supports_derive(value, "Eq", local_types, generic_params),
+            ),
+            _ => DeriveSupport::Unknown,
+        },
+        // `HashMap`/`HashSet` implement neither `Ord` nor `Hash`.
+        "Map" | "Set" => DeriveSupport::No,
+        _ => user_type_support(ty, root, derive, local_types, generic_params),
+    }
+}
+
+/// Whether `ty` can serve as a hashable container key/element. A `Map` key or
+/// `Set` element must be `Hash`, but the enclosing `Eq`/`JsonDecode` derive only
+/// adds an `Eq`/`Deserialize` bound to a generic parameter — never `Hash` — and
+/// RSScript has no `Hash` generic bound to express it. So this mirrors the
+/// `Hash` structural rule but treats a generic parameter at *any* nesting depth
+/// as `No`, catching nested positions such as `Map<List<T>, V>`.
+fn hash_key_support(
+    ty: &TypeRef,
+    local_types: &HashMap<String, LocalTypeDerives>,
+    generic_params: &HashSet<&str>,
+) -> DeriveSupport {
+    let root = type_root_name(&ty.name);
+    if generic_params.contains(root) {
+        return DeriveSupport::No;
+    }
+    match root {
+        "Float" | "Float32" | "Float64" => DeriveSupport::No,
+        "Int" | "Int8" | "Int16" | "Int32" | "Int64" | "UInt" | "UInt8" | "UInt16" | "UInt32"
+        | "UInt64" | "Bool" | "Byte" | "Char" | "Unit" | "String" => DeriveSupport::Yes,
+        "List" | "Option" => match ty.args.first() {
+            Some(arg) => hash_key_support(arg, local_types, generic_params),
+            None => DeriveSupport::Unknown,
+        },
+        "Result" if !ty.args.is_empty() => ty.args.iter().fold(DeriveSupport::Yes, |acc, arg| {
+            combine_support(acc, hash_key_support(arg, local_types, generic_params))
+        }),
+        // `HashMap`/`HashSet` are not themselves `Hash`.
+        "Map" | "Set" => DeriveSupport::No,
+        _ => match local_types.get(root) {
+            // A local type used as a key must derive `Hash`, and its `#[derive(Hash)]`
+            // adds `Arg: Hash` for each generic argument.
+            Some(local) if local.is_value => {
+                if !local.derives.contains("Hash") {
+                    return DeriveSupport::No;
+                }
+                ty.args.iter().fold(DeriveSupport::Yes, |acc, arg| {
+                    combine_support(acc, hash_key_support(arg, local_types, generic_params))
+                })
+            }
+            _ => DeriveSupport::Unknown,
+        },
+    }
+}
+
+/// Whether a field supports `JsonEncode`/`JsonDecode`. Builtin scalars and
+/// containers go through serde, but a `Deserialize` impl for `HashMap`/`HashSet`
+/// additionally requires the key/element type to be `Eq + Hash`, so a `Float`
+/// key is rejected for `JsonDecode`.
+fn json_support(
+    ty: &TypeRef,
+    root: &str,
+    derive: &str,
+    local_types: &HashMap<String, LocalTypeDerives>,
+    generic_params: &HashSet<&str>,
+) -> DeriveSupport {
+    let decode = derive == "JsonDecode";
+    let recurse = |arg: &TypeRef| field_supports_derive(arg, derive, local_types, generic_params);
+    // A `Deserialize` impl for `HashMap`/`HashSet` requires the key/element to be
+    // `Eq + Hash`; `hash_key_support` rejects generic parameters in that position.
+    let hashable_key = |arg: &TypeRef| {
+        combine_support(
+            field_supports_derive(arg, "Eq", local_types, generic_params),
+            hash_key_support(arg, local_types, generic_params),
+        )
+    };
+    match root {
+        "Int" | "Int8" | "Int16" | "Int32" | "Int64" | "UInt" | "UInt8" | "UInt16" | "UInt32"
+        | "UInt64" | "Float" | "Float32" | "Float64" | "Bool" | "Byte" | "Char" | "Unit"
+        | "String" => DeriveSupport::Yes,
+        "List" | "Option" => match ty.args.first() {
+            Some(arg) => recurse(arg),
+            None => DeriveSupport::Unknown,
+        },
+        "Result" if !ty.args.is_empty() => ty.args.iter().fold(DeriveSupport::Yes, |acc, arg| {
+            combine_support(acc, recurse(arg))
+        }),
+        "Set" => match ty.args.first() {
+            Some(arg) if decode => combine_support(recurse(arg), hashable_key(arg)),
+            Some(arg) => recurse(arg),
+            None => DeriveSupport::Unknown,
+        },
+        "Map" if ty.args.len() == 2 => {
+            let key = &ty.args[0];
+            let value = &ty.args[1];
+            let elements = combine_support(recurse(key), recurse(value));
+            if decode {
+                combine_support(elements, hashable_key(key))
+            } else {
+                elements
+            }
+        }
+        "Map" => DeriveSupport::Unknown,
+        _ => user_type_support(ty, root, derive, local_types, generic_params),
+    }
+}
+
+fn user_type_support(
+    ty: &TypeRef,
+    root: &str,
+    derive: &str,
+    local_types: &HashMap<String, LocalTypeDerives>,
+    generic_params: &HashSet<&str>,
+) -> DeriveSupport {
+    match local_types.get(root) {
+        Some(local) if local.is_value => {
+            let derived = match derive {
+                // An `Ord`-deriving value type also gets `Eq` in generated Rust.
+                "Eq" => local.derives.contains("Eq") || local.derives.contains("Ord"),
+                other => local.derives.contains(other),
+            };
+            if !derived {
+                return DeriveSupport::No;
+            }
+            // The local type's `#[derive(D)]` adds `Arg: D` for each generic
+            // argument, so `Key<Float>` deriving `Eq` still requires `Float: Eq`.
+            ty.args.iter().fold(DeriveSupport::Yes, |acc, arg| {
+                combine_support(
+                    acc,
+                    field_supports_derive(arg, derive, local_types, generic_params),
+                )
+            })
+        }
+        _ => DeriveSupport::Unknown,
+    }
+}
+
 fn supported_compiler_derive(name: &str) -> bool {
+    // `Eq`/`Ord` are the canonical spellings; `PartialEq`/`PartialOrd` are not a
+    // separate review-visible surface (Rust expands them inside `Eq`/`Ord`).
     matches!(
         name,
         "Debug"
             | "Clone"
-            | "PartialEq"
             | "Eq"
-            | "PartialOrd"
             | "Ord"
             | "Hash"
             | "JsonEncode"

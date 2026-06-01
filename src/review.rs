@@ -1038,6 +1038,10 @@ fn collect_review_map_local_closure_bindings_stmt(stmt: &Stmt, bindings: &mut BT
             collect_review_map_local_closure_bindings_expr(&stmt.value, bindings);
             collect_review_map_local_closure_bindings_block(&stmt.else_body, bindings);
         }
+        Stmt::Assign(stmt) => {
+            collect_review_map_local_closure_bindings_expr(&stmt.target, bindings);
+            collect_review_map_local_closure_bindings_expr(&stmt.value, bindings);
+        }
         Stmt::Expr(expr) => collect_review_map_local_closure_bindings_expr(expr, bindings),
         Stmt::Break(_)
         | Stmt::Continue(_)
@@ -1251,6 +1255,22 @@ fn collect_review_map_facts_stmt(
             );
             collect_review_map_facts_block(
                 &stmt.else_body,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
+        }
+        Stmt::Assign(stmt) => {
+            collect_review_map_facts_expr(
+                &stmt.target,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            );
+            collect_review_map_facts_expr(
+                &stmt.value,
                 hir,
                 callback_params,
                 local_closure_bindings,
@@ -1554,6 +1574,10 @@ fn collect_spawn_capture_names_from_stmt(stmt: &Stmt, captures: &mut BTreeSet<St
             if let Some(value) = &stmt.value {
                 collect_spawn_capture_names(value, captures);
             }
+        }
+        Stmt::Assign(stmt) => {
+            collect_spawn_capture_names(&stmt.target, captures);
+            collect_spawn_capture_names(&stmt.value, captures);
         }
         Stmt::Expr(value) => collect_spawn_capture_names(value, captures),
         Stmt::With(stmt) => {
@@ -3076,6 +3100,10 @@ fn collect_boundary_stmt(statement: &Stmt, path: &str, boundary: &mut BoundarySi
         Stmt::LetElse(stmt) => {
             collect_boundary_expr(&stmt.value, &format!("{path}.let_else"), boundary);
             collect_boundary_block(&stmt.else_body, &format!("{path}.else"), boundary);
+        }
+        Stmt::Assign(stmt) => {
+            collect_boundary_expr(&stmt.target, &format!("{path}.target"), boundary);
+            collect_boundary_expr(&stmt.value, &format!("{path}.value"), boundary);
         }
         Stmt::Expr(expr) => collect_boundary_expr(expr, path, boundary),
         Stmt::Break(_)

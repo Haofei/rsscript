@@ -1,0 +1,13 @@
+// expect: RS0211
+
+class User {
+    id: Int
+}
+
+struct Wrapper derives(Eq) {
+    user: handle User
+}
+
+fn main() -> Unit {
+    return Unit
+}

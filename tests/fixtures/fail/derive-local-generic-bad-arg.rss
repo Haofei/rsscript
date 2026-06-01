@@ -1,0 +1,13 @@
+// expect: RS0211
+
+struct GenericKeyHolder<T> derives(Eq) {
+    value: T
+}
+
+struct LocalGenericBadArgSample derives(Eq) {
+    holder: GenericKeyHolder<Float>
+}
+
+fn main() -> Unit {
+    return Unit
+}

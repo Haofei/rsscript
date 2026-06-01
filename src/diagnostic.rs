@@ -47,6 +47,8 @@ pub mod code {
     pub const RETURN_TYPE_MISMATCH: &str = "RS0208";
     pub const CONTROL_FLOW_TYPE_MISMATCH: &str = "RS0209";
     pub const OPERATOR_TYPE_MISMATCH: &str = "RS0210";
+    pub const DERIVE_FIELD_UNSUPPORTED: &str = "RS0211";
+    pub const RESOURCE_DERIVE_UNSUPPORTED: &str = "RS0212";
     pub const MANAGED_TO_LOCAL: &str = "RS0301";
     pub const FIELD_PARTIAL_ACCESS_CONFLICT: &str = "RS0302";
     pub const FIELD_PREFIX_CONFLICT: &str = "RS0303";
@@ -57,6 +59,9 @@ pub mod code {
     pub const INVALID_TAKE_OPERAND: &str = "RS0308";
     pub const MANAGED_FIELD_SPLIT_CONFLICT: &str = "RS0309";
     pub const READ_VIEW_MUTATION: &str = "RS0310";
+    pub const INVALID_ASSIGNMENT: &str = "RS0311";
+    pub const ASSIGNMENT_TARGET_DEFERRED: &str = "RS0312";
+    pub const ASSIGNMENT_TYPE_MISMATCH: &str = "RS0313";
     pub const USE_AFTER_MANAGE: &str = "RS0401";
     pub const LOCAL_VALUE_RETAINED: &str = "RS0501";
     pub const FRESH_RETURN_NOT_CLEAN: &str = "RS0601";
@@ -544,6 +549,16 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         explanation: "Built-in comparison and logical operators have fixed operand types. Equality requires matching known operand types, ordering requires numeric operands, and logical operators require Bool operands.",
     },
     DiagnosticExplanation {
+        code: code::DERIVE_FIELD_UNSUPPORTED,
+        title: "derive requirement not satisfied",
+        explanation: "A compiler-owned derive expands to generated Rust, so every field must support it. `Eq`, `Ord`, and `Hash` require equatable/orderable/hashable fields: `Float` fields, `handle`/`weak` fields (which lower to `Managed<T>`, implementing only `Clone`/`Debug`), `Map`/`Set` fields for `Ord`/`Hash`, and fields whose type does not derive the same trait are rejected. The checker recurses through `List`/`Option`/`Result` and `Map`/`Set` element types, and because a `HashMap`/`HashSet` key or element must be `Hash`, an `Eq`-derived `Map`/`Set` requires `Eq + Hash` keys/elements. `JsonEncode`/`JsonDecode` require fields whose type also derives JSON encoding/decoding; `JsonDecode` additionally rejects non-`Eq`/`Hash` `Map` keys and `Set` elements (such as `Float`). Generic type parameters are accepted as ordinary fields — the derive adds the matching `T: Trait` bound — but rejected in a `Map`-key/`Set`-element position, where the required `Hash` bound cannot be expressed. The checker reports this before lowering so the requirement is explained in RSScript instead of leaking as a generated-Rust trait-bound error.",
+    },
+    DiagnosticExplanation {
+        code: code::RESOURCE_DERIVE_UNSUPPORTED,
+        title: "unsupported resource derive",
+        explanation: "Resources are move-only RAII values that default to `Debug` only. They accept only the implicit `Debug` and the review-only `Schema`/`ReviewSchema` markers. Value derives such as `Clone`, `Eq`, `Ord`, `Hash`, `JsonEncode`, and `JsonDecode` would expand into generated Rust that copies or compares the resource, which contradicts its move-only model. This is a resource-derive policy enforced by RSScript — the Rust backend could expand some of these derives, but RSScript rejects them to keep resource ownership explicit. Model the data as a `struct` if you need value semantics.",
+    },
+    DiagnosticExplanation {
         code: code::MANAGED_TO_LOCAL,
         title: "managed-to-local conversion",
         explanation: "Managed values cannot be rebound as local values. Create the value locally at its origin if local ownership is required.",
@@ -582,6 +597,21 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::INVALID_TAKE_OPERAND,
         title: "invalid take operand",
         explanation: "`take value` consumes a local value. Managed values cannot be passed to taking parameters because they may have aliases.",
+    },
+    DiagnosticExplanation {
+        code: code::INVALID_ASSIGNMENT,
+        title: "invalid assignment",
+        explanation: "Controlled assignment (`x = e`) updates a place. The left side must be a `let mut` local: a plain `let`/`local` binding is immutable, a parameter is not a reassignable local (mutate through `mut` parameters by call or field update), an unknown name has no place, and the left side must be a place expression (a local, field, or index) rather than a call result such as `get_user().name = ...`. `mut` must appear explicitly in the binding, so mutation stays visible in the type system and review evidence.",
+    },
+    DiagnosticExplanation {
+        code: code::ASSIGNMENT_TARGET_DEFERRED,
+        title: "assignment target deferred",
+        explanation: "Field assignment (`obj.field = e`) and index assignment (`list[i] = e`) are recognized controlled-assignment forms but are not yet executable in this version. They are deferred, not excluded: local reassignment (`x = e` on a `let mut` local) is supported now, and field/index updates will require the base to be `mut` and, for index updates, a controlled index-set semantics.",
+    },
+    DiagnosticExplanation {
+        code: code::ASSIGNMENT_TYPE_MISMATCH,
+        title: "assignment type mismatch",
+        explanation: "When both sides are known, the value assigned to a place must match the place's type. Like the other type checks (`RS0207`/`RS0208`), this is checked before Rust lowering so an `Int = String` style error is reported in RSScript instead of leaking from rustc. Assignments whose value type cannot be determined are left to the existing checks.",
     },
     DiagnosticExplanation {
         code: code::READ_VIEW_MUTATION,

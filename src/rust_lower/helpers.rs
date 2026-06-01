@@ -129,6 +129,10 @@ fn validate_executable_declarations_in_stmt(
             validate_executable_declarations_in_expr(&stmt.value, context, diagnostics);
             validate_executable_declarations_in_block(&stmt.else_body, context, diagnostics);
         }
+        Stmt::Assign(stmt) => {
+            validate_executable_declarations_in_expr(&stmt.target, context, diagnostics);
+            validate_executable_declarations_in_expr(&stmt.value, context, diagnostics);
+        }
         Stmt::Expr(expr) => validate_executable_declarations_in_expr(expr, context, diagnostics),
         Stmt::Break(_)
         | Stmt::Continue(_)
@@ -482,6 +486,7 @@ pub(super) fn stmt_has_await(statement: &Stmt) -> bool {
             expr_has_await(&stmt.value) || stmt.arms.iter().any(|arm| block_has_await(&arm.body))
         }
         Stmt::LetElse(stmt) => expr_has_await(&stmt.value) || block_has_await(&stmt.else_body),
+        Stmt::Assign(stmt) => expr_has_await(&stmt.target) || expr_has_await(&stmt.value),
         Stmt::Expr(expr) => expr_has_await(expr),
         Stmt::Break(_)
         | Stmt::Continue(_)
@@ -571,6 +576,14 @@ pub(super) fn collect_mutated_bindings_from_stmt(statement: &Stmt, names: &mut B
         Stmt::LetElse(stmt) => {
             collect_mutated_bindings_from_expr(&stmt.value, names);
             collect_mutated_bindings_from_block(&stmt.else_body, names);
+        }
+        Stmt::Assign(stmt) => {
+            // The assigned place's root local must be `let mut` in generated Rust.
+            if let Some(name) = mutable_root_ident(&stmt.target) {
+                names.insert(name.to_string());
+            }
+            collect_mutated_bindings_from_expr(&stmt.target, names);
+            collect_mutated_bindings_from_expr(&stmt.value, names);
         }
         Stmt::Expr(expr) => collect_mutated_bindings_from_expr(expr, names),
         Stmt::Break(_)
@@ -670,6 +683,7 @@ pub(super) fn collect_closure_bound_names_from_block(block: &Block, names: &mut 
                 collect_closure_bound_names_from_block(&stmt.else_body, names);
             }
             Stmt::Return(_)
+            | Stmt::Assign(_)
             | Stmt::Break(_)
             | Stmt::Continue(_)
             | Stmt::Expr(_)
@@ -736,6 +750,10 @@ pub(super) fn closure_stmt_mutates_unbound_name(
         Stmt::LetElse(stmt) => {
             closure_expr_mutates_unbound_name(&stmt.value, bound)
                 || closure_block_mutates_unbound_name(&stmt.else_body, bound)
+        }
+        Stmt::Assign(stmt) => {
+            mutable_root_ident(&stmt.target).is_some_and(|name| !bound.contains(name))
+                || closure_expr_mutates_unbound_name(&stmt.value, bound)
         }
         Stmt::Expr(expr) => closure_expr_mutates_unbound_name(expr, bound),
         Stmt::Break(_)
@@ -814,6 +832,7 @@ pub(super) fn stmt_span(statement: &Stmt) -> &Span {
         | Stmt::MalformedFor(span)
         | Stmt::MalformedMatch(span)
         | Stmt::Unknown(span) => span,
+        Stmt::Assign(stmt) => &stmt.span,
         Stmt::Expr(expr) => expr.span(),
     }
 }

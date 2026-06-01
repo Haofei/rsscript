@@ -2,12 +2,12 @@ use std::collections::HashSet;
 
 use crate::lexer::{Token, TokenKind, lex};
 use crate::syntax::ast::{
-    BinaryOp, Block, CallArg, Callee, ConstDecl, DataEffect, DuplicateFileFeature, EffectDecl,
-    Expr, FieldDecl, FileFeature, FileFeatureScope, ForStmt, FunctionDecl, GenericBound,
-    GenericParam, IfStmt, Item, LetElseStmt, LetKind, LetStmt, LoopStmt, MatchArm, MatchPattern,
-    MatchStmt, ModuleDecl, Param, Program, ProtocolDecl, ProtocolImpl, ProtocolImplMapping,
-    ReturnStmt, Stmt, SumTypeDecl, SumVariant, TaskGroupStmt, TypeAliasDecl, TypeDecl, TypeKind,
-    TypeRef, UnknownFileFeature, UseDecl, WithStmt,
+    AssignStmt, BinaryOp, Block, CallArg, Callee, ConstDecl, DataEffect, DuplicateFileFeature,
+    EffectDecl, Expr, FieldDecl, FileFeature, FileFeatureScope, ForStmt, FunctionDecl,
+    GenericBound, GenericParam, IfStmt, Item, LetElseStmt, LetKind, LetStmt, LoopStmt, MatchArm,
+    MatchPattern, MatchStmt, ModuleDecl, Param, Program, ProtocolDecl, ProtocolImpl,
+    ProtocolImplMapping, ReturnStmt, Stmt, SumTypeDecl, SumVariant, TaskGroupStmt, TypeAliasDecl,
+    TypeDecl, TypeKind, TypeRef, UnknownFileFeature, UseDecl, WithStmt,
 };
 
 pub fn parse_source(file: &str, source: &str) -> Program {
@@ -1238,9 +1238,48 @@ fn parse_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
     }
 
     let end = statement_end(tokens, start, limit);
+    if let Some(statement) = try_parse_assign_stmt(tokens, start, end) {
+        return (statement, end);
+    }
     let statement = parse_expr(tokens, start, end)
         .map_or_else(|| Stmt::Unknown(tokens[start].span.clone()), Stmt::Expr);
     (statement, end)
+}
+
+/// Parse a controlled assignment `<place> = <expr>`. Recognizes a standalone
+/// `=` at bracket depth 0 — one that is not part of `==`, `!=`, `<=`, or `>=`
+/// (the lexer emits those as separate `=` tokens) — and splits the statement
+/// into a place target and a value. Returns `None` when there is no such `=`,
+/// so ordinary expression statements fall through unchanged.
+fn try_parse_assign_stmt(tokens: &[Token], start: usize, end: usize) -> Option<Stmt> {
+    let mut depth = 0i32;
+    let mut assign_index = None;
+    for index in start..end {
+        let token = &tokens[index];
+        if token.symbol("(") || token.symbol("[") || token.symbol("{") {
+            depth += 1;
+        } else if token.symbol(")") || token.symbol("]") || token.symbol("}") {
+            depth -= 1;
+        } else if depth == 0 && token.symbol("=") {
+            let prev_joins = index
+                .checked_sub(1)
+                .and_then(|i| tokens.get(i))
+                .is_some_and(|t| t.symbol("=") || t.symbol("!") || t.symbol("<") || t.symbol(">"));
+            let next_joins = tokens.get(index + 1).is_some_and(|t| t.symbol("="));
+            if !prev_joins && !next_joins {
+                assign_index = Some(index);
+                break;
+            }
+        }
+    }
+    let equals = assign_index?;
+    let target = parse_expr(tokens, start, equals)?;
+    let value = parse_expr(tokens, equals + 1, end)?;
+    Some(Stmt::Assign(AssignStmt {
+        target,
+        value,
+        span: tokens[start].span.clone(),
+    }))
 }
 
 // let Some(binding) = expr else { diverging-block }
@@ -1326,12 +1365,19 @@ fn parse_let_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize)
     } else {
         LetKind::Managed
     };
-    let parsed_name = tokens.get(start + 1).and_then(ident_name);
+    // `let mut name = expr` declares a reassignable local. `mut` is only a
+    // modifier on `let`; it shifts the name/annotation/value one token right.
+    let is_mut = kind == LetKind::Managed
+        && tokens
+            .get(start + 1)
+            .is_some_and(|t| t.is_ident_text("mut"));
+    let name_index = if is_mut { start + 2 } else { start + 1 };
+    let parsed_name = tokens.get(name_index).and_then(ident_name);
     let name = parsed_name.unwrap_or("").to_string();
     let end = statement_end(tokens, start, limit);
-    let equals = (start + 2..end).find(|index| tokens[*index].symbol("="));
+    let equals = (name_index + 1..end).find(|index| tokens[*index].symbol("="));
     let annotation_end = equals.unwrap_or(end);
-    let colon = (start + 2..annotation_end).find(|index| tokens[*index].symbol(":"));
+    let colon = (name_index + 1..annotation_end).find(|index| tokens[*index].symbol(":"));
     let type_annotation = colon.and_then(|colon| parse_type_ref(tokens, colon + 1, annotation_end));
     let value = equals.and_then(|equals| parse_expr(tokens, equals + 1, end));
     let malformed = parsed_name.is_none()
@@ -1345,6 +1391,7 @@ fn parse_let_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize)
             type_annotation,
             value,
             is_async: false,
+            is_mut,
             malformed,
             span: tokens[start].span.clone(),
         }),
@@ -1370,6 +1417,7 @@ fn parse_async_let_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, 
             type_annotation: None,
             value,
             is_async: true,
+            is_mut: false,
             malformed,
             span: tokens[start].span.clone(),
         }),

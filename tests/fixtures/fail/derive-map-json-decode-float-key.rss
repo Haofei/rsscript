@@ -1,0 +1,9 @@
+// expect: RS0211
+
+struct DecodeFloatKeySample derives(JsonDecode) {
+    values: Map<Float, String>
+}
+
+fn main() -> Unit {
+    return Unit
+}

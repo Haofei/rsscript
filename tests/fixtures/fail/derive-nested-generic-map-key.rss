@@ -1,0 +1,9 @@
+// expect: RS0211
+
+struct NestedGenericKeySample<T> derives(Eq) {
+    values: Map<List<T>, Int>
+}
+
+fn main() -> Unit {
+    return Unit
+}

@@ -1,0 +1,9 @@
+// expect: RS0211
+
+struct Sample derives(Ord, Hash) {
+    value: Float
+}
+
+fn main() -> Unit {
+    return Unit
+}

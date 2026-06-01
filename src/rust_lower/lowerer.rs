@@ -382,14 +382,9 @@ impl<'a> RustLowerer<'a> {
             match d.as_str() {
                 "Debug" => {}
                 "Clone" => push_unique_derive(&mut rust_derives, "Clone"),
-                "PartialEq" => push_unique_derive(&mut rust_derives, "PartialEq"),
                 "Eq" => {
                     push_unique_derive(&mut rust_derives, "PartialEq");
                     push_unique_derive(&mut rust_derives, "Eq");
-                }
-                "PartialOrd" => {
-                    push_unique_derive(&mut rust_derives, "PartialEq");
-                    push_unique_derive(&mut rust_derives, "PartialOrd");
                 }
                 "Ord" => {
                     push_unique_derive(&mut rust_derives, "PartialEq");
@@ -906,6 +901,11 @@ impl<'a> RustLowerer<'a> {
             }
             Stmt::Break(_) => out.push_str(&format!("{pad}break;\n")),
             Stmt::Continue(_) => out.push_str(&format!("{pad}continue;\n")),
+            Stmt::Assign(stmt) => out.push_str(&format!(
+                "{pad}{} = {};\n",
+                self.lower_expr(&stmt.target),
+                self.lower_expr(&stmt.value)
+            )),
             Stmt::Expr(expr) => out.push_str(&format!("{pad}{};\n", self.lower_expr(expr))),
             Stmt::MalformedWith(span)
             | Stmt::MalformedIf(span)
@@ -993,6 +993,10 @@ impl<'a> RustLowerer<'a> {
             Stmt::LetElse(stmt) => {
                 self.record_expr_source_map(&stmt.value, generated);
                 self.record_block_source_map(&stmt.else_body, generated);
+            }
+            Stmt::Assign(stmt) => {
+                self.record_expr_source_map(&stmt.target, generated);
+                self.record_expr_source_map(&stmt.value, generated);
             }
             Stmt::Expr(expr) => self.record_expr_source_map(expr, generated),
             Stmt::Break(_)

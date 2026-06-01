@@ -311,6 +311,9 @@ impl Formatter {
                     LetKind::Managed => "let ",
                     LetKind::Local => "local ",
                 });
+                if stmt.is_mut {
+                    self.out.push_str("mut ");
+                }
                 self.out.push_str(&stmt.name);
                 if let Some(type_annotation) = &stmt.type_annotation {
                     self.out.push_str(": ");
@@ -407,6 +410,11 @@ impl Formatter {
             }
             Stmt::Break(_) => self.out.push_str("break"),
             Stmt::Continue(_) => self.out.push_str("continue"),
+            Stmt::Assign(stmt) => {
+                self.expr(&stmt.target, 0);
+                self.out.push_str(" = ");
+                self.expr(&stmt.value, 0);
+            }
             Stmt::Expr(expr) => self.expr(expr, 0),
             Stmt::MalformedWith(_)
             | Stmt::MalformedIf(_)

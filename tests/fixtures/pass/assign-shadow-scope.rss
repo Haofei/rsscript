@@ -1,0 +1,9 @@
+fn main() -> Unit {
+    let mut x: Int = 0
+    if true {
+        let x = "shadow"
+        Log.write(message: read x)
+    }
+    x = 1
+    return Unit
+}

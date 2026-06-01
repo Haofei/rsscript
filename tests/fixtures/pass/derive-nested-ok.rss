@@ -1,0 +1,18 @@
+struct Inner derives(Eq, Ord, Hash) {
+    id: Int
+}
+
+struct Outer derives(Eq, Ord, Hash) {
+    inner: Inner
+    labels: List<String>
+    counts: List<Int>
+}
+
+sum Shape derives(Eq, Hash) {
+    Dot
+    Line(length: Int)
+}
+
+fn main() -> Unit {
+    return Unit
+}

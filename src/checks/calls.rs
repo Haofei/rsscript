@@ -3739,7 +3739,7 @@ fn enum_variant_type_name(callee: &Callee) -> Option<&'static str> {
     }
 }
 
-fn argument_type_matches(expected: &str, actual: &str) -> bool {
+pub(crate) fn argument_type_matches(expected: &str, actual: &str) -> bool {
     if expected == actual {
         return true;
     }
@@ -3829,7 +3829,7 @@ fn type_contains_unresolved_generic(type_name: &str, generics: &[String]) -> boo
     })
 }
 
-fn unresolved_generic_type(type_name: &str) -> bool {
+pub(crate) fn unresolved_generic_type(type_name: &str) -> bool {
     let root = type_root_name(type_name);
     (root.len() == 1 && root.chars().all(|ch| ch.is_ascii_uppercase()))
         || fresh_type_target(type_name).is_some_and(unresolved_generic_type)

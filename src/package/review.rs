@@ -1163,6 +1163,26 @@ fn collect_await_sites_from_stmt(
                 sites,
             );
         }
+        Stmt::Assign(stmt) => {
+            collect_await_sites_from_expr(
+                function,
+                &stmt.target,
+                live_after,
+                scoped_live,
+                pending_callees,
+                context,
+                sites,
+            );
+            collect_await_sites_from_expr(
+                function,
+                &stmt.value,
+                live_after,
+                scoped_live,
+                pending_callees,
+                context,
+                sites,
+            );
+        }
         Stmt::Expr(expr) => collect_await_sites_from_expr(
             function,
             expr,
@@ -1435,6 +1455,10 @@ fn collect_stmt_uses(statement: &Stmt, uses: &mut BTreeSet<String>) {
             collect_expr_uses(&stmt.value, uses);
             collect_block_uses(&stmt.else_body, uses);
         }
+        Stmt::Assign(stmt) => {
+            collect_expr_uses(&stmt.target, uses);
+            collect_expr_uses(&stmt.value, uses);
+        }
         Stmt::Expr(expr) => collect_expr_uses(expr, uses),
         Stmt::Break(_)
         | Stmt::Continue(_)
@@ -1548,7 +1572,8 @@ fn remove_stmt_bindings(statement: &Stmt, uses: &mut BTreeSet<String>) {
                 uses.remove(&stmt.binding_name);
             }
         }
-        Stmt::Return(_)
+        Stmt::Assign(_)
+        | Stmt::Return(_)
         | Stmt::If(_)
         | Stmt::Loop(_)
         | Stmt::Expr(_)

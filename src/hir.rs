@@ -1131,6 +1131,11 @@ fn lower_hir_stmt(
         }
         Stmt::TaskGroup(_) => unreachable!("task-group statements are lowered by lower_hir_stmts"),
         Stmt::LetElse(_) => unreachable!("let-else statements are lowered by lower_hir_stmts"),
+        // Controlled assignment is checked at the AST level; in HIR it carries
+        // the value expression so the RHS still gets ownership/use analysis.
+        Stmt::Assign(stmt) => {
+            HirStmt::Expr(lower_hir_expr(hir, function_name, &stmt.value, value_types))
+        }
         Stmt::Expr(expr) => HirStmt::Expr(lower_hir_expr(hir, function_name, expr, value_types)),
         Stmt::Break(span) => HirStmt::Break(span.clone()),
         Stmt::Continue(span) => HirStmt::Continue(span.clone()),
@@ -1562,6 +1567,10 @@ fn collect_body_facts_in_stmt(
                 value_types.insert(binding, type_name);
             }
         }
+        Stmt::Assign(stmt) => {
+            collect_body_facts_in_expr(hir, function_name, &stmt.target, value_types, facts);
+            collect_body_facts_in_expr(hir, function_name, &stmt.value, value_types, facts);
+        }
         Stmt::Expr(expr) => {
             collect_body_facts_in_expr(hir, function_name, expr, value_types, facts);
         }
@@ -1817,7 +1826,7 @@ fn hir_binding_kind(kind: LetKind) -> HirBindingKind {
     }
 }
 
-fn infer_hir_expr_type(
+pub(crate) fn infer_hir_expr_type(
     hir: &Hir,
     expr: &Expr,
     value_types: &HashMap<String, String>,
@@ -2022,7 +2031,9 @@ fn infer_closure_return_type(
                     .or_else(|| Some("Unit".to_string()));
             }
             Stmt::Expr(value) => return infer_hir_expr_type(hir, value, value_types),
-            Stmt::Let(_) | Stmt::LetElse(_) => return Some("Unit".to_string()),
+            Stmt::Let(_) | Stmt::LetElse(_) | Stmt::Assign(_) => {
+                return Some("Unit".to_string());
+            }
             Stmt::With { .. }
             | Stmt::If { .. }
             | Stmt::Loop { .. }
@@ -2297,7 +2308,7 @@ fn classify_block_return_expr(hir: &Hir, block: &Block) -> HirReturnProof {
                 classify_return_expr(hir, value)
             }),
         Stmt::Expr(value) => classify_return_expr(hir, value),
-        Stmt::Let(_) | Stmt::LetElse(_) => HirReturnProof::NoValue,
+        Stmt::Let(_) | Stmt::LetElse(_) | Stmt::Assign(_) => HirReturnProof::NoValue,
         Stmt::With { .. }
         | Stmt::If { .. }
         | Stmt::Loop { .. }

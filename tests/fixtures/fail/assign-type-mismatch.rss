@@ -1,0 +1,7 @@
+// expect: RS0313
+
+fn main() -> Unit {
+    let mut count: Int = 0
+    count = "oops"
+    return Unit
+}
