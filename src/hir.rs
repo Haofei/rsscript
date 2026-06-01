@@ -39,6 +39,7 @@ pub struct FunctionSig {
     pub name: String,
     pub is_async: bool,
     pub type_params: Box<[String]>,
+    pub type_param_bounds: Vec<Option<GenericBound>>,
     pub params: Vec<ParamSig>,
     pub return_type: Option<String>,
     pub returns_fresh: bool,
@@ -2407,6 +2408,11 @@ fn function_sig_from_decl(function: &FunctionDecl, is_builtin: bool) -> Function
             .map(|param| param.name.clone())
             .collect::<Vec<_>>()
             .into_boxed_slice(),
+        type_param_bounds: function
+            .type_params
+            .iter()
+            .map(|param| param.bound.clone())
+            .collect(),
         params: function.params.iter().map(param_sig_from_decl).collect(),
         return_type: function.return_ty.as_ref().map(type_ref_name),
         returns_fresh: function.returns_fresh,
@@ -2595,6 +2601,7 @@ fn constructor_sig_from_type(type_info: &TypeInfo, is_builtin: bool) -> Function
         name: type_info.name.clone(),
         is_async: false,
         type_params: type_info.type_params.clone(),
+        type_param_bounds: vec![None; type_info.type_params.len()],
         params: fields
             .into_iter()
             .map(|field| ParamSig {

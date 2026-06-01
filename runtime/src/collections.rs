@@ -1,6 +1,14 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
+pub fn ord_compare<T: Ord>(left: &T, right: &T) -> i64 {
+    match left.cmp(right) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    }
+}
+
 pub fn list_new<T>() -> Vec<T> {
     Vec::new()
 }
@@ -88,7 +96,11 @@ pub fn list_reverse<T: Clone>(list: &[T]) -> Vec<T> {
     result
 }
 
-pub fn list_sort<T: Clone>(list: &mut [T], mut compare: impl FnMut(T, T) -> i64) {
+pub fn list_sort<T: Ord>(list: &mut [T]) {
+    list.sort();
+}
+
+pub fn list_sort_with<T: Clone>(list: &mut [T], mut compare: impl FnMut(T, T) -> i64) {
     list.sort_by(|a, b| {
         let result = compare(a.clone(), b.clone());
         if result < 0 {

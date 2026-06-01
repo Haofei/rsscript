@@ -152,8 +152,13 @@ pub fn lower_sources_to_rust_package_with_options(
             )
         })
         .collect::<String>();
+    let serde_dependency_toml = if program_uses_serde_derives(&program) {
+        "serde = { version = \"1\", features = [\"derive\"] }\n"
+    } else {
+        ""
+    };
     let cargo_toml = format!(
-        "[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n\n[dependencies]\nrsscript-runtime = {{ path = \"{}\" }}\n{native_dependency_toml}",
+        "[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n\n[dependencies]\nrsscript-runtime = {{ path = \"{}\" }}\n{serde_dependency_toml}{native_dependency_toml}",
         toml_string(runtime_path),
     );
     let main_rs = rust_package_main(&program, &package_name);
@@ -166,6 +171,20 @@ pub fn lower_sources_to_rust_package_with_options(
         lib_rs: lowered.rust_source,
         main_rs,
         source_map_json,
+    })
+}
+
+fn program_uses_serde_derives(program: &crate::syntax::ast::Program) -> bool {
+    program.items.iter().any(|item| match item {
+        crate::syntax::ast::Item::Type(decl) => decl
+            .derives
+            .iter()
+            .any(|derive| matches!(derive.as_str(), "JsonEncode" | "JsonDecode")),
+        crate::syntax::ast::Item::SumType(sum) => sum
+            .derives
+            .iter()
+            .any(|derive| matches!(derive.as_str(), "JsonEncode" | "JsonDecode")),
+        _ => false,
     })
 }
 

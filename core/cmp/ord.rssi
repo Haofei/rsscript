@@ -1,0 +1,3 @@
+protocol Ord {
+    fn compare(self: read Self, other: read Self) -> Int
+}

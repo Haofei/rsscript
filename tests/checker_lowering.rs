@@ -89,6 +89,44 @@ pub fn maybe_value(flag: Bool) -> Option<Int> {
 }
 
 #[test]
+fn rust_lowering_expands_compiler_owned_derives() {
+    let source = r#"
+struct User derives(Clone, Eq, Ord, Hash, JsonEncode, JsonDecode, Schema) {
+    id: Int
+    name: String
+}
+"#;
+    let rust = lower_source_to_rust("derive.rss", source).expect("source should lower");
+
+    assert!(rust.contains(
+        "#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]"
+    ));
+    assert!(rust.contains("pub struct User"));
+}
+
+#[test]
+fn rust_package_adds_serde_for_json_derives() {
+    let source = r#"
+struct User derives(JsonEncode, JsonDecode) {
+    id: Int
+}
+"#;
+    let package = lower_source_to_rust_package(
+        "derive-json.rss",
+        source,
+        "derive-json-package",
+        "../runtime",
+    )
+    .expect("source should lower");
+
+    assert!(
+        package
+            .cargo_toml
+            .contains("serde = { version = \"1\", features = [\"derive\"] }")
+    );
+}
+
+#[test]
 fn rust_lowering_maps_core_surface_types_to_rust_std_types() {
     let source = r#"
 struct CoreError {
@@ -210,6 +248,14 @@ fn main() -> Result<Unit, JsonError> {
             return item + 1
         },
     )
+    let order = Ord.compare(self: read 1, other: read 2)
+    List.sort<Int>(list: mut list)
+    List.sort_with<Int>(
+        list: mut list,
+        compare: |left, right| {
+            return right - left
+        },
+    )
     let folded = List.fold<Int, CountBox>(
         list: read list,
         initial: read CountBox(value: 0),
@@ -256,6 +302,9 @@ fn main() -> Result<Unit, JsonError> {
     assert!(rust.contains("let found = rsscript_runtime::list_find(&list, |item| {"));
     assert!(rust.contains("let filtered = rsscript_runtime::list_filter(&list, |item| {"));
     assert!(rust.contains("let mapped = rsscript_runtime::list_map(&list, |item| {"));
+    assert!(rust.contains("let order = rsscript_runtime::ord_compare(&1, &2);"));
+    assert!(rust.contains("rsscript_runtime::list_sort(&mut list);"));
+    assert!(rust.contains("rsscript_runtime::list_sort_with(&mut list, |left, right| {"));
     assert!(rust.contains("return item == 10;"));
     assert!(rust.contains(
         "let folded = rsscript_runtime::list_fold(&list, &CountBox { value: 0 }, |state, item| {"

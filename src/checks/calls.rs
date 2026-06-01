@@ -1109,6 +1109,15 @@ fn check_call_args(
     }
 
     let type_param_substitutions = call_type_param_substitutions(analyzer, callee, args, signature);
+    check_generic_call_bounds(
+        analyzer,
+        function,
+        callee,
+        &call_name,
+        &signature,
+        &type_param_substitutions,
+        call_span,
+    );
 
     for arg in args {
         let Some(name) = &arg.name else {
@@ -1195,6 +1204,101 @@ fn check_call_args(
     }
 }
 
+fn check_generic_call_bounds(
+    analyzer: &mut Analyzer<'_>,
+    function: &FunctionDecl,
+    _callee: &Callee,
+    call_name: &str,
+    signature: &FunctionSig,
+    substitutions: &HashMap<String, String>,
+    call_span: &Span,
+) {
+    for (param, bound) in signature
+        .type_params
+        .iter()
+        .zip(signature.type_param_bounds.iter())
+    {
+        let Some(GenericBound::Protocol(protocol)) = bound else {
+            continue;
+        };
+        let Some(actual) = substitutions.get(param) else {
+            continue;
+        };
+        if type_satisfies_protocol_bound(analyzer, function, actual, protocol) {
+            continue;
+        }
+        analyzer.diagnostics.push(
+            Diagnostic::error(
+                code::PROTOCOL_NOT_SATISFIED,
+                format!(
+                    "type `{actual}` does not satisfy protocol `{protocol}` required by `{call_name}`."
+                ),
+                call_span.clone(),
+                "protocol not satisfied",
+            )
+            .with_cause(
+                "Generic protocol bounds are nominal. Use a type with a matching derive, add a compatible generic bound, or pass an explicit comparator API.",
+            )
+            .with_fix(
+                "satisfy_protocol_bound",
+                format!("Add `derives({protocol})` to `{actual}` if the compiler-owned ordering is intended, or call an API that accepts an explicit comparator."),
+                "manual",
+            ),
+        );
+    }
+}
+
+fn type_satisfies_protocol_bound(
+    analyzer: &Analyzer<'_>,
+    function: &FunctionDecl,
+    actual: &str,
+    protocol: &str,
+) -> bool {
+    let actual_root = type_root_name(strip_fresh_type(actual));
+    if protocol == "Ord" && builtin_type_is_ord(actual_root) {
+        return true;
+    }
+    if function.type_params.iter().any(|param| {
+        param.name == actual_root
+            && matches!(
+                param.bound.as_ref(),
+                Some(GenericBound::Protocol(bound)) if bound == protocol
+            )
+    }) {
+        return true;
+    }
+    if analyzer
+        .syntax_program
+        .protocol_impls
+        .iter()
+        .any(|protocol_impl| {
+            protocol_impl.protocol == protocol && protocol_impl.type_name == actual_root
+        })
+    {
+        return true;
+    }
+    type_derives_protocol(&analyzer.syntax_program.items, actual_root, protocol)
+}
+
+fn builtin_type_is_ord(type_name: &str) -> bool {
+    matches!(type_name, "Int" | "String" | "Bool")
+}
+
+fn type_derives_protocol(items: &[Item], type_name: &str, protocol: &str) -> bool {
+    if protocol != "Ord" {
+        return false;
+    }
+    items.iter().any(|item| match item {
+        Item::Type(decl) => {
+            decl.name == type_name && decl.derives.iter().any(|derive| derive == "Ord")
+        }
+        Item::SumType(sum) => {
+            sum.name == type_name && sum.derives.iter().any(|derive| derive == "Ord")
+        }
+        _ => false,
+    })
+}
+
 fn check_enum_variant_form(
     analyzer: &mut Analyzer<'_>,
     callee: &Callee,
@@ -1250,12 +1354,7 @@ fn check_protocol_receiver_satisfaction(
     let Callee::Qualified { namespace, name } = callee else {
         return;
     };
-    if !analyzer
-        .syntax_program
-        .protocols
-        .iter()
-        .any(|protocol| protocol.name == *namespace)
-    {
+    if !analyzer.protocol_name_is_visible(namespace) {
         return;
     }
     let Some(self_arg) = args.iter().find(|arg| arg.name.as_deref() == Some("self")) else {
@@ -1266,6 +1365,9 @@ fn check_protocol_receiver_satisfaction(
     };
     let receiver_type = strip_fresh_type(receiver_type);
     let receiver_root = type_root_name(receiver_type);
+    if type_satisfies_protocol_bound(analyzer, function, receiver_type, namespace) {
+        return;
+    }
     if function.type_params.iter().any(|param| {
         param.name == receiver_root
             && matches!(

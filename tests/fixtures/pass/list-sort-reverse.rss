@@ -1,10 +1,14 @@
 features: local
 
 fn sort_descending(numbers: mut List<Int>) -> Unit {
-    List.sort<Int>(
+    List.sort_with<Int>(
         list: mut numbers,
         compare: |a, b| { return b - a },
     )
+}
+
+fn sort_ascending(numbers: mut List<Int>) -> Unit {
+    List.sort<Int>(list: mut numbers)
 }
 
 fn make_reversed(items: read List<Int>) -> fresh List<Int> {

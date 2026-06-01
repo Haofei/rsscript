@@ -1,9 +1,9 @@
-struct Point derives(Clone, Eq, Hash) {
+struct Point derives(Clone, Eq, Ord, Hash, JsonEncode, JsonDecode, Schema) {
     x: Int
     y: Int
 }
 
-sum Direction derives(Clone, Eq) {
+sum Direction derives(Clone, Eq, Ord, ReviewSchema) {
     North
     South
     East

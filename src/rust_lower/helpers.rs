@@ -879,6 +879,9 @@ pub(super) fn lower_generic_params(params: &[GenericParam]) -> String {
                 Some(GenericBound::Managed) => format!("{name}: rsscript_runtime::ManagedValue"),
                 Some(GenericBound::Struct) => name,
                 Some(GenericBound::Resource) => format!("{name}: rsscript_runtime::Resource"),
+                Some(GenericBound::Protocol(protocol)) if protocol == "Ord" => {
+                    format!("{name}: std::cmp::Ord")
+                }
                 Some(GenericBound::Protocol(protocol)) => {
                     format!("{name}: {}", rust_ident(protocol))
                 }

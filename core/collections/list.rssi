@@ -68,7 +68,11 @@ pub fn List.is_empty<T>(list: read List<T>) -> Bool
 
 pub fn List.reverse<T>(list: read List<T>) -> fresh List<T>
 
-pub fn List.sort<T>(
+pub fn List.sort<T: Ord>(
+    list: mut List<T>,
+) -> Unit
+
+pub fn List.sort_with<T>(
     list: mut List<T>,
     compare: noescape Fn(T, T) -> Int,
 ) -> Unit

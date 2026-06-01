@@ -1,0 +1,11 @@
+// expect: RS0032
+
+features: local
+
+struct User {
+    id: Int
+}
+
+fn sort_users(users: mut List<User>) -> Unit {
+    List.sort<User>(list: mut users)
+}

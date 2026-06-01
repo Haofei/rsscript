@@ -2408,12 +2408,13 @@ T: Struct    for fresh or local-capable values
 T: Resource  for resource generic APIs
 ```
 
-The recognized generic bounds are exactly `Managed`, `Struct`, and `Resource`;
-any other bound is a malformed-generic-parameter diagnostic. A `Copy`-only bound
-is not recognized: managed containers already accept `Copy` values under the
-default `Managed` bound, so a restrictive `Copy` bound has no current use. If a
-genuine `Copy`-only generic API appears, the bound may be added later under the
-feature admission rule (section 2.8).
+The recognized built-in generic bounds are `Managed`, `Struct`, `Resource`, and
+the compiler-owned protocol bound `Ord`. User-declared protocol names are also
+valid bounds. Any other bound is a malformed-generic-parameter or unknown
+protocol diagnostic. A `Copy`-only bound is not recognized: managed containers
+already accept `Copy` values under the default `Managed` bound, so a restrictive
+`Copy` bound has no current use. If a genuine `Copy`-only generic API appears,
+the bound may be added later under the feature admission rule (section 2.8).
 
 Resource types are not `Managed`. Ordinary `List<T>` cannot be instantiated with resource types.
 
@@ -3459,6 +3460,15 @@ pub fn List.sort_by<T>(
     compare: noescape Fn(T, T) -> Int,
 ) -> fresh List<T>
 
+pub fn List.sort<T: Ord>(
+    list: mut List<T>,
+) -> Unit
+
+pub fn List.sort_with<T>(
+    list: mut List<T>,
+    compare: noescape Fn(T, T) -> Int,
+) -> Unit
+
 pub fn List.group_by<T>(
     list: read List<T>,
     key_fn: noescape Fn(T) -> String,
@@ -4103,14 +4113,20 @@ K. Explicit error composition (design principle — v0.6 implemented)
      anyhow/eyre-style erased errors (these hide error provenance from review).
 
 L. Compiler-owned derives (restricted code generation)
-   - RSScript may support a limited set of compiler-owned derive directives:
+   - RSScript supports a limited set of compiler-owned derive directives on
+     structs and sums:
 
-       derive JsonDecode for Config
-       derive ReviewSchema for PackageMetadata
+       struct User derives(Debug, Clone, Eq, Ord, Hash, JsonEncode, JsonDecode, Schema) { ... }
 
    - generated code must produce visible .rssi signatures and review facts.
    - generated code must not introduce hidden control flow, mutation, or
      resource acquisition.
+   - `Ord` is lexicographic over declared fields/variants and also implies the
+     equality/partial-order pieces required by the backend.
+   - `JsonEncode` and `JsonDecode` are compiler-owned serialization markers;
+     the Rust backend lowers them to audited serde derives in generated
+     packages. `Schema` and `ReviewSchema` are review/schema markers and must
+     not hide executable behavior.
    - not adopted: user-defined proc macros, attribute macros, macro_rules,
      build-time code generation that is not auditable, or derive that can
      suppress review facts.

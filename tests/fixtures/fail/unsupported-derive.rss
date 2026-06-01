@@ -1,0 +1,9 @@
+// expect: RS0015
+
+struct User derives(MagicMacro) {
+    id: Int
+}
+
+fn main() -> Unit {
+    return Unit
+}

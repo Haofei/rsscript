@@ -372,20 +372,31 @@ impl<'a> RustLowerer<'a> {
             }
         }
         let mut rust_derives = Vec::new();
-        // Always include Debug
-        rust_derives.push("Debug".to_string());
+        push_unique_derive(&mut rust_derives, "Debug");
         for d in user_derives {
             match d.as_str() {
-                "Debug" => {} // already added
-                "Clone" => rust_derives.push("Clone".to_string()),
+                "Debug" => {}
+                "Clone" => push_unique_derive(&mut rust_derives, "Clone"),
+                "PartialEq" => push_unique_derive(&mut rust_derives, "PartialEq"),
                 "Eq" => {
-                    rust_derives.push("PartialEq".to_string());
-                    rust_derives.push("Eq".to_string());
+                    push_unique_derive(&mut rust_derives, "PartialEq");
+                    push_unique_derive(&mut rust_derives, "Eq");
                 }
-                "Hash" => rust_derives.push("Hash".to_string()),
-                // JsonEncode/JsonDecode recognized but not lowered without serde
-                "JsonEncode" | "JsonDecode" => {}
-                _ => {} // unknown derives silently ignored
+                "PartialOrd" => {
+                    push_unique_derive(&mut rust_derives, "PartialEq");
+                    push_unique_derive(&mut rust_derives, "PartialOrd");
+                }
+                "Ord" => {
+                    push_unique_derive(&mut rust_derives, "PartialEq");
+                    push_unique_derive(&mut rust_derives, "Eq");
+                    push_unique_derive(&mut rust_derives, "PartialOrd");
+                    push_unique_derive(&mut rust_derives, "Ord");
+                }
+                "Hash" => push_unique_derive(&mut rust_derives, "Hash"),
+                "JsonEncode" => push_unique_derive(&mut rust_derives, "serde::Serialize"),
+                "JsonDecode" => push_unique_derive(&mut rust_derives, "serde::Deserialize"),
+                "Schema" | "ReviewSchema" => {}
+                _ => {}
             }
         }
         format!("#[derive({})]\n", rust_derives.join(", "))
@@ -2012,6 +2023,12 @@ impl<'a> RustLowerer<'a> {
 fn match_pattern_span(pattern: &MatchPattern) -> Span {
     match pattern {
         MatchPattern::Variant { span, .. } | MatchPattern::Wildcard(span) => span.clone(),
+    }
+}
+
+fn push_unique_derive(derives: &mut Vec<String>, derive: &str) {
+    if !derives.iter().any(|existing| existing == derive) {
+        derives.push(derive.to_string());
     }
 }
 

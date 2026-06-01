@@ -33,14 +33,14 @@ pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
     let tokens = lex(file, source);
     let syntax_program = parse_source(file, source);
     let hir = Hir::from_syntax(&syntax_program);
-    analyze_program(tokens, syntax_program, hir)
+    analyze_program(tokens, syntax_program, hir, builtin_interface_programs())
 }
 
 pub fn analyze_source_without_core(file: &str, source: &str) -> Vec<Diagnostic> {
     let tokens = lex(file, source);
     let syntax_program = parse_source(file, source);
     let hir = Hir::from_syntax_without_builtin_interfaces(&syntax_program);
-    analyze_program(tokens, syntax_program, hir)
+    analyze_program(tokens, syntax_program, hir, Vec::new())
 }
 
 pub fn core_interfaces() -> &'static [(&'static str, &'static str)] {
@@ -63,7 +63,7 @@ pub fn analyze_source_with_interfaces(
         .map(|(file, source)| parse_source(file, source))
         .collect::<Vec<_>>();
     let hir = Hir::from_syntax_with_interfaces(&syntax_program, &interface_programs);
-    analyze_program(tokens, syntax_program, hir)
+    analyze_program(tokens, syntax_program, hir, interface_programs)
 }
 
 pub fn analyze_source_with_interfaces_without_core(
@@ -81,7 +81,7 @@ pub fn analyze_source_with_interfaces_without_core(
         &syntax_program,
         &interface_programs,
     );
-    analyze_program(tokens, syntax_program, hir)
+    analyze_program(tokens, syntax_program, hir, interface_programs)
 }
 
 pub fn analyze_sources_with_interfaces(
@@ -102,7 +102,7 @@ pub fn analyze_sources_with_interfaces(
         .map(|(file, source)| parse_source(file, source))
         .collect::<Vec<_>>();
     let hir = Hir::from_syntax_with_interfaces(&syntax_program, &interface_programs);
-    analyze_program(tokens, syntax_program, hir)
+    analyze_program(tokens, syntax_program, hir, interface_programs)
 }
 
 pub fn analyze_sources_with_interfaces_without_core(
@@ -126,13 +126,21 @@ pub fn analyze_sources_with_interfaces_without_core(
         &syntax_program,
         &interface_programs,
     );
-    analyze_program(tokens, syntax_program, hir)
+    analyze_program(tokens, syntax_program, hir, interface_programs)
+}
+
+fn builtin_interface_programs() -> Vec<crate::syntax::ast::Program> {
+    CORE_INTERFACES
+        .iter()
+        .map(|(file, source)| parse_source(file, source))
+        .collect()
 }
 
 fn analyze_program(
     tokens: Vec<Token>,
     syntax_program: crate::syntax::ast::Program,
     hir: Hir,
+    interface_programs: Vec<crate::syntax::ast::Program>,
 ) -> Vec<Diagnostic> {
     use crate::syntax::ast::Item;
     let type_aliases = syntax_program
@@ -149,6 +157,7 @@ fn analyze_program(
     let mut analyzer = Analyzer {
         tokens: &tokens,
         syntax_program,
+        interface_programs,
         hir,
         diagnostics: Vec::new(),
         type_aliases,
@@ -178,6 +187,7 @@ fn type_ref_display_name(ty: &crate::syntax::ast::TypeRef) -> String {
 pub(crate) struct Analyzer<'a> {
     pub(crate) tokens: &'a [Token],
     pub(crate) syntax_program: crate::syntax::ast::Program,
+    interface_programs: Vec<crate::syntax::ast::Program>,
     pub(crate) hir: Hir,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) type_aliases: std::collections::BTreeMap<String, String>,
@@ -1036,6 +1046,7 @@ impl Analyzer<'_> {
                 self.check_unsupported_syntax_block(&function.body);
             }
             Item::Type(type_decl) => {
+                self.check_supported_derives(&type_decl.derives, &type_decl.span);
                 for span in &type_decl.malformed_generic_param_spans {
                     self.unsupported_syntax(
                         span.clone(),
@@ -1077,11 +1088,23 @@ impl Analyzer<'_> {
                     );
                 }
             }
-            Item::Module(_)
-            | Item::Use(_)
-            | Item::SumType(_)
-            | Item::TypeAlias(_)
-            | Item::Const(_) => {}
+            Item::SumType(sum) => {
+                self.check_supported_derives(&sum.derives, &sum.span);
+            }
+            Item::Module(_) | Item::Use(_) | Item::TypeAlias(_) | Item::Const(_) => {}
+        }
+    }
+
+    fn check_supported_derives(&mut self, derives: &[String], span: &crate::diagnostic::Span) {
+        for derive in derives {
+            if supported_compiler_derive(derive) {
+                continue;
+            }
+            self.unsupported_syntax(
+                span.clone(),
+                "unsupported derive",
+                "This name is not a compiler-owned RSScript derive. Supported derives are Debug, Clone, Eq, Ord, Hash, JsonEncode, JsonDecode, Schema, and ReviewSchema.",
+            );
         }
     }
 
@@ -1993,13 +2016,8 @@ impl Analyzer<'_> {
     }
 
     fn check_protocol_contracts(&mut self) {
-        let protocol_names = self
-            .syntax_program
-            .protocols
-            .iter()
-            .map(|protocol| protocol.name.clone())
-            .collect::<HashSet<_>>();
-        let items = self.syntax_program.items.clone();
+        let protocol_names = self.visible_protocol_names();
+        let items = self.visible_protocol_items();
         for item in &items {
             match item {
                 Item::Type(decl) => {
@@ -2112,6 +2130,31 @@ impl Analyzer<'_> {
                 }
             }
         }
+    }
+
+    fn visible_protocol_names(&self) -> HashSet<String> {
+        self.interface_programs
+            .iter()
+            .flat_map(|program| program.protocols.iter())
+            .chain(self.syntax_program.protocols.iter())
+            .map(|protocol| protocol.name.clone())
+            .collect()
+    }
+
+    pub(crate) fn protocol_name_is_visible(&self, name: &str) -> bool {
+        self.interface_programs
+            .iter()
+            .flat_map(|program| program.protocols.iter())
+            .chain(self.syntax_program.protocols.iter())
+            .any(|protocol| protocol.name == name)
+    }
+
+    fn visible_protocol_items(&self) -> Vec<Item> {
+        self.interface_programs
+            .iter()
+            .flat_map(|program| program.items.iter().cloned())
+            .chain(self.syntax_program.items.iter().cloned())
+            .collect()
     }
 
     fn check_protocol_bound(&mut self, param: &GenericParam, protocol_names: &HashSet<String>) {
@@ -3625,6 +3668,23 @@ fn generic_bounds(params: &[GenericParam]) -> HashMap<String, Option<GenericBoun
         .iter()
         .map(|param| (param.name.clone(), param.bound.clone()))
         .collect()
+}
+
+fn supported_compiler_derive(name: &str) -> bool {
+    matches!(
+        name,
+        "Debug"
+            | "Clone"
+            | "PartialEq"
+            | "Eq"
+            | "PartialOrd"
+            | "Ord"
+            | "Hash"
+            | "JsonEncode"
+            | "JsonDecode"
+            | "Schema"
+            | "ReviewSchema"
+    )
 }
 
 fn protocol_method_names(items: &[Item], protocol: &str) -> HashSet<String> {
