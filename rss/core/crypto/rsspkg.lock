@@ -1,0 +1,15 @@
+version = 1
+
+[[package]]
+name = "rss-core-crypto"
+version = "0.1.0"
+source = "path+rss/core/crypto"
+checksum = "sha256:d017e77e2b5307ec0c29dbd5d5117df6593647930fae092d4828c5cbce3b9f7e"
+interface_hash = "sha256:7807302bebf82d229a2f67a0cc4bc008bfe1d0392e3789089ae2628335042b88"
+review_hash = "sha256:e274fe2f40b14847c65a69cca1a20c1da73e66a913477e987d8b0213bcc1f9b4"
+native_hash = "sha256:20d532f4da768755f9dda393caabd777f14809df99b07f2b4b7523b0b5128f48"
+features = []
+
+[metadata]
+rss_version = "0.1.0"
+created_by = "rsscript pkg lock"

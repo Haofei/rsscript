@@ -1,0 +1,14 @@
+version = 1
+
+[[package]]
+name = "rss-core-http-server"
+version = "0.1.0"
+source = "path+rss/core/http-server"
+checksum = "sha256:50837f1f54a59e6399583aaceb59d3906d0ba10c3d3cbd9836e2ec9f310ea099"
+interface_hash = "sha256:5def63d81feaaea8552bfe2b6920fffff58a104a725fd23c20c7341f458c641a"
+review_hash = "sha256:72a1f8e7bbec13014d8f7df31ed32488987b0faa26734c5d8fe5eb575dfff9fe"
+features = []
+
+[metadata]
+rss_version = "0.1.0"
+created_by = "rsscript pkg lock"

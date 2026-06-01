@@ -205,6 +205,14 @@ fn package_registry_index_entry(
         native_hash: lock_entry.native_hash.clone(),
         risk,
         native,
+        virtual_package: package
+            .manifest
+            .virtual_package
+            .as_ref()
+            .map(|virtual_package| super::PackageVirtual {
+                has_default: virtual_package.has_default,
+                provider: virtual_package.provider.clone(),
+            }),
         unsafe_boundary: package_index_unsafe_boundary(&package.manifest, native_check),
         dependencies: package_index_dependencies(&package.manifest.dependencies),
         features: package_index_features(&package.manifest, root_features),

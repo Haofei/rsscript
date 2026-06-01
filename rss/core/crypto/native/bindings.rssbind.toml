@@ -1,0 +1,5 @@
+[bindings]
+"Sha256.hex_string" = "rss_crypto_native::sha256_hex_string"
+"Sha256.hex_bytes" = "rss_crypto_native::sha256_hex_bytes"
+"HmacSha256.hex" = "rss_crypto_native::hmac_sha256_hex"
+"ConstantTime.equal" = "rss_crypto_native::constant_time_equal"

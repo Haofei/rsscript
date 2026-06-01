@@ -8,6 +8,24 @@ pub fn File.open_read(path: read Path) -> Result<File, FileError>
 
 pub fn File.open_write(path: read Path) -> Result<File, FileError>
 
+pub fn File.exists(path: read Path) -> Bool
+    effects(native)
+
+pub fn File.read_bytes(path: read Path) -> Result<fresh Bytes, FileError>
+    effects(native)
+
+pub fn File.read_string(path: read Path) -> Result<String, FileError>
+    effects(native)
+
+pub fn File.write_bytes(path: read Path, data: read Bytes) -> Result<Unit, FileError>
+    effects(native)
+
+pub fn File.write_string_to_path(path: read Path, text: read String) -> Result<Unit, FileError>
+    effects(native)
+
+pub fn File.append_string(path: read Path, text: read String) -> Result<Unit, FileError>
+    effects(native)
+
 pub fn File.read_all(file: mut File) -> Result<fresh Bytes, FileError>
 
 pub fn File.read_all_string(file: mut File) -> Result<String, FileError>

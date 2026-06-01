@@ -1,0 +1,16 @@
+struct HttpRoute {
+    method: String
+    path: String
+}
+
+struct HttpReply {
+    status: Int
+    body: String
+}
+
+pub fn HttpServer.serve_static(
+    address: read String,
+    routes: read List<HttpRoute>,
+) -> Result<Unit, String>
+
+pub fn HttpReply.ok(body: read String) -> fresh HttpReply

@@ -1,0 +1,4 @@
+[bindings]
+"Sqlite.execute" = "rss_sqlite_native::execute"
+"Sqlite.query_strings" = "rss_sqlite_native::query_strings"
+"Sqlite.query_one_string" = "rss_sqlite_native::query_one_string"

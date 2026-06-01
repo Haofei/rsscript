@@ -1,0 +1,39 @@
+[package]
+name = "rss-sqlite"
+version = "0.1.0"
+edition = "2026"
+
+[interfaces]
+paths = ["interface"]
+
+[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_sqlite_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+
+[[review.capability_bindings]]
+symbol = "Sqlite.execute"
+category = "database.write"
+provider = "sqlite"
+service = "sqlite"
+action = "execute"
+resource = "path"
+
+[[review.capability_bindings]]
+symbol = "Sqlite.query_strings"
+category = "database.read"
+provider = "sqlite"
+service = "sqlite"
+action = "select"
+resource = "path"
+
+[[review.capability_bindings]]
+symbol = "Sqlite.query_one_string"
+category = "database.read"
+provider = "sqlite"
+service = "sqlite"
+action = "select"
+resource = "path"

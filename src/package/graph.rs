@@ -100,7 +100,7 @@ fn collect_missing_provider_reason(
     provider_choices: &BTreeMap<String, ManifestProviderChoice>,
     reasons: &mut Vec<String>,
 ) {
-    let Some(choice) = provider_choices.get(&node.name) else {
+    let Some(choice) = provider_choice_for_node(node, provider_choices) else {
         reasons.push(format!(
             "interface-only dependency `{}` requires an implementation provider for executable builds",
             node.name
@@ -165,6 +165,18 @@ fn find_package_tree_node_by_name<'a>(
         }
     }
     None
+}
+
+fn provider_choice_for_node<'a>(
+    node: &'a PackageTreeNode,
+    provider_choices: &'a BTreeMap<String, ManifestProviderChoice>,
+) -> Option<&'a ManifestProviderChoice> {
+    provider_choices.get(&node.name).or_else(|| {
+        node.virtual_package
+            .as_ref()
+            .and_then(|virtual_package| virtual_package.provider.as_deref())
+            .and_then(|provider| provider_choices.get(provider))
+    })
 }
 
 fn collect_graph_budget_reasons(
@@ -264,6 +276,7 @@ fn package_tree_node(
             risk: PackageRisk::Elevated,
             features,
             native: review.native_rust.is_some(),
+            virtual_package: package_virtual(&package.manifest),
             interface_only: package_is_interface_only(&package.sources),
             compile_only: false,
             test_only: false,
@@ -299,6 +312,7 @@ fn package_tree_node(
         risk: review.risk,
         features,
         native: review.native_rust.is_some(),
+        virtual_package: package_virtual(&package.manifest),
         interface_only: package_is_interface_only(&package.sources),
         compile_only: false,
         test_only: false,
@@ -377,6 +391,7 @@ fn unresolved_dependency_node(
         risk: PackageRisk::Unknown,
         features: spec.features,
         native: false,
+        virtual_package: None,
         interface_only: false,
         compile_only: spec.compile_only,
         test_only: spec.test_only,
@@ -404,6 +419,16 @@ fn package_provider_implementations(
             },
         )
         .collect()
+}
+
+fn package_virtual(manifest: &super::Manifest) -> Option<super::PackageVirtual> {
+    manifest
+        .virtual_package
+        .as_ref()
+        .map(|virtual_package| super::PackageVirtual {
+            has_default: virtual_package.has_default,
+            provider: virtual_package.provider.clone(),
+        })
 }
 
 fn package_is_interface_only(sources: &[super::PackageSource]) -> bool {

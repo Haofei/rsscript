@@ -1,0 +1,14 @@
+version = 1
+
+[[package]]
+name = "rss-core-telemetry"
+version = "0.1.0"
+source = "path+rss/core/telemetry"
+checksum = "sha256:e6ffb86afd99a46e1ab1e7a21d6893157a0a87f9067c81248161c44056b3f995"
+interface_hash = "sha256:4409664006d0467f72e58f550ba58aa22b0f569b7b677e30c3770bd0b0994f3b"
+review_hash = "sha256:3e3a747b7bdc45755948e89ec169d975399f0bf0dd8e96a5de79fe207f375c0e"
+features = []
+
+[metadata]
+rss_version = "0.1.0"
+created_by = "rsscript pkg lock"

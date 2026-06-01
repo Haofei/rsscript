@@ -67,6 +67,10 @@ pub fn path_parent<P: RuntimePath + ?Sized>(path: &P) -> Option<PathBuf> {
     path.as_path().parent().map(PathBuf::from)
 }
 
+pub fn path_is_absolute<P: RuntimePath + ?Sized>(path: &P) -> bool {
+    path.as_path().is_absolute()
+}
+
 pub trait RuntimeBytes {
     fn as_bytes_slice(&self) -> &[u8];
 }
@@ -115,6 +119,40 @@ pub fn file_open_read<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<File
 
 pub fn file_open_write<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<File> {
     std::fs::File::create(path.as_path()).map(|inner| File { inner })
+}
+
+pub fn file_exists<P: RuntimePath + ?Sized>(path: &P) -> bool {
+    path.as_path().exists()
+}
+
+pub fn file_read_bytes<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<Vec<u8>> {
+    std::fs::read(path.as_path())
+}
+
+pub fn file_read_string<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<String> {
+    std::fs::read_to_string(path.as_path())
+}
+
+pub fn file_write_bytes<P: RuntimePath + ?Sized, B: RuntimeBytes + ?Sized>(
+    path: &P,
+    data: &B,
+) -> std::io::Result<()> {
+    std::fs::write(path.as_path(), data.as_bytes_slice())
+}
+
+pub fn file_write_string_to_path<P: RuntimePath + ?Sized>(
+    path: &P,
+    text: &str,
+) -> std::io::Result<()> {
+    std::fs::write(path.as_path(), text.as_bytes())
+}
+
+pub fn file_append_string<P: RuntimePath + ?Sized>(path: &P, text: &str) -> std::io::Result<()> {
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path.as_path())?;
+    file.write_all(text.as_bytes())
 }
 
 pub fn file_read_all(file: &mut File) -> std::io::Result<Vec<u8>> {
@@ -345,6 +383,29 @@ mod tests {
             .expect("async read should succeed");
 
         assert_eq!(text, "hello async file");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn direct_file_helpers_cover_common_script_io() {
+        let path =
+            std::env::temp_dir().join(format!("rsscript-direct-file-{}.txt", std::process::id()));
+
+        assert!(!file_exists(&path));
+        file_write_string_to_path(&path, "hello").expect("write should succeed");
+        file_append_string(&path, " world").expect("append should succeed");
+
+        assert!(file_exists(&path));
+        assert_eq!(
+            file_read_string(&path).expect("read string should succeed"),
+            "hello world"
+        );
+        assert_eq!(
+            file_read_bytes(&path).expect("read bytes should succeed"),
+            b"hello world"
+        );
+        assert!(path_is_absolute(&path));
+
         let _ = std::fs::remove_file(path);
     }
 }

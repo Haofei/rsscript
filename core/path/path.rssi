@@ -13,3 +13,6 @@ pub fn Path.extension(path: read Path) -> Option<String>
 
 pub fn Path.parent(path: read Path) -> Option<Path>
     effects(pure)
+
+pub fn Path.is_absolute(path: read Path) -> Bool
+    effects(pure)

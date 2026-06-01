@@ -6,7 +6,14 @@ description = "Reviewable System Script v0.6 review-first front-end checker and 
 license = "MIT OR Apache-2.0"
 
 [workspace]
-members = ["runtime", "reir", "rss/rayon/native/rust"]
+members = [
+    "runtime",
+    "reir",
+    "rss/core/cli/native/rust",
+    "rss/core/crypto/native/rust",
+    "rss/rayon/native/rust",
+    "rss/adapters/sqlite/native/rust",
+]
 
 [[bin]]
 name = "rss"

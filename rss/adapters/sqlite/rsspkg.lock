@@ -1,0 +1,15 @@
+version = 1
+
+[[package]]
+name = "rss-sqlite"
+version = "0.1.0"
+source = "path+rss/adapters/sqlite"
+checksum = "sha256:a3d4451fedec7c7a449ac892c8ea5140633ef1c1c00f1c45bd6b8d640beb6712"
+interface_hash = "sha256:283f52be39bfe2702335c89ed601b0ba440d8e80796b878bc843683b73d2842e"
+review_hash = "sha256:56d782e711ae2439301ca473f193abd65b6ae5a2aaa6ebf2718893deb2cdf088"
+native_hash = "sha256:afa12d5e46aa0c9e30dac79915b9cac3683b599e481d8378e82c03664bfc3b2f"
+features = []
+
+[metadata]
+rss_version = "0.1.0"
+created_by = "rsscript pkg lock"

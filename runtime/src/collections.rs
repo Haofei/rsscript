@@ -17,6 +17,22 @@ pub fn list_push<T: Clone>(list: &mut Vec<T>, value: &T) {
     list.push(value.clone());
 }
 
+pub fn list_set<T: Clone>(list: &mut [T], index: i64, value: &T) {
+    list[index as usize] = value.clone();
+}
+
+pub fn list_pop<T>(list: &mut Vec<T>) -> Option<T> {
+    list.pop()
+}
+
+pub fn list_clear<T>(list: &mut Vec<T>) {
+    list.clear();
+}
+
+pub fn list_append<T: Clone>(list: &mut Vec<T>, values: &[T]) {
+    list.extend_from_slice(values);
+}
+
 pub fn list_len<T>(list: &[T]) -> i64 {
     list.len() as i64
 }
@@ -183,6 +199,15 @@ pub fn list_sort_by<T: Clone, K>(
 
 pub fn list_take<T: Clone>(list: &[T], count: i64) -> Vec<T> {
     list.iter().take(count.max(0) as usize).cloned().collect()
+}
+
+pub fn list_slice<T: Clone>(list: &[T], start: i64, len: i64) -> Vec<T> {
+    let start = start.max(0) as usize;
+    if start >= list.len() {
+        return Vec::new();
+    }
+    let end = start.saturating_add(len.max(0) as usize).min(list.len());
+    list[start..end].to_vec()
 }
 
 pub fn map_new<K, V>() -> HashMap<K, V> {
@@ -510,5 +535,22 @@ mod view_tests {
         assert_eq!(bytes_view(bytes, 2, 3), b"cde");
         assert_eq!(bytes_view(bytes, 20, 3), b"");
         assert_eq!(buffer_view(bytes, 4, 20), b"ef");
+    }
+
+    #[test]
+    fn list_mutation_helpers_cover_common_updates() {
+        let mut items = list_new();
+        list_push(&mut items, &1);
+        list_push(&mut items, &2);
+        list_set(&mut items, 1, &3);
+        list_append(&mut items, &[4, 5]);
+
+        assert_eq!(items, vec![1, 3, 4, 5]);
+        assert_eq!(list_slice(&items, 1, 2), vec![3, 4]);
+        assert_eq!(list_slice(&items, 99, 2), Vec::<i32>::new());
+        assert_eq!(list_pop(&mut items), Some(5));
+
+        list_clear(&mut items);
+        assert!(items.is_empty());
     }
 }

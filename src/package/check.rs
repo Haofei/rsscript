@@ -82,6 +82,7 @@ pub fn check_package_dir(package_dir: &Path) -> Result<PackageCheck, String> {
         ok,
         risk,
         reasons,
+        virtual_package: review.virtual_package,
         implements: review.implements,
         summary,
         graph,

@@ -6557,6 +6557,94 @@ fn main() -> Unit {
 }
 
 #[test]
+fn package_lowering_input_records_checked_in_optional_core_packages() {
+    let root_dir = common::unique_temp_dir("rsscript-package-optional-core-root");
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let cli_dir = repo.join("rss/core/cli");
+    let crypto_dir = repo.join("rss/core/crypto");
+    let sqlite_dir = repo.join("rss/adapters/sqlite");
+    common::write_named_package_fixture(
+        &root_dir,
+        "rss-optional-core-app",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-core-cli = {{ path = "{}" }}
+rss-core-crypto = {{ path = "{}" }}
+rss-sqlite = {{ path = "{}" }}
+"#,
+            common::toml_path(&cli_dir),
+            common::toml_path(&crypto_dir),
+            common::toml_path(&sqlite_dir)
+        ),
+        "",
+    );
+    fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        root_dir.join("src/main.rss"),
+        r#"features: native
+
+fn main() -> Result<Unit, String> {
+    let args = List<String>.new()
+    List.push(list: mut args, value: read "--verbose")
+    let verbose = Cli.flag(args: read args, name: read "verbose")
+    Assert.equal_bool(left: verbose, right: true)
+
+    let digest = Sha256.hex_string(value: read "abc")
+    Assert.equal(left: read digest, right: read "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+
+    let path = Path.from_string(value: read "target/rss-optional-core-app.db")
+    Sqlite.execute(path: read path, sql: read "create table if not exists item(name text);")?
+    let value = Sqlite.query_one_string(path: read path, sql: read "select name from item limit 1")?
+    return Ok(Unit)
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let input = package_lowering_input(&root_dir).expect("package should lower");
+    let package = lower_sources_to_rust_package_with_options(
+        &input.sources,
+        &input.package.name,
+        "/workspace/rsscript/runtime",
+        &input.interfaces,
+        &input.native_dependencies,
+    )
+    .expect("package source should lower with optional core native bindings");
+    let _ = fs::remove_dir_all(&root_dir);
+
+    assert_eq!(input.native_dependencies.len(), 3);
+    assert!(input.native_dependencies.iter().any(|dep| {
+        dep.crate_name == "rss_cli_native"
+            && dep
+                .bindings
+                .get("Cli.flag")
+                .is_some_and(|target| target == "rss_cli_native::flag")
+    }));
+    assert!(input.native_dependencies.iter().any(|dep| {
+        dep.crate_name == "rss_crypto_native"
+            && dep
+                .bindings
+                .get("Sha256.hex_string")
+                .is_some_and(|target| target == "rss_crypto_native::sha256_hex_string")
+    }));
+    assert!(input.native_dependencies.iter().any(|dep| {
+        dep.crate_name == "rss_sqlite_native"
+            && dep
+                .bindings
+                .get("Sqlite.execute")
+                .is_some_and(|target| target == "rss_sqlite_native::execute")
+    }));
+    assert!(package.lib_rs.contains("rss_cli_native::flag"));
+    assert!(
+        package
+            .lib_rs
+            .contains("rss_crypto_native::sha256_hex_string")
+    );
+    assert!(package.lib_rs.contains("rss_sqlite_native::execute"));
+}
+
+#[test]
 fn package_vendor_can_emit_reir_supply_chain_facts() {
     let temp_dir = common::unique_temp_dir("rsscript-package-vendor-reir");
     let root_dir = temp_dir.join("app");
@@ -6933,6 +7021,184 @@ platform-env = {{ package = "posix-env", version = "0.1.0" }}
                 != "interface-only dependency `platform-env` requires an implementation provider for executable builds"
         })
     }));
+}
+
+#[test]
+fn package_review_marks_virtual_package_with_default() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-virtual-default");
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-core-clock",
+        "0.1.0",
+        r#"[virtual]
+has_default = true
+"#,
+        r#"pub fn Clock.now_ms() -> Int
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("src/lib.rss"),
+        r#"pub fn Clock.now_ms() -> Int {
+    return 0
+}
+"#,
+    )
+    .expect("source should be written");
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&temp_dir).expect("package check should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let tree = package_tree(&temp_dir).expect("package tree should succeed");
+    let tree_json: Value = serde_json::from_str(&rsscript::format_package_tree_json(&tree))
+        .expect("package tree JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(check.ok);
+    assert_eq!(json["virtual_package"]["has_default"], true);
+    assert_eq!(json["virtual_package"]["provider"], Value::Null);
+    assert_eq!(tree_json["root"]["virtual_package"]["has_default"], true);
+}
+
+#[test]
+fn package_check_rejects_invalid_virtual_package_shape() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-virtual-invalid");
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-core-clock",
+        "0.1.0",
+        r#"[virtual]
+has_default = false
+"#,
+        r#"pub fn Clock.now_ms() -> Int
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("src/lib.rss"),
+        r#"pub fn Clock.now_ms() -> Int {
+    return 0
+}
+"#,
+    )
+    .expect("source should be written");
+    fs::write(
+        temp_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&temp_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&temp_dir).expect("package check should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!check.ok);
+    assert_eq!(json["virtual_package"]["has_default"], false);
+    assert!(json["diagnostics"].as_array().is_some_and(|diagnostics| {
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == "PKG0901"
+                && diagnostic["label"] == "has_default"
+                && diagnostic["summary"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("without a default implementation"))
+        })
+    }));
+}
+
+#[test]
+fn package_check_accepts_short_provider_alias_for_virtual_dependency() {
+    let root_dir = common::unique_temp_dir("rsscript-package-short-provider-root");
+    let interface_dir = common::unique_temp_dir("rsscript-package-short-provider-interface");
+    let provider_dir = common::unique_temp_dir("rsscript-package-short-provider-impl");
+    common::write_named_package_fixture(
+        &interface_dir,
+        "platform-env",
+        "0.1.0",
+        r#"[virtual]
+has_default = false
+provider = "env"
+"#,
+        r#"pub fn Env.home() -> String
+"#,
+    );
+    let interface_hash = lock_package_dir(&interface_dir)
+        .expect("interface package should lock")
+        .packages[0]
+        .interface_hash
+        .clone();
+    common::write_named_package_fixture(
+        &provider_dir,
+        "posix-env",
+        "0.1.0",
+        &format!(
+            r#"[implements."platform-env"]
+version = "0.1"
+interface_features = []
+interface_effective_hash = "{}"
+"#,
+            interface_hash
+        ),
+        r#"pub fn PosixEnv.ready() -> Unit
+"#,
+    );
+    fs::create_dir_all(provider_dir.join("src")).expect("provider source dir should be created");
+    fs::write(
+        provider_dir.join("src/lib.rss"),
+        r#"pub fn PosixEnv.ready() -> Unit {
+    return Unit
+}
+"#,
+    )
+    .expect("provider source should be written");
+    common::write_named_package_fixture(
+        &root_dir,
+        "rss-app",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+platform-env = {{ path = "{}" }}
+posix-env = {{ path = "{}" }}
+
+[providers]
+env = "posix-env"
+"#,
+            common::toml_path(&interface_dir),
+            common::toml_path(&provider_dir)
+        ),
+        r#"pub fn App.run() -> Unit
+"#,
+    );
+    fs::write(
+        root_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&root_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&root_dir).expect("package check should succeed");
+    let tree = package_tree(&root_dir).expect("package tree should succeed");
+    let tree_json: Value = serde_json::from_str(&rsscript::format_package_tree_json(&tree))
+        .expect("package tree JSON should parse");
+    let _ = fs::remove_dir_all(&root_dir);
+    let _ = fs::remove_dir_all(&interface_dir);
+    let _ = fs::remove_dir_all(&provider_dir);
+
+    assert!(check.ok);
+    assert_eq!(
+        tree_json["root"]["dependencies"][0]["virtual_package"]["provider"],
+        "env"
+    );
 }
 
 #[test]

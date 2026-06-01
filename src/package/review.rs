@@ -28,8 +28,9 @@ use super::{
     PackageDependencyKind, PackageNativeRustReview, PackageProviderImplementation, PackageReview,
     PackageReviewAwaitBoundary, PackageReviewAwaitSite, PackageReviewCapability,
     PackageReviewDependency, PackageReviewFile, PackageReviewFileKind, PackageReviewSummary,
-    PackageRisk, collect_dependency_interface_sources, dedup_diagnostics, package_dependency_spec,
-    package_feature_may_change_boundary_risk, package_feature_resolution_diagnostics,
+    PackageRisk, PackageVirtual, collect_dependency_interface_sources, dedup_diagnostics,
+    package_dependency_spec, package_feature_may_change_boundary_risk,
+    package_feature_resolution_diagnostics,
 };
 
 pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
@@ -83,6 +84,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         package_dir,
         manifest,
     ));
+    diagnostics.extend(package_virtual_diagnostics(package_dir, manifest, sources));
     diagnostics.extend(interface_frontend_diagnostics);
     diagnostics.extend(analyze_sources_with_interfaces(
         &source_refs,
@@ -205,6 +207,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         })
         .collect();
     let features = manifest.features.keys().cloned().collect::<Vec<_>>();
+    let virtual_package = package_virtual(manifest);
     let implements = package_provider_implementations(manifest);
     let dependencies = package_review_dependencies(manifest);
     let mut exports = package_review_exports(sources, &review_map);
@@ -221,6 +224,7 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         risk,
         reasons,
         features,
+        virtual_package,
         implements,
         dependencies,
         summary,
@@ -232,6 +236,16 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         review_map,
         diagnostics,
     })
+}
+
+fn package_virtual(manifest: &Manifest) -> Option<PackageVirtual> {
+    manifest
+        .virtual_package
+        .as_ref()
+        .map(|virtual_package| PackageVirtual {
+            has_default: virtual_package.has_default,
+            provider: virtual_package.provider.clone(),
+        })
 }
 
 fn package_review_dependencies(manifest: &Manifest) -> Vec<PackageReviewDependency> {
@@ -329,6 +343,68 @@ fn package_provider_implementation_diagnostics(
         }
     }
     diagnostics
+}
+
+fn package_virtual_diagnostics(
+    package_dir: &Path,
+    manifest: &Manifest,
+    sources: &[PackageSource],
+) -> Vec<Diagnostic> {
+    let Some(virtual_package) = manifest.virtual_package.as_ref() else {
+        return Vec::new();
+    };
+    let has_interface = sources
+        .iter()
+        .any(|source| source.kind == PackageReviewFileKind::Interface);
+    let has_source = sources
+        .iter()
+        .any(|source| source.kind == PackageReviewFileKind::Source);
+    let mut diagnostics = Vec::new();
+    if !has_interface {
+        diagnostics.push(package_virtual_diagnostic(
+            package_dir,
+            "virtual",
+            "virtual package must declare an interface.",
+            "`[virtual]` packages define a contract that implementations bind to, so at least one `.rssi` file must be present.",
+        ));
+    }
+    if virtual_package.has_default && !has_source {
+        diagnostics.push(package_virtual_diagnostic(
+            package_dir,
+            "has_default",
+            "virtual package with `has_default = true` must provide source files.",
+            "A default implementation is linkable only when the virtual package includes RSScript source or native bindings.",
+        ));
+    }
+    if !virtual_package.has_default && has_source {
+        diagnostics.push(package_virtual_diagnostic(
+            package_dir,
+            "has_default",
+            "virtual package without a default implementation cannot include source files.",
+            "Set `has_default = true`, or move the implementation into a provider package declared with `[implements]`.",
+        ));
+    }
+    diagnostics
+}
+
+fn package_virtual_diagnostic(
+    package_dir: &Path,
+    label: &str,
+    summary: impl Into<String>,
+    cause: impl Into<String>,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::PACKAGE_PROVIDER_DECLARATION,
+        summary,
+        super::package_manifest_key_span(package_dir, "virtual"),
+        label,
+    )
+    .with_cause(cause)
+    .with_fix(
+        "fix_virtual_package",
+        "Use `[virtual] has_default = true` with a default implementation, or keep the virtual package interface-only and select a provider with `[providers]`.",
+        "manual",
+    )
 }
 
 fn package_provider_implementation_diagnostic(

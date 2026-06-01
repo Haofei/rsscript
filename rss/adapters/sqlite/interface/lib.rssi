@@ -1,0 +1,10 @@
+features: native
+
+native fn Sqlite.execute(path: read Path, sql: read String) -> Result<Unit, String>
+    effects(native)
+
+native fn Sqlite.query_strings(path: read Path, sql: read String) -> Result<fresh List<String>, String>
+    effects(native)
+
+native fn Sqlite.query_one_string(path: read Path, sql: read String) -> Result<Option<String>, String>
+    effects(native)

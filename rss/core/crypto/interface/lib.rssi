@@ -1,0 +1,13 @@
+features: native
+
+native fn Sha256.hex_string(value: read String) -> fresh String
+    effects(native)
+
+native fn Sha256.hex_bytes(value: read Bytes) -> fresh String
+    effects(native)
+
+native fn HmacSha256.hex(key: read String, message: read String) -> fresh String
+    effects(native)
+
+native fn ConstantTime.equal(left: read String, right: read String) -> Bool
+    effects(native)

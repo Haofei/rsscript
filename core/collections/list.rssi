@@ -8,6 +8,23 @@ pub fn List.push<T>(
 ) -> Unit
     effects(retains(value))
 
+pub fn List.set<T>(
+    list: mut List<T>,
+    index: Int,
+    value: read T,
+) -> Unit
+    effects(retains(value))
+
+pub fn List.pop<T>(list: mut List<T>) -> Option<T>
+
+pub fn List.clear<T>(list: mut List<T>) -> Unit
+
+pub fn List.append<T>(
+    list: mut List<T>,
+    values: read List<T>,
+) -> Unit
+    effects(retains(values))
+
 pub fn List.len<T>(list: read List<T>) -> Int
 
 pub fn List.get<T>(
@@ -101,6 +118,12 @@ pub fn List.flat_map<T, U>(
 pub fn List.take<T>(
     list: read List<T>,
     count: Int,
+) -> fresh List<T>
+
+pub fn List.slice<T>(
+    list: read List<T>,
+    start: Int,
+    len: Int,
 ) -> fresh List<T>
 
 pub fn List.skip<T>(

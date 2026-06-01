@@ -13,6 +13,7 @@ pub struct PackageReview {
     pub risk: PackageRisk,
     pub reasons: Vec<String>,
     pub features: Vec<String>,
+    pub virtual_package: Option<PackageVirtual>,
     pub implements: Vec<PackageProviderImplementation>,
     pub dependencies: Vec<PackageReviewDependency>,
     pub summary: PackageReviewSummary,
@@ -72,6 +73,7 @@ pub struct PackageReviewMetadata {
     pub risk: PackageRisk,
     pub reasons: Vec<String>,
     pub features: Vec<String>,
+    pub virtual_package: Option<PackageVirtual>,
     pub implements: Vec<PackageProviderImplementation>,
     pub dependencies: Vec<PackageReviewDependency>,
     pub summary: PackageReviewSummary,
@@ -104,6 +106,7 @@ pub struct PackageCheck {
     pub ok: bool,
     pub risk: PackageRisk,
     pub reasons: Vec<String>,
+    pub virtual_package: Option<PackageVirtual>,
     pub implements: Vec<PackageProviderImplementation>,
     pub summary: PackageReviewSummary,
     pub graph: PackageGraphCheck,
@@ -162,6 +165,7 @@ pub struct PackageRegistryIndexEntry {
     pub native_hash: Option<String>,
     pub risk: PackageRisk,
     pub native: bool,
+    pub virtual_package: Option<PackageVirtual>,
     #[serde(rename = "unsafe_apis")]
     pub unsafe_boundary: bool,
     pub dependencies: BTreeMap<String, String>,
@@ -261,6 +265,7 @@ pub struct PackageTreeNode {
     pub risk: PackageRisk,
     pub features: Vec<String>,
     pub native: bool,
+    pub virtual_package: Option<PackageVirtual>,
     pub interface_only: bool,
     pub compile_only: bool,
     pub test_only: bool,
@@ -278,6 +283,12 @@ pub enum PackageDependencyKind {
     Root,
     Normal,
     Dev,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageVirtual {
+    pub has_default: bool,
+    pub provider: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

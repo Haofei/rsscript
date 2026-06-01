@@ -129,6 +129,41 @@ fn run() -> Int {
 }
 
 #[test]
+fn rust_lowering_maps_common_no_require_core_helpers() {
+    let source = r#"
+fn run(path: read Path) -> Result<Int, FileError> {
+    let mut items = List<Int>.new()
+    List.push(list: mut items, value: read 1)
+    List.set(list: mut items, index: 0, value: read 2)
+    let copy = List.slice(list: read items, start: 0, len: 1)
+    List.append(list: mut items, values: read copy)
+    List.pop(list: mut items)
+    let part = List.slice(list: read items, start: 0, len: 2)
+    if File.exists(path: read path) {
+        let text = File.read_string(path: read path)?
+        File.write_string_to_path(path: read path, text: read text)?
+        File.append_string(path: read path, text: read "!")?
+    }
+    if Path.is_absolute(path: read path) {
+        List.push(list: mut items, value: read 3)
+    }
+    return Ok(List.len(list: read part))
+}
+"#;
+    let rust = lower_source_to_rust("core-common.rss", source).expect("source should lower");
+
+    assert!(rust.contains("rsscript_runtime::list_set"));
+    assert!(rust.contains("rsscript_runtime::list_append"));
+    assert!(rust.contains("rsscript_runtime::list_pop"));
+    assert!(rust.contains("rsscript_runtime::list_slice"));
+    assert!(rust.contains("rsscript_runtime::file_exists"));
+    assert!(rust.contains("rsscript_runtime::file_read_string"));
+    assert!(rust.contains("rsscript_runtime::file_write_string_to_path"));
+    assert!(rust.contains("rsscript_runtime::file_append_string"));
+    assert!(rust.contains("rsscript_runtime::path_is_absolute"));
+}
+
+#[test]
 fn rust_lowering_wraps_async_control_flow_with_await_in_pending_boundary() {
     let source = r#"
 features: async

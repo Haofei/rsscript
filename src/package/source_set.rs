@@ -25,6 +25,8 @@ pub(super) struct Manifest {
     pub(super) review: Option<ManifestReview>,
     #[serde(default)]
     pub(super) native: Option<ManifestNative>,
+    #[serde(default, rename = "virtual")]
+    pub(super) virtual_package: Option<ManifestVirtual>,
     #[serde(default)]
     pub(super) implements: BTreeMap<String, ManifestProviderImplementation>,
     #[serde(default)]
@@ -166,6 +168,14 @@ pub(super) struct ManifestNativeRustPolicy {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ManifestVirtual {
+    #[serde(default)]
+    pub(super) has_default: bool,
+    pub(super) provider: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
 pub(super) struct ManifestProviderImplementation {
     pub(super) version: Option<String>,
     #[serde(default)]
@@ -173,10 +183,37 @@ pub(super) struct ManifestProviderImplementation {
     pub(super) interface_effective_hash: Option<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default)]
 pub(super) struct ManifestProviderChoice {
     pub(super) package: Option<String>,
     pub(super) version: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for ManifestProviderChoice {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum ProviderChoice {
+            Package(String),
+            Table {
+                package: Option<String>,
+                version: Option<String>,
+            },
+        }
+
+        match ProviderChoice::deserialize(deserializer)? {
+            ProviderChoice::Package(package) => Ok(ManifestProviderChoice {
+                package: Some(package),
+                version: None,
+            }),
+            ProviderChoice::Table { package, version } => {
+                Ok(ManifestProviderChoice { package, version })
+            }
+        }
+    }
 }
 
 impl ManifestNativeRust {
