@@ -568,6 +568,10 @@ impl Hir {
         &self.feature_uses
     }
 
+    pub fn call_sites(&self) -> &[HirCallSite] {
+        &self.call_sites
+    }
+
     pub fn resolve_call(&self, callee: &Callee) -> CallResolution {
         let call_name = callee_name(callee);
         if is_enum_variant_call(call_name) {

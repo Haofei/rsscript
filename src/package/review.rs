@@ -5,10 +5,11 @@ use crate::analyzer::{
     analyze_source_with_interfaces, analyze_sources_with_interfaces, core_interfaces,
 };
 use crate::diagnostic::{Diagnostic, Span, code};
+use crate::hir::{CallResolution, Hir};
 use crate::lint::lint_source;
 use crate::review::{ReviewMap, ReviewMapClassification, review_map_sources_with_interfaces};
 use crate::runtime_abi;
-use crate::syntax::ast::{Block, Callee, Expr, Item, MatchPattern, Stmt, TypeKind};
+use crate::syntax::ast::{Block, Callee, Expr, Item, MatchPattern, Stmt, TypeKind, merge_programs};
 use crate::syntax::parse_source;
 
 use super::contract::{
@@ -147,22 +148,13 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
     let await_sites = collect_package_await_sites(sources);
     let api_summary = package_api_effect_summary(sources, &review_map, &await_sites);
     let risk = if interface_diagnostic_exports.is_empty() {
-        let unknown_capability_bindings_for_risk = if manifest
-            .review
-            .as_ref()
-            .is_some_and(|review| review.policy.deny_unknown == Some(true))
-        {
-            unknown_capability_bindings
-        } else {
-            0
-        };
         package_risk(
             manifest,
             native_rust.as_ref(),
             &review_map,
             &diagnostics,
             api_summary.native_apis,
-            unknown_capability_bindings_for_risk,
+            unknown_capability_bindings,
         )
     } else {
         PackageRisk::Unknown
@@ -801,6 +793,23 @@ struct PackageCallSite {
 fn collect_package_call_graph(sources: &[PackageSource]) -> PackageCallGraph {
     let mut reverse_calls = BTreeMap::new();
     let mut function_spans = BTreeMap::new();
+    let relative_paths = sources
+        .iter()
+        .map(|source| (source.path.clone(), source.relative_path.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let source_program = merge_programs(
+        sources
+            .iter()
+            .filter(|source| source.kind == PackageReviewFileKind::Source)
+            .map(|source| parse_source(&source.path, &source.contents)),
+    );
+    let interface_programs = sources
+        .iter()
+        .filter(|source| source.kind == PackageReviewFileKind::Interface)
+        .map(|source| parse_source(&source.path, &source.contents))
+        .collect::<Vec<_>>();
+    let hir = Hir::from_syntax_with_interfaces(&source_program, &interface_programs);
+
     for source in sources {
         let program = parse_source(&source.path, &source.contents);
         for item in &program.items {
@@ -811,18 +820,21 @@ fn collect_package_call_graph(sources: &[PackageSource]) -> PackageCallGraph {
                 function.name.clone(),
                 relative_span(&function.span, &source.relative_path),
             );
-            let mut callees = Vec::new();
-            collect_calls_from_block(&function.body, &source.relative_path, &mut callees);
-            for (callee, span) in callees {
-                reverse_calls
-                    .entry(callee)
-                    .or_insert_with(Vec::new)
-                    .push(PackageCallSite {
-                        function: function.name.clone(),
-                        span,
-                    });
-            }
         }
+    }
+    for call_site in hir.call_sites() {
+        let callee = package_call_site_label(call_site);
+        let span = relative_paths.get(&call_site.span.file).map_or_else(
+            || call_site.span.clone(),
+            |relative_path| relative_span(&call_site.span, relative_path),
+        );
+        reverse_calls
+            .entry(callee)
+            .or_insert_with(Vec::new)
+            .push(PackageCallSite {
+                function: call_site.function_name.clone(),
+                span,
+            });
     }
     for callers in reverse_calls.values_mut() {
         callers.sort_by(|left, right| {
@@ -840,107 +852,24 @@ fn collect_package_call_graph(sources: &[PackageSource]) -> PackageCallGraph {
     }
 }
 
+fn package_call_site_label(call_site: &crate::hir::HirCallSite) -> String {
+    match &call_site.resolution {
+        CallResolution::Resolved { signature, .. } => match &signature.namespace {
+            Some(namespace) => format!("{namespace}.{}", signature.name),
+            None => signature.name.clone(),
+        },
+        CallResolution::EnumVariant
+        | CallResolution::Ambiguous { .. }
+        | CallResolution::Unknown => callee_label(&call_site.callee),
+    }
+}
+
 fn relative_span(span: &Span, relative_path: &str) -> Span {
     Span {
         file: relative_path.to_owned(),
         line: span.line,
         column: span.column,
         length: span.length,
-    }
-}
-
-fn collect_calls_from_block(block: &Block, relative_path: &str, calls: &mut Vec<(String, Span)>) {
-    for statement in &block.statements {
-        collect_calls_from_stmt(statement, relative_path, calls);
-    }
-}
-
-fn collect_calls_from_stmt(statement: &Stmt, relative_path: &str, calls: &mut Vec<(String, Span)>) {
-    match statement {
-        Stmt::Let(stmt) => {
-            if let Some(value) = &stmt.value {
-                collect_calls_from_expr(value, relative_path, calls);
-            }
-        }
-        Stmt::Return(stmt) => {
-            if let Some(value) = &stmt.value {
-                collect_calls_from_expr(value, relative_path, calls);
-            }
-        }
-        Stmt::With(stmt) => {
-            collect_calls_from_expr(&stmt.resource, relative_path, calls);
-            collect_calls_from_block(&stmt.body, relative_path, calls);
-        }
-        Stmt::If(stmt) => {
-            collect_calls_from_expr(&stmt.condition, relative_path, calls);
-            collect_calls_from_block(&stmt.then_body, relative_path, calls);
-            if let Some(else_body) = &stmt.else_body {
-                collect_calls_from_block(else_body, relative_path, calls);
-            }
-        }
-        Stmt::Loop(stmt) => {
-            if let Some(condition) = &stmt.condition {
-                collect_calls_from_expr(condition, relative_path, calls);
-            }
-            collect_calls_from_block(&stmt.body, relative_path, calls);
-        }
-        Stmt::For(stmt) => {
-            collect_calls_from_expr(&stmt.iterable, relative_path, calls);
-            collect_calls_from_block(&stmt.body, relative_path, calls);
-        }
-        Stmt::Match(stmt) => {
-            collect_calls_from_expr(&stmt.value, relative_path, calls);
-            for arm in &stmt.arms {
-                collect_calls_from_block(&arm.body, relative_path, calls);
-            }
-        }
-        Stmt::TaskGroup(stmt) => collect_calls_from_block(&stmt.body, relative_path, calls),
-        Stmt::LetElse(stmt) => {
-            collect_calls_from_expr(&stmt.value, relative_path, calls);
-            collect_calls_from_block(&stmt.else_body, relative_path, calls);
-        }
-        Stmt::Expr(expr) => collect_calls_from_expr(expr, relative_path, calls),
-        Stmt::Break(_)
-        | Stmt::Continue(_)
-        | Stmt::MalformedWith(_)
-        | Stmt::MalformedIf(_)
-        | Stmt::MalformedLoop(_)
-        | Stmt::MalformedFor(_)
-        | Stmt::MalformedMatch(_)
-        | Stmt::Unknown(_) => {}
-    }
-}
-
-fn collect_calls_from_expr(expr: &Expr, relative_path: &str, calls: &mut Vec<(String, Span)>) {
-    match expr {
-        Expr::Call { callee, args, span } => {
-            calls.push((callee_label(callee), relative_span(span, relative_path)));
-            for arg in args {
-                collect_calls_from_expr(&arg.value, relative_path, calls);
-            }
-        }
-        Expr::Binary { left, right, .. } => {
-            collect_calls_from_expr(left, relative_path, calls);
-            collect_calls_from_expr(right, relative_path, calls);
-        }
-        Expr::Field { base, .. } => collect_calls_from_expr(base, relative_path, calls),
-        Expr::Index { base, index, .. } => {
-            collect_calls_from_expr(base, relative_path, calls);
-            collect_calls_from_expr(index, relative_path, calls);
-        }
-        Expr::Effect { value, .. }
-        | Expr::Manage { value, .. }
-        | Expr::Spawn { value, .. }
-        | Expr::Await { value, .. }
-        | Expr::Try { value, .. } => collect_calls_from_expr(value, relative_path, calls),
-        Expr::Closure { body, .. } => collect_calls_from_block(body, relative_path, calls),
-        Expr::Match { value, arms, .. } => {
-            collect_calls_from_expr(value, relative_path, calls);
-            for arm in arms {
-                collect_calls_from_block(&arm.body, relative_path, calls);
-            }
-        }
-        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
     }
 }
 

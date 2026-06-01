@@ -1585,6 +1585,34 @@ fn rustc_diagnostics_report_unmappable_generated_spans() {
 }
 
 #[test]
+fn rustc_diagnostics_do_not_map_to_nearest_previous_source_marker() {
+    let source_map = vec![rsscript::RustSourceMapEntry {
+        kind: "function".to_string(),
+        source: rsscript::Span {
+            file: "bad.rss".to_string(),
+            line: 1,
+            column: 1,
+            length: 10,
+        },
+        generated: rsscript::Span {
+            file: "src/lib.rs".to_string(),
+            line: 10,
+            column: 1,
+            length: 2,
+        },
+    }];
+    let rustc_json = r#"{"message":"cannot find value","code":{"code":"E0425","explanation":null},"level":"error","spans":[{"file_name":"src/lib.rs","line_start":200,"line_end":200,"column_start":1,"column_end":2,"is_primary":true}]}"#;
+
+    let remapped = remap_rustc_diagnostic_json(&source_map, rustc_json)
+        .expect("rustc JSON should parse")
+        .expect("error should produce a diagnostic");
+
+    assert!(!remapped.mapped);
+    assert_eq!(remapped.diagnostic.code, "RS1102");
+    assert_eq!(remapped.diagnostic.span.file, "src/lib.rs");
+}
+
+#[test]
 fn rustc_diagnostic_line_remap_ignores_non_diagnostic_messages() {
     let lines = r#"{"reason":"compiler-artifact","target":{"name":"generated"}}
 {"reason":"compiler-message","message":{"message":"cannot find value","code":{"code":"E0425","explanation":null},"level":"error","spans":[{"file_name":"src/lib.rs","line_start":99,"line_end":99,"column_start":5,"column_end":10,"is_primary":true}]}}"#;

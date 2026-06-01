@@ -259,7 +259,8 @@ impl<'a> RustLowerer<'a> {
     }
 
     fn lower_type_decl(&mut self, ty: &TypeDecl, out: &mut String) {
-        self.record_source_marker(out, 0, "type", &ty.span);
+        let generated_start = out.len();
+        let marker = self.record_source_marker(out, 0, "type", &ty.span);
         if ty.kind == TypeKind::Resource {
             out.push_str("#[must_use]\n");
         }
@@ -301,6 +302,10 @@ impl<'a> RustLowerer<'a> {
             out.push_str("    }\n");
             out.push_str("}\n");
         }
+        self.widen_generated_span(
+            &marker.generated,
+            generated_line_count(&out[generated_start..]),
+        );
     }
 
     fn lower_field_decl(&mut self, field: &FieldDecl, out: &mut String) {
@@ -484,7 +489,8 @@ impl<'a> RustLowerer<'a> {
         self.current_async_executor = ((function.is_async && block_has_await(&function.body))
             || block_has_task_group(&function.body))
         .then(|| "__rsscript_async_executor".to_string());
-        self.record_source_marker(out, 0, "function", &function.span);
+        let generated_start = out.len();
+        let marker = self.record_source_marker(out, 0, "function", &function.span);
         let is_public = function.is_public || is_runnable_main(function);
         out.push_str(&format!(
             "{}fn {}{}(",
@@ -518,6 +524,10 @@ impl<'a> RustLowerer<'a> {
         }
         self.lower_block(&function.body, out, 1);
         out.push_str("}\n");
+        self.widen_generated_span(
+            &marker.generated,
+            generated_line_count(&out[generated_start..]),
+        );
         self.param_effects = previous_param_effects;
         self.value_types = previous_value_types;
         self.managed_bindings = previous_managed_bindings;
@@ -701,6 +711,7 @@ impl<'a> RustLowerer<'a> {
 
     fn lower_stmt(&mut self, statement: &Stmt, out: &mut String, indent: usize) {
         let pad = "    ".repeat(indent);
+        let generated_start = out.len();
         let marker = self.record_source_marker(out, indent, "statement", stmt_span(statement));
         self.record_statement_source_map(statement, &marker.generated);
         match statement {
@@ -903,6 +914,10 @@ impl<'a> RustLowerer<'a> {
             | Stmt::MalformedMatch(span)
             | Stmt::Unknown(span) => unreachable_lowering("statement", span),
         }
+        self.widen_generated_span(
+            &marker.generated,
+            generated_line_count(&out[generated_start..]),
+        );
     }
 
     fn record_source_marker(
@@ -915,6 +930,17 @@ impl<'a> RustLowerer<'a> {
         let entry = push_source_marker(out, indent, kind, span);
         self.source_map.push(entry.clone());
         entry
+    }
+
+    fn widen_generated_span(&mut self, generated: &Span, line_count: usize) {
+        for entry in &mut self.source_map {
+            if entry.generated.file == generated.file
+                && entry.generated.line == generated.line
+                && entry.generated.column == generated.column
+            {
+                entry.generated.length = entry.generated.length.max(line_count.max(1));
+            }
+        }
     }
 
     fn record_statement_source_map(&mut self, statement: &Stmt, generated: &Span) {
@@ -2024,6 +2050,14 @@ fn match_pattern_span(pattern: &MatchPattern) -> Span {
     match pattern {
         MatchPattern::Variant { span, .. } | MatchPattern::Wildcard(span) => span.clone(),
     }
+}
+
+fn generated_line_count(generated: &str) -> usize {
+    generated
+        .chars()
+        .filter(|character| *character == '\n')
+        .count()
+        + 1
 }
 
 fn push_unique_derive(derives: &mut Vec<String>, derive: &str) {

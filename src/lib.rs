@@ -28,7 +28,7 @@ pub use analyzer::{
     analyze_sources_with_interfaces, analyze_sources_with_interfaces_without_core, core_interfaces,
 };
 pub use diagnostic::{
-    Diagnostic, DiagnosticExplanation, Severity, explain_diagnostic_code,
+    Diagnostic, DiagnosticExplanation, Severity, Span, explain_diagnostic_code,
     format_diagnostic_explanation, format_diagnostics_human, format_diagnostics_json,
 };
 pub use formatter::{format_program, format_source};

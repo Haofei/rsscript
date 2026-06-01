@@ -113,16 +113,28 @@ fn best_source_map_entry<'a>(
     source_map
         .iter()
         .filter(|entry| generated_file_matches(&entry.generated.file, file))
-        .filter(|entry| generated_span_starts_before_or_at(&entry.generated, line, column))
-        .max_by_key(|entry| (entry.generated.line, entry.generated.column))
+        .filter(|entry| generated_span_contains(&entry.generated, line, column))
+        .max_by_key(|entry| {
+            (
+                entry.generated.line,
+                entry.generated.column,
+                entry.kind.len(),
+            )
+        })
 }
 
 fn generated_file_matches(left: &str, right: &str) -> bool {
     left.replace('\\', "/") == right.replace('\\', "/")
 }
 
-fn generated_span_starts_before_or_at(span: &Span, line: usize, column: usize) -> bool {
-    span.line < line || (span.line == line && span.column <= column)
+fn generated_span_contains(span: &Span, line: usize, column: usize) -> bool {
+    if line < span.line {
+        return false;
+    }
+    if line == span.line {
+        return column >= span.column;
+    }
+    line.saturating_sub(span.line) < span.length
 }
 
 fn rustc_severity(level: &str) -> Severity {

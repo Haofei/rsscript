@@ -110,7 +110,7 @@ native fn Json.parse(text: read String) -> Result<fresh JsonValue, JsonError>
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert_eq!(json["package"]["name"], "rss-json");
-    assert_eq!(json["risk"], "high");
+    assert_eq!(json["risk"], "unknown");
     assert_eq!(json["features"], serde_json::json!(["streaming"]));
     assert_eq!(
         json["dependencies"],
@@ -1433,6 +1433,49 @@ native fn Parallel.sort(values: mut List<Int>) -> Unit
 }
 
 #[test]
+fn package_native_source_scan_ignores_comment_only_parallel_markers() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-review-native-comment-scan");
+    common::write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_comment_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+        r#"features: native
+
+native fn Native.noop() -> Unit
+    effects(native)
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
+    fs::write(
+        temp_dir.join("native/rust/Cargo.toml"),
+        "[package]\nname = \"rss_comment_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n\n[dependencies]\n",
+    )
+    .expect("native Cargo.toml should be written");
+    fs::write(
+        temp_dir.join("native/rust/src/lib.rs"),
+        "// use rayon::prelude::*;\n// std::thread::spawn(|| {});\npub fn noop() {}\n",
+    )
+    .expect("native source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(
+        json["native_rust"]["semantic"]["source_scan_best_effort"]["worker_thread_parallelism_detected"],
+        false
+    );
+}
+
+#[test]
 fn package_review_reir_maps_process_facade_to_process_capability() {
     let temp_dir = common::unique_temp_dir("rsscript-package-review-process-facade-reir");
     common::write_named_package_fixture(
@@ -1615,7 +1658,7 @@ native fn S3.put_object(body: read String) -> Result<Unit, String>
             .expect("package review REIR bundle should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 
-    assert_ne!(review.risk, rsscript::PackageRisk::Unknown);
+    assert_eq!(review.risk, rsscript::PackageRisk::Unknown);
     assert_eq!(review_json["summary"]["unknown_apis"], 1);
     assert!(review_json["reasons"].as_array().is_some_and(|reasons| {
         reasons
@@ -1652,6 +1695,83 @@ native fn S3.put_object(body: read String) -> Result<Unit, String>
                     && capability.action.as_deref() == Some("S3.put_object")
             })
     }));
+}
+
+#[test]
+fn package_review_capability_propagates_through_hir_resolved_receiver_call() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-review-receiver-capability");
+    fs::create_dir_all(temp_dir.join("interface")).expect("interface dir should be created");
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("rsspkg.toml"),
+        r#"[package]
+name = "rss-receiver-capability"
+version = "0.1.0"
+edition = "2026"
+
+[interfaces]
+paths = ["interface"]
+
+[sources]
+paths = ["src"]
+
+[[review.capability_bindings]]
+symbol = "S3Client.put_object"
+category = "object_storage.write"
+provider = "aws"
+service = "s3"
+action = "s3:PutObject"
+resource = "arn:aws:s3:::reports-prod/*"
+"#,
+    )
+    .expect("manifest should be written");
+    fs::write(
+        temp_dir.join("interface/s3.rssi"),
+        r#"features: native
+
+opaque class S3Client
+
+native fn S3Client.put_object(
+    self: read S3Client,
+    body: read String,
+) -> Result<Unit, String>
+    effects(native)
+"#,
+    )
+    .expect("interface should be written");
+    fs::write(
+        temp_dir.join("src/upload.rss"),
+        r#"pub fn upload_report(client: read S3Client, report: read String) -> Result<Unit, String> {
+    return read client.put_object(body: read report)
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let review_json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(
+        review_json["capabilities"]
+            .as_array()
+            .is_some_and(|capabilities| {
+                capabilities.iter().any(|capability| {
+                    capability["function"] == "upload_report"
+                        && capability["binding_symbol"] == "S3Client.put_object"
+                        && capability["action"] == "s3:PutObject"
+                        && capability["call_chain"].as_array().is_some_and(|chain| {
+                            chain
+                                == &vec![
+                                    Value::from("upload_report"),
+                                    Value::from("S3Client.put_object"),
+                                ]
+                        })
+                })
+            }),
+        "{review_json:#}"
+    );
 }
 
 #[test]
@@ -3009,7 +3129,7 @@ native fn Native.echo(message: read String) -> String
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert!(!check.ok);
-    assert_eq!(json["risk"], "high");
+    assert_eq!(json["risk"], "unknown");
     assert!(json["reasons"].as_array().is_some_and(|reasons| {
         reasons
             .iter()
@@ -3136,7 +3256,7 @@ native fn Native.echo(message: read String) -> String
         .expect("package review JSON should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 
-    assert_eq!(json["risk"], "elevated");
+    assert_eq!(json["risk"], "unknown");
     assert_eq!(json["summary"]["native_apis"], 1);
 }
 
@@ -4102,7 +4222,7 @@ pub fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
     let _ = fs::remove_dir_all(&new_dir);
 
     assert_eq!(json["new_package"]["version"], "0.2.0");
-    assert_eq!(json["risk"], "high");
+    assert_eq!(json["risk"], "unknown");
     assert!(json["manifest_changes"].as_array().is_some_and(|changes| {
         changes
             .iter()
@@ -4254,7 +4374,7 @@ native fn Bytes.decode(value: read Bytes) -> String
     let _ = fs::remove_dir_all(&old_dir);
     let _ = fs::remove_dir_all(&new_dir);
 
-    assert_eq!(json["risk"], "high");
+    assert_eq!(json["risk"], "unknown");
     assert!(json["interface_changes"].as_array().is_some_and(|changes| {
         changes.iter().any(|change| {
             change["file"] == "interface/lib.rssi"
@@ -5950,7 +6070,7 @@ native fn Native.parse(text: read String) -> String
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert!(check.ok);
-    assert_eq!(check.risk, rsscript::PackageRisk::High);
+    assert_eq!(check.risk, rsscript::PackageRisk::Unknown);
     assert_eq!(
         json["native_rust"]["linked_libraries"],
         serde_json::json!(["ssl"])
