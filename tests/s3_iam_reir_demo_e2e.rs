@@ -476,10 +476,13 @@ fn s3_iam_reir_demo_postgres_write_scenario_reports_missing_then_covered() {
     );
     assert!(missing.iter().any(|reconciliation| {
         reconciliation.kind == ReconciliationKind::MissingCapability
-            && reconciliation.capability.as_ref().is_some_and(|capability| {
-                capability.action.as_deref() == Some("INSERT")
-                    && capability.category == CapabilityCategory::DatabaseWrite
-            })
+            && reconciliation
+                .capability
+                .as_ref()
+                .is_some_and(|capability| {
+                    capability.action.as_deref() == Some("INSERT")
+                        && capability.category == CapabilityCategory::DatabaseWrite
+                })
     }));
 
     let fixed = reir::reconcile_capabilities_for_target(
@@ -488,8 +491,9 @@ fn s3_iam_reir_demo_postgres_write_scenario_reports_missing_then_covered() {
         Some("prod"),
     );
     assert!(
-        fixed.iter().all(|reconciliation| reconciliation.kind
-            != ReconciliationKind::MissingCapability),
+        fixed
+            .iter()
+            .all(|reconciliation| reconciliation.kind != ReconciliationKind::MissingCapability),
         "postgres-fixed grants INSERT and should cover the scenario: {fixed:#?}"
     );
     let excess_select = fixed.iter().find(|reconciliation| {

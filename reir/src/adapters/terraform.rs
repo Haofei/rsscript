@@ -409,7 +409,11 @@ fn postgresql_grant_facts(block: &TerraformResourceBlock) -> Vec<Fact> {
                     time: None,
                     source: Some(PRODUCER_SOURCE.to_owned()),
                     event_name: None,
-                    principal: if role.is_empty() { None } else { Some(role.clone()) },
+                    principal: if role.is_empty() {
+                        None
+                    } else {
+                        Some(role.clone())
+                    },
                     account: None,
                     policy_arn: None,
                     statement_index: Some(privilege_index),
@@ -452,29 +456,48 @@ fn hcl_string_attr(body: &str, key: &str) -> Option<String> {
 }
 
 fn hcl_string_array_attr(body: &str, key: &str) -> Vec<String> {
-    for line in body.lines() {
+    let lines = body.lines().collect::<Vec<_>>();
+    let mut index = 0;
+    while index < lines.len() {
+        let line = lines[index];
         let trimmed = line.trim();
         let Some(rest) = trimmed.strip_prefix(key) else {
+            index += 1;
             continue;
         };
         let rest = rest.trim_start();
         let Some(rest) = rest.strip_prefix('=') else {
+            index += 1;
             continue;
         };
         let rest = rest.trim();
         let Some(rest) = rest.strip_prefix('[') else {
+            index += 1;
             continue;
         };
-        let Some(end) = rest.find(']') else {
-            continue;
-        };
-        return rest[..end]
-            .split(',')
-            .map(|item| item.trim().trim_matches('"').to_owned())
-            .filter(|item| !item.is_empty())
-            .collect();
+        let mut array_body = rest.to_owned();
+        while !array_body.contains(']') {
+            index += 1;
+            let Some(next_line) = lines.get(index) else {
+                break;
+            };
+            array_body.push('\n');
+            array_body.push_str(next_line.trim());
+        }
+        if let Some(end) = array_body.find(']') {
+            return parse_hcl_string_array_items(&array_body[..end]);
+        }
+        index += 1;
     }
     Vec::new()
+}
+
+fn parse_hcl_string_array_items(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(|item| item.trim().trim_matches('"').to_owned())
+        .filter(|item| !item.is_empty())
+        .collect()
 }
 
 fn capability_category_for_action(action: &str) -> CapabilityCategory {
@@ -854,5 +877,44 @@ POLICY
             select.unwrap().capability.as_ref().unwrap().category,
             CapabilityCategory::DatabaseRead
         );
+    }
+
+    #[test]
+    fn terraform_dir_to_bundle_reads_multiline_postgresql_grant_arrays() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "reir-terraform-postgresql-multiline-grant-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+        std::fs::write(
+            temp_dir.join("postgres.tf"),
+            r#"resource "postgresql_grant" "report_writer_audit_events" {
+  database    = "reports"
+  role        = "report_writer"
+  schema      = "public"
+  object_type = "table"
+  objects = [
+    "audit_events",
+  ]
+  privileges = [
+    "SELECT",
+    "INSERT",
+  ]
+}
+"#,
+        )
+        .expect("Terraform fixture should be written");
+
+        let bundle = terraform_dir_to_bundle(&temp_dir).expect("Terraform should collect");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        let actions = bundle
+            .facts
+            .iter()
+            .filter_map(|fact| fact.capability.as_ref()?.action.as_deref())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(actions.contains("SELECT"));
+        assert!(actions.contains("INSERT"));
     }
 }
