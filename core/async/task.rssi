@@ -1,0 +1,13 @@
+// `Task.cancellation_token()` returns the cancellation token of the lexically
+// enclosing `task_group` scope, so cooperative code (loops, cancellable runtime
+// APIs) can observe structured cancellation. The group owns the cancel
+// capability; this only hands out the read-only observation token, and the
+// token must not outlive the `task_group` scope it came from.
+//
+// It must be called inside a `task_group` block. Calling it in an `async fn`
+// with no lexical `task_group` is rejected (RS0412): there is no enclosing
+// scope token, so the token would silently never cancel. To give a child task
+// the group's token, call this in the `task_group` block and pass the token
+// into the async function as a `read CancellationToken` parameter.
+
+pub fn Task.cancellation_token() -> fresh CancellationToken

@@ -63,6 +63,8 @@ pub mod code {
     pub const ASSIGNMENT_TARGET_DEFERRED: &str = "RS0312";
     pub const ASSIGNMENT_TYPE_MISMATCH: &str = "RS0313";
     pub const USE_AFTER_MANAGE: &str = "RS0401";
+    pub const ASYNC_FN_NOT_LOWERABLE: &str = "RS0411";
+    pub const CANCELLATION_TOKEN_OUTSIDE_TASK_GROUP: &str = "RS0412";
     pub const LOCAL_VALUE_RETAINED: &str = "RS0501";
     pub const FRESH_RETURN_NOT_CLEAN: &str = "RS0601";
     pub const FRESHNESS_UNKNOWN: &str = "RS0602";
@@ -617,6 +619,16 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::READ_VIEW_MUTATION,
         title: "read view mutation",
         explanation: "`for` loop variables for non-Copy struct elements are read views into the list. They can be passed as `read`, but cannot be used as `mut`, `take`, or `manage` because iteration does not grant exclusive ownership of list elements.",
+    },
+    DiagnosticExplanation {
+        code: code::ASYNC_FN_NOT_LOWERABLE,
+        title: "async function not lowerable",
+        explanation: "In this version a user `async fn` lowers to a `Pending` chain. Top-level `await`, `task_group`, `select`, and `await for` statements are supported through explicit pending boundaries. An `await` nested inside ordinary control flow such as `loop`/`if`/`match`/`with` is still rejected instead of being silently mis-lowered because it needs full async state-machine lowering. Restructure so each suspension boundary is a top-level async statement.",
+    },
+    DiagnosticExplanation {
+        code: code::CANCELLATION_TOKEN_OUTSIDE_TASK_GROUP,
+        title: "cancellation token outside task_group",
+        explanation: "`Task.cancellation_token()` returns the token of the lexically enclosing `task_group` scope. A user `async fn` is lowered at its definition site, with no enclosing `task_group`, so calling it there would silently produce a never-cancelled token — the child would not observe the group's cancellation. In this version it is rejected rather than mis-lowered. Call `Task.cancellation_token()` directly inside the `task_group` block and pass the resulting `CancellationToken` into the async function as a `read` parameter.",
     },
     DiagnosticExplanation {
         code: code::USE_AFTER_MANAGE,

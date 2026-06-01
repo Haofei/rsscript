@@ -1113,6 +1113,32 @@ fn collect_await_sites_from_stmt(
                 sites,
             );
         }
+        Stmt::Select(stmt) => {
+            for arm in &stmt.arms {
+                collect_await_sites_from_expr(
+                    function,
+                    &arm.operation,
+                    live_after,
+                    scoped_live,
+                    pending_callees,
+                    context,
+                    sites,
+                );
+                let mut arm_scoped_live = scoped_live.clone();
+                if arm.binding != "_" {
+                    arm_scoped_live.insert(arm.binding.clone());
+                }
+                collect_await_sites_from_block(
+                    function,
+                    &arm.body,
+                    live_after,
+                    &arm_scoped_live,
+                    pending_callees,
+                    context,
+                    sites,
+                );
+            }
+        }
         Stmt::Match(stmt) => {
             collect_await_sites_from_expr(
                 function,
@@ -1445,6 +1471,12 @@ fn collect_stmt_uses(statement: &Stmt, uses: &mut BTreeSet<String>) {
         Stmt::TaskGroup(stmt) => {
             collect_block_uses(&stmt.body, uses);
         }
+        Stmt::Select(stmt) => {
+            for arm in &stmt.arms {
+                collect_expr_uses(&arm.operation, uses);
+                collect_block_uses(&arm.body, uses);
+            }
+        }
         Stmt::Match(stmt) => {
             collect_expr_uses(&stmt.value, uses);
             for arm in &stmt.arms {
@@ -1556,6 +1588,13 @@ fn remove_stmt_bindings(statement: &Stmt, uses: &mut BTreeSet<String>) {
             uses.remove(&stmt.binding);
         }
         Stmt::TaskGroup(_) => {}
+        Stmt::Select(stmt) => {
+            for arm in &stmt.arms {
+                if arm.binding != "_" {
+                    uses.remove(&arm.binding);
+                }
+            }
+        }
         Stmt::Match(stmt) => {
             for arm in &stmt.arms {
                 if let MatchPattern::Variant {

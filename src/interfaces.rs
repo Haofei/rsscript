@@ -1,7 +1,27 @@
 pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
     (
+        "core/async/cancellation.rssi",
+        include_str!("../core/async/cancellation.rssi"),
+    ),
+    (
+        "core/async/deadline.rssi",
+        include_str!("../core/async/deadline.rssi"),
+    ),
+    (
+        "core/async/task.rssi",
+        include_str!("../core/async/task.rssi"),
+    ),
+    (
+        "core/async/stream.rssi",
+        include_str!("../core/async/stream.rssi"),
+    ),
+    (
         "core/async/timer.rssi",
         include_str!("../core/async/timer.rssi"),
+    ),
+    (
+        "core/channel/channel.rssi",
+        include_str!("../core/channel/channel.rssi"),
     ),
     (
         "core/cache/cache.rssi",

@@ -119,6 +119,12 @@ fn validate_executable_declarations_in_stmt(
         Stmt::TaskGroup(stmt) => {
             validate_executable_declarations_in_block(&stmt.body, context, diagnostics);
         }
+        Stmt::Select(stmt) => {
+            for arm in &stmt.arms {
+                validate_executable_declarations_in_expr(&arm.operation, context, diagnostics);
+                validate_executable_declarations_in_block(&arm.body, context, diagnostics);
+            }
+        }
         Stmt::Match(stmt) => {
             validate_executable_declarations_in_expr(&stmt.value, context, diagnostics);
             for arm in &stmt.arms {
@@ -300,6 +306,14 @@ pub(super) fn list_element_type_ref(ty: &TypeRef) -> Option<TypeRef> {
     }
 }
 
+pub(super) fn stream_item_type_ref(ty: &TypeRef) -> Option<TypeRef> {
+    if ty.name == "Stream" && ty.args.len() == 1 {
+        ty.args.first().cloned()
+    } else {
+        None
+    }
+}
+
 pub(super) fn is_copy_type_ref(ty: &TypeRef) -> bool {
     ty.args.is_empty()
         && matches!(
@@ -463,32 +477,51 @@ pub(super) fn collect_mutated_bindings(block: &Block) -> BTreeSet<String> {
     names
 }
 
-pub(super) fn block_has_await(block: &Block) -> bool {
-    block.statements.iter().any(stmt_has_await)
+/// The awaited expression of `await x` or `await x?`, else `None`.
+pub(super) fn async_await_inner(expr: &Expr) -> Option<&Expr> {
+    match expr {
+        Expr::Try { value, .. } => match value.as_ref() {
+            Expr::Await { value, .. } => Some(value),
+            _ => None,
+        },
+        Expr::Await { value, .. } => Some(value),
+        _ => None,
+    }
 }
 
-pub(super) fn stmt_has_await(statement: &Stmt) -> bool {
+/// Whether the await form carries a `?` (`await x?`), so the continuation should
+/// short-circuit on `Err`.
+pub(super) fn async_await_is_try(expr: &Expr) -> bool {
+    matches!(expr, Expr::Try { value, .. } if matches!(value.as_ref(), Expr::Await { .. }))
+}
+
+pub(super) fn block_needs_async_executor(block: &Block) -> bool {
+    block.statements.iter().any(stmt_needs_async_executor)
+}
+
+fn stmt_needs_async_executor(statement: &Stmt) -> bool {
     match statement {
-        Stmt::Let(stmt) => stmt.value.as_ref().is_some_and(expr_has_await),
-        Stmt::Return(stmt) => stmt.value.as_ref().is_some_and(expr_has_await),
-        Stmt::With(stmt) => expr_has_await(&stmt.resource) || block_has_await(&stmt.body),
+        Stmt::TaskGroup(_) | Stmt::Select(_) => true,
+        Stmt::With(stmt) => block_needs_async_executor(&stmt.body),
         Stmt::If(stmt) => {
-            expr_has_await(&stmt.condition)
-                || block_has_await(&stmt.then_body)
-                || stmt.else_body.as_ref().is_some_and(block_has_await)
+            block_needs_async_executor(&stmt.then_body)
+                || stmt
+                    .else_body
+                    .as_ref()
+                    .is_some_and(block_needs_async_executor)
         }
-        Stmt::Loop(stmt) => {
-            stmt.condition.as_ref().is_some_and(expr_has_await) || block_has_await(&stmt.body)
-        }
-        Stmt::For(stmt) => expr_has_await(&stmt.iterable) || block_has_await(&stmt.body),
-        Stmt::TaskGroup(stmt) => block_has_await(&stmt.body),
-        Stmt::Match(stmt) => {
-            expr_has_await(&stmt.value) || stmt.arms.iter().any(|arm| block_has_await(&arm.body))
-        }
-        Stmt::LetElse(stmt) => expr_has_await(&stmt.value) || block_has_await(&stmt.else_body),
-        Stmt::Assign(stmt) => expr_has_await(&stmt.target) || expr_has_await(&stmt.value),
-        Stmt::Expr(expr) => expr_has_await(expr),
-        Stmt::Break(_)
+        Stmt::Loop(stmt) => block_needs_async_executor(&stmt.body),
+        Stmt::For(stmt) => stmt.is_async || block_needs_async_executor(&stmt.body),
+        Stmt::Match(stmt) => stmt
+            .arms
+            .iter()
+            .any(|arm| block_needs_async_executor(&arm.body)),
+        Stmt::LetElse(stmt) => block_needs_async_executor(&stmt.else_body),
+        Stmt::Let(_)
+        | Stmt::Return(_)
+        | Stmt::Assign(_)
+        | Stmt::Expr(_)
+        | Stmt::Break(_)
         | Stmt::Continue(_)
         | Stmt::MalformedWith(_)
         | Stmt::MalformedIf(_)
@@ -497,32 +530,6 @@ pub(super) fn stmt_has_await(statement: &Stmt) -> bool {
         | Stmt::MalformedMatch(_)
         | Stmt::Unknown(_) => false,
     }
-}
-
-pub(super) fn expr_has_await(expr: &Expr) -> bool {
-    match expr {
-        Expr::Await { .. } => true,
-        Expr::Binary { left, right, .. } => expr_has_await(left) || expr_has_await(right),
-        Expr::Field { base, .. } => expr_has_await(base),
-        Expr::Index { base, index, .. } => expr_has_await(base) || expr_has_await(index),
-        Expr::Call { args, .. } => args.iter().any(|arg| expr_has_await(&arg.value)),
-        Expr::Effect { value, .. }
-        | Expr::Manage { value, .. }
-        | Expr::Spawn { value, .. }
-        | Expr::Try { value, .. } => expr_has_await(value),
-        Expr::Closure { body, .. } => block_has_await(body),
-        Expr::Match { value, arms, .. } => {
-            expr_has_await(value) || arms.iter().any(|arm| block_has_await(&arm.body))
-        }
-        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => false,
-    }
-}
-
-pub(super) fn block_has_task_group(block: &Block) -> bool {
-    block
-        .statements
-        .iter()
-        .any(|s| matches!(s, Stmt::TaskGroup(_)))
 }
 
 pub(super) fn collect_mutated_bindings_from_block(block: &Block, names: &mut BTreeSet<String>) {
@@ -566,6 +573,12 @@ pub(super) fn collect_mutated_bindings_from_stmt(statement: &Stmt, names: &mut B
         }
         Stmt::TaskGroup(stmt) => {
             collect_mutated_bindings_from_block(&stmt.body, names);
+        }
+        Stmt::Select(stmt) => {
+            for arm in &stmt.arms {
+                collect_mutated_bindings_from_expr(&arm.operation, names);
+                collect_mutated_bindings_from_block(&arm.body, names);
+            }
         }
         Stmt::Match(stmt) => {
             collect_mutated_bindings_from_expr(&stmt.value, names);
@@ -671,6 +684,11 @@ pub(super) fn collect_closure_bound_names_from_block(block: &Block, names: &mut 
             Stmt::TaskGroup(stmt) => {
                 collect_closure_bound_names_from_block(&stmt.body, names);
             }
+            Stmt::Select(stmt) => {
+                for arm in &stmt.arms {
+                    collect_closure_bound_names_from_block(&arm.body, names);
+                }
+            }
             Stmt::Match(stmt) => {
                 for arm in &stmt.arms {
                     collect_closure_bound_names_from_block(&arm.body, names);
@@ -740,6 +758,10 @@ pub(super) fn closure_stmt_mutates_unbound_name(
                 || closure_block_mutates_unbound_name(&stmt.body, bound)
         }
         Stmt::TaskGroup(stmt) => closure_block_mutates_unbound_name(&stmt.body, bound),
+        Stmt::Select(stmt) => stmt.arms.iter().any(|arm| {
+            closure_expr_mutates_unbound_name(&arm.operation, bound)
+                || closure_block_mutates_unbound_name(&arm.body, bound)
+        }),
         Stmt::Match(stmt) => {
             closure_expr_mutates_unbound_name(&stmt.value, bound)
                 || stmt
@@ -822,6 +844,7 @@ pub(super) fn stmt_span(statement: &Stmt) -> &Span {
         Stmt::Loop(stmt) => &stmt.span,
         Stmt::For(stmt) => &stmt.span,
         Stmt::TaskGroup(stmt) => &stmt.span,
+        Stmt::Select(stmt) => &stmt.span,
         Stmt::Match(stmt) => &stmt.span,
         Stmt::LetElse(stmt) => &stmt.span,
         Stmt::Break(span)
@@ -1051,7 +1074,22 @@ pub(super) fn is_file_open_callee(callee: &Callee) -> bool {
 }
 
 pub(super) fn is_async_runtime_intrinsic_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "Timer" && type_root_name(name) == "sleep")
+    let Callee::Qualified { namespace, name } = callee else {
+        return false;
+    };
+    let (namespace, name) = (type_root_name(namespace), type_root_name(name));
+    matches!(
+        (namespace, name),
+        ("Timer", "sleep" | "sleep_until" | "sleep_cancellable")
+            | (
+                "File",
+                "read_all_async" | "read_all_string_async" | "write_async" | "write_string_async",
+            )
+            | ("Http", "get_async" | "post_form_async" | "post_json_async")
+            | ("Sender", "send" | "send_cancellable")
+            | ("Receiver", "recv" | "recv_cancellable")
+            | ("Stream", "next")
+    )
 }
 
 pub(super) fn is_file_open_read_callee(callee: &Callee) -> bool {

@@ -26,6 +26,8 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
     ("unsupported resource derive", "RS0212"),
     ("invalid assignment", "RS0311"),
     ("assignment target deferred", "RS0312"),
+    ("async function not lowerable", "RS0411"),
+    ("cancellation token outside task_group", "RS0412"),
     ("assignment type mismatch", "RS0313"),
     ("same-call place conflict", "RS0302"),
     ("constructor/variant call-like conflict", "RS0203"),
@@ -3497,7 +3499,7 @@ async fn fetch_profile(id: read Int) -> Result<String, NetworkError> {
     return Ok("profile")
 }
 
-async fn load(id: read Int) -> Result<String, NetworkError> {
+fn load(id: read Int) -> Result<String, NetworkError> {
     task_group {
         async let user = fetch_user(id: read id)
         async let profile = fetch_profile(id: read id)
@@ -3564,6 +3566,86 @@ async fn run(id: read Int) -> Int {
                     .any(|cause| cause.contains("must be consumed by `await`"))
         }),
         "unawaited async let should be rejected: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn task_group_rejects_forward_await_of_async_let_handle() {
+    let source = r#"
+features: async
+
+async fn fetch(id: read Int) -> Int
+
+fn run(id: read Int) -> Int {
+    task_group {
+        await result
+        async let result = fetch(id: read id)
+    }
+    return 0
+}
+"#;
+    let diagnostics = analyze_source("task-group-forward-await.rss", source);
+    assert!(
+        diagnostics.iter().any(|d| {
+            d.code == "RS0015"
+                && d.label == "async let await before declaration"
+                && d.causes
+                    .iter()
+                    .any(|cause| cause.contains("after the matching `async let`"))
+        }),
+        "forward await of task_group handle should be rejected: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn task_group_rejects_duplicate_await_of_async_let_handle() {
+    let source = r#"
+features: async
+
+async fn fetch(id: read Int) -> Int
+
+fn run(id: read Int) -> Int {
+    task_group {
+        async let result = fetch(id: read id)
+        await result
+        await result
+    }
+    return 0
+}
+"#;
+    let diagnostics = analyze_source("task-group-duplicate-await.rss", source);
+    assert!(
+        diagnostics.iter().any(|d| {
+            d.code == "RS0015"
+                && d.label == "async let awaited more than once"
+                && d.causes
+                    .iter()
+                    .any(|cause| cause.contains("can be consumed by `await` only once"))
+        }),
+        "duplicate await of task_group handle should be rejected: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn task_group_allows_discarded_background_async_let() {
+    let source = r#"
+features: async
+
+fn run() -> Result<Unit, TimerError> {
+    task_group {
+        async let _ = Timer.sleep(ms: 1)
+    }
+    return Ok(Unit)
+}
+"#;
+    let diagnostics = analyze_source("task-group-background.rss", source);
+    let errors: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "discarded async let should be a scoped background task: {errors:?}"
     );
 }
 
@@ -3655,5 +3737,202 @@ fn run() -> Int {
     assert!(
         diagnostics.iter().any(|d| d.code == "RS0101"),
         "task_group without features: async should be rejected: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn async_fn_with_task_group_passes_checker() {
+    let source = r#"
+features: async
+
+async fn worker() -> Result<Unit, TimerError> {
+    await Timer.sleep(ms: 1)?
+    return Ok(Unit)
+}
+
+async fn run() -> Result<Unit, TimerError> {
+    task_group {
+        async let child = worker()
+        await child?
+    }
+    return Ok(Unit)
+}
+"#;
+    let diagnostics = analyze_source("async-fn-task-group.rss", source);
+    let errors: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "async fn with task_group should pass: {errors:?}"
+    );
+}
+
+#[test]
+fn select_with_await_arms_passes_checker() {
+    let source = r#"
+features: async
+
+fn run() -> Result<Unit, TimerError> {
+    select {
+        _ = await Timer.sleep(ms: 1)? => {
+            Log.write(message: read "fast")
+        }
+        _ = await Timer.sleep(ms: 100)? => {
+            Log.write(message: read "slow")
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    let diagnostics = analyze_source("select-pass.rss", source);
+    let errors: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .collect();
+    assert!(errors.is_empty(), "select should pass: {errors:?}");
+}
+
+#[test]
+fn select_arm_requires_await_operation() {
+    let source = r#"
+features: async
+
+fn run() -> Result<Unit, TimerError> {
+    select {
+        _ = Timer.sleep(ms: 1) => {
+            Log.write(message: read "bad")
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    let diagnostics = analyze_source("select-no-await.rss", source);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.code == "RS0015" && d.label == "malformed select arm"),
+        "select arm without await should be rejected: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn async_fn_with_select_passes_checker() {
+    let source = r#"
+features: async
+
+async fn run() -> Result<Unit, TimerError> {
+    select {
+        _ = await Timer.sleep(ms: 1)? => {
+            Log.write(message: read "bad")
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    let diagnostics = analyze_source("select-in-async-fn.rss", source);
+    let errors: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "select inside async fn should pass: {errors:?}"
+    );
+}
+
+#[test]
+fn async_fn_rejects_await_inside_select_arm_body() {
+    let source = r#"
+features: async
+
+async fn run() -> Result<Unit, TimerError> {
+    select {
+        _ = await Timer.sleep(ms: 1)? => {
+            await Timer.sleep(ms: 1)?
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    let diagnostics = analyze_source("select-body-await.rss", source);
+    assert!(
+        diagnostics.iter().any(|d| d.code == "RS0411"),
+        "await nested in select arm body should still be rejected: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn stream_next_from_channel_receiver_passes_checker() {
+    let source = r#"
+features: async, local
+
+fn run() -> Result<Unit, ChannelError> {
+    let mut channel: Channel<Int> = Channel.bounded(capacity: 1)?
+    local receiver = Channel.receiver(channel: mut channel)?
+    let stream: Stream<Int> = Receiver.into_stream(receiver: take receiver)
+    select {
+        item = await Stream.next(stream: read stream)? => {
+            Log.write(message: read "stream item")
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    let diagnostics = analyze_source("stream-next.rss", source);
+    let errors: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .collect();
+    assert!(errors.is_empty(), "stream next should pass: {errors:?}");
+}
+
+#[test]
+fn await_for_stream_passes_checker() {
+    let source = r#"
+features: async, local
+
+fn run() -> Result<Unit, ChannelError> {
+    let mut channel: Channel<Int> = Channel.bounded(capacity: 1)?
+    local receiver = Channel.receiver(channel: mut channel)?
+    let stream: Stream<Int> = Receiver.into_stream(receiver: take receiver)
+    await for item in stream {
+        Log.write(message: read "stream item")
+    }
+    return Ok(Unit)
+}
+"#;
+    let diagnostics = analyze_source("await-for-stream.rss", source);
+    let errors: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "await for stream should pass: {errors:?}"
+    );
+}
+
+#[test]
+fn async_fn_with_await_for_stream_passes_checker() {
+    let source = r#"
+features: async, local
+
+async fn run(stream: read Stream<Int>) -> Result<Unit, ChannelError> {
+    await for item in stream {
+        Log.write(message: read "stream item")
+    }
+    return Ok(Unit)
+}
+"#;
+    let diagnostics = analyze_source("async-await-for-stream.rss", source);
+    let errors: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "await for stream inside async fn should pass: {errors:?}"
     );
 }

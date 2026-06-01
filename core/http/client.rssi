@@ -1,4 +1,4 @@
-features: native
+features: async, native
 
 struct HttpResponse
 struct HttpError
@@ -6,10 +6,19 @@ struct HttpError
 pub native fn Http.get(url: read Url) -> Result<fresh HttpResponse, HttpError>
     effects(native)
 
+pub async native fn Http.get_async(url: read Url) -> Result<fresh HttpResponse, HttpError>
+    effects(native)
+
 pub native fn Http.post_json(url: read Url, body: read String) -> Result<fresh HttpResponse, HttpError>
     effects(native)
 
+pub async native fn Http.post_json_async(url: read Url, body: read String) -> Result<fresh HttpResponse, HttpError>
+    effects(native)
+
 pub native fn Http.post_form(url: read Url, body: read String) -> Result<fresh HttpResponse, HttpError>
+    effects(native)
+
+pub async native fn Http.post_form_async(url: read Url, body: read String) -> Result<fresh HttpResponse, HttpError>
     effects(native)
 
 pub native fn HttpResponse.status(response: read HttpResponse) -> Int

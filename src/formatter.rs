@@ -368,6 +368,9 @@ impl Formatter {
                 self.out.push('}');
             }
             Stmt::For(stmt) => {
+                if stmt.is_async {
+                    self.out.push_str("await ");
+                }
                 self.out.push_str("for ");
                 self.out.push_str(&stmt.binding);
                 self.out.push_str(" in ");
@@ -380,6 +383,21 @@ impl Formatter {
             Stmt::TaskGroup(stmt) => {
                 self.out.push_str("task_group {\n");
                 self.block(&stmt.body, indent + 1);
+                self.indent(indent);
+                self.out.push('}');
+            }
+            Stmt::Select(stmt) => {
+                self.out.push_str("select {\n");
+                for arm in &stmt.arms {
+                    self.indent(indent + 1);
+                    self.out.push_str(&arm.binding);
+                    self.out.push_str(" = ");
+                    self.expr(&arm.operation, 0);
+                    self.out.push_str(" => {\n");
+                    self.block(&arm.body, indent + 2);
+                    self.indent(indent + 1);
+                    self.out.push_str("}\n");
+                }
                 self.indent(indent);
                 self.out.push('}');
             }

@@ -2,6 +2,7 @@
 
 mod asserts;
 mod async_runtime;
+mod channel;
 mod clock;
 mod collections;
 mod diagnostics;
@@ -22,6 +23,7 @@ mod tempdir;
 pub use self::regex::*;
 pub use asserts::*;
 pub use async_runtime::*;
+pub use channel::*;
 pub use clock::*;
 pub use collections::*;
 pub use diagnostics::*;

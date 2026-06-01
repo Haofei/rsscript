@@ -1813,7 +1813,7 @@ fn s3_iam_reir_demo_preserves_call_site_for_missing_permission() {
                 .as_deref()
                 .is_some_and(|reason| reason.contains("upload_report -> S3.put_object"))
     }));
-    assert_eq!(review.summary.await_sites, 8);
+    assert_eq!(review.summary.await_sites, 7);
 }
 
 #[test]
@@ -1845,15 +1845,15 @@ fn s3_iam_reir_demo_lowers_native_s3_binding_to_runtime_tokio_pending() {
     assert!(
         package
             .lib_rs
-            .contains("run_pending(rss_s3_demo_native::put_object_start"),
-        "async native S3 call should lower through RSScript Pending runtime:\n{}",
+            .contains("__rsscript_pending_audit = rss_s3_demo_native::put_object_start"),
+        "task_group async-let should construct (not run) the native S3 pending:\n{}",
         package.lib_rs
     );
     assert!(
-        package.lib_rs.contains(
-            "__rsscript_async_executor.run_pending(rss_s3_demo_native::put_object_start(&bucket, &key, &body))?;"
-        ),
-        "direct await of native S3 call should also poll the Pending runtime:\n{}",
+        package
+            .lib_rs
+            .contains("rsscript_runtime::pending_try(rss_s3_demo_native::put_object_start(&bucket, &key, &body)"),
+        "a leaf async fn awaiting the native S3 call should compose it via pending_try:\n{}",
         package.lib_rs
     );
     assert!(

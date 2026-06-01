@@ -12,7 +12,7 @@ async fn fetch_profile(id: read Int) -> Result<String, NetworkError> {
     return Ok("profile")
 }
 
-async fn load_user_data(id: read Int) -> Result<String, NetworkError> {
+fn load_user_data(id: read Int) -> Result<String, NetworkError> {
     task_group {
         async let user = fetch_user(id: read id)
         async let profile = fetch_profile(id: read id)

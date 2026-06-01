@@ -29,9 +29,17 @@ pub(super) struct RustLowerer<'a> {
     drop_field_names: BTreeSet<String>,
     current_return_type: Option<TypeRef>,
     current_async_executor: Option<String>,
+    /// Name of the enclosing `task_group`'s cancellation guard local, if any, so
+    /// `Task.cancellation_token()` resolves to that scope's token.
+    current_task_group_token: Option<String>,
     source_map: Vec<RustSourceMapEntry>,
     /// Maps generic type param name -> protocol bound name for receiver-call resolution
     generic_protocol_bounds: BTreeMap<String, String>,
+}
+
+struct AsyncTaskGroupBoundary {
+    pending: String,
+    returns_result: bool,
 }
 
 impl<'a> RustLowerer<'a> {
@@ -77,6 +85,7 @@ impl<'a> RustLowerer<'a> {
             drop_field_names: BTreeSet::new(),
             current_return_type: None,
             current_async_executor: None,
+            current_task_group_token: None,
             source_map: Vec::new(),
             generic_protocol_bounds: BTreeMap::new(),
         }
@@ -481,8 +490,15 @@ impl<'a> RustLowerer<'a> {
             .collect();
         self.mutated_bindings = collect_mutated_bindings(&function.body);
         self.current_return_type = function.return_ty.clone();
-        self.current_async_executor = ((function.is_async && block_has_await(&function.body))
-            || block_has_task_group(&function.body))
+        // A user `async fn` lowers to a pending chain. `task_group` statements
+        // are represented as explicit pending boundaries inside that chain; the
+        // runnable entry point keeps a normal `fn main` that drives the chain
+        // with `run_pending`.
+        let is_runnable = is_runnable_main(function);
+        let lower_as_pending_chain = function.is_async && !is_runnable;
+        let lower_as_async_main = function.is_async && is_runnable;
+        self.current_async_executor = (!function.is_async
+            && block_needs_async_executor(&function.body))
         .then(|| "__rsscript_async_executor".to_string());
         let generated_start = out.len();
         let marker = self.record_source_marker(out, 0, "function", &function.span);
@@ -504,7 +520,13 @@ impl<'a> RustLowerer<'a> {
         out.push(')');
         if let Some(return_ty) = &function.return_ty {
             out.push_str(" -> ");
-            out.push_str(&self.lower_return_type(return_ty, function.returns_fresh));
+            let lowered = self.lower_return_type(return_ty, function.returns_fresh);
+            if lower_as_pending_chain {
+                // A leaf async fn returns a pending of its declared return type.
+                out.push_str(&format!("impl rsscript_runtime::Pending<{lowered}>"));
+            } else {
+                out.push_str(&lowered);
+            }
         }
         out.push_str(" {\n");
         if function.effects.iter().any(is_native_boundary) {
@@ -512,12 +534,21 @@ impl<'a> RustLowerer<'a> {
                 "    // RSScript native/unsafe boundary: review before binding implementation.\n",
             );
         }
-        if let Some(executor) = &self.current_async_executor {
-            out.push_str(&format!(
-                "    let mut {executor} = rsscript_runtime::Executor::new();\n"
-            ));
+        if lower_as_pending_chain {
+            let chain = self.lower_async_chain(&function.body.statements);
+            out.push_str(&format!("    {chain}\n"));
+        } else if lower_as_async_main {
+            // The entrypoint is the only place that drives a pending to a value.
+            let chain = self.lower_async_chain(&function.body.statements);
+            out.push_str(&format!("    rsscript_runtime::run_pending({chain})\n"));
+        } else {
+            if let Some(executor) = &self.current_async_executor {
+                out.push_str(&format!(
+                    "    let mut {executor} = rsscript_runtime::Executor::new();\n"
+                ));
+            }
+            self.lower_block(&function.body, out, 1);
         }
-        self.lower_block(&function.body, out, 1);
         out.push_str("}\n");
         self.widen_generated_span(
             &marker.generated,
@@ -599,85 +630,261 @@ impl<'a> RustLowerer<'a> {
 
     fn lower_task_group_block(&mut self, block: &Block, out: &mut String, indent: usize) {
         let pad = "    ".repeat(indent);
+        let executor = self
+            .current_async_executor
+            .clone()
+            .unwrap_or_else(|| "__rsscript_async_executor".to_string());
 
-        // Collect async let names to know which `await x` references a pending
-        let mut async_let_names: Vec<String> = Vec::new();
-        for statement in &block.statements {
-            if let Stmt::Let(stmt) = statement {
-                if stmt.is_async {
-                    async_let_names.push(stmt.name.clone());
+        // The group owns a cancellation guard. It is declared first so it drops
+        // last: on any scope exit (normal, early `return`, or `?` error) it
+        // cancels the group token, stopping cooperative siblings.
+        let guard = "_rsscript_task_group".to_string();
+        out.push_str(&format!(
+            "{pad}let {guard} = rsscript_runtime::TaskGroupScope::new();\n"
+        ));
+        let previous_task_group_token = self.current_task_group_token.replace(guard);
+
+        let async_let_names: Vec<String> = block
+            .statements
+            .iter()
+            .filter_map(|statement| match statement {
+                Stmt::Let(stmt) if stmt.is_async && stmt.name != "_" => {
+                    Some(rust_ident(&stmt.name))
                 }
-            }
-        }
+                _ => None,
+            })
+            .collect();
 
-        // Lower each statement in the task_group body
-        for statement in &block.statements {
+        // Lower statements in source order so an `async let` can reference an
+        // earlier binding. `async let x = f()` constructs (does not run) the
+        // pending; `await x` drives every still-running sibling until x is ready,
+        // then reads x and applies `?` — so an error propagates immediately (the
+        // guard drops and cancels the rest) and a never-completing sibling never
+        // blocks an unrelated await.
+        //
+        // `active` is the set of async-lets that have been *declared* but not yet
+        // awaited. An await only polls this set, so it never forward-references a
+        // pending declared later, and never re-polls a task whose result was
+        // already taken (`take` resets the result slot to `None`).
+        let mut active: Vec<String> = Vec::new();
+        for (statement_index, statement) in block.statements.iter().enumerate() {
             match statement {
                 Stmt::Let(stmt) if stmt.is_async => {
-                    // async let x = expr → let mut __rsscript_pending_x = expr;
                     if let Some(value) = &stmt.value {
                         let lowered = self.lower_expr(value);
-                        out.push_str(&format!(
-                            "{pad}let mut __rsscript_pending_{} = {lowered};\n",
-                            rust_ident(&stmt.name)
-                        ));
-                    }
-                }
-                Stmt::Let(stmt) if !stmt.is_async => {
-                    // Regular let inside task_group — check if value is `await x`
-                    if let Some(value) = &stmt.value {
-                        if let Some(pending_name) =
-                            self.extract_task_group_await(value, &async_let_names)
-                        {
-                            // let result = await x → polls the pending to completion
-                            let executor = self
-                                .current_async_executor
-                                .clone()
-                                .unwrap_or_else(|| "__rsscript_async_executor".to_string());
-                            let (try_suffix, wrap) = if is_try_wrapped(value) {
-                                ("?", true)
-                            } else {
-                                ("", false)
-                            };
-                            let mutable = if self.mutated_bindings.contains(&stmt.name) {
-                                "mut "
-                            } else {
-                                ""
-                            };
-                            out.push_str(&format!(
-                                "{pad}let {mutable}{} = {executor}.run_pending(&mut __rsscript_pending_{pending_name}){try_suffix};\n",
-                                rust_ident(&stmt.name),
-                            ));
-                            // suppress unused variable warning
-                            let _ = wrap;
+                        let name = if stmt.name == "_" {
+                            format!("discard_{statement_index}")
                         } else {
-                            // Normal let statement
-                            self.lower_stmt(statement, out, indent);
-                        }
-                    } else {
-                        self.lower_stmt(statement, out, indent);
-                    }
-                }
-                _ => {
-                    if let Stmt::Expr(expr) = statement
-                        && let Some(pending_name) =
-                            self.extract_task_group_await(expr, &async_let_names)
-                    {
-                        let executor = self
-                            .current_async_executor
-                            .clone()
-                            .unwrap_or_else(|| "__rsscript_async_executor".to_string());
-                        let try_suffix = if is_try_wrapped(expr) { "?" } else { "" };
+                            rust_ident(&stmt.name)
+                        };
                         out.push_str(&format!(
-                            "{pad}{executor}.run_pending(&mut __rsscript_pending_{pending_name}){try_suffix};\n"
+                            "{pad}let mut __rsscript_pending_{name} = {lowered};\n"
                         ));
-                    } else {
-                        // All other statements lower normally
-                        self.lower_stmt(statement, out, indent);
+                        out.push_str(&format!("{pad}let mut __rsscript_result_{name} = None;\n"));
+                        active.push(name);
                     }
                 }
+                Stmt::Let(stmt)
+                    if stmt
+                        .value
+                        .as_ref()
+                        .and_then(|value| self.extract_task_group_await(value, &async_let_names))
+                        .is_some() =>
+                {
+                    let value = stmt.value.as_ref().expect("await let value");
+                    let pending = self
+                        .extract_task_group_await(value, &async_let_names)
+                        .expect("await handle");
+                    let try_suffix = if is_try_wrapped(value) { "?" } else { "" };
+                    let mutable = if self.mutated_bindings.contains(&stmt.name) {
+                        "mut "
+                    } else {
+                        ""
+                    };
+                    self.emit_task_group_poll_until(out, &pad, &executor, &active, &pending);
+                    active.retain(|name| name != &pending);
+                    out.push_str(&format!(
+                        "{pad}let {mutable}{} = __rsscript_result_{pending}.take().expect(\"awaited task completed\"){try_suffix};\n",
+                        rust_ident(&stmt.name),
+                    ));
+                }
+                Stmt::Expr(expr)
+                    if self
+                        .extract_task_group_await(expr, &async_let_names)
+                        .is_some() =>
+                {
+                    let pending = self
+                        .extract_task_group_await(expr, &async_let_names)
+                        .expect("await handle");
+                    let try_suffix = if is_try_wrapped(expr) { "?" } else { "" };
+                    self.emit_task_group_poll_until(out, &pad, &executor, &active, &pending);
+                    active.retain(|name| name != &pending);
+                    out.push_str(&format!(
+                        "{pad}__rsscript_result_{pending}.take().expect(\"awaited task completed\"){try_suffix};\n"
+                    ));
+                }
+                _ => self.lower_stmt(statement, out, indent),
             }
         }
+
+        if !active.is_empty() {
+            self.emit_task_group_drain(out, &pad, &executor, &active);
+        }
+
+        self.current_task_group_token = previous_task_group_token;
+    }
+
+    /// Emit a cooperative poll loop that drives every currently-active async-let
+    /// sibling until `target`'s result is ready (so siblings interleave, but the
+    /// await only waits for its own task). `active` holds only async-lets already
+    /// declared and not yet awaited, so the loop never references a pending that
+    /// is declared later or whose result was already taken.
+    fn emit_task_group_poll_until(
+        &self,
+        out: &mut String,
+        pad: &str,
+        executor: &str,
+        active: &[String],
+        target: &str,
+    ) {
+        out.push_str(&format!(
+            "{pad}if __rsscript_result_{target}.is_none() {{\n"
+        ));
+        out.push_str(&format!("{pad}    loop {{\n"));
+        out.push_str(&format!(
+            "{pad}        let mut __rsscript_progress = false;\n"
+        ));
+        for name in active {
+            out.push_str(&format!(
+                "{pad}        if __rsscript_result_{name}.is_none() {{\n"
+            ));
+            out.push_str(&format!(
+                "{pad}            if let rsscript_runtime::AsyncPoll::Ready(__rsscript_value) = {executor}.poll_once(&mut __rsscript_pending_{name}) {{\n"
+            ));
+            out.push_str(&format!(
+                "{pad}                __rsscript_result_{name} = Some(__rsscript_value);\n"
+            ));
+            out.push_str(&format!(
+                "{pad}                __rsscript_progress = true;\n"
+            ));
+            out.push_str(&format!("{pad}            }}\n"));
+            out.push_str(&format!("{pad}        }}\n"));
+        }
+        out.push_str(&format!(
+            "{pad}        if __rsscript_result_{target}.is_some() {{ break; }}\n"
+        ));
+        out.push_str(&format!(
+            "{pad}        if !__rsscript_progress {{ {executor}.yield_once(); }}\n"
+        ));
+        out.push_str(&format!("{pad}    }}\n"));
+        out.push_str(&format!("{pad}}}\n"));
+    }
+
+    fn emit_task_group_drain(
+        &self,
+        out: &mut String,
+        pad: &str,
+        executor: &str,
+        active: &[String],
+    ) {
+        out.push_str(&format!("{pad}loop {{\n"));
+        out.push_str(&format!("{pad}    let mut __rsscript_all_done = true;\n"));
+        out.push_str(&format!("{pad}    let mut __rsscript_progress = false;\n"));
+        for name in active {
+            out.push_str(&format!(
+                "{pad}    if __rsscript_result_{name}.is_none() {{\n"
+            ));
+            out.push_str(&format!("{pad}        __rsscript_all_done = false;\n"));
+            out.push_str(&format!(
+                "{pad}        if let rsscript_runtime::AsyncPoll::Ready(__rsscript_value) = {executor}.poll_once(&mut __rsscript_pending_{name}) {{\n"
+            ));
+            out.push_str(&format!(
+                "{pad}            __rsscript_result_{name} = Some(__rsscript_value);\n"
+            ));
+            out.push_str(&format!("{pad}            __rsscript_progress = true;\n"));
+            out.push_str(&format!("{pad}        }}\n"));
+            out.push_str(&format!("{pad}    }}\n"));
+        }
+        out.push_str(&format!("{pad}    if __rsscript_all_done {{ break; }}\n"));
+        out.push_str(&format!(
+            "{pad}    if !__rsscript_progress {{ {executor}.yield_once(); }}\n"
+        ));
+        out.push_str(&format!("{pad}}}\n"));
+    }
+
+    fn lower_select_stmt(
+        &mut self,
+        stmt: &crate::syntax::ast::SelectStmt,
+        out: &mut String,
+        indent: usize,
+    ) {
+        let pad = "    ".repeat(indent);
+        let inner_pad = "    ".repeat(indent + 1);
+        let executor = self
+            .current_async_executor
+            .clone()
+            .unwrap_or_else(|| "__rsscript_async_executor".to_string());
+        let prefix = format!("__rsscript_select_{}_{}", stmt.span.line, stmt.span.column);
+
+        out.push_str(&format!("{pad}{{\n"));
+        for (index, arm) in stmt.arms.iter().enumerate() {
+            let pending = async_await_inner(&arm.operation)
+                .map(|inner| self.lower_expr(inner))
+                .unwrap_or_else(|| "rsscript_runtime::pending_ready(())".to_string());
+            out.push_str(&format!(
+                "{inner_pad}let mut {prefix}_pending_{index} = {pending};\n"
+            ));
+            out.push_str(&format!(
+                "{inner_pad}let mut {prefix}_result_{index} = None;\n"
+            ));
+        }
+
+        out.push_str(&format!("{inner_pad}let {prefix}_arm = loop {{\n"));
+        for index in 0..stmt.arms.len() {
+            out.push_str(&format!(
+                "{inner_pad}    if {prefix}_result_{index}.is_none() {{\n"
+            ));
+            out.push_str(&format!(
+                "{inner_pad}        if let rsscript_runtime::AsyncPoll::Ready(__rsscript_value) = {executor}.poll_once(&mut {prefix}_pending_{index}) {{\n"
+            ));
+            out.push_str(&format!(
+                "{inner_pad}            {prefix}_result_{index} = Some(__rsscript_value);\n"
+            ));
+            out.push_str(&format!("{inner_pad}            break {index};\n"));
+            out.push_str(&format!("{inner_pad}        }}\n"));
+            out.push_str(&format!("{inner_pad}    }}\n"));
+        }
+        out.push_str(&format!("{inner_pad}    {executor}.yield_once();\n"));
+        out.push_str(&format!("{inner_pad}}};\n"));
+
+        out.push_str(&format!("{inner_pad}match {prefix}_arm {{\n"));
+        for (index, arm) in stmt.arms.iter().enumerate() {
+            out.push_str(&format!("{inner_pad}    {index} => {{\n"));
+            let take_result =
+                format!("{prefix}_result_{index}.take().expect(\"select arm completed\")");
+            if arm.binding == "_" {
+                if async_await_is_try(&arm.operation) {
+                    out.push_str(&format!("{inner_pad}        {take_result}?;\n"));
+                } else {
+                    out.push_str(&format!("{inner_pad}        let _ = {take_result};\n"));
+                }
+            } else {
+                let try_suffix = if async_await_is_try(&arm.operation) {
+                    "?"
+                } else {
+                    ""
+                };
+                out.push_str(&format!(
+                    "{inner_pad}        let {} = {take_result}{try_suffix};\n",
+                    rust_ident(&arm.binding)
+                ));
+            }
+            self.lower_block(&arm.body, out, indent + 2);
+            out.push_str(&format!("{inner_pad}    }}\n"));
+        }
+        out.push_str(&format!("{inner_pad}    _ => unreachable!(),\n"));
+        out.push_str(&format!("{inner_pad}}}\n"));
+        out.push_str(&format!("{pad}}}\n"));
     }
 
     fn extract_task_group_await<'b>(
@@ -704,6 +911,176 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
+    /// Lower a linear `async fn` body into a `pending_try`/`pending_then`/
+    /// `pending_ready` chain — a single `impl Pending<Ret>` expression. Each
+    /// `await op()?` becomes `pending_try(op(), move |x| <rest>)`; non-await
+    /// statements run inside the continuation block; `return e` is `pending_ready(e)`.
+    fn lower_async_chain(&mut self, statements: &[Stmt]) -> String {
+        let Some((head, tail)) = statements.split_first() else {
+            return "rsscript_runtime::pending_ready(())".to_string();
+        };
+        match head {
+            // `return await op` (the function's pending IS op's pending).
+            Stmt::Return(stmt)
+                if stmt
+                    .value
+                    .as_ref()
+                    .and_then(|value| async_await_inner(value))
+                    .is_some() =>
+            {
+                let value = stmt.value.as_ref().expect("return value");
+                self.lower_expr(async_await_inner(value).expect("await inner"))
+            }
+            Stmt::Return(stmt) => {
+                let value = stmt
+                    .value
+                    .as_ref()
+                    .map(|value| self.lower_expr(value))
+                    .unwrap_or_else(|| "()".to_string());
+                format!("rsscript_runtime::pending_ready({value})")
+            }
+            Stmt::Let(stmt)
+                if stmt
+                    .value
+                    .as_ref()
+                    .and_then(|value| async_await_inner(value))
+                    .is_some() =>
+            {
+                let value = stmt.value.as_ref().expect("await let has a value");
+                let combinator = if async_await_is_try(value) {
+                    "pending_try"
+                } else {
+                    "pending_then"
+                };
+                let pending = self.lower_expr(async_await_inner(value).expect("await inner"));
+                let bind = rust_ident(&stmt.name);
+                let rest = self.lower_async_chain(tail);
+                format!("rsscript_runtime::{combinator}({pending}, move |{bind}| {{ {rest} }})")
+            }
+            Stmt::Expr(expr) if async_await_inner(expr).is_some() => {
+                let combinator = if async_await_is_try(expr) {
+                    "pending_try"
+                } else {
+                    "pending_then"
+                };
+                let pending = self.lower_expr(async_await_inner(expr).expect("await inner"));
+                let rest = self.lower_async_chain(tail);
+                format!(
+                    "rsscript_runtime::{combinator}({pending}, move |_rsscript_unit| {{ {rest} }})"
+                )
+            }
+            Stmt::TaskGroup(stmt) => {
+                let boundary = self.lower_async_task_group_boundary(&stmt.body);
+                let rest = self.lower_async_chain(tail);
+                if boundary.returns_result {
+                    format!(
+                        "rsscript_runtime::pending_try({pending}, move |_rsscript_unit| {{ {rest} }})",
+                        pending = boundary.pending
+                    )
+                } else {
+                    format!(
+                        "rsscript_runtime::pending_then({pending}, move |_rsscript_unit| {{ {rest} }})",
+                        pending = boundary.pending
+                    )
+                }
+            }
+            Stmt::Select(_) => {
+                let boundary = self.lower_async_statement_boundary(head);
+                let rest = self.lower_async_chain(tail);
+                if boundary.returns_result {
+                    format!(
+                        "rsscript_runtime::pending_try({pending}, move |_rsscript_unit| {{ {rest} }})",
+                        pending = boundary.pending
+                    )
+                } else {
+                    format!(
+                        "rsscript_runtime::pending_then({pending}, move |_rsscript_unit| {{ {rest} }})",
+                        pending = boundary.pending
+                    )
+                }
+            }
+            Stmt::For(stmt) if stmt.is_async => {
+                let boundary = self.lower_async_statement_boundary(head);
+                let rest = self.lower_async_chain(tail);
+                if boundary.returns_result {
+                    format!(
+                        "rsscript_runtime::pending_try({pending}, move |_rsscript_unit| {{ {rest} }})",
+                        pending = boundary.pending
+                    )
+                } else {
+                    format!(
+                        "rsscript_runtime::pending_then({pending}, move |_rsscript_unit| {{ {rest} }})",
+                        pending = boundary.pending
+                    )
+                }
+            }
+            other => {
+                let mut statement_out = String::new();
+                self.lower_stmt(other, &mut statement_out, 0);
+                let rest = self.lower_async_chain(tail);
+                format!("{{ {} {rest} }}", statement_out.trim())
+            }
+        }
+    }
+
+    fn lower_async_statement_boundary(&mut self, statement: &Stmt) -> AsyncTaskGroupBoundary {
+        let mut body = String::new();
+        let previous_executor = self
+            .current_async_executor
+            .replace("__rsscript_async_executor".to_string());
+        body.push_str("{\n");
+        body.push_str("let mut __rsscript_async_executor = rsscript_runtime::Executor::new();\n");
+        self.lower_stmt(statement, &mut body, 0);
+        let returns_result = if let Some(error_ty) = self.current_result_error_type_rust() {
+            body.push_str(&format!("Ok::<(), {error_ty}>(())\n"));
+            true
+        } else {
+            body.push_str("()\n");
+            false
+        };
+        body.push('}');
+        self.current_async_executor = previous_executor;
+        AsyncTaskGroupBoundary {
+            pending: format!("rsscript_runtime::pending_defer(move || {body})"),
+            returns_result,
+        }
+    }
+
+    fn lower_async_task_group_boundary(&mut self, block: &Block) -> AsyncTaskGroupBoundary {
+        let mut body = String::new();
+        let previous_executor = self
+            .current_async_executor
+            .replace("__rsscript_async_executor".to_string());
+        body.push_str("{\n");
+        body.push_str("let mut __rsscript_async_executor = rsscript_runtime::Executor::new();\n");
+        body.push_str("// task_group: structured concurrency scope\n");
+        body.push_str("{\n");
+        self.lower_task_group_block(block, &mut body, 1);
+        body.push_str("}\n");
+        let returns_result = if let Some(error_ty) = self.current_result_error_type_rust() {
+            body.push_str(&format!("Ok::<(), {error_ty}>(())\n"));
+            true
+        } else {
+            body.push_str("()\n");
+            false
+        };
+        body.push('}');
+        self.current_async_executor = previous_executor;
+        AsyncTaskGroupBoundary {
+            pending: format!("rsscript_runtime::pending_defer(move || {body})"),
+            returns_result,
+        }
+    }
+
+    fn current_result_error_type_rust(&self) -> Option<String> {
+        let ty = self.current_return_type.as_ref()?;
+        if ty.name == "Result" && ty.args.len() == 2 {
+            Some(self.lower_type_ref(&ty.args[1], ManagedPosition::Return))
+        } else {
+            None
+        }
+    }
+
     fn lower_stmt(&mut self, statement: &Stmt, out: &mut String, indent: usize) {
         let pad = "    ".repeat(indent);
         let generated_start = out.len();
@@ -724,8 +1101,14 @@ impl<'a> RustLowerer<'a> {
                 if let Some(value) = &stmt.value {
                     let lowered = self.lower_expr(value);
                     let inferred_ty = self.infer_expr_type(value);
+                    let annotation = stmt
+                        .type_annotation
+                        .as_ref()
+                        .and_then(|ty| self.lower_let_annotation(ty))
+                        .map(|ty| format!(": {ty}"))
+                        .unwrap_or_default();
                     out.push_str(&format!(
-                        "{pad}let {mutable}{} = {};\n",
+                        "{pad}let {mutable}{}{annotation} = {};\n",
                         rust_ident(&stmt.name),
                         lowered
                     ));
@@ -799,7 +1182,13 @@ impl<'a> RustLowerer<'a> {
                 let item_type = self
                     .infer_expr_type(&stmt.iterable)
                     .as_ref()
-                    .and_then(list_element_type_ref);
+                    .and_then(|ty| {
+                        if stmt.is_async {
+                            stream_item_type_ref(ty)
+                        } else {
+                            list_element_type_ref(ty)
+                        }
+                    });
                 if let Some(item_type) = item_type.clone() {
                     if self.is_class_type(&item_type) {
                         self.managed_bindings.insert(stmt.binding.clone());
@@ -808,19 +1197,48 @@ impl<'a> RustLowerer<'a> {
                     }
                     self.value_types.insert(stmt.binding.clone(), item_type);
                 }
-                let iterator = if item_type.as_ref().is_some_and(is_copy_type_ref) {
+                if stmt.is_async {
                     self.read_view_bindings.remove(&stmt.binding);
-                    format!("({iterable}).iter().cloned()")
+                    let executor = self
+                        .current_async_executor
+                        .clone()
+                        .unwrap_or_else(|| "__rsscript_async_executor".to_string());
+                    let prefix = format!(
+                        "__rsscript_await_for_{}_{}",
+                        stmt.span.line, stmt.span.column
+                    );
+                    out.push_str(&format!("{pad}loop {{\n"));
+                    out.push_str(&format!(
+                        "{pad}    let mut {prefix}_pending = rsscript_runtime::stream_next(&{iterable});\n"
+                    ));
+                    out.push_str(&format!(
+                        "{pad}    let {prefix}_next = {executor}.run_pending(&mut {prefix}_pending)?;\n"
+                    ));
+                    out.push_str(&format!("{pad}    match {prefix}_next {{\n"));
+                    out.push_str(&format!(
+                        "{pad}        Some({}) => {{\n",
+                        rust_ident(&stmt.binding)
+                    ));
+                    self.lower_block(&stmt.body, out, indent + 3);
+                    out.push_str(&format!("{pad}        }}\n"));
+                    out.push_str(&format!("{pad}        None => break,\n"));
+                    out.push_str(&format!("{pad}    }}\n"));
+                    out.push_str(&format!("{pad}}}\n"));
                 } else {
-                    self.read_view_bindings.insert(stmt.binding.clone());
-                    format!("({iterable}).iter()")
-                };
-                out.push_str(&format!(
-                    "{pad}for {} in {iterator} {{\n",
-                    rust_ident(&stmt.binding)
-                ));
-                self.lower_block(&stmt.body, out, indent + 1);
-                out.push_str(&format!("{pad}}}\n"));
+                    let iterator = if item_type.as_ref().is_some_and(is_copy_type_ref) {
+                        self.read_view_bindings.remove(&stmt.binding);
+                        format!("({iterable}).iter().cloned()")
+                    } else {
+                        self.read_view_bindings.insert(stmt.binding.clone());
+                        format!("({iterable}).iter()")
+                    };
+                    out.push_str(&format!(
+                        "{pad}for {} in {iterator} {{\n",
+                        rust_ident(&stmt.binding)
+                    ));
+                    self.lower_block(&stmt.body, out, indent + 1);
+                    out.push_str(&format!("{pad}}}\n"));
+                }
                 match previous_type {
                     Some(ty) => {
                         self.value_types.insert(stmt.binding.clone(), ty);
@@ -848,6 +1266,12 @@ impl<'a> RustLowerer<'a> {
                 out.push_str(&format!("{pad}{{\n"));
                 self.lower_task_group_block(&stmt.body, out, indent + 1);
                 out.push_str(&format!("{pad}}}\n"));
+            }
+            Stmt::Select(stmt) => {
+                out.push_str(&format!(
+                    "{pad}// select: wait for the first ready operation\n"
+                ));
+                self.lower_select_stmt(stmt, out, indent);
             }
             Stmt::Match(stmt) => {
                 out.push_str(&format!("{pad}match {} {{\n", self.lower_expr(&stmt.value)));
@@ -983,6 +1407,12 @@ impl<'a> RustLowerer<'a> {
             }
             Stmt::TaskGroup(stmt) => {
                 self.record_block_source_map(&stmt.body, generated);
+            }
+            Stmt::Select(stmt) => {
+                for arm in &stmt.arms {
+                    self.record_expr_source_map(&arm.operation, generated);
+                    self.record_block_source_map(&arm.body, generated);
+                }
             }
             Stmt::Match(stmt) => {
                 self.record_expr_source_map(&stmt.value, generated);
@@ -1236,6 +1666,17 @@ impl<'a> RustLowerer<'a> {
                 format!("{}[{}]", self.lower_expr(base), self.lower_expr(index))
             }
             Expr::Call { callee, args, span } => {
+                // `Task.cancellation_token()` resolves to the enclosing
+                // task_group's token, or a never-cancelled token outside one.
+                if let Callee::Qualified { namespace, name } = callee
+                    && type_root_name(namespace) == "Task"
+                    && type_root_name(name) == "cancellation_token"
+                {
+                    return match &self.current_task_group_token {
+                        Some(guard) => format!("{guard}.token()"),
+                        None => "rsscript_runtime::cancellation_never()".to_string(),
+                    };
+                }
                 if let Callee::Name(name) = callee {
                     if let Some(type_kind) = self.type_kinds.get(name).copied() {
                         let mut fields = Vec::new();
@@ -1770,6 +2211,36 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
+    /// The Rust type annotation to emit on a `let`, when it is needed for
+    /// inference and provably matches the value's owned lowered type.
+    ///
+    /// We only annotate the builtin generic containers (`Channel<T>`, `List<T>`,
+    /// …). For those, `lower_type_ref` produces a concrete type identical to what
+    /// the constructor lowers to, so the annotation is sound and resolves cases
+    /// where a generic param is otherwise unconstrained (e.g.
+    /// `let ch: Channel<Int> = Channel.bounded(capacity: 1)?` → `RssChannel<_>`).
+    /// User types and transparent aliases are intentionally skipped: aliases are
+    /// not resolved here and class types are not wrapped at this position, so
+    /// annotating them could diverge from the value's actual Rust type.
+    fn lower_let_annotation(&self, ty: &TypeRef) -> Option<String> {
+        const GENERIC_CONTAINERS: &[&str] = &[
+            "Channel",
+            "Sender",
+            "Receiver",
+            "Stream",
+            "List",
+            "Map",
+            "Set",
+            "Option",
+            "Result",
+            "ResourcePool",
+        ];
+        if ty.args.is_empty() || !GENERIC_CONTAINERS.contains(&ty.name.as_str()) {
+            return None;
+        }
+        Some(self.lower_type_ref(ty, ManagedPosition::Bare))
+    }
+
     fn lower_type_ref(&self, ty: &TypeRef, position: ManagedPosition) -> String {
         if ty.name == "Fn" {
             let params = ty
@@ -1833,6 +2304,26 @@ impl<'a> RustLowerer<'a> {
             "Counter" => "rsscript_runtime::Counter".to_string(),
             "Instant" => "rsscript_runtime::RssInstant".to_string(),
             "Duration" => "rsscript_runtime::RssDuration".to_string(),
+            "Deadline" => "rsscript_runtime::RssDeadline".to_string(),
+            "CancellationSource" => "rsscript_runtime::RssCancellationSource".to_string(),
+            "CancellationToken" => "rsscript_runtime::RssCancellationToken".to_string(),
+            "Channel" if ty.args.len() == 1 => format!(
+                "rsscript_runtime::RssChannel<{}>",
+                self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
+            ),
+            "Sender" if ty.args.len() == 1 => format!(
+                "rsscript_runtime::RssSender<{}>",
+                self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
+            ),
+            "Receiver" if ty.args.len() == 1 => format!(
+                "rsscript_runtime::RssReceiver<{}>",
+                self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
+            ),
+            "Stream" if ty.args.len() == 1 => format!(
+                "rsscript_runtime::RssStream<{}>",
+                self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
+            ),
+            "ChannelError" => "rsscript_runtime::ChannelError".to_string(),
             "Regex" => "rsscript_runtime::RssRegex".to_string(),
             "RegexError" => "rsscript_runtime::RegexError".to_string(),
             "TempDir" => "rsscript_runtime::TempDir".to_string(),

@@ -1,0 +1,23 @@
+features: async
+
+fn run_workers() -> Result<Unit, TimerError> {
+    task_group {
+        // The group owns cancellation; its read-only token reaches cancellable
+        // children. If the scope exits early (a `?` error or return), the guard
+        // cancels the token and cooperative siblings stop instead of leaking.
+        let token = Task.cancellation_token()
+
+        async let quick = Timer.sleep(ms: 1)
+        async let cancellable = Timer.sleep_cancellable(ms: 1, token: read token)
+
+        await quick?
+        await cancellable?
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Result<Unit, TimerError> {
+    run_workers()?
+    Log.write(message: read "task group done")
+    return Ok(Unit)
+}

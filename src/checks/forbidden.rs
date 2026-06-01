@@ -189,6 +189,12 @@ fn check_operator_overload_attempts_in_stmt(analyzer: &mut Analyzer<'_>, stateme
                 check_operator_overload_attempts_in_block(analyzer, &arm.body);
             }
         }
+        HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                check_operator_overload_attempts_in_expr(analyzer, &arm.operation);
+                check_operator_overload_attempts_in_block(analyzer, &arm.body);
+            }
+        }
         HirStmt::Expr(value) => check_operator_overload_attempts_in_expr(analyzer, value),
         HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
     }

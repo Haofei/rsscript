@@ -1,0 +1,21 @@
+features: async
+
+async fn produce(id: Int) -> Result<Int, TimerError> {
+    await Timer.sleep(ms: 1)?
+    return Ok(id)
+}
+
+fn run_pipeline() -> Result<Int, TimerError> {
+    task_group {
+        async let a = produce(id: 1)
+        async let b = produce(id: 2)
+
+        let x = await a?
+        let y = await b?
+    }
+    return Ok(0)
+}
+
+fn main() -> Unit {
+    return Unit
+}

@@ -250,7 +250,8 @@ fn collect_task_group_async_lets(
                 collect_task_group_async_lets_expr(&stmt.value, async_lets);
             }
             Stmt::Expr(expr) => collect_task_group_async_lets_expr(expr, async_lets),
-            Stmt::TaskGroup(_)
+            Stmt::Select(_)
+            | Stmt::TaskGroup(_)
             | Stmt::MalformedWith(_)
             | Stmt::MalformedIf(_)
             | Stmt::MalformedLoop(_)
@@ -316,6 +317,7 @@ fn collect_nested_task_group_async_lets(
                 collect_all_async_let_spans_expr(expr, async_lets);
             }
             Stmt::Return(_)
+            | Stmt::Select(_)
             | Stmt::TaskGroup(_)
             | Stmt::MalformedWith(_)
             | Stmt::MalformedIf(_)
@@ -381,6 +383,12 @@ fn collect_all_async_let_spans(block: &Block, async_lets: &mut Vec<crate::diagno
                 collect_all_async_let_spans_expr(&stmt.value, async_lets);
             }
             Stmt::Expr(expr) => collect_all_async_let_spans_expr(expr, async_lets),
+            Stmt::Select(stmt) => {
+                for arm in &stmt.arms {
+                    collect_all_async_let_spans_expr(&arm.operation, async_lets);
+                    collect_all_async_let_spans(&arm.body, async_lets);
+                }
+            }
             Stmt::TaskGroup(_)
             | Stmt::MalformedWith(_)
             | Stmt::MalformedIf(_)
@@ -510,7 +518,8 @@ fn collect_task_group_awaited_handles(block: &Block, awaited: &mut HashSet<Strin
                 collect_task_group_awaited_handles_expr(&stmt.value, awaited);
             }
             Stmt::Expr(expr) => collect_task_group_awaited_handles_expr(expr, awaited),
-            Stmt::TaskGroup(_)
+            Stmt::Select(_)
+            | Stmt::TaskGroup(_)
             | Stmt::MalformedWith(_)
             | Stmt::MalformedIf(_)
             | Stmt::MalformedLoop(_)
@@ -538,6 +547,41 @@ fn collect_direct_task_group_awaited_handles(block: &Block, awaited: &mut HashSe
             Stmt::Expr(expr) => collect_task_group_awaited_handles_expr(expr, awaited),
             _ => {}
         }
+    }
+}
+
+fn direct_task_group_awaited_handles_in_stmt(
+    statement: &Stmt,
+) -> Vec<(String, crate::diagnostic::Span)> {
+    let mut awaited = Vec::new();
+    match statement {
+        Stmt::Let(stmt) => {
+            if let Some(value) = &stmt.value {
+                direct_task_group_awaited_handles_in_expr(value, &mut awaited);
+            }
+        }
+        Stmt::Assign(stmt) => {
+            direct_task_group_awaited_handles_in_expr(&stmt.target, &mut awaited);
+            direct_task_group_awaited_handles_in_expr(&stmt.value, &mut awaited);
+        }
+        Stmt::Expr(expr) => direct_task_group_awaited_handles_in_expr(expr, &mut awaited),
+        _ => {}
+    }
+    awaited
+}
+
+fn direct_task_group_awaited_handles_in_expr(
+    expr: &Expr,
+    awaited: &mut Vec<(String, crate::diagnostic::Span)>,
+) {
+    match expr {
+        Expr::Await { value, span } => {
+            if let Some(name) = await_handle_name(value) {
+                awaited.push((name.to_string(), span.clone()));
+            }
+        }
+        Expr::Try { value, .. } => direct_task_group_awaited_handles_in_expr(value, awaited),
+        _ => {}
     }
 }
 
@@ -630,7 +674,8 @@ fn find_nested_task_group_await_span<'a>(
                     return Some(span);
                 }
             }
-            Stmt::TaskGroup(_)
+            Stmt::Select(_)
+            | Stmt::TaskGroup(_)
             | Stmt::MalformedWith(_)
             | Stmt::MalformedIf(_)
             | Stmt::MalformedLoop(_)
@@ -733,7 +778,8 @@ fn find_task_group_await_span<'a>(
                     return Some(span);
                 }
             }
-            Stmt::TaskGroup(_)
+            Stmt::Select(_)
+            | Stmt::TaskGroup(_)
             | Stmt::MalformedWith(_)
             | Stmt::MalformedIf(_)
             | Stmt::MalformedLoop(_)
@@ -867,6 +913,7 @@ impl Analyzer<'_> {
         self.check_unsupported_syntax();
         self.check_derive_field_requirements();
         self.check_assignments();
+        self.check_async_fn_lowerable();
         self.check_match_exhaustiveness();
         self.check_duplicate_declarations();
         self.check_protocol_contracts();
@@ -1273,6 +1320,38 @@ impl Analyzer<'_> {
         }
     }
 
+    /// A user `async fn` lowers to a `Pending` chain. Reject awaits nested in
+    /// control flow (RS0411, deferred until full state-machine lowering) rather
+    /// than silently mis-lowering them.
+    fn check_async_fn_lowerable(&mut self) {
+        use crate::syntax::ast::Item;
+        let mut diagnostics = Vec::new();
+        for item in &self.syntax_program.items {
+            let Item::Function(function) = item else {
+                continue;
+            };
+            if !function.is_async {
+                continue;
+            }
+            if let Some(span) = async_block_nonlinear_await(&function.body) {
+                diagnostics.push(async_not_lowerable_diagnostic(
+                    span,
+                    "this `await` is inside control flow, which needs full async lowering",
+                    "Restructure so every `await` is a top-level statement in the async function body. Awaits inside `loop`/`if`/`match`/`with` are deferred.",
+                ));
+            }
+            // Independent of lowerability: a `Task.cancellation_token()` call in
+            // A `Task.cancellation_token()` call in an async fn outside an
+            // actual task_group still has no lexical cancellation owner, so it
+            // would silently lower to a never-cancelled token. Reject it instead
+            // of handing out fake structured cancellation.
+            if let Some(span) = block_first_cancellation_token(&function.body) {
+                diagnostics.push(cancellation_token_outside_task_group_diagnostic(span));
+            }
+        }
+        self.diagnostics.extend(diagnostics);
+    }
+
     /// Controlled ordinary assignment: `x = e` updates a `let mut` local. The
     /// left side must be a place whose root is a reassignable local, and `mut`
     /// must appear in the binding so mutation stays visible to the type system.
@@ -1419,6 +1498,19 @@ impl Analyzer<'_> {
                 self.check_unsupported_syntax_block(&stmt.body);
                 self.in_task_group = was_in_task_group;
             }
+            Stmt::Select(stmt) => {
+                for arm in &stmt.arms {
+                    if async_await_inner_ast(&arm.operation).is_none() {
+                        self.unsupported_syntax(
+                            arm.span.clone(),
+                            "malformed select arm",
+                            "Select arms must use `name = await operation => { ... }`.",
+                        );
+                    }
+                    self.check_unsupported_syntax_expr(&arm.operation);
+                    self.check_unsupported_syntax_block(&arm.body);
+                }
+            }
             Stmt::MalformedFor(span) => self.unsupported_syntax(
                 span.clone(),
                 "malformed for statement",
@@ -1520,6 +1612,9 @@ impl Analyzer<'_> {
         collect_task_group_async_lets(block, &mut async_lets);
         collect_direct_task_group_awaited_handles(block, &mut awaited);
         for (name, span) in async_lets {
+            if name == "_" {
+                continue;
+            }
             if !awaited.contains(&name) {
                 self.unsupported_syntax(
                     span,
@@ -1535,6 +1630,7 @@ impl Analyzer<'_> {
         for statement in &block.statements {
             if let Stmt::Let(stmt) = statement
                 && stmt.is_async
+                && stmt.name != "_"
             {
                 top_level_async_lets.insert(stmt.name.clone());
             }
@@ -1564,6 +1660,38 @@ impl Analyzer<'_> {
                     "nested async let await",
                     "`await` of a task_group async-let handle must be a direct task_group statement in the v0.6 executable MVP.",
                 );
+            }
+        }
+
+        let mut declared = HashSet::new();
+        let mut awaited = HashSet::new();
+        for statement in &block.statements {
+            if let Stmt::Let(stmt) = statement
+                && stmt.is_async
+            {
+                if stmt.name != "_" {
+                    declared.insert(stmt.name.clone());
+                }
+                continue;
+            }
+
+            for (name, span) in direct_task_group_awaited_handles_in_stmt(statement) {
+                if !top_level_async_lets.contains(&name) {
+                    continue;
+                }
+                if !declared.contains(&name) {
+                    self.unsupported_syntax(
+                        span,
+                        "async let await before declaration",
+                        "`await` of a task_group async-let handle must appear after the matching `async let` declaration.",
+                    );
+                } else if !awaited.insert(name) {
+                    self.unsupported_syntax(
+                        span,
+                        "async let awaited more than once",
+                        "`async let` handles are bounded task_group handles and can be consumed by `await` only once.",
+                    );
+                }
             }
         }
     }
@@ -1675,6 +1803,12 @@ impl Analyzer<'_> {
                             "manual",
                         ),
                     );
+                }
+            }
+            HirStmt::Select { arms, .. } => {
+                for arm in arms {
+                    self.check_match_exhaustiveness_expr(&arm.operation);
+                    self.check_match_exhaustiveness_block(&arm.body);
                 }
             }
             HirStmt::Expr(expr) => self.check_match_exhaustiveness_expr(expr),
@@ -2582,6 +2716,16 @@ impl Analyzer<'_> {
                     self.check_unknown_bindings_in_block(&arm.body, &mut arm_visible);
                 }
             }
+            HirStmt::Select { arms, .. } => {
+                for arm in arms {
+                    self.check_unknown_bindings_in_expr(&arm.operation, visible);
+                    let mut arm_visible = visible.clone();
+                    if arm.binding != "_" {
+                        arm_visible.insert(arm.binding.clone());
+                    }
+                    self.check_unknown_bindings_in_block(&arm.body, &mut arm_visible);
+                }
+            }
             HirStmt::Expr(value) => self.check_unknown_bindings_in_expr(value, visible),
             HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
         }
@@ -2835,6 +2979,12 @@ impl Analyzer<'_> {
             }
             Stmt::TaskGroup(stmt) => {
                 self.check_runtime_guarantee_block(guarantee, function_name, &stmt.body);
+            }
+            Stmt::Select(stmt) => {
+                for arm in &stmt.arms {
+                    self.check_runtime_guarantee_expr(guarantee, function_name, &arm.operation);
+                    self.check_runtime_guarantee_block(guarantee, function_name, &arm.body);
+                }
             }
             Stmt::Match(stmt) => {
                 self.check_runtime_guarantee_expr(guarantee, function_name, &stmt.value);
@@ -3222,6 +3372,12 @@ impl Analyzer<'_> {
             Stmt::TaskGroup(stmt) => {
                 self.check_resource_pool_calls_in_block(&stmt.body);
             }
+            Stmt::Select(stmt) => {
+                for arm in &stmt.arms {
+                    self.check_resource_pool_calls_in_expr(&arm.operation);
+                    self.check_resource_pool_calls_in_block(&arm.body);
+                }
+            }
             Stmt::Match(stmt) => {
                 self.check_resource_pool_calls_in_expr(&stmt.value);
                 for arm in &stmt.arms {
@@ -3336,6 +3492,12 @@ impl Analyzer<'_> {
             }
             Stmt::TaskGroup(stmt) => {
                 self.check_resource_generic_calls_in_block(&stmt.body);
+            }
+            Stmt::Select(stmt) => {
+                for arm in &stmt.arms {
+                    self.check_resource_generic_calls_in_expr(&arm.operation);
+                    self.check_resource_generic_calls_in_block(&arm.body);
+                }
             }
             Stmt::Match(stmt) => {
                 self.check_resource_generic_calls_in_expr(&stmt.value);
@@ -3901,6 +4063,244 @@ fn generic_bounds(params: &[GenericParam]) -> HashMap<String, Option<GenericBoun
         .collect()
 }
 
+fn async_not_lowerable_diagnostic(
+    span: crate::diagnostic::Span,
+    label: &str,
+    cause: &str,
+) -> Diagnostic {
+    Diagnostic::error(
+        code::ASYNC_FN_NOT_LOWERABLE,
+        "async function is not lowerable in this version.",
+        span,
+        label,
+    )
+    .with_cause(cause)
+    .with_fix(
+        "restructure_async_fn",
+        "Make every `await` a top-level statement, or move a `task_group` into a synchronous function.",
+        "manual",
+    )
+}
+
+fn cancellation_token_outside_task_group_diagnostic(span: crate::diagnostic::Span) -> Diagnostic {
+    Diagnostic::error(
+        code::CANCELLATION_TOKEN_OUTSIDE_TASK_GROUP,
+        "`Task.cancellation_token()` is not allowed inside an `async fn`.",
+        span,
+        "this would observe a never-cancelled token, not the task_group's",
+    )
+    .with_cause(
+        "An `async fn` has no lexically enclosing `task_group`, so this call cannot inherit the group's cancellation token and would silently never cancel.",
+    )
+    .with_fix(
+        "pass_cancellation_token",
+        "Call `Task.cancellation_token()` inside the `task_group` block and pass the token into this function as a `read CancellationToken` parameter.",
+        "manual",
+    )
+}
+
+/// First `Task.cancellation_token()` call span anywhere in a function body.
+fn block_first_cancellation_token(block: &Block) -> Option<crate::diagnostic::Span> {
+    block
+        .statements
+        .iter()
+        .find_map(stmt_first_cancellation_token)
+}
+
+fn stmt_first_cancellation_token(statement: &Stmt) -> Option<crate::diagnostic::Span> {
+    match statement {
+        Stmt::Let(stmt) => stmt.value.as_ref().and_then(expr_first_cancellation_token),
+        Stmt::Return(stmt) => stmt.value.as_ref().and_then(expr_first_cancellation_token),
+        Stmt::Expr(expr) => expr_first_cancellation_token(expr),
+        Stmt::With(stmt) => expr_first_cancellation_token(&stmt.resource)
+            .or_else(|| block_first_cancellation_token(&stmt.body)),
+        Stmt::If(stmt) => expr_first_cancellation_token(&stmt.condition)
+            .or_else(|| block_first_cancellation_token(&stmt.then_body))
+            .or_else(|| {
+                stmt.else_body
+                    .as_ref()
+                    .and_then(block_first_cancellation_token)
+            }),
+        Stmt::Loop(stmt) => stmt
+            .condition
+            .as_ref()
+            .and_then(expr_first_cancellation_token)
+            .or_else(|| block_first_cancellation_token(&stmt.body)),
+        Stmt::For(stmt) => expr_first_cancellation_token(&stmt.iterable)
+            .or_else(|| block_first_cancellation_token(&stmt.body)),
+        Stmt::Match(stmt) => expr_first_cancellation_token(&stmt.value).or_else(|| {
+            stmt.arms
+                .iter()
+                .find_map(|arm| block_first_cancellation_token(&arm.body))
+        }),
+        Stmt::TaskGroup(_) => None,
+        Stmt::LetElse(stmt) => expr_first_cancellation_token(&stmt.value)
+            .or_else(|| block_first_cancellation_token(&stmt.else_body)),
+        _ => None,
+    }
+}
+
+fn expr_first_cancellation_token(expr: &Expr) -> Option<crate::diagnostic::Span> {
+    match expr {
+        Expr::Call { callee, args, span } => {
+            if let Callee::Qualified { namespace, name } = callee
+                && namespace == "Task"
+                && name == "cancellation_token"
+            {
+                return Some(span.clone());
+            }
+            args.iter()
+                .find_map(|arg| expr_first_cancellation_token(&arg.value))
+        }
+        Expr::Binary { left, right, .. } => {
+            expr_first_cancellation_token(left).or_else(|| expr_first_cancellation_token(right))
+        }
+        Expr::Field { base, .. } => expr_first_cancellation_token(base),
+        Expr::Index { base, index, .. } => {
+            expr_first_cancellation_token(base).or_else(|| expr_first_cancellation_token(index))
+        }
+        Expr::Effect { value, .. }
+        | Expr::Manage { value, .. }
+        | Expr::Spawn { value, .. }
+        | Expr::Await { value, .. }
+        | Expr::Try { value, .. } => expr_first_cancellation_token(value),
+        Expr::Closure { body, .. } => block_first_cancellation_token(body),
+        Expr::Match { value, arms, .. } => expr_first_cancellation_token(value).or_else(|| {
+            arms.iter()
+                .find_map(|arm| block_first_cancellation_token(&arm.body))
+        }),
+        Expr::Ident(..) | Expr::Number(..) | Expr::String(..) | Expr::Unknown(_) => None,
+    }
+}
+
+/// The awaited inner expression of `await x` / `await x?`.
+fn async_await_inner_ast(expr: &Expr) -> Option<&Expr> {
+    match expr {
+        Expr::Try { value, .. } => match value.as_ref() {
+            Expr::Await { value, .. } => Some(value),
+            _ => None,
+        },
+        Expr::Await { value, .. } => Some(value),
+        _ => None,
+    }
+}
+
+fn expr_first_await(expr: &Expr) -> Option<crate::diagnostic::Span> {
+    match expr {
+        Expr::Await { span, .. } => Some(span.clone()),
+        Expr::Binary { left, right, .. } => {
+            expr_first_await(left).or_else(|| expr_first_await(right))
+        }
+        Expr::Field { base, .. } => expr_first_await(base),
+        Expr::Index { base, index, .. } => {
+            expr_first_await(base).or_else(|| expr_first_await(index))
+        }
+        Expr::Call { args, .. } => args.iter().find_map(|arg| expr_first_await(&arg.value)),
+        Expr::Effect { value, .. }
+        | Expr::Manage { value, .. }
+        | Expr::Spawn { value, .. }
+        | Expr::Try { value, .. } => expr_first_await(value),
+        Expr::Closure { body, .. } => block_first_await(body),
+        Expr::Match { value, arms, .. } => expr_first_await(value)
+            .or_else(|| arms.iter().find_map(|arm| block_first_await(&arm.body))),
+        Expr::Ident(..) | Expr::Number(..) | Expr::String(..) | Expr::Unknown(_) => None,
+    }
+}
+
+fn block_first_await(block: &Block) -> Option<crate::diagnostic::Span> {
+    block.statements.iter().find_map(stmt_first_await_ast)
+}
+
+fn stmt_first_await_ast(statement: &Stmt) -> Option<crate::diagnostic::Span> {
+    match statement {
+        Stmt::Let(stmt) => stmt.value.as_ref().and_then(expr_first_await),
+        Stmt::Return(stmt) => stmt.value.as_ref().and_then(expr_first_await),
+        Stmt::Expr(expr) => expr_first_await(expr),
+        Stmt::With(stmt) => {
+            expr_first_await(&stmt.resource).or_else(|| block_first_await(&stmt.body))
+        }
+        Stmt::If(stmt) => expr_first_await(&stmt.condition)
+            .or_else(|| block_first_await(&stmt.then_body))
+            .or_else(|| stmt.else_body.as_ref().and_then(block_first_await)),
+        Stmt::Loop(stmt) => stmt
+            .condition
+            .as_ref()
+            .and_then(expr_first_await)
+            .or_else(|| block_first_await(&stmt.body)),
+        Stmt::For(stmt) => {
+            if stmt.is_async {
+                Some(stmt.span.clone())
+            } else {
+                expr_first_await(&stmt.iterable).or_else(|| block_first_await(&stmt.body))
+            }
+        }
+        Stmt::Match(stmt) => expr_first_await(&stmt.value).or_else(|| {
+            stmt.arms
+                .iter()
+                .find_map(|arm| block_first_await(&arm.body))
+        }),
+        Stmt::Select(stmt) => stmt.arms.iter().find_map(|arm| {
+            expr_first_await(&arm.operation).or_else(|| block_first_await(&arm.body))
+        }),
+        Stmt::TaskGroup(stmt) => block_first_await(&stmt.body),
+        Stmt::LetElse(stmt) => {
+            expr_first_await(&stmt.value).or_else(|| block_first_await(&stmt.else_body))
+        }
+        _ => None,
+    }
+}
+
+/// The span of the first `await` that is *not* a top-level statement of an async
+/// body (i.e. nested in control flow or a non-await expression position).
+fn async_block_nonlinear_await(block: &Block) -> Option<crate::diagnostic::Span> {
+    for statement in &block.statements {
+        let nested = match statement {
+            Stmt::Let(stmt) => match stmt.value.as_ref() {
+                Some(value) => match async_await_inner_ast(value) {
+                    Some(inner) => expr_first_await(inner),
+                    None => expr_first_await(value),
+                },
+                None => None,
+            },
+            Stmt::Expr(expr) => match async_await_inner_ast(expr) {
+                Some(inner) => expr_first_await(inner),
+                None => expr_first_await(expr),
+            },
+            // `return await op` is a top-level await; only nested awaits in the
+            // returned expression are non-linear.
+            Stmt::Return(stmt) => match stmt.value.as_ref() {
+                Some(value) => match async_await_inner_ast(value) {
+                    Some(inner) => expr_first_await(inner),
+                    None => expr_first_await(value),
+                },
+                None => None,
+            },
+            Stmt::Select(stmt) => select_boundary_nonlinear_await(stmt),
+            Stmt::For(stmt) if stmt.is_async => {
+                expr_first_await(&stmt.iterable).or_else(|| block_first_await(&stmt.body))
+            }
+            Stmt::TaskGroup(_) => None,
+            other => stmt_first_await_ast(other),
+        };
+        if nested.is_some() {
+            return nested;
+        }
+    }
+    None
+}
+
+fn select_boundary_nonlinear_await(
+    stmt: &crate::syntax::ast::SelectStmt,
+) -> Option<crate::diagnostic::Span> {
+    stmt.arms.iter().find_map(|arm| {
+        let operation_nested = match async_await_inner_ast(&arm.operation) {
+            Some(inner) => expr_first_await(inner),
+            None => expr_first_await(&arm.operation),
+        };
+        operation_nested.or_else(|| block_first_await(&arm.body))
+    })
+}
+
 #[derive(Debug, Clone, Copy)]
 enum AssignBinding {
     MutLocal,
@@ -4072,6 +4472,12 @@ impl<'a> AssignChecker<'a> {
                 self.match_arms(&stmt.arms);
             }
             Stmt::TaskGroup(stmt) => self.block(&stmt.body),
+            Stmt::Select(stmt) => {
+                for arm in &stmt.arms {
+                    self.expr(&arm.operation);
+                    self.block(&arm.body);
+                }
+            }
             Stmt::LetElse(stmt) => {
                 self.expr(&stmt.value);
                 self.block(&stmt.else_body);

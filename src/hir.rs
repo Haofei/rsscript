@@ -239,12 +239,17 @@ pub enum HirStmt {
         iterable: HirExpr,
         iterable_type_name: Option<String>,
         item_type_name: Option<String>,
+        is_async: bool,
         body: HirBlock,
         span: Span,
     },
     Match {
         value: HirExpr,
         arms: Vec<HirMatchArm>,
+        span: Span,
+    },
+    Select {
+        arms: Vec<HirSelectArm>,
         span: Span,
     },
     Break(Span),
@@ -256,6 +261,14 @@ pub enum HirStmt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HirMatchArm {
     pub pattern: MatchPattern,
+    pub body: HirBlock,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirSelectArm {
+    pub binding: String,
+    pub operation: HirExpr,
     pub body: HirBlock,
     pub span: Span,
 }
@@ -1089,7 +1102,11 @@ fn lower_hir_stmt(
         },
         Stmt::For(stmt) => {
             let iterable_type = infer_hir_expr_type(hir, &stmt.iterable, value_types);
-            let item_type = iterable_type.as_deref().and_then(list_element_type);
+            let item_type = if stmt.is_async {
+                iterable_type.as_deref().and_then(stream_item_type)
+            } else {
+                iterable_type.as_deref().and_then(list_element_type)
+            };
             let mut body_types = value_types.clone();
             if let Some(item_type) = &item_type {
                 body_types.insert(stmt.binding.clone(), item_type.clone());
@@ -1099,6 +1116,7 @@ fn lower_hir_stmt(
                 iterable: lower_hir_expr(hir, function_name, &stmt.iterable, value_types),
                 iterable_type_name: iterable_type,
                 item_type_name: item_type,
+                is_async: stmt.is_async,
                 body: lower_hir_block(hir, function_name, &stmt.body, &mut body_types),
                 span: stmt.span.clone(),
             }
@@ -1125,6 +1143,34 @@ fn lower_hir_stmt(
                 .collect();
             HirStmt::Match {
                 value,
+                arms,
+                span: stmt.span.clone(),
+            }
+        }
+        Stmt::Select(stmt) => {
+            let arms = stmt
+                .arms
+                .iter()
+                .map(|arm| {
+                    // The binding observes the *awaited* value of the operation,
+                    // so the body sees it with the resolved (unwrapped) type.
+                    let binding_type = infer_hir_expr_type(hir, &arm.operation, value_types);
+                    let operation = lower_hir_expr(hir, function_name, &arm.operation, value_types);
+                    let mut arm_types = value_types.clone();
+                    if arm.binding != "_"
+                        && let Some(type_name) = binding_type
+                    {
+                        arm_types.insert(arm.binding.clone(), type_name);
+                    }
+                    HirSelectArm {
+                        binding: arm.binding.clone(),
+                        operation,
+                        body: lower_hir_block(hir, function_name, &arm.body, &mut arm_types),
+                        span: arm.span.clone(),
+                    }
+                })
+                .collect();
+            HirStmt::Select {
                 arms,
                 span: stmt.span.clone(),
             }
@@ -1495,9 +1541,20 @@ fn collect_body_facts_in_stmt(
             collect_body_facts_in_block(hir, function_name, &stmt.body, value_types, facts);
         }
         Stmt::For(stmt) => {
+            if stmt.is_async {
+                facts.feature_uses.push(HirFeatureUse {
+                    function_name: Some(function_name.to_string()),
+                    kind: HirFeatureUseKind::Async,
+                    span: stmt.span.clone(),
+                });
+            }
             collect_body_facts_in_expr(hir, function_name, &stmt.iterable, value_types, facts);
             let iterable_type = infer_hir_expr_type(hir, &stmt.iterable, value_types);
-            let item_type = iterable_type.as_deref().and_then(list_element_type);
+            let item_type = if stmt.is_async {
+                iterable_type.as_deref().and_then(stream_item_type)
+            } else {
+                iterable_type.as_deref().and_then(list_element_type)
+            };
             let mut body_types = value_types.clone();
             if let Some(item_type) = item_type {
                 facts.bindings.push(HirBinding {
@@ -1520,6 +1577,32 @@ fn collect_body_facts_in_stmt(
             });
             let mut body_types = value_types.clone();
             collect_body_facts_in_block(hir, function_name, &stmt.body, &mut body_types, facts);
+        }
+        Stmt::Select(stmt) => {
+            facts.feature_uses.push(HirFeatureUse {
+                function_name: Some(function_name.to_string()),
+                kind: HirFeatureUseKind::Async,
+                span: stmt.span.clone(),
+            });
+            for arm in &stmt.arms {
+                collect_body_facts_in_expr(hir, function_name, &arm.operation, value_types, facts);
+                let binding_type = infer_hir_expr_type(hir, &arm.operation, value_types);
+                let mut arm_types = value_types.clone();
+                if arm.binding != "_"
+                    && let Some(type_name) = binding_type
+                {
+                    facts.bindings.push(HirBinding {
+                        function_name: function_name.to_string(),
+                        name: arm.binding.clone(),
+                        kind: HirBindingKind::ManagedLet,
+                        effect: None,
+                        span: arm.span.clone(),
+                        type_name: Some(type_name.clone()),
+                    });
+                    arm_types.insert(arm.binding.clone(), type_name);
+                }
+                collect_body_facts_in_block(hir, function_name, &arm.body, &mut arm_types, facts);
+            }
         }
         Stmt::Match(stmt) => {
             collect_body_facts_in_expr(hir, function_name, &stmt.value, value_types, facts);
@@ -2039,6 +2122,7 @@ fn infer_closure_return_type(
             | Stmt::Loop { .. }
             | Stmt::For(_)
             | Stmt::TaskGroup(_)
+            | Stmt::Select(_)
             | Stmt::Match { .. }
             | Stmt::Break(_)
             | Stmt::Continue(_)
@@ -2168,7 +2252,8 @@ fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
 
 fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str>> {
     match root {
-        "List" | "Set" | "Option" | "ResourcePool" => Some(vec!["T"]),
+        "List" | "Set" | "Option" | "ResourcePool" | "Channel" | "Sender" | "Receiver"
+        | "Stream" => Some(vec!["T"]),
         "Map" | "Result" => Some(vec!["K", "V"]),
         _ => None,
     }
@@ -2227,6 +2312,16 @@ fn result_ok_type(type_name: &str) -> Option<String> {
 fn list_element_type(type_name: &str) -> Option<String> {
     let inner = type_name
         .strip_prefix("List<")
+        .and_then(|rest| rest.strip_suffix('>'))?;
+    split_top_level_type_args(inner)
+        .into_iter()
+        .next()
+        .map(str::to_string)
+}
+
+fn stream_item_type(type_name: &str) -> Option<String> {
+    let inner = type_name
+        .strip_prefix("Stream<")
         .and_then(|rest| rest.strip_suffix('>'))?;
     split_top_level_type_args(inner)
         .into_iter()
@@ -2314,6 +2409,7 @@ fn classify_block_return_expr(hir: &Hir, block: &Block) -> HirReturnProof {
         | Stmt::Loop { .. }
         | Stmt::For(_)
         | Stmt::TaskGroup(_)
+        | Stmt::Select(_)
         | Stmt::Match { .. }
         | Stmt::Break(_)
         | Stmt::Continue(_)

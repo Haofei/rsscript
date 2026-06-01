@@ -4,3 +4,12 @@ struct TimerError
 
 pub async native fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
     effects(native)
+
+pub async native fn Timer.sleep_until(deadline: read Deadline) -> Result<Unit, TimerError>
+    effects(native)
+
+// Sleep up to `ms`, waking early as soon as `token` is cancelled. Always
+// completes (never hangs); check the token afterwards to learn whether it
+// elapsed or woke on cancel.
+pub async native fn Timer.sleep_cancellable(ms: Int, token: read CancellationToken) -> Result<Unit, TimerError>
+    effects(native)

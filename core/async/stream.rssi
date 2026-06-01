@@ -1,0 +1,13 @@
+features: async, native, local
+
+// A narrow async sequence handle. Stream v1 is intentionally pull-based:
+// callers explicitly await `Stream.next`, which returns `None` when the stream
+// is closed. `await for` lowers to this same primitive.
+
+struct Stream<T>
+
+pub native fn Receiver.into_stream<T>(receiver: take Receiver<T>) -> fresh Stream<T>
+    effects(native)
+
+pub async native fn Stream.next<T>(stream: read Stream<T>) -> Result<Option<T>, ChannelError>
+    effects(native)

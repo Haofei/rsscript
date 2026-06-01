@@ -11,10 +11,10 @@ use rsscript::{
     write_generated_rust_package,
 };
 
-const REQUESTS: usize = 24;
-const PAYLOAD_BYTES: usize = 64 * 1024;
-const CONCURRENCY: usize = 8;
-const SERVER_DELAY_MS: u64 = 50;
+const DEFAULT_REQUESTS: usize = 256;
+const DEFAULT_PAYLOAD_BYTES: usize = 256 * 1024;
+const DEFAULT_CONCURRENCY: usize = 16;
+const DEFAULT_SERVER_DELAY_MS: u64 = 10;
 
 #[test]
 #[ignore = "release/demo e2e; run from rss/test-runner/manifests/demo-e2e.rsstest.toml"]
@@ -23,6 +23,7 @@ fn file_upload_benchmark_reports_async_and_sync_requests_per_second() {
     let benchmark_dir = repo.join("benchmarks/file-upload");
     let native_dir = benchmark_dir.join("native/rust");
     let native_manifest = native_dir.join("Cargo.toml");
+    let config = BenchmarkConfig::from_env();
     let temp_dir = common::unique_temp_dir("rsscript-file-upload-benchmark");
     fs::create_dir_all(&temp_dir).expect("e2e temp dir should be created");
 
@@ -32,10 +33,12 @@ fn file_upload_benchmark_reports_async_and_sync_requests_per_second() {
 
     let addr = available_local_addr();
     let server_log = temp_dir.join("file-upload-server.log");
-    let _server = UploadServer::start(&native_dir, addr, &server_log);
+    let _server = UploadServer::start(&native_dir, addr, &server_log, config.server_delay_ms);
 
+    let generated_source_dir = temp_dir.join("rss-file-upload-benchmark-source");
+    generate_rss_benchmark_source(&benchmark_dir, &native_dir, &generated_source_dir, &config);
     let generated_dir = temp_dir.join("generated-rss-file-upload-benchmark");
-    generate_rss_package(&benchmark_dir, repo, &generated_dir);
+    generate_rss_package(&generated_source_dir, repo, &generated_dir);
     cargo_build(
         &generated_dir.join("Cargo.toml"),
         "rss-file-upload-benchmark",
@@ -49,20 +52,28 @@ fn file_upload_benchmark_reports_async_and_sync_requests_per_second() {
     let rust_async_bin = binary_path(&target_dir, "rust_async_upload_client");
     let sync_bin = binary_path(&target_dir, "sync_upload_client");
 
-    run_client(&rss_async_bin, addr, &[]);
+    run_client(&rss_async_bin, addr, &config, &[]);
     run_client(
         &rust_async_bin,
         addr,
-        &[("RSS_FILE_UPLOAD_CONCURRENCY", CONCURRENCY.to_string())],
+        &config,
+        &[(
+            "RSS_FILE_UPLOAD_CONCURRENCY",
+            config.concurrency.to_string(),
+        )],
     );
 
-    let rss_async_result = run_client(&rss_async_bin, addr, &[]);
+    let rss_async_result = run_client(&rss_async_bin, addr, &config, &[]);
     let rust_async_result = run_client(
         &rust_async_bin,
         addr,
-        &[("RSS_FILE_UPLOAD_CONCURRENCY", CONCURRENCY.to_string())],
+        &config,
+        &[(
+            "RSS_FILE_UPLOAD_CONCURRENCY",
+            config.concurrency.to_string(),
+        )],
     );
-    let sync_result = run_client(&sync_bin, addr, &[]);
+    let sync_result = run_client(&sync_bin, addr, &config, &[]);
 
     let log = fs::read_to_string(&server_log).expect("server log should be readable");
     let rss_async_max_in_flight = max_in_flight_for(&log, "/upload/rss-");
@@ -99,7 +110,11 @@ fn file_upload_benchmark_reports_async_and_sync_requests_per_second() {
         "rust_client_or_noise"
     };
     println!(
-        "file upload benchmark: rss_async_rps={:.2} rust_async_rps={:.2} sync_rps={:.2} rss_async_ms={} rust_async_ms={} sync_ms={} rss_async_max_in_flight={} rust_async_max_in_flight={} sync_max_in_flight={} rust_to_rss_rps_ratio={:.3} likely_bottleneck={}",
+        "file upload benchmark: requests={} payload_bytes={} concurrency={} server_delay_ms={} rss_async_rps={:.2} rust_async_rps={:.2} sync_rps={:.2} rss_async_ms={} rust_async_ms={} sync_ms={} rss_async_max_in_flight={} rust_async_max_in_flight={} sync_max_in_flight={} rust_to_rss_rps_ratio={:.3} likely_bottleneck={}",
+        config.requests,
+        config.payload_bytes,
+        config.concurrency,
+        config.server_delay_ms,
         rss_async_result.rps,
         rust_async_result.rps,
         sync_result.rps,
@@ -114,6 +129,25 @@ fn file_upload_benchmark_reports_async_and_sync_requests_per_second() {
     );
 
     let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[derive(Debug, Clone)]
+struct BenchmarkConfig {
+    requests: usize,
+    payload_bytes: usize,
+    concurrency: usize,
+    server_delay_ms: u64,
+}
+
+impl BenchmarkConfig {
+    fn from_env() -> Self {
+        Self {
+            requests: env_usize("RSS_FILE_UPLOAD_REQUESTS", DEFAULT_REQUESTS),
+            payload_bytes: env_usize("RSS_FILE_UPLOAD_PAYLOAD_BYTES", DEFAULT_PAYLOAD_BYTES),
+            concurrency: env_usize("RSS_FILE_UPLOAD_CONCURRENCY", DEFAULT_CONCURRENCY).max(1),
+            server_delay_ms: env_u64("RSS_FILE_UPLOAD_DELAY_MS", DEFAULT_SERVER_DELAY_MS),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -141,8 +175,103 @@ fn cargo_build(manifest: &Path, bin: &str) {
     );
 }
 
-fn generate_rss_package(benchmark_dir: &Path, repo: &Path, out_dir: &Path) {
-    let input = package_lowering_input(benchmark_dir).expect("benchmark package should lower");
+fn generate_rss_benchmark_source(
+    benchmark_dir: &Path,
+    native_dir: &Path,
+    out_dir: &Path,
+    config: &BenchmarkConfig,
+) {
+    fs::create_dir_all(out_dir.join("src")).expect("benchmark source src dir should be created");
+    fs::create_dir_all(out_dir.join("interface"))
+        .expect("benchmark source interface dir should be created");
+    fs::create_dir_all(out_dir.join("native")).expect("benchmark native dir should be created");
+    fs::copy(
+        benchmark_dir.join("interface/upload.rssi"),
+        out_dir.join("interface/upload.rssi"),
+    )
+    .expect("benchmark interface should copy");
+    fs::copy(
+        benchmark_dir.join("native/bindings.rssbind.toml"),
+        out_dir.join("native/bindings.rssbind.toml"),
+    )
+    .expect("benchmark native bindings should copy");
+    fs::write(
+        out_dir.join("rsspkg.toml"),
+        format!(
+            r#"[package]
+name = "rss-file-upload-benchmark"
+version = "0.1.0"
+edition = "2026"
+
+[sources]
+paths = ["src"]
+
+[interfaces]
+paths = ["interface"]
+
+[native.rust]
+enabled = true
+path = "{}"
+crate = "rss_file_upload_benchmark_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+native_links = "forbid"
+ffi = "forbid"
+
+[[review.capability_bindings]]
+symbol = "Upload.put"
+category = "network.client"
+provider = "local"
+service = "mock-upload"
+action = "upload:Put"
+resource = "http://127.0.0.1/upload/*"
+"#,
+            native_dir.display()
+        ),
+    )
+    .expect("benchmark manifest should be written");
+    fs::write(out_dir.join("src/main.rss"), rss_benchmark_source(config))
+        .expect("generated RSS benchmark source should be written");
+}
+
+fn rss_benchmark_source(config: &BenchmarkConfig) -> String {
+    let mut source = String::from("features: async\n\n");
+    let mut request = 0usize;
+    let mut batch = 0usize;
+    while request < config.requests {
+        let end = (request + config.concurrency).min(config.requests);
+        source.push_str(&format!(
+            "async fn upload_batch_{batch}() -> Result<Unit, String> {{\n"
+        ));
+        source.push_str("    task_group {\n");
+        for index in request..end {
+            source.push_str(&format!(
+                "        async let upload_{index} = Upload.put(path: read \"/upload/rss-{index}.bin\", body: read \"rss payload seed\")\n"
+            ));
+        }
+        source.push('\n');
+        for index in request..end {
+            source.push_str(&format!("        await upload_{index}?\n"));
+        }
+        source.push_str("    }\n");
+        source.push_str("    return Ok(Unit)\n");
+        source.push_str("}\n\n");
+        request = end;
+        batch += 1;
+    }
+
+    source.push_str("async fn main() -> Result<Unit, String> {\n");
+    for index in 0..batch {
+        source.push_str(&format!("    await upload_batch_{index}()?\n"));
+    }
+    source.push_str("    return Ok(Unit)\n");
+    source.push_str("}\n");
+    source
+}
+
+fn generate_rss_package(package_dir: &Path, repo: &Path, out_dir: &Path) {
+    let input = package_lowering_input(package_dir).expect("benchmark package should lower");
     let runtime_path = repo.join("runtime").display().to_string();
     let package = lower_sources_to_rust_package_with_options(
         &input.sources,
@@ -156,12 +285,20 @@ fn generate_rss_package(benchmark_dir: &Path, repo: &Path, out_dir: &Path) {
         .expect("generated RSS benchmark package should be written");
 }
 
-fn run_client(binary: &Path, addr: SocketAddr, extra_env: &[(&str, String)]) -> ClientResult {
+fn run_client(
+    binary: &Path,
+    addr: SocketAddr,
+    config: &BenchmarkConfig,
+    extra_env: &[(&str, String)],
+) -> ClientResult {
     let started = Instant::now();
     let output = Command::new(binary)
         .env("RSS_FILE_UPLOAD_ENDPOINT", addr.to_string())
-        .env("RSS_FILE_UPLOAD_REQUESTS", REQUESTS.to_string())
-        .env("RSS_FILE_UPLOAD_PAYLOAD_BYTES", PAYLOAD_BYTES.to_string())
+        .env("RSS_FILE_UPLOAD_REQUESTS", config.requests.to_string())
+        .env(
+            "RSS_FILE_UPLOAD_PAYLOAD_BYTES",
+            config.payload_bytes.to_string(),
+        )
         .envs(extra_env.iter().map(|(key, value)| (*key, value)))
         .output()
         .unwrap_or_else(|error| panic!("failed to run {}: {error}", binary.display()));
@@ -175,7 +312,7 @@ fn run_client(binary: &Path, addr: SocketAddr, extra_env: &[(&str, String)]) -> 
     );
 
     let measured_ms = elapsed.as_millis().max(1) as u64;
-    let measured_rps = REQUESTS as f64 / elapsed.as_secs_f64();
+    let measured_rps = config.requests as f64 / elapsed.as_secs_f64();
     ClientResult {
         elapsed_ms: measured_ms,
         rps: measured_rps,
@@ -221,12 +358,12 @@ struct UploadServer {
 }
 
 impl UploadServer {
-    fn start(native_dir: &Path, addr: SocketAddr, log_path: &Path) -> Self {
+    fn start(native_dir: &Path, addr: SocketAddr, log_path: &Path, delay_ms: u64) -> Self {
         let server_bin = binary_path(&native_dir.join("target/debug"), "mock_upload_server");
         let log = File::create(log_path).expect("server log should be created");
         let child = Command::new(&server_bin)
             .env("RSS_FILE_UPLOAD_ADDR", addr.to_string())
-            .env("RSS_FILE_UPLOAD_DELAY_MS", SERVER_DELAY_MS.to_string())
+            .env("RSS_FILE_UPLOAD_DELAY_MS", delay_ms.to_string())
             .stdout(Stdio::from(log))
             .stderr(Stdio::null())
             .spawn()
@@ -234,6 +371,20 @@ impl UploadServer {
         wait_for_server(addr);
         Self { child }
     }
+}
+
+fn env_usize(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(default)
+}
+
+fn env_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(default)
 }
 
 impl Drop for UploadServer {

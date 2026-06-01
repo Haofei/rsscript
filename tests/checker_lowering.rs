@@ -424,6 +424,35 @@ fn copy_file(input: read Path, output: read Path) -> Result<Unit, FileError> {
 }
 
 #[test]
+fn rust_lowering_maps_async_file_io_to_tokio_pending_hooks() {
+    let source = r#"
+features: async
+
+async fn main() -> Result<Unit, FileError> {
+    let path = Path.from_string(value: read "/tmp/rsscript-async-file.txt")
+    await File.write_string_async(path: read path, text: read "hello")?
+    let text = await File.read_all_string_async(path: read path)?
+    return Ok(Unit)
+}
+"#;
+    let rust = lower_source_to_rust("async-file.rss", source).expect("async file IO should lower");
+
+    assert!(
+        rust.contains("rsscript_runtime::file_write_string_async(&path, &\"hello\".to_string())"),
+        "async file write should lower to runtime pending hook, got:\n{rust}"
+    );
+    assert!(
+        rust.contains("rsscript_runtime::file_read_all_string_async(&path)"),
+        "async file read should lower to runtime pending hook, got:\n{rust}"
+    );
+    assert!(
+        rust.contains("rsscript_runtime::pending_try(")
+            && rust.contains("rsscript_runtime::run_pending("),
+        "async file IO should compose through RSScript pending chain, got:\n{rust}"
+    );
+}
+
+#[test]
 fn rust_lowering_maps_path_construction_to_runtime_hook() {
     let source = r#"
 fn main() -> Result<Unit, FileError> {
@@ -896,12 +925,15 @@ async fn main() -> Result<Unit, TimerError> {
 
     assert!(rust.contains("pub fn main() -> Result<(), rsscript_runtime::TimerError>"));
     assert!(!rust.contains("async fn"));
+    // The async entrypoint drives a pending chain via `run_pending`; the body
+    // composes the sleep with `pending_try` and has no inline executor.
+    assert!(rust.contains("rsscript_runtime::run_pending("));
     assert!(
-        rust.contains("let mut __rsscript_async_executor = rsscript_runtime::Executor::new();")
+        rust.contains(
+            "rsscript_runtime::pending_try(rsscript_runtime::timer_sleep_native_start(1)"
+        )
     );
-    assert!(rust.contains(
-        "__rsscript_async_executor.run_pending(rsscript_runtime::timer_sleep_native_start(1))?;"
-    ));
+    assert!(!rust.contains("__rsscript_async_executor"));
 }
 
 #[test]
@@ -954,8 +986,9 @@ async fn main() -> Result<Unit, HostError> {
     assert!(
         package
             .lib_rs
-            .contains("__rsscript_async_executor.run_pending(timer_native::sleep_start(1))?;")
+            .contains("rsscript_runtime::pending_try(timer_native::sleep_start(1)")
     );
+    assert!(package.lib_rs.contains("rsscript_runtime::run_pending("));
 }
 
 #[test]
@@ -1180,6 +1213,34 @@ fn main() -> Unit {
     let rust = lower_source_to_rust("int.rss", source).expect("source should lower");
 
     assert!(rust.contains("let value = 20 + 22;"));
+}
+
+#[test]
+fn rust_lowering_maps_async_http_client_to_tokio_pending_hooks() {
+    let source = r#"
+features: async
+
+async fn fetch_status(url: read Url) -> Result<Int, HttpError> {
+    let response = await Http.get_async(url: read url)?
+    return Ok(HttpResponse.status(response: read response))
+}
+"#;
+    let rust = lower_source_to_rust("async-http.rss", source).expect("source should lower");
+
+    assert!(
+        rust.contains(
+            "-> impl rsscript_runtime::Pending<Result<i64, rsscript_runtime::HttpError>>"
+        ),
+        "async fn should lower to a pending chain, got:\n{rust}"
+    );
+    assert!(
+        rust.contains("rsscript_runtime::pending_try(rsscript_runtime::http_get_async(&url)"),
+        "async HTTP client call should use the Tokio-backed pending hook, got:\n{rust}"
+    );
+    assert!(
+        rust.contains("Ok(rsscript_runtime::http_response_status(&response))"),
+        "response helpers should still map through runtime hooks, got:\n{rust}"
+    );
 }
 
 #[test]
@@ -4784,7 +4845,7 @@ async fn fetch_profile(id: read Int) -> Result<String, NetworkError> {
     return Ok("profile")
 }
 
-async fn load(id: read Int) -> Result<String, NetworkError> {
+fn load(id: read Int) -> Result<String, NetworkError> {
     task_group {
         async let user = fetch_user(id: read id)
         async let profile = fetch_profile(id: read id)
@@ -4796,25 +4857,336 @@ async fn load(id: read Int) -> Result<String, NetworkError> {
 }
 "#;
     let lowered = lower_source_to_rust("task-group.rss", source).expect("task_group should lower");
+    // Each async-let constructs a pending and a result slot; the group drives
+    // them together with one concurrent poll loop; awaits read the cached result.
     assert!(
-        lowered.contains("__rsscript_pending_user"),
-        "async let should produce pending variable, got:\n{lowered}"
+        lowered.contains("let mut __rsscript_pending_user = fetch_user(&id);"),
+        "async let should construct (not run) the pending, got:\n{lowered}"
     );
     assert!(
-        lowered.contains("__rsscript_pending_profile"),
-        "async let should produce pending variable, got:\n{lowered}"
+        lowered.contains("__rsscript_result_user") && lowered.contains("__rsscript_result_profile"),
+        "async let should produce a result slot, got:\n{lowered}"
     );
     assert!(
-        lowered.contains("run_pending"),
-        "await should produce run_pending call, got:\n{lowered}"
+        lowered.contains("__rsscript_async_executor.poll_once(&mut __rsscript_pending_user)"),
+        "task_group should poll siblings concurrently, got:\n{lowered}"
     );
     assert!(
         lowered
-            .contains("__rsscript_async_executor.run_pending(&mut __rsscript_pending_profile)?;"),
-        "expression-statement await should poll the task_group pending, got:\n{lowered}"
+            .contains("let u = __rsscript_result_user.take().expect(\"awaited task completed\")?;"),
+        "await should read the cached result, got:\n{lowered}"
     );
     assert!(
-        lowered.contains("__rsscript_async_executor"),
-        "task_group should create executor, got:\n{lowered}"
+        lowered.contains("__rsscript_result_profile.take().expect(\"awaited task completed\")?;"),
+        "expression-statement await should read its cached result, got:\n{lowered}"
+    );
+    assert!(
+        lowered.contains("rsscript_runtime::TaskGroupScope::new()"),
+        "task_group should create the cancellation guard, got:\n{lowered}"
+    );
+}
+
+#[test]
+fn async_fn_with_task_group_lowers_to_pending_boundary() {
+    let source = r#"
+features: async
+
+async fn worker() -> Result<Unit, TimerError> {
+    await Timer.sleep(ms: 1)?
+    return Ok(Unit)
+}
+
+async fn run() -> Result<Unit, TimerError> {
+    task_group {
+        async let child = worker()
+        await child?
+    }
+    return Ok(Unit)
+}
+"#;
+    let lowered =
+        lower_source_to_rust("async-fn-task-group.rss", source).expect("source should lower");
+
+    assert!(
+        lowered.contains(
+            "fn run() -> impl rsscript_runtime::Pending<Result<(), rsscript_runtime::TimerError>>"
+        ),
+        "async orchestrator should still return a Pending, got:\n{lowered}"
+    );
+    assert!(
+        lowered.contains("rsscript_runtime::pending_defer(move ||")
+            && lowered.contains("rsscript_runtime::pending_try("),
+        "task_group should become an explicit pending boundary in the async chain, got:\n{lowered}"
+    );
+    assert!(
+        lowered.contains("let mut __rsscript_async_executor = rsscript_runtime::Executor::new();")
+            && lowered.contains("rsscript_runtime::TaskGroupScope::new()")
+            && lowered.contains("let mut __rsscript_pending_child = worker();"),
+        "task_group boundary should keep the internal cooperative executor, got:\n{lowered}"
+    );
+    assert!(
+        lowered.contains("Ok::<(), rsscript_runtime::TimerError>(())"),
+        "task_group pending boundary should expose a Result<Unit, E> for `?`, got:\n{lowered}"
+    );
+}
+
+#[test]
+fn task_group_await_only_polls_already_declared_siblings() {
+    // An await emitted before a later `async let` must not poll that later
+    // task's pending — doing so forward-references a binding that does not yet
+    // exist and leaks `cannot find value __rsscript_pending_b` into rustc.
+    let source = r#"
+features: async
+
+fn run() -> Result<Unit, TimerError> {
+    task_group {
+        async let a = Timer.sleep(ms: 1)
+        await a?
+        async let b = Timer.sleep(ms: 1)
+        await b?
+    }
+    return Ok(Unit)
+}
+"#;
+    let lowered = lower_source_to_rust("task-group-order.rss", source)
+        .expect("interleaved task_group should lower");
+
+    let decl_b = lowered
+        .find("let mut __rsscript_pending_b")
+        .expect("b's pending should be declared, got:\n{lowered}");
+    if let Some(poll_b) = lowered.find("poll_once(&mut __rsscript_pending_b)") {
+        assert!(
+            poll_b > decl_b,
+            "await on `a` must not poll `b` before it is declared, got:\n{lowered}"
+        );
+    }
+    // After taking `a`'s result, the await on `b` must no longer poll `a`
+    // (its result slot was reset by `take`).
+    let take_a = lowered
+        .find("__rsscript_result_a.take()")
+        .expect("a should be taken, got:\n{lowered}");
+    let poll_a_after = lowered[take_a..].find("poll_once(&mut __rsscript_pending_a)");
+    assert!(
+        poll_a_after.is_none(),
+        "an awaited task must not be re-polled after its result is taken, got:\n{lowered}"
+    );
+}
+
+#[test]
+fn task_group_discarded_async_let_lowers_to_scoped_background_drain() {
+    let source = r#"
+features: async
+
+fn run() -> Result<Unit, TimerError> {
+    task_group {
+        async let _ = Timer.sleep(ms: 1)
+    }
+    return Ok(Unit)
+}
+"#;
+    let lowered =
+        lower_source_to_rust("task-group-background.rss", source).expect("background should lower");
+    assert!(
+        lowered.contains("let mut __rsscript_pending_discard_0 ="),
+        "discarded async let should get an internal pending slot, got:\n{lowered}"
+    );
+    assert!(
+        lowered.contains("__rsscript_result_discard_0")
+            && lowered.contains("__rsscript_all_done")
+            && lowered.contains("poll_once(&mut __rsscript_pending_discard_0)"),
+        "task_group should drain discarded background tasks before scope exit, got:\n{lowered}"
+    );
+}
+
+#[test]
+fn select_lowers_to_first_ready_poll_loop() {
+    let source = r#"
+features: async
+
+fn run() -> Result<Unit, TimerError> {
+    select {
+        _ = await Timer.sleep(ms: 1)? => {
+            Log.write(message: read "fast")
+        }
+        _ = await Timer.sleep(ms: 100)? => {
+            Log.write(message: read "slow")
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    let lowered = lower_source_to_rust("select.rss", source).expect("select should lower");
+
+    assert!(
+        lowered.contains("let mut __rsscript_async_executor = rsscript_runtime::Executor::new();"),
+        "select in a sync function should create a cooperative executor, got:\n{lowered}"
+    );
+    assert!(
+        lowered.contains("rsscript_runtime::timer_sleep_native_start(1)")
+            && lowered.contains("rsscript_runtime::timer_sleep_native_start(100)"),
+        "select arms should construct pending operations without running them inline, got:\n{lowered}"
+    );
+    assert!(
+        lowered.contains("__rsscript_async_executor.poll_once(&mut __rsscript_select_")
+            && lowered.contains("break 0;")
+            && lowered.contains("break 1;"),
+        "select should poll arms and break with the first ready arm, got:\n{lowered}"
+    );
+    assert!(
+        lowered.contains("match __rsscript_select_")
+            && lowered.contains(".take().expect(\"select arm completed\")?;"),
+        "select should execute the winning arm and apply `?` at the arm boundary, got:\n{lowered}"
+    );
+}
+
+#[test]
+fn async_fn_with_select_lowers_to_pending_boundary() {
+    let source = r#"
+features: async
+
+async fn run() -> Result<Unit, TimerError> {
+    select {
+        _ = await Timer.sleep(ms: 1)? => {
+            Log.write(message: read "fast")
+        }
+        _ = await Timer.sleep(ms: 100)? => {
+            Log.write(message: read "slow")
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    let lowered =
+        lower_source_to_rust("async-select.rss", source).expect("async select should lower");
+    assert!(
+        lowered.contains(
+            "fn run() -> impl rsscript_runtime::Pending<Result<(), rsscript_runtime::TimerError>>"
+        ),
+        "async select function should return a Pending, got:\n{lowered}"
+    );
+    assert!(
+        lowered.contains("rsscript_runtime::pending_defer(move ||")
+            && lowered.contains("rsscript_runtime::pending_try(")
+            && lowered
+                .contains("let mut __rsscript_async_executor = rsscript_runtime::Executor::new();"),
+        "select should lower through an explicit async boundary, got:\n{lowered}"
+    );
+    assert!(
+        lowered.contains("__rsscript_async_executor.poll_once")
+            && lowered.contains("Ok::<(), rsscript_runtime::TimerError>(())"),
+        "select boundary should poll arms and expose Result<Unit, E>, got:\n{lowered}"
+    );
+}
+
+#[test]
+fn typed_let_emits_generic_container_annotation() {
+    // A `let` annotated with a builtin generic container carries that annotation
+    // into Rust, so an otherwise-unconstrained generic (RssChannel<_>) resolves
+    // instead of failing with E0282 `type annotations needed`.
+    let source = r#"
+features: async, native, local
+
+fn run() -> Result<Unit, ChannelError> {
+    let mut ch: Channel<Int> = Channel.bounded(capacity: 1)?
+    let rx = Channel.receiver(channel: mut ch)?
+    return Ok(Unit)
+}
+"#;
+    let lowered =
+        lower_source_to_rust("typed-channel.rss", source).expect("typed channel let should lower");
+    assert!(
+        lowered.contains("let mut ch: rsscript_runtime::RssChannel<i64> ="),
+        "typed Channel<Int> let should emit a concrete Rust annotation, got:\n{lowered}"
+    );
+}
+
+#[test]
+fn stream_from_receiver_lowers_to_runtime_pending_next() {
+    let source = r#"
+features: async, local
+
+fn run() -> Result<Unit, ChannelError> {
+    let mut channel: Channel<Int> = Channel.bounded(capacity: 1)?
+    local receiver = Channel.receiver(channel: mut channel)?
+    let stream: Stream<Int> = Receiver.into_stream(receiver: take receiver)
+    select {
+        item = await Stream.next(stream: read stream)? => {
+            Log.write(message: read "stream item")
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    let lowered = lower_source_to_rust("stream-next.rss", source).expect("stream should lower");
+    assert!(
+        lowered.contains("let stream: rsscript_runtime::RssStream<i64> ="),
+        "typed Stream<Int> let should emit a concrete Rust annotation, got:\n{lowered}"
+    );
+    assert!(
+        lowered.contains("rsscript_runtime::receiver_into_stream(receiver)"),
+        "Receiver.into_stream should lower to the runtime hook, got:\n{lowered}"
+    );
+    assert!(
+        lowered.contains("rsscript_runtime::stream_next(&stream)"),
+        "Stream.next should lower to a pending runtime hook, got:\n{lowered}"
+    );
+}
+
+#[test]
+fn await_for_stream_lowers_to_stream_next_loop() {
+    let source = r#"
+features: async, local
+
+fn run() -> Result<Unit, ChannelError> {
+    let mut channel: Channel<Int> = Channel.bounded(capacity: 1)?
+    local receiver = Channel.receiver(channel: mut channel)?
+    let stream: Stream<Int> = Receiver.into_stream(receiver: take receiver)
+    await for item in stream {
+        Log.write(message: read "stream item")
+    }
+    return Ok(Unit)
+}
+"#;
+    let lowered = lower_source_to_rust("await-for-stream.rss", source)
+        .expect("await for stream should lower");
+    assert!(
+        lowered.contains("let mut __rsscript_async_executor = rsscript_runtime::Executor::new();"),
+        "await for in a sync function should create an executor, got:\n{lowered}"
+    );
+    assert!(
+        lowered.contains("rsscript_runtime::stream_next(&stream)")
+            && lowered.contains(".run_pending(&mut __rsscript_await_for_"),
+        "await for should poll Stream.next through the executor, got:\n{lowered}"
+    );
+    assert!(
+        lowered.contains("Some(item) =>") && lowered.contains("None => break"),
+        "await for should match Some(item)/None, got:\n{lowered}"
+    );
+}
+
+#[test]
+fn async_fn_with_await_for_stream_lowers_to_pending_boundary() {
+    let source = r#"
+features: async, local
+
+async fn run(stream: read Stream<Int>) -> Result<Unit, ChannelError> {
+    await for item in stream {
+        Log.write(message: read "stream item")
+    }
+    return Ok(Unit)
+}
+"#;
+    let lowered = lower_source_to_rust("async-await-for-stream.rss", source)
+        .expect("async await for stream should lower");
+    assert!(
+        lowered.contains("fn run(stream: &rsscript_runtime::RssStream<i64>) -> impl rsscript_runtime::Pending<Result<(), rsscript_runtime::ChannelError>>"),
+        "async await-for function should return a Pending, got:\n{lowered}"
+    );
+    assert!(
+        lowered.contains("rsscript_runtime::pending_defer(move ||")
+            && lowered.contains("rsscript_runtime::pending_try(")
+            && lowered.contains("rsscript_runtime::stream_next(&stream)")
+            && lowered.contains("run_pending(&mut __rsscript_await_for_"),
+        "await for should lower through an explicit async boundary, got:\n{lowered}"
     );
 }

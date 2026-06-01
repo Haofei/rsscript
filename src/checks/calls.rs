@@ -117,6 +117,9 @@ fn statement_may_fall_through(statement: &HirStmt) -> bool {
         HirStmt::Match { arms, .. } if !arms.is_empty() => {
             arms.iter().any(|arm| block_may_fall_through(&arm.body))
         }
+        HirStmt::Select { arms, .. } if !arms.is_empty() => {
+            arms.iter().any(|arm| block_may_fall_through(&arm.body))
+        }
         HirStmt::With { body, .. } => block_may_fall_through(body),
         HirStmt::Let { .. }
         | HirStmt::Expr(_)
@@ -126,6 +129,7 @@ fn statement_may_fall_through(statement: &HirStmt) -> bool {
         | HirStmt::Loop { .. }
         | HirStmt::For { .. }
         | HirStmt::Match { .. }
+        | HirStmt::Select { .. }
         | HirStmt::Unknown(_) => true,
     }
 }
@@ -162,6 +166,11 @@ fn collect_local_closure_bindings(block: &HirBlock, bindings: &mut HashMap<Strin
             HirStmt::Loop { body, .. } => collect_local_closure_bindings(body, bindings),
             HirStmt::For { body, .. } => collect_local_closure_bindings(body, bindings),
             HirStmt::Match { arms, .. } => {
+                for arm in arms {
+                    collect_local_closure_bindings(&arm.body, bindings);
+                }
+            }
+            HirStmt::Select { arms, .. } => {
                 for arm in arms {
                     collect_local_closure_bindings(&arm.body, bindings);
                 }
@@ -279,6 +288,12 @@ fn check_block(
             HirStmt::Match { value, arms, .. } => {
                 check_expr(analyzer, function, value, context);
                 for arm in arms {
+                    check_block(analyzer, function, &arm.body, context);
+                }
+            }
+            HirStmt::Select { arms, .. } => {
+                for arm in arms {
+                    check_expr(analyzer, function, &arm.operation, context);
                     check_block(analyzer, function, &arm.body, context);
                 }
             }
@@ -561,6 +576,14 @@ fn check_expr_block_without_return_contract(
             HirStmt::Match { value, arms, .. } => {
                 check_expr(analyzer, function, value, context);
                 for arm in arms {
+                    check_expr_block_without_return_contract(
+                        analyzer, function, &arm.body, context,
+                    );
+                }
+            }
+            HirStmt::Select { arms, .. } => {
+                for arm in arms {
+                    check_expr(analyzer, function, &arm.operation, context);
                     check_expr_block_without_return_contract(
                         analyzer, function, &arm.body, context,
                     );
@@ -1842,6 +1865,11 @@ fn collect_closure_binding_sets(
                     collect_closure_binding_sets(&arm.body, local_bindings, managed_bindings);
                 }
             }
+            HirStmt::Select { arms, .. } => {
+                for arm in arms {
+                    collect_closure_binding_sets(&arm.body, local_bindings, managed_bindings);
+                }
+            }
             HirStmt::Return { .. }
             | HirStmt::Expr(_)
             | HirStmt::Break(_)
@@ -1894,6 +1922,11 @@ fn collect_explicit_return_sites<'a>(statement: &'a HirStmt, returns: &mut Vec<C
                 collect_explicit_return_sites_from_block(&arm.body, returns);
             }
         }
+        HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                collect_explicit_return_sites_from_block(&arm.body, returns);
+            }
+        }
         HirStmt::Let { .. }
         | HirStmt::Expr(_)
         | HirStmt::Break(_)
@@ -1936,6 +1969,7 @@ fn collect_implicit_closure_return_sites<'a>(
         | HirStmt::Loop { .. }
         | HirStmt::For { .. }
         | HirStmt::Match { .. }
+        | HirStmt::Select { .. }
         | HirStmt::Break(_)
         | HirStmt::Continue(_)
         | HirStmt::Unknown(_) => {}
@@ -1987,6 +2021,12 @@ fn check_callback_body_call_argument_types(
             HirStmt::Match { value, arms, .. } => {
                 check_callback_call_argument_types(analyzer, value, contract);
                 for arm in arms {
+                    check_callback_body_call_argument_types(analyzer, &arm.body, contract);
+                }
+            }
+            HirStmt::Select { arms, .. } => {
+                for arm in arms {
+                    check_callback_call_argument_types(analyzer, &arm.operation, contract);
                     check_callback_body_call_argument_types(analyzer, &arm.body, contract);
                 }
             }
@@ -2459,6 +2499,10 @@ fn callback_retained_local_use_in_block(
                     arms.iter()
                         .find_map(|arm| callback_retained_local_use_in_block(&arm.body, contract))
                 }),
+            HirStmt::Select { arms, .. } => arms.iter().find_map(|arm| {
+                callback_retained_local_use(&arm.operation, contract)
+                    .or_else(|| callback_retained_local_use_in_block(&arm.body, contract))
+            }),
             HirStmt::Let { value: None, .. }
             | HirStmt::Return { value: None, .. }
             | HirStmt::Break(_)
@@ -2611,6 +2655,12 @@ fn check_callback_body_operator_operand_types(
             HirStmt::Match { value, arms, .. } => {
                 check_callback_operator_operand_types(analyzer, value, contract);
                 for arm in arms {
+                    check_callback_body_operator_operand_types(analyzer, &arm.body, contract);
+                }
+            }
+            HirStmt::Select { arms, .. } => {
+                for arm in arms {
+                    check_callback_operator_operand_types(analyzer, &arm.operation, contract);
                     check_callback_body_operator_operand_types(analyzer, &arm.body, contract);
                 }
             }
@@ -3323,6 +3373,14 @@ fn noescape_any_use_in_stmt<'a>(
                 })
             })
         }
+        HirStmt::Select { arms, .. } => arms.iter().find_map(|arm| {
+            noescape_any_use(&arm.operation, noescape_bindings).or_else(|| {
+                arm.body
+                    .statements
+                    .iter()
+                    .find_map(|statement| noescape_any_use_in_stmt(statement, noescape_bindings))
+            })
+        }),
         HirStmt::Let { value: None, .. }
         | HirStmt::Return { value: None, .. }
         | HirStmt::Break(_)
@@ -3442,6 +3500,13 @@ fn local_closure_any_use_in_stmt<'a>(
                     })
                 })
             }),
+        HirStmt::Select { arms, .. } => arms.iter().find_map(|arm| {
+            local_closure_any_use(&arm.operation, local_closure_bindings).or_else(|| {
+                arm.body.statements.iter().find_map(|statement| {
+                    local_closure_any_use_in_stmt(statement, local_closure_bindings)
+                })
+            })
+        }),
         HirStmt::Let { value: None, .. }
         | HirStmt::Return { value: None, .. }
         | HirStmt::Break(_)
@@ -3850,7 +3915,8 @@ fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
 
 fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str>> {
     match root {
-        "List" | "Set" | "Option" | "ResourcePool" => Some(vec!["T"]),
+        "List" | "Set" | "Option" | "ResourcePool" | "Channel" | "Sender" | "Receiver"
+        | "Stream" => Some(vec!["T"]),
         "Map" | "Result" => Some(vec!["K", "V"]),
         _ => None,
     }

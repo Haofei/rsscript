@@ -1,6 +1,7 @@
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
+use crate::async_runtime::{NativeAsyncPending, spawn_tokio_native};
 use crate::diagnostics::Resource;
 
 pub struct File {
@@ -139,6 +140,38 @@ pub fn file_write_buffer(file: &mut File, buffer: &[u8]) -> std::io::Result<()> 
     file.inner.write_all(buffer)
 }
 
+pub fn file_read_all_async<P: RuntimePath + ?Sized>(
+    path: &P,
+) -> NativeAsyncPending<std::io::Result<Vec<u8>>> {
+    let path = path.as_path().to_path_buf();
+    spawn_tokio_native(async move { tokio::fs::read(path).await })
+}
+
+pub fn file_read_all_string_async<P: RuntimePath + ?Sized>(
+    path: &P,
+) -> NativeAsyncPending<std::io::Result<String>> {
+    let path = path.as_path().to_path_buf();
+    spawn_tokio_native(async move { tokio::fs::read_to_string(path).await })
+}
+
+pub fn file_write_async<P: RuntimePath + ?Sized, B: RuntimeBytes + ?Sized>(
+    path: &P,
+    data: &B,
+) -> NativeAsyncPending<std::io::Result<()>> {
+    let path = path.as_path().to_path_buf();
+    let bytes = data.as_bytes_slice().to_vec();
+    spawn_tokio_native(async move { tokio::fs::write(path, bytes).await })
+}
+
+pub fn file_write_string_async<P: RuntimePath + ?Sized>(
+    path: &P,
+    text: &str,
+) -> NativeAsyncPending<std::io::Result<()>> {
+    let path = path.as_path().to_path_buf();
+    let text = text.to_string();
+    spawn_tokio_native(async move { tokio::fs::write(path, text).await })
+}
+
 pub fn directory_list_files<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<Vec<String>> {
     let root = path.as_path();
     let mut files = Vec::new();
@@ -237,4 +270,27 @@ pub fn directory_write_string<P: RuntimePath + ?Sized>(
     content: &str,
 ) -> std::io::Result<()> {
     std::fs::write(path.as_path(), content.as_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::async_runtime::Executor;
+
+    #[test]
+    fn async_file_text_io_uses_tokio_native_pending() {
+        let path =
+            std::env::temp_dir().join(format!("rsscript-async-file-{}.txt", std::process::id()));
+        let mut executor = Executor::new();
+
+        executor
+            .run_pending(file_write_string_async(&path, "hello async file"))
+            .expect("async write should succeed");
+        let text = executor
+            .run_pending(file_read_all_string_async(&path))
+            .expect("async read should succeed");
+
+        assert_eq!(text, "hello async file");
+        let _ = std::fs::remove_file(path);
+    }
 }

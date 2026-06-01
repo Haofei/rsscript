@@ -13,7 +13,7 @@ one Tokio mock upload server:
 Run it through the Rust test runner:
 
 ```sh
-cargo test --test file_upload_benchmark_e2e -- --nocapture
+cargo test --test file_upload_benchmark_e2e -- --ignored --nocapture
 ```
 
 The test runner starts the server, builds the native benchmark helpers, lowers and
@@ -21,10 +21,21 @@ builds the RSScript package, excludes build time from timing, and prints request
 per second for all clients. The default workload is:
 
 ```text
-requests=24
-payload_bytes=65536
-concurrency=8
-server_delay_ms=50
+requests=256
+payload_bytes=262144
+concurrency=16
+server_delay_ms=10
+```
+
+Override the workload with environment variables when you need a shorter smoke
+run or a larger local benchmark:
+
+```sh
+RSS_FILE_UPLOAD_REQUESTS=512 \
+RSS_FILE_UPLOAD_PAYLOAD_BYTES=1048576 \
+RSS_FILE_UPLOAD_CONCURRENCY=32 \
+RSS_FILE_UPLOAD_DELAY_MS=5 \
+cargo test --test file_upload_benchmark_e2e -- --ignored --nocapture
 ```
 
 The RSS and Rust async paths both use Tokio for actual socket IO and hit the
@@ -35,7 +46,7 @@ RSScript lowering/runtime scheduling rather than the server or network setup.
 Representative local output:
 
 ```text
-file upload benchmark: rss_async_rps=149.81 rust_async_rps=148.85 sync_rps=15.39 rss_async_ms=160 rust_async_ms=161 sync_ms=1559 rss_async_max_in_flight=8 rust_async_max_in_flight=8 sync_max_in_flight=1 rust_to_rss_rps_ratio=0.994 likely_bottleneck=server_or_io
+file upload benchmark: requests=256 payload_bytes=262144 concurrency=16 server_delay_ms=10 rss_async_rps=...
 ```
 
 When `rust_to_rss_rps_ratio` stays near `1.0` and both async clients reach the

@@ -1,7 +1,7 @@
 features: async
 
-async fn main() -> Result<Unit, String> {
-    await Reports.upload_batch(
+fn main() -> Result<Unit, String> {
+    Reports.upload_batch(
         bucket: read "reports-prod",
         day: read "2026-05-31",
     )?

@@ -1,5 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
+
+use crate::async_runtime::{NativeAsyncPending, spawn_tokio_native};
 use std::io::Read;
 use std::str::Utf8Error;
 
@@ -413,15 +415,78 @@ pub fn http_get(url: &str) -> Result<Response, HttpError> {
     })
 }
 
+pub fn http_get_async(url: &str) -> NativeAsyncPending<Result<Response, HttpError>> {
+    let url = url.to_string();
+    spawn_tokio_native(async move { http_request_async("GET", &url, None, None).await })
+}
+
 pub fn http_post_json(url: &str, _body: &str) -> Result<Response, HttpError> {
     Err(HttpError {
         message: format!("HTTP client runtime is not configured for POST JSON {url}"),
     })
 }
 
+pub fn http_post_json_async(
+    url: &str,
+    body: &str,
+) -> NativeAsyncPending<Result<Response, HttpError>> {
+    let url = url.to_string();
+    let body = body.to_string();
+    spawn_tokio_native(async move {
+        http_request_async("POST", &url, Some("application/json"), Some(body)).await
+    })
+}
+
 pub fn http_post_form(url: &str, _body: &str) -> Result<Response, HttpError> {
     Err(HttpError {
         message: format!("HTTP client runtime is not configured for POST form {url}"),
+    })
+}
+
+pub fn http_post_form_async(
+    url: &str,
+    body: &str,
+) -> NativeAsyncPending<Result<Response, HttpError>> {
+    let url = url.to_string();
+    let body = body.to_string();
+    spawn_tokio_native(async move {
+        http_request_async(
+            "POST",
+            &url,
+            Some("application/x-www-form-urlencoded"),
+            Some(body),
+        )
+        .await
+    })
+}
+
+async fn http_request_async(
+    method: &str,
+    url: &str,
+    content_type: Option<&str>,
+    body: Option<String>,
+) -> Result<Response, HttpError> {
+    let client = reqwest::Client::new();
+    let method = reqwest::Method::from_bytes(method.as_bytes()).map_err(|error| HttpError {
+        message: format!("invalid HTTP method `{method}`: {error}"),
+    })?;
+    let mut request = client.request(method, url);
+    if let Some(content_type) = content_type {
+        request = request.header(reqwest::header::CONTENT_TYPE, content_type);
+    }
+    if let Some(body) = body {
+        request = request.body(body);
+    }
+    let response = request.send().await.map_err(|error| HttpError {
+        message: format!("HTTP request failed for {url}: {error}"),
+    })?;
+    let status = i64::from(response.status().as_u16());
+    let body = response.bytes().await.map_err(|error| HttpError {
+        message: format!("failed to read HTTP response body from {url}: {error}"),
+    })?;
+    Ok(Response {
+        status,
+        body: String::from_utf8_lossy(&body).to_string(),
     })
 }
 
@@ -1069,6 +1134,82 @@ pub fn row_field_string(row: &Row, index: i64) -> Result<String, CsvError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::async_runtime::Executor;
+
+    #[test]
+    fn http_get_async_uses_reqwest_tokio_io() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
+        let addr = listener.local_addr().expect("listener addr should exist");
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("client should connect");
+            let mut request = [0_u8; 1024];
+            let read = stream.read(&mut request).expect("request should read");
+            let request = String::from_utf8_lossy(&request[..read]);
+            assert!(request.starts_with("GET /health HTTP/1.1"));
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nready",
+                )
+                .expect("response should write");
+        });
+
+        let mut executor = Executor::new();
+        let response = executor
+            .run_pending(http_get_async(&format!("http://{addr}/health")))
+            .expect("async HTTP GET should succeed");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, "ready");
+        handle.join().expect("server thread should finish");
+    }
+
+    #[test]
+    fn http_post_json_async_sends_body_through_reqwest_tokio_io() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
+        let addr = listener.local_addr().expect("listener addr should exist");
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("client should connect");
+            let mut request = [0_u8; 2048];
+            let read = stream.read(&mut request).expect("request should read");
+            let request = String::from_utf8_lossy(&request[..read]);
+            assert!(request.starts_with("POST /users HTTP/1.1"));
+            assert!(request.contains("content-type: application/json"));
+            assert!(request.contains(r#"{"name":"rss"}"#));
+            stream
+                .write_all(
+                    b"HTTP/1.1 201 Created\r\nContent-Length: 7\r\nConnection: close\r\n\r\ncreated",
+                )
+                .expect("response should write");
+        });
+
+        let mut executor = Executor::new();
+        let response = executor
+            .run_pending(http_post_json_async(
+                &format!("http://{addr}/users"),
+                r#"{"name":"rss"}"#,
+            ))
+            .expect("async HTTP POST should succeed");
+
+        assert_eq!(response.status, 201);
+        assert_eq!(response.body, "created");
+        handle.join().expect("server thread should finish");
+    }
+
+    #[test]
+    fn http_get_async_reports_invalid_url_errors() {
+        let mut executor = Executor::new();
+        let error = executor
+            .run_pending(http_get_async("not a url"))
+            .expect_err("invalid URL should be reported");
+
+        assert!(error.message.contains("HTTP request failed"));
+    }
 
     #[test]
     fn yaml_parse_reuses_json_value_accessors() {

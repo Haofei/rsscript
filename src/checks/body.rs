@@ -214,6 +214,12 @@ fn collect_stmt_uses(statement: &HirStmt, uses: &mut HashSet<String>) {
                 collect_block_uses(&arm.body, uses);
             }
         }
+        HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                collect_expr_uses(&arm.operation, uses);
+                collect_block_uses(&arm.body, uses);
+            }
+        }
         HirStmt::Expr(expr) => collect_expr_uses(expr, uses),
         HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
     }
@@ -287,6 +293,13 @@ fn remove_stmt_bindings(statement: &HirStmt, uses: &mut HashSet<String>) {
                 } = &arm.pattern
                 {
                     uses.remove(binding);
+                }
+            }
+        }
+        HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                if arm.binding != "_" {
+                    uses.remove(&arm.binding);
                 }
             }
         }
@@ -469,10 +482,11 @@ fn check_stmt_semantics(
             iterable,
             iterable_type_name,
             item_type_name,
+            is_async,
             body,
             ..
         } => {
-            check_for_iterable_type(analyzer, iterable, iterable_type_name.as_deref());
+            check_for_iterable_type(analyzer, iterable, iterable_type_name.as_deref(), *is_async);
             check_expr_semantics(analyzer, local_analysis, iterable, state, live_after);
             if check_resource_contexts {
                 check_resource_pool_lease_expr(analyzer, iterable, false);
@@ -488,7 +502,7 @@ fn check_stmt_semantics(
                     == Some(HirTypeKind::Class)
                 {
                     body_state.bind_managed(binding.clone());
-                } else if !is_copy_type_name(item_type_name) {
+                } else if !is_async && !is_copy_type_name(item_type_name) {
                     body_state.bind_read_view(binding.clone());
                 }
             }
@@ -516,6 +530,42 @@ fn check_stmt_semantics(
             let mut all_return = !arms.is_empty();
             for arm in arms {
                 let mut arm_state = base_state.clone();
+                let flow = check_block(
+                    analyzer,
+                    local_analysis,
+                    &arm.body,
+                    &mut arm_state,
+                    check_resource_contexts,
+                    live_after,
+                );
+                all_return &= flow == Flow::Return;
+            }
+            if all_return {
+                Flow::Return
+            } else {
+                Flow::Fallthrough
+            }
+        }
+        HirStmt::Select { arms, .. } => {
+            // Every arm operation is constructed and polled, so their effects
+            // apply to the shared state first. Then exactly one body runs, so the
+            // bodies are mutually-exclusive branches off that common base — like
+            // `match` arms — which avoids false cross-arm ownership conflicts.
+            for arm in arms {
+                check_expr_semantics(analyzer, local_analysis, &arm.operation, state, live_after);
+                if check_resource_contexts {
+                    check_resource_pool_lease_expr(analyzer, &arm.operation, false);
+                    check_resource_producer_expr(analyzer, &arm.operation, false);
+                }
+                apply_expr_effects(&arm.operation, state);
+            }
+            let base_state = state.clone();
+            let mut all_return = !arms.is_empty();
+            for arm in arms {
+                let mut arm_state = base_state.clone();
+                if arm.binding != "_" {
+                    arm_state.bind_local(arm.binding.clone());
+                }
                 let flow = check_block(
                     analyzer,
                     local_analysis,
@@ -579,6 +629,11 @@ fn apply_stmt_effects(statement: &HirStmt, state: &mut BodyState) {
         HirStmt::Loop { .. } => {}
         HirStmt::For { iterable, .. } => apply_expr_effects(iterable, state),
         HirStmt::Match { value, .. } => apply_expr_effects(value, state),
+        HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                apply_expr_effects(&arm.operation, state);
+            }
+        }
         HirStmt::Expr(expr) => apply_expr_effects(expr, state),
         HirStmt::Break(_) | HirStmt::Continue(_) => {}
         HirStmt::Unknown(_) => {}
@@ -626,24 +681,40 @@ fn check_bool_condition(analyzer: &mut Analyzer<'_>, expr: &HirExpr, construct: 
     );
 }
 
-fn check_for_iterable_type(analyzer: &mut Analyzer<'_>, expr: &HirExpr, type_name: Option<&str>) {
+fn check_for_iterable_type(
+    analyzer: &mut Analyzer<'_>,
+    expr: &HirExpr,
+    type_name: Option<&str>,
+    is_async: bool,
+) {
     let Some(type_name) = type_name else {
         return;
     };
-    if list_element_type(type_name).is_some() {
+    if (!is_async && list_element_type(type_name).is_some())
+        || (is_async && stream_item_type(type_name).is_some())
+    {
         return;
     }
+    let expected = if is_async { "Stream<T>" } else { "List<T>" };
     analyzer.diagnostics.push(
         Diagnostic::error(
             code::CONTROL_FLOW_TYPE_MISMATCH,
-            format!("for iterable has type `{type_name}`, expected `List<T>`."),
+            format!("for iterable has type `{type_name}`, expected `{expected}`."),
             hir_expr_span(expr).clone(),
             "control-flow type mismatch",
         )
-        .with_cause("RSScript v0.6 `for` iteration is limited to `List<T>` so loop ownership and review metadata stay explicit.")
+        .with_cause(if is_async {
+            "RSScript `await for` iterates `Stream<T>` values by repeatedly awaiting `Stream.next`."
+        } else {
+            "RSScript v0.6 `for` iteration is limited to `List<T>` so loop ownership and review metadata stay explicit."
+        })
         .with_fix(
-            "iterate_list",
-            "Iterate a `List<T>` value or convert the input to a List before the loop.",
+            if is_async { "iterate_stream" } else { "iterate_list" },
+            if is_async {
+                "Iterate a `Stream<T>` value or convert the input to a Stream before the loop."
+            } else {
+                "Iterate a `List<T>` value or convert the input to a List before the loop."
+            },
             "manual",
         ),
     );
@@ -1017,8 +1088,16 @@ fn match_arm_value_type(block: &HirBlock) -> Option<&str> {
 }
 
 fn check_await_placement(analyzer: &mut Analyzer<'_>, block: &HirBlock, function_is_async: bool) {
+    // A `task_group` body is flattened into its parent block, recognizable by its
+    // `async let` bindings; awaits of those handles are a structured-concurrency
+    // boundary and are valid even in a synchronous enclosing function.
+    let in_task_group = block
+        .statements
+        .iter()
+        .any(|statement| matches!(statement, HirStmt::Let { is_async: true, .. }));
+    let async_context = function_is_async || in_task_group;
     for statement in &block.statements {
-        check_await_placement_stmt(analyzer, statement, function_is_async);
+        check_await_placement_stmt(analyzer, statement, async_context);
     }
 }
 
@@ -1064,6 +1143,15 @@ fn check_await_placement_stmt(
         HirStmt::Match { value, arms, .. } => {
             check_await_placement_expr(analyzer, value, function_is_async);
             for arm in arms {
+                check_await_placement(analyzer, &arm.body, function_is_async);
+            }
+        }
+        HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                // The arm operation is `select`'s structured await boundary: an
+                // executor poll loop drives it, so the await is valid even in a
+                // synchronous enclosing function. The body is ordinary code.
+                check_await_placement_expr(analyzer, &arm.operation, true);
                 check_await_placement(analyzer, &arm.body, function_is_async);
             }
         }
@@ -1515,6 +1603,14 @@ fn weak_field_access_requiring_upgrade_in_stmt(
                 })
             })
         }
+        HirStmt::Select { arms, .. } => arms.iter().find_map(|arm| {
+            weak_field_access_requiring_upgrade(&arm.operation).or_else(|| {
+                arm.body
+                    .statements
+                    .iter()
+                    .find_map(weak_field_access_requiring_upgrade_in_stmt)
+            })
+        }),
         HirStmt::Let { value: None, .. }
         | HirStmt::Return { value: None, .. }
         | HirStmt::Break(_)
@@ -1898,6 +1994,14 @@ fn collect_spawn_capture_idents_from_stmt(statement: &HirStmt, captures: &mut Ve
                 }
             }
         }
+        HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                collect_spawn_capture_idents(&arm.operation, captures);
+                for statement in &arm.body.statements {
+                    collect_spawn_capture_idents_from_stmt(statement, captures);
+                }
+            }
+        }
         HirStmt::Let { value: None, .. }
         | HirStmt::Return { value: None, .. }
         | HirStmt::Break(_)
@@ -2014,6 +2118,11 @@ fn collect_closure_bound_names(block: &HirBlock, bound: &mut HashSet<String>) {
                     collect_closure_bound_names(&arm.body, bound);
                 }
             }
+            HirStmt::Select { arms, .. } => {
+                for arm in arms {
+                    collect_closure_bound_names(&arm.body, bound);
+                }
+            }
             HirStmt::Return { .. }
             | HirStmt::Break(_)
             | HirStmt::Continue(_)
@@ -2068,6 +2177,12 @@ fn collect_closure_effect_accesses_block(
             HirStmt::Match { value, arms, .. } => {
                 collect_closure_effect_accesses_expr(value, bound, out);
                 for arm in arms {
+                    collect_closure_effect_accesses_block(&arm.body, bound, out);
+                }
+            }
+            HirStmt::Select { arms, .. } => {
+                for arm in arms {
+                    collect_closure_effect_accesses_expr(&arm.operation, bound, out);
                     collect_closure_effect_accesses_block(&arm.body, bound, out);
                 }
             }
@@ -2278,6 +2393,12 @@ fn check_try_error_types_stmt(
         HirStmt::Match { value, arms, .. } => {
             check_try_error_types_expr(analyzer, value, function_error_type);
             for arm in arms {
+                check_try_error_types(analyzer, &arm.body, function_error_type);
+            }
+        }
+        HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                check_try_error_types_expr(analyzer, &arm.operation, function_error_type);
                 check_try_error_types(analyzer, &arm.body, function_error_type);
             }
         }
@@ -3377,6 +3498,14 @@ fn check_resource_producer_stmt(analyzer: &mut Analyzer<'_>, statement: &HirStmt
                 }
             }
         }
+        HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                check_resource_producer_expr(analyzer, &arm.operation, false);
+                for statement in &arm.body.statements {
+                    check_resource_producer_stmt(analyzer, statement);
+                }
+            }
+        }
         HirStmt::Let { value: None, .. }
         | HirStmt::Return { value: None, .. }
         | HirStmt::Break(_)
@@ -3625,6 +3754,26 @@ fn collect_resource_pool_factory_resource_captures_stmt(
                 );
             }
         }
+        HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                collect_resource_pool_factory_resource_captures_expr(
+                    &arm.operation,
+                    state,
+                    bound,
+                    captures,
+                );
+                let mut scoped = bound.clone();
+                if arm.binding != "_" {
+                    scoped.insert(arm.binding.clone());
+                }
+                collect_resource_pool_factory_resource_captures_block(
+                    &arm.body,
+                    state,
+                    &mut scoped,
+                    captures,
+                );
+            }
+        }
         HirStmt::Return { value: None, .. }
         | HirStmt::Break(_)
         | HirStmt::Continue(_)
@@ -3784,6 +3933,9 @@ fn resource_pool_fallible_factory_stmt(statement: &HirStmt) -> Option<&HirExpr> 
         HirStmt::Match { arms, .. } => arms
             .iter()
             .find_map(|arm| resource_pool_fallible_factory_block(&arm.body)),
+        HirStmt::Select { arms, .. } => arms
+            .iter()
+            .find_map(|arm| resource_pool_fallible_factory_block(&arm.body)),
         HirStmt::Let { .. }
         | HirStmt::Return { value: None, .. }
         | HirStmt::Break(_)
@@ -3847,6 +3999,14 @@ fn check_resource_pool_factory_stmt(analyzer: &mut Analyzer<'_>, statement: &Hir
                 }
             }
         }
+        HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                check_resource_producer_expr(analyzer, &arm.operation, false);
+                for statement in &arm.body.statements {
+                    check_resource_pool_factory_stmt(analyzer, statement);
+                }
+            }
+        }
         HirStmt::Let { value: None, .. }
         | HirStmt::Return { value: None, .. }
         | HirStmt::Break(_)
@@ -3901,6 +4061,13 @@ fn result_error_type_name(type_name: &str) -> Option<&str> {
 fn list_element_type(type_name: &str) -> Option<&str> {
     let inner = type_name
         .strip_prefix("List<")
+        .and_then(|type_name| type_name.strip_suffix('>'))?;
+    split_top_level_type_args(inner).into_iter().next()
+}
+
+fn stream_item_type(type_name: &str) -> Option<&str> {
+    let inner = type_name
+        .strip_prefix("Stream<")
         .and_then(|type_name| type_name.strip_suffix('>'))?;
     split_top_level_type_args(inner).into_iter().next()
 }
@@ -3981,6 +4148,14 @@ fn check_resource_pool_lease_stmt(analyzer: &mut Analyzer<'_>, statement: &HirSt
                 }
             }
         }
+        HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                check_resource_pool_lease_expr(analyzer, &arm.operation, false);
+                for statement in &arm.body.statements {
+                    check_resource_pool_lease_stmt(analyzer, statement);
+                }
+            }
+        }
         HirStmt::Let { value: None, .. }
         | HirStmt::Return { value: None, .. }
         | HirStmt::Break(_)
@@ -4045,6 +4220,12 @@ fn check_resource_pool_active_lease_stmt(
         HirStmt::Match { value, arms, .. } => {
             check_resource_pool_active_lease_expr(analyzer, active_pool, value);
             for arm in arms {
+                check_resource_pool_active_lease_block(analyzer, active_pool, &arm.body);
+            }
+        }
+        HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                check_resource_pool_active_lease_expr(analyzer, active_pool, &arm.operation);
                 check_resource_pool_active_lease_block(analyzer, active_pool, &arm.body);
             }
         }

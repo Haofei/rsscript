@@ -1028,6 +1028,12 @@ fn collect_review_map_local_closure_bindings_stmt(stmt: &Stmt, bindings: &mut BT
         Stmt::TaskGroup(stmt) => {
             collect_review_map_local_closure_bindings_block(&stmt.body, bindings);
         }
+        Stmt::Select(stmt) => {
+            for arm in &stmt.arms {
+                collect_review_map_local_closure_bindings_expr(&arm.operation, bindings);
+                collect_review_map_local_closure_bindings_block(&arm.body, bindings);
+            }
+        }
         Stmt::Match(stmt) => {
             collect_review_map_local_closure_bindings_expr(&stmt.value, bindings);
             for arm in &stmt.arms {
@@ -1226,6 +1232,24 @@ fn collect_review_map_facts_stmt(
                 local_closure_bindings,
                 facts,
             );
+        }
+        Stmt::Select(stmt) => {
+            for arm in &stmt.arms {
+                collect_review_map_facts_expr(
+                    &arm.operation,
+                    hir,
+                    callback_params,
+                    local_closure_bindings,
+                    facts,
+                );
+                collect_review_map_facts_block(
+                    &arm.body,
+                    hir,
+                    callback_params,
+                    local_closure_bindings,
+                    facts,
+                );
+            }
         }
         Stmt::Match(stmt) => {
             collect_review_map_facts_expr(
@@ -1616,6 +1640,14 @@ fn collect_spawn_capture_names_from_stmt(stmt: &Stmt, captures: &mut BTreeSet<St
                 collect_spawn_capture_names_from_stmt(statement, captures);
             }
         }
+        Stmt::Select(stmt) => {
+            for arm in &stmt.arms {
+                collect_spawn_capture_names(&arm.operation, captures);
+                for statement in &arm.body.statements {
+                    collect_spawn_capture_names_from_stmt(statement, captures);
+                }
+            }
+        }
         Stmt::Match(stmt) => {
             collect_spawn_capture_names(&stmt.value, captures);
             for arm in &stmt.arms {
@@ -1737,6 +1769,12 @@ fn collect_review_map_hir_facts_stmt(
         HirStmt::Match { value, arms, .. } => {
             collect_review_map_hir_facts_expr(value, local_bindings, facts);
             for arm in arms {
+                collect_review_map_hir_facts_block(&arm.body, local_bindings, facts);
+            }
+        }
+        HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                collect_review_map_hir_facts_expr(&arm.operation, local_bindings, facts);
                 collect_review_map_hir_facts_block(&arm.body, local_bindings, facts);
             }
         }
@@ -1992,6 +2030,26 @@ fn collect_managed_closure_capture_names_block(
                     } = &arm.pattern
                     {
                         arm_locals.insert(binding.clone());
+                    }
+                    collect_managed_closure_capture_names_block(
+                        &arm.body,
+                        local_bindings,
+                        &mut arm_locals,
+                        facts,
+                    );
+                }
+            }
+            HirStmt::Select { arms, .. } => {
+                for arm in arms {
+                    collect_managed_closure_capture_names_expr(
+                        &arm.operation,
+                        local_bindings,
+                        closure_locals,
+                        facts,
+                    );
+                    let mut arm_locals = closure_locals.clone();
+                    if arm.binding != "_" {
+                        arm_locals.insert(arm.binding.clone());
                     }
                     collect_managed_closure_capture_names_block(
                         &arm.body,
@@ -3090,6 +3148,20 @@ fn collect_boundary_stmt(statement: &Stmt, path: &str, boundary: &mut BoundarySi
         }
         Stmt::TaskGroup(stmt) => {
             collect_boundary_block(&stmt.body, &format!("{path}.task_group"), boundary);
+        }
+        Stmt::Select(stmt) => {
+            for (index, arm) in stmt.arms.iter().enumerate() {
+                collect_boundary_expr(
+                    &arm.operation,
+                    &format!("{path}.select.arm{}", index + 1),
+                    boundary,
+                );
+                collect_boundary_block(
+                    &arm.body,
+                    &format!("{path}.select.arm{}", index + 1),
+                    boundary,
+                );
+            }
         }
         Stmt::Match(stmt) => {
             collect_boundary_expr(&stmt.value, &format!("{path}.match"), boundary);

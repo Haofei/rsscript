@@ -1,3 +1,5 @@
+features: async, native
+
 resource File
 
 pub fn File.open(path: read Path) -> Result<File, FileError>
@@ -17,6 +19,18 @@ pub fn File.write(file: mut File, data: read Bytes) -> Result<Unit, FileError>
 pub fn File.write_string(file: mut File, text: read String) -> Result<Unit, FileError>
 
 pub fn File.write_buffer(file: mut File, buffer: read Buffer) -> Result<Unit, FileError>
+
+pub async native fn File.read_all_async(path: read Path) -> Result<fresh Bytes, FileError>
+    effects(native)
+
+pub async native fn File.read_all_string_async(path: read Path) -> Result<String, FileError>
+    effects(native)
+
+pub async native fn File.write_async(path: read Path, data: read Bytes) -> Result<Unit, FileError>
+    effects(native)
+
+pub async native fn File.write_string_async(path: read Path, text: read String) -> Result<Unit, FileError>
+    effects(native)
 
 pub fn FileError.message(error: read FileError) -> String
     effects(pure)

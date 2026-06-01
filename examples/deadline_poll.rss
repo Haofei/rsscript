@@ -1,0 +1,15 @@
+fn main() -> Unit {
+    let budget = Duration.ms(value: 50)
+    let deadline = Deadline.after(duration: read budget)
+    let mut steps = 0
+    while steps < 3 {
+        if Deadline.is_expired(deadline: read deadline) {
+            Log.write(message: read "deadline expired early")
+            return Unit
+        }
+        steps = steps + 1
+    }
+    Assert.equal_int(left: steps, right: 3)
+    Log.write(message: read "deadline poll ok")
+    return Unit
+}

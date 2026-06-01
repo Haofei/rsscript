@@ -6,8 +6,9 @@ use crate::syntax::ast::{
     EffectDecl, Expr, FieldDecl, FileFeature, FileFeatureScope, ForStmt, FunctionDecl,
     GenericBound, GenericParam, IfStmt, Item, LetElseStmt, LetKind, LetStmt, LoopStmt, MatchArm,
     MatchPattern, MatchStmt, ModuleDecl, Param, Program, ProtocolDecl, ProtocolImpl,
-    ProtocolImplMapping, ReturnStmt, Stmt, SumTypeDecl, SumVariant, TaskGroupStmt, TypeAliasDecl,
-    TypeDecl, TypeKind, TypeRef, UnknownFileFeature, UseDecl, WithStmt,
+    ProtocolImplMapping, ReturnStmt, SelectArm, SelectStmt, Stmt, SumTypeDecl, SumVariant,
+    TaskGroupStmt, TypeAliasDecl, TypeDecl, TypeKind, TypeRef, UnknownFileFeature, UseDecl,
+    WithStmt,
 };
 
 pub fn parse_source(file: &str, source: &str) -> Program {
@@ -1218,11 +1219,21 @@ fn parse_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
     if tokens[start].is_ident_text("match") {
         return parse_match_stmt(tokens, start, limit);
     }
+    if tokens[start].is_ident_text("await")
+        && tokens
+            .get(start + 1)
+            .is_some_and(|token| token.is_ident_text("for"))
+    {
+        return parse_for_stmt(tokens, start + 1, limit, true);
+    }
     if tokens[start].is_ident_text("for") {
-        return parse_for_stmt(tokens, start, limit);
+        return parse_for_stmt(tokens, start, limit, false);
     }
     if tokens[start].is_ident_text("task_group") {
         return parse_task_group_stmt(tokens, start, limit);
+    }
+    if tokens[start].is_ident_text("select") {
+        return parse_select_stmt(tokens, start, limit);
     }
     if tokens[start].is_ident_text("break") {
         return (
@@ -1563,7 +1574,7 @@ fn parse_loop_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize
     )
 }
 
-fn parse_for_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
+fn parse_for_stmt(tokens: &[Token], start: usize, limit: usize, is_async: bool) -> (Stmt, usize) {
     let Some(open) = find_control_body_open(tokens, start, limit) else {
         return (
             Stmt::MalformedFor(tokens[start].span.clone()),
@@ -1591,6 +1602,7 @@ fn parse_for_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize)
             binding: binding.to_string(),
             iterable,
             body: parse_block(tokens, open, close),
+            is_async,
             span: tokens[start].span.clone(),
         }),
         close + 1,
@@ -1616,6 +1628,90 @@ fn parse_task_group_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt,
         }),
         close + 1,
     )
+}
+
+fn parse_select_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
+    // select { arms }
+    let open = start + 1;
+    if open >= limit || !tokens[open].symbol("{") {
+        return (
+            Stmt::Unknown(tokens[start].span.clone()),
+            statement_end(tokens, start, limit),
+        );
+    }
+    let Some(close) = find_matching(tokens, open, "{", "}") else {
+        return (Stmt::Unknown(tokens[start].span.clone()), limit);
+    };
+    (
+        Stmt::Select(SelectStmt {
+            arms: parse_select_arms(tokens, open + 1, close),
+            span: tokens[start].span.clone(),
+        }),
+        close + 1,
+    )
+}
+
+fn parse_select_arms(tokens: &[Token], start: usize, end: usize) -> Vec<SelectArm> {
+    // Each arm is `<binding> = <await-operation> => { body }`, where the body is
+    // a brace block or a single statement (mirroring `match` arms).
+    let mut arms = Vec::new();
+    let mut index = start;
+    while index < end {
+        while index < end && is_trivia_boundary(&tokens[index]) {
+            index += 1;
+        }
+        if index >= end {
+            break;
+        }
+        let line_end = next_line_or_block_end(tokens, index, end);
+        let Some(arrow) = find_top_level_symbol(tokens, index, line_end, "=>") else {
+            index = line_end.max(index + 1);
+            continue;
+        };
+        let arm_start = index;
+        let Some(eq) = find_top_level_symbol(tokens, index, arrow, "=") else {
+            index = arrow + 1;
+            continue;
+        };
+        let binding = ident_name(&tokens[index])
+            .map(str::to_string)
+            .unwrap_or_else(|| "_".to_string());
+        let Some(operation) = parse_expr(tokens, eq + 1, arrow) else {
+            index = arrow + 1;
+            continue;
+        };
+        let body_start = arrow + 1;
+        let (body, next) = if tokens
+            .get(body_start)
+            .is_some_and(|token| token.symbol("{"))
+        {
+            let Some(body_close) = find_matching(tokens, body_start, "{", "}") else {
+                break;
+            };
+            (parse_block(tokens, body_start, body_close), body_close + 1)
+        } else {
+            if body_start >= end {
+                break;
+            }
+            let body_end = next_line_or_block_end(tokens, body_start, end);
+            let (statement, next) = parse_stmt(tokens, body_start, body_end);
+            (
+                Block {
+                    statements: vec![statement],
+                    span: tokens[body_start].span.clone(),
+                },
+                next,
+            )
+        };
+        arms.push(SelectArm {
+            binding,
+            operation,
+            body,
+            span: tokens[arm_start].span.clone(),
+        });
+        index = next;
+    }
+    arms
 }
 
 fn parse_match_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {

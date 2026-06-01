@@ -330,6 +330,7 @@ pub enum Stmt {
     Match(MatchStmt),
     MalformedMatch(Span),
     TaskGroup(TaskGroupStmt),
+    Select(SelectStmt),
     Break(Span),
     Continue(Span),
     LetElse(LetElseStmt),
@@ -399,6 +400,7 @@ pub struct ForStmt {
     pub binding: String,
     pub iterable: Expr,
     pub body: Block,
+    pub is_async: bool,
     pub span: Span,
 }
 
@@ -413,6 +415,24 @@ pub struct LetElseStmt {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskGroupStmt {
+    pub body: Block,
+    pub span: Span,
+}
+
+/// `select { binding = await <op> => { body } ... }` — wait on several async
+/// operations and run the body of whichever becomes ready first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectStmt {
+    pub arms: Vec<SelectArm>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectArm {
+    /// The name bound to the awaited result inside `body`, or `_` to ignore it.
+    pub binding: String,
+    /// The awaited operation, i.e. an `await <pending>` expression.
+    pub operation: Expr,
     pub body: Block,
     pub span: Span,
 }

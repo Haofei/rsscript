@@ -1,0 +1,16 @@
+fn worker_should_stop(token: read CancellationToken) -> Bool {
+    return CancellationToken.is_cancelled(token: read token)
+}
+
+fn main() -> Unit {
+    let source = CancellationSource.new()
+    let token = CancellationSource.token(source: read source)
+
+    Assert.equal_bool(left: worker_should_stop(token: read token), right: false)
+
+    CancellationSource.cancel(source: mut source)
+
+    Assert.equal_bool(left: worker_should_stop(token: read token), right: true)
+    Log.write(message: read "cancellation ok")
+    return Unit
+}

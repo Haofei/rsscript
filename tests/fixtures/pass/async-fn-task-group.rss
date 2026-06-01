@@ -1,0 +1,18 @@
+features: async
+
+async fn worker() -> Result<Unit, TimerError> {
+    await Timer.sleep(ms: 1)?
+    return Ok(Unit)
+}
+
+async fn orchestrate() -> Result<Unit, TimerError> {
+    task_group {
+        async let a = worker()
+        await a?
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Unit {
+    return Unit
+}

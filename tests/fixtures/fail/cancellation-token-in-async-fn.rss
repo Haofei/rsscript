@@ -1,0 +1,24 @@
+// expect: RS0412
+
+features: async
+
+// `Task.cancellation_token()` here cannot see the `task_group` that drives this
+// task — an async fn is lowered at its definition site — so it would silently
+// produce a never-cancelled token. The token must be passed in as a parameter.
+async fn worker() -> Result<Unit, TimerError> {
+    let token = Task.cancellation_token()
+    await Timer.sleep_cancellable(ms: 1, token: read token)?
+    return Ok(Unit)
+}
+
+fn run() -> Result<Unit, TimerError> {
+    task_group {
+        async let w = worker()
+        await w?
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Unit {
+    return Unit
+}
