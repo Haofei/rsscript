@@ -4,6 +4,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::domain::TimerError;
+use tracing::info;
 
 pub enum AsyncPoll<T> {
     Ready(T),
@@ -32,14 +33,29 @@ impl Executor {
     }
 
     pub fn run_pending<T>(&mut self, mut pending: impl Pending<T>) -> T {
+        let started = Instant::now();
+        let start_polls = self.polls;
+        let start_yields = self.yields;
         loop {
             self.polls += 1;
             let poll = {
-                let mut cx = Context { executor: self };
+                let mut cx = Context {
+                    executor: self,
+                    wake_key: None,
+                };
                 pending.poll(&mut cx)
             };
             match poll {
-                AsyncPoll::Ready(value) => return value,
+                AsyncPoll::Ready(value) => {
+                    info!(
+                        phase = "executor_run_pending",
+                        elapsed_us = started.elapsed().as_micros(),
+                        polls = self.polls.saturating_sub(start_polls),
+                        yields = self.yields.saturating_sub(start_yields),
+                        "async_runtime_phase"
+                    );
+                    return value;
+                }
                 AsyncPoll::Pending => {
                     self.park_or_yield(None);
                 }
@@ -49,12 +65,36 @@ impl Executor {
 
     pub fn poll_once<T>(&mut self, pending: &mut impl Pending<T>) -> AsyncPoll<T> {
         self.polls += 1;
-        let mut cx = Context { executor: self };
+        let mut cx = Context {
+            executor: self,
+            wake_key: None,
+        };
+        pending.poll(&mut cx)
+    }
+
+    pub fn poll_once_keyed<T>(
+        &mut self,
+        wake_key: usize,
+        pending: &mut impl Pending<T>,
+    ) -> AsyncPoll<T> {
+        self.polls += 1;
+        let mut cx = Context {
+            executor: self,
+            wake_key: Some(wake_key),
+        };
         pending.poll(&mut cx)
     }
 
     pub fn yield_once(&mut self) {
         self.park_or_yield(None);
+    }
+
+    pub fn wait_for_wake(&mut self) {
+        self.park_or_yield(None);
+    }
+
+    pub fn drain_ready_wake_keys(&mut self) -> Vec<usize> {
+        self.wake_signal.drain_ready_keys()
     }
 
     pub fn run_task_group<T>(&mut self, group: TaskGroup<T>) -> Vec<T> {
@@ -81,13 +121,16 @@ impl Executor {
             (None, Some(limit)) => Some(limit),
             (None, None) => None,
         };
-        if let Some(deadline) = target {
-            let now = Instant::now();
-            if deadline > now {
-                self.wake_signal
-                    .wait_timeout(deadline.saturating_duration_since(now));
-                return;
-            }
+        let Some(deadline) = target else {
+            self.wake_signal.wait();
+            return;
+        };
+
+        let now = Instant::now();
+        if deadline > now {
+            self.wake_signal
+                .wait_timeout(deadline.saturating_duration_since(now));
+            return;
         }
         std::thread::yield_now();
     }
@@ -96,46 +139,81 @@ impl Executor {
 #[derive(Debug, Clone, Default)]
 pub struct WakeHandle {
     signal: Arc<WakeSignal>,
+    key: Option<usize>,
 }
 
 #[derive(Debug, Default)]
 struct WakeSignal {
-    woken: Mutex<bool>,
+    state: Mutex<WakeState>,
     ready: Condvar,
+}
+
+#[derive(Debug, Default)]
+struct WakeState {
+    woken: bool,
+    ready_keys: Vec<usize>,
 }
 
 impl WakeHandle {
     pub fn wake(&self) {
-        let mut woken = self.signal.woken.lock().expect("wake signal lock poisoned");
-        *woken = true;
+        let mut state = self.signal.state.lock().expect("wake signal lock poisoned");
+        state.woken = true;
+        if let Some(key) = self.key {
+            state.ready_keys.push(key);
+        }
         self.signal.ready.notify_all();
     }
 
     fn wait_timeout(&self, duration: Duration) {
-        let mut woken = self.signal.woken.lock().expect("wake signal lock poisoned");
-        if *woken {
-            *woken = false;
+        let mut state = self.signal.state.lock().expect("wake signal lock poisoned");
+        if state.woken {
+            state.woken = false;
             return;
         }
-        let (mut woken_after_wait, _) = self
+        let (mut state_after_wait, _) = self
             .signal
             .ready
-            .wait_timeout(woken, duration)
+            .wait_timeout(state, duration)
             .expect("wake signal condvar wait poisoned");
-        if *woken_after_wait {
-            *woken_after_wait = false;
+        if state_after_wait.woken {
+            state_after_wait.woken = false;
         }
+    }
+
+    fn wait(&self) {
+        let mut state = self.signal.state.lock().expect("wake signal lock poisoned");
+        while !state.woken {
+            state = self
+                .signal
+                .ready
+                .wait(state)
+                .expect("wake signal condvar wait poisoned");
+        }
+        state.woken = false;
+    }
+
+    fn with_key(&self, key: Option<usize>) -> Self {
+        Self {
+            signal: self.signal.clone(),
+            key,
+        }
+    }
+
+    fn drain_ready_keys(&self) -> Vec<usize> {
+        let mut state = self.signal.state.lock().expect("wake signal lock poisoned");
+        std::mem::take(&mut state.ready_keys)
     }
 }
 
 pub struct Context<'executor> {
     executor: &'executor mut Executor,
+    wake_key: Option<usize>,
 }
 
 impl Context<'_> {
     pub fn yield_now(&mut self) {
         self.executor.yields += 1;
-        std::thread::yield_now();
+        self.executor.wake_signal.wake();
     }
 
     pub fn sleep_for(&mut self, duration: Duration) {
@@ -151,7 +229,7 @@ impl Context<'_> {
     }
 
     pub fn wake_handle(&self) -> WakeHandle {
-        self.executor.wake_handle()
+        self.executor.wake_handle().with_key(self.wake_key)
     }
 }
 
@@ -530,6 +608,19 @@ pub fn cancellation_token_is_cancelled(token: &RssCancellationToken) -> bool {
     token.token.is_cancelled()
 }
 
+pub fn trace_async_runtime_phase(
+    phase: &str,
+    elapsed_us: u128,
+    polls: usize,
+    yields: usize,
+    tasks: usize,
+) {
+    info!(
+        phase,
+        elapsed_us, polls, yields, tasks, "async_runtime_phase"
+    );
+}
+
 /// A token that is never cancelled, used for `Task.cancellation_token()` outside
 /// a `task_group` so cooperative checks simply never see cancellation.
 pub fn cancellation_never() -> RssCancellationToken {
@@ -614,7 +705,11 @@ impl<T> TaskGroup<T> {
     }
 
     pub fn join(self, executor: &mut Executor) -> Vec<T> {
+        let started = Instant::now();
+        let start_polls = executor.polls;
+        let start_yields = executor.yields;
         let mut tasks = self.tasks;
+        let task_count = tasks.len();
         let mut outputs = (0..tasks.len()).map(|_| None).collect::<Vec<_>>();
         let mut remaining = tasks.len();
         while remaining > 0 {
@@ -625,7 +720,10 @@ impl<T> TaskGroup<T> {
                 }
                 executor.polls += 1;
                 let poll = {
-                    let mut cx = Context { executor };
+                    let mut cx = Context {
+                        executor,
+                        wake_key: Some(index),
+                    };
                     task.poll(&mut cx)
                 };
                 if let AsyncPoll::Ready(value) = poll {
@@ -638,6 +736,14 @@ impl<T> TaskGroup<T> {
                 executor.park_or_yield(None);
             }
         }
+        info!(
+            phase = "task_group_join",
+            tasks = task_count,
+            elapsed_us = started.elapsed().as_micros(),
+            polls = executor.polls.saturating_sub(start_polls),
+            yields = executor.yields.saturating_sub(start_yields),
+            "async_runtime_phase"
+        );
         outputs
             .into_iter()
             .map(|output| output.expect("task group output should be ready after join"))
@@ -645,13 +751,26 @@ impl<T> TaskGroup<T> {
     }
 
     pub fn join_until(self, executor: &mut Executor, deadline: Instant) -> TaskGroupJoin<T> {
+        let started = Instant::now();
+        let start_polls = executor.polls;
+        let start_yields = executor.yields;
         let cancellation = self.cancellation.clone();
         let mut tasks = self.tasks;
+        let task_count = tasks.len();
         let mut outputs = (0..tasks.len()).map(|_| None).collect::<Vec<_>>();
         let mut remaining = tasks.len();
         while remaining > 0 {
             if Instant::now() >= deadline {
                 cancellation.cancel();
+                info!(
+                    phase = "task_group_join_timeout",
+                    tasks = task_count,
+                    elapsed_us = started.elapsed().as_micros(),
+                    polls = executor.polls.saturating_sub(start_polls),
+                    yields = executor.yields.saturating_sub(start_yields),
+                    pending = remaining,
+                    "async_runtime_phase"
+                );
                 return TaskGroupJoin::TimedOut {
                     completed: outputs,
                     pending: remaining,
@@ -664,7 +783,10 @@ impl<T> TaskGroup<T> {
                 }
                 executor.polls += 1;
                 let poll = {
-                    let mut cx = Context { executor };
+                    let mut cx = Context {
+                        executor,
+                        wake_key: Some(index),
+                    };
                     task.poll(&mut cx)
                 };
                 if let AsyncPoll::Ready(value) = poll {
@@ -677,6 +799,14 @@ impl<T> TaskGroup<T> {
                 executor.park_or_yield(Some(deadline));
             }
         }
+        info!(
+            phase = "task_group_join_until",
+            tasks = task_count,
+            elapsed_us = started.elapsed().as_micros(),
+            polls = executor.polls.saturating_sub(start_polls),
+            yields = executor.yields.saturating_sub(start_yields),
+            "async_runtime_phase"
+        );
         TaskGroupJoin::Completed(
             outputs
                 .into_iter()

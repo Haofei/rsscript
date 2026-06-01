@@ -4868,8 +4868,9 @@ fn load(id: read Int) -> Result<String, NetworkError> {
         "async let should produce a result slot, got:\n{lowered}"
     );
     assert!(
-        lowered.contains("__rsscript_async_executor.poll_once(&mut __rsscript_pending_user)"),
-        "task_group should poll siblings concurrently, got:\n{lowered}"
+        lowered.contains("__rsscript_async_executor.poll_once_keyed(__rsscript_key_user")
+            && lowered.contains("__rsscript_async_executor.wait_for_wake()"),
+        "task_group should drive siblings from keyed wakes, got:\n{lowered}"
     );
     assert!(
         lowered
@@ -4954,7 +4955,7 @@ fn run() -> Result<Unit, TimerError> {
     let decl_b = lowered
         .find("let mut __rsscript_pending_b")
         .expect("b's pending should be declared, got:\n{lowered}");
-    if let Some(poll_b) = lowered.find("poll_once(&mut __rsscript_pending_b)") {
+    if let Some(poll_b) = lowered.find("poll_once_keyed(__rsscript_key_b") {
         assert!(
             poll_b > decl_b,
             "await on `a` must not poll `b` before it is declared, got:\n{lowered}"
@@ -4965,7 +4966,7 @@ fn run() -> Result<Unit, TimerError> {
     let take_a = lowered
         .find("__rsscript_result_a.take()")
         .expect("a should be taken, got:\n{lowered}");
-    let poll_a_after = lowered[take_a..].find("poll_once(&mut __rsscript_pending_a)");
+    let poll_a_after = lowered[take_a..].find("poll_once_keyed(__rsscript_key_a");
     assert!(
         poll_a_after.is_none(),
         "an awaited task must not be re-polled after its result is taken, got:\n{lowered}"
@@ -4993,7 +4994,7 @@ fn run() -> Result<Unit, TimerError> {
     assert!(
         lowered.contains("__rsscript_result_discard_0")
             && lowered.contains("__rsscript_all_done")
-            && lowered.contains("poll_once(&mut __rsscript_pending_discard_0)"),
+            && lowered.contains("poll_once_keyed(__rsscript_key_discard_0"),
         "task_group should drain discarded background tasks before scope exit, got:\n{lowered}"
     );
 }

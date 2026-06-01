@@ -5,8 +5,8 @@ one Tokio mock upload server:
 
 - `rss-file-upload-benchmark`: RSScript async client lowered to Rust, using the
   RSS runtime pending ABI and a Tokio native upload binding.
-- `rust_async_upload_client`: hand-written Tokio client with bounded
-  concurrency.
+- `rust_async_upload_client`: hand-written Tokio client using the same fixed
+  concurrency batches as the generated RSScript client.
 - `sync_upload_client`: blocking TCP client that uploads files sequentially.
 - `mock_upload_server`: Tokio HTTP server that reads the full request body before responding.
 
@@ -37,6 +37,19 @@ RSS_FILE_UPLOAD_CONCURRENCY=32 \
 RSS_FILE_UPLOAD_DELAY_MS=5 \
 cargo test --test file_upload_benchmark_e2e -- --ignored --nocapture
 ```
+
+Enable phase tracing when you need to see where RSS async differs from the
+hand-written Rust async client:
+
+```sh
+RSS_FILE_UPLOAD_TRACE=1 \
+cargo test --test file_upload_benchmark_e2e -- --ignored --nocapture
+```
+
+With tracing enabled, the benchmark prints per-phase RSS-vs-Rust averages for
+`connect`, `write_request`, `read_response`, and per-upload `total` time. It
+also reports RSS runtime phases such as `task_group_join` and
+`executor_run_pending` with elapsed time, poll count, and yield count.
 
 The RSS and Rust async paths both use Tokio for actual socket IO and hit the
 same server with the same request count and payload size. The benchmark reports

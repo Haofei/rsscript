@@ -23,3 +23,5 @@ path = "src/bin/sync_upload_client.rs"
 [dependencies]
 rsscript-runtime = { path = "../../../../runtime" }
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }

@@ -655,6 +655,20 @@ impl<'a> RustLowerer<'a> {
             })
             .collect();
 
+        out.push_str(&format!(
+            "{pad}let __rsscript_task_group_trace_started = std::time::Instant::now();\n"
+        ));
+        out.push_str(&format!(
+            "{pad}let __rsscript_task_group_trace_polls = {executor}.poll_count();\n"
+        ));
+        out.push_str(&format!(
+            "{pad}let __rsscript_task_group_trace_yields = {executor}.yield_count();\n"
+        ));
+        out.push_str(&format!(
+            "{pad}let __rsscript_task_group_trace_tasks = {}usize;\n",
+            async_let_names.len()
+        ));
+
         // Lower statements in source order so an `async let` can reference an
         // earlier binding. `async let x = f()` constructs (does not run) the
         // pending; `await x` drives every still-running sibling until x is ready,
@@ -677,6 +691,9 @@ impl<'a> RustLowerer<'a> {
                         } else {
                             rust_ident(&stmt.name)
                         };
+                        out.push_str(&format!(
+                            "{pad}let __rsscript_key_{name} = {statement_index}usize;\n"
+                        ));
                         out.push_str(&format!(
                             "{pad}let mut __rsscript_pending_{name} = {lowered};\n"
                         ));
@@ -731,6 +748,22 @@ impl<'a> RustLowerer<'a> {
             self.emit_task_group_drain(out, &pad, &executor, &active);
         }
 
+        out.push_str(&format!(
+            "{pad}rsscript_runtime::trace_async_runtime_phase(\n"
+        ));
+        out.push_str(&format!("{pad}    \"task_group_scope\",\n"));
+        out.push_str(&format!(
+            "{pad}    __rsscript_task_group_trace_started.elapsed().as_micros(),\n"
+        ));
+        out.push_str(&format!(
+            "{pad}    {executor}.poll_count().saturating_sub(__rsscript_task_group_trace_polls),\n"
+        ));
+        out.push_str(&format!(
+            "{pad}    {executor}.yield_count().saturating_sub(__rsscript_task_group_trace_yields),\n"
+        ));
+        out.push_str(&format!("{pad}    __rsscript_task_group_trace_tasks,\n"));
+        out.push_str(&format!("{pad});\n"));
+
         self.current_task_group_token = previous_task_group_token;
     }
 
@@ -750,31 +783,37 @@ impl<'a> RustLowerer<'a> {
         out.push_str(&format!(
             "{pad}if __rsscript_result_{target}.is_none() {{\n"
         ));
-        out.push_str(&format!("{pad}    loop {{\n"));
         out.push_str(&format!(
-            "{pad}        let mut __rsscript_progress = false;\n"
+            "{pad}    let mut __rsscript_ready_keys: Option<Vec<usize>> = None;\n"
         ));
+        out.push_str(&format!("{pad}    loop {{\n"));
         for name in active {
             out.push_str(&format!(
                 "{pad}        if __rsscript_result_{name}.is_none() {{\n"
             ));
             out.push_str(&format!(
-                "{pad}            if let rsscript_runtime::AsyncPoll::Ready(__rsscript_value) = {executor}.poll_once(&mut __rsscript_pending_{name}) {{\n"
+                "{pad}            let __rsscript_should_poll = __rsscript_ready_keys.as_ref().map_or(true, |__rsscript_keys| __rsscript_keys.contains(&__rsscript_key_{name}));\n"
+            ));
+            out.push_str(&format!("{pad}            if __rsscript_should_poll {{\n"));
+            out.push_str(&format!(
+                "{pad}                if let rsscript_runtime::AsyncPoll::Ready(__rsscript_value) = {executor}.poll_once_keyed(__rsscript_key_{name}, &mut __rsscript_pending_{name}) {{\n"
             ));
             out.push_str(&format!(
-                "{pad}                __rsscript_result_{name} = Some(__rsscript_value);\n"
+                "{pad}                    __rsscript_result_{name} = Some(__rsscript_value);\n"
             ));
-            out.push_str(&format!(
-                "{pad}                __rsscript_progress = true;\n"
-            ));
+            out.push_str(&format!("{pad}                }}\n"));
             out.push_str(&format!("{pad}            }}\n"));
             out.push_str(&format!("{pad}        }}\n"));
         }
         out.push_str(&format!(
             "{pad}        if __rsscript_result_{target}.is_some() {{ break; }}\n"
         ));
+        out.push_str(&format!("{pad}        {executor}.wait_for_wake();\n"));
         out.push_str(&format!(
-            "{pad}        if !__rsscript_progress {{ {executor}.yield_once(); }}\n"
+            "{pad}        let __rsscript_woken_keys = {executor}.drain_ready_wake_keys();\n"
+        ));
+        out.push_str(&format!(
+            "{pad}        __rsscript_ready_keys = if __rsscript_woken_keys.is_empty() {{ None }} else {{ Some(__rsscript_woken_keys) }};\n"
         ));
         out.push_str(&format!("{pad}    }}\n"));
         out.push_str(&format!("{pad}}}\n"));
@@ -787,27 +826,37 @@ impl<'a> RustLowerer<'a> {
         executor: &str,
         active: &[String],
     ) {
+        out.push_str(&format!(
+            "{pad}let mut __rsscript_ready_keys: Option<Vec<usize>> = None;\n"
+        ));
         out.push_str(&format!("{pad}loop {{\n"));
         out.push_str(&format!("{pad}    let mut __rsscript_all_done = true;\n"));
-        out.push_str(&format!("{pad}    let mut __rsscript_progress = false;\n"));
         for name in active {
             out.push_str(&format!(
                 "{pad}    if __rsscript_result_{name}.is_none() {{\n"
             ));
             out.push_str(&format!("{pad}        __rsscript_all_done = false;\n"));
             out.push_str(&format!(
-                "{pad}        if let rsscript_runtime::AsyncPoll::Ready(__rsscript_value) = {executor}.poll_once(&mut __rsscript_pending_{name}) {{\n"
+                "{pad}        let __rsscript_should_poll = __rsscript_ready_keys.as_ref().map_or(true, |__rsscript_keys| __rsscript_keys.contains(&__rsscript_key_{name}));\n"
+            ));
+            out.push_str(&format!("{pad}        if __rsscript_should_poll {{\n"));
+            out.push_str(&format!(
+                "{pad}            if let rsscript_runtime::AsyncPoll::Ready(__rsscript_value) = {executor}.poll_once_keyed(__rsscript_key_{name}, &mut __rsscript_pending_{name}) {{\n"
             ));
             out.push_str(&format!(
-                "{pad}            __rsscript_result_{name} = Some(__rsscript_value);\n"
+                "{pad}                __rsscript_result_{name} = Some(__rsscript_value);\n"
             ));
-            out.push_str(&format!("{pad}            __rsscript_progress = true;\n"));
+            out.push_str(&format!("{pad}            }}\n"));
             out.push_str(&format!("{pad}        }}\n"));
             out.push_str(&format!("{pad}    }}\n"));
         }
         out.push_str(&format!("{pad}    if __rsscript_all_done {{ break; }}\n"));
+        out.push_str(&format!("{pad}    {executor}.wait_for_wake();\n"));
         out.push_str(&format!(
-            "{pad}    if !__rsscript_progress {{ {executor}.yield_once(); }}\n"
+            "{pad}    let __rsscript_woken_keys = {executor}.drain_ready_wake_keys();\n"
+        ));
+        out.push_str(&format!(
+            "{pad}    __rsscript_ready_keys = if __rsscript_woken_keys.is_empty() {{ None }} else {{ Some(__rsscript_woken_keys) }};\n"
         ));
         out.push_str(&format!("{pad}}}\n"));
     }

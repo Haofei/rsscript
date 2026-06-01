@@ -1,5 +1,6 @@
 mod common;
 
+use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -127,6 +128,8 @@ fn file_upload_benchmark_reports_async_and_sync_requests_per_second() {
         rust_to_rss_ratio,
         likely_bottleneck,
     );
+    print_trace_comparison(&rss_async_result.trace, &rust_async_result.trace);
+    print_runtime_trace("rss_async", &rss_async_result.runtime_trace);
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
@@ -154,6 +157,70 @@ impl BenchmarkConfig {
 struct ClientResult {
     elapsed_ms: u64,
     rps: f64,
+    trace: TraceStats,
+    runtime_trace: RuntimeTraceStats,
+}
+
+#[derive(Debug, Default, Clone)]
+struct TraceStats {
+    phases: BTreeMap<String, PhaseStats>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct PhaseStats {
+    count: usize,
+    total_us: u128,
+    max_us: u128,
+}
+
+#[derive(Debug, Default, Clone)]
+struct RuntimeTraceStats {
+    phases: BTreeMap<String, RuntimePhaseStats>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct RuntimePhaseStats {
+    count: usize,
+    total_us: u128,
+    max_us: u128,
+    polls: u128,
+    yields: u128,
+    tasks: u128,
+}
+
+impl RuntimePhaseStats {
+    fn record(&mut self, elapsed_us: u128, polls: u128, yields: u128, tasks: u128) {
+        self.count += 1;
+        self.total_us += elapsed_us;
+        self.max_us = self.max_us.max(elapsed_us);
+        self.polls += polls;
+        self.yields += yields;
+        self.tasks += tasks;
+    }
+
+    fn avg_us(&self) -> u128 {
+        if self.count == 0 {
+            0
+        } else {
+            self.total_us / self.count as u128
+        }
+    }
+}
+
+impl PhaseStats {
+    fn record(&mut self, elapsed_us: u128) {
+        self.count += 1;
+        self.total_us += elapsed_us;
+        self.max_us = self.max_us.max(elapsed_us);
+    }
+
+    fn avg_us(&self) -> u128 {
+        if self.count == 0 {
+            0
+        } else {
+            self.total_us / self.count as u128
+        }
+    }
 }
 
 fn cargo_build(manifest: &Path, bin: &str) {
@@ -316,6 +383,116 @@ fn run_client(
     ClientResult {
         elapsed_ms: measured_ms,
         rps: measured_rps,
+        trace: parse_trace_stats(&String::from_utf8_lossy(&output.stdout)),
+        runtime_trace: parse_runtime_trace_stats(&String::from_utf8_lossy(&output.stdout)),
+    }
+}
+
+fn parse_trace_stats(stdout: &str) -> TraceStats {
+    let mut stats = TraceStats::default();
+    for line in stdout.lines().filter(|line| line.contains("upload_phase")) {
+        let Some(phase) = trace_field(line, "phase") else {
+            continue;
+        };
+        let Some(elapsed_us) =
+            trace_field(line, "elapsed_us").and_then(|value| value.parse::<u128>().ok())
+        else {
+            continue;
+        };
+        stats.phases.entry(phase).or_default().record(elapsed_us);
+    }
+    stats
+}
+
+fn parse_runtime_trace_stats(stdout: &str) -> RuntimeTraceStats {
+    let mut stats = RuntimeTraceStats::default();
+    for line in stdout
+        .lines()
+        .filter(|line| line.contains("async_runtime_phase"))
+    {
+        let Some(phase) = trace_field(line, "phase") else {
+            continue;
+        };
+        let elapsed_us = trace_field(line, "elapsed_us")
+            .and_then(|value| value.parse::<u128>().ok())
+            .unwrap_or(0);
+        let polls = trace_field(line, "polls")
+            .and_then(|value| value.parse::<u128>().ok())
+            .unwrap_or(0);
+        let yields = trace_field(line, "yields")
+            .and_then(|value| value.parse::<u128>().ok())
+            .unwrap_or(0);
+        let tasks = trace_field(line, "tasks")
+            .and_then(|value| value.parse::<u128>().ok())
+            .unwrap_or(0);
+        stats
+            .phases
+            .entry(phase)
+            .or_default()
+            .record(elapsed_us, polls, yields, tasks);
+    }
+    stats
+}
+
+fn trace_field(line: &str, name: &str) -> Option<String> {
+    let prefix = format!("{name}=");
+    line.split_whitespace().find_map(|token| {
+        token
+            .strip_prefix(&prefix)
+            .map(|value| value.trim_matches(|ch| ch == '"' || ch == ',').to_string())
+    })
+}
+
+fn print_trace_comparison(rss: &TraceStats, rust: &TraceStats) {
+    if rss.phases.is_empty() && rust.phases.is_empty() {
+        return;
+    }
+
+    for phase in ["connect", "write_request", "read_response", "total"] {
+        let Some(rss_phase) = rss.phases.get(phase) else {
+            continue;
+        };
+        let Some(rust_phase) = rust.phases.get(phase) else {
+            continue;
+        };
+        let rss_avg = rss_phase.avg_us();
+        let rust_avg = rust_phase.avg_us();
+        let delta = rss_avg as i128 - rust_avg as i128;
+        println!(
+            "file upload trace: phase={phase} rss_avg_us={} rust_avg_us={} delta_us={} rss_max_us={} rust_max_us={} samples={}/{}",
+            rss_avg,
+            rust_avg,
+            delta,
+            rss_phase.max_us,
+            rust_phase.max_us,
+            rss_phase.count,
+            rust_phase.count,
+        );
+    }
+    for phase in ["native_start"] {
+        let Some(rss_phase) = rss.phases.get(phase) else {
+            continue;
+        };
+        println!(
+            "file upload trace: phase={phase} rss_avg_us={} rust_avg_us=n/a delta_us=n/a rss_max_us={} rust_max_us=n/a samples={}/0",
+            rss_phase.avg_us(),
+            rss_phase.max_us,
+            rss_phase.count,
+        );
+    }
+}
+
+fn print_runtime_trace(mode: &str, stats: &RuntimeTraceStats) {
+    for (phase, phase_stats) in &stats.phases {
+        println!(
+            "file upload runtime trace: mode={mode} phase={phase} count={} avg_us={} max_us={} polls={} yields={} tasks={}",
+            phase_stats.count,
+            phase_stats.avg_us(),
+            phase_stats.max_us,
+            phase_stats.polls,
+            phase_stats.yields,
+            phase_stats.tasks,
+        );
     }
 }
 
