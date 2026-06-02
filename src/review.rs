@@ -791,6 +791,9 @@ fn review_map_region_draft(
             .join(", ");
         reasons.push(format!("managed closure retains {captures}"));
     }
+    for contract in &facts.explicit_closure_contracts {
+        reasons.push(format!("explicit closure {contract}"));
+    }
     if facts.has_with {
         reasons.push("resource with block".to_string());
     }
@@ -887,6 +890,7 @@ struct ReviewMapFacts {
     unsafe_calls: BTreeSet<String>,
     spawn_captures: BTreeSet<String>,
     managed_closure_captures: BTreeSet<String>,
+    explicit_closure_contracts: BTreeSet<String>,
     /// Value types for receiver-call resolution (param_name -> type_name,
     /// plus `__protocol_bound__<T>` -> protocol for generic bounds).
     value_types: HashMap<String, String>,
@@ -1599,13 +1603,35 @@ fn collect_review_map_facts_expr(
                 facts,
             );
         }
-        Expr::Closure { body, .. } => collect_review_map_facts_block(
+        Expr::Closure {
             body,
-            hir,
-            callback_params,
-            local_closure_bindings,
-            facts,
-        ),
+            captures,
+            declared_effects,
+            explicit,
+            ..
+        } => {
+            if *explicit {
+                for capture in captures {
+                    facts.explicit_closure_contracts.insert(format!(
+                        "captures {} `{}`",
+                        effect_label(capture.effect),
+                        capture.name
+                    ));
+                }
+                if !declared_effects.is_empty() {
+                    facts
+                        .explicit_closure_contracts
+                        .insert(format!("effects({})", declared_effects.join(", ")));
+                }
+            }
+            collect_review_map_facts_block(
+                body,
+                hir,
+                callback_params,
+                local_closure_bindings,
+                facts,
+            )
+        }
         Expr::MapLiteral { entries, .. } => {
             for entry in entries {
                 collect_review_map_facts_expr(

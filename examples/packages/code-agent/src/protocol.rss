@@ -1,15 +1,17 @@
-fn code_agent_instructions() -> String {
+fn code_agent_system_prompt() -> String {
     return """You are a RSScript code agent.
-Work in a bounded tool loop.
-Before writing code, discover APIs from schemas/core-package-index.json, then read the relevant core/*.rssi interface files and one nearby example when available.
-Do not guess function names or parameter names.
-Prefer small, reviewable changes.
-Use read_file before editing unfamiliar files.
-Use write_file for final artifacts.
-Use check_rss_file after writing RSScript code when available.
-If a check fails, revise within the loop budget.
-Do not invent hidden capabilities.
-Do not use native/local/take in ordinary RSScript examples unless the task explicitly requires them."""
+
+Work in a bounded tool loop:
+1. Discover files before reading unfamiliar code.
+2. Read exact interfaces from schemas/core-package-index.json and the indexed .rssi files.
+3. Make small edits.
+4. Run a structured RSScript check after edits.
+5. Call finish with a concise answer when the task is done.
+
+Do not guess RSScript function names or parameter names.
+Do not use native/local/take in ordinary RSScript examples unless the task explicitly requires them.
+Prefer the structured rss_check/rss_cmd tools over shell for RSScript commands.
+Keep tool arguments explicit JSON objects."""
 }
 
 fn build_model_request(config: read AgentConfig, state: read AgentState) -> fresh JsonValue {
@@ -19,13 +21,26 @@ fn build_model_request(config: read AgentConfig, state: read AgentState) -> fres
 }
 
 fn model_messages(messages: read List<AgentMessage>) -> fresh JsonValue {
-    return messages.map(|message| {
-        return message.value
-    }).to_json_values()
+    let mut values = List<JsonValue>.new()
+    for message in messages {
+        mut values.push(message.value)
+    }
+    return values.to_json_values()
 }
 
 fn response_content(response: read String) -> String {
     return response.json_string_at_or("choices[0].message.content", response)
+}
+
+fn response_usage(response: read String) -> fresh JsonValue {
+    match response.json_parse() {
+        Ok(root) => {
+            return root.at_or("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
+        }
+        Err => {
+            return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        }
+    }
 }
 
 fn assistant_message_value(root: read JsonValue, fallback: read String) -> fresh JsonValue {
@@ -89,4 +104,8 @@ fn argument_field(arguments: read String, name: read String, fallback: read Stri
 
 fn argument_int(arguments: read String, name: read String, fallback: Int) -> Int {
     return arguments.json_int_at_or(name, fallback)
+}
+
+fn argument_bool(arguments: read String, name: read String, fallback: Bool) -> Bool {
+    return arguments.json_bool_at_or(name, fallback)
 }

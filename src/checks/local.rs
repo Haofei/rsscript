@@ -3483,6 +3483,9 @@ mod tests {
                     },
                     HirStmt::Expr(HirExpr::Closure {
                         params: Vec::new(),
+                        captures: Vec::new(),
+                        declared_effects: Vec::new(),
+                        explicit: false,
                         body: HirBlock {
                             statements: vec![HirStmt::Expr(HirExpr::Ident {
                                 name: "cached".to_string(),
@@ -3866,6 +3869,9 @@ mod tests {
                                 name: "callback".to_string(),
                                 value: Some(HirExpr::Closure {
                                     params: Vec::new(),
+                                    captures: Vec::new(),
+                                    declared_effects: Vec::new(),
+                                    explicit: false,
                                     body: HirBlock {
                                         statements: vec![HirStmt::Expr(HirExpr::Ident {
                                             name: "file".to_string(),
@@ -4054,6 +4060,9 @@ mod tests {
                         name: "callback".to_string(),
                         value: Some(HirExpr::Closure {
                             params: Vec::new(),
+                            captures: Vec::new(),
+                            declared_effects: Vec::new(),
+                            explicit: false,
                             body: HirBlock {
                                 statements: vec![HirStmt::Expr(HirExpr::Ident {
                                     name: "image".to_string(),

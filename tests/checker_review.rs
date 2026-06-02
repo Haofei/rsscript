@@ -397,6 +397,7 @@ fn load() -> Result<Unit, IOError> {
     may_fail()?
     return Ok(Unit)
 }
+
 "#;
     let map = review_map_sources(vec![("error-boundary.rss", source)]);
 
@@ -408,6 +409,43 @@ fn load() -> Result<Unit, IOError> {
                 .iter()
                 .any(|reason| reason == "error handling boundary")
     }));
+}
+
+#[test]
+fn review_map_records_explicit_fn_capture_contracts() {
+    let source = r#"
+features: local
+
+fn run() -> Int {
+    let offset = 2
+    local add = fn(value) captures(read offset) effects(pure) {
+        return value + offset
+    }
+    return add(40)
+}
+"#;
+    let map = review_map_sources(vec![("explicit-fn-review.rss", source)]);
+    let region = map
+        .files
+        .iter()
+        .flat_map(|file| file.regions.iter())
+        .find(|region| region.function == "run")
+        .expect("run region should exist");
+
+    assert!(
+        region
+            .reasons
+            .iter()
+            .any(|reason| reason == "explicit closure captures read `offset`"),
+        "{region:?}"
+    );
+    assert!(
+        region
+            .reasons
+            .iter()
+            .any(|reason| reason == "explicit closure effects(pure)"),
+        "{region:?}"
+    );
 }
 
 #[test]

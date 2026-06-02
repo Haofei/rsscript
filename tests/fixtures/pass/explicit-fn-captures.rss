@@ -1,0 +1,9 @@
+features: local
+
+fn run() -> Int {
+    let offset = 2
+    local add = fn(value) captures(read offset) effects(pure) {
+        return value + offset
+    }
+    return add(40)
+}

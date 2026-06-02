@@ -449,6 +449,14 @@ pub struct PackageReviewFile {
     pub kind: PackageReviewFileKind,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageSourceFile {
+    pub path: String,
+    pub relative_path: String,
+    pub contents: String,
+    pub kind: PackageReviewFileKind,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PackageReviewExport {
     pub name: String,

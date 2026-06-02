@@ -1,0 +1,101 @@
+sum ToolRuntime {
+    CoreToolRuntime
+}
+
+struct ToolRequest {
+    id: String
+    name: String
+    arguments: String
+}
+
+struct ToolOutput {
+    content: String
+    is_error: Bool
+}
+
+struct ToolAction {
+    response: Option<ToolOutput>
+    finish: Bool
+    abort: Bool
+    final_answer: String
+}
+
+fn ToolRequest.new(id: read String, name: read String, arguments: read String) -> fresh ToolRequest {
+    return ToolRequest(id, name, arguments)
+}
+
+fn ToolOutput.respond(content: read String) -> fresh ToolOutput {
+    return ToolOutput(content, is_error: false)
+}
+
+fn ToolOutput.error(content: read String) -> fresh ToolOutput {
+    return ToolOutput(content, is_error: true)
+}
+
+fn ToolAction.respond(content: read String) -> fresh ToolAction {
+    return ToolAction(response: Some(ToolOutput.respond(content)), finish: false, abort: false, final_answer: "")
+}
+
+fn ToolAction.error(content: read String) -> fresh ToolAction {
+    return ToolAction(response: Some(ToolOutput.error(content)), finish: false, abort: false, final_answer: "")
+}
+
+fn ToolAction.finish(answer: read String) -> fresh ToolAction {
+    return ToolAction(response: None, finish: true, abort: false, final_answer: answer)
+}
+
+fn path_in_workspace(workspace_root: read String, path_text: read String) -> Bool {
+    let safe = path_text.safe_relative().is_ok()
+    let under_root = path_text.starts_with(workspace_root)
+    return safe && under_root
+}
+
+fn resolve_repo_path(repo_root: read Path, path_text: read String) -> Result<fresh Path, String> {
+    return repo_root.resolve_relative(path_text)
+}
+
+fn tool_path_error(path_text: read String, reason: read String) -> fresh ToolAction {
+    let body = {"ok": false, "path": path_text, "error": reason}
+    return ToolAction.error(body.to_string())
+}
+
+fn bounded_limit(value: Int, fallback: Int, max: Int) -> Int {
+    if value < 1 {
+        return fallback
+    }
+    if value > max {
+        return max
+    }
+    return value
+}
+
+fn cap_text(content: read String, max_chars: Int) -> fresh String {
+    if content.len() <= max_chars {
+        return content.copy()
+    }
+    return content.slice(0, max_chars)
+}
+
+fn truncation_header(content: read String, max_chars: Int) -> String {
+    if content.len() <= max_chars {
+        return ""
+    }
+    let parts: List<String> = [
+        "truncated=true\noutput_chars=",
+        content.len().to_string(),
+        "\nshown_chars=",
+        max_chars.to_string(),
+        "\n---\n",
+    ]
+    return parts.join("")
+}
+
+fn output_with_cap(content: read String, max_chars: Int) -> fresh ToolOutput {
+    let capped = cap_text(content, max_chars)
+    let prefix = truncation_header(content, max_chars)
+    let text = [prefix, capped].join("")
+    if content.len() > max_chars {
+        return ToolOutput.error(text)
+    }
+    return ToolOutput.respond(text)
+}

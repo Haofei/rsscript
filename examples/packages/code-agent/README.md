@@ -11,9 +11,13 @@ AGENT_API_KEY=test_key cargo run -- run examples/packages/code-agent
 The example is intentionally structured like a simplified Codex loop:
 
 - `src/config.rss`: environment-derived model, endpoint, API key, loop budget, retry policy, and the write sandbox root.
-- `src/protocol.rss`: request JSON, response extraction, and tool-call parsing.
+- `src/protocol.rss`: request JSON, response extraction, usage extraction, and tool-call parsing.
 - `src/state.rss`: structured chat message history.
-- `src/tools.rss`: narrow tool registry, `ToolRuntime`, path sandboxing, and tool execution.
+- `src/tool_types.rss`: tool request/output/action types and shared helpers.
+- `src/tool_specs.rss`: JSON schemas sent to the model.
+- `src/tool_file.rss`: `read`, `write`, and `edit`.
+- `src/tool_command.rss`: `shell`, `rss_check`, `rss_cmd`, `rss_ide`, and `finish`.
+- `src/tools.rss`: explicit `ToolRuntime` dispatch and chat-history glue.
 - `src/checks.rss`: RSScript-specific validation helpers.
 - `src/main.rss`: bounded agent loop.
 
@@ -41,16 +45,20 @@ network behavior are not hard-coded:
 - **Structured history**: model turns are stored as chat messages. Tool results
   are appended as `role=tool` messages with the original tool call id, not as
   natural-language transcript text.
-- **Discovery tools**: `list_files` and `search_text` let the model find source
-  files and indexed interfaces before it reads or edits.
-- **Write sandbox**: `write_file` only writes under `AGENT_WORKSPACE_ROOT`, and
+- **Discovery tools**: `read` and `rss_ide` let the model inspect source files
+  and indexed interfaces before it edits.
+- **Edit tools**: `write` overwrites files and `edit` replaces exact text.
+- **Command tools**: `rss_check` and `rss_cmd` run structured RSScript commands;
+  `shell` refuses RSScript commands so language checks stay reviewable.
+- **Finish tool**: `finish` ends the loop explicitly with a final answer.
+- **Write sandbox**: `write` and `edit` only write under `AGENT_WORKSPACE_ROOT`, and
   tools reject absolute paths and `..` traversal. Write results include
   `old_bytes`, `new_bytes`, and `changed`.
-- **Real checks**: `check_rss_file` validates the current read-file task shape;
-  `check_rss_package` runs the package checker and returns status/stdout/stderr.
+- **Real checks**: `rss_check` runs the package checker and returns
+  status/stdout/stderr.
 - **HTTP errors**: a non-success response is logged as a `turn.failed` event and
   ends the loop instead of being parsed as if it were a successful turn.
 - **Budget**: when the step budget is exhausted before the task finishes, the
   agent emits a `turn.budget_exhausted` event.
 
-The agent should not guess RSScript APIs. It reads `examples/packages/code-agent/AGENTS.md`, then `schemas/core-package-index.json`, then the relevant indexed `.rssi` files under `core/` or `rss/*/interface/` before writing RSScript code.
+The agent should not guess RSScript APIs. It reads `examples/packages/code-agent/AGENTS.md`, uses `rss_ide` or direct `read` calls against `schemas/core-package-index.json`, then opens the relevant indexed `.rssi` files under `core/` or `rss/*/interface/` before writing RSScript code.

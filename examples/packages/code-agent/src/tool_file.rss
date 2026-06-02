@@ -1,0 +1,190 @@
+fn read_selection(content: read String, start_line: Int, max_lines: Int) -> fresh String {
+    let lines = content.lines()
+    let total = lines.len()
+    let start_index = start_line - 1
+    let mut selected = List<String>.new()
+    let mut index = start_index
+    while index < total && selected.len() < max_lines {
+        mut selected.push(lines.get(index))
+        index = index + 1
+    }
+    return selected.join("\n")
+}
+
+fn read_header(
+    path_text: read String,
+    content: read String,
+    start_line: Int,
+    max_lines: Int,
+    selection: read String,
+) -> fresh String {
+    let total_lines = content.lines().len()
+    let shown_lines = selection.lines().len()
+    let end_line = start_line + shown_lines - 1
+    let parts: List<String> = [
+        "path=", path_text,
+        "\nstart_line=", start_line.to_string(),
+        "\nend_line=", end_line.to_string(),
+        "\ntotal_lines=", total_lines.to_string(),
+        "\nshown_lines=", shown_lines.to_string(),
+        "\nmax_lines=", max_lines.to_string(),
+        "\n---\n",
+    ]
+    return parts.join("")
+}
+
+fn execute_read(arguments: read String, config: read AgentConfig) -> fresh ToolAction {
+    let path_text = argument_field(arguments, "path", "")
+    if path_text == "" {
+        return ToolAction.error("error: read requires arguments.path")
+    }
+    let start_line = bounded_limit(argument_int(arguments, "start_line", 1), 1, 1000000)
+    let max_lines = bounded_limit(argument_int(arguments, "max_lines", 200), 200, 5000)
+    let max_chars = bounded_limit(argument_int(arguments, "max_output_chars", 12000), 12000, 50000)
+    match resolve_repo_path(config.repo_root, path_text) {
+        Ok(path) => {
+            match path.read_string() {
+                Ok(content) => {
+                    let selected = read_selection(content, start_line, max_lines)
+                    let header = read_header(path_text, content, start_line, max_lines, selected)
+                    let output = [header, selected].join("")
+                    let capped = output_with_cap(output, max_chars)
+                    return ToolAction(response: Some(capped), finish: false, abort: false, final_answer: "")
+                }
+                Err(error) => {
+                    let body = ["error reading ", path_text, ": ", error.message()].join("")
+                    return ToolAction.error(body)
+                }
+            }
+        }
+        Err(error) => {
+            return tool_path_error(path_text, error)
+        }
+    }
+}
+
+fn write_guard_error(path_text: read String, config: read AgentConfig) -> Option<String> {
+    if path_in_workspace(config.workspace_root, path_text) == false {
+        let reason = [
+            "writes are confined to `",
+            config.workspace_root,
+            "` and must be safe relative paths",
+        ].join("")
+        return Some(reason)
+    }
+    return None
+}
+
+fn execute_write(arguments: read String, config: read AgentConfig) -> fresh ToolAction {
+    let path_text = argument_field(arguments, "path", "")
+    let content = argument_field(arguments, "content", "")
+    if path_text == "" {
+        return ToolAction.error("error: write requires arguments.path")
+    }
+    match write_guard_error(path_text, config) {
+        Some(reason) => {
+            return tool_path_error(path_text, reason)
+        }
+        None => {
+        }
+    }
+    match resolve_repo_path(config.repo_root, path_text) {
+        Ok(path) => {
+            let mut old_content = ""
+            let mut existed = false
+            match path.read_string() {
+                Ok(existing) => {
+                    old_content = existing
+                    existed = true
+                }
+                Err => {
+                }
+            }
+            match path.write_string(content) {
+                Ok => {
+                    let body = {
+                        "ok": true,
+                        "path": path_text,
+                        "existed": existed,
+                        "changed": old_content != content,
+                        "old_bytes": old_content.len(),
+                        "new_bytes": content.len(),
+                    }
+                    return ToolAction.respond(body.to_string())
+                }
+                Err(error) => {
+                    let body = {"ok": false, "path": path_text, "error": error.message()}
+                    return ToolAction.error(body.to_string())
+                }
+            }
+        }
+        Err(error) => {
+            return tool_path_error(path_text, error)
+        }
+    }
+}
+
+fn execute_edit(arguments: read String, config: read AgentConfig) -> fresh ToolAction {
+    let path_text = argument_field(arguments, "path", "")
+    let old_string = argument_field(arguments, "old_string", "")
+    let new_string = argument_field(arguments, "new_string", "")
+    let replace_all = argument_bool(arguments, "replace_all", false)
+    if path_text == "" {
+        return ToolAction.error("error: edit requires arguments.path")
+    }
+    if old_string == "" {
+        return ToolAction.error("error: edit requires non-empty arguments.old_string")
+    }
+    if old_string == new_string {
+        return ToolAction.error("error: edit old_string and new_string are identical")
+    }
+    match write_guard_error(path_text, config) {
+        Some(reason) => {
+            return tool_path_error(path_text, reason)
+        }
+        None => {
+        }
+    }
+    match resolve_repo_path(config.repo_root, path_text) {
+        Ok(path) => {
+            match path.read_string() {
+                Ok(content) => {
+                    let parts = content.split(old_string)
+                    let occurrences = parts.len() - 1
+                    if occurrences == 0 {
+                        return ToolAction.error("error: edit old_string not found")
+                    }
+                    if occurrences > 1 && replace_all == false {
+                        return ToolAction.error("error: edit old_string matched more than once; set replace_all=true")
+                    }
+                    let mut replacement_count = 1
+                    let mut new_content = content.replace(old_string, new_string)
+                    if replace_all {
+                        replacement_count = occurrences
+                        new_content = parts.join(new_string)
+                    }
+                    match path.write_string(new_content) {
+                        Ok => {
+                            let body = {
+                                "ok": true,
+                                "path": path_text,
+                                "replacements": replacement_count,
+                                "new_bytes": new_content.len(),
+                            }
+                            return ToolAction.respond(body.to_string())
+                        }
+                        Err(error) => {
+                            return ToolAction.error(["error editing ", path_text, ": ", error.message()].join(""))
+                        }
+                    }
+                }
+                Err(error) => {
+                    return ToolAction.error(["error reading ", path_text, ": ", error.message()].join(""))
+                }
+            }
+        }
+        Err(error) => {
+            return tool_path_error(path_text, error)
+        }
+    }
+}

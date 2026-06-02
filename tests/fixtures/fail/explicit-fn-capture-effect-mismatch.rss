@@ -1,0 +1,11 @@
+// expect: RS0805
+features: local
+
+fn run() -> Int {
+    let mut count = 0
+    local bump = fn() captures(read count) effects(pure) {
+        count = count + 1
+        return count
+    }
+    return bump()
+}

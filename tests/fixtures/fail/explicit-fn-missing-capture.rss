@@ -1,0 +1,10 @@
+// expect: RS0805
+features: local
+
+fn run() -> Int {
+    let offset = 2
+    local add = fn(value) captures() effects(pure) {
+        return value + offset
+    }
+    return add(40)
+}

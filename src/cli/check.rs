@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use rsscript::{
     analyze_source_with_interfaces, analyze_source_with_interfaces_without_core,
     analyze_source_without_core, explain_diagnostic_code, format_diagnostic_explanation,
-    format_diagnostics_human, format_diagnostics_json, standard_package_interfaces,
+    format_diagnostics_human, format_diagnostics_json_with_source, standard_package_interfaces,
 };
 
 use super::package::run_package_check;
@@ -132,7 +132,10 @@ pub(crate) fn run_check(args: &[String]) -> ExitCode {
         analyze_source_with_interfaces_without_core(path, &source, &interface_refs)
     };
     if options.json {
-        println!("{}", format_diagnostics_json(&diagnostics));
+        println!(
+            "{}",
+            format_diagnostics_json_with_source(&source, &diagnostics)
+        );
     } else if diagnostics.is_empty() {
         println!("{path}: ok");
     } else {

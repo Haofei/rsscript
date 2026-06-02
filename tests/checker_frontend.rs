@@ -3,7 +3,7 @@ mod common;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use rsscript::syntax::ast::{EffectDecl, Item};
+use rsscript::syntax::ast::{DataEffect, EffectDecl, Expr, Item};
 use rsscript::syntax::parse_source;
 use rsscript::{
     Severity, analyze_source, analyze_source_with_core, analyze_source_with_interfaces,
@@ -3174,6 +3174,81 @@ fn run() -> Unit {
 }
 
 #[test]
+fn parser_preserves_explicit_fn_capture_contract() {
+    let source = r#"
+features: local
+
+fn run() -> Int {
+    let offset = 2
+    local add = fn(value) captures(read offset) effects(pure) {
+        return value + offset
+    }
+    return add(40)
+}
+"#;
+    let program = parse_source("explicit-fn-capture.rss", source);
+    let function = program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(function) => Some(function),
+            _ => None,
+        })
+        .find(|function| function.name == "run")
+        .expect("run should parse");
+    let closure = function
+        .body
+        .statements
+        .iter()
+        .find_map(|stmt| match stmt {
+            rsscript::syntax::ast::Stmt::Let(stmt) => match stmt.value.as_ref() {
+                Some(Expr::Closure { .. }) => stmt.value.as_ref(),
+                _ => None,
+            },
+            _ => None,
+        })
+        .and_then(|expr| match expr {
+            Expr::Closure {
+                captures,
+                declared_effects,
+                explicit,
+                ..
+            } => Some((captures, declared_effects, explicit)),
+            _ => None,
+        })
+        .expect("explicit fn expression should parse as closure");
+
+    assert!(*closure.2);
+    assert_eq!(closure.0.len(), 1);
+    assert_eq!(closure.0[0].name, "offset");
+    assert_eq!(closure.0[0].effect, DataEffect::Read);
+    assert_eq!(closure.1, &vec!["pure".to_string()]);
+}
+
+#[test]
+fn rust_lowering_accepts_explicit_fn_capture_contract() {
+    let source = r#"
+features: local
+
+fn run() -> Int {
+    let offset = 2
+    local add = fn(value) captures(read offset) effects(pure) {
+        return value + offset
+    }
+    return add(40)
+}
+"#;
+    let diagnostics = analyze_source("explicit-fn-capture.rss", source);
+    assert_eq!(diagnostics, Vec::new());
+
+    let lowered = lower_source_to_rust("explicit-fn-capture.rss", source)
+        .expect("explicit fn capture source should lower");
+    assert!(lowered.contains("let add = |value|"));
+    assert!(lowered.contains("value + offset"));
+    assert!(lowered.contains("add(40)"));
+}
+
+#[test]
 fn parser_preserves_noescape_function_return_types() {
     let source =
         r#"fn build(create: noescape Fn(Url, Int) -> Result<DbConnection, DbError>) -> Unit"#;
@@ -3349,19 +3424,54 @@ fn resource_pool_core_signatures_use_typed_factory_closures() {
 }
 
 #[test]
-fn checker_rejects_user_authored_owned_fn_parameter_until_general_semantics_exist() {
+fn checker_accepts_user_authored_owned_fn_parameter_with_explicit_capture_contract() {
     let source = r#"
-fn Keep.store(callback: owned Fn() -> Unit) -> Unit
+fn apply(callback: owned Fn(Int) -> Int, value: Int) -> Int {
+    return callback(value)
+}
+
+fn run() -> Int {
+    let offset = 2
+    return apply(
+        callback: fn(value) captures(read offset) effects(pure) {
+            return value + offset
+        },
+        value: 40,
+    )
+}
 "#;
     let diagnostics = analyze_source("owned-fn.rss", source);
 
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+#[test]
+fn rust_lowering_uses_move_for_owned_explicit_fn_capture() {
+    let source = r#"
+fn apply(callback: owned Fn(Int) -> Int, value: Int) -> Int {
+    return callback(value)
+}
+
+fn run() -> Int {
+    let offset = 2
+    return apply(
+        callback: fn(value) captures(read offset) effects(pure) {
+            return value + offset
+        },
+        value: 40,
+    )
+}
+"#;
+
+    let lowered = lower_source_to_rust("owned-fn-lowering.rss", source)
+        .expect("owned explicit fn should lower");
+
     assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "RS0015"
-                && diagnostic.label == "unsupported owned position"),
-        "{diagnostics:?}"
+        lowered.contains("mut callback: impl FnMut(i64) -> i64"),
+        "{lowered}"
     );
+    assert!(lowered.contains("callback(value)"), "{lowered}");
+    assert!(lowered.contains("move |value: i64|"), "{lowered}");
 }
 
 #[test]

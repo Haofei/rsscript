@@ -11,6 +11,8 @@ struct AgentState {
 struct ToolLoopResult {
     called_tool: Bool
     messages: List<AgentMessage>
+    finished: Bool
+    final_answer: String
 }
 
 fn AgentMessage.from_value(value: read JsonValue) -> fresh AgentMessage {
@@ -31,7 +33,7 @@ fn AgentMessage.tool(call_id: read String, content: read String) -> fresh AgentM
 
 fn AgentState.new(task: read String) -> fresh AgentState {
     return AgentState(
-        messages: [AgentMessage.system(code_agent_instructions()), AgentMessage.user(task)],
+        messages: [AgentMessage.system(code_agent_system_prompt()), AgentMessage.user(task)],
         step: 0,
         finished: false,
     )

@@ -35,6 +35,7 @@ pub use core_index::core_package_index_json;
 pub use diagnostic::{
     Diagnostic, DiagnosticExplanation, Severity, Span, explain_diagnostic_code,
     format_diagnostic_explanation, format_diagnostics_human, format_diagnostics_json,
+    format_diagnostics_json_with_source,
 };
 pub use editor_grammar::{VSCODE_GRAMMAR_PATH, vscode_tmlanguage_json};
 pub use formatter::{format_program, format_source};
@@ -48,20 +49,21 @@ pub use package::{
     PackageNativeRustReview, PackageNativeRustSemanticReview, PackageNativeRustSourceScan,
     PackagePublishCheck, PackagePublishDryRun, PackageRegistryIndexEntry,
     PackageRegistryPublishTarget, PackageReview, PackageReviewExport, PackageReviewFile,
-    PackageReviewFileKind, PackageReviewMetadata, PackageReviewSummary, PackageRisk, PackageTree,
-    PackageTreeNode, PackageTreeSummary, PackageVendorEntry, PackageVendorReport,
-    PackageVendorUnresolved, check_package_dir, diff_package_dirs, diff_package_locks,
-    format_package_check_human, format_package_check_json, format_package_check_reir_json,
-    format_package_diff_human, format_package_diff_json, format_package_lock_diff_human,
-    format_package_lock_diff_json, format_package_lock_diff_reir_json, format_package_lock_json,
-    format_package_lock_reir_json, format_package_lock_reir_json_with_path,
-    format_package_lock_toml, format_package_metadata_human, format_package_metadata_json,
-    format_package_metadata_reir_json, format_package_publish_human, format_package_publish_json,
-    format_package_publish_reir_json, format_package_review_human, format_package_review_json,
-    format_package_review_reir_diff_json, format_package_review_reir_json,
-    format_package_tree_human, format_package_tree_json, format_package_tree_reir_json,
-    format_package_vendor_human, format_package_vendor_json, format_package_vendor_reir_json,
-    lock_package_dir, package_lowering_input, package_metadata, package_metadata_verify,
+    PackageReviewFileKind, PackageReviewMetadata, PackageReviewSummary, PackageRisk,
+    PackageSourceFile, PackageTree, PackageTreeNode, PackageTreeSummary, PackageVendorEntry,
+    PackageVendorReport, PackageVendorUnresolved, check_package_dir, diff_package_dirs,
+    diff_package_locks, format_package_check_human, format_package_check_json,
+    format_package_check_reir_json, format_package_diff_human, format_package_diff_json,
+    format_package_lock_diff_human, format_package_lock_diff_json,
+    format_package_lock_diff_reir_json, format_package_lock_json, format_package_lock_reir_json,
+    format_package_lock_reir_json_with_path, format_package_lock_toml,
+    format_package_metadata_human, format_package_metadata_json, format_package_metadata_reir_json,
+    format_package_publish_human, format_package_publish_json, format_package_publish_reir_json,
+    format_package_review_human, format_package_review_json, format_package_review_reir_diff_json,
+    format_package_review_reir_json, format_package_tree_human, format_package_tree_json,
+    format_package_tree_reir_json, format_package_vendor_human, format_package_vendor_json,
+    format_package_vendor_reir_json, lock_package_dir, package_lowering_input, package_metadata,
+    package_metadata_verify, package_sources, package_sources_with_dependency_interfaces,
     package_tree, publish_package_dry_run, publish_package_dry_run_with_registry,
     review_package_dir, vendor_package_dir,
 };
@@ -80,4 +82,7 @@ pub use rust_lower::{
     lower_sources_to_rust_package_with_options, parse_runtime_diagnostics, parse_source_map_json,
     remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines, write_generated_rust_package,
 };
-pub use symbols::{Definition, Reference, SymbolIndex, SymbolKind, symbol_index};
+pub use symbols::{
+    Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
+    document_symbols, symbol_index,
+};

@@ -27,6 +27,13 @@ impl ParamEffect {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirClosureCapture {
+    pub effect: ParamEffect,
+    pub name: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParamSig {
     pub name: String,
     pub effect: Option<ParamEffect>,
@@ -359,6 +366,9 @@ pub enum HirExpr {
     },
     Closure {
         params: Vec<String>,
+        captures: Vec<HirClosureCapture>,
+        declared_effects: Vec<String>,
+        explicit: bool,
         body: HirBlock,
         span: Span,
     },
@@ -1424,10 +1434,27 @@ fn lower_hir_expr(
             type_name: infer_hir_expr_type(hir, expr, value_types),
             span: span.clone(),
         },
-        Expr::Closure { params, body, span } => {
+        Expr::Closure {
+            params,
+            captures,
+            declared_effects,
+            explicit,
+            body,
+            span,
+        } => {
             let mut closure_types = value_types.clone();
             HirExpr::Closure {
                 params: params.clone(),
+                captures: captures
+                    .iter()
+                    .map(|capture| HirClosureCapture {
+                        effect: param_effect_from_data_effect(capture.effect),
+                        name: capture.name.clone(),
+                        span: capture.span.clone(),
+                    })
+                    .collect(),
+                declared_effects: declared_effects.clone(),
+                explicit: *explicit,
                 body: lower_hir_block(hir, function_name, body, &mut closure_types),
                 span: span.clone(),
             }

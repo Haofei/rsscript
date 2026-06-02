@@ -688,7 +688,7 @@ impl<'a> RustLowerer<'a> {
             Some(DataEffect::Take) | None => ty,
         };
         let name = rust_value_ident(&param.name);
-        if param.ty.is_noescape && param.ty.name == "Fn" {
+        if (param.ty.is_noescape || param.ty.is_owned) && param.ty.name == "Fn" {
             format!("mut {name}: {rust_ty}")
         } else {
             format!("{name}: {rust_ty}")
@@ -2666,14 +2666,18 @@ impl<'a> RustLowerer<'a> {
             .collect::<Vec<_>>()
             .join(", ");
         let previous_return_type = self.current_return_type.take();
+        let closure_prefix = if expected.is_owned { "move " } else { "" };
         if let [Stmt::Expr(value)] = body.statements.as_slice() {
-            let lowered = format!("|{lowered_params}| {}", self.lower_expr(value));
+            let lowered = format!(
+                "{closure_prefix}|{lowered_params}| {}",
+                self.lower_expr(value)
+            );
             self.current_return_type = previous_return_type;
             self.value_types = previous_value_types;
             return lowered;
         }
         let mut out = String::new();
-        out.push_str(&format!("|{lowered_params}| {{\n"));
+        out.push_str(&format!("{closure_prefix}|{lowered_params}| {{\n"));
         self.lower_block(body, &mut out, 1);
         out.push('}');
         self.current_return_type = previous_return_type;

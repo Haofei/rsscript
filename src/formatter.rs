@@ -562,10 +562,38 @@ impl Formatter {
                 self.expr_at(value, 7, indent);
                 self.out.push('?');
             }
-            Expr::Closure { params, body, .. } => {
-                self.out.push('|');
-                self.out.push_str(&params.join(", "));
-                self.out.push_str("| {\n");
+            Expr::Closure {
+                params,
+                captures,
+                declared_effects,
+                explicit,
+                body,
+                ..
+            } => {
+                if *explicit {
+                    self.out.push_str("fn(");
+                    self.out.push_str(&params.join(", "));
+                    self.out.push_str(") captures(");
+                    for (index, capture) in captures.iter().enumerate() {
+                        if index > 0 {
+                            self.out.push_str(", ");
+                        }
+                        self.out.push_str(data_effect_name(capture.effect));
+                        self.out.push(' ');
+                        self.out.push_str(&capture.name);
+                    }
+                    self.out.push(')');
+                    if !declared_effects.is_empty() {
+                        self.out.push_str(" effects(");
+                        self.out.push_str(&declared_effects.join(", "));
+                        self.out.push(')');
+                    }
+                    self.out.push_str(" {\n");
+                } else {
+                    self.out.push('|');
+                    self.out.push_str(&params.join(", "));
+                    self.out.push_str("| {\n");
+                }
                 self.block(body, indent + 1);
                 self.indent(indent);
                 self.out.push('}');

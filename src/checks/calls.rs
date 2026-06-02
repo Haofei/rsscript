@@ -19,6 +19,7 @@ struct CallbackBinding {
 struct CallCheckContext<'a> {
     noescape_bindings: &'a HashMap<String, CallbackBinding>,
     callback_bindings: &'a HashMap<String, CallbackBinding>,
+    callable_closure_bindings: &'a HashMap<String, Span>,
     local_closure_bindings: &'a HashMap<String, Span>,
 }
 
@@ -56,10 +57,16 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
                 .collect::<HashMap<_, _>>();
             if let Some(block) = &body.block {
                 let mut local_closure_bindings = HashMap::new();
-                collect_local_closure_bindings(block, &mut local_closure_bindings);
+                let mut callable_closure_bindings = HashMap::new();
+                collect_closure_bindings(
+                    block,
+                    &mut callable_closure_bindings,
+                    &mut local_closure_bindings,
+                );
                 let context = CallCheckContext {
                     noescape_bindings: &noescape_bindings,
                     callback_bindings: &callback_bindings,
+                    callable_closure_bindings: &callable_closure_bindings,
                     local_closure_bindings: &local_closure_bindings,
                 };
                 check_function_fallthrough(analyzer, function, block);
@@ -137,45 +144,58 @@ fn statement_may_fall_through(statement: &HirStmt) -> bool {
     }
 }
 
-fn collect_local_closure_bindings(block: &HirBlock, bindings: &mut HashMap<String, Span>) {
+fn collect_closure_bindings(
+    block: &HirBlock,
+    callable_bindings: &mut HashMap<String, Span>,
+    local_bindings: &mut HashMap<String, Span>,
+) {
     for statement in &block.statements {
         match statement {
             HirStmt::Let {
                 kind: HirBindingKind::LocalLet,
                 name,
-                value: Some(HirExpr::Closure { body, .. }),
+                value: Some(HirExpr::Closure { body, explicit, .. }),
                 span,
                 ..
             } => {
-                bindings.insert(name.clone(), span.clone());
-                collect_local_closure_bindings(body, bindings);
+                callable_bindings.insert(name.clone(), span.clone());
+                if !explicit {
+                    local_bindings.insert(name.clone(), span.clone());
+                }
+                collect_closure_bindings(body, callable_bindings, local_bindings);
             }
             HirStmt::Let {
                 value: Some(HirExpr::Closure { body, .. }),
                 ..
-            } => collect_local_closure_bindings(body, bindings),
+            } => collect_closure_bindings(body, callable_bindings, local_bindings),
             HirStmt::Let { .. } | HirStmt::Return { .. } | HirStmt::Expr(_) => {}
-            HirStmt::With { body, .. } => collect_local_closure_bindings(body, bindings),
+            HirStmt::With { body, .. } => {
+                collect_closure_bindings(body, callable_bindings, local_bindings)
+            }
             HirStmt::If {
                 then_body,
                 else_body,
                 ..
             } => {
-                collect_local_closure_bindings(then_body, bindings);
+                collect_closure_bindings(then_body, callable_bindings, local_bindings);
                 if let Some(else_body) = else_body {
-                    collect_local_closure_bindings(else_body, bindings);
+                    collect_closure_bindings(else_body, callable_bindings, local_bindings);
                 }
             }
-            HirStmt::Loop { body, .. } => collect_local_closure_bindings(body, bindings),
-            HirStmt::For { body, .. } => collect_local_closure_bindings(body, bindings),
+            HirStmt::Loop { body, .. } => {
+                collect_closure_bindings(body, callable_bindings, local_bindings)
+            }
+            HirStmt::For { body, .. } => {
+                collect_closure_bindings(body, callable_bindings, local_bindings)
+            }
             HirStmt::Match { arms, .. } => {
                 for arm in arms {
-                    collect_local_closure_bindings(&arm.body, bindings);
+                    collect_closure_bindings(&arm.body, callable_bindings, local_bindings);
                 }
             }
             HirStmt::Select { arms, .. } => {
                 for arm in arms {
-                    collect_local_closure_bindings(&arm.body, bindings);
+                    collect_closure_bindings(&arm.body, callable_bindings, local_bindings);
                 }
             }
             HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
@@ -976,13 +996,14 @@ fn check_call_args(
     let noescape_bindings = context.noescape_bindings;
     let callback_bindings = context.callback_bindings;
     let local_closure_bindings = context.local_closure_bindings;
+    let callable_closure_bindings = context.callable_closure_bindings;
     let call_name = callee_display(callee);
     if is_closure_binding_call(
         callee,
         args,
         resolution,
         callback_bindings,
-        local_closure_bindings,
+        callable_closure_bindings,
     ) {
         check_callback_call_args(analyzer, callee, args, callback_bindings);
         return;
@@ -1277,7 +1298,7 @@ fn check_call_args(
         };
         let expected_type =
             substitute_type_params(&expected_param.type_name, &type_param_substitutions);
-        if check_noescape_closure_return_type(
+        if check_fn_closure_contract(
             analyzer,
             &call_name,
             name,
@@ -1894,10 +1915,10 @@ fn collect_type_param_substitutions(
             .or_insert_with(|| actual.to_string());
         return;
     }
-    if is_noescape_fn_type(pattern) && is_noescape_fn_type(actual) {
-        for (pattern_param, actual_param) in noescape_param_types(pattern)
+    if is_fn_type(pattern) && is_fn_type(actual) {
+        for (pattern_param, actual_param) in fn_param_types(pattern)
             .into_iter()
-            .zip(noescape_param_types(actual))
+            .zip(fn_param_types(actual))
         {
             collect_type_param_substitutions(
                 pattern_param,
@@ -1907,7 +1928,7 @@ fn collect_type_param_substitutions(
             );
         }
         if let (Some(pattern_return), Some(actual_return)) =
-            (noescape_return_type(pattern), noescape_return_type(actual))
+            (fn_return_type(pattern), fn_return_type(actual))
         {
             collect_type_param_substitutions(
                 pattern_return,
@@ -1940,14 +1961,15 @@ fn substitute_type_params(type_name: &str, substitutions: &HashMap<String, Strin
     if let Some(target) = fresh_type_target(type_name) {
         return format!("fresh {}", substitute_type_params(target, substitutions));
     }
-    if let Some(return_ty) = noescape_return_type(type_name) {
-        let params = noescape_param_types(type_name)
+    if let Some(return_ty) = fn_return_type(type_name) {
+        let prefix = fn_type_prefix(type_name);
+        let params = fn_param_types(type_name)
             .into_iter()
             .map(|param| substitute_type_params(param, substitutions))
             .collect::<Vec<_>>()
             .join(", ");
         return format!(
-            "noescape Fn({params}) -> {}",
+            "{prefix}Fn({params}) -> {}",
             substitute_type_params(return_ty, substitutions)
         );
     }
@@ -1963,7 +1985,7 @@ fn substitute_type_params(type_name: &str, substitutions: &HashMap<String, Strin
     format!("{root}<{args}>")
 }
 
-fn check_noescape_closure_return_type(
+fn check_fn_closure_contract(
     analyzer: &mut Analyzer<'_>,
     call_name: &str,
     arg_name: &str,
@@ -1971,13 +1993,13 @@ fn check_noescape_closure_return_type(
     generic_params: &[String],
     value: &HirExpr,
 ) -> bool {
-    if !is_noescape_fn_type(expected_type) {
+    if !is_fn_type(expected_type) {
         return false;
     }
     let HirExpr::Closure { params, body, .. } = value else {
         return false;
     };
-    let expected_params = noescape_param_types(expected_type);
+    let expected_params = fn_param_types(expected_type);
     if params.len() != expected_params.len() {
         callback_arity_mismatch_diagnostic(
             analyzer,
@@ -1989,7 +2011,7 @@ fn check_noescape_closure_return_type(
         );
         return true;
     }
-    let expected_return = noescape_return_type(expected_type).unwrap_or("Unit");
+    let expected_return = fn_return_type(expected_type).unwrap_or("Unit");
     let (local_bindings, managed_bindings) = closure_binding_sets(body);
     let contract = CallbackContract {
         call_name,
@@ -3943,6 +3965,7 @@ fn is_fn_type(type_name: &str) -> bool {
     let type_name = type_name.trim();
     type_name
         .strip_prefix("noescape ")
+        .or_else(|| type_name.strip_prefix("owned "))
         .unwrap_or(type_name)
         .strip_prefix("Fn(")
         .and_then(|rest| rest.split_once(')'))
@@ -3960,6 +3983,7 @@ fn fn_return_type(type_name: &str) -> Option<&str> {
     let type_name = type_name.trim();
     type_name
         .strip_prefix("noescape ")
+        .or_else(|| type_name.strip_prefix("owned "))
         .unwrap_or(type_name)
         .strip_prefix("Fn(")
         .and_then(|rest| rest.split_once(')'))
@@ -3979,6 +4003,7 @@ fn fn_param_types(type_name: &str) -> Vec<&str> {
     let type_name = type_name.trim();
     let Some(params) = type_name
         .strip_prefix("noescape ")
+        .or_else(|| type_name.strip_prefix("owned "))
         .unwrap_or(type_name)
         .strip_prefix("Fn(")
         .and_then(|rest| rest.split_once(')').map(|(params, _)| params.trim()))
@@ -3989,6 +4014,17 @@ fn fn_param_types(type_name: &str) -> Vec<&str> {
         Vec::new()
     } else {
         split_top_level_type_args(params)
+    }
+}
+
+fn fn_type_prefix(type_name: &str) -> &'static str {
+    let type_name = type_name.trim();
+    if type_name.starts_with("noescape ") {
+        "noescape "
+    } else if type_name.starts_with("owned ") {
+        "owned "
+    } else {
+        ""
     }
 }
 

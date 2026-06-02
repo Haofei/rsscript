@@ -2006,6 +2006,12 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
         return Some(closure);
     }
 
+    if tokens[start].is_ident_text("fn")
+        && let Some(closure) = parse_explicit_fn_expr(tokens, start, end)
+    {
+        return Some(closure);
+    }
+
     if let Some(binary) = parse_binary_expr(tokens, start, end) {
         return Some(binary);
     }
@@ -2429,6 +2435,9 @@ fn parse_closure_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr
             .unwrap_or_else(|| Expr::Unknown(tokens[start].span.clone()));
         return Some(Expr::Closure {
             params,
+            captures: Vec::new(),
+            declared_effects: Vec::new(),
+            explicit: false,
             body: Block {
                 statements: vec![Stmt::Expr(value)],
                 span: tokens[start].span.clone(),
@@ -2447,9 +2456,142 @@ fn parse_closure_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr
     }
     Some(Expr::Closure {
         params,
+        captures: Vec::new(),
+        declared_effects: Vec::new(),
+        explicit: false,
         body: parse_block(tokens, open, close),
         span: tokens[start].span.clone(),
     })
+}
+
+fn parse_explicit_fn_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
+    let params_open = start + 1;
+    if !tokens
+        .get(params_open)
+        .is_some_and(|token| token.symbol("("))
+    {
+        return None;
+    }
+    let params_close = find_matching(tokens, params_open, "(", ")")?;
+    let mut params = Vec::new();
+    for range in split_param_ranges(tokens, params_open + 1, params_close) {
+        if range.empty_span.is_some() {
+            continue;
+        }
+        if range.start + 1 != range.end {
+            return Some(Expr::Unknown(tokens[start].span.clone()));
+        }
+        let Some(name) = ident_name(&tokens[range.start]) else {
+            return Some(Expr::Unknown(tokens[start].span.clone()));
+        };
+        params.push(name.to_string());
+    }
+
+    let mut cursor = params_close + 1;
+    if !tokens
+        .get(cursor)
+        .is_some_and(|token| token.is_ident_text("captures"))
+    {
+        return Some(Expr::Unknown(tokens[start].span.clone()));
+    }
+    let captures_open = cursor + 1;
+    if !tokens
+        .get(captures_open)
+        .is_some_and(|token| token.symbol("("))
+    {
+        return Some(Expr::Unknown(tokens[start].span.clone()));
+    }
+    let Some(captures_close) = find_matching(tokens, captures_open, "(", ")") else {
+        return Some(Expr::Unknown(tokens[start].span.clone()));
+    };
+    let Some(captures) = parse_closure_captures(tokens, captures_open + 1, captures_close) else {
+        return Some(Expr::Unknown(tokens[start].span.clone()));
+    };
+    cursor = captures_close + 1;
+
+    let mut declared_effects = Vec::new();
+    if tokens
+        .get(cursor)
+        .is_some_and(|token| token.is_ident_text("effects"))
+    {
+        let effects_open = cursor + 1;
+        if !tokens
+            .get(effects_open)
+            .is_some_and(|token| token.symbol("("))
+        {
+            return Some(Expr::Unknown(tokens[start].span.clone()));
+        }
+        let Some(effects_close) = find_matching(tokens, effects_open, "(", ")") else {
+            return Some(Expr::Unknown(tokens[start].span.clone()));
+        };
+        let Some(effects) = parse_closure_declared_effects(tokens, effects_open + 1, effects_close)
+        else {
+            return Some(Expr::Unknown(tokens[start].span.clone()));
+        };
+        declared_effects = effects;
+        cursor = effects_close + 1;
+    }
+
+    if !tokens.get(cursor).is_some_and(|token| token.symbol("{")) {
+        return Some(Expr::Unknown(tokens[start].span.clone()));
+    }
+    let Some(body_close) = find_matching(tokens, cursor, "{", "}") else {
+        return Some(Expr::Unknown(tokens[start].span.clone()));
+    };
+    if body_close + 1 != end {
+        return Some(Expr::Unknown(tokens[start].span.clone()));
+    }
+
+    Some(Expr::Closure {
+        params,
+        captures,
+        declared_effects,
+        explicit: true,
+        body: parse_block(tokens, cursor, body_close),
+        span: tokens[start].span.clone(),
+    })
+}
+
+fn parse_closure_captures(
+    tokens: &[Token],
+    start: usize,
+    end: usize,
+) -> Option<Vec<crate::syntax::ast::ClosureCapture>> {
+    let mut captures = Vec::new();
+    for range in split_param_ranges(tokens, start, end) {
+        if range.empty_span.is_some() {
+            continue;
+        }
+        if range.start + 2 != range.end {
+            return None;
+        }
+        let effect = parse_data_effect(tokens.get(range.start))?;
+        let name = ident_name(&tokens[range.start + 1])?.to_string();
+        captures.push(crate::syntax::ast::ClosureCapture {
+            effect,
+            name,
+            span: tokens[range.start].span.clone(),
+        });
+    }
+    Some(captures)
+}
+
+fn parse_closure_declared_effects(
+    tokens: &[Token],
+    start: usize,
+    end: usize,
+) -> Option<Vec<String>> {
+    let mut effects = Vec::new();
+    for range in split_param_ranges(tokens, start, end) {
+        if range.empty_span.is_some() {
+            continue;
+        }
+        if range.start + 1 != range.end {
+            return None;
+        }
+        effects.push(ident_name(&tokens[range.start])?.to_string());
+    }
+    Some(effects)
 }
 
 /// Parse receiver-call shorthand: `<effect> receiver.method(args)`

@@ -1,0 +1,155 @@
+fn output_from_process(label: read String, args: read List<String>, output: read ProcessOutput, max_chars: Int) -> fresh ToolAction {
+    let status_text = output.status.to_string()
+    let body = [
+        "command=", label, " ", args.join(" "),
+        "\nexit=", status_text,
+        "\nstdout:\n", output.stdout,
+        "\nstderr:\n", output.stderr,
+    ].join("")
+    let tool_output = output_with_cap(body, max_chars)
+    if output.status != 0 {
+        return ToolAction(response: Some(ToolOutput.error(tool_output.content)), finish: false, abort: false, final_answer: "")
+    }
+    return ToolAction(response: Some(tool_output), finish: false, abort: false, final_answer: "")
+}
+
+fn execute_shell(arguments: read String, config: read AgentConfig) -> fresh ToolAction {
+    let cmd = argument_field(arguments, "cmd", "")
+    if cmd == "" {
+        return ToolAction.error("error: shell requires arguments.cmd")
+    }
+    if shell_command_policy_error(cmd).is_some() {
+        return ToolAction.error("error: use rss_check/rss_cmd instead of shell for RSScript commands")
+    }
+    let timeout_ms = bounded_limit(argument_int(arguments, "timeout_ms", config.request_timeout_ms), config.request_timeout_ms, 300000)
+    let max_chars = bounded_limit(argument_int(arguments, "max_output_chars", 12000), 12000, 50000)
+    let args: List<String> = ["-c", cmd]
+    match Process.run_timeout(command: read "sh", args: read args, timeout_ms: timeout_ms) {
+        Ok(output) => {
+            return output_from_process("sh", args, output, max_chars)
+        }
+        Err(error) => {
+            return ToolAction.error(["error running shell: ", error].join(""))
+        }
+    }
+}
+
+fn shell_command_policy_error(cmd: read String) -> Option<String> {
+    if cmd.starts_with("rss ") || cmd.contains("&& rss ") || cmd.contains("; rss ") || cmd.contains("\nrss ") {
+        return Some("rss command")
+    }
+    if cmd.starts_with("cargo run --") || cmd.contains(" cargo run --") {
+        return Some("rss cargo wrapper command")
+    }
+    return None
+}
+
+fn execute_rss_check(arguments: read String, config: read AgentConfig) -> fresh ToolAction {
+    let path_text = argument_field(arguments, "path", "examples/packages/code-agent")
+    let timeout_ms = bounded_limit(argument_int(arguments, "timeout_ms", 120000), 120000, 300000)
+    match resolve_repo_path(config.repo_root, path_text) {
+        Ok(path) => {
+            let args: List<String> = ["run", "--quiet", "--", "check", path.to_string()]
+            match Process.run_timeout(command: read "cargo", args: read args, timeout_ms: timeout_ms) {
+                Ok(output) => {
+                    return output_from_process("cargo", args, output, 50000)
+                }
+                Err(error) => {
+                    return ToolAction.error(["error running rss_check: ", error].join(""))
+                }
+            }
+        }
+        Err(error) => {
+            return tool_path_error(path_text, error)
+        }
+    }
+}
+
+fn append_json_string_array_argument(args: mut List<String>, arguments: read String, path: read String) -> Unit {
+    match arguments.json_parse() {
+        Ok(root) => {
+            match root.at(path) {
+                Ok(value) => {
+                    match value.array_strings() {
+                        Ok(items) => {
+                            mut args.append(items)
+                        }
+                        Err => {
+                        }
+                    }
+                }
+                Err => {
+                }
+            }
+        }
+        Err => {
+        }
+    }
+}
+
+fn execute_rss_cmd(arguments: read String, config: read AgentConfig) -> fresh ToolAction {
+    let command = argument_field(arguments, "command", "")
+    if command == "" {
+        return ToolAction.error("error: rss_cmd requires arguments.command")
+    }
+    if rss_command_allowed(command) == false {
+        return ToolAction.error("error: rss_cmd command must be check, lint, fmt, test, or pkg")
+    }
+    let timeout_ms = bounded_limit(argument_int(arguments, "timeout_ms", 120000), 120000, 300000)
+    let max_chars = bounded_limit(argument_int(arguments, "max_output_chars", 20000), 20000, 50000)
+    let mut args: List<String> = ["run", "--quiet", "--", command]
+    append_json_string_array_argument(mut args, arguments, "args")
+    let path_text = argument_field(arguments, "path", "")
+    if path_text != "" {
+        match resolve_repo_path(config.repo_root, path_text) {
+            Ok(path) => {
+                mut args.push(path.to_string())
+            }
+            Err(error) => {
+                return tool_path_error(path_text, error)
+            }
+        }
+    }
+    match Process.run_timeout(command: read "cargo", args: read args, timeout_ms: timeout_ms) {
+        Ok(output) => {
+            return output_from_process("cargo", args, output, max_chars)
+        }
+        Err(error) => {
+            return ToolAction.error(["error running rss_cmd: ", error].join(""))
+        }
+    }
+}
+
+fn rss_command_allowed(command: read String) -> Bool {
+    return command == "check" || command == "lint" || command == "fmt" || command == "test" || command == "pkg"
+}
+
+fn execute_rss_ide(arguments: read String, config: read AgentConfig) -> fresh ToolAction {
+    let query = argument_field(arguments, "query", "")
+    let max_results = bounded_limit(argument_int(arguments, "max_results", 20), 20, 100)
+    if query == "" {
+        return ToolAction.error("error: rss_ide requires arguments.query")
+    }
+    let index_path = config.repo_root.join("schemas/core-package-index.json")
+    match index_path.read_string() {
+        Ok(index) => {
+            let mut matches = List<String>.new()
+            let lines = index.lines()
+            for line in lines {
+                if matches.len() < max_results && line.contains(query) {
+                    mut matches.push(line.trim())
+                }
+            }
+            let body = {"ok": true, "query": query, "matches": matches.to_json_strings(), "count": matches.len()}
+            return ToolAction.respond(body.to_string())
+        }
+        Err(error) => {
+            return ToolAction.error(["error reading core index: ", error.message()].join(""))
+        }
+    }
+}
+
+fn execute_finish(arguments: read String) -> fresh ToolAction {
+    let answer = argument_field(arguments, "answer", "")
+    return ToolAction.finish(answer)
+}

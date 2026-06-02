@@ -308,6 +308,13 @@ impl DataEffect {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClosureCapture {
+    pub effect: DataEffect,
+    pub name: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EffectDecl {
     Name(String),
     Retains(String),
@@ -539,6 +546,9 @@ pub enum Expr {
     },
     Closure {
         params: Vec<String>,
+        captures: Vec<ClosureCapture>,
+        declared_effects: Vec<String>,
+        explicit: bool,
         body: Block,
         span: Span,
     },

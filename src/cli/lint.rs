@@ -3,8 +3,8 @@ use std::process::ExitCode;
 
 use rsscript::{
     analyze_source_with_interfaces, analyze_source_with_interfaces_without_core,
-    analyze_source_without_core, format_diagnostics_human, format_diagnostics_json, lint_source,
-    standard_package_interfaces,
+    analyze_source_without_core, format_diagnostics_human, format_diagnostics_json_with_source,
+    lint_source, standard_package_interfaces,
 };
 
 use super::check::parse_check_args;
@@ -54,7 +54,10 @@ pub(crate) fn run_lint(args: &[String]) -> ExitCode {
     diagnostics.extend(lint_source(path, &source));
 
     if options.json {
-        println!("{}", format_diagnostics_json(&diagnostics));
+        println!(
+            "{}",
+            format_diagnostics_json_with_source(&source, &diagnostics)
+        );
     } else if diagnostics.is_empty() {
         println!("{path}: lint ok");
     } else {

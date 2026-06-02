@@ -6,7 +6,10 @@ use crate::hir::{
     CallResolution, FieldInfo, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirMatchArm, HirStmt,
     HirTypeKind, ParamEffect, ResolvedCalleeKind,
 };
-use crate::syntax::ast::{Callee, Expr, FunctionDecl, Item, MatchLiteral, MatchPattern, TypeRef};
+use crate::syntax::ast::{
+    Block as SyntaxBlock, Callee, DataEffect, Expr, FunctionDecl, Item, MatchLiteral, MatchPattern,
+    Stmt as SyntaxStmt, TypeRef,
+};
 
 use super::local::{
     BodyState, FreshReturnIssue, FreshReturnIssueKind, LocalAnalysis, ManagedToLocalUse, MovedUse,
@@ -31,6 +34,7 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
         .collect();
 
     for function in functions {
+        check_explicit_closure_capture_effects_syntax(analyzer, &function);
         analyzer.async_let_names.clear();
         let hir_body = analyzer.hir.function_body(&function.name).cloned();
         let local_analysis = LocalAnalysis::new(hir_body.as_ref());
@@ -54,6 +58,8 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
                     .map(|binding| (binding.name.clone(), binding.kind))
                     .collect();
                 check_lazy_factory_captures_block(analyzer, block, &bindings);
+                let binding_names = bindings.keys().cloned().collect::<HashSet<_>>();
+                check_explicit_closure_captures_block(analyzer, block, &binding_names);
             }
         }
         let mut state = local_analysis.initial_state();
@@ -75,6 +81,236 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
     }
 }
 
+fn check_explicit_closure_captures_block(
+    analyzer: &mut Analyzer<'_>,
+    block: &HirBlock,
+    binding_names: &HashSet<String>,
+) {
+    for statement in &block.statements {
+        check_explicit_closure_captures_stmt(analyzer, statement, binding_names);
+    }
+}
+
+fn check_explicit_closure_captures_stmt(
+    analyzer: &mut Analyzer<'_>,
+    statement: &HirStmt,
+    binding_names: &HashSet<String>,
+) {
+    match statement {
+        HirStmt::Let { value, .. } => {
+            if let Some(value) = value {
+                check_explicit_closure_captures_expr(analyzer, value, binding_names);
+            }
+        }
+        HirStmt::Return { value, .. } => {
+            if let Some(value) = value {
+                check_explicit_closure_captures_expr(analyzer, value, binding_names);
+            }
+        }
+        HirStmt::With { resource, body, .. } => {
+            check_explicit_closure_captures_expr(analyzer, resource, binding_names);
+            check_explicit_closure_captures_block(analyzer, body, binding_names);
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            check_explicit_closure_captures_expr(analyzer, condition, binding_names);
+            check_explicit_closure_captures_block(analyzer, then_body, binding_names);
+            if let Some(else_body) = else_body {
+                check_explicit_closure_captures_block(analyzer, else_body, binding_names);
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                check_explicit_closure_captures_expr(analyzer, condition, binding_names);
+            }
+            check_explicit_closure_captures_block(analyzer, body, binding_names);
+        }
+        HirStmt::For { iterable, body, .. } => {
+            check_explicit_closure_captures_expr(analyzer, iterable, binding_names);
+            check_explicit_closure_captures_block(analyzer, body, binding_names);
+        }
+        HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                check_explicit_closure_captures_expr(analyzer, &arm.operation, binding_names);
+                check_explicit_closure_captures_block(analyzer, &arm.body, binding_names);
+            }
+        }
+        HirStmt::Match { value, arms, .. } => {
+            check_explicit_closure_captures_expr(analyzer, value, binding_names);
+            for arm in arms {
+                check_explicit_closure_captures_block(analyzer, &arm.body, binding_names);
+            }
+        }
+        HirStmt::Expr(expr) => check_explicit_closure_captures_expr(analyzer, expr, binding_names),
+        HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn check_explicit_closure_captures_expr(
+    analyzer: &mut Analyzer<'_>,
+    expr: &HirExpr,
+    binding_names: &HashSet<String>,
+) {
+    match expr {
+        HirExpr::Closure {
+            params,
+            captures,
+            body,
+            explicit,
+            ..
+        } => {
+            if *explicit {
+                check_one_explicit_closure_capture_contract(
+                    analyzer,
+                    params,
+                    captures,
+                    body,
+                    binding_names,
+                );
+            }
+            check_explicit_closure_captures_block(analyzer, body, binding_names);
+        }
+        HirExpr::Binary { left, right, .. } => {
+            check_explicit_closure_captures_expr(analyzer, left, binding_names);
+            check_explicit_closure_captures_expr(analyzer, right, binding_names);
+        }
+        HirExpr::Field { base, .. } => {
+            check_explicit_closure_captures_expr(analyzer, base, binding_names);
+        }
+        HirExpr::Index { base, index, .. } => {
+            check_explicit_closure_captures_expr(analyzer, base, binding_names);
+            check_explicit_closure_captures_expr(analyzer, index, binding_names);
+        }
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                check_explicit_closure_captures_expr(analyzer, &arg.value, binding_names);
+            }
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. } => {
+            check_explicit_closure_captures_expr(analyzer, value, binding_names);
+        }
+        HirExpr::Match { value, arms, .. } => {
+            check_explicit_closure_captures_expr(analyzer, value, binding_names);
+            for arm in arms {
+                check_explicit_closure_captures_block(analyzer, &arm.body, binding_names);
+            }
+        }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                check_explicit_closure_captures_expr(analyzer, &entry.key, binding_names);
+                check_explicit_closure_captures_expr(analyzer, &entry.value, binding_names);
+            }
+        }
+        HirExpr::ObjectLiteral { fields, .. } => {
+            for field in fields {
+                check_explicit_closure_captures_expr(analyzer, &field.value, binding_names);
+            }
+        }
+        HirExpr::ArrayLiteral { items, .. } => {
+            for item in items {
+                check_explicit_closure_captures_expr(analyzer, item, binding_names);
+            }
+        }
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn check_one_explicit_closure_capture_contract(
+    analyzer: &mut Analyzer<'_>,
+    params: &[String],
+    captures: &[crate::hir::HirClosureCapture],
+    body: &HirBlock,
+    binding_names: &HashSet<String>,
+) {
+    let param_names = params.iter().cloned().collect::<HashSet<_>>();
+    let declared = captures
+        .iter()
+        .map(|capture| (capture.name.clone(), (capture.effect, capture.span.clone())))
+        .collect::<HashMap<_, _>>();
+    let actual = explicit_closure_actual_captures(body, &param_names, binding_names);
+
+    for (name, effect) in &actual {
+        match declared.get(name) {
+            Some((declared_effect, span)) if declared_effect != effect => {
+                explicit_closure_capture_contract_diagnostic(
+                    analyzer,
+                    name,
+                    *declared_effect,
+                    *effect,
+                    span.clone(),
+                );
+            }
+            Some(_) => {}
+            None => {
+                explicit_closure_missing_capture_diagnostic(
+                    analyzer,
+                    name,
+                    *effect,
+                    body.span.clone(),
+                );
+            }
+        }
+    }
+    for (name, (_, span)) in declared {
+        if !actual.contains_key(&name) {
+            explicit_closure_unused_capture_diagnostic(analyzer, &name, span);
+        }
+    }
+}
+
+fn explicit_closure_actual_captures(
+    body: &HirBlock,
+    params: &HashSet<String>,
+    binding_names: &HashSet<String>,
+) -> HashMap<String, ParamEffect> {
+    let mut uses = HashSet::new();
+    collect_block_uses(body, &mut uses);
+    for param in params {
+        uses.remove(param);
+    }
+    let mut actual = uses
+        .into_iter()
+        .filter(|name| binding_names.contains(name))
+        .map(|name| (name, ParamEffect::Read))
+        .collect::<HashMap<_, _>>();
+
+    let bound = params.clone();
+    let mut accesses = Vec::new();
+    collect_closure_effect_accesses_block(body, &bound, &mut accesses);
+    for access in accesses {
+        if binding_names.contains(&access.path.base) {
+            let current = actual
+                .get(&access.path.base)
+                .copied()
+                .unwrap_or(ParamEffect::Read);
+            let next = strongest_capture_effect(current, access.effect);
+            actual.insert(access.path.base, next);
+        }
+    }
+    actual
+}
+
+fn strongest_capture_effect(left: ParamEffect, right: ParamEffect) -> ParamEffect {
+    match (left, right) {
+        (ParamEffect::Take, _) | (_, ParamEffect::Take) => ParamEffect::Take,
+        (ParamEffect::Mut, _) | (_, ParamEffect::Mut) => ParamEffect::Mut,
+        _ => ParamEffect::Read,
+    }
+}
+
 fn check_local_class_bindings(analyzer: &mut Analyzer<'_>, body: &crate::hir::HirFunctionBody) {
     for binding in &body.bindings {
         if binding.kind == HirBindingKind::LocalLet
@@ -84,6 +320,604 @@ fn check_local_class_bindings(analyzer: &mut Analyzer<'_>, body: &crate::hir::Hi
         {
             local_class_binding_diagnostic(analyzer, &binding.name, binding.span.clone());
         }
+    }
+}
+
+fn check_explicit_closure_capture_effects_syntax(
+    analyzer: &mut Analyzer<'_>,
+    function: &FunctionDecl,
+) {
+    let mut binding_names = function
+        .params
+        .iter()
+        .map(|param| param.name.clone())
+        .collect::<HashSet<_>>();
+    collect_syntax_block_bindings(&function.body, &mut binding_names);
+    check_explicit_closure_capture_effects_syntax_block(analyzer, &function.body, &binding_names);
+}
+
+fn collect_syntax_block_bindings(block: &SyntaxBlock, names: &mut HashSet<String>) {
+    for statement in &block.statements {
+        match statement {
+            SyntaxStmt::Let(stmt) => {
+                names.insert(stmt.name.clone());
+                if let Some(value) = &stmt.value {
+                    collect_syntax_expr_bindings(value, names);
+                }
+            }
+            SyntaxStmt::LetElse(stmt) => {
+                names.insert(stmt.binding_name.clone());
+                collect_syntax_expr_bindings(&stmt.value, names);
+                collect_syntax_block_bindings(&stmt.else_body, names);
+            }
+            SyntaxStmt::With(stmt) => {
+                names.insert(stmt.binding.clone());
+                collect_syntax_expr_bindings(&stmt.resource, names);
+                collect_syntax_block_bindings(&stmt.body, names);
+            }
+            SyntaxStmt::If(stmt) => {
+                collect_syntax_expr_bindings(&stmt.condition, names);
+                collect_syntax_block_bindings(&stmt.then_body, names);
+                if let Some(else_body) = &stmt.else_body {
+                    collect_syntax_block_bindings(else_body, names);
+                }
+            }
+            SyntaxStmt::Loop(stmt) => {
+                if let Some(condition) = &stmt.condition {
+                    collect_syntax_expr_bindings(condition, names);
+                }
+                collect_syntax_block_bindings(&stmt.body, names);
+            }
+            SyntaxStmt::For(stmt) => {
+                names.insert(stmt.binding.clone());
+                collect_syntax_expr_bindings(&stmt.iterable, names);
+                collect_syntax_block_bindings(&stmt.body, names);
+            }
+            SyntaxStmt::Match(stmt) => {
+                collect_syntax_expr_bindings(&stmt.value, names);
+                for arm in &stmt.arms {
+                    collect_syntax_block_bindings(&arm.body, names);
+                }
+            }
+            SyntaxStmt::TaskGroup(stmt) => collect_syntax_block_bindings(&stmt.body, names),
+            SyntaxStmt::Select(stmt) => {
+                for arm in &stmt.arms {
+                    if arm.binding != "_" {
+                        names.insert(arm.binding.clone());
+                    }
+                    collect_syntax_expr_bindings(&arm.operation, names);
+                    collect_syntax_block_bindings(&arm.body, names);
+                }
+            }
+            SyntaxStmt::Assign(stmt) => {
+                collect_syntax_expr_bindings(&stmt.target, names);
+                collect_syntax_expr_bindings(&stmt.value, names);
+            }
+            SyntaxStmt::Return(stmt) => {
+                if let Some(value) = &stmt.value {
+                    collect_syntax_expr_bindings(value, names);
+                }
+            }
+            SyntaxStmt::Expr(expr) => collect_syntax_expr_bindings(expr, names),
+            SyntaxStmt::MalformedWith(_)
+            | SyntaxStmt::MalformedIf(_)
+            | SyntaxStmt::MalformedLoop(_)
+            | SyntaxStmt::MalformedFor(_)
+            | SyntaxStmt::MalformedMatch(_)
+            | SyntaxStmt::Break(_)
+            | SyntaxStmt::Continue(_)
+            | SyntaxStmt::Unknown(_) => {}
+        }
+    }
+}
+
+fn collect_syntax_expr_bindings(expr: &Expr, names: &mut HashSet<String>) {
+    match expr {
+        Expr::Closure { body, .. } => collect_syntax_block_bindings(body, names),
+        Expr::Binary { left, right, .. } => {
+            collect_syntax_expr_bindings(left, names);
+            collect_syntax_expr_bindings(right, names);
+        }
+        Expr::Field { base, .. } => collect_syntax_expr_bindings(base, names),
+        Expr::Index { base, index, .. } => {
+            collect_syntax_expr_bindings(base, names);
+            collect_syntax_expr_bindings(index, names);
+        }
+        Expr::Call { args, .. } => {
+            for arg in args {
+                collect_syntax_expr_bindings(&arg.value, names);
+            }
+        }
+        Expr::Effect { value, .. }
+        | Expr::Manage { value, .. }
+        | Expr::Spawn { value, .. }
+        | Expr::Await { value, .. }
+        | Expr::Try { value, .. } => collect_syntax_expr_bindings(value, names),
+        Expr::Match { value, arms, .. } => {
+            collect_syntax_expr_bindings(value, names);
+            for arm in arms {
+                collect_syntax_block_bindings(&arm.body, names);
+            }
+        }
+        Expr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                collect_syntax_expr_bindings(&entry.key, names);
+                collect_syntax_expr_bindings(&entry.value, names);
+            }
+        }
+        Expr::ObjectLiteral { fields, .. } => {
+            for field in fields {
+                collect_syntax_expr_bindings(&field.value, names);
+            }
+        }
+        Expr::ArrayLiteral { items, .. } => {
+            for item in items {
+                collect_syntax_expr_bindings(item, names);
+            }
+        }
+        Expr::Ident(_, _)
+        | Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::MultilineString(_, _)
+        | Expr::Unknown(_) => {}
+    }
+}
+
+fn check_explicit_closure_capture_effects_syntax_block(
+    analyzer: &mut Analyzer<'_>,
+    block: &SyntaxBlock,
+    binding_names: &HashSet<String>,
+) {
+    for statement in &block.statements {
+        check_explicit_closure_capture_effects_syntax_stmt(analyzer, statement, binding_names);
+    }
+}
+
+fn check_explicit_closure_capture_effects_syntax_stmt(
+    analyzer: &mut Analyzer<'_>,
+    statement: &SyntaxStmt,
+    binding_names: &HashSet<String>,
+) {
+    match statement {
+        SyntaxStmt::Let(stmt) => {
+            if let Some(value) = &stmt.value {
+                check_explicit_closure_capture_effects_syntax_expr(analyzer, value, binding_names);
+            }
+        }
+        SyntaxStmt::LetElse(stmt) => {
+            check_explicit_closure_capture_effects_syntax_expr(
+                analyzer,
+                &stmt.value,
+                binding_names,
+            );
+            check_explicit_closure_capture_effects_syntax_block(
+                analyzer,
+                &stmt.else_body,
+                binding_names,
+            );
+        }
+        SyntaxStmt::Return(stmt) => {
+            if let Some(value) = &stmt.value {
+                check_explicit_closure_capture_effects_syntax_expr(analyzer, value, binding_names);
+            }
+        }
+        SyntaxStmt::With(stmt) => {
+            check_explicit_closure_capture_effects_syntax_expr(
+                analyzer,
+                &stmt.resource,
+                binding_names,
+            );
+            check_explicit_closure_capture_effects_syntax_block(
+                analyzer,
+                &stmt.body,
+                binding_names,
+            );
+        }
+        SyntaxStmt::If(stmt) => {
+            check_explicit_closure_capture_effects_syntax_expr(
+                analyzer,
+                &stmt.condition,
+                binding_names,
+            );
+            check_explicit_closure_capture_effects_syntax_block(
+                analyzer,
+                &stmt.then_body,
+                binding_names,
+            );
+            if let Some(else_body) = &stmt.else_body {
+                check_explicit_closure_capture_effects_syntax_block(
+                    analyzer,
+                    else_body,
+                    binding_names,
+                );
+            }
+        }
+        SyntaxStmt::Loop(stmt) => {
+            if let Some(condition) = &stmt.condition {
+                check_explicit_closure_capture_effects_syntax_expr(
+                    analyzer,
+                    condition,
+                    binding_names,
+                );
+            }
+            check_explicit_closure_capture_effects_syntax_block(
+                analyzer,
+                &stmt.body,
+                binding_names,
+            );
+        }
+        SyntaxStmt::For(stmt) => {
+            check_explicit_closure_capture_effects_syntax_expr(
+                analyzer,
+                &stmt.iterable,
+                binding_names,
+            );
+            check_explicit_closure_capture_effects_syntax_block(
+                analyzer,
+                &stmt.body,
+                binding_names,
+            );
+        }
+        SyntaxStmt::Match(stmt) => {
+            check_explicit_closure_capture_effects_syntax_expr(
+                analyzer,
+                &stmt.value,
+                binding_names,
+            );
+            for arm in &stmt.arms {
+                check_explicit_closure_capture_effects_syntax_block(
+                    analyzer,
+                    &arm.body,
+                    binding_names,
+                );
+            }
+        }
+        SyntaxStmt::TaskGroup(stmt) => {
+            check_explicit_closure_capture_effects_syntax_block(
+                analyzer,
+                &stmt.body,
+                binding_names,
+            );
+        }
+        SyntaxStmt::Select(stmt) => {
+            for arm in &stmt.arms {
+                check_explicit_closure_capture_effects_syntax_expr(
+                    analyzer,
+                    &arm.operation,
+                    binding_names,
+                );
+                check_explicit_closure_capture_effects_syntax_block(
+                    analyzer,
+                    &arm.body,
+                    binding_names,
+                );
+            }
+        }
+        SyntaxStmt::Assign(stmt) => {
+            check_explicit_closure_capture_effects_syntax_expr(
+                analyzer,
+                &stmt.target,
+                binding_names,
+            );
+            check_explicit_closure_capture_effects_syntax_expr(
+                analyzer,
+                &stmt.value,
+                binding_names,
+            );
+        }
+        SyntaxStmt::Expr(expr) => {
+            check_explicit_closure_capture_effects_syntax_expr(analyzer, expr, binding_names);
+        }
+        SyntaxStmt::MalformedWith(_)
+        | SyntaxStmt::MalformedIf(_)
+        | SyntaxStmt::MalformedLoop(_)
+        | SyntaxStmt::MalformedFor(_)
+        | SyntaxStmt::MalformedMatch(_)
+        | SyntaxStmt::Break(_)
+        | SyntaxStmt::Continue(_)
+        | SyntaxStmt::Unknown(_) => {}
+    }
+}
+
+fn check_explicit_closure_capture_effects_syntax_expr(
+    analyzer: &mut Analyzer<'_>,
+    expr: &Expr,
+    binding_names: &HashSet<String>,
+) {
+    match expr {
+        Expr::Closure {
+            captures,
+            explicit,
+            body,
+            ..
+        } => {
+            if *explicit {
+                let actual = syntax_closure_actual_capture_effects(body, binding_names);
+                for capture in captures {
+                    if let Some(actual_effect) = actual.get(&capture.name)
+                        && capture.effect != *actual_effect
+                    {
+                        explicit_closure_capture_contract_diagnostic(
+                            analyzer,
+                            &capture.name,
+                            param_effect_from_data_effect_syntax(capture.effect),
+                            param_effect_from_data_effect_syntax(*actual_effect),
+                            capture.span.clone(),
+                        );
+                    }
+                }
+            }
+            check_explicit_closure_capture_effects_syntax_block(analyzer, body, binding_names);
+        }
+        Expr::Binary { left, right, .. } => {
+            check_explicit_closure_capture_effects_syntax_expr(analyzer, left, binding_names);
+            check_explicit_closure_capture_effects_syntax_expr(analyzer, right, binding_names);
+        }
+        Expr::Field { base, .. } => {
+            check_explicit_closure_capture_effects_syntax_expr(analyzer, base, binding_names);
+        }
+        Expr::Index { base, index, .. } => {
+            check_explicit_closure_capture_effects_syntax_expr(analyzer, base, binding_names);
+            check_explicit_closure_capture_effects_syntax_expr(analyzer, index, binding_names);
+        }
+        Expr::Call { args, .. } => {
+            for arg in args {
+                check_explicit_closure_capture_effects_syntax_expr(
+                    analyzer,
+                    &arg.value,
+                    binding_names,
+                );
+            }
+        }
+        Expr::Effect { value, .. }
+        | Expr::Manage { value, .. }
+        | Expr::Spawn { value, .. }
+        | Expr::Await { value, .. }
+        | Expr::Try { value, .. } => {
+            check_explicit_closure_capture_effects_syntax_expr(analyzer, value, binding_names);
+        }
+        Expr::Match { value, arms, .. } => {
+            check_explicit_closure_capture_effects_syntax_expr(analyzer, value, binding_names);
+            for arm in arms {
+                check_explicit_closure_capture_effects_syntax_block(
+                    analyzer,
+                    &arm.body,
+                    binding_names,
+                );
+            }
+        }
+        Expr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                check_explicit_closure_capture_effects_syntax_expr(
+                    analyzer,
+                    &entry.key,
+                    binding_names,
+                );
+                check_explicit_closure_capture_effects_syntax_expr(
+                    analyzer,
+                    &entry.value,
+                    binding_names,
+                );
+            }
+        }
+        Expr::ObjectLiteral { fields, .. } => {
+            for field in fields {
+                check_explicit_closure_capture_effects_syntax_expr(
+                    analyzer,
+                    &field.value,
+                    binding_names,
+                );
+            }
+        }
+        Expr::ArrayLiteral { items, .. } => {
+            for item in items {
+                check_explicit_closure_capture_effects_syntax_expr(analyzer, item, binding_names);
+            }
+        }
+        Expr::Ident(_, _)
+        | Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::MultilineString(_, _)
+        | Expr::Unknown(_) => {}
+    }
+}
+
+fn syntax_closure_actual_capture_effects(
+    body: &SyntaxBlock,
+    binding_names: &HashSet<String>,
+) -> HashMap<String, DataEffect> {
+    let mut actual = HashMap::new();
+    collect_syntax_capture_effects_block(body, binding_names, &mut actual);
+    actual
+}
+
+fn collect_syntax_capture_effects_block(
+    body: &SyntaxBlock,
+    binding_names: &HashSet<String>,
+    actual: &mut HashMap<String, DataEffect>,
+) {
+    for statement in &body.statements {
+        match statement {
+            SyntaxStmt::Assign(stmt) => {
+                if let Some(name) = syntax_place_base(&stmt.target)
+                    && binding_names.contains(&name)
+                {
+                    merge_syntax_capture_effect(actual, &name, DataEffect::Mut);
+                }
+                collect_syntax_capture_effects_expr(&stmt.target, binding_names, actual);
+                collect_syntax_capture_effects_expr(&stmt.value, binding_names, actual);
+            }
+            SyntaxStmt::Let(stmt) => {
+                if let Some(value) = &stmt.value {
+                    collect_syntax_capture_effects_expr(value, binding_names, actual);
+                }
+            }
+            SyntaxStmt::LetElse(stmt) => {
+                collect_syntax_capture_effects_expr(&stmt.value, binding_names, actual);
+                collect_syntax_capture_effects_block(&stmt.else_body, binding_names, actual);
+            }
+            SyntaxStmt::Return(stmt) => {
+                if let Some(value) = &stmt.value {
+                    collect_syntax_capture_effects_expr(value, binding_names, actual);
+                }
+            }
+            SyntaxStmt::With(stmt) => {
+                collect_syntax_capture_effects_expr(&stmt.resource, binding_names, actual);
+                collect_syntax_capture_effects_block(&stmt.body, binding_names, actual);
+            }
+            SyntaxStmt::If(stmt) => {
+                collect_syntax_capture_effects_expr(&stmt.condition, binding_names, actual);
+                collect_syntax_capture_effects_block(&stmt.then_body, binding_names, actual);
+                if let Some(else_body) = &stmt.else_body {
+                    collect_syntax_capture_effects_block(else_body, binding_names, actual);
+                }
+            }
+            SyntaxStmt::Loop(stmt) => {
+                if let Some(condition) = &stmt.condition {
+                    collect_syntax_capture_effects_expr(condition, binding_names, actual);
+                }
+                collect_syntax_capture_effects_block(&stmt.body, binding_names, actual);
+            }
+            SyntaxStmt::For(stmt) => {
+                collect_syntax_capture_effects_expr(&stmt.iterable, binding_names, actual);
+                collect_syntax_capture_effects_block(&stmt.body, binding_names, actual);
+            }
+            SyntaxStmt::Match(stmt) => {
+                collect_syntax_capture_effects_expr(&stmt.value, binding_names, actual);
+                for arm in &stmt.arms {
+                    collect_syntax_capture_effects_block(&arm.body, binding_names, actual);
+                }
+            }
+            SyntaxStmt::TaskGroup(stmt) => {
+                collect_syntax_capture_effects_block(&stmt.body, binding_names, actual);
+            }
+            SyntaxStmt::Select(stmt) => {
+                for arm in &stmt.arms {
+                    collect_syntax_capture_effects_expr(&arm.operation, binding_names, actual);
+                    collect_syntax_capture_effects_block(&arm.body, binding_names, actual);
+                }
+            }
+            SyntaxStmt::Expr(expr) => {
+                collect_syntax_capture_effects_expr(expr, binding_names, actual);
+            }
+            SyntaxStmt::MalformedWith(_)
+            | SyntaxStmt::MalformedIf(_)
+            | SyntaxStmt::MalformedLoop(_)
+            | SyntaxStmt::MalformedFor(_)
+            | SyntaxStmt::MalformedMatch(_)
+            | SyntaxStmt::Break(_)
+            | SyntaxStmt::Continue(_)
+            | SyntaxStmt::Unknown(_) => {}
+        }
+    }
+}
+
+fn collect_syntax_capture_effects_expr(
+    expr: &Expr,
+    binding_names: &HashSet<String>,
+    actual: &mut HashMap<String, DataEffect>,
+) {
+    match expr {
+        Expr::Ident(name, _) => {
+            if binding_names.contains(name) {
+                merge_syntax_capture_effect(actual, name, DataEffect::Read);
+            }
+        }
+        Expr::Effect { effect, value, .. } => {
+            if let Some(name) = syntax_place_base(value)
+                && binding_names.contains(&name)
+            {
+                merge_syntax_capture_effect(actual, &name, *effect);
+            }
+            collect_syntax_capture_effects_expr(value, binding_names, actual);
+        }
+        Expr::Manage { value, .. } => {
+            if let Some(name) = syntax_place_base(value)
+                && binding_names.contains(&name)
+            {
+                merge_syntax_capture_effect(actual, &name, DataEffect::Take);
+            }
+            collect_syntax_capture_effects_expr(value, binding_names, actual);
+        }
+        Expr::Closure { body, .. } => {
+            collect_syntax_capture_effects_block(body, binding_names, actual);
+        }
+        Expr::Binary { left, right, .. } => {
+            collect_syntax_capture_effects_expr(left, binding_names, actual);
+            collect_syntax_capture_effects_expr(right, binding_names, actual);
+        }
+        Expr::Field { base, .. } => {
+            collect_syntax_capture_effects_expr(base, binding_names, actual)
+        }
+        Expr::Index { base, index, .. } => {
+            collect_syntax_capture_effects_expr(base, binding_names, actual);
+            collect_syntax_capture_effects_expr(index, binding_names, actual);
+        }
+        Expr::Call { args, .. } => {
+            for arg in args {
+                collect_syntax_capture_effects_expr(&arg.value, binding_names, actual);
+            }
+        }
+        Expr::Spawn { value, .. } | Expr::Await { value, .. } | Expr::Try { value, .. } => {
+            collect_syntax_capture_effects_expr(value, binding_names, actual);
+        }
+        Expr::Match { value, arms, .. } => {
+            collect_syntax_capture_effects_expr(value, binding_names, actual);
+            for arm in arms {
+                collect_syntax_capture_effects_block(&arm.body, binding_names, actual);
+            }
+        }
+        Expr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                collect_syntax_capture_effects_expr(&entry.key, binding_names, actual);
+                collect_syntax_capture_effects_expr(&entry.value, binding_names, actual);
+            }
+        }
+        Expr::ObjectLiteral { fields, .. } => {
+            for field in fields {
+                collect_syntax_capture_effects_expr(&field.value, binding_names, actual);
+            }
+        }
+        Expr::ArrayLiteral { items, .. } => {
+            for item in items {
+                collect_syntax_capture_effects_expr(item, binding_names, actual);
+            }
+        }
+        Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::MultilineString(_, _)
+        | Expr::Unknown(_) => {}
+    }
+}
+
+fn syntax_place_base(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Ident(name, _) => Some(name.clone()),
+        Expr::Field { base, .. } | Expr::Index { base, .. } => syntax_place_base(base),
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } => syntax_place_base(value),
+        _ => None,
+    }
+}
+
+fn merge_syntax_capture_effect(
+    actual: &mut HashMap<String, DataEffect>,
+    name: &str,
+    effect: DataEffect,
+) {
+    let current = actual.get(name).copied().unwrap_or(DataEffect::Read);
+    let next = match (current, effect) {
+        (DataEffect::Take, _) | (_, DataEffect::Take) => DataEffect::Take,
+        (DataEffect::Mut, _) | (_, DataEffect::Mut) => DataEffect::Mut,
+        _ => DataEffect::Read,
+    };
+    actual.insert(name.to_string(), next);
+}
+
+fn param_effect_from_data_effect_syntax(effect: DataEffect) -> ParamEffect {
+    match effect {
+        DataEffect::Read => ParamEffect::Read,
+        DataEffect::Mut => ParamEffect::Mut,
+        DataEffect::Take => ParamEffect::Take,
     }
 }
 
@@ -3470,6 +4304,70 @@ fn noescape_consumes_capture_diagnostic(analyzer: &mut Analyzer<'_>, access: &Ca
             "Do not use `take` or `manage` on captured local values inside noescape callbacks.",
             "manual",
         ),
+    );
+}
+
+fn explicit_closure_missing_capture_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    name: &str,
+    actual: ParamEffect,
+    span: Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::CLOSURE_CAPTURE_CONTRACT,
+            format!("closure uses `{name}` without declaring it in captures"),
+            span,
+            "missing closure capture",
+        )
+        .with_cause(
+            "Escaping function values must make every external input explicit in `captures(...)`.",
+        )
+        .with_cause(format!(
+            "Add `captures({} {name})` or remove the external use.",
+            actual.as_str()
+        )),
+    );
+}
+
+fn explicit_closure_unused_capture_diagnostic(analyzer: &mut Analyzer<'_>, name: &str, span: Span) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::CLOSURE_CAPTURE_CONTRACT,
+            format!("closure declares capture `{name}` but does not use it"),
+            span,
+            "unused closure capture",
+        )
+        .with_cause(
+            "A closure capture list is review evidence and must describe the function value's real inputs.",
+        )
+        .with_cause("Remove the capture entry or use the value inside the closure body."),
+    );
+}
+
+fn explicit_closure_capture_contract_diagnostic(
+    analyzer: &mut Analyzer<'_>,
+    name: &str,
+    declared: ParamEffect,
+    actual: ParamEffect,
+    span: Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::CLOSURE_CAPTURE_CONTRACT,
+            format!(
+                "closure capture `{name}` is declared as `{}` but used as `{}`",
+                declared.as_str(),
+                actual.as_str()
+            ),
+            span,
+            "closure capture effect mismatch",
+        )
+        .with_cause("Closure captures use the same read/mut/take ownership vocabulary as parameters.")
+        .with_cause(format!(
+            "Change the capture to `{} {name}` or change the closure body to match the declared access.",
+            actual.as_str()
+        )),
     );
 }
 

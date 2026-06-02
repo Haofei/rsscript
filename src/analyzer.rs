@@ -1232,11 +1232,7 @@ impl Analyzer<'_> {
                     );
                 }
                 for param in &function.params {
-                    self.check_unsupported_syntax_type_ref(
-                        &param.ty,
-                        true,
-                        owned_fn_param_allowed(&function.name, &param.name),
-                    );
+                    self.check_unsupported_syntax_type_ref(&param.ty, true, true);
                 }
                 if let Some(return_ty) = &function.return_ty {
                     self.check_unsupported_syntax_type_ref(return_ty, false, false);
@@ -1535,7 +1531,7 @@ impl Analyzer<'_> {
             self.unsupported_syntax(
                 ty.span.clone(),
                 "unsupported owned position",
-                "`owned Fn(...)` is currently reserved for compiler-owned stored factory contracts such as `ResourcePool.lazy(create: owned Fn(...))`.",
+                "`owned Fn(...)` is only supported as a direct function parameter type.",
             );
         }
         for span in &ty.malformed_arg_spans {
@@ -5755,13 +5751,6 @@ fn type_ref_is_noescape(ty: &TypeRef) -> bool {
 
 fn type_ref_is_owned(ty: &TypeRef) -> bool {
     ty.is_owned || ty.args.iter().any(type_ref_is_owned)
-}
-
-fn owned_fn_param_allowed(function_name: &str, param_name: &str) -> bool {
-    matches!(
-        (function_name, param_name),
-        ("ResourcePool.lazy" | "ResourcePool.try_lazy", "create")
-    )
 }
 
 fn type_ref_is_copy(ty: &TypeRef) -> bool {

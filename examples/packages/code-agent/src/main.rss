@@ -24,8 +24,13 @@ async fn main() -> Result<Unit, HttpError> {
             state.finished = true
         } else {
             Log.trace(event: read "agent.response", message: read response)
+            Log.write_json(value: read response_usage(response))
             let tool_result = execute_tool_calls(response, state.messages, config)
-            if tool_result.called_tool == false {
+            if tool_result.finished {
+                Log.trace(event: read "turn.completed", message: read tool_result.final_answer)
+                Log.write(message: read tool_result.final_answer)
+                state.finished = true
+            } else if tool_result.called_tool == false {
                 let content = response_content(response)
                 Log.trace(event: read "turn.completed", message: read content)
                 Log.write(message: read content)

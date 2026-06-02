@@ -67,9 +67,10 @@ fn agent_config_from_env() -> fresh AgentConfig {
 
 fn default_agent_task() -> String {
     return """Read examples/packages/code-agent/AGENTS.md and schemas/core-package-index.json.
-Use the index to find the file IO API, read the relevant core interface, then write target/rsscript-agent-read-file.rss containing a concise RSScript function that reads a UTF-8 file with File.read_string.
-After writing, call check_rss_file for target/rsscript-agent-read-file.rss.
-If the check passes, finish with a short summary."""
+Use rss_ide to find the file IO API, then read the relevant core interface.
+Write target/rsscript-agent-read-file.rss containing a concise RSScript function that reads a UTF-8 file with File.read_string.
+After writing, call rss_check for examples/packages/code-agent.
+If the check passes, call finish with a short summary."""
 }
 
 fn agent_task_from_env() -> fresh String {

@@ -85,6 +85,7 @@ pub mod code {
     pub const NOESCAPE_CALLBACK_ESCAPE: &str = "RS0802";
     pub const LOCAL_CLOSURE_ESCAPE: &str = "RS0803";
     pub const NOESCAPE_CONSUMES_CAPTURE: &str = "RS0804";
+    pub const CLOSURE_CAPTURE_CONTRACT: &str = "RS0805";
     pub const TAKE_HANDLE_FIELD: &str = "RS0901";
     pub const INVALID_WEAK_FIELD: &str = "RS0902";
     pub const WEAK_FIELD_REQUIRES_UPGRADE: &str = "RS0903";
@@ -840,6 +841,14 @@ pub fn format_diagnostics_json(diagnostics: &[Diagnostic]) -> String {
     serde_json::to_string(&diagnostics).expect("diagnostic JSON serialization should not fail")
 }
 
+pub fn format_diagnostics_json_with_source(source: &str, diagnostics: &[Diagnostic]) -> String {
+    let diagnostics = diagnostics
+        .iter()
+        .map(|diagnostic| JsonDiagnosticWithSource::new(diagnostic, source))
+        .collect::<Vec<_>>();
+    serde_json::to_string(&diagnostics).expect("diagnostic JSON serialization should not fail")
+}
+
 #[derive(Serialize)]
 struct JsonDiagnostic<'a> {
     code: &'a str,
@@ -851,12 +860,39 @@ struct JsonDiagnostic<'a> {
 }
 
 #[derive(Serialize)]
+struct JsonDiagnosticWithSource<'a> {
+    code: &'a str,
+    severity: &'a str,
+    summary: &'a str,
+    primary_span: JsonSpan<'a>,
+    spans: Vec<JsonSpan<'a>>,
+    source_context: Option<JsonSourceContext>,
+    causes: &'a [String],
+    fixes: &'a [Fix],
+    explanation: Option<JsonDiagnosticExplanation>,
+}
+
+#[derive(Serialize)]
 struct JsonSpan<'a> {
     file: &'a str,
     line: usize,
     column: usize,
     length: usize,
     label: &'a str,
+}
+
+#[derive(Serialize)]
+struct JsonSourceContext {
+    line: usize,
+    text: String,
+    start_column: usize,
+    end_column: usize,
+}
+
+#[derive(Serialize)]
+struct JsonDiagnosticExplanation {
+    title: &'static str,
+    explanation: &'static str,
 }
 
 impl<'a> From<&'a Diagnostic> for JsonDiagnostic<'a> {
@@ -876,6 +912,51 @@ impl<'a> From<&'a Diagnostic> for JsonDiagnostic<'a> {
             fixes: &diagnostic.fixes,
         }
     }
+}
+
+impl<'a> JsonDiagnosticWithSource<'a> {
+    fn new(diagnostic: &'a Diagnostic, source: &str) -> Self {
+        let primary_span = JsonSpan::from_diagnostic(diagnostic);
+        let explanation = explain_diagnostic_code(&diagnostic.code).map(|explanation| {
+            JsonDiagnosticExplanation {
+                title: explanation.title,
+                explanation: explanation.explanation,
+            }
+        });
+        Self {
+            code: &diagnostic.code,
+            severity: diagnostic.severity.as_str(),
+            summary: &diagnostic.summary,
+            primary_span,
+            spans: vec![JsonSpan::from_diagnostic(diagnostic)],
+            source_context: source_context_for_span(source, &diagnostic.span),
+            causes: &diagnostic.causes,
+            fixes: &diagnostic.fixes,
+            explanation,
+        }
+    }
+}
+
+impl<'a> JsonSpan<'a> {
+    fn from_diagnostic(diagnostic: &'a Diagnostic) -> Self {
+        Self {
+            file: &diagnostic.span.file,
+            line: diagnostic.span.line,
+            column: diagnostic.span.column,
+            length: diagnostic.span.length,
+            label: &diagnostic.label,
+        }
+    }
+}
+
+fn source_context_for_span(source: &str, span: &Span) -> Option<JsonSourceContext> {
+    let text = source.lines().nth(span.line.checked_sub(1)?)?.to_string();
+    Some(JsonSourceContext {
+        line: span.line,
+        text,
+        start_column: span.column,
+        end_column: span.column + span.length.max(1),
+    })
 }
 
 #[cfg(test)]
@@ -945,5 +1026,40 @@ mod tests {
         // No gutter line; caret-only fallback with the label inline.
         assert!(!rendered.contains(" | "));
         assert!(rendered.contains("  ^^^^ not in scope"));
+    }
+
+    #[test]
+    fn json_with_source_includes_structured_context_and_explanation() {
+        let diagnostic = Diagnostic::error(
+            code::UNKNOWN_BINDING,
+            "unknown binding `missing`",
+            Span {
+                file: "diag.rss".to_string(),
+                line: 2,
+                column: 12,
+                length: 7,
+            },
+            "not in scope",
+        )
+        .with_cause("binding must be declared before use")
+        .with_fix("declare_binding", "Declare `missing`.", "manual");
+
+        let json = format_diagnostics_json_with_source(
+            "fn run() -> Unit {\n    return missing\n}\n",
+            &[diagnostic],
+        );
+        let value: serde_json::Value =
+            serde_json::from_str(&json).expect("diagnostic JSON should parse");
+        let first = &value[0];
+
+        assert_eq!(first["code"], code::UNKNOWN_BINDING);
+        assert_eq!(first["primary_span"]["file"], "diag.rss");
+        assert_eq!(first["primary_span"]["line"], 2);
+        assert_eq!(first["source_context"]["text"], "    return missing");
+        assert_eq!(first["source_context"]["start_column"], 12);
+        assert_eq!(first["source_context"]["end_column"], 19);
+        assert_eq!(first["causes"][0], "binding must be declared before use");
+        assert_eq!(first["fixes"][0]["kind"], "declare_binding");
+        assert_eq!(first["explanation"]["title"], "unknown binding");
     }
 }

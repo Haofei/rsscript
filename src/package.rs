@@ -40,6 +40,36 @@ use source_set::{LoadedPackage, Manifest, ManifestNativeRust, PackageSource};
 pub use types::*;
 pub use vendor::vendor_package_dir;
 
+pub fn package_sources(package_dir: &Path) -> Result<Vec<PackageSourceFile>, String> {
+    let package = source_set::load_package(package_dir)?;
+    Ok(package_source_files(package.sources))
+}
+
+pub fn package_sources_with_dependency_interfaces(
+    package_dir: &Path,
+) -> Result<Vec<PackageSourceFile>, String> {
+    let package = source_set::load_package(package_dir)?;
+    let mut sources = package.sources;
+    sources.extend(collect_dependency_interface_sources(
+        package_dir,
+        &package.manifest,
+    )?);
+    sources.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(package_source_files(sources))
+}
+
+fn package_source_files(sources: Vec<PackageSource>) -> Vec<PackageSourceFile> {
+    sources
+        .into_iter()
+        .map(|source| PackageSourceFile {
+            path: source.path,
+            relative_path: source.relative_path,
+            contents: source.contents,
+            kind: source.kind,
+        })
+        .collect()
+}
+
 fn relative_path(base: &Path, path: &Path) -> String {
     path.strip_prefix(base)
         .unwrap_or(path)
