@@ -1,0 +1,14 @@
+version = 1
+
+[[package]]
+name = "rss-async"
+version = "0.1.0"
+source = "path+rss/async"
+checksum = "sha256:db57781b9e685fa2106408b347386ec254054102ad9596bd88cc26a96bab87b9"
+interface_hash = "sha256:3f45f6e1b6f9da848527aeff030887b68b7c05eb0bc38c682cea24a08c1fba06"
+review_hash = "sha256:70be93fe114cdd3b83e952ae99df838dc2dbbbb5d334aa8349fbd64a59a66860"
+features = []
+
+[metadata]
+rss_version = "0.1.0"
+created_by = "rsscript pkg"

@@ -1,27 +1,30 @@
+// Default signatures visible to single-file checks and Rust lowering. This
+// includes language/core interfaces plus standard package contracts that are
+// still prelude-visible while package imports mature.
 pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
     (
-        "core/async/cancellation.rssi",
-        include_str!("../core/async/cancellation.rssi"),
+        "rss/async/interface/cancellation.rssi",
+        include_str!("../rss/async/interface/cancellation.rssi"),
     ),
     (
-        "core/async/deadline.rssi",
-        include_str!("../core/async/deadline.rssi"),
+        "rss/async/interface/channel.rssi",
+        include_str!("../rss/async/interface/channel.rssi"),
     ),
     (
-        "core/async/task.rssi",
-        include_str!("../core/async/task.rssi"),
+        "rss/async/interface/deadline.rssi",
+        include_str!("../rss/async/interface/deadline.rssi"),
     ),
     (
-        "core/async/stream.rssi",
-        include_str!("../core/async/stream.rssi"),
+        "rss/async/interface/stream.rssi",
+        include_str!("../rss/async/interface/stream.rssi"),
     ),
     (
-        "core/async/timer.rssi",
-        include_str!("../core/async/timer.rssi"),
+        "rss/async/interface/task.rssi",
+        include_str!("../rss/async/interface/task.rssi"),
     ),
     (
-        "core/channel/channel.rssi",
-        include_str!("../core/channel/channel.rssi"),
+        "rss/async/interface/timer.rssi",
+        include_str!("../rss/async/interface/timer.rssi"),
     ),
     (
         "core/capability/capability.rssi",

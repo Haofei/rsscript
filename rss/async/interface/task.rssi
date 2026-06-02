@@ -1,0 +1,5 @@
+// `Task.cancellation_token()` returns the cancellation token of the lexically
+// enclosing `task_group` scope. The group owns the cancel capability; this
+// hands out only the observation token.
+
+pub fn Task.cancellation_token() -> fresh CancellationToken

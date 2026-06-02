@@ -1,0 +1,20 @@
+features: native, local
+
+// Structured cancellation split into a cancel capability and a read-only
+// observation token. The language/runtime owns propagation through task_group;
+// this package exposes the explicit API.
+
+struct CancellationSource
+struct CancellationToken
+
+pub native fn CancellationSource.new() -> fresh CancellationSource
+    effects(native)
+
+pub native fn CancellationSource.token(source: read CancellationSource) -> fresh CancellationToken
+    effects(native)
+
+pub native fn CancellationSource.cancel(source: mut CancellationSource) -> Unit
+    effects(native)
+
+pub native fn CancellationToken.is_cancelled(token: read CancellationToken) -> Bool
+    effects(native)

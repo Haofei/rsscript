@@ -12,4 +12,4 @@ When extending it:
 6. Keep dynamic tool dispatch behind `ToolRuntime.execute`.
 7. Do not add `features: native` or `features: local` to the agent source.
 
-For RSScript APIs, read this file and `schemas/core-package-index.json`, then open the exact `core/**/*.rssi` file named by the index.
+For RSScript APIs, read this file and `schemas/core-package-index.json`, then open the exact `.rssi` file named by the index. Built-in language/core signatures live under `core/`; standard packages such as `rss-async` live under `rss/*/interface/`.

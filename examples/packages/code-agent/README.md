@@ -42,7 +42,7 @@ network behavior are not hard-coded:
   are appended as `role=tool` messages with the original tool call id, not as
   natural-language transcript text.
 - **Discovery tools**: `list_files` and `search_text` let the model find source
-  files and core interfaces before it reads or edits.
+  files and indexed interfaces before it reads or edits.
 - **Write sandbox**: `write_file` only writes under `AGENT_WORKSPACE_ROOT`, and
   tools reject absolute paths and `..` traversal. Write results include
   `old_bytes`, `new_bytes`, and `changed`.
@@ -53,4 +53,4 @@ network behavior are not hard-coded:
 - **Budget**: when the step budget is exhausted before the task finishes, the
   agent emits a `turn.budget_exhausted` event.
 
-The agent should not guess RSScript APIs. It reads `examples/packages/code-agent/AGENTS.md`, then `schemas/core-package-index.json`, then the relevant `core/**/*.rssi` files before writing RSScript code.
+The agent should not guess RSScript APIs. It reads `examples/packages/code-agent/AGENTS.md`, then `schemas/core-package-index.json`, then the relevant indexed `.rssi` files under `core/` or `rss/*/interface/` before writing RSScript code.

@@ -1,19 +1,9 @@
 features: async, native, local
 
-// Bounded MPSC channel — explicit endpoints, explicit waiting, explicit
-// ownership transfer. `Channel.bounded` is the factory; `sender(read channel)`
-// hands out multiple producers; `receiver(mut channel)` is a one-time take of
-// the single consumer. `send`/`recv` are async (they wait when full/empty); the
-// `*_cancellable` variants take a `CancellationToken` to bound the wait. Values
-// move into the channel via `take T`.
-//
-// Note: `ChannelError` is an opaque error for now (use `ChannelError.message`
-// or `?` propagation); matching `Closed`/`Cancelled`/`InvalidCapacity` variants
-// is deferred. Receiver is single-consumer (no clone); unbounded/broadcast
-// variants are out of scope for this first version.
+// Bounded MPSC channel: explicit endpoints, explicit waiting, and explicit
+// ownership transfer. Values move into the channel via `take T`.
 
 struct ChannelError
-
 struct Channel<T>
 struct Sender<T>
 struct Receiver<T>
@@ -27,7 +17,10 @@ pub native fn Channel.sender<T>(channel: read Channel<T>) -> fresh Sender<T>
 pub native fn Channel.receiver<T>(channel: mut Channel<T>) -> Result<fresh Receiver<T>, ChannelError>
     effects(native)
 
-pub async native fn Sender.send<T>(sender: read Sender<T>, value: take T) -> Result<Unit, ChannelError>
+pub async native fn Sender.send<T>(
+    sender: read Sender<T>,
+    value: take T,
+) -> Result<Unit, ChannelError>
     effects(native)
 
 pub async native fn Sender.send_cancellable<T>(
