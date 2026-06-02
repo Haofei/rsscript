@@ -252,6 +252,12 @@ fn check_operator_overload_attempts_in_expr(analyzer: &mut Analyzer<'_>, expr: &
                 check_operator_overload_attempts_in_block(analyzer, &arm.body);
             }
         }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                check_operator_overload_attempts_in_expr(analyzer, &entry.key);
+                check_operator_overload_attempts_in_expr(analyzer, &entry.value);
+            }
+        }
         HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Ident { .. }
@@ -402,7 +408,8 @@ fn inferred_operand_type<'a>(analyzer: &'a Analyzer<'_>, expr: &'a HirExpr) -> O
         | HirExpr::Spawn { type_name, .. }
         | HirExpr::Await { type_name, .. }
         | HirExpr::Try { type_name, .. }
-        | HirExpr::Match { type_name, .. } => type_name.as_deref(),
+        | HirExpr::Match { type_name, .. }
+        | HirExpr::MapLiteral { type_name, .. } => type_name.as_deref(),
         HirExpr::Field { access, .. } => access.type_name.as_deref(),
         HirExpr::Binary { .. }
         | HirExpr::Index { .. }

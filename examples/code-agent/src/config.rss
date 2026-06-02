@@ -7,68 +7,68 @@ struct AgentConfig {
     request_timeout_ms: Int
     max_attempts: Int
     backoff_ms: Int
+    repo_root: Path
     workspace_root: String
 }
 
 fn env_int(name: read String, default: Int) -> Int {
-    let raw = Env.get_or_default(name: read name, default: read "")
-    match String.parse_int(value: read raw) {
-        Some(value) => {
-            return value
-        }
-        None => {
-            return default
-        }
-    }
+    let raw = name.env_or("")
+    return raw.parse_int().unwrap_or(default)
 }
 
 fn env_min_int(name: read String, default: Int, min: Int) -> Int {
-    let value = env_int(name: read name, default: default)
+    let value = env_int(name, default)
     if value < min {
         return default
     }
-
     return value
 }
 
-fn ensure_trailing_slash(value: read String) -> fresh String {
-    if String.ends_with(value: read value, suffix: read "/") {
-        return String.concat(left: read "", right: read value)
+fn ensure_trailing_slash(value: read String) -> String {
+    if value.ends_with("/") {
+        return value
     }
-
-    return String.concat(left: read value, right: read "/")
+    return value.concat("/")
 }
 
-fn workspace_root_from_env() -> fresh String {
-    let raw = Env.get_or_default(name: read "AGENT_WORKSPACE_ROOT", default: read "target/")
+fn workspace_root_from_env() -> String {
+    let raw = "AGENT_WORKSPACE_ROOT".env_or("target/")
     if raw == "" {
-        return String.concat(left: read "", right: read "target/")
+        return "target/"
     }
-    if path_is_traversal_safe(path_text: read raw) == false {
-        return String.concat(left: read "", right: read "target/")
+    if raw.safe_relative().is_err() {
+        return "target/"
     }
+    return ensure_trailing_slash(raw)
+}
 
-    return ensure_trailing_slash(value: read raw)
+fn repo_root_from_env() -> fresh Path {
+    let explicit = "AGENT_REPO_ROOT".env_or("")
+    if explicit != "" {
+        return explicit.to_path()
+    }
+    return Env.run_workspace_root()
 }
 
 fn agent_config_from_env() -> fresh AgentConfig {
     return AgentConfig(
-        model: Env.get_or_default(name: read "AGENT_MODEL", default: read "gpt-5.5:medium"),
-        endpoint: Url.from_string(value: read Env.get_or_default(name: read "AGENT_ENDPOINT", default: read "http://localhost:8080/v1/chat/completions")),
-        api_key: Env.get_or_default(name: read "AGENT_API_KEY", default: read "test_key"),
-        max_steps: env_min_int(name: read "AGENT_MAX_STEPS", default: 8, min: 1),
-        max_tool_calls: env_min_int(name: read "AGENT_MAX_TOOL_CALLS", default: 8, min: 1),
-        request_timeout_ms: env_min_int(name: read "AGENT_TIMEOUT_MS", default: 60000, min: 1),
-        max_attempts: env_min_int(name: read "AGENT_MAX_ATTEMPTS", default: 3, min: 1),
-        backoff_ms: env_min_int(name: read "AGENT_BACKOFF_MS", default: 500, min: 0),
+        model: "AGENT_MODEL".env_or("gpt-5.5:medium"),
+        endpoint: "AGENT_ENDPOINT".env_or("http://localhost:8080/v1/chat/completions").to_url(),
+        api_key: "AGENT_API_KEY".env_or("test_key"),
+        max_steps: env_min_int("AGENT_MAX_STEPS", 8, 1),
+        max_tool_calls: env_min_int("AGENT_MAX_TOOL_CALLS", 8, 1),
+        request_timeout_ms: env_min_int("AGENT_TIMEOUT_MS", 60000, 1),
+        max_attempts: env_min_int("AGENT_MAX_ATTEMPTS", 3, 1),
+        backoff_ms: env_min_int("AGENT_BACKOFF_MS", 500, 0),
+        repo_root: repo_root_from_env(),
         workspace_root: workspace_root_from_env(),
     )
 }
 
 fn default_agent_task() -> String {
-    return "Read examples/AGENTS.md and schemas/core-package-index.json. Use the index to find the file IO API, read the relevant core interface, then write target/rsscript-agent-read-file.rss containing a concise RSScript function that reads a UTF-8 file with File.read_string. After writing, call check_rss_file for target/rsscript-agent-read-file.rss. If the check passes, finish with a short summary."
+    return "Read examples/code-agent/AGENTS.md and schemas/core-package-index.json. Use the index to find the file IO API, read the relevant core interface, then write target/rsscript-agent-read-file.rss containing a concise RSScript function that reads a UTF-8 file with File.read_string. After writing, call check_rss_file for target/rsscript-agent-read-file.rss. If the check passes, finish with a short summary."
 }
 
 fn agent_task_from_env() -> fresh String {
-    return Env.get_or_default(name: read "AGENT_PROMPT", default: read default_agent_task())
+    return "AGENT_PROMPT".env_or(default_agent_task())
 }

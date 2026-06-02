@@ -1,4 +1,4 @@
-features: local
+features: local, native
 
 struct StringBuilder
 
@@ -7,11 +7,35 @@ struct StringView
 pub fn String.concat(left: read String, right: read String) -> fresh String
     effects(pure)
 
+pub fn String.copy(value: read String) -> fresh String
+    effects(pure)
+
 pub fn String.from_int(value: Int) -> fresh String
     effects(pure)
 
 pub fn String.from_bool(value: Bool) -> fresh String
     effects(pure)
+
+pub fn Int.to_string(value: read Int) -> fresh String
+    effects(pure)
+
+pub fn String.to_path(value: read String) -> fresh Path
+    effects(pure)
+
+pub fn String.safe_relative(value: read String) -> Result<fresh Path, String>
+    effects(pure)
+
+pub fn String.to_url(value: read String) -> fresh Url
+    effects(pure)
+
+pub fn String.to_bytes(value: read String) -> fresh Bytes
+    effects(pure)
+
+pub fn String.env(value: read String) -> Option<fresh String>
+    effects(native)
+
+pub fn String.env_or(value: read String, default: read String) -> fresh String
+    effects(native)
 
 pub fn String.len(value: read String) -> Int
     effects(pure)

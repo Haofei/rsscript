@@ -1,7 +1,7 @@
 use std::fs;
 use std::process::ExitCode;
 
-use rsscript::{analyze_source, format_diagnostics_human, format_source};
+use rsscript::{analyze_syntax_source, format_diagnostics_human, format_source};
 
 use super::{parse_path_args, print_usage};
 
@@ -26,7 +26,7 @@ pub(crate) fn run_fmt(args: &[String]) -> ExitCode {
         }
     };
 
-    let diagnostics = analyze_source(path, &source);
+    let diagnostics = analyze_syntax_source(path, &source);
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity.is_error())

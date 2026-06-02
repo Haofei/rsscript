@@ -36,6 +36,13 @@ pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
     analyze_program(tokens, syntax_program, hir, builtin_interface_programs())
 }
 
+pub fn analyze_syntax_source(file: &str, source: &str) -> Vec<Diagnostic> {
+    let tokens = lex(file, source);
+    let syntax_program = parse_source(file, source);
+    let hir = Hir::from_syntax(&syntax_program);
+    analyze_syntax_program(tokens, syntax_program, hir)
+}
+
 pub fn analyze_source_without_core(file: &str, source: &str) -> Vec<Diagnostic> {
     let tokens = lex(file, source);
     let syntax_program = parse_source(file, source);
@@ -165,6 +172,25 @@ fn analyze_program(
         async_let_names: Vec::new(),
     };
     analyzer.run();
+    analyzer.diagnostics
+}
+
+fn analyze_syntax_program(
+    tokens: Vec<Token>,
+    syntax_program: crate::syntax::ast::Program,
+    hir: Hir,
+) -> Vec<Diagnostic> {
+    let mut analyzer = Analyzer {
+        tokens: &tokens,
+        syntax_program,
+        interface_programs: Vec::new(),
+        hir,
+        diagnostics: Vec::new(),
+        type_aliases: Default::default(),
+        in_task_group: false,
+        async_let_names: Vec::new(),
+    };
+    analyzer.run_syntax_only();
     analyzer.diagnostics
 }
 
@@ -435,6 +461,12 @@ fn collect_all_async_let_spans_expr(expr: &Expr, async_lets: &mut Vec<crate::dia
                 collect_all_async_let_spans_expr(&field.value, async_lets);
             }
         }
+        Expr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                collect_all_async_let_spans_expr(&entry.key, async_lets);
+                collect_all_async_let_spans_expr(&entry.value, async_lets);
+            }
+        }
         Expr::ArrayLiteral { items, .. } => {
             for item in items {
                 collect_all_async_let_spans_expr(item, async_lets);
@@ -478,6 +510,12 @@ fn collect_task_group_async_lets_expr(
         Expr::ObjectLiteral { fields, .. } => {
             for field in fields {
                 collect_task_group_async_lets_expr(&field.value, async_lets);
+            }
+        }
+        Expr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                collect_task_group_async_lets_expr(&entry.key, async_lets);
+                collect_task_group_async_lets_expr(&entry.value, async_lets);
             }
         }
         Expr::ArrayLiteral { items, .. } => {
@@ -845,6 +883,10 @@ fn find_nested_task_group_await_span_expr<'a>(
         Expr::ObjectLiteral { fields, .. } => fields
             .iter()
             .find_map(|field| find_nested_task_group_await_span_expr(&field.value, name)),
+        Expr::MapLiteral { entries, .. } => entries.iter().find_map(|entry| {
+            find_nested_task_group_await_span_expr(&entry.key, name)
+                .or_else(|| find_nested_task_group_await_span_expr(&entry.value, name))
+        }),
         Expr::ArrayLiteral { items, .. } => items
             .iter()
             .find_map(|item| find_nested_task_group_await_span_expr(item, name)),
@@ -888,6 +930,12 @@ fn collect_task_group_awaited_handles_expr(expr: &Expr, awaited: &mut HashSet<St
         Expr::ObjectLiteral { fields, .. } => {
             for field in fields {
                 collect_task_group_awaited_handles_expr(&field.value, awaited);
+            }
+        }
+        Expr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                collect_task_group_awaited_handles_expr(&entry.key, awaited);
+                collect_task_group_awaited_handles_expr(&entry.value, awaited);
             }
         }
         Expr::ArrayLiteral { items, .. } => {
@@ -969,6 +1017,14 @@ impl Analyzer<'_> {
         checks::calls::check(self);
         checks::body::check(self);
         checks::forbidden::check(self);
+    }
+
+    fn run_syntax_only(&mut self) {
+        self.check_single_feature_declaration();
+        self.check_unknown_file_features();
+        self.check_duplicate_file_features();
+        self.check_removed_profile_declarations();
+        self.check_unsupported_syntax();
     }
 
     fn check_single_feature_declaration(&mut self) {
@@ -1655,6 +1711,12 @@ impl Analyzer<'_> {
                     self.check_unsupported_syntax_expr(&field.value);
                 }
             }
+            Expr::MapLiteral { entries, .. } => {
+                for entry in entries {
+                    self.check_unsupported_syntax_expr(&entry.key);
+                    self.check_unsupported_syntax_expr(&entry.value);
+                }
+            }
             Expr::ArrayLiteral { items, .. } => {
                 for item in items {
                     self.check_unsupported_syntax_expr(item);
@@ -1966,6 +2028,7 @@ impl Analyzer<'_> {
                 }
             }
             HirExpr::ObjectLiteral { .. }
+            | HirExpr::MapLiteral { .. }
             | HirExpr::ArrayLiteral { .. }
             | HirExpr::Ident { .. }
             | HirExpr::Number { .. }
@@ -2876,6 +2939,12 @@ impl Analyzer<'_> {
                     self.check_unknown_bindings_in_block(&arm.body, &mut arm_visible);
                 }
             }
+            HirExpr::MapLiteral { entries, .. } => {
+                for entry in entries {
+                    self.check_unknown_bindings_in_expr(&entry.key, visible);
+                    self.check_unknown_bindings_in_expr(&entry.value, visible);
+                }
+            }
             HirExpr::ObjectLiteral { .. }
             | HirExpr::ArrayLiteral { .. }
             | HirExpr::Number { .. }
@@ -3193,6 +3262,12 @@ impl Analyzer<'_> {
                 self.check_runtime_guarantee_expr(guarantee, function_name, value);
                 for arm in arms {
                     self.check_runtime_guarantee_block(guarantee, function_name, &arm.body);
+                }
+            }
+            Expr::MapLiteral { entries, .. } => {
+                for entry in entries {
+                    self.check_runtime_guarantee_expr(guarantee, function_name, &entry.key);
+                    self.check_runtime_guarantee_expr(guarantee, function_name, &entry.value);
                 }
             }
             Expr::ObjectLiteral { .. }
@@ -3562,6 +3637,12 @@ impl Analyzer<'_> {
                     self.check_resource_pool_calls_in_block(&arm.body);
                 }
             }
+            Expr::MapLiteral { entries, .. } => {
+                for entry in entries {
+                    self.check_resource_pool_calls_in_expr(&entry.key);
+                    self.check_resource_pool_calls_in_expr(&entry.value);
+                }
+            }
             Expr::ObjectLiteral { .. }
             | Expr::ArrayLiteral { .. }
             | Expr::Ident(_, _)
@@ -3683,6 +3764,12 @@ impl Analyzer<'_> {
                 self.check_resource_generic_calls_in_expr(value);
                 for arm in arms {
                     self.check_resource_generic_calls_in_block(&arm.body);
+                }
+            }
+            Expr::MapLiteral { entries, .. } => {
+                for entry in entries {
+                    self.check_resource_generic_calls_in_expr(&entry.key);
+                    self.check_resource_generic_calls_in_expr(&entry.value);
                 }
             }
             Expr::ObjectLiteral { .. }
@@ -4299,6 +4386,14 @@ fn expr_first_cancellation_token(expr: &Expr) -> Option<crate::diagnostic::Span>
             arms.iter()
                 .find_map(|arm| block_first_cancellation_token(&arm.body))
         }),
+        Expr::MapLiteral { entries, .. } => entries
+            .iter()
+            .find_map(|entry| expr_first_cancellation_token(&entry.key))
+            .or_else(|| {
+                entries
+                    .iter()
+                    .find_map(|entry| expr_first_cancellation_token(&entry.value))
+            }),
         Expr::ObjectLiteral { .. }
         | Expr::ArrayLiteral { .. }
         | Expr::Ident(..)
@@ -4338,6 +4433,14 @@ fn expr_first_await(expr: &Expr) -> Option<crate::diagnostic::Span> {
         Expr::Closure { body, .. } => block_first_await(body),
         Expr::Match { value, arms, .. } => expr_first_await(value)
             .or_else(|| arms.iter().find_map(|arm| block_first_await(&arm.body))),
+        Expr::MapLiteral { entries, .. } => entries
+            .iter()
+            .find_map(|entry| expr_first_await(&entry.key))
+            .or_else(|| {
+                entries
+                    .iter()
+                    .find_map(|entry| expr_first_await(&entry.value))
+            }),
         Expr::ObjectLiteral { .. }
         | Expr::ArrayLiteral { .. }
         | Expr::Ident(..)
@@ -4659,6 +4762,12 @@ impl<'a> AssignChecker<'a> {
             | Expr::Spawn { value, .. }
             | Expr::Await { value, .. }
             | Expr::Try { value, .. } => self.expr(value),
+            Expr::MapLiteral { entries, .. } => {
+                for entry in entries {
+                    self.expr(&entry.key);
+                    self.expr(&entry.value);
+                }
+            }
             Expr::ObjectLiteral { .. }
             | Expr::ArrayLiteral { .. }
             | Expr::Ident(..)
@@ -5352,7 +5461,8 @@ fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
         | HirExpr::Spawn { type_name, .. }
         | HirExpr::Await { type_name, .. }
         | HirExpr::Try { type_name, .. }
-        | HirExpr::Match { type_name, .. } => type_name.as_deref(),
+        | HirExpr::Match { type_name, .. }
+        | HirExpr::MapLiteral { type_name, .. } => type_name.as_deref(),
         HirExpr::Field { access, .. } => access.type_name.as_deref(),
         HirExpr::Number { .. } => Some("Int"),
         HirExpr::String { .. } => Some("String"),
@@ -5391,7 +5501,25 @@ fn callee_display(callee: &Callee) -> String {
             receiver,
             method,
             effect,
-        } => format!("{} {receiver}.{method}", effect.as_str()),
+        } => format!(
+            "{} {}.{method}",
+            effect.as_str(),
+            analyzer_expr_label(receiver)
+        ),
+    }
+}
+
+fn analyzer_expr_label(expr: &Expr) -> String {
+    match expr {
+        Expr::Ident(name, _) => name.clone(),
+        Expr::String(value, _) => format!("{value:?}"),
+        Expr::Field { base, name, .. } => format!("{}.{}", analyzer_expr_label(base), name),
+        Expr::Index { base, .. } => format!("{}[]", analyzer_expr_label(base)),
+        Expr::Call { callee, .. } => format!("{}()", callee_display(callee)),
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
+            analyzer_expr_label(value)
+        }
+        _ => "<expr>".to_string(),
     }
 }
 

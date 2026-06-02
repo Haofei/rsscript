@@ -1,12 +1,12 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::{
-    CallResolution, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirMatchArm, HirStmt,
+    CallResolution, FieldInfo, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirMatchArm, HirStmt,
     HirTypeKind, ParamEffect, ResolvedCalleeKind,
 };
-use crate::syntax::ast::{Callee, FunctionDecl, Item, MatchPattern, TypeRef};
+use crate::syntax::ast::{Callee, Expr, FunctionDecl, Item, MatchPattern, TypeRef};
 
 use super::local::{
     BodyState, FreshReturnIssue, FreshReturnIssueKind, LocalAnalysis, ManagedToLocalUse, MovedUse,
@@ -278,6 +278,12 @@ fn collect_expr_uses(expr: &HirExpr, uses: &mut HashSet<String>) {
                 collect_block_uses(&arm.body, uses);
             }
         }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                collect_expr_uses(&entry.key, uses);
+                collect_expr_uses(&entry.value, uses);
+            }
+        }
         HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Number { .. }
@@ -321,6 +327,12 @@ fn collect_await_operand_live_uses(expr: &HirExpr, uses: &mut HashSet<String>) {
             collect_await_operand_live_uses(value, uses);
             for arm in arms {
                 collect_block_uses(&arm.body, uses);
+            }
+        }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                collect_await_operand_live_uses(&entry.key, uses);
+                collect_await_operand_live_uses(&entry.value, uses);
             }
         }
         HirExpr::ObjectLiteral { .. }
@@ -1094,6 +1106,28 @@ fn check_expr_semantics_with_context(
                 );
             }
         }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                check_expr_semantics_with_context(
+                    analyzer,
+                    local_analysis,
+                    &entry.key,
+                    state,
+                    allow_weak_upgrade_arg,
+                    async_call_consumed,
+                    live_after,
+                );
+                check_expr_semantics_with_context(
+                    analyzer,
+                    local_analysis,
+                    &entry.value,
+                    state,
+                    allow_weak_upgrade_arg,
+                    async_call_consumed,
+                    live_after,
+                );
+            }
+        }
         HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Ident { .. }
@@ -1270,6 +1304,12 @@ fn check_await_placement_expr(
                 check_await_placement(analyzer, &arm.body, function_is_async);
             }
         }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                check_await_placement_expr(analyzer, &entry.key, function_is_async);
+                check_await_placement_expr(analyzer, &entry.value, function_is_async);
+            }
+        }
         HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Ident { .. }
@@ -1372,6 +1412,7 @@ fn expr_span(expr: &HirExpr) -> &Span {
         | HirExpr::Number { span, .. }
         | HirExpr::String { span, .. }
         | HirExpr::ObjectLiteral { span, .. }
+        | HirExpr::MapLiteral { span, .. }
         | HirExpr::ArrayLiteral { span, .. }
         | HirExpr::Binary { span, .. }
         | HirExpr::Field { span, .. }
@@ -1478,6 +1519,7 @@ fn expr_is_fresh_shell(expr: &HirExpr) -> bool {
         HirExpr::Try { value, .. } | HirExpr::Effect { value, .. } => expr_is_fresh_shell(value),
         HirExpr::Ident { .. }
         | HirExpr::ObjectLiteral { .. }
+        | HirExpr::MapLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -1550,7 +1592,21 @@ fn body_callee_display(callee: &Callee) -> String {
             receiver,
             method,
             effect,
-        } => format!("{} {receiver}.{method}", effect.as_str()),
+        } => format!("{} {}.{method}", effect.as_str(), body_expr_label(receiver)),
+    }
+}
+
+fn body_expr_label(expr: &Expr) -> String {
+    match expr {
+        Expr::Ident(name, _) => name.clone(),
+        Expr::String(value, _) => format!("{value:?}"),
+        Expr::Field { base, name, .. } => format!("{}.{}", body_expr_label(base), name),
+        Expr::Index { base, .. } => format!("{}[]", body_expr_label(base)),
+        Expr::Call { callee, .. } => format!("{}()", body_callee_display(callee)),
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
+            body_expr_label(value)
+        }
+        _ => "<expr>".to_string(),
     }
 }
 
@@ -1600,6 +1656,14 @@ fn weak_field_access_requiring_upgrade(expr: &HirExpr) -> Option<&crate::hir::Hi
                 })
             })
         }
+        HirExpr::MapLiteral { entries, .. } => entries
+            .iter()
+            .find_map(|entry| weak_field_access_requiring_upgrade(&entry.key))
+            .or_else(|| {
+                entries
+                    .iter()
+                    .find_map(|entry| weak_field_access_requiring_upgrade(&entry.value))
+            }),
         HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Ident { .. }
@@ -1714,7 +1778,7 @@ fn check_constructor_field_initializers(
     let constructor_name = body_callee_display(callee);
 
     for arg in args {
-        let Some(name) = arg.name.as_deref() else {
+        let Some(name) = constructor_field_arg_name(arg, &fields) else {
             continue;
         };
         let Some(field) = fields.get(name) else {
@@ -1776,6 +1840,19 @@ fn check_constructor_field_initializers(
     }
 }
 
+fn constructor_field_arg_name<'a>(
+    arg: &'a HirCallArg,
+    fields: &HashMap<String, FieldInfo>,
+) -> Option<&'a str> {
+    if let Some(name) = arg.name.as_deref() {
+        return Some(name);
+    }
+    let HirExpr::Ident { name, .. } = &arg.value else {
+        return None;
+    };
+    fields.contains_key(name).then_some(name.as_str())
+}
+
 fn constructor_arg_uses_local_inline_place(expr: &HirExpr, state: &BodyState) -> bool {
     let Some(path) = constructor_arg_place_path(expr) else {
         return false;
@@ -1791,6 +1868,7 @@ fn constructor_arg_place_path(expr: &HirExpr) -> Option<PlacePath> {
         HirExpr::Ident { .. } | HirExpr::Field { .. } | HirExpr::Index { .. } => place_path(expr),
         HirExpr::Manage { .. }
         | HirExpr::ObjectLiteral { .. }
+        | HirExpr::MapLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Spawn { .. }
         | HirExpr::Await { .. }
@@ -1851,6 +1929,10 @@ fn constructor_arg_uses_managed_inline_value(
         HirExpr::ObjectLiteral { fields, .. } => fields
             .iter()
             .any(|field| constructor_arg_uses_managed_inline_value(analyzer, &field.value, state)),
+        HirExpr::MapLiteral { entries, .. } => entries.iter().any(|entry| {
+            constructor_arg_uses_managed_inline_value(analyzer, &entry.key, state)
+                || constructor_arg_uses_managed_inline_value(analyzer, &entry.value, state)
+        }),
         HirExpr::ArrayLiteral { items, .. } => items
             .iter()
             .any(|item| constructor_arg_uses_managed_inline_value(analyzer, item, state)),
@@ -2009,6 +2091,12 @@ fn collect_spawn_capture_idents(expr: &HirExpr, captures: &mut Vec<(String, Span
                 for statement in &arm.body.statements {
                     collect_spawn_capture_idents_from_stmt(statement, captures);
                 }
+            }
+        }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                collect_spawn_capture_idents(&entry.key, captures);
+                collect_spawn_capture_idents(&entry.value, captures);
             }
         }
         HirExpr::ObjectLiteral { .. }
@@ -2335,6 +2423,12 @@ fn collect_closure_effect_accesses_expr(
                 collect_closure_effect_accesses_block(&arm.body, bound, out);
             }
         }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                collect_closure_effect_accesses_expr(&entry.key, bound, out);
+                collect_closure_effect_accesses_expr(&entry.value, bound, out);
+            }
+        }
         HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Ident { .. }
@@ -2389,6 +2483,9 @@ fn expr_moves_path(expr: &HirExpr) -> bool {
         HirExpr::ObjectLiteral { fields, .. } => {
             fields.iter().any(|field| expr_moves_path(&field.value))
         }
+        HirExpr::MapLiteral { entries, .. } => entries
+            .iter()
+            .any(|entry| expr_moves_path(&entry.key) || expr_moves_path(&entry.value)),
         HirExpr::ArrayLiteral { items, .. } => items.iter().any(expr_moves_path),
         HirExpr::Closure { .. }
         | HirExpr::Match { .. }
@@ -2548,6 +2645,12 @@ fn check_try_error_types_expr(
                 check_try_error_types(analyzer, &arm.body, function_error_type);
             }
         }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                check_try_error_types_expr(analyzer, &entry.key, function_error_type);
+                check_try_error_types_expr(analyzer, &entry.value, function_error_type);
+            }
+        }
         HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Ident { .. }
@@ -2570,7 +2673,8 @@ fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
         | HirExpr::Spawn { type_name, .. }
         | HirExpr::Await { type_name, .. }
         | HirExpr::Try { type_name, .. }
-        | HirExpr::Match { type_name, .. } => type_name.as_deref(),
+        | HirExpr::Match { type_name, .. }
+        | HirExpr::MapLiteral { type_name, .. } => type_name.as_deref(),
         HirExpr::Field { access, .. } => access.type_name.as_deref(),
         HirExpr::Number { .. } => Some("Int"),
         HirExpr::String { .. } => Some("String"),
@@ -2598,6 +2702,7 @@ fn hir_expr_span(expr: &HirExpr) -> &Span {
         | HirExpr::Number { span, .. }
         | HirExpr::String { span, .. }
         | HirExpr::ObjectLiteral { span, .. }
+        | HirExpr::MapLiteral { span, .. }
         | HirExpr::ArrayLiteral { span, .. }
         | HirExpr::Binary { span, .. }
         | HirExpr::Field { span, .. }
@@ -3073,6 +3178,12 @@ fn apply_expr_effects(expr: &HirExpr, state: &mut BodyState) {
             apply_expr_effects(left, state);
             apply_expr_effects(right, state);
         }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                apply_expr_effects(&entry.key, state);
+                apply_expr_effects(&entry.value, state);
+            }
+        }
         HirExpr::Field { base, .. } => apply_expr_effects(base, state),
         HirExpr::Index { base, index, .. } => {
             apply_expr_effects(base, state);
@@ -3426,6 +3537,12 @@ fn check_resource_pool_lease_expr(
                 }
             }
         }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                check_resource_pool_lease_expr(analyzer, &entry.key, within_with_resource);
+                check_resource_pool_lease_expr(analyzer, &entry.value, within_with_resource);
+            }
+        }
         HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Ident { .. }
@@ -3490,6 +3607,12 @@ fn check_resource_producer_expr(
                 for statement in &arm.body.statements {
                     check_resource_producer_stmt(analyzer, statement);
                 }
+            }
+        }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                check_resource_producer_expr(analyzer, &entry.key, false);
+                check_resource_producer_expr(analyzer, &entry.value, false);
             }
         }
         HirExpr::ObjectLiteral { .. }
@@ -3966,6 +4089,19 @@ fn collect_resource_pool_factory_resource_captures_expr(
                 );
             }
         }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                collect_resource_pool_factory_resource_captures_expr(
+                    &entry.key, state, bound, captures,
+                );
+                collect_resource_pool_factory_resource_captures_expr(
+                    &entry.value,
+                    state,
+                    bound,
+                    captures,
+                );
+            }
+        }
         HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Number { .. }
@@ -4115,6 +4251,12 @@ fn check_lazy_factory_captures_expr(
             check_lazy_factory_captures_expr(analyzer, value, bindings);
             for arm in arms {
                 check_lazy_factory_captures_block(analyzer, &arm.body, bindings);
+            }
+        }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                check_lazy_factory_captures_expr(analyzer, &entry.key, bindings);
+                check_lazy_factory_captures_expr(analyzer, &entry.value, bindings);
             }
         }
         HirExpr::ObjectLiteral { .. }
@@ -4294,6 +4436,12 @@ fn collect_lazy_factory_capture_idents_expr(
                 collect_lazy_factory_capture_idents_block(&arm.body, &mut scoped, captures);
             }
         }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                collect_lazy_factory_capture_idents_expr(&entry.key, bound, captures);
+                collect_lazy_factory_capture_idents_expr(&entry.value, bound, captures);
+            }
+        }
         HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Number { .. }
@@ -4449,6 +4597,12 @@ fn check_resource_pool_discards_expr(
                 check_resource_pool_discards(analyzer, &arm.body, lease_bindings);
             }
         }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                check_resource_pool_discards_expr(analyzer, &entry.key, lease_bindings);
+                check_resource_pool_discards_expr(analyzer, &entry.value, lease_bindings);
+            }
+        }
         HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Ident { .. }
@@ -4497,6 +4651,7 @@ fn resource_pool_fallible_factory_expr(expr: &HirExpr) -> Option<&HirExpr> {
         | HirExpr::Field { .. }
         | HirExpr::Index { .. }
         | HirExpr::Binary { .. }
+        | HirExpr::MapLiteral { .. }
         | HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Ident { .. }
@@ -4900,6 +5055,12 @@ fn check_resource_pool_active_lease_expr(
             check_resource_pool_active_lease_expr(analyzer, active_pool, value);
             for arm in arms {
                 check_resource_pool_active_lease_block(analyzer, active_pool, &arm.body);
+            }
+        }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                check_resource_pool_active_lease_expr(analyzer, active_pool, &entry.key);
+                check_resource_pool_active_lease_expr(analyzer, active_pool, &entry.value);
             }
         }
         HirExpr::ObjectLiteral { .. }

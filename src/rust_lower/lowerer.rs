@@ -19,6 +19,8 @@ pub(super) struct RustLowerer<'a> {
     async_native_boundary_callees: BTreeSet<String>,
     native_bindings: BTreeMap<String, String>,
     function_return_types: BTreeMap<String, TypeRef>,
+    function_param_types: BTreeMap<String, Vec<(String, TypeRef)>>,
+    function_param_effects: BTreeMap<String, Vec<(String, Option<DataEffect>)>>,
     retained_params_by_callee: BTreeMap<String, BTreeSet<String>>,
     param_effects: BTreeMap<String, DataEffect>,
     value_types: BTreeMap<String, TypeRef>,
@@ -65,6 +67,8 @@ impl<'a> RustLowerer<'a> {
             .map(|protocol| protocol.name.clone())
             .collect();
         let function_return_types = collect_function_return_types(program);
+        let function_param_types = collect_function_param_types(program);
+        let function_param_effects = collect_function_param_effects(program);
         let retained_params_by_callee = collect_function_retained_params(program);
 
         Self {
@@ -75,6 +79,8 @@ impl<'a> RustLowerer<'a> {
             async_native_boundary_callees,
             native_bindings,
             function_return_types,
+            function_param_types,
+            function_param_effects,
             retained_params_by_callee,
             param_effects: BTreeMap::new(),
             value_types: BTreeMap::new(),
@@ -1095,7 +1101,21 @@ impl<'a> RustLowerer<'a> {
                 };
                 let pending = self.lower_expr(async_await_inner(value).expect("await inner"));
                 let bind = rust_ident(&stmt.name);
+                let binding_ty = awaited_binding_type(
+                    self.infer_expr_type(async_await_inner(value).expect("await inner")),
+                    async_await_is_try(value),
+                );
+                let previous_binding_ty = binding_ty
+                    .clone()
+                    .and_then(|ty| self.value_types.insert(stmt.name.clone(), ty));
                 let rest = self.lower_async_chain(tail);
+                if binding_ty.is_some() {
+                    if let Some(previous) = previous_binding_ty {
+                        self.value_types.insert(stmt.name.clone(), previous);
+                    } else {
+                        self.value_types.remove(&stmt.name);
+                    }
+                }
                 format!("rsscript_runtime::{combinator}({pending}, move |{bind}| {{ {rest} }})")
             }
             Stmt::Expr(expr) if async_await_inner(expr).is_some() => {
@@ -1293,9 +1313,15 @@ impl<'a> RustLowerer<'a> {
             Stmt::Let(let_stmt) => {
                 let value = let_stmt.value.as_ref()?;
                 let inner = async_await_inner(value)?;
+                let binding_ty =
+                    awaited_binding_type(self.infer_expr_type(inner), async_await_is_try(value));
                 (
                     self.lower_expr(inner),
-                    Some(rust_ident(&let_stmt.name)),
+                    Some((
+                        let_stmt.name.clone(),
+                        rust_ident(&let_stmt.name),
+                        binding_ty,
+                    )),
                     async_await_is_try(value),
                 )
             }
@@ -1309,18 +1335,30 @@ impl<'a> RustLowerer<'a> {
         for statement in before_await {
             self.lower_stmt(statement, &mut before_body, 7);
         }
+        let previous_binding_ty = if let Some((name, _, Some(ty))) = binding.as_ref() {
+            self.value_types.insert(name.clone(), ty.clone())
+        } else {
+            None
+        };
         let mut rest_body = String::new();
         for statement in rest {
             self.lower_stmt(statement, &mut rest_body, 4);
         }
+        if let Some((name, _, Some(_))) = binding.as_ref() {
+            if let Some(previous) = previous_binding_ty {
+                self.value_types.insert(name.clone(), previous);
+            } else {
+                self.value_types.remove(name);
+            }
+        }
         let value_bind = match (binding, is_try) {
-            (Some(binding), true) => format!(
+            (Some((_, binding, _)), true) => format!(
                 "let {binding} = match {prefix}_value {{
                     Ok(__rsscript_ok) => __rsscript_ok,
                     Err(__rsscript_error) => return rsscript_runtime::AsyncPoll::Ready(Err(__rsscript_error)),
                 }};"
             ),
-            (Some(binding), false) => format!("let {binding} = {prefix}_value;"),
+            (Some((_, binding, _)), false) => format!("let {binding} = {prefix}_value;"),
             (None, true) => format!(
                 "if let Err(__rsscript_error) = {prefix}_value {{
                     return rsscript_runtime::AsyncPoll::Ready(Err(__rsscript_error));
@@ -1391,7 +1429,21 @@ impl<'a> RustLowerer<'a> {
                 };
                 let pending = self.lower_expr(async_await_inner(value).expect("await inner"));
                 let bind = rust_ident(&stmt.name);
+                let binding_ty = awaited_binding_type(
+                    self.infer_expr_type(async_await_inner(value).expect("await inner")),
+                    async_await_is_try(value),
+                );
+                let previous_binding_ty = binding_ty
+                    .clone()
+                    .and_then(|ty| self.value_types.insert(stmt.name.clone(), ty));
                 let rest = self.lower_async_loop_body_chain(tail, error_ty);
+                if binding_ty.is_some() {
+                    if let Some(previous) = previous_binding_ty {
+                        self.value_types.insert(stmt.name.clone(), previous);
+                    } else {
+                        self.value_types.remove(&stmt.name);
+                    }
+                }
                 format!("rsscript_runtime::{combinator}({pending}, |{bind}| {{ {rest} }})")
             }
             Stmt::Expr(expr) if async_await_inner(expr).is_some() => {
@@ -1440,7 +1492,11 @@ impl<'a> RustLowerer<'a> {
                     ""
                 };
                 if let Some(value) = &stmt.value {
-                    let lowered = self.lower_expr(value);
+                    let lowered = if let Some(expected) = &stmt.type_annotation {
+                        self.lower_expr_for_expected_type(value, expected)
+                    } else {
+                        self.lower_expr(value)
+                    };
                     let inferred_ty = self.infer_expr_type(value);
                     let annotation = stmt
                         .type_annotation
@@ -1618,6 +1674,7 @@ impl<'a> RustLowerer<'a> {
                 out.push_str(&format!("{pad}match {} {{\n", self.lower_expr(&stmt.value)));
                 // Determine if this is a sum type match (qualify variant patterns)
                 let sum_type_name = self.find_sum_type_for_match(&stmt.arms);
+                let scrutinee_type = self.infer_expr_type(&stmt.value);
                 for arm in &stmt.arms {
                     let pattern = if let Some(ref sum_name) = sum_type_name {
                         lower_match_pattern_qualified(&arm.pattern, sum_name)
@@ -1625,7 +1682,36 @@ impl<'a> RustLowerer<'a> {
                         lower_match_pattern(&arm.pattern)
                     };
                     out.push_str(&format!("{}{} => {{\n", "    ".repeat(indent + 1), pattern));
+                    let scoped_binding =
+                        match_binding_type_ref(&arm.pattern, scrutinee_type.as_ref());
+                    let previous_value_type = scoped_binding
+                        .as_ref()
+                        .and_then(|(binding, _)| self.value_types.get(binding).cloned());
+                    let previous_managed = scoped_binding
+                        .as_ref()
+                        .is_some_and(|(binding, _)| self.managed_bindings.contains(binding));
+                    if let Some((binding, binding_type)) = &scoped_binding {
+                        self.value_types
+                            .insert(binding.clone(), binding_type.clone());
+                        if self.is_class_type(binding_type) {
+                            self.managed_bindings.insert(binding.clone());
+                        } else {
+                            self.managed_bindings.remove(binding);
+                        }
+                    }
                     self.lower_block(&arm.body, out, indent + 2);
+                    if let Some((binding, _)) = scoped_binding {
+                        if let Some(previous) = previous_value_type {
+                            self.value_types.insert(binding.clone(), previous);
+                        } else {
+                            self.value_types.remove(&binding);
+                        }
+                        if previous_managed {
+                            self.managed_bindings.insert(binding);
+                        } else {
+                            self.managed_bindings.remove(&binding);
+                        }
+                    }
                     out.push_str(&format!("{}}},\n", "    ".repeat(indent + 1)));
                 }
                 out.push_str(&format!("{pad}}}\n"));
@@ -1906,6 +1992,22 @@ impl<'a> RustLowerer<'a> {
                     self.record_expr_source_map(&field.value, generated);
                 }
             }
+            Expr::MapLiteral { entries, span } => {
+                self.source_map.push(RustSourceMapEntry {
+                    kind: "map_literal".to_string(),
+                    source: span.clone(),
+                    generated: generated.clone(),
+                });
+                for entry in entries {
+                    self.source_map.push(RustSourceMapEntry {
+                        kind: "map_literal_entry".to_string(),
+                        source: entry.span.clone(),
+                        generated: generated.clone(),
+                    });
+                    self.record_expr_source_map(&entry.key, generated);
+                    self.record_expr_source_map(&entry.value, generated);
+                }
+            }
             Expr::ArrayLiteral { items, span } => {
                 self.source_map.push(RustSourceMapEntry {
                     kind: "array_literal".to_string(),
@@ -1971,6 +2073,7 @@ impl<'a> RustLowerer<'a> {
             Expr::Number(value, _) => value.clone(),
             Expr::String(value, _) => format!("{:?}.to_string()", decode_string_token(value)),
             Expr::ObjectLiteral { .. } => self.lower_json_value(expr),
+            Expr::MapLiteral { span, .. } => unreachable_lowering("map literal", span),
             Expr::ArrayLiteral { items, .. } => {
                 let items = items
                     .iter()
@@ -2063,25 +2166,25 @@ impl<'a> RustLowerer<'a> {
                     if let Some(type_kind) = self.type_kinds.get(name).copied() {
                         let mut fields = Vec::new();
                         for arg in args {
-                            let field = arg
-                                .name
+                            let field_name = self.constructor_field_arg_name(name, arg);
+                            let field = field_name
                                 .as_deref()
                                 .map(rust_ident)
                                 .unwrap_or_else(|| "/* unnamed */".to_string());
                             let is_weak_field = arg
                                 .name
                                 .as_deref()
+                                .or(field_name.as_deref())
                                 .is_some_and(|field_name| self.is_weak_field(name, field_name));
                             if is_weak_field {
                                 fields.push(format!(
                                     "{field}: {}",
                                     self.lower_explicit_weak_field_value(&arg.value)
                                 ));
-                            } else if arg.name.as_deref().is_some_and(|field_name| {
+                            } else if field_name.as_deref().is_some_and(|field_name| {
                                 self.is_runtime_handle_field(name, field_name)
                             }) {
-                                let field_name =
-                                    arg.name.as_deref().unwrap_or_default().to_string();
+                                let field_name = field_name.unwrap_or_default();
                                 fields.push(format!(
                                     "{field}: {}",
                                     self.lower_runtime_handle_field_value(
@@ -2092,7 +2195,13 @@ impl<'a> RustLowerer<'a> {
                                     )
                                 ));
                             } else {
-                                let value = self.lower_owned_expr(&arg.value);
+                                let value = field_name
+                                    .as_deref()
+                                    .and_then(|field_name| self.field_type(name, field_name))
+                                    .map(|expected| {
+                                        self.lower_expr_for_expected_type(&arg.value, &expected)
+                                    })
+                                    .unwrap_or_else(|| self.lower_owned_expr(&arg.value));
                                 fields.push(format!("{field}: {value}"));
                             }
                         }
@@ -2124,11 +2233,12 @@ impl<'a> RustLowerer<'a> {
                     effect,
                 } = callee
                 {
-                    let receiver_type = self.value_types.get(receiver).cloned();
+                    let receiver_type = self.infer_expr_type(receiver);
                     let receiver_type_name = receiver_type
                         .as_ref()
                         .map(type_ref_display_name)
-                        .unwrap_or_else(|| receiver.clone());
+                        .unwrap_or_else(|| "Unknown".to_string());
+                    let receiver_type_root = type_root_name(&receiver_type_name).to_string();
                     let receiver_rust_type = receiver_type
                         .as_ref()
                         .map(|ty| self.lower_type_ref(ty, ManagedPosition::Bare))
@@ -2144,17 +2254,67 @@ impl<'a> RustLowerer<'a> {
                         .or_else(|| {
                             capability_protocol_name(&receiver_type_name).map(str::to_string)
                         })
-                        .or_else(|| self.protocol_impl_namespace(&receiver_type_name, method))
-                        .unwrap_or(receiver_type_name.clone());
+                        .or_else(|| self.protocol_impl_namespace(&receiver_type_root, method))
+                        .or_else(|| {
+                            receiver_facade_namespace(&receiver_type_root, method)
+                                .map(str::to_string)
+                        })
+                        .unwrap_or(receiver_type_root);
                     let is_protocol = self.protocol_names.contains(&namespace);
                     let lowered_receiver = match effect {
-                        DataEffect::Mut => format!("&mut {}", rust_ident(receiver)),
-                        DataEffect::Read => format!("&{}", rust_ident(receiver)),
-                        DataEffect::Take => rust_ident(receiver),
+                        DataEffect::Mut
+                            if let Expr::Ident(receiver_name, _) = receiver.as_ref()
+                                && self.param_effects.get(receiver_name)
+                                    == Some(&DataEffect::Mut) =>
+                        {
+                            rust_ident(receiver_name)
+                        }
+                        DataEffect::Mut
+                            if matches!(
+                                receiver.as_ref(),
+                                Expr::Ident(..) | Expr::Field { .. } | Expr::Index { .. }
+                            ) =>
+                        {
+                            format!("&mut {}", self.lower_assignment_target(receiver))
+                        }
+                        DataEffect::Mut => format!("&mut {}", self.lower_expr(receiver)),
+                        DataEffect::Read
+                            if receiver_type.as_ref().is_some_and(is_copy_type_ref) =>
+                        {
+                            self.lower_expr(receiver)
+                        }
+                        DataEffect::Read => format!("&{}", self.lower_expr(receiver)),
+                        DataEffect::Take => self.lower_expr(receiver),
                     };
                     let lowered_args = args
                         .iter()
-                        .map(|arg| self.lower_expr(&arg.value))
+                        .enumerate()
+                        .map(|(index, arg)| {
+                            if let Some(expected) = self.receiver_call_expected_arg_type(
+                                &namespace,
+                                method,
+                                receiver_type.as_ref(),
+                                arg.name.as_deref(),
+                                index,
+                            ) {
+                                if arg.name.is_none()
+                                    && let Some(effect) = self.receiver_call_expected_arg_effect(
+                                        &namespace, method, index,
+                                    )
+                                {
+                                    let lowered =
+                                        self.lower_receiver_positional_arg(&arg.value, &expected);
+                                    return match effect {
+                                        DataEffect::Read => format!("&{lowered}"),
+                                        DataEffect::Mut => format!("&mut {lowered}"),
+                                        DataEffect::Take => lowered,
+                                    };
+                                }
+                                return self
+                                    .lower_call_arg_for_expected_type(&arg.value, &expected);
+                            }
+                            self.lower_expr(&arg.value)
+                        })
                         .collect::<Vec<_>>()
                         .join(", ");
                     let all_args = if lowered_args.is_empty() {
@@ -2170,7 +2330,10 @@ impl<'a> RustLowerer<'a> {
                             rust_ident(method)
                         )
                     } else {
-                        rust_qualified_function_ident(&namespace, method)
+                        lower_callee(&Callee::Qualified {
+                            namespace: namespace.clone(),
+                            name: method.clone(),
+                        })
                     };
                     return format!("{callee_str}({all_args})");
                 }
@@ -2358,6 +2521,77 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
+    fn lower_expr_for_expected_type(&mut self, expr: &Expr, expected: &TypeRef) -> String {
+        if let Expr::Call {
+            callee: Callee::Name(name),
+            args,
+            ..
+        } = expr
+        {
+            if expected.name == "Result" && expected.args.len() == 2 {
+                match (name.as_str(), args.as_slice()) {
+                    ("Ok", [arg]) => {
+                        let payload =
+                            self.lower_owned_expr_for_expected_type(&arg.value, &expected.args[0]);
+                        return format!("Ok({payload})");
+                    }
+                    ("Err", [arg]) => {
+                        let payload =
+                            self.lower_owned_expr_for_expected_type(&arg.value, &expected.args[1]);
+                        return format!("Err({payload})");
+                    }
+                    ("Ok", []) if expected.args[0].name == "Unit" => return "Ok(())".to_string(),
+                    ("Err", []) if expected.args[1].name == "Unit" => return "Err(())".to_string(),
+                    _ => {}
+                }
+            }
+            if expected.name == "Option" && expected.args.len() == 1 {
+                match (name.as_str(), args.as_slice()) {
+                    ("Some", [arg]) => {
+                        let payload =
+                            self.lower_owned_expr_for_expected_type(&arg.value, &expected.args[0]);
+                        return format!("Some({payload})");
+                    }
+                    ("Some", []) if expected.args[0].name == "Unit" => {
+                        return "Some(())".to_string();
+                    }
+                    ("None", []) => return "None".to_string(),
+                    _ => {}
+                }
+            }
+        }
+        if expected.name == "JsonValue" && expr_is_json_literal(expr) {
+            let lowered = self.lower_json_value(expr);
+            return format!("rsscript_runtime::json_value(&{lowered})");
+        }
+        if expected.name == "Map" && matches!(expr, Expr::MapLiteral { .. }) {
+            return self.lower_map_literal(expr, expected);
+        }
+        if expected.name == "List" && matches!(expr, Expr::ArrayLiteral { .. }) {
+            return self.lower_list_literal(expr, expected);
+        }
+        if expected.name == "String"
+            && expected.args.is_empty()
+            && let Expr::Ident(name, _) = expr
+            && self.param_effects.get(name) == Some(&DataEffect::Read)
+        {
+            return format!("{}.clone()", rust_value_ident(name));
+        }
+        if let Expr::Effect {
+            effect: DataEffect::Read,
+            value,
+            ..
+        } = expr
+        {
+            let lowered = self.lower_expr(value);
+            if is_copy_type_ref(expected) {
+                return lowered;
+            }
+            return format!("{lowered}.clone()");
+        }
+        self.lower_expr(expr)
+    }
+
     fn lower_await_expr(&mut self, expr: &Expr) -> String {
         match expr {
             Expr::Try { value, .. } => format!("{}?", self.lower_await_expr(value)),
@@ -2468,7 +2702,124 @@ impl<'a> RustLowerer<'a> {
                 DataEffect::Take => self.lower_expr(value),
             };
         }
+        if arg.name.is_none()
+            && let Some(DataEffect::Read) = self.expected_call_arg_effect(callee, arg, index)
+            && let Some(expected) = self.expected_call_arg_type(callee, arg, index)
+        {
+            let lowered = self.lower_receiver_positional_arg(&arg.value, &expected);
+            if is_copy_type_ref(&expected) {
+                return lowered;
+            }
+            return format!("&{lowered}");
+        }
+        if let Some(expected) = self.expected_call_arg_type(callee, arg, index) {
+            return self.lower_call_arg_for_expected_type(&arg.value, &expected);
+        }
         self.lower_expr(&arg.value)
+    }
+
+    fn lower_call_arg_for_expected_type(&mut self, value: &Expr, expected: &TypeRef) -> String {
+        match value {
+            Expr::Call {
+                callee:
+                    Callee::ReceiverCall {
+                        effect: DataEffect::Read,
+                        ..
+                    },
+                ..
+            } if !is_copy_type_ref(expected) => {
+                format!("&{}", self.lower_expr_for_expected_type(value, expected))
+            }
+            Expr::Effect {
+                effect: DataEffect::Read,
+                value,
+                span,
+                ..
+            } => {
+                if self.expr_lowers_to_managed_non_class_handle(value) {
+                    format!(
+                        "&*rsscript_runtime::unwrap_runtime({}.try_read_at({}))",
+                        self.lower_expr(value),
+                        lower_source_span(span)
+                    )
+                } else if expr_is_json_literal(value)
+                    || (expected.name == "Map" && matches!(value.as_ref(), Expr::MapLiteral { .. }))
+                    || (expected.name == "List"
+                        && matches!(value.as_ref(), Expr::ArrayLiteral { .. }))
+                {
+                    format!("&{}", self.lower_expr_for_expected_type(value, expected))
+                } else {
+                    format!("&{}", self.lower_expr(value))
+                }
+            }
+            Expr::Effect {
+                effect: DataEffect::Mut,
+                value,
+                span,
+                ..
+            } => {
+                if let Expr::Ident(name, _) = value.as_ref()
+                    && self.param_effects.get(name) == Some(&DataEffect::Mut)
+                {
+                    rust_value_ident(name)
+                } else if self.is_class_type(expected) {
+                    format!("&{}", self.lower_expr_for_expected_type(value, expected))
+                } else if self.expr_lowers_to_managed_non_class_handle(value) {
+                    format!(
+                        "&mut *rsscript_runtime::unwrap_runtime({}.try_write_at({}))",
+                        self.lower_expr(value),
+                        lower_source_span(span)
+                    )
+                } else {
+                    format!(
+                        "&mut {}",
+                        self.lower_expr_for_expected_type(value, expected)
+                    )
+                }
+            }
+            Expr::Effect {
+                effect: DataEffect::Take,
+                value,
+                ..
+            } => self.lower_expr_for_expected_type(value, expected),
+            _ => self.lower_expr_for_expected_type(value, expected),
+        }
+    }
+
+    fn expected_call_arg_type(
+        &self,
+        callee: &Callee,
+        arg: &CallArg,
+        index: usize,
+    ) -> Option<TypeRef> {
+        let key = native_boundary_callee_key(callee);
+        let params = self.function_param_types.get(&key)?;
+        if let Some(name) = arg.name.as_deref() {
+            params
+                .iter()
+                .find(|(param_name, _)| param_name == name)
+                .map(|(_, ty)| ty.clone())
+        } else {
+            params.get(index).map(|(_, ty)| ty.clone())
+        }
+    }
+
+    fn expected_call_arg_effect(
+        &self,
+        callee: &Callee,
+        arg: &CallArg,
+        index: usize,
+    ) -> Option<DataEffect> {
+        let key = native_boundary_callee_key(callee);
+        let params = self.function_param_effects.get(&key)?;
+        if let Some(name) = arg.name.as_deref() {
+            params
+                .iter()
+                .find(|(param_name, _)| param_name == name)
+                .and_then(|(_, effect)| *effect)
+        } else {
+            params.get(index).and_then(|(_, effect)| *effect)
+        }
     }
 
     fn lower_capability_from_call(&mut self, protocol: &str, args: &[CallArg]) -> String {
@@ -2507,7 +2858,11 @@ impl<'a> RustLowerer<'a> {
     }
 
     fn lower_return_expr(&mut self, expr: &Expr) -> String {
-        let lowered = self.lower_expr(expr);
+        let lowered = if let Some(expected) = self.current_return_type.clone() {
+            self.lower_expr_for_expected_type(expr, &expected)
+        } else {
+            self.lower_expr(expr)
+        };
         if self
             .current_return_type
             .as_ref()
@@ -2524,6 +2879,24 @@ impl<'a> RustLowerer<'a> {
     fn expr_returns_result(&self, expr: &Expr) -> bool {
         match expr {
             Expr::Call { callee, .. } => {
+                if let Callee::ReceiverCall {
+                    receiver, method, ..
+                } = callee
+                {
+                    return self
+                        .infer_expr_type(receiver)
+                        .map(|receiver_type| {
+                            let namespace = self.receiver_call_namespace(&receiver_type, method);
+                            let qualified = Callee::Qualified {
+                                namespace,
+                                name: method.clone(),
+                            };
+                            self.function_return_types
+                                .get(&native_boundary_callee_key(&qualified))
+                                .is_some_and(is_result_type)
+                        })
+                        .unwrap_or(false);
+                }
                 self.function_return_types
                     .get(&native_boundary_callee_key(callee))
                     .is_some_and(is_result_type)
@@ -2582,7 +2955,20 @@ impl<'a> RustLowerer<'a> {
                 fn_return: None,
                 span: span.clone(),
             }),
-            Expr::Ident(name, _) => self.value_types.get(name).cloned(),
+            Expr::Ident(name, span) => self.value_types.get(name).cloned().or_else(|| {
+                self.find_sum_type_for_variant(name)
+                    .map(|sum_name| TypeRef {
+                        name: sum_name,
+                        args: Vec::new(),
+                        malformed_arg_spans: Vec::new(),
+                        is_fresh: false,
+                        is_noescape: false,
+                        is_owned: false,
+                        fn_params: Vec::new(),
+                        fn_return: None,
+                        span: span.clone(),
+                    })
+            }),
             Expr::Number(_, span) => Some(TypeRef {
                 name: "Int".to_string(),
                 args: Vec::new(),
@@ -2596,6 +2982,30 @@ impl<'a> RustLowerer<'a> {
             }),
             Expr::String(_, span) => Some(TypeRef {
                 name: "String".to_string(),
+                args: Vec::new(),
+                malformed_arg_spans: Vec::new(),
+                is_fresh: false,
+                is_noescape: false,
+                is_owned: false,
+                fn_params: Vec::new(),
+                fn_return: None,
+                span: span.clone(),
+            }),
+            Expr::Binary { op, span, .. } => Some(TypeRef {
+                name: match op {
+                    BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide => {
+                        "Int"
+                    }
+                    BinaryOp::Equal
+                    | BinaryOp::NotEqual
+                    | BinaryOp::Less
+                    | BinaryOp::LessEqual
+                    | BinaryOp::Greater
+                    | BinaryOp::GreaterEqual
+                    | BinaryOp::LogicalAnd
+                    | BinaryOp::LogicalOr => "Bool",
+                }
+                .to_string(),
                 args: Vec::new(),
                 malformed_arg_spans: Vec::new(),
                 is_fresh: false,
@@ -2627,6 +3037,13 @@ impl<'a> RustLowerer<'a> {
                 fn_return: None,
                 span: span.clone(),
             }),
+            Expr::Call {
+                callee: Callee::Qualified { namespace, name },
+                span,
+                ..
+            } if type_root_name(name) == "new" && type_arg_names(namespace).is_some() => {
+                Some(type_ref_from_display(namespace, span))
+            }
             Expr::Call { callee, span, .. } if capability_from_protocol(callee).is_some() => {
                 let protocol = capability_from_protocol(callee)?;
                 Some(TypeRef {
@@ -2664,12 +3081,39 @@ impl<'a> RustLowerer<'a> {
                         .get(&native_boundary_callee_key(&Callee::Name(name.clone())))
                         .cloned()
                 }),
+            Expr::Call {
+                callee:
+                    Callee::ReceiverCall {
+                        receiver, method, ..
+                    },
+                ..
+            } => {
+                let receiver_type = self.infer_expr_type(receiver)?;
+                let namespace = self.receiver_call_namespace(&receiver_type, method);
+                self.function_return_types
+                    .get(&native_boundary_callee_key(&Callee::Qualified {
+                        namespace,
+                        name: method.clone(),
+                    }))
+                    .cloned()
+            }
             Expr::Call { callee, .. } => self
                 .function_return_types
                 .get(&native_boundary_callee_key(callee))
                 .cloned(),
             Expr::ObjectLiteral { span, .. } => Some(TypeRef {
                 name: "JsonLiteral".to_string(),
+                args: Vec::new(),
+                malformed_arg_spans: Vec::new(),
+                is_fresh: false,
+                is_noescape: false,
+                is_owned: false,
+                fn_params: Vec::new(),
+                fn_return: None,
+                span: span.clone(),
+            }),
+            Expr::MapLiteral { span, .. } => Some(TypeRef {
+                name: "MapLiteral".to_string(),
                 args: Vec::new(),
                 malformed_arg_spans: Vec::new(),
                 is_fresh: false,
@@ -2714,6 +3158,110 @@ impl<'a> RustLowerer<'a> {
             }),
             _ => None,
         }
+    }
+
+    fn receiver_call_expected_arg_type(
+        &self,
+        namespace: &str,
+        method: &str,
+        receiver_type: Option<&TypeRef>,
+        arg_name: Option<&str>,
+        arg_index: usize,
+    ) -> Option<TypeRef> {
+        let positional_name = || {
+            let qualified = Callee::Qualified {
+                namespace: namespace.to_string(),
+                name: method.to_string(),
+            };
+            let key = native_boundary_callee_key(&qualified);
+            self.function_param_types
+                .get(&key)?
+                .get(arg_index + 1)
+                .map(|(name, _)| name.as_str())
+        };
+        let resolved_arg_name = arg_name.or_else(positional_name);
+        if type_root_name(namespace) == "List" && resolved_arg_name == Some("value") {
+            let receiver_type = receiver_type?;
+            let item_type = receiver_type.args.first()?.clone();
+            return match type_root_name(method) {
+                "push" | "set" => Some(item_type),
+                _ => None,
+            };
+        }
+        if type_root_name(namespace) == "Map" {
+            let receiver_type = receiver_type?;
+            let key_type = receiver_type.args.first()?.clone();
+            let value_type = receiver_type.args.get(1)?.clone();
+            return match type_root_name(method) {
+                "contains_key" | "get" | "get_or_default" | "insert" | "insert_old" | "remove"
+                    if resolved_arg_name == Some("key") =>
+                {
+                    Some(key_type)
+                }
+                "get_or_default" | "insert" | "insert_old"
+                    if resolved_arg_name == Some("value") =>
+                {
+                    Some(value_type)
+                }
+                "get_or_default" if resolved_arg_name == Some("default") => Some(value_type),
+                _ => None,
+            };
+        }
+        let qualified = Callee::Qualified {
+            namespace: namespace.to_string(),
+            name: method.to_string(),
+        };
+        let key = native_boundary_callee_key(&qualified);
+        if let Some(params) = self.function_param_types.get(&key) {
+            if let Some(arg_name) = arg_name
+                && let Some((_, ty)) = params.iter().find(|(param_name, _)| param_name == arg_name)
+            {
+                return Some(ty.clone());
+            }
+            if arg_name.is_none()
+                && let Some((_, ty)) = params.get(arg_index + 1)
+            {
+                return Some(ty.clone());
+            }
+        }
+        None
+    }
+
+    fn lower_receiver_positional_arg(&mut self, value: &Expr, expected: &TypeRef) -> String {
+        if expected.name == "String"
+            && expected.args.is_empty()
+            && let Expr::Ident(name, _) = value
+            && self.param_effects.get(name) == Some(&DataEffect::Read)
+        {
+            return rust_value_ident(name);
+        }
+        self.lower_expr_for_expected_type(value, expected)
+    }
+
+    fn receiver_call_namespace(&self, receiver_type: &TypeRef, method: &str) -> String {
+        let receiver_type_name = type_ref_display_name(receiver_type);
+        let receiver_type_root = type_root_name(&receiver_type_name).to_string();
+        self.generic_protocol_bounds
+            .get(&receiver_type_name)
+            .cloned()
+            .or_else(|| capability_protocol_name(&receiver_type_name).map(str::to_string))
+            .or_else(|| self.protocol_impl_namespace(&receiver_type_root, method))
+            .or_else(|| receiver_facade_namespace(&receiver_type_root, method).map(str::to_string))
+            .unwrap_or(receiver_type_root)
+    }
+
+    fn receiver_call_expected_arg_effect(
+        &self,
+        namespace: &str,
+        method: &str,
+        arg_index: usize,
+    ) -> Option<DataEffect> {
+        let qualified = Callee::Qualified {
+            namespace: namespace.to_string(),
+            name: method.to_string(),
+        };
+        let key = native_boundary_callee_key(&qualified);
+        self.function_param_effects.get(&key)?.get(arg_index + 1)?.1
     }
 
     fn expr_lowers_to_managed_handle(&self, expr: &Expr) -> bool {
@@ -2784,6 +3332,97 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
+    fn lower_map_literal(&mut self, expr: &Expr, expected: &TypeRef) -> String {
+        let Expr::MapLiteral { entries, .. } = expr else {
+            return self.lower_expr(expr);
+        };
+        let key_type = expected.args.first();
+        let value_type = expected.args.get(1);
+        let entries = entries
+            .iter()
+            .map(|entry| {
+                let key = if let Some(expected) = key_type {
+                    self.lower_retained_expr_for_expected_type(&entry.key, expected)
+                } else {
+                    self.lower_owned_expr(&entry.key)
+                };
+                let value = if let Some(expected) = value_type {
+                    self.lower_retained_expr_for_expected_type(&entry.value, expected)
+                } else {
+                    self.lower_owned_expr(&entry.value)
+                };
+                format!("({key}, {value})")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("rsscript_runtime::map_from_entries(vec![{entries}])")
+    }
+
+    fn lower_list_literal(&mut self, expr: &Expr, expected: &TypeRef) -> String {
+        let Expr::ArrayLiteral { items, .. } = expr else {
+            return self.lower_expr(expr);
+        };
+        let item_type = expected.args.first();
+        let items = items
+            .iter()
+            .map(|item| {
+                if let Some(expected) = item_type {
+                    self.lower_retained_expr_for_expected_type(item, expected)
+                } else {
+                    self.lower_owned_expr(item)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("vec![{items}]")
+    }
+
+    fn lower_retained_expr_for_expected_type(&mut self, expr: &Expr, expected: &TypeRef) -> String {
+        match expr {
+            Expr::Ident(name, _) if !is_copy_type_ref(expected) => {
+                format!("{}.clone()", rust_value_ident(name))
+            }
+            Expr::Effect {
+                effect: DataEffect::Take,
+                value,
+                ..
+            } => self.lower_owned_expr_for_expected_type(value, expected),
+            _ => self.lower_owned_expr_for_expected_type(expr, expected),
+        }
+    }
+
+    fn lower_owned_expr_for_expected_type(&mut self, expr: &Expr, expected: &TypeRef) -> String {
+        match expr {
+            Expr::Ident(name, _)
+                if !is_copy_type_ref(expected)
+                    && matches!(
+                        self.param_effects.get(name),
+                        Some(DataEffect::Read | DataEffect::Mut)
+                    ) =>
+            {
+                format!("{}.clone()", rust_value_ident(name))
+            }
+            Expr::Effect {
+                effect: DataEffect::Read | DataEffect::Mut,
+                value,
+                ..
+            } => {
+                let lowered = self.lower_expr_for_expected_type(value, expected);
+                if is_copy_type_ref(expected) {
+                    lowered
+                } else {
+                    format!("{lowered}.clone()")
+                }
+            }
+            Expr::Effect {
+                effect: DataEffect::Take,
+                value,
+                ..
+            } => self.lower_expr_for_expected_type(value, expected),
+            _ => self.lower_expr_for_expected_type(expr, expected),
+        }
+    }
+
     fn lower_json_field(&mut self, name: &str, value: &Expr) -> String {
         let key = format!("{:?}.to_string()", decode_string_token(name));
         match value {
@@ -2812,9 +3451,15 @@ impl<'a> RustLowerer<'a> {
                     let lowered = self.lower_expr(value);
                     format!("rsscript_runtime::json_raw_field(&{key}, &{lowered})")
                 }
+                Some(ty) if ty == "JsonValue" => {
+                    let lowered = self.lower_expr(value);
+                    format!(
+                        "rsscript_runtime::json_raw_field(&{key}, &rsscript_runtime::json_to_string(&{lowered}))"
+                    )
+                }
                 _ => format!(
-                    "rsscript_runtime::json_string_field(&{key}, &{})",
-                    self.lower_expr(value)
+                    "rsscript_runtime::json_string_field(&{key}, {})",
+                    self.lower_json_string_value(value)
                 ),
             },
         }
@@ -2828,11 +3473,29 @@ impl<'a> RustLowerer<'a> {
             _ => match self.infer_expr_type(value).map(|ty| ty.name) {
                 Some(ty) if ty == "Int" || ty == "Bool" => self.lower_expr(value),
                 Some(ty) if ty == "JsonLiteral" => self.lower_expr(value),
+                Some(ty) if ty == "JsonValue" => {
+                    format!(
+                        "rsscript_runtime::json_to_string(&{})",
+                        self.lower_expr(value)
+                    )
+                }
                 _ => format!(
-                    "rsscript_runtime::json_quote_string(&{})",
-                    self.lower_expr(value)
+                    "rsscript_runtime::json_quote_string({})",
+                    self.lower_json_string_value(value)
                 ),
             },
+        }
+    }
+
+    fn lower_json_string_value(&mut self, value: &Expr) -> String {
+        match value {
+            Expr::Effect {
+                effect: DataEffect::Read,
+                value,
+                ..
+            } => self.lower_json_string_value(value),
+            Expr::Ident(name, _) if self.param_effects.contains_key(name) => self.lower_expr(value),
+            _ => format!("&{}", self.lower_expr(value)),
         }
     }
 
@@ -3085,6 +3748,16 @@ impl<'a> RustLowerer<'a> {
         })
     }
 
+    fn constructor_field_arg_name(&self, type_name: &str, arg: &CallArg) -> Option<String> {
+        if let Some(name) = arg.name.as_deref() {
+            return Some(name.to_string());
+        }
+        let Expr::Ident(name, _) = &arg.value else {
+            return None;
+        };
+        self.field_type(type_name, name).map(|_| name.clone())
+    }
+
     fn field_type(&self, type_name: &str, field_name: &str) -> Option<TypeRef> {
         self.program.items.iter().find_map(|item| match item {
             Item::Type(ty) if ty.name == type_name => ty
@@ -3235,6 +3908,15 @@ fn type_ref_display_name(ty: &TypeRef) -> String {
     )
 }
 
+fn awaited_binding_type(value_type: Option<TypeRef>, is_try: bool) -> Option<TypeRef> {
+    let value_type = value_type?;
+    if is_try {
+        result_ok_type_ref(&value_type)
+    } else {
+        Some(value_type)
+    }
+}
+
 fn stmt_contains_await(statement: &Stmt) -> bool {
     match statement {
         Stmt::Let(stmt) => stmt.value.as_ref().is_some_and(expr_contains_await),
@@ -3277,6 +3959,39 @@ fn block_contains_await(block: &Block) -> bool {
     block.statements.iter().any(stmt_contains_await)
 }
 
+fn match_binding_type_ref(
+    pattern: &MatchPattern,
+    value_type: Option<&TypeRef>,
+) -> Option<(String, TypeRef)> {
+    let MatchPattern::Variant {
+        name,
+        binding: Some(binding),
+        ..
+    } = pattern
+    else {
+        return None;
+    };
+    let value_type = value_type?;
+    match name.as_str() {
+        "Some" if value_type.name == "Option" => value_type
+            .args
+            .first()
+            .cloned()
+            .map(|ty| (binding.clone(), ty)),
+        "Ok" if value_type.name == "Result" => value_type
+            .args
+            .first()
+            .cloned()
+            .map(|ty| (binding.clone(), ty)),
+        "Err" if value_type.name == "Result" => value_type
+            .args
+            .get(1)
+            .cloned()
+            .map(|ty| (binding.clone(), ty)),
+        _ => None,
+    }
+}
+
 fn split_loop_body_at_first_await(statements: &[Stmt]) -> Option<(&[Stmt], &Stmt, &[Stmt])> {
     for (index, statement) in statements.iter().enumerate() {
         match statement {
@@ -3311,8 +4026,29 @@ fn expr_contains_await(expr: &Expr) -> bool {
         Expr::ObjectLiteral { fields, .. } => {
             fields.iter().any(|field| expr_contains_await(&field.value))
         }
+        Expr::MapLiteral { entries, .. } => entries
+            .iter()
+            .any(|entry| expr_contains_await(&entry.key) || expr_contains_await(&entry.value)),
         Expr::ArrayLiteral { items, .. } => items.iter().any(expr_contains_await),
         Expr::Ident(..) | Expr::Number(..) | Expr::String(..) | Expr::Unknown(_) => false,
+    }
+}
+
+fn type_ref_from_display(name: &str, span: &Span) -> TypeRef {
+    TypeRef {
+        name: type_root_name(name).to_string(),
+        args: type_arg_names(name)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|arg| type_ref_from_display(arg, span))
+            .collect(),
+        malformed_arg_spans: Vec::new(),
+        is_fresh: false,
+        is_noescape: false,
+        is_owned: false,
+        fn_params: Vec::new(),
+        fn_return: None,
+        span: span.clone(),
     }
 }
 
@@ -3322,6 +4058,22 @@ fn is_json_encode_callee(callee: &Callee) -> bool {
         Callee::Qualified { namespace, name }
             if type_root_name(namespace) == "Json" && type_root_name(name) == "encode"
     )
+}
+
+fn expr_is_json_literal(expr: &Expr) -> bool {
+    match expr {
+        Expr::ObjectLiteral { .. } | Expr::ArrayLiteral { .. } => true,
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } => expr_is_json_literal(value),
+        _ => false,
+    }
+}
+
+fn receiver_facade_namespace(receiver_root: &str, method: &str) -> Option<&'static str> {
+    match receiver_root {
+        "JsonValue" | "JsonLiteral" => Some("Json"),
+        "String" if method.starts_with("json_") => Some("Json"),
+        _ => None,
+    }
 }
 
 fn generated_line_count(generated: &str) -> usize {

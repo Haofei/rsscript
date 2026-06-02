@@ -112,6 +112,9 @@ pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
     if let Some(target_dir) = generated_target_dir_from_env() {
         cargo.env("CARGO_TARGET_DIR", target_dir);
     }
+    if let Ok(current_dir) = std::env::current_dir() {
+        cargo.env("RSS_RUN_WORKSPACE_ROOT", current_dir);
+    }
     let output = match cargo.output() {
         Ok(output) => output,
         Err(error) => {

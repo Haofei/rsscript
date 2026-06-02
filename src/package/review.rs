@@ -1478,6 +1478,31 @@ fn collect_await_sites_from_expr(
                 );
             }
         }
+        Expr::MapLiteral { entries, .. } => {
+            let mut entry_live_after = live_after.clone();
+            for entry in entries.iter().rev() {
+                collect_await_sites_from_expr(
+                    function,
+                    &entry.value,
+                    &entry_live_after,
+                    scoped_live,
+                    pending_callees,
+                    context,
+                    sites,
+                );
+                collect_expr_uses(&entry.value, &mut entry_live_after);
+                collect_await_sites_from_expr(
+                    function,
+                    &entry.key,
+                    &entry_live_after,
+                    scoped_live,
+                    pending_callees,
+                    context,
+                    sites,
+                );
+                collect_expr_uses(&entry.key, &mut entry_live_after);
+            }
+        }
         Expr::ObjectLiteral { .. }
         | Expr::ArrayLiteral { .. }
         | Expr::Ident(_, _)
@@ -1626,6 +1651,12 @@ fn collect_expr_uses(expr: &Expr, uses: &mut BTreeSet<String>) {
                 collect_block_uses(&arm.body, uses);
             }
         }
+        Expr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                collect_expr_uses(&entry.key, uses);
+                collect_expr_uses(&entry.value, uses);
+            }
+        }
         Expr::ObjectLiteral { .. }
         | Expr::ArrayLiteral { .. }
         | Expr::Number(_, _)
@@ -1731,7 +1762,25 @@ fn callee_label(callee: &Callee) -> String {
             receiver,
             method,
             effect,
-        } => format!("{} {receiver}.{method}", effect.as_str()),
+        } => format!(
+            "{} {}.{method}",
+            effect.as_str(),
+            package_expr_label(receiver)
+        ),
+    }
+}
+
+fn package_expr_label(expr: &Expr) -> String {
+    match expr {
+        Expr::Ident(name, _) => name.clone(),
+        Expr::String(value, _) => format!("{value:?}"),
+        Expr::Field { base, name, .. } => format!("{}.{}", package_expr_label(base), name),
+        Expr::Index { base, .. } => format!("{}[]", package_expr_label(base)),
+        Expr::Call { callee, .. } => format!("{}()", callee_label(callee)),
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
+            package_expr_label(value)
+        }
+        _ => "<expr>".to_string(),
     }
 }
 

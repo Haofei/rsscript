@@ -26,7 +26,8 @@ pub mod syntax;
 pub use analyzer::{
     analyze_source, analyze_source_with_core, analyze_source_with_interfaces,
     analyze_source_with_interfaces_without_core, analyze_source_without_core,
-    analyze_sources_with_interfaces, analyze_sources_with_interfaces_without_core, core_interfaces,
+    analyze_sources_with_interfaces, analyze_sources_with_interfaces_without_core,
+    analyze_syntax_source, core_interfaces,
 };
 pub use core_index::core_package_index_json;
 pub use diagnostic::{

@@ -1,5 +1,7 @@
 use std::time::{Duration, Instant};
 
+use crate::{JsonValue, json_to_string};
+
 pub fn os_close(fd: i64) {
     let _ = fd;
 }
@@ -369,8 +371,16 @@ pub fn log_write(message: &str) {
     println!("{message}");
 }
 
+pub fn log_write_json(value: &JsonValue) {
+    println!("{}", json_to_string(value));
+}
+
 pub fn log_error(message: &str) {
     eprintln!("{message}");
+}
+
+pub fn log_error_json(value: &JsonValue) {
+    eprintln!("{}", json_to_string(value));
 }
 
 pub fn log_trace(event: &str, message: &str) {

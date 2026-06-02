@@ -7,9 +7,9 @@ use rsscript::syntax::ast::{EffectDecl, Item};
 use rsscript::syntax::parse_source;
 use rsscript::{
     Severity, analyze_source, analyze_source_with_core, analyze_source_with_interfaces,
-    analyze_source_without_core, analyze_sources_with_interfaces, core_interfaces,
-    explain_diagnostic_code, format_diagnostic_explanation, format_diagnostics_json, lint_source,
-    lower_source_to_rust, lower_source_to_rust_package,
+    analyze_source_without_core, analyze_sources_with_interfaces, analyze_syntax_source,
+    core_interfaces, explain_diagnostic_code, format_diagnostic_explanation,
+    format_diagnostics_json, lint_source, lower_source_to_rust, lower_source_to_rust_package,
 };
 use serde_json::Value;
 
@@ -148,6 +148,33 @@ module rss.package.other
     }));
     assert!(diagnostics.iter().any(|diagnostic| {
         diagnostic.code == "RS0015" && diagnostic.label == "misplaced module declaration"
+    }));
+}
+
+#[test]
+fn syntax_analysis_ignores_cross_file_semantic_references_for_fmt() {
+    let source = r#"
+fn use_other_file(config: read AgentConfig) -> Unit {
+    OtherFile.helper(config)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_syntax_source("fmt-cross-file.rss", source);
+
+    assert_eq!(diagnostics, Vec::new());
+}
+
+#[test]
+fn syntax_analysis_still_reports_malformed_parser_surface_for_fmt() {
+    let source = r#"
+fn broken() -> Unit {
+    let =
+}
+"#;
+    let diagnostics = analyze_syntax_source("fmt-broken.rss", source);
+
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS0015" && diagnostic.label == "malformed statement"
     }));
 }
 

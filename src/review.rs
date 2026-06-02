@@ -9,8 +9,8 @@ use crate::hir::{
 };
 use crate::syntax::ast::{
     Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature, FunctionDecl,
-    GenericBound, Item, LetKind, Param, Program, ProtocolImpl, Stmt, TypeDecl, TypeKind, TypeRef,
-    merge_programs,
+    GenericBound, Item, LetKind, MatchPattern, Param, Program, ProtocolImpl, Stmt, TypeDecl,
+    TypeKind, TypeRef, merge_programs,
 };
 use crate::syntax::parse_source;
 
@@ -1101,6 +1101,12 @@ fn collect_review_map_local_closure_bindings_expr(expr: &Expr, bindings: &mut BT
                 collect_review_map_local_closure_bindings_block(&arm.body, bindings);
             }
         }
+        Expr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                collect_review_map_local_closure_bindings_expr(&entry.key, bindings);
+                collect_review_map_local_closure_bindings_expr(&entry.value, bindings);
+            }
+        }
         Expr::ObjectLiteral { .. }
         | Expr::ArrayLiteral { .. }
         | Expr::Ident(_, _)
@@ -1146,6 +1152,12 @@ fn collect_review_map_facts_stmt(
                     .insert(stmt.name.clone(), type_ref_display_name(ty));
             }
             if let Some(value) = &stmt.value {
+                if !facts.value_types.contains_key(&stmt.name)
+                    && let Some(type_name) =
+                        review_map_expr_type_name_with_facts(value, hir, &facts.value_types)
+                {
+                    facts.value_types.insert(stmt.name.clone(), type_name);
+                }
                 collect_review_map_facts_expr(
                     value,
                     hir,
@@ -1277,7 +1289,17 @@ fn collect_review_map_facts_stmt(
                 local_closure_bindings,
                 facts,
             );
+            let value_type =
+                review_map_expr_type_name_with_facts(&stmt.value, hir, &facts.value_types);
             for arm in &stmt.arms {
+                let scoped_binding =
+                    review_map_match_binding_type(&arm.pattern, value_type.as_deref());
+                let previous = scoped_binding
+                    .as_ref()
+                    .and_then(|(binding, _)| facts.value_types.get(binding).cloned());
+                if let Some((binding, type_name)) = &scoped_binding {
+                    facts.value_types.insert(binding.clone(), type_name.clone());
+                }
                 collect_review_map_facts_block(
                     &arm.body,
                     hir,
@@ -1285,6 +1307,13 @@ fn collect_review_map_facts_stmt(
                     local_closure_bindings,
                     facts,
                 );
+                if let Some((binding, _)) = scoped_binding {
+                    if let Some(previous) = previous {
+                        facts.value_types.insert(binding, previous);
+                    } else {
+                        facts.value_types.remove(&binding);
+                    }
+                }
             }
         }
         Stmt::LetElse(stmt) => {
@@ -1333,6 +1362,43 @@ fn collect_review_map_facts_stmt(
     }
 }
 
+fn review_map_expr_type_name(expr: &Expr, hir: &Hir) -> Option<String> {
+    match expr {
+        Expr::Call { callee, .. } => match hir.resolve_call(callee) {
+            CallResolution::Resolved { signature, kind } => {
+                if let ResolvedCalleeKind::Constructor { .. } = kind
+                    && let Callee::Qualified { namespace, .. } = callee
+                {
+                    return Some(namespace.clone());
+                }
+                signature.return_type.clone()
+            }
+            CallResolution::EnumVariant
+            | CallResolution::Ambiguous { .. }
+            | CallResolution::Unknown => None,
+        },
+        Expr::Effect { value, .. } => review_map_expr_type_name(value, hir),
+        Expr::Try { value, .. } => {
+            review_map_expr_type_name(value, hir).and_then(|ty| result_ok_type_name(&ty))
+        }
+        Expr::Await { value, .. } => review_map_expr_type_name(value, hir),
+        Expr::String(_, _) => Some("String".to_string()),
+        Expr::Number(_, _) => Some("Int".to_string()),
+        Expr::Ident(name, _) if matches!(name.as_str(), "true" | "false") => {
+            Some("Bool".to_string())
+        }
+        Expr::Ident(name, _) => hir.sum_type_for_variant(name).map(str::to_string),
+        Expr::ArrayLiteral { items, .. } => items
+            .first()
+            .and_then(|item| review_map_expr_type_name(item, hir))
+            .map(|item| format!("List<{item}>"))
+            .or_else(|| Some("List".to_string())),
+        Expr::MapLiteral { .. } => Some("MapLiteral".to_string()),
+        Expr::ObjectLiteral { .. } => Some("JsonLiteral".to_string()),
+        _ => None,
+    }
+}
+
 fn collect_review_map_facts_expr(
     expr: &Expr,
     hir: &Hir,
@@ -1357,7 +1423,10 @@ fn collect_review_map_facts_expr(
                         method,
                         effect,
                     } => {
-                        if let Some(receiver_type) = facts.value_types.get(receiver).cloned() {
+                        let receiver_label = review_expr_label(receiver);
+                        if let Some(receiver_type) =
+                            review_map_expr_type_name_with_facts(receiver, hir, &facts.value_types)
+                        {
                             let (resolution, namespace) = hir.resolve_receiver_call(
                                 &receiver_type,
                                 method,
@@ -1371,7 +1440,7 @@ fn collect_review_map_facts_expr(
                             facts.receiver_calls.push(ReviewMapReceiverCall {
                                 line: span.line,
                                 column: span.column,
-                                source: format!("{} {receiver}.{method}", effect.as_str()),
+                                source: format!("{} {receiver_label}.{method}", effect.as_str()),
                                 canonical_callee: namespace
                                     .map(|namespace| format!("{namespace}.{method}"))
                                     .unwrap_or_else(|| format!("<unresolved>.{method}")),
@@ -1383,7 +1452,7 @@ fn collect_review_map_facts_expr(
                             facts.receiver_calls.push(ReviewMapReceiverCall {
                                 line: span.line,
                                 column: span.column,
-                                source: format!("{} {receiver}.{method}", effect.as_str()),
+                                source: format!("{} {receiver_label}.{method}", effect.as_str()),
                                 canonical_callee: format!("<unresolved>.{method}"),
                                 self_effect: effect.as_str().to_string(),
                                 resolution: "unknown".to_string(),
@@ -1534,6 +1603,24 @@ fn collect_review_map_facts_expr(
             local_closure_bindings,
             facts,
         ),
+        Expr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                collect_review_map_facts_expr(
+                    &entry.key,
+                    hir,
+                    callback_params,
+                    local_closure_bindings,
+                    facts,
+                );
+                collect_review_map_facts_expr(
+                    &entry.value,
+                    hir,
+                    callback_params,
+                    local_closure_bindings,
+                    facts,
+                );
+            }
+        }
         Expr::ObjectLiteral { .. }
         | Expr::ArrayLiteral { .. }
         | Expr::Ident(_, _)
@@ -1615,6 +1702,12 @@ fn collect_spawn_capture_names(expr: &Expr, captures: &mut BTreeSet<String>) {
         Expr::Closure { body, .. } => {
             for statement in &body.statements {
                 collect_spawn_capture_names_from_stmt(statement, captures);
+            }
+        }
+        Expr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                collect_spawn_capture_names(&entry.key, captures);
+                collect_spawn_capture_names(&entry.value, captures);
             }
         }
         Expr::ObjectLiteral { .. }
@@ -1719,6 +1812,7 @@ fn spawn_capture_path(expr: &Expr) -> Option<String> {
         }
         Expr::Effect { value, .. } | Expr::Try { value, .. } => spawn_capture_path(value),
         Expr::Manage { .. }
+        | Expr::MapLiteral { .. }
         | Expr::ObjectLiteral { .. }
         | Expr::ArrayLiteral { .. }
         | Expr::Spawn { .. }
@@ -1875,6 +1969,12 @@ fn collect_review_map_hir_facts_expr(
             collect_review_map_hir_facts_expr(value, local_bindings, facts);
             for arm in arms {
                 collect_review_map_hir_facts_block(&arm.body, local_bindings, facts);
+            }
+        }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                collect_review_map_hir_facts_expr(&entry.key, local_bindings, facts);
+                collect_review_map_hir_facts_expr(&entry.value, local_bindings, facts);
             }
         }
         HirExpr::ObjectLiteral { .. }
@@ -2190,6 +2290,22 @@ fn collect_managed_closure_capture_names_expr(
                 );
             }
         }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                collect_managed_closure_capture_names_expr(
+                    &entry.key,
+                    local_bindings,
+                    closure_locals,
+                    facts,
+                );
+                collect_managed_closure_capture_names_expr(
+                    &entry.value,
+                    local_bindings,
+                    closure_locals,
+                    facts,
+                );
+            }
+        }
         HirExpr::Field { .. }
         | HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
@@ -2244,6 +2360,7 @@ fn hir_place_path_root(expr: &HirExpr) -> Option<&str> {
         | HirExpr::Await { value, .. }
         | HirExpr::Try { value, .. } => hir_place_path_root(value),
         HirExpr::Binary { .. }
+        | HirExpr::MapLiteral { .. }
         | HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Call { .. }
@@ -2269,6 +2386,7 @@ fn hir_place_path_crosses_handle_field(expr: &HirExpr) -> bool {
         }
         HirExpr::Ident { .. } => false,
         HirExpr::Binary { .. }
+        | HirExpr::MapLiteral { .. }
         | HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Call { .. }
@@ -2288,7 +2406,69 @@ fn review_callee_display(callee: &Callee) -> String {
             receiver,
             method,
             effect,
-        } => format!("{} {receiver}.{method}", effect.as_str()),
+        } => format!(
+            "{} {}.{method}",
+            effect.as_str(),
+            review_expr_label(receiver)
+        ),
+    }
+}
+
+fn review_map_expr_type_name_with_facts(
+    expr: &Expr,
+    hir: &Hir,
+    value_types: &HashMap<String, String>,
+) -> Option<String> {
+    match expr {
+        Expr::Ident(name, _) => value_types
+            .get(name)
+            .cloned()
+            .or_else(|| hir.sum_type_for_variant(name).map(str::to_string)),
+        Expr::Call {
+            callee: Callee::ReceiverCall {
+                receiver, method, ..
+            },
+            ..
+        } => {
+            let receiver_type = review_map_expr_type_name_with_facts(receiver, hir, value_types)?;
+            match hir
+                .resolve_receiver_call(&receiver_type, method, value_types)
+                .0
+            {
+                CallResolution::Resolved { signature, .. } => signature.return_type,
+                CallResolution::Ambiguous { .. }
+                | CallResolution::EnumVariant
+                | CallResolution::Unknown => None,
+            }
+        }
+        Expr::Call { .. } => review_map_expr_type_name(expr, hir),
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
+            review_map_expr_type_name_with_facts(value, hir, value_types)
+        }
+        Expr::Try { value, .. } => review_map_expr_type_name_with_facts(value, hir, value_types)
+            .and_then(|ty| result_ok_type_name(&ty)),
+        Expr::Await { value, .. } => review_map_expr_type_name_with_facts(value, hir, value_types),
+        Expr::Field { base, name, .. } => {
+            let base_type = review_map_expr_type_name_with_facts(base, hir, value_types)?;
+            hir.type_info(&base_type)
+                .and_then(|info| info.fields.get(name))
+                .map(|field| field.type_name.clone())
+        }
+        _ => review_map_expr_type_name(expr, hir),
+    }
+}
+
+fn review_expr_label(expr: &Expr) -> String {
+    match expr {
+        Expr::Ident(name, _) => name.clone(),
+        Expr::String(value, _) => format!("{value:?}"),
+        Expr::Field { base, name, .. } => format!("{}.{}", review_expr_label(base), name),
+        Expr::Index { base, .. } => format!("{}[]", review_expr_label(base)),
+        Expr::Call { callee, .. } => format!("{}()", review_callee_display(callee)),
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
+            review_expr_label(value)
+        }
+        _ => "<expr>".to_string(),
     }
 }
 
@@ -2341,6 +2521,34 @@ fn type_ref_contains_name(ty: &TypeRef, name: &str) -> bool {
     ty.name == name || ty.args.iter().any(|arg| type_ref_contains_name(arg, name))
 }
 
+fn review_map_match_binding_type(
+    pattern: &MatchPattern,
+    value_type: Option<&str>,
+) -> Option<(String, String)> {
+    let MatchPattern::Variant {
+        name,
+        binding: Some(binding),
+        ..
+    } = pattern
+    else {
+        return None;
+    };
+    let value_type = value_type?;
+    let args = type_arg_names(value_type)?;
+    match name.as_str() {
+        "Some" if type_root_name(value_type) == "Option" => {
+            args.first().map(|ty| (binding.clone(), (*ty).to_string()))
+        }
+        "Ok" if type_root_name(value_type) == "Result" => {
+            args.first().map(|ty| (binding.clone(), (*ty).to_string()))
+        }
+        "Err" if type_root_name(value_type) == "Result" => {
+            args.get(1).map(|ty| (binding.clone(), (*ty).to_string()))
+        }
+        _ => None,
+    }
+}
+
 fn type_ref_display_name(ty: &TypeRef) -> String {
     if ty.args.is_empty() {
         return ty.name.clone();
@@ -2371,6 +2579,13 @@ fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
         .split_once('<')
         .and_then(|(_, rest)| rest.strip_suffix('>'))?;
     Some(split_top_level_type_args(inner))
+}
+
+fn result_ok_type_name(type_name: &str) -> Option<String> {
+    if type_root_name(type_name) != "Result" {
+        return None;
+    }
+    type_arg_names(type_name).and_then(|args| args.first().map(|ty| (*ty).to_string()))
 }
 
 fn split_top_level_type_args(args: &str) -> Vec<&str> {
@@ -3381,6 +3596,13 @@ fn collect_boundary_expr(expr: &Expr, path: &str, boundary: &mut BoundarySig) {
                 collect_boundary_block(&arm.body, &format!("{path}.arm{}", index + 1), boundary);
             }
         }
+        Expr::MapLiteral { entries, .. } => {
+            for (index, entry) in entries.iter().enumerate() {
+                let entry_path = format!("{path}.entry{}", index + 1);
+                collect_boundary_expr(&entry.key, &format!("{entry_path}.key"), boundary);
+                collect_boundary_expr(&entry.value, &format!("{entry_path}.value"), boundary);
+            }
+        }
         Expr::ObjectLiteral { .. }
         | Expr::ArrayLiteral { .. }
         | Expr::Ident(_, _)
@@ -3413,7 +3635,7 @@ fn boundary_expr_subject(expr: &Expr) -> Option<String> {
         | Expr::Try { value, .. } => boundary_expr_subject(value),
         Expr::Field { name, .. } => Some(format!(".{name}")),
         Expr::Index { .. } => None,
-        Expr::ObjectLiteral { .. } | Expr::ArrayLiteral { .. } => None,
+        Expr::ObjectLiteral { .. } | Expr::MapLiteral { .. } | Expr::ArrayLiteral { .. } => None,
         Expr::Call { .. }
         | Expr::Binary { .. }
         | Expr::Closure { .. }

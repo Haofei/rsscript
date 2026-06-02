@@ -1,0 +1,15 @@
+features: local
+
+fn main() -> Int {
+    let mut items = List<Int>.new()
+    mut items.push(1)
+    mut items.push(2)
+    let path = "target/core-receiver-call.txt".to_path()
+    let safe = "target/core-receiver-call.txt".safe_relative()
+    let url: Url = "http://localhost".to_url()
+    let bytes = "ab".to_bytes()
+    if safe.is_err() {
+        return 0
+    }
+    return items.len() + path.to_string().len() + url.to_string().len() + bytes.len()
+}

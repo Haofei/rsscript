@@ -1,9 +1,15 @@
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature,
-    FunctionDecl, GenericBound, GenericParam, Item, LetKind, MatchPattern, Param, Program,
-    ProtocolImpl, Stmt, TypeDecl, TypeKind, TypeRef,
+    FunctionDecl, GenericBound, GenericParam, Item, LetKind, MapLiteralEntry, MatchPattern,
+    ObjectLiteralField, Param, Program, ProtocolImpl, Stmt, TypeDecl, TypeKind, TypeRef,
 };
 use crate::syntax::parse_source;
+
+const MAX_INLINE_LITERAL_LEN: usize = 88;
+const MAX_INLINE_SIGNATURE_LEN: usize = 100;
+
+type ReceiverCallSegment<'a> = (&'a str, &'a [CallArg]);
+type ReceiverCallSegments<'a> = (&'a Expr, Vec<ReceiverCallSegment<'a>>);
 
 pub fn format_source(file: &str, source: &str) -> String {
     format_program(&parse_source(file, source))
@@ -193,26 +199,26 @@ impl Formatter {
     }
 
     fn protocol_method_decl(&mut self, function: &FunctionDecl) {
-        if function.is_async {
-            self.out.push_str("async ");
-        }
-        self.out.push_str("fn ");
-        self.out.push_str(protocol_method_name(&function.name));
         let visible_type_params = function
             .type_params
             .iter()
             .filter(|param| param.name != "Self")
             .cloned()
             .collect::<Vec<_>>();
-        self.generic_params(&visible_type_params);
-        self.params(&function.params);
-        if let Some(return_ty) = &function.return_ty {
-            self.out.push_str(" -> ");
-            if function.returns_fresh {
-                self.out.push_str("fresh ");
-            }
-            self.type_ref(return_ty);
+        let mut prefix = String::new();
+        if function.is_async {
+            prefix.push_str("async ");
         }
+        prefix.push_str("fn ");
+        prefix.push_str(protocol_method_name(&function.name));
+        prefix.push_str(&generic_params_text(&visible_type_params));
+        self.function_signature(
+            &prefix,
+            &function.params,
+            function.return_ty.as_ref(),
+            function.returns_fresh,
+            1,
+        );
         if !function.effects.is_empty() {
             self.out.push('\n');
             self.indent(2);
@@ -248,26 +254,26 @@ impl Formatter {
     }
 
     fn function_decl(&mut self, function: &FunctionDecl) {
+        let mut prefix = String::new();
         if function.is_public {
-            self.out.push_str("pub ");
+            prefix.push_str("pub ");
         }
         if function.is_async {
-            self.out.push_str("async ");
+            prefix.push_str("async ");
         }
         if function.is_native {
-            self.out.push_str("native ");
+            prefix.push_str("native ");
         }
-        self.out.push_str("fn ");
-        self.out.push_str(&function.name);
-        self.generic_params(&function.type_params);
-        self.params(&function.params);
-        if let Some(return_ty) = &function.return_ty {
-            self.out.push_str(" -> ");
-            if function.returns_fresh {
-                self.out.push_str("fresh ");
-            }
-            self.type_ref(return_ty);
-        }
+        prefix.push_str("fn ");
+        prefix.push_str(&function.name);
+        prefix.push_str(&generic_params_text(&function.type_params));
+        self.function_signature(
+            &prefix,
+            &function.params,
+            function.return_ty.as_ref(),
+            function.returns_fresh,
+            0,
+        );
         if !function.effects.is_empty() {
             self.out.push('\n');
             self.indent(1);
@@ -281,16 +287,32 @@ impl Formatter {
         self.out.push('}');
     }
 
-    fn params(&mut self, params: &[Param]) {
-        self.out.push('(');
-        self.out.push_str(
-            &params
-                .iter()
-                .map(format_param)
-                .collect::<Vec<_>>()
-                .join(", "),
-        );
+    fn function_signature(
+        &mut self,
+        prefix: &str,
+        params: &[Param],
+        return_ty: Option<&TypeRef>,
+        returns_fresh: bool,
+        indent: usize,
+    ) {
+        let inline_params = format_params_text(params);
+        let return_text = return_type_text(return_ty, returns_fresh);
+        let inline = format!("{prefix}{inline_params}{return_text}");
+        if inline.len() <= MAX_INLINE_SIGNATURE_LEN || params.len() <= 1 {
+            self.out.push_str(&inline);
+            return;
+        }
+
+        self.out.push_str(prefix);
+        self.out.push_str("(\n");
+        for param in params {
+            self.indent(indent + 1);
+            self.out.push_str(&format_param(param));
+            self.out.push_str(",\n");
+        }
+        self.indent(indent);
         self.out.push(')');
+        self.out.push_str(&return_text);
     }
 
     fn block(&mut self, block: &Block, indent: usize) {
@@ -321,19 +343,19 @@ impl Formatter {
                 }
                 if let Some(value) = &stmt.value {
                     self.out.push_str(" = ");
-                    self.expr(value, 0);
+                    self.expr_at(value, 0, indent);
                 }
             }
             Stmt::Return(stmt) => {
                 self.out.push_str("return");
                 if let Some(value) = &stmt.value {
                     self.out.push(' ');
-                    self.expr(value, 0);
+                    self.expr_at(value, 0, indent);
                 }
             }
             Stmt::With(stmt) => {
                 self.out.push_str("with ");
-                self.expr(&stmt.resource, 0);
+                self.expr_at(&stmt.resource, 0, indent);
                 self.out.push_str(" as ");
                 self.out.push_str(&stmt.binding);
                 self.out.push_str(" {\n");
@@ -343,7 +365,7 @@ impl Formatter {
             }
             Stmt::If(stmt) => {
                 self.out.push_str("if ");
-                self.expr(&stmt.condition, 0);
+                self.expr_at(&stmt.condition, 0, indent);
                 self.out.push_str(" {\n");
                 self.block(&stmt.then_body, indent + 1);
                 self.indent(indent);
@@ -358,7 +380,7 @@ impl Formatter {
             Stmt::Loop(stmt) => {
                 if let Some(condition) = &stmt.condition {
                     self.out.push_str("while ");
-                    self.expr(condition, 0);
+                    self.expr_at(condition, 0, indent);
                 } else {
                     self.out.push_str("loop");
                 }
@@ -374,7 +396,7 @@ impl Formatter {
                 self.out.push_str("for ");
                 self.out.push_str(&stmt.binding);
                 self.out.push_str(" in ");
-                self.expr(&stmt.iterable, 0);
+                self.expr_at(&stmt.iterable, 0, indent);
                 self.out.push_str(" {\n");
                 self.block(&stmt.body, indent + 1);
                 self.indent(indent);
@@ -392,7 +414,7 @@ impl Formatter {
                     self.indent(indent + 1);
                     self.out.push_str(&arm.binding);
                     self.out.push_str(" = ");
-                    self.expr(&arm.operation, 0);
+                    self.expr_at(&arm.operation, 0, indent + 1);
                     self.out.push_str(" => {\n");
                     self.block(&arm.body, indent + 2);
                     self.indent(indent + 1);
@@ -403,7 +425,7 @@ impl Formatter {
             }
             Stmt::Match(stmt) => {
                 self.out.push_str("match ");
-                self.expr(&stmt.value, 0);
+                self.expr_at(&stmt.value, 0, indent);
                 self.out.push_str(" {\n");
                 for arm in &stmt.arms {
                     self.indent(indent + 1);
@@ -420,7 +442,7 @@ impl Formatter {
                 self.out.push_str("let ");
                 self.match_pattern(&stmt.pattern);
                 self.out.push_str(" = ");
-                self.expr(&stmt.value, 0);
+                self.expr_at(&stmt.value, 0, indent);
                 self.out.push_str(" else {\n");
                 self.block(&stmt.else_body, indent + 1);
                 self.indent(indent);
@@ -429,11 +451,11 @@ impl Formatter {
             Stmt::Break(_) => self.out.push_str("break"),
             Stmt::Continue(_) => self.out.push_str("continue"),
             Stmt::Assign(stmt) => {
-                self.expr(&stmt.target, 0);
+                self.expr_at(&stmt.target, 0, indent);
                 self.out.push_str(" = ");
-                self.expr(&stmt.value, 0);
+                self.expr_at(&stmt.value, 0, indent);
             }
-            Stmt::Expr(expr) => self.expr(expr, 0),
+            Stmt::Expr(expr) => self.expr_at(expr, 0, indent),
             Stmt::MalformedWith(_)
             | Stmt::MalformedIf(_)
             | Stmt::MalformedLoop(_)
@@ -444,30 +466,21 @@ impl Formatter {
     }
 
     fn expr(&mut self, expr: &Expr, parent_precedence: u8) {
+        self.expr_at(expr, parent_precedence, 0);
+    }
+
+    fn expr_at(&mut self, expr: &Expr, parent_precedence: u8, indent: usize) {
         match expr {
             Expr::Ident(name, _) | Expr::Number(name, _) => self.out.push_str(name),
             Expr::String(value, _) => self.string_literal(value),
             Expr::ObjectLiteral { fields, .. } => {
-                self.out.push('{');
-                for (index, field) in fields.iter().enumerate() {
-                    if index > 0 {
-                        self.out.push_str(", ");
-                    }
-                    self.string_literal(&field.name);
-                    self.out.push_str(": ");
-                    self.expr(&field.value, 0);
-                }
-                self.out.push('}');
+                self.object_literal(fields, indent);
+            }
+            Expr::MapLiteral { entries, .. } => {
+                self.map_literal(entries, indent);
             }
             Expr::ArrayLiteral { items, .. } => {
-                self.out.push('[');
-                for (index, item) in items.iter().enumerate() {
-                    if index > 0 {
-                        self.out.push_str(", ");
-                    }
-                    self.expr(item, 0);
-                }
-                self.out.push(']');
+                self.array_literal(items, indent);
             }
             Expr::Binary {
                 op, left, right, ..
@@ -477,81 +490,75 @@ impl Formatter {
                 if needs_parens {
                     self.out.push('(');
                 }
-                self.expr(left, precedence);
+                self.expr_at(left, precedence, indent);
                 self.out.push(' ');
                 self.out.push_str(binary_op_text(*op));
                 self.out.push(' ');
-                self.expr(right, precedence + 1);
+                self.expr_at(right, precedence + 1, indent);
                 if needs_parens {
                     self.out.push(')');
                 }
             }
             Expr::Field { base, name, .. } => {
-                self.expr(base, 7);
+                self.expr_at(base, 7, indent);
                 self.out.push('.');
                 self.out.push_str(name);
             }
             Expr::Index { base, index, .. } => {
-                self.expr(base, 7);
+                self.expr_at(base, 7, indent);
                 self.out.push('[');
-                self.expr(index, 0);
+                self.expr_at(index, 0, indent);
                 self.out.push(']');
             }
             Expr::Call { callee, args, .. } => {
-                self.callee(callee);
-                self.out.push('(');
-                self.out.push_str(
-                    &args
-                        .iter()
-                        .map(format_call_arg)
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                );
-                self.out.push(')');
+                if self.receiver_call_chain(expr, indent) {
+                    return;
+                }
+                self.call_expr(callee, args, indent);
             }
             Expr::Effect { effect, value, .. } => {
                 self.out.push_str(data_effect_name(*effect));
                 self.out.push(' ');
                 if matches!(**value, Expr::Binary { .. }) {
                     self.out.push('(');
-                    self.expr(value, 0);
+                    self.expr_at(value, 0, indent);
                     self.out.push(')');
                 } else {
-                    self.expr(value, 6);
+                    self.expr_at(value, 6, indent);
                 }
             }
             Expr::Manage { value, .. } => {
                 self.out.push_str("manage ");
                 if matches!(**value, Expr::Binary { .. }) {
                     self.out.push('(');
-                    self.expr(value, 0);
+                    self.expr_at(value, 0, indent);
                     self.out.push(')');
                 } else {
-                    self.expr(value, 6);
+                    self.expr_at(value, 6, indent);
                 }
             }
             Expr::Spawn { value, .. } => {
                 self.out.push_str("spawn ");
                 if matches!(**value, Expr::Binary { .. }) {
                     self.out.push('(');
-                    self.expr(value, 0);
+                    self.expr_at(value, 0, indent);
                     self.out.push(')');
                 } else {
-                    self.expr(value, 6);
+                    self.expr_at(value, 6, indent);
                 }
             }
             Expr::Await { value, .. } => {
                 self.out.push_str("await ");
                 if matches!(**value, Expr::Binary { .. }) {
                     self.out.push('(');
-                    self.expr(value, 0);
+                    self.expr_at(value, 0, indent);
                     self.out.push(')');
                 } else {
-                    self.expr(value, 6);
+                    self.expr_at(value, 6, indent);
                 }
             }
             Expr::Try { value, .. } => {
-                self.expr(value, 7);
+                self.expr_at(value, 7, indent);
                 self.out.push('?');
             }
             Expr::Closure { params, body, .. } => {
@@ -563,20 +570,144 @@ impl Formatter {
             }
             Expr::Match { value, arms, .. } => {
                 self.out.push_str("match ");
-                self.expr(value, 0);
+                self.expr_at(value, 0, indent);
                 self.out.push_str(" {\n");
                 for arm in arms {
-                    self.indent(1);
+                    self.indent(indent + 1);
                     self.match_pattern(&arm.pattern);
                     self.out.push_str(" => {\n");
-                    self.block(&arm.body, 2);
-                    self.indent(1);
+                    self.block(&arm.body, indent + 2);
+                    self.indent(indent + 1);
                     self.out.push_str("}\n");
                 }
+                self.indent(indent);
                 self.out.push('}');
             }
             Expr::Unknown(_) => self.out.push_str("/* unsupported */"),
         }
+    }
+
+    fn object_literal(&mut self, fields: &[ObjectLiteralField], indent: usize) {
+        if fields.is_empty() {
+            self.out.push_str("{}");
+            return;
+        }
+        if let Some(inline) = inline_object_literal(fields) {
+            self.out.push_str(&inline);
+            return;
+        }
+        self.out.push_str("{\n");
+        for field in fields {
+            self.indent(indent + 1);
+            self.string_literal(&field.name);
+            self.out.push_str(": ");
+            self.expr_at(&field.value, 0, indent + 1);
+            self.out.push_str(",\n");
+        }
+        self.indent(indent);
+        self.out.push('}');
+    }
+
+    fn map_literal(&mut self, entries: &[MapLiteralEntry], indent: usize) {
+        if entries.is_empty() {
+            self.out.push_str("{}");
+            return;
+        }
+        if let Some(inline) = inline_map_literal(entries) {
+            self.out.push_str(&inline);
+            return;
+        }
+        self.out.push_str("{\n");
+        for entry in entries {
+            self.indent(indent + 1);
+            self.expr_at(&entry.key, 0, indent + 1);
+            self.out.push_str(" => ");
+            self.expr_at(&entry.value, 0, indent + 1);
+            self.out.push_str(",\n");
+        }
+        self.indent(indent);
+        self.out.push('}');
+    }
+
+    fn array_literal(&mut self, items: &[Expr], indent: usize) {
+        if items.is_empty() {
+            self.out.push_str("[]");
+            return;
+        }
+        if let Some(inline) = inline_array_literal(items) {
+            self.out.push_str(&inline);
+            return;
+        }
+        self.out.push_str("[\n");
+        for item in items {
+            self.indent(indent + 1);
+            self.expr_at(item, 0, indent + 1);
+            self.out.push_str(",\n");
+        }
+        self.indent(indent);
+        self.out.push(']');
+    }
+
+    fn call_expr(&mut self, callee: &Callee, args: &[CallArg], indent: usize) {
+        let inline = format!(
+            "{}({})",
+            inline_callee(callee).unwrap_or_else(|| {
+                let mut formatter = Formatter { out: String::new() };
+                formatter.callee(callee);
+                formatter.out
+            }),
+            args.iter()
+                .map(format_call_arg)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        if inline.len() <= MAX_INLINE_SIGNATURE_LEN || args.len() <= 1 {
+            self.out.push_str(&inline);
+            return;
+        }
+
+        self.callee(callee);
+        self.out.push_str("(\n");
+        for arg in args {
+            self.indent(indent + 1);
+            if let Some(name) = &arg.name {
+                self.out.push_str(name);
+                self.out.push_str(": ");
+            }
+            self.expr_at(&arg.value, 0, indent + 1);
+            self.out.push_str(",\n");
+        }
+        self.indent(indent);
+        self.out.push(')');
+    }
+
+    fn receiver_call_chain(&mut self, expr: &Expr, indent: usize) -> bool {
+        let Some(inline) = inline_expr(expr) else {
+            return false;
+        };
+        if inline.len() <= MAX_INLINE_SIGNATURE_LEN {
+            return false;
+        }
+        let Some((base, segments)) = receiver_call_segments(expr) else {
+            return false;
+        };
+        self.expr_at(base, 7, indent);
+        for (method, args) in segments {
+            self.out.push('\n');
+            self.indent(indent + 1);
+            self.out.push('.');
+            self.out.push_str(method);
+            self.out.push('(');
+            self.out.push_str(
+                &args
+                    .iter()
+                    .map(format_call_arg)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            self.out.push(')');
+        }
+        true
     }
 
     fn type_ref(&mut self, ty: &TypeRef) {
@@ -640,9 +771,11 @@ impl Formatter {
                 method,
                 effect,
             } => {
-                self.out.push_str(effect.as_str());
-                self.out.push(' ');
-                self.out.push_str(receiver);
+                if *effect != DataEffect::Read {
+                    self.out.push_str(effect.as_str());
+                    self.out.push(' ');
+                }
+                self.expr(receiver, 0);
                 self.out.push('.');
                 self.out.push_str(method);
             }
@@ -680,6 +813,54 @@ fn format_param(param: &Param) -> String {
     format!("{}: {effect}{}", param.name, type_ref_text(&param.ty))
 }
 
+fn format_params_text(params: &[Param]) -> String {
+    format!(
+        "({})",
+        params
+            .iter()
+            .map(format_param)
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn generic_params_text(params: &[GenericParam]) -> String {
+    if params.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<{}>",
+            params
+                .iter()
+                .map(format_generic_param)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
+fn return_type_text(return_ty: Option<&TypeRef>, returns_fresh: bool) -> String {
+    let Some(return_ty) = return_ty else {
+        return String::new();
+    };
+    let fresh = if returns_fresh && !type_ref_contains_fresh(return_ty) {
+        "fresh "
+    } else {
+        ""
+    };
+    format!(" -> {fresh}{}", type_ref_text(return_ty))
+}
+
+fn type_ref_contains_fresh(ty: &TypeRef) -> bool {
+    ty.is_fresh
+        || ty.args.iter().any(type_ref_contains_fresh)
+        || ty.fn_params.iter().any(type_ref_contains_fresh)
+        || ty
+            .fn_return
+            .as_deref()
+            .is_some_and(type_ref_contains_fresh)
+}
+
 fn format_call_arg(arg: &CallArg) -> String {
     let mut formatter = Formatter { out: String::new() };
     if let Some(name) = &arg.name {
@@ -688,6 +869,153 @@ fn format_call_arg(arg: &CallArg) -> String {
     }
     formatter.expr(&arg.value, 0);
     formatter.out
+}
+
+fn inline_expr(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Ident(name, _) | Expr::Number(name, _) => Some(name.clone()),
+        Expr::String(value, _) => Some(quoted_string(value)),
+        Expr::ObjectLiteral { fields, .. } => inline_object_literal(fields),
+        Expr::MapLiteral { entries, .. } => inline_map_literal(entries),
+        Expr::ArrayLiteral { items, .. } => inline_array_literal(items),
+        Expr::Binary {
+            op, left, right, ..
+        } => Some(format!(
+            "{} {} {}",
+            inline_expr(left)?,
+            binary_op_text(*op),
+            inline_expr(right)?
+        )),
+        Expr::Field { base, name, .. } => Some(format!("{}.{}", inline_expr(base)?, name)),
+        Expr::Index { base, index, .. } => {
+            Some(format!("{}[{}]", inline_expr(base)?, inline_expr(index)?))
+        }
+        Expr::Call { callee, args, .. } => {
+            let args = args
+                .iter()
+                .map(inline_call_arg)
+                .collect::<Option<Vec<_>>>()?
+                .join(", ");
+            Some(format!("{}({args})", inline_callee(callee)?))
+        }
+        Expr::Try { value, .. } => Some(format!("{}?", inline_expr(value)?)),
+        Expr::Effect { effect, value, .. } => Some(format!(
+            "{} {}",
+            data_effect_name(*effect),
+            inline_expr(value)?
+        )),
+        Expr::Manage { value, .. } => Some(format!("manage {}", inline_expr(value)?)),
+        Expr::Spawn { value, .. } => Some(format!("spawn {}", inline_expr(value)?)),
+        Expr::Await { value, .. } => Some(format!("await {}", inline_expr(value)?)),
+        Expr::Closure { .. } | Expr::Match { .. } | Expr::Unknown(_) => None,
+    }
+}
+
+fn inline_call_arg(arg: &CallArg) -> Option<String> {
+    let value = inline_expr(&arg.value)?;
+    Some(match &arg.name {
+        Some(name) => format!("{name}: {value}"),
+        None => value,
+    })
+}
+
+fn inline_callee(callee: &Callee) -> Option<String> {
+    match callee {
+        Callee::Name(name) => Some(name.clone()),
+        Callee::Qualified { namespace, name } => Some(format!("{namespace}.{name}")),
+        Callee::ReceiverCall {
+            receiver,
+            method,
+            effect,
+        } => {
+            let prefix = if *effect == DataEffect::Read {
+                String::new()
+            } else {
+                format!("{} ", effect.as_str())
+            };
+            Some(format!("{prefix}{}.{}", inline_expr(receiver)?, method))
+        }
+    }
+}
+
+fn receiver_call_segments(expr: &Expr) -> Option<ReceiverCallSegments<'_>> {
+    let mut current = expr;
+    let mut segments = Vec::new();
+    while let Expr::Call {
+        callee:
+            Callee::ReceiverCall {
+                receiver,
+                method,
+                effect,
+            },
+        args,
+        ..
+    } = current
+    {
+        if *effect != DataEffect::Read {
+            return None;
+        }
+        segments.push((method.as_str(), args.as_slice()));
+        current = receiver;
+    }
+    if segments.len() < 2 {
+        return None;
+    }
+    segments.reverse();
+    Some((current, segments))
+}
+
+fn inline_object_literal(fields: &[ObjectLiteralField]) -> Option<String> {
+    let parts = fields
+        .iter()
+        .map(|field| {
+            Some(format!(
+                "{}: {}",
+                quoted_string(&field.name),
+                inline_expr(&field.value)?
+            ))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    inline_literal(format!("{{{}}}", parts.join(", ")))
+}
+
+fn inline_map_literal(entries: &[MapLiteralEntry]) -> Option<String> {
+    let parts = entries
+        .iter()
+        .map(|entry| {
+            Some(format!(
+                "{} => {}",
+                inline_expr(&entry.key)?,
+                inline_expr(&entry.value)?
+            ))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    inline_literal(format!("{{{}}}", parts.join(", ")))
+}
+
+fn inline_array_literal(items: &[Expr]) -> Option<String> {
+    let parts = items.iter().map(inline_expr).collect::<Option<Vec<_>>>()?;
+    inline_literal(format!("[{}]", parts.join(", ")))
+}
+
+fn inline_literal(value: String) -> Option<String> {
+    (value.len() <= MAX_INLINE_LITERAL_LEN).then_some(value)
+}
+
+fn quoted_string(value: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn format_generic_param(param: &GenericParam) -> String {
@@ -731,12 +1059,17 @@ fn type_ref_text(ty: &TypeRef) -> String {
                 .join(", ")
         )
     };
-    if ty.is_noescape {
+    let name = if ty.is_noescape {
         format!("noescape {text}")
     } else if ty.is_owned {
         format!("owned {text}")
     } else {
         text
+    };
+    if ty.is_fresh {
+        format!("fresh {name}")
+    } else {
+        name
     }
 }
 
@@ -927,6 +1260,181 @@ return Unit
             format_source("fn-type.rss", source),
             r#"fn schedule(callback: Fn(Int) -> Result<String, BuildError>) -> Unit {
     return Unit
+}
+"#
+        );
+    }
+
+    #[test]
+    fn formats_receiver_calls_without_default_read_noise() {
+        let source = r#"fn ok(path_text:read String)->Bool{
+let ok=path_text.safe_relative().is_ok()
+let mut values=List<String>.new()
+mut values.push("done")
+return ok
+}
+"#;
+
+        assert_eq!(
+            format_source("receiver-format.rss", source),
+            r#"fn ok(path_text: read String) -> Bool {
+    let ok = path_text.safe_relative().is_ok()
+    let mut values = List<String>.new()
+    mut values.push("done")
+    return ok
+}
+"#
+        );
+    }
+
+    #[test]
+    fn formats_large_json_literals_for_review() {
+        let source = r#"fn tool_specs()->fresh JsonValue{
+let specs:List<JsonValue>=[{"type":"function","function":{"name":"read_file","description":"Read a UTF-8 text file for the agent.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Relative path to read."}},"required":["path"],"additionalProperties":false}}},{"type":"function","function":{"name":"list_files","description":"List files under a relative directory.","parameters":{"type":"object","properties":{"path":{"type":"string"},"max_results":{"type":"integer"}},"required":["path"],"additionalProperties":false}}}]
+return {"ok":true,"tools":specs.to_json_values()}
+}
+"#;
+
+        assert_eq!(
+            format_source("json-format.rss", source),
+            r#"fn tool_specs() -> fresh JsonValue {
+    let specs: List<JsonValue> = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read a UTF-8 text file for the agent.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string", "description": "Relative path to read."}},
+                    "required": ["path"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_files",
+                "description": "List files under a relative directory.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}, "max_results": {"type": "integer"}},
+                    "required": ["path"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+    ]
+    return {"ok": true, "tools": specs.to_json_values()}
+}
+"#
+        );
+    }
+
+    #[test]
+    fn formats_long_function_signatures_for_review() {
+        let source = r#"fn collect_files_recursive(root:read Path,display_root_text:read String,results:mut List<String>,max_results:Int)->Unit{
+return Unit
+}
+fn short(path:read Path)->fresh JsonValue{
+return {"ok":true}
+}
+"#;
+
+        assert_eq!(
+            format_source("signature-format.rss", source),
+            r#"fn collect_files_recursive(
+    root: read Path,
+    display_root_text: read String,
+    results: mut List<String>,
+    max_results: Int,
+) -> Unit {
+    return Unit
+}
+
+fn short(path: read Path) -> fresh JsonValue {
+    return {"ok": true}
+}
+"#
+        );
+    }
+
+    #[test]
+    fn formats_long_receiver_chains_for_review() {
+        let source = r#"fn message(workspace_root:read String)->fresh String{
+let short="a".concat("b")
+let reason="writes are confined to the workspace root `".concat(workspace_root).concat("` (no absolute paths or `..`)")
+return reason
+}
+"#;
+
+        assert_eq!(
+            format_source("receiver-chain-format.rss", source),
+            r#"fn message(workspace_root: read String) -> fresh String {
+    let short = "a".concat("b")
+    let reason = "writes are confined to the workspace root `"
+        .concat(workspace_root)
+        .concat("` (no absolute paths or `..`)")
+    return reason
+}
+"#
+        );
+    }
+
+    #[test]
+    fn formats_long_calls_and_constructors_for_review() {
+        let source = r#"features: async
+async fn main(config:read AgentConfig)->Result<Unit,HttpError>{
+let http=await Http.post_json_bearer_retry_async(url:read config.endpoint,body:read request_body,token:read config.api_key,timeout_ms:config.request_timeout_ms,attempts:config.max_attempts,backoff_ms:config.backoff_ms)?
+return Ok(Unit)
+}
+fn config()->fresh AgentConfig{
+return AgentConfig(model:"AGENT_MODEL".env_or("gpt-5.5:medium"),endpoint:"AGENT_ENDPOINT".env_or("http://localhost:8080/v1/chat/completions").to_url(),api_key:"AGENT_API_KEY".env_or("test_key"),max_steps:env_min_int("AGENT_MAX_STEPS",8,1),max_tool_calls:env_min_int("AGENT_MAX_TOOL_CALLS",8,1),request_timeout_ms:env_min_int("AGENT_TIMEOUT_MS",60000,1))
+}
+"#;
+
+        assert_eq!(
+            format_source("call-format.rss", source),
+            r#"features: async
+
+async fn main(config: read AgentConfig) -> Result<Unit, HttpError> {
+    let http = await Http.post_json_bearer_retry_async(
+        url: read config.endpoint,
+        body: read request_body,
+        token: read config.api_key,
+        timeout_ms: config.request_timeout_ms,
+        attempts: config.max_attempts,
+        backoff_ms: config.backoff_ms,
+    )?
+    return Ok(Unit)
+}
+
+fn config() -> fresh AgentConfig {
+    return AgentConfig(
+        model: "AGENT_MODEL".env_or("gpt-5.5:medium"),
+        endpoint: "AGENT_ENDPOINT".env_or("http://localhost:8080/v1/chat/completions").to_url(),
+        api_key: "AGENT_API_KEY".env_or("test_key"),
+        max_steps: env_min_int("AGENT_MAX_STEPS", 8, 1),
+        max_tool_calls: env_min_int("AGENT_MAX_TOOL_CALLS", 8, 1),
+        request_timeout_ms: env_min_int("AGENT_TIMEOUT_MS", 60000, 1),
+    )
+}
+"#
+        );
+    }
+
+    #[test]
+    fn preserves_fresh_inside_generic_type_arguments() {
+        let source = r#"fn value_at(root:read JsonValue,index:Int)->Result<fresh JsonValue,JsonError>{
+return root.array_get(index)
+}
+"#;
+
+        assert_eq!(
+            format_source("fresh-generic-format.rss", source),
+            r#"fn value_at(root: read JsonValue, index: Int) -> Result<fresh JsonValue, JsonError> {
+    return root.array_get(index)
 }
 "#
         );

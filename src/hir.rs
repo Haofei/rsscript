@@ -37,6 +37,7 @@ pub struct ParamSig {
 pub struct FunctionSig {
     pub namespace: Option<String>,
     pub name: String,
+    pub is_public: bool,
     pub is_async: bool,
     pub type_params: Box<[String]>,
     pub type_param_bounds: Vec<Option<GenericBound>>,
@@ -293,6 +294,11 @@ pub enum HirExpr {
         type_name: Option<String>,
         span: Span,
     },
+    MapLiteral {
+        entries: Vec<HirMapLiteralEntry>,
+        type_name: Option<String>,
+        span: Span,
+    },
     ArrayLiteral {
         items: Vec<HirExpr>,
         type_name: Option<String>,
@@ -373,6 +379,13 @@ pub struct HirObjectLiteralField {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirMapLiteralEntry {
+    pub key: HirExpr,
+    pub value: HirExpr,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HirCallArg {
     pub name: Option<String>,
     pub value: HirExpr,
@@ -395,6 +408,7 @@ pub struct Hir {
     signatures: HashMap<String, FunctionSig>,
     types: HashMap<String, TypeInfo>,
     fields_by_name: HashMap<String, Vec<FieldInfo>>,
+    sum_variant_types: HashMap<String, String>,
     duplicate_symbols: Vec<DuplicateSymbol>,
     call_sites: Vec<HirCallSite>,
     bindings: Vec<HirBinding>,
@@ -540,6 +554,10 @@ impl Hir {
                         fields: HashMap::new(),
                     };
                     self.insert_type(type_info);
+                    for variant in &sum.variants {
+                        self.sum_variant_types
+                            .insert(variant.name.clone(), sum.name.clone());
+                    }
                 }
                 Item::TypeAlias(_) | Item::Const(_) | Item::Module(_) | Item::Use(_) => {}
             }
@@ -570,6 +588,10 @@ impl Hir {
 
     pub fn type_kind(&self, name: &str) -> Option<HirTypeKind> {
         self.type_info(name).map(|info| info.kind)
+    }
+
+    pub fn sum_type_for_variant(&self, variant_name: &str) -> Option<&str> {
+        self.sum_variant_types.get(variant_name).map(String::as_str)
     }
 
     #[cfg(test)]
@@ -681,6 +703,11 @@ impl Hir {
 
         if let Some(sig) = self.resolve_function(Some(receiver_root), method) {
             candidates.push((receiver_root.to_string(), sig.clone()));
+        }
+        if let Some(namespace) = receiver_facade_namespace(receiver_root, method)
+            && let Some(sig) = self.resolve_function(Some(namespace), method)
+        {
+            candidates.push((namespace.to_string(), sig.clone()));
         }
 
         let bound_key = format!("__protocol_bound__{receiver_root}");
@@ -1075,7 +1102,7 @@ fn lower_hir_stmt(
                 .value
                 .as_ref()
                 .map_or(HirReturnProof::NoValue, |value| {
-                    classify_return_expr(hir, value)
+                    classify_return_expr(hir, value, value_types)
                 });
             HirStmt::Return {
                 value: stmt
@@ -1248,6 +1275,18 @@ fn lower_hir_expr(
             type_name: infer_hir_expr_type(hir, expr, value_types),
             span: span.clone(),
         },
+        Expr::MapLiteral { entries, span } => HirExpr::MapLiteral {
+            entries: entries
+                .iter()
+                .map(|entry| HirMapLiteralEntry {
+                    key: lower_hir_expr(hir, function_name, &entry.key, value_types),
+                    value: lower_hir_expr(hir, function_name, &entry.value, value_types),
+                    span: entry.span.clone(),
+                })
+                .collect(),
+            type_name: infer_hir_expr_type(hir, expr, value_types),
+            span: span.clone(),
+        },
         Expr::ArrayLiteral { items, span } => HirExpr::ArrayLiteral {
             items: items
                 .iter()
@@ -1298,7 +1337,7 @@ fn lower_hir_expr(
                 Callee::ReceiverCall {
                     receiver, method, ..
                 } => {
-                    if let Some(receiver_type) = value_types.get(receiver).cloned() {
+                    if let Some(receiver_type) = infer_hir_expr_type(hir, receiver, value_types) {
                         let (res, _) =
                             hir.resolve_receiver_call(&receiver_type, method, value_types);
                         res
@@ -1549,7 +1588,7 @@ fn collect_body_facts_in_stmt(
                 facts.returns.push(HirReturn {
                     function_name: function_name.to_string(),
                     span: value.span().clone(),
-                    proof: classify_return_expr(hir, value),
+                    proof: classify_return_expr(hir, value, value_types),
                 });
                 collect_body_facts_in_expr(hir, function_name, value, value_types, facts);
             } else {
@@ -1727,7 +1766,7 @@ fn collect_body_facts_in_expr(
                 Callee::ReceiverCall {
                     receiver, method, ..
                 } => {
-                    if let Some(receiver_type) = value_types.get(receiver).cloned() {
+                    if let Some(receiver_type) = infer_hir_expr_type(hir, receiver, value_types) {
                         let (res, _namespace) =
                             hir.resolve_receiver_call(&receiver_type, method, value_types);
                         res
@@ -1874,8 +1913,14 @@ fn collect_body_facts_in_expr(
                 collect_body_facts_in_block(hir, function_name, &arm.body, value_types, facts);
             }
         }
-        Expr::ObjectLiteral { .. }
-        | Expr::ArrayLiteral { .. }
+        Expr::ObjectLiteral { .. } => {}
+        Expr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                collect_body_facts_in_expr(hir, function_name, &entry.key, value_types, facts);
+                collect_body_facts_in_expr(hir, function_name, &entry.value, value_types, facts);
+            }
+        }
+        Expr::ArrayLiteral { .. }
         | Expr::Ident(_, _)
         | Expr::Number(_, _)
         | Expr::String(_, _)
@@ -1962,7 +2007,10 @@ pub(crate) fn infer_hir_expr_type(
     value_types: &HashMap<String, String>,
 ) -> Option<String> {
     match expr {
-        Expr::Ident(name, _) => value_types.get(name).cloned(),
+        Expr::Ident(name, _) => value_types
+            .get(name)
+            .cloned()
+            .or_else(|| hir.sum_type_for_variant(name).map(str::to_string)),
         Expr::Binary { .. } => None,
         Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
             infer_hir_expr_type(hir, value, value_types)
@@ -1984,7 +2032,7 @@ pub(crate) fn infer_hir_expr_type(
                 Callee::ReceiverCall {
                     receiver, method, ..
                 } => {
-                    if let Some(receiver_type) = value_types.get(receiver).cloned() {
+                    if let Some(receiver_type) = infer_hir_expr_type(hir, receiver, value_types) {
                         hir.resolve_receiver_call(&receiver_type, method, value_types)
                             .0
                     } else {
@@ -2019,6 +2067,7 @@ pub(crate) fn infer_hir_expr_type(
         Expr::Number(_, _) => Some("Int".to_string()),
         Expr::String(_, _) => Some("String".to_string()),
         Expr::ObjectLiteral { .. } => Some("JsonLiteral".to_string()),
+        Expr::MapLiteral { .. } => Some("MapLiteral".to_string()),
         Expr::ArrayLiteral { items, .. } => {
             let item_type = items
                 .first()
@@ -2214,7 +2263,7 @@ fn infer_arg_expr_type(
                 format!("noescape Fn({params}) -> {return_type}")
             }),
         Expr::Match { .. } => infer_hir_expr_type(hir, expr, value_types),
-        Expr::ObjectLiteral { .. } | Expr::ArrayLiteral { .. } => {
+        Expr::ObjectLiteral { .. } | Expr::MapLiteral { .. } | Expr::ArrayLiteral { .. } => {
             infer_hir_expr_type(hir, expr, value_types)
         }
         Expr::Field { .. }
@@ -2458,7 +2507,11 @@ fn split_top_level_type_args(args: &str) -> Vec<&str> {
     parts
 }
 
-fn classify_block_return_expr(hir: &Hir, block: &Block) -> HirReturnProof {
+fn classify_block_return_expr(
+    hir: &Hir,
+    block: &Block,
+    value_types: &HashMap<String, String>,
+) -> HirReturnProof {
     let Some(statement) = block.statements.iter().next_back() else {
         return HirReturnProof::NoValue;
     };
@@ -2467,9 +2520,9 @@ fn classify_block_return_expr(hir: &Hir, block: &Block) -> HirReturnProof {
             .value
             .as_ref()
             .map_or(HirReturnProof::NoValue, |value| {
-                classify_return_expr(hir, value)
+                classify_return_expr(hir, value, value_types)
             }),
-        Stmt::Expr(value) => classify_return_expr(hir, value),
+        Stmt::Expr(value) => classify_return_expr(hir, value, value_types),
         Stmt::Let(_) | Stmt::LetElse(_) | Stmt::Assign(_) => HirReturnProof::NoValue,
         Stmt::With { .. }
         | Stmt::If { .. }
@@ -2489,7 +2542,11 @@ fn classify_block_return_expr(hir: &Hir, block: &Block) -> HirReturnProof {
     }
 }
 
-fn classify_return_expr(hir: &Hir, expr: &Expr) -> HirReturnProof {
+fn classify_return_expr(
+    hir: &Hir,
+    expr: &Expr,
+    value_types: &HashMap<String, String>,
+) -> HirReturnProof {
     match expr {
         Expr::Ident(name, _) => HirReturnProof::Ident { name: name.clone() },
         Expr::Call { callee, args, .. } => {
@@ -2499,9 +2556,21 @@ fn classify_return_expr(hir: &Hir, expr: &Expr) -> HirReturnProof {
             if matches!(callee_name(callee), "Ok" | "Some")
                 && let Some(arg) = args.first()
             {
-                return classify_return_expr(hir, &arg.value);
+                return classify_return_expr(hir, &arg.value, value_types);
             }
-            match hir.resolve_call(callee) {
+            let resolution = match callee {
+                Callee::ReceiverCall {
+                    receiver, method, ..
+                } => infer_hir_expr_type(hir, receiver, value_types).map_or(
+                    CallResolution::Unknown,
+                    |receiver_type| {
+                        hir.resolve_receiver_call(&receiver_type, method, value_types)
+                            .0
+                    },
+                ),
+                _ => hir.resolve_call(callee),
+            };
+            match resolution {
                 CallResolution::Resolved {
                     signature,
                     kind:
@@ -2529,11 +2598,13 @@ fn classify_return_expr(hir: &Hir, expr: &Expr) -> HirReturnProof {
         | Expr::Manage { value, .. }
         | Expr::Spawn { value, .. }
         | Expr::Await { value, .. }
-        | Expr::Try { value, .. } => classify_return_expr(hir, value),
+        | Expr::Try { value, .. } => classify_return_expr(hir, value, value_types),
         Expr::Match { arms, .. } => arms.first().map_or(HirReturnProof::Unknown, |arm| {
-            classify_block_return_expr(hir, &arm.body)
+            classify_block_return_expr(hir, &arm.body, value_types)
         }),
-        Expr::ObjectLiteral { .. } | Expr::ArrayLiteral { .. } => HirReturnProof::Unknown,
+        Expr::ObjectLiteral { .. } | Expr::MapLiteral { .. } | Expr::ArrayLiteral { .. } => {
+            HirReturnProof::FreshCall
+        }
         Expr::Field { .. }
         | Expr::Index { .. }
         | Expr::Binary { .. }
@@ -2571,7 +2642,33 @@ fn callee_display(callee: &Callee) -> String {
             receiver,
             method,
             effect,
-        } => format!("{} {receiver}.{method}", effect.as_str()),
+        } => format!(
+            "{} {}.{method}",
+            effect.as_str(),
+            receiver_call_label(receiver)
+        ),
+    }
+}
+
+fn receiver_call_label(receiver: &Expr) -> String {
+    match receiver {
+        Expr::Ident(name, _) => name.clone(),
+        Expr::String(value, _) => format!("{value:?}"),
+        Expr::Field { base, name, .. } => format!("{}.{}", receiver_call_label(base), name),
+        Expr::Index { base, .. } => format!("{}[]", receiver_call_label(base)),
+        Expr::Call { callee, .. } => format!("{}()", callee_display(callee)),
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
+            receiver_call_label(value)
+        }
+        _ => "<expr>".to_string(),
+    }
+}
+
+fn receiver_facade_namespace(receiver_root: &str, method: &str) -> Option<&'static str> {
+    match receiver_root {
+        "JsonValue" | "JsonLiteral" => Some("Json"),
+        "String" if method.starts_with("json_") => Some("Json"),
+        _ => None,
     }
 }
 
@@ -2580,6 +2677,7 @@ fn function_sig_from_decl(function: &FunctionDecl, is_builtin: bool) -> Function
     FunctionSig {
         namespace,
         name,
+        is_public: function.is_public,
         is_async: function.is_async,
         type_params: function
             .type_params
@@ -2780,6 +2878,7 @@ fn constructor_sig_from_type(type_info: &TypeInfo, is_builtin: bool) -> Function
     FunctionSig {
         namespace: None,
         name: type_info.name.clone(),
+        is_public: is_builtin,
         is_async: false,
         type_params: type_info.type_params.clone(),
         type_param_bounds: vec![None; type_info.type_params.len()],

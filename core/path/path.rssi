@@ -1,6 +1,17 @@
+features: native
+
 pub fn Path.from_string(value: read String) -> fresh Path
 
 pub fn Path.join(base: read Path, child: read String) -> fresh Path
+
+pub fn Path.safe_relative(value: read String) -> Result<fresh Path, String>
+    effects(pure)
+
+pub fn Path.resolve_relative(
+    root: read Path,
+    relative: read String,
+) -> Result<fresh Path, String>
+    effects(pure)
 
 pub fn Path.normalize(path: read Path) -> fresh Path
     effects(pure)
@@ -25,3 +36,24 @@ pub fn Path.with_extension(path: read Path, extension: read String) -> fresh Pat
 
 pub fn Path.starts_with(path: read Path, base: read Path) -> Bool
     effects(pure)
+
+pub fn Path.exists(path: read Path) -> Bool
+    effects(native)
+
+pub fn Path.is_file(path: read Path) -> Bool
+    effects(native)
+
+pub fn Path.is_dir(path: read Path) -> Bool
+    effects(native)
+
+pub fn Path.list_files(path: read Path) -> Result<fresh List<String>, FileError>
+    effects(native)
+
+pub fn Path.list_paths(path: read Path) -> Result<fresh List<Path>, FileError>
+    effects(native)
+
+pub fn Path.read_string(path: read Path) -> Result<String, FileError>
+    effects(native)
+
+pub fn Path.write_string(path: read Path, text: read String) -> Result<Unit, FileError>
+    effects(native)

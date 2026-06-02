@@ -2,6 +2,14 @@ pub fn string_from_int(value: i64) -> String {
     value.to_string()
 }
 
+pub fn string_copy(value: &str) -> String {
+    value.to_string()
+}
+
+pub fn string_concat(left: &str, right: &str) -> String {
+    format!("{left}{right}")
+}
+
 pub fn string_from_bool(value: bool) -> String {
     value.to_string()
 }

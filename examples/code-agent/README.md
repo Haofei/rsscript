@@ -12,8 +12,8 @@ The example is intentionally structured like a simplified Codex loop:
 
 - `src/config.rss`: environment-derived model, endpoint, API key, loop budget, retry policy, and the write sandbox root.
 - `src/protocol.rss`: request JSON, response extraction, and tool-call parsing.
-- `src/state.rss`: transcript state and tool-result injection.
-- `src/tools.rss`: narrow tool registry, path sandboxing, and tool execution.
+- `src/state.rss`: structured chat message history.
+- `src/tools.rss`: narrow tool registry, `ToolRuntime`, path sandboxing, and tool execution.
 - `src/checks.rss`: RSScript-specific validation helpers.
 - `src/main.rss`: bounded agent loop.
 
@@ -33,16 +33,24 @@ network behavior are not hard-coded:
 | `AGENT_MAX_ATTEMPTS` | `3` | HTTP retry attempts (transient failures). |
 | `AGENT_BACKOFF_MS` | `500` | Backoff between retries. |
 | `AGENT_WORKSPACE_ROOT` | `target/` | `write_file` is confined to this prefix. |
+| `AGENT_REPO_ROOT` | `RSS_RUN_WORKSPACE_ROOT` | Repository root used for read/list/search/check tools. |
 | `AGENT_PROMPT` | (read-file task) | Override the agent task. |
 
 ## Safety and robustness
 
+- **Structured history**: model turns are stored as chat messages. Tool results
+  are appended as `role=tool` messages with the original tool call id, not as
+  natural-language transcript text.
+- **Discovery tools**: `list_files` and `search_text` let the model find source
+  files and core interfaces before it reads or edits.
 - **Write sandbox**: `write_file` only writes under `AGENT_WORKSPACE_ROOT`, and
-  both tools reject absolute paths and `..` traversal, so the model cannot write
-  outside the workspace.
+  tools reject absolute paths and `..` traversal. Write results include
+  `old_bytes`, `new_bytes`, and `changed`.
+- **Real checks**: `check_rss_file` validates the current read-file task shape;
+  `check_rss_package` runs the package checker and returns status/stdout/stderr.
 - **HTTP errors**: a non-success response is logged as a `turn.failed` event and
   ends the loop instead of being parsed as if it were a successful turn.
 - **Budget**: when the step budget is exhausted before the task finishes, the
   agent emits a `turn.budget_exhausted` event.
 
-The agent should not guess RSScript APIs. It reads `examples/AGENTS.md`, then `schemas/core-package-index.json`, then the relevant `core/**/*.rssi` files before writing RSScript code.
+The agent should not guess RSScript APIs. It reads `examples/code-agent/AGENTS.md`, then `schemas/core-package-index.json`, then the relevant `core/**/*.rssi` files before writing RSScript code.

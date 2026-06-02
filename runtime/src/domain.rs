@@ -1053,6 +1053,16 @@ pub fn json_parse(text: &str) -> Result<JsonValue, JsonError> {
         .map_err(JsonError::from)
 }
 
+pub fn json_value(value: &str) -> JsonValue {
+    serde_json::from_str(value)
+        .map(|inner| JsonValue { inner })
+        .expect("compiler-generated JSON literal should be valid JSON")
+}
+
+pub fn json_clone(value: &JsonValue) -> JsonValue {
+    value.clone()
+}
+
 pub fn json_parse_file<P: RuntimePath + ?Sized>(path: &P) -> Result<JsonValue, JsonError> {
     let text = std::fs::read_to_string(path.as_path())?;
     json_parse(&text)
@@ -1060,6 +1070,10 @@ pub fn json_parse_file<P: RuntimePath + ?Sized>(path: &P) -> Result<JsonValue, J
 
 pub fn json_quote_string(value: &str) -> String {
     serde_json::to_string(value).expect("serializing a string to JSON cannot fail")
+}
+
+pub fn json_to_string(value: &JsonValue) -> String {
+    serde_json::to_string(&value.inner).expect("serializing a JSON value cannot fail")
 }
 
 pub fn json_string_field(name: &str, value: &str) -> String {
@@ -1084,6 +1098,31 @@ pub fn json_object(fields: &[String]) -> String {
 
 pub fn json_array(items: &[String]) -> String {
     format!("[{}]", items.join(","))
+}
+
+pub fn json_string_array(items: &[String]) -> String {
+    let quoted = items
+        .iter()
+        .map(|item| json_quote_string(item))
+        .collect::<Vec<_>>();
+    json_array(&quoted)
+}
+
+pub fn json_strings(items: &[String]) -> JsonValue {
+    JsonValue {
+        inner: serde_json::Value::Array(
+            items
+                .iter()
+                .map(|item| serde_json::Value::String(item.clone()))
+                .collect(),
+        ),
+    }
+}
+
+pub fn json_values(items: &[JsonValue]) -> JsonValue {
+    JsonValue {
+        inner: serde_json::Value::Array(items.iter().map(|item| item.inner.clone()).collect()),
+    }
 }
 
 pub fn toml_parse_file<P: RuntimePath + ?Sized>(path: &P) -> Result<JsonValue, JsonError> {
@@ -1238,14 +1277,88 @@ pub fn json_value_at(value: &JsonValue, path: &str) -> Result<JsonValue, JsonErr
     })
 }
 
+pub fn json_at(value: &JsonValue, path: &str) -> Result<JsonValue, JsonError> {
+    json_value_at(value, path)
+}
+
+pub fn json_at_or(value: &JsonValue, path: &str, fallback: &JsonValue) -> JsonValue {
+    json_value_at(value, path).unwrap_or_else(|_| fallback.clone())
+}
+
+pub fn json_at_string(value: &JsonValue, path: &str) -> Result<String, JsonError> {
+    let item = json_value_at(value, path)?;
+    json_as_string(&item)
+}
+
+pub fn json_at_int(value: &JsonValue, path: &str) -> Result<i64, JsonError> {
+    let item = json_value_at(value, path)?;
+    json_as_int(&item)
+}
+
+pub fn json_at_bool(value: &JsonValue, path: &str) -> Result<bool, JsonError> {
+    let item = json_value_at(value, path)?;
+    json_as_bool(&item)
+}
+
+pub fn json_at_string_or(value: &JsonValue, path: &str, fallback: &str) -> String {
+    json_at_string(value, path).unwrap_or_else(|_| fallback.to_string())
+}
+
+pub fn json_at_int_or(value: &JsonValue, path: &str, fallback: i64) -> i64 {
+    json_at_int(value, path).unwrap_or(fallback)
+}
+
+pub fn json_at_bool_or(value: &JsonValue, path: &str, fallback: bool) -> bool {
+    json_at_bool(value, path).unwrap_or(fallback)
+}
+
+pub fn json_at_to_string(value: &JsonValue, path: &str) -> Result<String, JsonError> {
+    let item = json_value_at(value, path)?;
+    Ok(json_to_string(&item))
+}
+
+pub fn json_at_to_string_or(value: &JsonValue, path: &str, fallback: &str) -> String {
+    json_at_to_string(value, path).unwrap_or_else(|_| fallback.to_string())
+}
+
 pub fn json_string_at(text: &str, path: &str) -> Result<String, JsonError> {
     let value = json_parse(text)?;
     let item = json_value_at(&value, path)?;
     json_as_string(&item)
 }
 
+pub fn json_int_at(text: &str, path: &str) -> Result<i64, JsonError> {
+    let value = json_parse(text)?;
+    let item = json_value_at(&value, path)?;
+    json_as_int(&item)
+}
+
+pub fn json_bool_at(text: &str, path: &str) -> Result<bool, JsonError> {
+    let value = json_parse(text)?;
+    let item = json_value_at(&value, path)?;
+    json_as_bool(&item)
+}
+
+pub fn json_to_string_at(text: &str, path: &str) -> Result<String, JsonError> {
+    let value = json_parse(text)?;
+    let item = json_value_at(&value, path)?;
+    Ok(json_to_string(&item))
+}
+
 pub fn json_string_at_or(text: &str, path: &str, fallback: &str) -> String {
     json_string_at(text, path).unwrap_or_else(|_| fallback.to_string())
+}
+
+pub fn json_int_at_or(text: &str, path: &str, fallback: i64) -> i64 {
+    json_int_at(text, path).unwrap_or(fallback)
+}
+
+pub fn json_bool_at_or(text: &str, path: &str, fallback: bool) -> bool {
+    json_bool_at(text, path).unwrap_or(fallback)
+}
+
+pub fn json_to_string_at_or(text: &str, path: &str, fallback: &str) -> String {
+    json_to_string_at(text, path).unwrap_or_else(|_| fallback.to_string())
 }
 
 pub fn json_as_string(value: &JsonValue) -> Result<String, JsonError> {
@@ -1696,6 +1809,24 @@ mod tests {
             ]
         }"#;
         let value = json_parse(text).expect("JSON should parse");
+        let literal = json_value(r#"{"ready":true,"count":2}"#);
+        assert_eq!(
+            json_bool_at_or(
+                text,
+                "choices[0].message.tool_calls[0].function.name",
+                false
+            ),
+            false
+        );
+        assert_eq!(json_int_at_or(&json_to_string(&literal), "count", 0), 2);
+        assert_eq!(
+            json_bool_at_or(&json_to_string(&literal), "ready", false),
+            true
+        );
+        assert_eq!(
+            json_string_array(&["a".to_string(), "b".to_string()]),
+            r#"["a","b"]"#
+        );
 
         assert_eq!(
             json_as_string(
@@ -1713,6 +1844,16 @@ mod tests {
         assert_eq!(
             json_string_at_or(text, "choices[0].message.missing", "fallback"),
             "fallback"
+        );
+        let message = json_value_at(&value, "choices[0].message").expect("message should resolve");
+        assert_eq!(
+            json_to_string(&json_at_or(&value, "choices[2].message", &message)),
+            json_to_string(&message)
+        );
+        let serialized = json_to_string(&message);
+        assert!(
+            serialized.contains(r#""tool_calls""#),
+            "serialized message should preserve tool calls"
         );
         assert!(
             json_value_at(&value, "choices[2].message")

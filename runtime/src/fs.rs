@@ -47,6 +47,46 @@ pub fn path_join<P: RuntimePath + ?Sized>(base: &P, child: &str) -> PathBuf {
     base.as_path().join(child)
 }
 
+pub fn path_safe_relative(value: &str) -> Result<PathBuf, String> {
+    let path = std::path::Path::new(value);
+    if value.is_empty() {
+        return Err("path must be non-empty".to_string());
+    }
+    if path.is_absolute() {
+        return Err("absolute paths are not allowed".to_string());
+    }
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(part) => normalized.push(part),
+            std::path::Component::ParentDir => {
+                return Err("parent-directory traversal is not allowed".to_string());
+            }
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                return Err("absolute paths are not allowed".to_string());
+            }
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        return Err("path must name a relative file or directory".to_string());
+    }
+    Ok(normalized)
+}
+
+pub fn path_resolve_relative<P: RuntimePath + ?Sized>(
+    root: &P,
+    relative: &str,
+) -> Result<PathBuf, String> {
+    let relative = path_safe_relative(relative)?;
+    let root = root.as_path();
+    let resolved = path_normalize(&root.join(relative));
+    if !resolved.starts_with(root) {
+        return Err("resolved path escapes the workspace root".to_string());
+    }
+    Ok(resolved)
+}
+
 pub fn path_normalize<P: RuntimePath + ?Sized>(path: &P) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.as_path().components() {
@@ -425,6 +465,19 @@ pub fn directory_write_string<P: RuntimePath + ?Sized>(
 mod tests {
     use super::*;
     use crate::async_runtime::Executor;
+
+    #[test]
+    fn safe_relative_paths_reject_absolute_and_parent_traversal() {
+        assert!(path_safe_relative("core/json/json.rssi").is_ok());
+        assert!(path_safe_relative("/tmp/file").is_err());
+        assert!(path_safe_relative("../secret").is_err());
+        assert!(path_safe_relative("core/../secret").is_err());
+
+        let root = std::env::temp_dir();
+        let resolved = path_resolve_relative(&root, "rsscript-safe-path.txt")
+            .expect("relative path should resolve under root");
+        assert!(resolved.starts_with(root));
+    }
 
     #[test]
     fn async_file_text_io_uses_tokio_native_pending() {

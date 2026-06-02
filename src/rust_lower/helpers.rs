@@ -222,6 +222,7 @@ fn validate_executable_declarations_in_expr(
             }
         }
         Expr::ObjectLiteral { .. }
+        | Expr::MapLiteral { .. }
         | Expr::ArrayLiteral { .. }
         | Expr::Ident(_, _)
         | Expr::Number(_, _)
@@ -361,6 +362,66 @@ pub(super) fn collect_function_return_types(program: &Program) -> BTreeMap<Strin
         collect_program_function_return_types(&interface_program, &mut return_types);
     }
     return_types
+}
+
+pub(super) fn collect_function_param_types(
+    program: &Program,
+) -> BTreeMap<String, Vec<(String, TypeRef)>> {
+    let mut param_types = BTreeMap::new();
+    for (file, source) in builtin_interfaces() {
+        let interface_program = parse_source(file, source);
+        collect_program_function_param_types(&interface_program, &mut param_types);
+    }
+    collect_program_function_param_types(program, &mut param_types);
+    param_types
+}
+
+pub(super) fn collect_function_param_effects(
+    program: &Program,
+) -> BTreeMap<String, Vec<(String, Option<DataEffect>)>> {
+    let mut param_effects = BTreeMap::new();
+    for (file, source) in builtin_interfaces() {
+        let interface_program = parse_source(file, source);
+        collect_program_function_param_effects(&interface_program, &mut param_effects);
+    }
+    collect_program_function_param_effects(program, &mut param_effects);
+    param_effects
+}
+
+fn collect_program_function_param_effects(
+    program: &Program,
+    param_effects: &mut BTreeMap<String, Vec<(String, Option<DataEffect>)>>,
+) {
+    for item in &program.items {
+        if let Item::Function(function) = item {
+            param_effects.insert(
+                function.name.clone(),
+                function
+                    .params
+                    .iter()
+                    .map(|param| (param.name.clone(), param.effect))
+                    .collect(),
+            );
+        }
+    }
+}
+
+fn collect_program_function_param_types(
+    program: &Program,
+    param_types: &mut BTreeMap<String, Vec<(String, TypeRef)>>,
+) {
+    for item in &program.items {
+        if let Item::Function(function) = item {
+            param_types.insert(
+                function.name.clone(),
+                function
+                    .params
+                    .iter()
+                    .map(|param| (param.name.clone(), param.ty.clone()))
+                    .collect(),
+            );
+        }
+    }
 }
 
 pub(super) fn collect_function_retained_params(
@@ -631,8 +692,9 @@ pub(super) fn collect_mutated_bindings_from_expr(expr: &Expr, names: &mut BTreeS
                 receiver, effect, ..
             } = callee
                 && *effect == DataEffect::Mut
+                && let Some(root) = expr_root_name(receiver)
             {
-                names.insert(receiver.clone());
+                names.insert(root.to_string());
             }
             for arg in args {
                 collect_mutated_bindings_from_expr(&arg.value, names);
@@ -660,11 +722,23 @@ pub(super) fn collect_mutated_bindings_from_expr(expr: &Expr, names: &mut BTreeS
             }
         }
         Expr::ObjectLiteral { .. }
+        | Expr::MapLiteral { .. }
         | Expr::ArrayLiteral { .. }
         | Expr::Ident(_, _)
         | Expr::Number(_, _)
         | Expr::String(_, _)
         | Expr::Unknown(_) => {}
+    }
+}
+
+fn expr_root_name(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Ident(name, _) => Some(name),
+        Expr::Field { base, .. } | Expr::Index { base, .. } => expr_root_name(base),
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
+            expr_root_name(value)
+        }
+        _ => None,
     }
 }
 
@@ -843,6 +917,10 @@ pub(super) fn closure_expr_mutates_unbound_name(expr: &Expr, bound: &BTreeSet<St
         Expr::ObjectLiteral { fields, .. } => fields
             .iter()
             .any(|field| closure_expr_mutates_unbound_name(&field.value, bound)),
+        Expr::MapLiteral { entries, .. } => entries.iter().any(|entry| {
+            closure_expr_mutates_unbound_name(&entry.key, bound)
+                || closure_expr_mutates_unbound_name(&entry.value, bound)
+        }),
         Expr::ArrayLiteral { items, .. } => items
             .iter()
             .any(|item| closure_expr_mutates_unbound_name(item, bound)),

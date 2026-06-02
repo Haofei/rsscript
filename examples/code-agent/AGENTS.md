@@ -8,6 +8,8 @@ When extending it:
 2. Add response/request parsing in `src/protocol.rss`.
 3. Add loop state changes in `src/state.rss`.
 4. Keep `src/main.rss` as orchestration only.
-5. Do not add `features: native` or `features: local` to the agent source.
+5. Keep tool results as structured `role=tool` messages; do not append them to a natural-language transcript.
+6. Keep dynamic tool dispatch behind `ToolRuntime.execute`.
+7. Do not add `features: native` or `features: local` to the agent source.
 
-For RSScript APIs, read `examples/AGENTS.md` and `schemas/core-package-index.json`, then open the exact `core/**/*.rssi` file named by the index.
+For RSScript APIs, read this file and `schemas/core-package-index.json`, then open the exact `core/**/*.rssi` file named by the index.

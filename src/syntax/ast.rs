@@ -475,6 +475,10 @@ pub enum Expr {
         fields: Vec<ObjectLiteralField>,
         span: Span,
     },
+    MapLiteral {
+        entries: Vec<MapLiteralEntry>,
+        span: Span,
+    },
     ArrayLiteral {
         items: Vec<Expr>,
         span: Span,
@@ -541,6 +545,13 @@ pub struct ObjectLiteralField {
     pub span: Span,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MapLiteralEntry {
+    pub key: Expr,
+    pub value: Expr,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {
     Add,
@@ -567,7 +578,7 @@ pub enum Callee {
     /// Receiver-call shorthand: `<effect> receiver.method(args)`
     /// Desugars to `Type.method(self: <effect> receiver, args)`.
     ReceiverCall {
-        receiver: String,
+        receiver: Box<Expr>,
         method: String,
         effect: DataEffect,
     },
@@ -588,6 +599,7 @@ impl Expr {
             | Self::Number(_, span)
             | Self::String(_, span)
             | Self::ObjectLiteral { span, .. }
+            | Self::MapLiteral { span, .. }
             | Self::ArrayLiteral { span, .. }
             | Self::Binary { span, .. }
             | Self::Field { span, .. }

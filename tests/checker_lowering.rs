@@ -39,6 +39,89 @@ pub fn make_point(x: Int, y: Int) -> fresh Point {
 }
 
 #[test]
+fn rust_lowering_allows_positional_args_for_private_helpers() {
+    let source = r#"
+fn join_pair(left: read String, right: read String) -> String {
+    return left.concat(right)
+}
+
+pub fn main() -> String {
+    return join_pair("a", "b")
+}
+"#;
+    let rust = lower_source_to_rust("private-positional.rss", source).expect("source should lower");
+
+    assert!(
+        rust.contains("join_pair(&\"a\".to_string(), &\"b\".to_string())"),
+        "private positional read arguments should lower as borrows, got:\n{rust}"
+    );
+}
+
+#[test]
+fn checker_rejects_positional_args_for_public_functions() {
+    let source = r#"
+pub fn join_pair(left: read String, right: read String) -> String {
+    return left.concat(right)
+}
+
+pub fn main() -> String {
+    return join_pair("a", "b")
+}
+"#;
+    let diagnostics = analyze_source("public-positional.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0201"),
+        "{diagnostics:#?}"
+    );
+}
+
+#[test]
+fn rust_lowering_allows_constructor_field_shorthand() {
+    let source = r#"
+struct Names {
+    value: String
+    count: Int
+}
+
+fn make(value: read String, count: Int) -> fresh Names {
+    return Names(value, count)
+}
+"#;
+    let rust = lower_source_to_rust("constructor-field-shorthand.rss", source)
+        .expect("source should lower");
+
+    assert!(
+        rust.contains("return Names { value: value.clone(), count: count };"),
+        "constructor field shorthand should bind by field name, got:\n{rust}"
+    );
+}
+
+#[test]
+fn checker_rejects_constructor_shorthand_without_matching_field() {
+    let source = r#"
+struct User {
+    id: String
+}
+
+fn main() -> fresh User {
+    let value = "rss"
+    return User(value)
+}
+"#;
+    let diagnostics = analyze_source("constructor-field-shorthand-mismatch.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0201"),
+        "{diagnostics:#?}"
+    );
+}
+
+#[test]
 fn rust_lowering_maps_unit_and_result_constructors_to_rust() {
     let source = r#"
 struct BuildError {
@@ -539,15 +622,41 @@ fn rust_lowering_maps_path_construction_to_runtime_hook() {
     let source = r#"
 fn main() -> Result<Unit, FileError> {
     let path = Path.from_string(value: read "fixtures/rsscript-path.txt")
+    let path_from_method = "fixtures/rsscript-path.txt".to_path()
+    let url_from_method: Url = "http://localhost".to_url()
+    let safe_from_method = "fixtures/rsscript-path.txt".safe_relative()
+    let safe = Result.unwrap_or(
+        value: read Path.safe_relative(value: read "fixtures/rsscript-path.txt"),
+        default: read Path.from_string(value: read "fixtures/rsscript-path.txt"),
+    )
+    let resolved = Result.unwrap_or(
+        value: read Path.resolve_relative(root: read Path.from_string(value: read "fixtures"), relative: read "rsscript-path.txt"),
+        default: read Path.from_string(value: read "fixtures/rsscript-path.txt"),
+    )
     let text = Path.to_string(path: read path)
     let file_name = Path.file_name(path: read path)
     let extension = Path.extension(path: read path)
     let parent = Path.parent(path: read path)
     let data = Bytes.from_string(value: read "path hook ran")
+    let data_from_method = "path hook ran".to_bytes()
+    let text_from_method = path.read_string()?
     with File.open_write(path: read path)? as file {
         File.write(file: mut file, data: read data)?
     }
     return Ok(Unit)
+}
+
+fn resolve(root: read Path, relative: read String) -> Result<fresh Path, String> {
+    return root.resolve_relative(relative)
+}
+
+fn json_lists() -> fresh JsonValue {
+    let strings: List<String> = ["a", "b"]
+    let mut values = List<JsonValue>.new()
+    mut values.push({"name": "read_file"})
+    let string_json = strings.to_json_strings()
+    let value_json = values.to_json_values()
+    return value_json.clone()
 }
 "#;
     let rust = lower_source_to_rust("path.rss", source).expect("source should lower");
@@ -555,11 +664,33 @@ fn main() -> Result<Unit, FileError> {
     assert!(rust.contains(
         "let path = rsscript_runtime::path_from_string(&\"fixtures/rsscript-path.txt\".to_string());"
     ));
+    assert!(rust.contains(
+        "let path_from_method = rsscript_runtime::path_from_string(&\"fixtures/rsscript-path.txt\".to_string());"
+    ));
+    assert!(rust.contains(
+        "let url_from_method = rsscript_runtime::url_from_string(&\"http://localhost\".to_string());"
+    ));
+    assert!(rust.contains(
+        "let safe_from_method = rsscript_runtime::path_safe_relative(&\"fixtures/rsscript-path.txt\".to_string());"
+    ));
+    assert!(rust.contains(
+        "rsscript_runtime::path_safe_relative(&\"fixtures/rsscript-path.txt\".to_string())"
+    ));
+    assert!(rust.contains("rsscript_runtime::path_resolve_relative("));
     assert!(rust.contains("let text = rsscript_runtime::path_to_string(&path);"));
     assert!(rust.contains("let file_name = rsscript_runtime::path_file_name(&path);"));
     assert!(rust.contains("let extension = rsscript_runtime::path_extension(&path);"));
     assert!(rust.contains("let parent = rsscript_runtime::path_parent(&path);"));
+    assert!(rust.contains(
+        "let data_from_method = rsscript_runtime::bytes_from_string(&\"path hook ran\".to_string());"
+    ));
+    assert!(rust.contains("let text_from_method = rsscript_runtime::file_read_string(&path)?;"));
     assert!(rust.contains("let mut file = rsscript_runtime::file_open_write(&path)?;"));
+    assert!(rust.contains("return rsscript_runtime::path_resolve_relative(&root, &relative);"));
+    assert!(!rust.contains("return Ok(rsscript_runtime::path_resolve_relative"));
+    assert!(rust.contains("let string_json = rsscript_runtime::json_strings(&strings);"));
+    assert!(rust.contains("let value_json = rsscript_runtime::json_values(&values);"));
+    assert!(rust.contains("return rsscript_runtime::json_clone(&value_json);"));
 }
 
 #[test]
@@ -599,9 +730,20 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     let value = Json.parse(text: read text)?
     let path = Path.from_string(value: read "profile.json")
     let value_from_file = Json.parse_file(path: read path)?
+    let literal_value = Json.value(value: read {"name": "rss", "tags": ["agent", "json"]})
     let quoted = Json.quote_string(value: read "RSScript \"review\"")
+    let serialized = Json.to_string(value: read value)
+    let literal_serialized = Json.to_string(value: read literal_value)
+    let raw_message = Json.to_string_at_or(text: read text, path: read "profile", fallback: read "{}")
+    let age_at = Json.int_at_or(text: read text, path: read "profile.age", fallback: 0)
+    let active_at = Json.bool_at_or(text: read text, path: read "profile.active", fallback: false)
+    let parsed_from_method = text.json_parse()?
+    let raw_message_from_method = text.json_string_at_or("profile", "{}")
+    let age_from_method = text.json_int_at_or("profile.age", 0)
+    let active_from_method = text.json_bool_at_or("profile.active", false)
+    let profile_or_root = value.at_or("profile", value)
     let count = Json.array_len(value: read value)?
-    let first = Json.array_get(value: read value, index: 0)?
+    let first = value.array_get(0)?
     let strings = Json.array_strings(value: read value)?
     let ints_value = Json.parse(text: read "[1, 2]")?
     let ints = Json.array_ints(value: read ints_value)?
@@ -629,10 +771,10 @@ fn read_name(text: read String) -> Result<String, JsonError> {
             return Ok(IntBox(value: state.value))
         },
     )?
-    let profile = Json.field(value: read value, name: read "profile")?
+    let profile = value.field("profile")?
     let profile_again = Json.value_at(value: read value, path: read "profile")?
-    let profile_name_value = Json.field(value: read profile, name: read "name")?
-    let profile_name = Json.as_string(value: read profile_name_value)?
+    let profile_name_value = profile.field("name")?
+    let profile_name = profile_name_value.as_string()?
     let profile_name_at = Json.string_at(text: read text, path: read "profile.name")?
     let missing_name = Json.string_at_or(text: read text, path: read "profile.missing", fallback: read "unknown")
     let active = Json.field_bool(value: read profile, name: read "active")?
@@ -655,7 +797,30 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     assert!(rust.contains("let value = rsscript_runtime::json_parse(&text)?;"));
     assert!(rust.contains("let value_from_file = rsscript_runtime::json_parse_file(&path)?;"));
     assert!(rust.contains(
+        "let literal_value = rsscript_runtime::json_value(&rsscript_runtime::json_object"
+    ));
+    assert!(rust.contains(
         "let quoted = rsscript_runtime::json_quote_string(&\"RSScript \\\"review\\\"\".to_string());"
+    ));
+    assert!(rust.contains("let serialized = rsscript_runtime::json_to_string(&value);"));
+    assert!(
+        rust.contains("let literal_serialized = rsscript_runtime::json_to_string(&literal_value);")
+    );
+    assert!(rust.contains("let raw_message = rsscript_runtime::json_to_string_at_or"));
+    assert!(rust.contains("let age_at = rsscript_runtime::json_int_at_or"));
+    assert!(rust.contains("let active_at = rsscript_runtime::json_bool_at_or"));
+    assert!(rust.contains("let parsed_from_method = rsscript_runtime::json_parse(&text)?;"));
+    assert!(rust.contains(
+        "let raw_message_from_method = rsscript_runtime::json_string_at_or(&text, &\"profile\".to_string(), &\"{}\".to_string());"
+    ));
+    assert!(rust.contains(
+        "let age_from_method = rsscript_runtime::json_int_at_or(&text, &\"profile.age\".to_string(), 0);"
+    ));
+    assert!(rust.contains(
+        "let active_from_method = rsscript_runtime::json_bool_at_or(&text, &\"profile.active\".to_string(), false);"
+    ));
+    assert!(rust.contains(
+        "let profile_or_root = rsscript_runtime::json_at_or(&value, &\"profile\".to_string(), &value);"
     ));
     assert!(rust.contains(
         "let profile = rsscript_runtime::json_field(&value, &\"profile\".to_string())?;"
@@ -723,6 +888,84 @@ fn read_name(text: read String) -> Result<String, JsonError> {
 }
 
 #[test]
+fn rust_lowering_treats_json_literals_as_json_values_when_expected() {
+    let source = r##"
+fn accept(value: read JsonValue) -> String {
+    return Json.to_string(value: read value)
+}
+
+fn make_object() -> fresh JsonValue {
+    return {"role": "user", "content": "hello"}
+}
+
+fn main() -> String {
+    let message: JsonValue = {"role": "assistant", "content": "ok"}
+    let array_value: JsonValue = [{"name": "read_file"}]
+    let rendered = accept(value: read {"tool_call_id": "call_1", "content": "done"})
+    return Json.to_string(value: read message)
+}
+"##;
+    let rust = lower_source_to_rust("json-value-literal.rss", source)
+        .expect("JsonValue literal contexts should lower");
+
+    assert!(rust.contains("rsscript_runtime::json_value(&rsscript_runtime::json_object"));
+    assert!(rust.contains("rsscript_runtime::json_value(&rsscript_runtime::json_array"));
+    assert!(rust.contains("fn make_object() -> rsscript_runtime::JsonValue"));
+}
+
+#[test]
+fn rust_lowering_treats_array_literals_as_typed_lists_when_expected() {
+    let source = r##"
+fn accept(values: read List<JsonValue>) -> JsonValue {
+    return values.to_json_values()
+}
+
+fn make_values() -> Result<fresh List<JsonValue>, JsonError> {
+    return Ok([
+        {"name": "read_file"},
+        {"name": "write_file"},
+    ])
+}
+
+fn main() -> JsonValue {
+    let values: List<JsonValue> = [
+        {"name": "read_file"},
+        {"name": "write_file"},
+    ]
+    return accept([
+        {"name": "check"},
+    ])
+}
+"##;
+    let rust = lower_source_to_rust("typed-list-literal.rss", source)
+        .expect("typed List<JsonValue> literals should lower");
+
+    assert!(rust.contains("let values: Vec<rsscript_runtime::JsonValue> = vec!["));
+    assert!(rust.contains("rsscript_runtime::json_value(&rsscript_runtime::json_object"));
+    assert!(rust.contains("accept(&vec![rsscript_runtime::json_value("));
+    assert!(rust.contains("return Ok(vec![rsscript_runtime::json_value("));
+}
+
+#[test]
+fn rust_lowering_allows_read_effect_on_receiver_call_result() {
+    let source = r#"
+fn accept(value: read String) -> Unit {
+    Log.write(message: read value)
+}
+
+fn main() -> Unit {
+    let value: JsonValue = {"ok": true}
+    accept(value: read value.to_string())
+    return Unit
+}
+"#;
+    let rust = lower_source_to_rust("read-receiver-call-result.rss", source)
+        .expect("read receiver-call result should lower");
+
+    assert!(rust.contains("accept(&rsscript_runtime::json_to_string(&value));"));
+}
+
+#[test]
 fn rust_lowering_maps_literals_and_json_encode_to_runtime_hooks() {
     let source = r#"
 fn build(model: read String, prompt: read String) -> String {
@@ -748,7 +991,7 @@ fn build(model: read String, prompt: read String) -> String {
         "list literal should lower to Vec, got:\n{rust}"
     );
     assert!(
-        rust.contains("rsscript_runtime::json_string_field(&\"model\".to_string(), &model)"),
+        rust.contains("rsscript_runtime::json_string_field(&\"model\".to_string(), model)"),
         "string object fields should use JSON string encoding, got:\n{rust}"
     );
     assert!(
@@ -1379,7 +1622,12 @@ features: local
 
 fn main() -> Unit {
     let message = String.concat(left: read "hello ", right: read "world")
+    let suffixed = message.concat("!")
+    let literal_joined = "agent HTTP status ".concat(String.from_int(value: 500))
+    let literal_joined_len = "prefix".concat("suffix").len()
+    let copied = String.copy(value: read message)
     let count = String.from_int(value: 42)
+    let count_method = count.len().to_string()
     let ok = String.from_bool(value: true)
     let length = String.len(value: read message)
     let starts = String.starts_with(value: read message, prefix: read "hello")
@@ -1387,6 +1635,8 @@ fn main() -> Unit {
     let contains = String.contains(value: read message, needle: read "lo wo")
     let lines = String.lines(value: read "one\ntwo")
     let joined = String.join(parts: read lines, separator: read ",")
+    let root = "target/"
+    let path_message = String.join(parts: read ["root=", root, " ok"], separator: read "")
     let stripped = String.strip_prefix(value: read "pub fn Api.run()", prefix: read "pub fn ")
     let before = String.before(value: read "Api.run() -> Unit", delimiter: read "(")
     let after = String.after(value: read "Api.run() -> Unit", delimiter: read "-> ")
@@ -1401,8 +1651,13 @@ fn main() -> Unit {
     StringBuilder.push(builder: mut builder, value: read " builder")
     let built = StringBuilder.finish(builder: take builder)
     Log.write(message: read message)
+    Log.write(message: read suffixed)
+    Log.write(message: read literal_joined)
+    Log.write(message: read copied)
     Log.write(message: read count)
+    Log.write(message: read count_method)
     Log.write(message: read ok)
+    Log.write(message: read path_message)
     return Unit
 }
 "#;
@@ -1411,7 +1666,27 @@ fn main() -> Unit {
     assert!(rust.contains(
         "let message = format!(\"{}{}\", &\"hello \".to_string(), &\"world\".to_string());"
     ));
+    assert!(
+        rust.contains(
+            "let suffixed = rsscript_runtime::string_concat(&message, &\"!\".to_string());"
+        )
+    );
+    assert!(rust.contains(
+        "let literal_joined = rsscript_runtime::string_concat(&\"agent HTTP status \".to_string(), &rsscript_runtime::string_from_int(500));"
+    ));
+    assert!(rust.contains(
+        "let literal_joined_len = rsscript_runtime::string_len(&rsscript_runtime::string_concat(&\"prefix\".to_string(), &\"suffix\".to_string()));"
+    ));
+    assert!(rust.contains("let copied = rsscript_runtime::string_copy(&message);"));
     assert!(rust.contains("let count = rsscript_runtime::string_from_int(42);"));
+    assert!(rust.contains("let count_method = rsscript_runtime::string_from_int("));
+    assert!(rust.contains("rsscript_runtime::string_len(&count)"));
+    assert!(
+        rust.contains(
+            "let path_message = rsscript_runtime::string_join(&vec![\"root=\".to_string(), root.clone(), \" ok\".to_string()], &\"\".to_string());"
+        ),
+        "String.join should materialize read String bindings inside List<String> literals, got:\n{rust}"
+    );
     assert!(rust.contains("let ok = rsscript_runtime::string_from_bool(true);"));
     assert!(rust.contains("let length = rsscript_runtime::string_len(&message);"));
     assert!(rust.contains(
@@ -1464,8 +1739,32 @@ fn main() -> Unit {
             "rsscript_runtime::string_builder_push(&mut builder, &\"hello\".to_string());"
         )
     );
-    assert!(rust.contains("let built = rsscript_runtime::string_builder_finish(builder);"));
-    assert!(rust.contains("rsscript_runtime::log_write(&message);"));
+    assert!(
+        rust.contains("let built = rsscript_runtime::string_builder_finish(builder);"),
+        "StringBuilder.finish should take builder by value, got:\n{rust}"
+    );
+}
+
+#[test]
+fn rust_lowering_materializes_read_string_when_owned_string_is_expected() {
+    let source = r#"
+struct Names {
+    value: String
+}
+
+fn identity(value: read String) -> String {
+    return value
+}
+
+fn wrap(value: read String) -> fresh Names {
+    return Names(value: value)
+}
+"#;
+    let rust = lower_source_to_rust("read-string-owned.rss", source)
+        .expect("read String should materialize when owned String is expected");
+
+    assert!(rust.contains("return value.clone();"));
+    assert!(rust.contains("value: value.clone()"));
 }
 
 #[test]
@@ -1542,8 +1841,10 @@ fn inspect_file(path: read Path, bytes: read Bytes) -> Result<String, FileError>
     let file_hash = Hash.sha256_file(path: read path)?
     let byte_hash = Hash.sha256_bytes(value: read bytes)
     let current = Env.current_dir()?
+    let run_root = Env.run_workspace_root()
     Env.set_current_dir(path: read current)?
     let configured = Env.get_or_default(name: read "RSS_MODE", default: read "dev")
+    let configured_method = "RSS_MODE".env_or("dev")
     let now = Clock.now()
     let elapsed = Instant.elapsed(start: read now)
     let millis = Duration.as_ms(value: read elapsed)
@@ -1585,8 +1886,12 @@ fn fetch_status(url: read Url) -> Result<Int, HttpError> {
     assert!(rust.contains("let file_hash = rsscript_runtime::hash_sha256_file(&path)?;"));
     assert!(rust.contains("let byte_hash = rsscript_runtime::hash_sha256_bytes(&bytes);"));
     assert!(rust.contains("let current = rsscript_runtime::env_current_dir()?;"));
+    assert!(rust.contains("let run_root = rsscript_runtime::env_run_workspace_root();"));
     assert!(rust.contains("rsscript_runtime::env_set_current_dir(&current)?;"));
     assert!(rust.contains("let configured = rsscript_runtime::env_get_or_default"));
+    assert!(rust.contains(
+        "let configured_method = rsscript_runtime::env_get_or_default(&\"RSS_MODE\".to_string(), &\"dev\".to_string());"
+    ));
     assert!(rust.contains("let now = rsscript_runtime::clock_now();"));
     assert!(rust.contains("let elapsed = rsscript_runtime::instant_elapsed(&now);"));
     assert!(rust.contains("let millis = rsscript_runtime::duration_as_ms(&elapsed);"));
@@ -2327,7 +2632,7 @@ fn write_line<W: Writer>(writer: mut W, message: read String) -> Unit {
     let rust =
         lower_source_to_rust("receiver-protocol-lower.rss", source).expect("source should lower");
 
-    assert!(rust.contains("<W as Writer>::write(&mut writer, &message);"));
+    assert!(rust.contains("<W as Writer>::write(writer, &message);"));
     assert!(!rust.contains("Writer::write(&mut writer, &message);"));
 }
 
@@ -2359,7 +2664,7 @@ fn write_line(writer: mut BufferWriter, message: read String) -> Unit {
     let rust = lower_source_to_rust("receiver-concrete-protocol-lower.rss", source)
         .expect("source should lower");
 
-    assert!(rust.contains("<BufferWriter as Writer>::write(&mut writer, &message);"));
+    assert!(rust.contains("<BufferWriter as Writer>::write(writer, &message);"));
     assert!(!rust.contains("BufferWriter::write(&mut writer, &message);"));
 }
 
@@ -2430,6 +2735,172 @@ fn write_dynamic(writer: take BufferWriter, message: read String) -> Unit {
         lower_source_to_rust("capability-receiver-lower.rss", source).expect("source should lower");
 
     assert!(rust.contains("<CapabilityWriter as Writer>::write(&mut cap, &message);"));
+}
+
+#[test]
+fn rust_lowering_allows_receiver_calls_for_core_namespace_functions() {
+    let source = r#"
+features: local
+
+fn main() -> Int {
+    let mut items = List<Int>.new()
+    mut items.push(value: read 1)
+    mut items.push(value: read 2)
+    let count = items.len()
+    let first = items.get(0)
+    return count
+}
+"#;
+    let rust =
+        lower_source_to_rust("core-receiver-call-lower.rss", source).expect("source should lower");
+
+    assert!(rust.contains("rsscript_runtime::list_push"));
+    assert!(rust.contains("&mut items"));
+    assert!(rust.contains("&1"));
+    assert!(rust.contains("&2"));
+    assert!(rust.contains("let count = rsscript_runtime::list_len(&items);"));
+    assert!(rust.contains("let first = rsscript_runtime::list_get(&items, 0);"));
+    assert!(rust.contains("return count;"));
+}
+
+#[test]
+fn rust_lowering_allows_multiline_receiver_chain_after_closure() {
+    let source = r#"
+sum ParseError {
+    Bad
+}
+
+fn keep(value: Int) -> Result<Int, ParseError> {
+    return Ok(value)
+}
+
+fn parse(value: read Result<Int, ParseError>) -> Option<Int> {
+    return value.and_then(|item| {
+        return keep(item)
+    }).ok()
+}
+"#;
+    let rust = lower_source_to_rust("multiline-receiver-chain-after-closure.rss", source)
+        .expect("multiline receiver chain after closure should lower");
+
+    assert!(rust.contains("rsscript_runtime::result_ok(&rsscript_runtime::result_and_then("));
+    assert!(rust.contains("|item| {"));
+}
+
+#[test]
+fn rust_lowering_allows_receiver_calls_on_field_receivers() {
+    let source = r#"
+struct User {
+    name: String
+}
+
+fn main() -> Int {
+    let user = User(name: "rss")
+    return user.name.len()
+}
+"#;
+    let rust = lower_source_to_rust("field-receiver-call-lower.rss", source)
+        .expect("field receiver calls should lower");
+
+    assert!(rust.contains("return rsscript_runtime::string_len(&user.name);"));
+}
+
+#[test]
+fn rust_lowering_allows_receiver_calls_on_sum_variants() {
+    let source = r#"
+sum Runtime {
+    CoreRuntime
+}
+
+fn Runtime.name(runtime: read Runtime) -> String {
+    match runtime {
+        CoreRuntime => {
+            return "core"
+        }
+    }
+}
+
+fn main() -> String {
+    let runtime = CoreRuntime
+    return runtime.name()
+}
+"#;
+    let rust = lower_source_to_rust("sum-variant-receiver-call-lower.rss", source)
+        .expect("sum variant receiver calls should lower");
+
+    assert!(rust.contains("let runtime = Runtime::CoreRuntime;"));
+    assert!(rust.contains("return Runtime_name(&runtime);"));
+}
+
+#[test]
+fn rust_lowering_allows_receiver_calls_for_generic_map_methods() {
+    let source = r#"
+fn main() -> Int {
+    let mut names = Map<Int, String>.new()
+    mut names.insert(key: read 1, value: read "one")
+    let found = read names.get(key: read 1)
+    let removed = mut names.remove(key: read 1)
+
+    let mut payloads = Map<Int, JsonValue>.new()
+    mut payloads.insert(key: read 7, value: read {"ok": true})
+    return Map.len(map: read names)
+}
+"#;
+    let rust =
+        lower_source_to_rust("map-receiver-call-lower.rss", source).expect("source should lower");
+
+    assert!(rust.contains("rsscript_runtime::map_insert(&mut names, &1, &\"one\".to_string());"));
+    assert!(rust.contains("let found = rsscript_runtime::map_get(&names, &1);"));
+    assert!(rust.contains("let removed = rsscript_runtime::map_remove(&mut names, &1);"));
+    assert!(rust.contains("rsscript_runtime::map_insert(&mut payloads, &7, &rsscript_runtime::json_value(&rsscript_runtime::json_object"));
+}
+
+#[test]
+fn rust_lowering_treats_map_literals_as_maps_when_expected() {
+    let source = r#"
+fn main() -> Int {
+    let names: Map<Int, String> = { 1 => "one", 2 => "two" }
+    let payloads: Map<Int, JsonValue> = { 7 => {"ok": true} }
+    return Map.len(map: read names)
+}
+"#;
+    let rust = lower_source_to_rust("map-literal-lower.rss", source).expect("source should lower");
+
+    assert!(rust.contains("rsscript_runtime::map_from_entries(vec![(1, \"one\".to_string()), (2, \"two\".to_string())])"));
+    assert!(rust.contains("rsscript_runtime::map_from_entries(vec![(7, rsscript_runtime::json_value(&rsscript_runtime::json_object"));
+}
+
+#[test]
+fn checker_rejects_map_literal_entry_type_mismatches() {
+    let source = r#"
+fn takes_names(names: read Map<Int, String>) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    let wrong_key: Map<Int, String> = { "one" => "one" }
+    let wrong_value: Map<Int, String> = { 1 => 2 }
+    takes_names(names: read { "two" => 2 })
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source_with_core("map-literal-type-mismatch.rss", source);
+    let map_entry_mismatches = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.label == "map literal entry type mismatch")
+        .count();
+
+    assert_eq!(map_entry_mismatches, 4, "{diagnostics:?}");
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .summary
+            .contains("map literal key has type `String`, expected `Int`")
+    }));
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .summary
+            .contains("map literal value has type `Int`, expected `String`")
+    }));
 }
 
 #[test]

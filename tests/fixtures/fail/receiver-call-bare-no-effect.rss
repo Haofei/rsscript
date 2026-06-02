@@ -1,7 +1,7 @@
-// expect: RS0206
+// expect: RS0202
 features: local
 
-struct Cache {
+class Cache {
     data: Map<String, String>
 }
 
@@ -10,6 +10,6 @@ fn Cache.put(self: mut Cache, key: read String, value: read String) -> Unit {
 }
 
 fn main() -> Unit {
-    let cache = Cache(data: Map.new<String, String>())
-    cache.put(key: read "hello", value: read "world")
+    let mut cache = Cache(data: Map.new<String, String>())
+    mut cache.put(key: "hello", value: "world")
 }

@@ -4,11 +4,11 @@ use crate::lexer::{Token, TokenKind, lex};
 use crate::syntax::ast::{
     AssignStmt, BinaryOp, Block, CallArg, Callee, ConstDecl, DataEffect, DuplicateFileFeature,
     EffectDecl, Expr, FieldDecl, FileFeature, FileFeatureScope, ForStmt, FunctionDecl,
-    GenericBound, GenericParam, IfStmt, Item, LetElseStmt, LetKind, LetStmt, LoopStmt, MatchArm,
-    MatchPattern, MatchStmt, ModuleDecl, ObjectLiteralField, Param, Program, ProtocolDecl,
-    ProtocolImpl, ProtocolImplMapping, ReturnStmt, SelectArm, SelectStmt, Stmt, SumTypeDecl,
-    SumVariant, TaskGroupStmt, TypeAliasDecl, TypeDecl, TypeKind, TypeRef, UnknownFileFeature,
-    UseDecl, WithStmt,
+    GenericBound, GenericParam, IfStmt, Item, LetElseStmt, LetKind, LetStmt, LoopStmt,
+    MapLiteralEntry, MatchArm, MatchPattern, MatchStmt, ModuleDecl, ObjectLiteralField, Param,
+    Program, ProtocolDecl, ProtocolImpl, ProtocolImplMapping, ReturnStmt, SelectArm, SelectStmt,
+    Stmt, SumTypeDecl, SumVariant, TaskGroupStmt, TypeAliasDecl, TypeDecl, TypeKind, TypeRef,
+    UnknownFileFeature, UseDecl, WithStmt,
 };
 
 pub fn parse_source(file: &str, source: &str) -> Program {
@@ -1267,8 +1267,7 @@ fn parse_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
 fn try_parse_assign_stmt(tokens: &[Token], start: usize, end: usize) -> Option<Stmt> {
     let mut depth = 0i32;
     let mut assign_index = None;
-    for index in start..end {
-        let token = &tokens[index];
+    for (index, token) in tokens.iter().enumerate().take(end).skip(start) {
         if token.symbol("(") || token.symbol("[") || token.symbol("{") {
             depth += 1;
         } else if token.symbol(")") || token.symbol("]") || token.symbol("}") {
@@ -1768,8 +1767,7 @@ fn parse_match_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> 
 fn find_match_expr_arms_open(tokens: &[Token], start: usize, end: usize) -> Option<usize> {
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
-    for index in start..end {
-        let token = &tokens[index];
+    for (index, token) in tokens.iter().enumerate().take(end).skip(start) {
         if token.symbol("(") {
             paren_depth += 1;
         } else if token.symbol(")") {
@@ -1989,6 +1987,12 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
         return Some(object);
     }
 
+    if let Some(receiver_call) =
+        parse_receiver_call_expr_from_receiver(tokens, start, end, DataEffect::Read)
+    {
+        return Some(receiver_call);
+    }
+
     if let Some(call) = parse_call_expr(tokens, start, end) {
         return Some(call);
     }
@@ -2057,10 +2061,33 @@ fn parse_object_literal_expr(tokens: &[Token], start: usize, end: usize) -> Opti
         return None;
     }
     let mut fields = Vec::new();
+    let mut entries = Vec::new();
+    let mut saw_map_entry = false;
+    let mut saw_object_field = false;
     for range in split_param_ranges(tokens, start + 1, close) {
         if range.empty_span.is_some() {
             continue;
         }
+        if let Some(arrow) = find_top_level_symbol(tokens, range.start, range.end, "=>") {
+            if saw_object_field {
+                return None;
+            }
+            saw_map_entry = true;
+            let key = parse_expr(tokens, range.start, arrow)
+                .unwrap_or_else(|| Expr::Unknown(tokens[range.start].span.clone()));
+            let value = parse_expr(tokens, arrow + 1, range.end)
+                .unwrap_or_else(|| Expr::Unknown(tokens[range.start].span.clone()));
+            entries.push(MapLiteralEntry {
+                key,
+                value,
+                span: tokens[range.start].span.clone(),
+            });
+            continue;
+        }
+        if saw_map_entry {
+            return None;
+        }
+        saw_object_field = true;
         let Some(colon) = find_top_level_symbol(tokens, range.start, range.end, ":") else {
             return None;
         };
@@ -2076,6 +2103,12 @@ fn parse_object_literal_expr(tokens: &[Token], start: usize, end: usize) -> Opti
             name: name.clone(),
             value,
             span: tokens[range.start].span.clone(),
+        });
+    }
+    if saw_map_entry {
+        return Some(Expr::MapLiteral {
+            entries,
+            span: tokens[start].span.clone(),
         });
     }
     Some(Expr::ObjectLiteral {
@@ -2305,20 +2338,26 @@ fn parse_receiver_call_expr(
     end: usize,
     effect: DataEffect,
 ) -> Option<Expr> {
-    let receiver_pos = start + 1;
-    let receiver_name = ident_name(tokens.get(receiver_pos)?)?;
+    parse_receiver_call_expr_from_receiver(tokens, start + 1, end, effect)
+}
 
-    // Receiver must start with lowercase to distinguish from Type.method qualified calls
-    if !receiver_name.starts_with(|c: char| c.is_lowercase() || c == '_') {
+fn parse_receiver_call_expr_from_receiver(
+    tokens: &[Token],
+    receiver_start: usize,
+    end: usize,
+    effect: DataEffect,
+) -> Option<Expr> {
+    if tokens
+        .get(receiver_start)
+        .is_some_and(|token| token.symbol("!"))
+    {
         return None;
     }
-
-    // Must be followed by "."
-    if !tokens.get(receiver_pos + 1)?.symbol(".") {
+    let dot = find_receiver_call_dot(tokens, receiver_start, end)?;
+    if is_qualified_namespace_receiver(tokens, receiver_start, dot) {
         return None;
     }
-
-    let method_pos = receiver_pos + 2;
+    let method_pos = dot + 1;
     let method_name = ident_name(tokens.get(method_pos)?)?;
 
     // Find the opening paren for the call args (may have generic args like method<T>(...))
@@ -2336,16 +2375,54 @@ fn parse_receiver_call_expr(
         parse_named_callee_segment(tokens, method_pos, call_open)?
     };
 
+    let receiver = parse_expr(tokens, receiver_start, dot)
+        .unwrap_or_else(|| Expr::Unknown(tokens[receiver_start].span.clone()));
     let args = parse_call_args(tokens, call_open + 1, close);
     Some(Expr::Call {
         callee: Callee::ReceiverCall {
-            receiver: receiver_name.to_string(),
+            receiver: Box::new(receiver),
             method,
             effect,
         },
         args,
-        span: tokens[start].span.clone(),
+        span: tokens[receiver_start].span.clone(),
     })
+}
+
+fn find_receiver_call_dot(tokens: &[Token], start: usize, end: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut candidates = Vec::new();
+    for (index, token) in tokens.iter().enumerate().take(end).skip(start) {
+        if token.symbol("(") || token.symbol("{") || token.symbol("[") {
+            depth += 1;
+        } else if token.symbol(")") || token.symbol("}") || token.symbol("]") {
+            depth = depth.saturating_sub(1);
+        } else if depth == 0 && token.symbol(".") {
+            candidates.push(index);
+        }
+    }
+    candidates.into_iter().rev().find(|dot| {
+        if *dot <= start || dot + 1 >= end || ident_name(&tokens[dot + 1]).is_none() {
+            return false;
+        }
+        let Some(open) = find_call_open(tokens, dot + 1, end) else {
+            return false;
+        };
+        find_matching(tokens, open, "(", ")").is_some_and(|close| close + 1 == end)
+    })
+}
+
+fn is_qualified_namespace_receiver(tokens: &[Token], start: usize, dot: usize) -> bool {
+    let Some(name) = tokens.get(start).and_then(ident_name) else {
+        return false;
+    };
+    name.starts_with(|c: char| c.is_uppercase())
+        && tokens[start + 1..dot].iter().all(|token| {
+            token.symbol("<")
+                || token.symbol(">")
+                || token.symbol(",")
+                || ident_name(token).is_some()
+        })
 }
 
 fn parse_call_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
@@ -2690,13 +2767,18 @@ fn statement_end(tokens: &[Token], start: usize, limit: usize) -> usize {
     let line = tokens[start].span.line;
     let mut depth = 0usize;
     let mut angle_depth = 0usize;
+    let mut postfix_continuation_line = None;
     for (index, token) in tokens.iter().enumerate().take(limit).skip(start + 1) {
-        if depth == 0
-            && angle_depth == 0
-            && token.span.line > line
-            && !is_statement_postfix_token(token)
-        {
-            return index;
+        if depth == 0 && angle_depth == 0 && token.span.line > line {
+            if postfix_continuation_line == Some(token.span.line) {
+                // Keep scanning the receiver-call segment that began with a
+                // postfix token on this line, e.g. `}).ok()` or a next-line
+                // `.map(...)` chain.
+            } else if is_statement_postfix_token(token) {
+                postfix_continuation_line = Some(token.span.line);
+            } else {
+                return index;
+            }
         }
         if token.symbol("(") || token.symbol("{") || token.symbol("[") {
             depth += 1;
@@ -2715,7 +2797,7 @@ fn statement_end(tokens: &[Token], start: usize, limit: usize) -> usize {
 }
 
 fn is_statement_postfix_token(token: &Token) -> bool {
-    token.symbol("?")
+    token.symbol("?") || token.symbol(".")
 }
 
 fn find_control_body_open(tokens: &[Token], start: usize, limit: usize) -> Option<usize> {

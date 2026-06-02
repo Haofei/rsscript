@@ -1,217 +1,493 @@
-fn tool_specs_json() -> fresh String {
-    let mut specs = List<String>.new()
-    List.push(list: mut specs, value: read Json.encode(value: read {
-        "type": "function",
-        "function": {
-            "name": "read_file",
-            "description": "Read a UTF-8 text file for the agent.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Relative path to read.",
-                    },
-                },
-                "required": ["path"],
-                "additionalProperties": false,
-            },
-        },
-    }))
-    List.push(list: mut specs, value: read Json.encode(value: read {
-        "type": "function",
-        "function": {
-            "name": "write_file",
-            "description": "Write a UTF-8 text file on behalf of the agent.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Relative path to write.",
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "File content.",
-                    },
-                },
-                "required": ["path", "content"],
-                "additionalProperties": false,
-            },
-        },
-    }))
-    List.push(list: mut specs, value: read Json.encode(value: read {
-        "type": "function",
-        "function": {
-            "name": "check_rss_file",
-            "description": "Check that a generated RSScript file follows the requested read-file example shape.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Relative RSScript file path to check.",
-                    },
-                },
-                "required": ["path"],
-                "additionalProperties": false,
-            },
-        },
-    }))
+sum ToolRuntime {
+    CoreToolRuntime
+}
 
-    return Json.array(items: read specs)
+
+struct ToolRequest {
+    id: String
+    name: String
+    arguments: String
+}
+
+struct ToolResult {
+    id: String
+    name: String
+    content: JsonValue
+}
+
+fn ToolRequest.new(id: read String, name: read String, arguments: read String) -> fresh ToolRequest {
+    return ToolRequest(id, name, arguments)
+}
+
+fn ToolResult.new(id: read String, name: read String, content: read JsonValue) -> fresh ToolResult {
+    return ToolResult(id, name, content: content.clone())
+}
+
+fn tool_specs() -> fresh JsonValue {
+    let specs: List<JsonValue> = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read a UTF-8 text file for the agent.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string", "description": "Relative path to read."}},
+                    "required": ["path"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_files",
+                "description": "List files under a relative directory. Use this before guessing file names.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Relative directory to inspect."},
+                        "max_results": {"type": "integer", "description": "Maximum paths to return."},
+                    },
+                    "required": ["path"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_text",
+                "description": "Search UTF-8 files under a relative directory for a substring.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Relative directory to search."},
+                        "query": {"type": "string", "description": "Substring to search for."},
+                        "max_results": {"type": "integer", "description": "Maximum matching paths to return."},
+                    },
+                    "required": ["path", "query"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "write_file",
+                "description": "Write a UTF-8 text file on behalf of the agent. Returns old/new byte counts and whether content changed.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Relative path to write."},
+                        "content": {"type": "string", "description": "File content."},
+                    },
+                    "required": ["path", "content"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "check_rss_file",
+                "description": "Check that a generated RSScript file follows the requested read-file example shape.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string", "description": "Relative RSScript file path to check."}},
+                    "required": ["path"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "check_rss_package",
+                "description": "Run the RSScript package checker for a relative package path.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Relative package directory to check."},
+                        "timeout_ms": {"type": "integer", "description": "Process timeout in milliseconds."},
+                    },
+                    "required": ["path"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+    ]
+    return specs.to_json_values()
 }
 
 fn path_is_traversal_safe(path_text: read String) -> Bool {
-    let absolute = String.starts_with(value: read path_text, prefix: read "/")
-    let traversal = String.contains(value: read path_text, needle: read "..")
-    return absolute == false && traversal == false
+    return path_text.safe_relative().is_ok()
 }
 
 fn path_in_workspace(workspace_root: read String, path_text: read String) -> Bool {
-    let safe = path_is_traversal_safe(path_text: read path_text)
-    let under_root = String.starts_with(value: read path_text, prefix: read workspace_root)
+    let safe = path_is_traversal_safe(path_text)
+    let under_root = path_text.starts_with(workspace_root)
     return safe && under_root
 }
 
-fn tool_path_error(path_text: read String, reason: read String) -> String {
-    return Json.encode(value: read {
-        "ok": false,
-        "path": path_text,
-        "error": reason,
-    })
+fn resolve_repo_path(repo_root: read Path, path_text: read String) -> fresh Result<Path, String> {
+    return repo_root.resolve_relative(path_text)
 }
 
-fn file_read_result(path_text: read String) -> String {
-    let path = Path.from_string(value: read path_text)
-    match File.read_string(path: read path) {
+fn tool_path_error(path_text: read String, reason: read String) -> fresh JsonValue {
+    return {"ok": false, "path": path_text, "error": reason}
+}
+
+fn bounded_limit(value: Int, fallback: Int, max: Int) -> Int {
+    if value < 1 {
+        return fallback
+    }
+    if value > max {
+        return max
+    }
+    return value
+}
+
+fn file_read_result(path_text: read String, actual_path: read Path) -> fresh JsonValue {
+    match actual_path.read_string() {
         Ok(text) => {
-            return Json.encode(value: read {
-                "ok": true,
-                "path": path_text,
-                "content": text,
-                "bytes": String.len(value: read text),
-            })
+            return {"ok": true, "path": path_text, "content": text, "bytes": text.len()}
         }
         Err(error) => {
-            return Json.encode(value: read {
-                "ok": false,
-                "path": path_text,
-                "error": FileError.message(error: read error),
-            })
+            return {"ok": false, "path": path_text, "error": error.message()}
         }
     }
 }
 
-fn execute_read_file(arguments: read String) -> String {
-    let path_text = argument_field(arguments: read arguments, name: read "path", fallback: read "examples/AGENTS.md")
-    if path_is_traversal_safe(path_text: read path_text) == false {
-        return tool_path_error(
-            path_text: read path_text,
-            reason: read "path is not allowed: absolute paths and `..` traversal are rejected",
-        )
-    }
-    return file_read_result(path_text: read path_text)
-}
-
-fn file_write_result(path_text: read String, content: read String) -> String {
-    let path = Path.from_string(value: read path_text)
-    match File.write_string_to_path(path: read path, text: read content) {
-        Ok(_) => {
-            return Json.encode(value: read {
-                "ok": true,
-                "path": path_text,
-                "bytes": String.len(value: read content),
-            })
+fn execute_read_file(arguments: read String, repo_root: read Path) -> fresh JsonValue {
+    let path_text = argument_field(arguments, "path", "examples/code-agent/AGENTS.md")
+    match resolve_repo_path(repo_root, path_text) {
+        Ok(path) => {
+            return file_read_result(path_text, path)
         }
         Err(error) => {
-            return Json.encode(value: read {
-                "ok": false,
-                "path": path_text,
-                "error": FileError.message(error: read error),
-            })
+            return tool_path_error(path_text, error)
         }
     }
 }
 
-fn execute_write_file(arguments: read String, workspace_root: read String) -> String {
+fn push_listed_file(results: mut List<String>, file_path: read String, max_results: Int) -> Unit {
+    if results.len() < max_results {
+        mut results.push(file_path)
+    }
+}
+
+fn collect_files_recursive(
+    root: read Path,
+    display_root_text: read String,
+    results: mut List<String>,
+    max_results: Int,
+) -> Unit {
+    if results.len() >= max_results {
+        return Unit
+    }
+    match root.list_files() {
+        Ok(names) => {
+            let mut index = 0
+            let limit = names.len()
+            while index < limit {
+                let name = names.get(index)
+                let full = root.join(name)
+                let display_root = display_root_text.to_path()
+                let display_full = display_root.join(name)
+                let display_full_text = display_full.to_string()
+                if full.is_dir() {
+                    collect_files_recursive(full, display_full_text, mut results, max_results)
+                } else {
+                    push_listed_file(mut results, display_full_text, max_results)
+                }
+                index = index + 1
+            }
+        }
+        Err => {
+            return Unit
+        }
+    }
+}
+
+fn execute_list_files(arguments: read String, repo_root: read Path) -> fresh JsonValue {
+    let path_text = argument_field(arguments, "path", ".")
+    let max_results = bounded_limit(argument_int(arguments, "max_results", 80), 80, 500)
+    let mut files = List<String>.new()
+    match resolve_repo_path(repo_root, path_text) {
+        Ok(root) => {
+            collect_files_recursive(root, path_text, mut files, max_results)
+        }
+        Err(error) => {
+            return tool_path_error(path_text, error)
+        }
+    }
+    let files_value = files.to_json_strings()
+    let file_count = files.len()
+    let truncated = file_count >= max_results
+    return {
+        "ok": true,
+        "path": path_text,
+        "files": files_value,
+        "count": file_count,
+        "truncated": truncated,
+    }
+}
+
+fn execute_search_text(arguments: read String, repo_root: read Path) -> fresh JsonValue {
+    let path_text = argument_field(arguments, "path", ".")
+    let query = argument_field(arguments, "query", "")
+    let max_results = bounded_limit(argument_int(arguments, "max_results", 50), 50, 200)
+    if query == "" {
+        return {"ok": false, "path": path_text, "error": "query must be non-empty"}
+    }
+    let mut files = List<String>.new()
+    match resolve_repo_path(repo_root, path_text) {
+        Ok(root) => {
+            collect_files_recursive(root, path_text, mut files, 1000)
+        }
+        Err(error) => {
+            return tool_path_error(path_text, error)
+        }
+    }
+    let mut matches = List<String>.new()
+    let mut index = 0
+    let limit = files.len()
+    while index < limit && matches.len() < max_results {
+        let file_path = files.get(index)
+        match resolve_repo_path(repo_root, file_path) {
+            Ok(path) => {
+                match path.read_string() {
+                    Ok(text) => {
+                        if text.contains(query) {
+                            mut matches.push(file_path)
+                        }
+                    }
+                    Err => {
+                    }
+                }
+            }
+            Err => {
+            }
+        }
+        index = index + 1
+    }
+    let matches_value = matches.to_json_strings()
+    let match_count = matches.len()
+    let truncated = match_count >= max_results
+    return {
+        "ok": true,
+        "path": path_text,
+        "query": query,
+        "matches": matches_value,
+        "count": match_count,
+        "truncated": truncated,
+    }
+}
+
+fn file_write_result(
+    path_text: read String,
+    actual_path: read Path,
+    content: read String,
+) -> fresh JsonValue {
+    let mut existed = false
+    let mut old_bytes = 0
+    let mut old_content = ""
+    match actual_path.read_string() {
+        Ok(existing) => {
+            existed = true
+            old_bytes = existing.len()
+            old_content = existing
+        }
+        Err => {
+        }
+    }
+    let new_bytes = content.len()
+    let changed = old_content != content
+    match actual_path.write_string(content) {
+        Ok => {
+            return {
+                "ok": true,
+                "path": path_text,
+                "existed": existed,
+                "changed": changed,
+                "old_bytes": old_bytes,
+                "new_bytes": new_bytes,
+            }
+        }
+        Err(error) => {
+            return {
+                "ok": false,
+                "path": path_text,
+                "existed": existed,
+                "changed": changed,
+                "old_bytes": old_bytes,
+                "new_bytes": new_bytes,
+                "error": error.message(),
+            }
+        }
+    }
+}
+
+fn execute_write_file(
+    arguments: read String,
+    repo_root: read Path,
+    workspace_root: read String,
+) -> fresh JsonValue {
     let default_path = "target/rsscript-agent-hello.txt"
-    let default_content = "hello world\n"
-    let path_text = argument_field(arguments: read arguments, name: read "path", fallback: read default_path)
-    let content = argument_field(arguments: read arguments, name: read "content", fallback: read default_content)
-    if path_in_workspace(workspace_root: read workspace_root, path_text: read path_text) == false {
-        let reason = String.concat(
-            left: read "writes are confined to the workspace root `",
-            right: read String.concat(left: read workspace_root, right: read "` (no absolute paths or `..`)"),
-        )
-        return tool_path_error(path_text: read path_text, reason: read reason)
+    let default_content = "hello world\\\\n"
+    let path_text = argument_field(arguments, "path", default_path)
+    let content = argument_field(arguments, "content", default_content)
+    if path_in_workspace(workspace_root, path_text) == false {
+        let reason = "writes are confined to the workspace root `"
+            .concat(workspace_root)
+            .concat("` (no absolute paths or `..`)")
+        return tool_path_error(path_text, reason)
     }
-    return file_write_result(path_text: read path_text, content: read content)
+    match resolve_repo_path(repo_root, path_text) {
+        Ok(path) => {
+            return file_write_result(path_text, path, content)
+        }
+        Err(error) => {
+            return tool_path_error(path_text, error)
+        }
+    }
 }
 
-fn execute_check_rss_file(arguments: read String, workspace_root: read String) -> String {
-    let path_text = argument_field(arguments: read arguments, name: read "path", fallback: read "target/rsscript-agent-read-file.rss")
-    if path_in_workspace(workspace_root: read workspace_root, path_text: read path_text) == false {
-        let reason = String.concat(
-            left: read "checks are confined to the workspace root `",
-            right: read String.concat(left: read workspace_root, right: read "` (no absolute paths or `..`)"),
-        )
-        return tool_path_error(path_text: read path_text, reason: read reason)
+fn execute_check_rss_file(
+    arguments: read String,
+    repo_root: read Path,
+    workspace_root: read String,
+) -> fresh JsonValue {
+    let path_text = argument_field(arguments, "path", "target/rsscript-agent-read-file.rss")
+    if path_in_workspace(workspace_root, path_text) == false {
+        let reason = "checks are confined to the workspace root `"
+            .concat(workspace_root)
+            .concat("` (no absolute paths or `..`)")
+        return tool_path_error(path_text, reason)
     }
-
-    return rss_read_file_check_result(path_text: read path_text)
+    match resolve_repo_path(repo_root, path_text) {
+        Ok(path) => {
+            return rss_read_file_check_result(path_text, path)
+        }
+        Err(error) => {
+            return tool_path_error(path_text, error)
+        }
+    }
 }
 
-fn execute_tool(name: read String, arguments: read String, config: read AgentConfig) -> String {
-    if name == "read_file" {
-        return execute_read_file(arguments: read arguments)
+fn execute_check_rss_package(arguments: read String, repo_root: read Path) -> fresh JsonValue {
+    let path_text = argument_field(arguments, "path", "examples/code-agent")
+    let timeout_ms = bounded_limit(argument_int(arguments, "timeout_ms", 120000), 120000, 300000)
+    match resolve_repo_path(repo_root, path_text) {
+        Ok(path) => {
+            return run_package_check(path_text, path.to_string(), timeout_ms)
+        }
+        Err(error) => {
+            return tool_path_error(path_text, error)
+        }
     }
-
-    if name == "write_file" {
-        return execute_write_file(arguments: read arguments, workspace_root: read config.workspace_root)
-    }
-
-    if name == "check_rss_file" {
-        return execute_check_rss_file(arguments: read arguments, workspace_root: read config.workspace_root)
-    }
-
-    return Json.encode(value: read {
-        "ok": false,
-        "tool": name,
-        "error": "unknown tool",
-    })
 }
 
-fn execute_tool_calls(response: read String, transcript: read String, config: read AgentConfig) -> fresh ToolLoopResult {
+fn run_package_check(
+    path_text: read String,
+    package_path: read String,
+    timeout_ms: Int,
+) -> fresh JsonValue {
+    let args: List<String> = ["run", "--quiet", "--", "check", package_path]
+    match Process.run_timeout(command: read "cargo", args: read args, timeout_ms: timeout_ms) {
+        Ok(output) => {
+            let status: Int = output.status
+            return {
+                "ok": status == 0,
+                "path": path_text,
+                "status": status,
+                "stdout": output.stdout,
+                "stderr": output.stderr,
+            }
+        }
+        Err(error) => {
+            return {"ok": false, "path": path_text, "error": error}
+        }
+    }
+}
+
+fn ToolRuntime.execute(
+    runtime: read ToolRuntime,
+    request: read ToolRequest,
+    config: read AgentConfig,
+) -> fresh ToolResult {
+    match runtime {
+        CoreToolRuntime => {
+            let content = execute_core_tool(request, config)
+            return ToolResult.new(request.id, request.name, content)
+        }
+    }
+}
+
+fn execute_core_tool(request: read ToolRequest, config: read AgentConfig) -> fresh JsonValue {
+    if request.name == "read_file" {
+        return execute_read_file(request.arguments, config.repo_root)
+    }
+    if request.name == "list_files" {
+        return execute_list_files(request.arguments, config.repo_root)
+    }
+    if request.name == "search_text" {
+        return execute_search_text(request.arguments, config.repo_root)
+    }
+    if request.name == "write_file" {
+        return execute_write_file(request.arguments, config.repo_root, config.workspace_root)
+    }
+    if request.name == "check_rss_file" {
+        return execute_check_rss_file(request.arguments, config.repo_root, config.workspace_root)
+    }
+    if request.name == "check_rss_package" {
+        return execute_check_rss_package(request.arguments, config.repo_root)
+    }
+    return {"ok": false, "tool": request.name, "error": "unknown tool"}
+}
+
+fn execute_tool_calls(
+    response: read String,
+    messages: read List<AgentMessage>,
+    config: read AgentConfig,
+) -> fresh ToolLoopResult {
+    let runtime = CoreToolRuntime
     let mut tool_index = 0
     let mut called_tool = false
-    let mut next_transcript = String.concat(left: read "", right: read transcript)
-
-    while tool_index < config.max_tool_calls {
-        let call_id = tool_call_id_at(response: read response, index: tool_index)
-        if call_id == "" {
-            tool_index = config.max_tool_calls
-        } else {
-            let tool_name = tool_call_name_at(response: read response, index: tool_index)
-            let arguments = tool_call_arguments_at(response: read response, index: tool_index)
-            Log.write(message: read event_json(kind: read "tool.requested", message: read tool_name))
-            Log.write(message: read arguments)
-
-            let tool_result = execute_tool(name: read tool_name, arguments: read arguments, config: read config)
-            Log.write(message: read event_json(kind: read "tool.completed", message: read tool_result))
-            next_transcript = append_tool_result(
-                transcript: read next_transcript,
-                name: read tool_name,
-                arguments: read arguments,
-                result: read tool_result,
-            )
-            called_tool = true
-            tool_index = tool_index + 1
+    let mut next_messages = List<AgentMessage>.new()
+    let mut message_index = 0
+    let message_limit = messages.len()
+    while message_index < message_limit {
+        let message = messages.get(message_index)
+        mut next_messages.push(message)
+        message_index = message_index + 1
+    }
+    match response.json_parse() {
+        Ok(root) => {
+            let assistant_message = assistant_message_value(root, response_content(response))
+            mut next_messages.push(AgentMessage.from_value(assistant_message))
+            while tool_index < config.max_tool_calls {
+                match tool_request_at(assistant_message, tool_index) {
+                    Some(request) => {
+                        Log.trace(event: read "tool.requested", message: read request.name)
+                        Log.write(message: read request.arguments)
+                        let result = runtime.execute(request, config)
+                        Log.write_json(value: read result.content)
+                        mut next_messages.push(AgentMessage.tool(result.id, result.content.to_string()))
+                        called_tool = true
+                        tool_index = tool_index + 1
+                    }
+                    None => {
+                        tool_index = config.max_tool_calls
+                    }
+                }
+            }
+        }
+        Err => {
+            mut next_messages.push(AgentMessage.from_value(assistant_fallback_message(response)))
+            return ToolLoopResult(called_tool: false, messages: next_messages)
         }
     }
-
-    return ToolLoopResult(
-        called_tool: called_tool,
-        transcript: String.concat(left: read "", right: read next_transcript),
-    )
+    return ToolLoopResult(called_tool, messages: next_messages)
 }

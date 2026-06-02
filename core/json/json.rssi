@@ -3,12 +3,23 @@ struct JsonLiteral
 
 pub fn Json.parse(text: read String) -> Result<fresh JsonValue, JsonError>
 
+pub fn Json.json_parse(text: read String) -> Result<fresh JsonValue, JsonError>
+
 pub fn Json.parse_file(path: read Path) -> Result<fresh JsonValue, JsonError>
+
+pub fn Json.value(value: read JsonLiteral) -> fresh JsonValue
+    effects(pure)
+
+pub fn Json.clone(value: read JsonValue) -> fresh JsonValue
+    effects(pure)
 
 pub fn Json.encode(value: read JsonLiteral) -> fresh String
     effects(pure)
 
 pub fn Json.quote_string(value: read String) -> fresh String
+    effects(pure)
+
+pub fn Json.to_string(value: read JsonValue) -> fresh String
     effects(pure)
 
 pub fn Json.string_field(name: read String, value: read String) -> fresh String
@@ -27,6 +38,15 @@ pub fn Json.object(fields: read List<String>) -> fresh String
     effects(pure)
 
 pub fn Json.array(items: read List<String>) -> fresh String
+    effects(pure)
+
+pub fn Json.string_array(items: read List<String>) -> fresh String
+    effects(pure)
+
+pub fn Json.strings(items: read List<String>) -> fresh JsonValue
+    effects(pure)
+
+pub fn Json.values(items: read List<JsonValue>) -> fresh JsonValue
     effects(pure)
 
 pub fn Json.field(
@@ -54,12 +74,129 @@ pub fn Json.value_at(
     path: read String,
 ) -> Result<fresh JsonValue, JsonError>
 
+pub fn Json.at(
+    value: read JsonValue,
+    path: read String,
+) -> Result<fresh JsonValue, JsonError>
+
+pub fn Json.at_or(
+    value: read JsonValue,
+    path: read String,
+    fallback: read JsonValue,
+) -> fresh JsonValue
+    effects(pure)
+
+pub fn Json.at_string(
+    value: read JsonValue,
+    path: read String,
+) -> Result<String, JsonError>
+
+pub fn Json.at_int(
+    value: read JsonValue,
+    path: read String,
+) -> Result<Int, JsonError>
+
+pub fn Json.at_bool(
+    value: read JsonValue,
+    path: read String,
+) -> Result<Bool, JsonError>
+
+pub fn Json.at_string_or(
+    value: read JsonValue,
+    path: read String,
+    fallback: read String,
+) -> String
+    effects(pure)
+
+pub fn Json.at_int_or(
+    value: read JsonValue,
+    path: read String,
+    fallback: Int,
+) -> Int
+    effects(pure)
+
+pub fn Json.at_bool_or(
+    value: read JsonValue,
+    path: read String,
+    fallback: Bool,
+) -> Bool
+    effects(pure)
+
+pub fn Json.at_to_string(
+    value: read JsonValue,
+    path: read String,
+) -> Result<String, JsonError>
+
+pub fn Json.at_to_string_or(
+    value: read JsonValue,
+    path: read String,
+    fallback: read String,
+) -> String
+    effects(pure)
+
 pub fn Json.string_at(
     text: read String,
     path: read String,
 ) -> Result<String, JsonError>
 
+pub fn Json.int_at(
+    text: read String,
+    path: read String,
+) -> Result<Int, JsonError>
+
+pub fn Json.bool_at(
+    text: read String,
+    path: read String,
+) -> Result<Bool, JsonError>
+
+pub fn Json.to_string_at(
+    text: read String,
+    path: read String,
+) -> Result<String, JsonError>
+
 pub fn Json.string_at_or(
+    text: read String,
+    path: read String,
+    fallback: read String,
+) -> String
+    effects(pure)
+
+pub fn Json.json_string_at_or(
+    text: read String,
+    path: read String,
+    fallback: read String,
+) -> String
+    effects(pure)
+
+pub fn Json.int_at_or(
+    text: read String,
+    path: read String,
+    fallback: Int,
+) -> Int
+    effects(pure)
+
+pub fn Json.json_int_at_or(
+    text: read String,
+    path: read String,
+    fallback: Int,
+) -> Int
+    effects(pure)
+
+pub fn Json.bool_at_or(
+    text: read String,
+    path: read String,
+    fallback: Bool,
+) -> Bool
+    effects(pure)
+
+pub fn Json.json_bool_at_or(
+    text: read String,
+    path: read String,
+    fallback: Bool,
+) -> Bool
+    effects(pure)
+
+pub fn Json.to_string_at_or(
     text: read String,
     path: read String,
     fallback: read String,

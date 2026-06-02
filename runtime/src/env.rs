@@ -19,6 +19,13 @@ pub fn env_current_dir() -> std::io::Result<PathBuf> {
     std::env::current_dir()
 }
 
+pub fn env_run_workspace_root() -> PathBuf {
+    std::env::var("RSS_RUN_WORKSPACE_ROOT")
+        .map(PathBuf::from)
+        .or_else(|_| std::env::current_dir())
+        .unwrap_or_else(|_| PathBuf::from("."))
+}
+
 pub fn env_set_current_dir(path: &std::path::Path) -> std::io::Result<()> {
     std::env::set_current_dir(path)
 }

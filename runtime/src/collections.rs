@@ -223,6 +223,10 @@ pub fn map_new<K, V>() -> HashMap<K, V> {
     HashMap::new()
 }
 
+pub fn map_from_entries<K: Eq + Hash, V>(entries: Vec<(K, V)>) -> HashMap<K, V> {
+    entries.into_iter().collect()
+}
+
 pub fn map_len<K, V>(map: &HashMap<K, V>) -> i64 {
     map.len() as i64
 }

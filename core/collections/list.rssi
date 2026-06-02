@@ -146,3 +146,9 @@ pub fn List.remove_at<T>(
 ) -> Option<T>
 
 pub fn List.join(list: read List<String>, separator: read String) -> fresh String
+
+pub fn List.to_json_strings(list: read List<String>) -> fresh JsonValue
+    effects(pure)
+
+pub fn List.to_json_values(list: read List<JsonValue>) -> fresh JsonValue
+    effects(pure)

@@ -3,9 +3,12 @@ use std::collections::{HashMap, HashSet};
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::{
-    CallResolution, FunctionSig, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirStmt,
+    CallResolution, FunctionSig, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirStmt, ParamSig,
+    ResolvedCalleeKind,
 };
-use crate::syntax::ast::{BinaryOp, Callee, FunctionDecl, GenericBound, Item, TypeRef};
+use crate::syntax::ast::{
+    BinaryOp, Callee, DataEffect, Expr, FunctionDecl, GenericBound, Item, TypeRef,
+};
 
 #[derive(Debug, Clone)]
 struct CallbackBinding {
@@ -327,9 +330,18 @@ fn check_binding_type(
     if unresolved_generic_type(actual) {
         return;
     }
-    let resolved_expected = analyzer.resolve_type_alias(expected);
-    let resolved_actual = analyzer.resolve_type_alias(actual);
-    if argument_type_matches(resolved_expected, resolved_actual) {
+    let resolved_expected = analyzer.resolve_type_alias(expected).to_string();
+    let resolved_actual = analyzer.resolve_type_alias(actual).to_string();
+    if json_value_accepts_literal(&resolved_expected, value) {
+        return;
+    }
+    if check_map_literal_type(analyzer, &resolved_expected, value, "binding initializer") {
+        return;
+    }
+    if check_list_literal_type(analyzer, &resolved_expected, value, "binding initializer") {
+        return;
+    }
+    if argument_type_matches(&resolved_expected, &resolved_actual) {
         return;
     }
     analyzer.diagnostics.push(
@@ -430,6 +442,15 @@ fn check_binding_payload_type(
         }
         return;
     }
+    if json_value_accepts_literal(expected, payload) {
+        return;
+    }
+    if check_map_literal_type(analyzer, expected, payload, "binding payload") {
+        return;
+    }
+    if check_list_literal_type(analyzer, expected, payload, "binding payload") {
+        return;
+    }
     let Some(actual) = hir_expr_type_name(payload) else {
         return;
     };
@@ -517,6 +538,12 @@ fn check_expr(
             check_expr(analyzer, function, value, context);
             for arm in arms {
                 check_expr_block_without_return_contract(analyzer, function, &arm.body, context);
+            }
+        }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                check_expr(analyzer, function, &entry.key, context);
+                check_expr(analyzer, function, &entry.value, context);
             }
         }
         HirExpr::ObjectLiteral { .. }
@@ -659,6 +686,15 @@ fn check_return_expr_type(
     if unresolved_generic_type(actual) {
         return;
     }
+    if json_value_accepts_literal(&expected, value) {
+        return;
+    }
+    if check_map_literal_type(analyzer, &expected, value, "return value") {
+        return;
+    }
+    if check_list_literal_type(analyzer, &expected, value, "return value") {
+        return;
+    }
     if !argument_type_matches(&expected, actual) {
         return_type_mismatch_diagnostic(analyzer, &function.name, actual, &expected, span);
     }
@@ -792,6 +828,15 @@ fn check_return_payload_type(
                 hir_expr_span(payload),
             );
         }
+        return;
+    }
+    if json_value_accepts_literal(expected, payload) {
+        return;
+    }
+    if check_map_literal_type(analyzer, expected, payload, "return payload") {
+        return;
+    }
+    if check_list_literal_type(analyzer, expected, payload, "return payload") {
         return;
     }
     let Some(actual) = hir_expr_type_name(payload) else {
@@ -948,25 +993,7 @@ fn check_call_args(
     }
     check_capability_from_call(analyzer, function, callee, args, call_span);
 
-    for arg in args {
-        if arg.name.is_none() {
-            analyzer.diagnostics.push(
-                Diagnostic::error(
-                    code::UNNAMED_ARGUMENT,
-                    format!("call to `{call_name}` uses an unnamed argument."),
-                    arg.span.clone(),
-                    "argument must be named",
-                )
-                .with_cause("RSScript v0.6 requires all non-receiver call arguments to be named.")
-                .with_fix(
-                    "add_argument_name",
-                    "Write the argument as `name: value`.",
-                    "manual",
-                ),
-            );
-        }
-    }
-
+    let is_receiver_call = matches!(callee, Callee::ReceiverCall { .. });
     let signature = match resolution {
         CallResolution::Resolved { signature, .. } => signature,
         CallResolution::Unknown => {
@@ -1013,17 +1040,27 @@ fn check_call_args(
         }
         CallResolution::EnumVariant => return,
     };
+    let allow_positional_args = is_receiver_call
+        || matches!(
+            resolution,
+            CallResolution::Resolved {
+                signature,
+                kind: ResolvedCalleeKind::UserFunction,
+            } if !signature.is_public
+        );
+    let allow_constructor_field_shorthand = matches!(
+        resolution,
+        CallResolution::Resolved {
+            kind: ResolvedCalleeKind::Constructor { .. },
+            ..
+        }
+    );
     check_receiver_call_self_effect(analyzer, callee, &signature, call_span);
-    // For receiver-call shorthand, the `self` parameter is provided implicitly
-    // by the receiver, so filter it out of the signature params for arg checking.
-    let is_receiver_call = matches!(callee, Callee::ReceiverCall { .. });
+    // For receiver-call shorthand, the receiver slot is provided implicitly.
+    // Protocol methods conventionally name it `self`; core namespace functions
+    // may keep their canonical parameter name, e.g. `List.push(list: mut List<T>, ...)`.
     let signature_params: Vec<_> = if is_receiver_call {
-        signature
-            .params
-            .iter()
-            .filter(|p| p.name != "self")
-            .cloned()
-            .collect()
+        signature.params.iter().skip(1).cloned().collect()
     } else {
         signature.params.clone()
     };
@@ -1042,12 +1079,54 @@ fn check_call_args(
         .map(|param| param.name.clone())
         .collect();
 
-    let mut seen_names = HashSet::new();
     for arg in args {
-        let Some(name) = &arg.name else {
+        if arg.name.is_none()
+            && !allow_positional_args
+            && constructor_field_shorthand_name(
+                allow_constructor_field_shorthand,
+                arg,
+                &param_names,
+            )
+            .is_none()
+        {
+            analyzer.diagnostics.push(
+                Diagnostic::error(
+                    code::UNNAMED_ARGUMENT,
+                    format!("call to `{call_name}` uses an unnamed argument."),
+                    arg.span.clone(),
+                    "argument must be named",
+                )
+                .with_cause("Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand.")
+                .with_fix(
+                    "add_argument_name",
+                    "Write the argument as `name: value`.",
+                    "manual",
+                ),
+            );
+        }
+    }
+
+    let mut seen_names = HashSet::new();
+    let mut seen_positional_params = HashSet::new();
+    for (index, arg) in args.iter().enumerate() {
+        let Some(name) = arg
+            .name
+            .as_deref()
+            .or_else(|| {
+                constructor_field_shorthand_name(
+                    allow_constructor_field_shorthand,
+                    arg,
+                    &param_names,
+                )
+            })
+            .or_else(|| positional_param_name(allow_positional_args, &signature_params, index))
+        else {
             continue;
         };
-        if !seen_names.insert(name.as_str()) {
+        if arg.name.is_none() && !seen_positional_params.insert(name) {
+            continue;
+        }
+        if !seen_names.insert(name) {
             analyzer.diagnostics.push(
                 Diagnostic::error(
                     code::DUPLICATE_ARGUMENT,
@@ -1083,7 +1162,22 @@ fn check_call_args(
         }
     }
 
-    let provided_names: HashSet<&str> = args.iter().filter_map(|arg| arg.name.as_deref()).collect();
+    let provided_names: HashSet<&str> = args
+        .iter()
+        .enumerate()
+        .filter_map(|(index, arg)| {
+            arg.name
+                .as_deref()
+                .or_else(|| {
+                    constructor_field_shorthand_name(
+                        allow_constructor_field_shorthand,
+                        arg,
+                        &param_names,
+                    )
+                })
+                .or_else(|| positional_param_name(allow_positional_args, &signature_params, index))
+        })
+        .collect();
     for param in &signature_params {
         if !provided_names.contains(param.name.as_str()) {
             analyzer.diagnostics.push(
@@ -1109,13 +1203,31 @@ fn check_call_args(
         }
     }
 
-    for arg in args {
-        let Some(name) = &arg.name else {
+    for (index, arg) in args.iter().enumerate() {
+        let Some(name) = arg
+            .name
+            .as_deref()
+            .or_else(|| {
+                constructor_field_shorthand_name(
+                    allow_constructor_field_shorthand,
+                    arg,
+                    &param_names,
+                )
+            })
+            .or_else(|| positional_param_name(allow_positional_args, &signature_params, index))
+        else {
             continue;
         };
         let Some(expected) = param_effects.get(name) else {
             continue;
         };
+        if arg.name.is_none()
+            && allow_positional_args
+            && *expected == "read"
+            && expr_data_effect(&arg.value).is_none()
+        {
+            continue;
+        }
         if expr_data_effect(&arg.value) != Some(*expected) {
             analyzer.diagnostics.push(
                 Diagnostic::error(
@@ -1145,11 +1257,22 @@ fn check_call_args(
         call_span,
     );
 
-    for arg in args {
-        let Some(name) = &arg.name else {
+    for (index, arg) in args.iter().enumerate() {
+        let Some(name) = arg
+            .name
+            .as_deref()
+            .or_else(|| {
+                constructor_field_shorthand_name(
+                    allow_constructor_field_shorthand,
+                    arg,
+                    &param_names,
+                )
+            })
+            .or_else(|| positional_param_name(allow_positional_args, &signature_params, index))
+        else {
             continue;
         };
-        let Some(expected_param) = signature.params.iter().find(|param| param.name == *name) else {
+        let Some(expected_param) = signature.params.iter().find(|param| param.name == name) else {
             continue;
         };
         let expected_type =
@@ -1182,6 +1305,15 @@ fn check_call_args(
         if unresolved_generic_type(actual_type) {
             continue;
         }
+        if json_value_accepts_literal(&expected_type, &arg.value) {
+            continue;
+        }
+        if check_map_literal_type(analyzer, &expected_type, &arg.value, "argument") {
+            continue;
+        }
+        if check_list_literal_type(analyzer, &expected_type, &arg.value, "argument") {
+            continue;
+        }
         if !argument_type_matches(&expected_type, actual_type) {
             analyzer.diagnostics.push(
                 Diagnostic::error(
@@ -1205,11 +1337,19 @@ fn check_call_args(
         }
     }
 
-    for arg in args {
+    for (index, arg) in args.iter().enumerate() {
         let expected_param = arg
             .name
-            .as_ref()
-            .and_then(|name| signature.params.iter().find(|param| param.name == *name));
+            .as_deref()
+            .or_else(|| {
+                constructor_field_shorthand_name(
+                    allow_constructor_field_shorthand,
+                    arg,
+                    &param_names,
+                )
+            })
+            .or_else(|| positional_param_name(allow_positional_args, &signature_params, index))
+            .and_then(|name| signature.params.iter().find(|param| param.name == name));
         if expected_param.is_some_and(|param| is_noescape_fn_type(&param.type_name)) {
             continue;
         }
@@ -1228,6 +1368,31 @@ fn check_call_args(
             LocalClosureEscapeContext::Pass { callee: &call_name },
         );
     }
+}
+
+fn constructor_field_shorthand_name<'a>(
+    allow_constructor_field_shorthand: bool,
+    arg: &'a HirCallArg,
+    param_names: &HashSet<String>,
+) -> Option<&'a str> {
+    if !allow_constructor_field_shorthand || arg.name.is_some() {
+        return None;
+    }
+    let HirExpr::Ident { name, .. } = &arg.value else {
+        return None;
+    };
+    param_names.contains(name).then_some(name.as_str())
+}
+
+fn positional_param_name<'a>(
+    allow_positional_args: bool,
+    signature_params: &'a [ParamSig],
+    index: usize,
+) -> Option<&'a str> {
+    if !allow_positional_args {
+        return None;
+    }
+    signature_params.get(index).map(|param| param.name.as_str())
 }
 
 fn check_generic_call_bounds(
@@ -1540,38 +1705,35 @@ fn check_receiver_call_self_effect(
     else {
         return;
     };
-    let Some(self_param) = signature
-        .params
-        .first()
-        .filter(|param| param.name == "self")
-    else {
+    let Some(receiver_param) = signature.params.first() else {
         analyzer.diagnostics.push(
             Diagnostic::error(
                 code::UNKNOWN_CALLEE,
                 format!(
-                    "receiver-call `{}` does not resolve to a method with a `self` receiver.",
+                    "receiver-call `{}` does not resolve to a method with a receiver parameter.",
                     callee_display(callee)
                 ),
                 call_span.clone(),
                 "receiver method required",
             )
             .with_cause(
-                "Receiver-call shorthand expands to a qualified method call and requires the resolved function to declare `self` as its first parameter.",
+                "Receiver-call shorthand expands to a qualified call and requires the resolved function to declare the receiver as its first parameter.",
             )
             .with_fix(
                 "use_qualified_call",
-                format!("Call `{method}` in qualified form, or add `self: <effect> ...` to its signature."),
+                format!("Call `{method}` in qualified form, or put the receiver parameter first in its signature."),
                 "manual",
             ),
         );
         return;
     };
-    let Some(expected) = self_param.effect else {
+    let receiver_label = call_expr_label(receiver);
+    let Some(expected) = receiver_param.effect else {
         analyzer.diagnostics.push(
             Diagnostic::error(
                 code::MISSING_DATA_EFFECT,
                 format!(
-                    "receiver `{receiver}` for `{method}` has no declared `self` effect to match."
+                    "receiver `{receiver_label}` for `{method}` has no declared `self` effect to match."
                 ),
                 call_span.clone(),
                 "missing receiver effect",
@@ -1592,7 +1754,7 @@ fn check_receiver_call_self_effect(
             Diagnostic::error(
                 code::MISSING_DATA_EFFECT,
                 format!(
-                    "receiver `{receiver}` for `{method}` uses `{}` but the method requires `{}`.",
+                    "receiver `{receiver_label}` for `{method}` uses `{}` but the method requires `{}`.",
                     effect.as_str(),
                     expected.as_str()
                 ),
@@ -1604,7 +1766,10 @@ fn check_receiver_call_self_effect(
             )
             .with_fix(
                 "match_receiver_effect",
-                format!("Write `{} {receiver}.{method}(...)`.", expected.as_str()),
+                format!(
+                    "Write `{} {receiver_label}.{method}(...)`.",
+                    expected.as_str()
+                ),
                 "machine-applicable",
             ),
         );
@@ -1677,6 +1842,10 @@ fn collect_call_arg_type_param_substitutions(
             .name
             .as_deref()
             .and_then(|name| signature.params.iter().find(|param| param.name == name))
+            .or_else(|| {
+                constructor_or_named_shorthand_arg_name(arg)
+                    .and_then(|name| signature.params.iter().find(|param| param.name == name))
+            })
             .or_else(|| signature.params.get(index))
         else {
             continue;
@@ -1691,6 +1860,16 @@ fn collect_call_arg_type_param_substitutions(
             substitutions,
         );
     }
+}
+
+fn constructor_or_named_shorthand_arg_name(arg: &HirCallArg) -> Option<&str> {
+    if arg.name.is_some() {
+        return None;
+    }
+    let HirExpr::Ident { name, .. } = &arg.value else {
+        return None;
+    };
+    Some(name.as_str())
 }
 
 fn collect_type_param_substitutions(
@@ -2344,6 +2523,7 @@ fn callback_expr_is_fresh_value(
             })
         }
         HirExpr::Manage { .. }
+        | HirExpr::MapLiteral { .. }
         | HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Spawn { .. }
@@ -2367,6 +2547,7 @@ fn fresh_return_ident(expr: &HirExpr) -> Option<&str> {
             fresh_return_ident(base)
         }
         HirExpr::Manage { .. }
+        | HirExpr::MapLiteral { .. }
         | HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Spawn { .. }
@@ -2462,6 +2643,12 @@ fn check_callback_call_argument_types(
                 check_callback_body_call_argument_types(analyzer, &arm.body, contract);
             }
         }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                check_callback_call_argument_types(analyzer, &entry.key, contract);
+                check_callback_call_argument_types(analyzer, &entry.value, contract);
+            }
+        }
         HirExpr::Closure { .. }
         | HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
@@ -2543,6 +2730,14 @@ fn callback_retained_local_use(
         HirExpr::ObjectLiteral { fields, .. } => fields
             .iter()
             .find_map(|field| callback_retained_local_use(&field.value, contract)),
+        HirExpr::MapLiteral { entries, .. } => entries
+            .iter()
+            .find_map(|entry| callback_retained_local_use(&entry.key, contract))
+            .or_else(|| {
+                entries
+                    .iter()
+                    .find_map(|entry| callback_retained_local_use(&entry.value, contract))
+            }),
         HirExpr::ArrayLiteral { items, .. } => items
             .iter()
             .find_map(|item| callback_retained_local_use(item, contract)),
@@ -2708,6 +2903,12 @@ fn check_callback_operator_operand_types(
             check_callback_operator_operand_types(analyzer, value, contract);
             for arm in arms {
                 check_callback_body_operator_operand_types(analyzer, &arm.body, contract);
+            }
+        }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                check_callback_operator_operand_types(analyzer, &entry.key, contract);
+                check_callback_operator_operand_types(analyzer, &entry.value, contract);
             }
         }
         HirExpr::Closure { .. }
@@ -3168,6 +3369,15 @@ fn check_argument_payload_type(
         }
         return;
     }
+    if json_value_accepts_literal(expected, payload) {
+        return;
+    }
+    if check_map_literal_type(analyzer, expected, payload, "argument payload") {
+        return;
+    }
+    if check_list_literal_type(analyzer, expected, payload, "argument payload") {
+        return;
+    }
     let Some(actual) = hir_expr_type_name(payload) else {
         return;
     };
@@ -3327,6 +3537,14 @@ fn local_closure_escape_use<'a>(
                 })
             })
         }
+        HirExpr::MapLiteral { entries, .. } => entries
+            .iter()
+            .find_map(|entry| local_closure_escape_use(&entry.key, local_closure_bindings))
+            .or_else(|| {
+                entries.iter().find_map(|entry| {
+                    local_closure_escape_use(&entry.value, local_closure_bindings)
+                })
+            }),
         HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Ident { .. }
@@ -3417,6 +3635,14 @@ fn noescape_escape_use<'a>(
                         noescape_any_use_in_stmt(statement, noescape_bindings)
                     })
                 })
+            }),
+        HirExpr::MapLiteral { entries, .. } => entries
+            .iter()
+            .find_map(|entry| noescape_escape_use(&entry.key, noescape_bindings))
+            .or_else(|| {
+                entries
+                    .iter()
+                    .find_map(|entry| noescape_escape_use(&entry.value, noescape_bindings))
             }),
         HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
@@ -3547,6 +3773,14 @@ fn noescape_any_use<'a>(
                 })
             })
         }
+        HirExpr::MapLiteral { entries, .. } => entries
+            .iter()
+            .find_map(|entry| noescape_any_use(&entry.key, noescape_bindings))
+            .or_else(|| {
+                entries
+                    .iter()
+                    .find_map(|entry| noescape_any_use(&entry.value, noescape_bindings))
+            }),
         HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Ident { .. }
@@ -3673,6 +3907,14 @@ fn local_closure_any_use<'a>(
                         local_closure_any_use_in_stmt(statement, local_closure_bindings)
                     })
                 })
+            }),
+        HirExpr::MapLiteral { entries, .. } => entries
+            .iter()
+            .find_map(|entry| local_closure_any_use(&entry.key, local_closure_bindings))
+            .or_else(|| {
+                entries
+                    .iter()
+                    .find_map(|entry| local_closure_any_use(&entry.value, local_closure_bindings))
             }),
         HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
@@ -3858,13 +4100,35 @@ fn callee_display(callee: &Callee) -> String {
             receiver,
             method,
             effect,
-        } => format!("{} {receiver}.{method}", effect.as_str()),
+        } => format!("{} {}.{method}", effect.as_str(), call_expr_label(receiver)),
+    }
+}
+
+fn call_expr_label(expr: &Expr) -> String {
+    match expr {
+        Expr::Ident(name, _) => name.clone(),
+        Expr::String(value, _) => format!("{value:?}"),
+        Expr::Field { base, name, .. } => format!("{}.{}", call_expr_label(base), name),
+        Expr::Index { base, .. } => format!("{}[]", call_expr_label(base)),
+        Expr::Call { callee, .. } => format!("{}()", callee_display(callee)),
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
+            call_expr_label(value)
+        }
+        _ => "<expr>".to_string(),
     }
 }
 
 fn expr_data_effect(expr: &HirExpr) -> Option<&'static str> {
     match expr {
         HirExpr::Effect { effect, .. } => Some(effect.as_str()),
+        HirExpr::Call {
+            callee:
+                Callee::ReceiverCall {
+                    effect: DataEffect::Read,
+                    ..
+                },
+            ..
+        } => Some(DataEffect::Read.as_str()),
         _ => None,
     }
 }
@@ -3880,6 +4144,7 @@ fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
         HirExpr::String { .. } => Some("String"),
         HirExpr::ObjectLiteral { type_name, .. } => type_name.as_deref(),
         HirExpr::ArrayLiteral { type_name, .. } => type_name.as_deref(),
+        HirExpr::MapLiteral { type_name, .. } => type_name.as_deref(),
         HirExpr::Call {
             callee, type_name, ..
         } => type_name
@@ -3944,6 +4209,161 @@ pub(crate) fn argument_type_matches(expected: &str, actual: &str) -> bool {
         return type_root_name(expected) == "Result";
     }
     false
+}
+
+fn json_value_accepts_literal(expected: &str, value: &HirExpr) -> bool {
+    if strip_fresh_type(expected) != "JsonValue" {
+        return false;
+    }
+    match value {
+        HirExpr::ObjectLiteral { .. } | HirExpr::ArrayLiteral { .. } => true,
+        HirExpr::Ident { name, .. } if name == "null" => true,
+        HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => {
+            json_value_accepts_literal(expected, value)
+        }
+        _ => false,
+    }
+}
+
+fn check_map_literal_type(
+    analyzer: &mut Analyzer<'_>,
+    expected: &str,
+    value: &HirExpr,
+    context: &str,
+) -> bool {
+    if type_root_name(strip_fresh_type(expected)) != "Map" {
+        return false;
+    }
+    match value {
+        HirExpr::MapLiteral { entries, .. } => {
+            let Some(args) = type_arg_names(strip_fresh_type(expected)) else {
+                return true;
+            };
+            let [key_type, value_type] = args.as_slice() else {
+                return true;
+            };
+            for entry in entries {
+                check_map_literal_entry_expr(analyzer, key_type, &entry.key, "key", context);
+                check_map_literal_entry_expr(analyzer, value_type, &entry.value, "value", context);
+            }
+            true
+        }
+        HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => {
+            check_map_literal_type(analyzer, expected, value, context)
+        }
+        _ => false,
+    }
+}
+
+fn check_map_literal_entry_expr(
+    analyzer: &mut Analyzer<'_>,
+    expected: &str,
+    value: &HirExpr,
+    role: &str,
+    context: &str,
+) {
+    if unresolved_generic_type(expected) {
+        return;
+    }
+    if json_value_accepts_literal(expected, value) {
+        return;
+    }
+    if check_map_literal_type(analyzer, expected, value, context) {
+        return;
+    }
+    let Some(actual) = hir_expr_type_name(value) else {
+        return;
+    };
+    if unresolved_generic_type(actual) || argument_type_matches(expected, actual) {
+        return;
+    }
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::ARGUMENT_TYPE_MISMATCH,
+            format!("map literal {role} has type `{actual}`, expected `{expected}`."),
+            hir_expr_span(value).clone(),
+            "map literal entry type mismatch",
+        )
+        .with_cause(format!(
+            "The {context} is typed as a `Map`, so every map literal {role} must match the corresponding `Map` type argument before Rust lowering."
+        ))
+        .with_fix(
+            "match_map_literal_entry_type",
+            format!("Use a {role} expression of type `{expected}`."),
+            "manual",
+        ),
+    );
+}
+
+fn check_list_literal_type(
+    analyzer: &mut Analyzer<'_>,
+    expected: &str,
+    value: &HirExpr,
+    context: &str,
+) -> bool {
+    if type_root_name(strip_fresh_type(expected)) != "List" {
+        return false;
+    }
+    match value {
+        HirExpr::ArrayLiteral { items, .. } => {
+            let Some(args) = type_arg_names(strip_fresh_type(expected)) else {
+                return true;
+            };
+            let [item_type] = args.as_slice() else {
+                return true;
+            };
+            for item in items {
+                check_list_literal_item_expr(analyzer, item_type, item, context);
+            }
+            true
+        }
+        HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => {
+            check_list_literal_type(analyzer, expected, value, context)
+        }
+        _ => false,
+    }
+}
+
+fn check_list_literal_item_expr(
+    analyzer: &mut Analyzer<'_>,
+    expected: &str,
+    value: &HirExpr,
+    context: &str,
+) {
+    if unresolved_generic_type(expected) {
+        return;
+    }
+    if json_value_accepts_literal(expected, value) {
+        return;
+    }
+    if check_map_literal_type(analyzer, expected, value, context) {
+        return;
+    }
+    if check_list_literal_type(analyzer, expected, value, context) {
+        return;
+    }
+    let Some(actual) = hir_expr_type_name(value) else {
+        return;
+    };
+    if unresolved_generic_type(actual) || argument_type_matches(expected, actual) {
+        return;
+    }
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::ARGUMENT_TYPE_MISMATCH,
+            format!("list literal item has type `{actual}`, expected `{expected}`."),
+            hir_expr_span(value).clone(),
+            "list literal item type mismatch",
+        )
+        .with_cause(format!(
+            "The {context} is typed as a `List`, so every array literal item must match the `List` item type before Rust lowering."
+        ))
+        .with_fix(
+            "match_list_literal_item_type",
+            format!("Use a `{expected}` value for this list literal item."),
+            "manual",
+        ),
+    );
 }
 
 fn strip_fresh_type(type_name: &str) -> &str {
@@ -4086,6 +4506,7 @@ fn hir_expr_span(expr: &HirExpr) -> &Span {
         | HirExpr::String { span, .. }
         | HirExpr::ObjectLiteral { span, .. }
         | HirExpr::ArrayLiteral { span, .. }
+        | HirExpr::MapLiteral { span, .. }
         | HirExpr::Binary { span, .. }
         | HirExpr::Field { span, .. }
         | HirExpr::Index { span, .. }
