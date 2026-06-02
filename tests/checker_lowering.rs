@@ -1861,6 +1861,38 @@ fn main() -> Result<Unit, String> {
 }
 
 #[test]
+fn rust_lowering_maps_process_request_calls_to_runtime_hooks() {
+    let source = r#"
+fn main() -> Result<Unit, String> {
+    let env: List<ProcessEnv> = [
+        ProcessEnv(name: "RSS_TEST", value: "1"),
+    ]
+    let request = ProcessRequest(
+        command: "printf",
+        args: ["hello"],
+        cwd: Some(Path.from_string(value: read "/tmp")),
+        stdin: None,
+        env: env,
+        timeout_ms: 1000,
+        merge_stderr: true,
+        output_cap_bytes: 4096,
+    )
+    let output = Process.run_request(request: read request)?
+    Assert.equal_int(left: output.status, right: 0)
+    return Ok(Unit)
+}
+"#;
+    let rust = lower_source_to_rust("process-request.rss", source).expect("source should lower");
+
+    assert!(
+        rust.contains("rsscript_runtime::ProcessRequest"),
+        "process request should lower to runtime request type, got:\n{rust}"
+    );
+    assert!(rust.contains("rsscript_runtime::ProcessEnv"));
+    assert!(rust.contains("rsscript_runtime::process_run_request(&request)?"));
+}
+
+#[test]
 fn rust_lowering_maps_async_process_calls_to_runtime_pending_hooks() {
     let source = r#"
 features: async
@@ -1879,6 +1911,82 @@ async fn run_command() -> Result<String, String> {
         rust.contains("rsscript_runtime::pending_try(rsscript_runtime::process_run_stdout_async"),
         "async process call should lower to runtime pending hook, got:\n{rust}"
     );
+}
+
+#[test]
+fn rust_lowering_maps_async_process_request_calls_to_runtime_pending_hooks() {
+    let source = r#"
+features: async
+
+async fn run_command(token: read CancellationToken) -> Result<ProcessOutput, String> {
+    let request = ProcessRequest(
+        command: "printf",
+        args: ["hello"],
+        cwd: None,
+        stdin: None,
+        env: List<ProcessEnv>.new(),
+        timeout_ms: 1000,
+        merge_stderr: true,
+        output_cap_bytes: 4096,
+    )
+    let output = await Process.run_request_cancellable_async(request: read request, token: read token)?
+    return Ok(output)
+}
+"#;
+    let rust =
+        lower_source_to_rust("async-process-request.rss", source).expect("source should lower");
+
+    assert!(rust.contains(
+        "-> impl rsscript_runtime::Pending<Result<rsscript_runtime::ProcessOutput, String>>"
+    ));
+    assert!(
+        rust.contains(
+            "rsscript_runtime::pending_try(rsscript_runtime::process_run_request_cancellable_async"
+        ),
+        "async process request call should lower to runtime pending hook, got:\n{rust}"
+    );
+}
+
+#[test]
+fn rust_lowering_maps_process_stream_to_runtime_stream() {
+    let source = r#"
+features: async
+
+async fn run_command() -> Result<Unit, String> {
+    let request = ProcessRequest(
+        command: "printf",
+        args: ["hello"],
+        cwd: None,
+        stdin: None,
+        env: List<ProcessEnv>.new(),
+        timeout_ms: 1000,
+        merge_stderr: true,
+        output_cap_bytes: 4096,
+    )
+    let events: Stream<ProcessEvent> = Process.stream(request: read request)?
+    match await Stream.next(stream: read events) {
+        Ok(first) => {
+            match first {
+                Some(event) => {
+                    Log.write(message: read event.kind)
+                }
+                None => {
+                    Log.write(message: read "done")
+                }
+            }
+        }
+        Err(error) => {
+            Log.write(message: read ChannelError.message(error: read error))
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    let rust = lower_source_to_rust("process-stream.rss", source).expect("source should lower");
+
+    assert!(rust.contains("rsscript_runtime::process_stream(&request)?"));
+    assert!(rust.contains("rsscript_runtime::stream_next(&events)"));
+    assert!(rust.contains("rsscript_runtime::ProcessEvent"));
 }
 
 #[test]

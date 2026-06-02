@@ -2235,6 +2235,23 @@ impl<'a> RustLowerer<'a> {
                             .join(", ");
                         return format!("{}({args})", rust_ident(name));
                     }
+
+                    if let Some((target, fields)) = runtime_struct_constructor(name) {
+                        let mut lowered_fields = Vec::new();
+                        for (index, arg) in args.iter().enumerate() {
+                            let Some(field) =
+                                arg.name.as_deref().or_else(|| fields.get(index).copied())
+                            else {
+                                continue;
+                            };
+                            lowered_fields.push(format!(
+                                "{}: {}",
+                                rust_ident(field),
+                                self.lower_owned_expr(&arg.value)
+                            ));
+                        }
+                        return format!("{target} {{ {} }}", lowered_fields.join(", "));
+                    }
                 }
                 // Receiver-call shorthand: resolve receiver type and emit
                 // qualified call with receiver as first arg.
@@ -3844,7 +3861,10 @@ impl<'a> RustLowerer<'a> {
             "File" => "rsscript_runtime::File".to_string(),
             "FileMetadata" => "rsscript_runtime::FileMetadata".to_string(),
             "FileError" | "IOError" => "std::io::Error".to_string(),
+            "ProcessEnv" => "rsscript_runtime::ProcessEnv".to_string(),
+            "ProcessEvent" => "rsscript_runtime::ProcessEvent".to_string(),
             "ProcessOutput" => "rsscript_runtime::ProcessOutput".to_string(),
+            "ProcessRequest" => "rsscript_runtime::ProcessRequest".to_string(),
             "Request" => "rsscript_runtime::Request".to_string(),
             "HttpRequest" => "rsscript_runtime::HttpRequest".to_string(),
             "Response" => "rsscript_runtime::Response".to_string(),

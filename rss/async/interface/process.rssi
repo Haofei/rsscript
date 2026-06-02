@@ -17,6 +17,22 @@ pub async native fn Process.run_timeout_async(
 ) -> Result<fresh ProcessOutput, String>
     effects(native)
 
+pub async native fn Process.run_request_async(
+    request: read ProcessRequest,
+) -> Result<fresh ProcessOutput, String>
+    effects(native)
+
+pub async native fn Process.run_request_cancellable_async(
+    request: read ProcessRequest,
+    token: read CancellationToken,
+) -> Result<fresh ProcessOutput, String>
+    effects(native)
+
+pub native fn Process.stream(
+    request: read ProcessRequest,
+) -> Result<fresh Stream<ProcessEvent>, String>
+    effects(native)
+
 pub async native fn Process.run_stdout_async(
     command: read String,
     args: read List<String>,

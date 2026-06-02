@@ -7,6 +7,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
+use std::sync::mpsc as std_mpsc;
 
 use crate::async_runtime::{AsyncPoll, Context, Pending, RssCancellationToken};
 
@@ -62,6 +63,7 @@ pub struct RssStream<T> {
 enum RssStreamBackend<T> {
     Receiver(RssReceiver<T>),
     Iterator(Box<dyn Iterator<Item = Result<T, ChannelError>>>),
+    External(std_mpsc::Receiver<Result<T, ChannelError>>),
 }
 
 // A `Sender` clone is another producer with its own closed flag and its own slot
@@ -158,6 +160,14 @@ pub fn stream_from_iterator<T: 'static>(
 ) -> RssStream<T> {
     RssStream {
         backend: RefCell::new(RssStreamBackend::Iterator(Box::new(items))),
+    }
+}
+
+pub fn stream_from_external_receiver<T: 'static>(
+    receiver: std_mpsc::Receiver<Result<T, ChannelError>>,
+) -> RssStream<T> {
+    RssStream {
+        backend: RefCell::new(RssStreamBackend::External(receiver)),
     }
 }
 
@@ -271,6 +281,11 @@ impl<T> Pending<Result<Option<T>, ChannelError>> for StreamNextPending<'_, T> {
         match &mut *backend {
             RssStreamBackend::Receiver(receiver) => receiver_recv(receiver).poll(cx),
             RssStreamBackend::Iterator(iterator) => AsyncPoll::Ready(iterator.next().transpose()),
+            RssStreamBackend::External(receiver) => match receiver.try_recv() {
+                Ok(item) => AsyncPoll::Ready(item.map(Some)),
+                Err(std_mpsc::TryRecvError::Empty) => AsyncPoll::Pending,
+                Err(std_mpsc::TryRecvError::Disconnected) => AsyncPoll::Ready(Ok(None)),
+            },
         }
     }
 }
@@ -298,6 +313,17 @@ pub fn stream_collect_list<T>(stream: &RssStream<T>) -> Result<Vec<T>, ChannelEr
                 ))
             }
         }
+        RssStreamBackend::External(receiver) => loop {
+            match receiver.try_recv() {
+                Ok(item) => values.push(item?),
+                Err(std_mpsc::TryRecvError::Empty) => {
+                    return Err(ChannelError::new(
+                        "stream collect_list would block on an open external stream",
+                    ));
+                }
+                Err(std_mpsc::TryRecvError::Disconnected) => return Ok(values),
+            }
+        },
     }
 }
 

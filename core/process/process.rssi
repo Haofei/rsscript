@@ -4,6 +4,30 @@ struct ProcessOutput {
     status: Int
     stdout: String
     stderr: String
+    merged: String
+    truncated: Bool
+}
+
+struct ProcessEnv {
+    name: String
+    value: String
+}
+
+struct ProcessEvent {
+    kind: String
+    data: String
+    status: Int
+}
+
+struct ProcessRequest {
+    command: String
+    args: List<String>
+    cwd: Option<Path>
+    stdin: Option<String>
+    env: List<ProcessEnv>
+    timeout_ms: Int
+    merge_stderr: Bool
+    output_cap_bytes: Int
 }
 
 pub native fn Process.run_stdout(
@@ -29,6 +53,11 @@ pub native fn Process.run_timeout(
     command: read String,
     args: read List<String>,
     timeout_ms: Int,
+) -> Result<fresh ProcessOutput, String>
+    effects(native)
+
+pub native fn Process.run_request(
+    request: read ProcessRequest,
 ) -> Result<fresh ProcessOutput, String>
     effects(native)
 

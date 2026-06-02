@@ -579,12 +579,16 @@
         "Process.run",
         "Process.run_many_stdout",
         "Process.run_many_stdout_timeout",
+        "Process.run_request",
         "Process.run_stdout",
         "Process.run_stdout_timeout",
         "Process.run_timeout"
       ],
       "types": [
-        "ProcessOutput"
+        "ProcessEnv",
+        "ProcessEvent",
+        "ProcessOutput",
+        "ProcessRequest"
       ]
     },
     {

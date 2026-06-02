@@ -1248,6 +1248,8 @@ pub(super) fn is_async_runtime_intrinsic_callee(callee: &Callee) -> bool {
                 "Process",
                 "run_async"
                     | "run_timeout_async"
+                    | "run_request_async"
+                    | "run_request_cancellable_async"
                     | "run_stdout_async"
                     | "run_stdout_timeout_async"
                     | "run_many_stdout_async"
@@ -1432,6 +1434,32 @@ pub(super) fn decode_string_token(value: &str) -> String {
 
 pub(super) fn is_rust_enum_constructor(name: &str) -> bool {
     matches!(name, "Ok" | "Err" | "Some")
+}
+
+pub(super) fn runtime_struct_constructor(
+    name: &str,
+) -> Option<(&'static str, &'static [&'static str])> {
+    match name {
+        "ProcessEnv" => Some(("rsscript_runtime::ProcessEnv", &["name", "value"])),
+        "ProcessEvent" => Some((
+            "rsscript_runtime::ProcessEvent",
+            &["kind", "data", "status"],
+        )),
+        "ProcessRequest" => Some((
+            "rsscript_runtime::ProcessRequest",
+            &[
+                "command",
+                "args",
+                "cwd",
+                "stdin",
+                "env",
+                "timeout_ms",
+                "merge_stderr",
+                "output_cap_bytes",
+            ],
+        )),
+        _ => None,
+    }
 }
 
 pub(super) fn lower_source_span(span: &Span) -> String {

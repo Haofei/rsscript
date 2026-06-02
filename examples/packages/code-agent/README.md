@@ -48,8 +48,10 @@ network behavior are not hard-coded:
 - **Discovery tools**: `read` and `rss_ide` let the model inspect source files
   and indexed interfaces before it edits.
 - **Edit tools**: `write` overwrites files and `edit` replaces exact text.
-- **Command tools**: `rss_check` and `rss_cmd` run structured RSScript commands;
-  `shell` refuses RSScript commands so language checks stay reviewable.
+- **Command tools**: `rss_check` and `rss_cmd` run structured RSScript commands
+  from the repository root; `shell` refuses RSScript commands so language
+  checks stay reviewable. Command execution uses `ProcessRequest` with explicit
+  `cwd`, timeout, merged stdout/stderr, and runtime-enforced output caps.
 - **Finish tool**: `finish` ends the loop explicitly with a final answer.
 - **Write sandbox**: `write` and `edit` only write under `AGENT_WORKSPACE_ROOT`, and
   tools reject absolute paths and `..` traversal. Write results include

@@ -886,6 +886,22 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     ),
     runtime_intrinsic(
         "Process",
+        "run_request",
+        "rsscript_runtime::process_run_request",
+    ),
+    runtime_intrinsic(
+        "Process",
+        "run_request_async",
+        "rsscript_runtime::process_run_request_async",
+    ),
+    runtime_intrinsic(
+        "Process",
+        "run_request_cancellable_async",
+        "rsscript_runtime::process_run_request_cancellable_async",
+    ),
+    runtime_intrinsic("Process", "stream", "rsscript_runtime::process_stream"),
+    runtime_intrinsic(
+        "Process",
         "run_stdout",
         "rsscript_runtime::process_run_stdout",
     ),

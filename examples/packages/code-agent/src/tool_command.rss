@@ -1,8 +1,11 @@
 fn output_from_process(label: read String, args: read List<String>, output: read ProcessOutput, max_chars: Int) -> fresh ToolAction {
     let status_text = output.status.to_string()
+    let truncated_text = String.from_bool(value: output.truncated)
     let body = [
         "command=", label, " ", args.join(" "),
         "\nexit=", status_text,
+        "\nprocess_output_truncated=", truncated_text,
+        "\nmerged:\n", output.merged,
         "\nstdout:\n", output.stdout,
         "\nstderr:\n", output.stderr,
     ].join("")
@@ -11,6 +14,19 @@ fn output_from_process(label: read String, args: read List<String>, output: read
         return ToolAction(response: Some(ToolOutput.error(tool_output.content)), finish: false, abort: false, final_answer: "")
     }
     return ToolAction(response: Some(tool_output), finish: false, abort: false, final_answer: "")
+}
+
+fn process_request(command: read String, args: read List<String>, config: read AgentConfig, timeout_ms: Int, max_output_chars: Int) -> fresh ProcessRequest {
+    return ProcessRequest(
+        command: command,
+        args: args,
+        cwd: Some(config.repo_root),
+        stdin: None,
+        env: List<ProcessEnv>.new(),
+        timeout_ms: timeout_ms,
+        merge_stderr: true,
+        output_cap_bytes: max_output_chars,
+    )
 }
 
 fn execute_shell(arguments: read String, config: read AgentConfig) -> fresh ToolAction {
@@ -24,7 +40,8 @@ fn execute_shell(arguments: read String, config: read AgentConfig) -> fresh Tool
     let timeout_ms = bounded_limit(argument_int(arguments, "timeout_ms", config.request_timeout_ms), config.request_timeout_ms, 300000)
     let max_chars = bounded_limit(argument_int(arguments, "max_output_chars", 12000), 12000, 50000)
     let args: List<String> = ["-c", cmd]
-    match Process.run_timeout(command: read "sh", args: read args, timeout_ms: timeout_ms) {
+    let request = process_request("sh", args, config, timeout_ms, max_chars)
+    match Process.run_request(request: read request) {
         Ok(output) => {
             return output_from_process("sh", args, output, max_chars)
         }
@@ -50,7 +67,8 @@ fn execute_rss_check(arguments: read String, config: read AgentConfig) -> fresh 
     match resolve_repo_path(config.repo_root, path_text) {
         Ok(path) => {
             let args: List<String> = ["run", "--quiet", "--", "check", path.to_string()]
-            match Process.run_timeout(command: read "cargo", args: read args, timeout_ms: timeout_ms) {
+            let request = process_request("cargo", args, config, timeout_ms, 50000)
+            match Process.run_request(request: read request) {
                 Ok(output) => {
                     return output_from_process("cargo", args, output, 50000)
                 }
@@ -110,7 +128,8 @@ fn execute_rss_cmd(arguments: read String, config: read AgentConfig) -> fresh To
             }
         }
     }
-    match Process.run_timeout(command: read "cargo", args: read args, timeout_ms: timeout_ms) {
+    let request = process_request("cargo", args, config, timeout_ms, max_chars)
+    match Process.run_request(request: read request) {
         Ok(output) => {
             return output_from_process("cargo", args, output, max_chars)
         }

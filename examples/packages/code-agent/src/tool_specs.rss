@@ -78,7 +78,7 @@ fn edit_tool_spec() -> fresh JsonValue {
 fn shell_tool_spec() -> fresh JsonValue {
     return function_tool(
         "shell",
-        "Run a shell command through sh -c. Prefer rss_check/rss_cmd for RSScript commands.",
+        "Run a shell command through sh -c in the repository root. Returns merged stdout/stderr with an output cap. Use rss_check/rss_cmd for RSScript commands.",
         {
             "type": "object",
             "properties": {
@@ -95,7 +95,7 @@ fn shell_tool_spec() -> fresh JsonValue {
 fn rss_check_tool_spec() -> fresh JsonValue {
     return function_tool(
         "rss_check",
-        "Run rss check for a relative package or file path.",
+        "Run rss check for a relative package or file path from the repository root.",
         {
             "type": "object",
             "properties": {
@@ -111,7 +111,7 @@ fn rss_check_tool_spec() -> fresh JsonValue {
 fn rss_cmd_tool_spec() -> fresh JsonValue {
     return function_tool(
         "rss_cmd",
-        "Run selected RSScript tool commands with structured arguments.",
+        "Run selected RSScript tool commands from the repository root with structured command arguments.",
         {
             "type": "object",
             "properties": {
