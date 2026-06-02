@@ -1,0 +1,8 @@
+// expect: RS0209
+
+fn bad(value: read String) -> String {
+    return match value {
+        1 => { "one" }
+        _ => { "fallback" }
+    }
+}

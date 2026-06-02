@@ -4019,6 +4019,32 @@ fn package_publish_archive_excludes_generated_review_artifacts() {
     }));
 }
 
+#[cfg(unix)]
+#[test]
+fn package_publish_archive_rejects_symlink_entries() {
+    use std::os::unix::fs::symlink;
+
+    let temp_dir = common::unique_temp_dir("rsscript-package-publish-rejects-symlink");
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-publish-symlink",
+        "0.1.0",
+        "",
+        r#"pub fn add(left: Int, right: Int) -> Int
+"#,
+    );
+    let outside_file = temp_dir.with_extension("outside.txt");
+    fs::write(&outside_file, "secret").expect("outside file should be written");
+    symlink(&outside_file, temp_dir.join("leak.txt")).expect("symlink should be created");
+
+    let error = publish_package_dry_run(&temp_dir).expect_err("publish should reject symlinks");
+    let _ = fs::remove_file(&outside_file);
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(error.contains("package archive rejects symlinks"));
+    assert!(error.contains("leak.txt"));
+}
+
 #[test]
 fn package_publish_registry_index_exposes_review_schema_features_and_footprint() {
     let temp_dir = common::unique_temp_dir("rsscript-package-publish-registry-index");
@@ -6783,6 +6809,43 @@ rss-registry-dep = "^1"
                 && fact["evidence"][0]["json_pointer"] == "/unresolved/0"
         })
     }));
+}
+
+#[cfg(unix)]
+#[test]
+fn package_vendor_rejects_symlink_entries() {
+    use std::os::unix::fs::symlink;
+
+    let temp_dir = common::unique_temp_dir("rsscript-package-vendor-rejects-symlink");
+    let root_dir = temp_dir.join("app");
+    let dep_dir = temp_dir.join("dep");
+    common::write_named_package_fixture(
+        &dep_dir,
+        "rss-vendor-symlink-dep",
+        "0.1.0",
+        "",
+        r#"pub fn Dep.value() -> Int
+"#,
+    );
+    let outside_file = temp_dir.join("outside.txt");
+    fs::write(&outside_file, "secret").expect("outside file should be written");
+    symlink(&outside_file, dep_dir.join("leak.txt")).expect("symlink should be created");
+    common::write_named_package_fixture(
+        &root_dir,
+        "rss-vendor-symlink-app",
+        "0.1.0",
+        r#"[dependencies]
+rss-vendor-symlink-dep = { path = "../dep" }
+"#,
+        r#"pub fn App.run() -> Int
+"#,
+    );
+
+    let error = vendor_package_dir(&root_dir, false).expect_err("vendor should reject symlinks");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(error.contains("package copy rejects symlinks"));
+    assert!(error.contains("leak.txt"));
 }
 
 #[test]

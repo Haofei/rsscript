@@ -432,25 +432,29 @@ fn ToolRuntime.execute(
 }
 
 fn execute_core_tool(request: read ToolRequest, config: read AgentConfig) -> fresh JsonValue {
-    if request.name == "read_file" {
-        return execute_read_file(request.arguments, config.repo_root)
+    match request.name {
+        "read_file" => {
+            return execute_read_file(request.arguments, config.repo_root)
+        }
+        "list_files" => {
+            return execute_list_files(request.arguments, config.repo_root)
+        }
+        "search_text" => {
+            return execute_search_text(request.arguments, config.repo_root)
+        }
+        "write_file" => {
+            return execute_write_file(request.arguments, config.repo_root, config.workspace_root)
+        }
+        "check_rss_file" => {
+            return execute_check_rss_file(request.arguments, config.repo_root, config.workspace_root)
+        }
+        "check_rss_package" => {
+            return execute_check_rss_package(request.arguments, config.repo_root)
+        }
+        _ => {
+            return {"ok": false, "tool": request.name, "error": "unknown tool"}
+        }
     }
-    if request.name == "list_files" {
-        return execute_list_files(request.arguments, config.repo_root)
-    }
-    if request.name == "search_text" {
-        return execute_search_text(request.arguments, config.repo_root)
-    }
-    if request.name == "write_file" {
-        return execute_write_file(request.arguments, config.repo_root, config.workspace_root)
-    }
-    if request.name == "check_rss_file" {
-        return execute_check_rss_file(request.arguments, config.repo_root, config.workspace_root)
-    }
-    if request.name == "check_rss_package" {
-        return execute_check_rss_package(request.arguments, config.repo_root)
-    }
-    return {"ok": false, "tool": request.name, "error": "unknown tool"}
 }
 
 fn execute_tool_calls(

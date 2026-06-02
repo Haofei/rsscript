@@ -723,6 +723,17 @@ impl Formatter {
     fn match_pattern(&mut self, pattern: &MatchPattern) {
         match pattern {
             MatchPattern::Wildcard(_) => self.out.push('_'),
+            MatchPattern::Literal { value, .. } => match value {
+                crate::syntax::ast::MatchLiteral::Int(value) => self.out.push_str(value),
+                crate::syntax::ast::MatchLiteral::String(value) => {
+                    self.out.push('"');
+                    self.out.push_str(value);
+                    self.out.push('"');
+                }
+                crate::syntax::ast::MatchLiteral::Bool(value) => {
+                    self.out.push_str(if *value { "true" } else { "false" });
+                }
+            },
             MatchPattern::Variant {
                 name,
                 binding: Some(binding),

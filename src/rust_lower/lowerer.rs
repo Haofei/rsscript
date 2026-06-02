@@ -1671,10 +1671,12 @@ impl<'a> RustLowerer<'a> {
                 self.lower_select_stmt(stmt, out, indent);
             }
             Stmt::Match(stmt) => {
-                out.push_str(&format!("{pad}match {} {{\n", self.lower_expr(&stmt.value)));
                 // Determine if this is a sum type match (qualify variant patterns)
                 let sum_type_name = self.find_sum_type_for_match(&stmt.arms);
                 let scrutinee_type = self.infer_expr_type(&stmt.value);
+                let scrutinee =
+                    self.lower_match_scrutinee_expr(&stmt.value, scrutinee_type.as_ref());
+                out.push_str(&format!("{pad}match {scrutinee} {{\n"));
                 for arm in &stmt.arms {
                     let pattern = if let Some(ref sum_name) = sum_type_name {
                         lower_match_pattern_qualified(&arm.pattern, sum_name)
@@ -2498,8 +2500,10 @@ impl<'a> RustLowerer<'a> {
                 out
             }
             Expr::Match { value, arms, .. } => {
-                let mut out = format!("match {} {{\n", self.lower_expr(value));
                 let sum_type_name = self.find_sum_type_for_match(arms);
+                let scrutinee_type = self.infer_expr_type(value);
+                let scrutinee = self.lower_match_scrutinee_expr(value, scrutinee_type.as_ref());
+                let mut out = format!("match {scrutinee} {{\n");
                 for arm in arms {
                     let pattern = if let Some(ref sum_name) = sum_type_name {
                         lower_match_pattern_qualified(&arm.pattern, sum_name)
@@ -4031,6 +4035,19 @@ impl<'a> RustLowerer<'a> {
         None
     }
 
+    fn lower_match_scrutinee_expr(
+        &mut self,
+        value: &Expr,
+        scrutinee_type: Option<&TypeRef>,
+    ) -> String {
+        let lowered = self.lower_expr(value);
+        if scrutinee_type.is_some_and(|ty| ty.name == "String") {
+            format!("{lowered}.as_str()")
+        } else {
+            lowered
+        }
+    }
+
     fn find_sum_type_for_variant(&self, variant_name: &str) -> Option<String> {
         // Skip built-in variants
         if matches!(
@@ -4052,7 +4069,9 @@ impl<'a> RustLowerer<'a> {
 
 fn match_pattern_span(pattern: &MatchPattern) -> Span {
     match pattern {
-        MatchPattern::Variant { span, .. } | MatchPattern::Wildcard(span) => span.clone(),
+        MatchPattern::Variant { span, .. }
+        | MatchPattern::Literal { span, .. }
+        | MatchPattern::Wildcard(span) => span.clone(),
     }
 }
 

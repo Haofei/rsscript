@@ -5,10 +5,10 @@ use crate::syntax::ast::{
     AssignStmt, BinaryOp, Block, CallArg, Callee, ConstDecl, DataEffect, DuplicateFileFeature,
     EffectDecl, Expr, FieldDecl, FileFeature, FileFeatureScope, ForStmt, FunctionDecl,
     GenericBound, GenericParam, IfStmt, Item, LetElseStmt, LetKind, LetStmt, LoopStmt,
-    MapLiteralEntry, MatchArm, MatchPattern, MatchStmt, ModuleDecl, ObjectLiteralField, Param,
-    Program, ProtocolDecl, ProtocolImpl, ProtocolImplMapping, ReturnStmt, SelectArm, SelectStmt,
-    Stmt, SumTypeDecl, SumVariant, TaskGroupStmt, TypeAliasDecl, TypeDecl, TypeKind, TypeRef,
-    UnknownFileFeature, UseDecl, WithStmt,
+    MapLiteralEntry, MatchArm, MatchLiteral, MatchPattern, MatchStmt, ModuleDecl,
+    ObjectLiteralField, Param, Program, ProtocolDecl, ProtocolImpl, ProtocolImplMapping,
+    ReturnStmt, SelectArm, SelectStmt, Stmt, SumTypeDecl, SumVariant, TaskGroupStmt, TypeAliasDecl,
+    TypeDecl, TypeKind, TypeRef, UnknownFileFeature, UseDecl, WithStmt,
 };
 
 pub fn parse_source(file: &str, source: &str) -> Program {
@@ -1496,6 +1496,12 @@ fn parse_if_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) 
     let Some(close) = find_matching(tokens, open, "{", "}") else {
         return (Stmt::MalformedIf(tokens[start].span.clone()), limit);
     };
+    if tokens
+        .get(start + 1)
+        .is_some_and(|token| token.is_ident_text("let"))
+    {
+        return parse_if_let_stmt(tokens, start, open, close, limit);
+    }
     let condition = parse_expr(tokens, start + 1, open)
         .unwrap_or_else(|| Expr::Unknown(tokens[start].span.clone()));
     let then_body = parse_block(tokens, open, close);
@@ -1537,6 +1543,79 @@ fn parse_if_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) 
             condition,
             then_body,
             else_body,
+            span: tokens[start].span.clone(),
+        }),
+        next,
+    )
+}
+
+fn parse_if_let_stmt(
+    tokens: &[Token],
+    start: usize,
+    open: usize,
+    close: usize,
+    limit: usize,
+) -> (Stmt, usize) {
+    let Some(equals) = find_top_level_symbol(tokens, start + 2, open, "=") else {
+        return (Stmt::MalformedIf(tokens[start].span.clone()), close + 1);
+    };
+    let Some(pattern) = parse_match_pattern(tokens, start + 2, equals) else {
+        return (Stmt::MalformedIf(tokens[start].span.clone()), close + 1);
+    };
+    let value = parse_expr(tokens, equals + 1, open)
+        .unwrap_or_else(|| Expr::Unknown(tokens[start].span.clone()));
+    let then_body = parse_block(tokens, open, close);
+    let mut next = close + 1;
+    let else_body = if tokens
+        .get(next)
+        .is_some_and(|token| token.is_ident_text("else"))
+    {
+        if tokens.get(next + 1).is_some_and(|token| token.symbol("{")) {
+            let else_open = next + 1;
+            let Some(else_close) = find_matching(tokens, else_open, "{", "}") else {
+                return (Stmt::MalformedIf(tokens[start].span.clone()), limit);
+            };
+            next = else_close + 1;
+            parse_block(tokens, else_open, else_close)
+        } else if tokens
+            .get(next + 1)
+            .is_some_and(|token| token.is_ident_text("if"))
+        {
+            let span = tokens[next + 1].span.clone();
+            let (else_if, else_next) = parse_if_stmt(tokens, next + 1, limit);
+            next = else_next;
+            Block {
+                statements: vec![else_if],
+                span,
+            }
+        } else {
+            return (
+                Stmt::MalformedIf(tokens[start].span.clone()),
+                statement_end(tokens, next, limit),
+            );
+        }
+    } else {
+        Block {
+            statements: Vec::new(),
+            span: tokens[start].span.clone(),
+        }
+    };
+    (
+        Stmt::Match(MatchStmt {
+            value,
+            arms: vec![
+                MatchArm {
+                    pattern,
+                    body: then_body,
+                    span: tokens[start].span.clone(),
+                },
+                MatchArm {
+                    pattern: MatchPattern::Wildcard(tokens[start].span.clone()),
+                    body: else_body,
+                    span: tokens[start].span.clone(),
+                },
+            ],
+            malformed_arm_spans: Vec::new(),
             span: tokens[start].span.clone(),
         }),
         next,
@@ -1856,6 +1935,35 @@ fn parse_match_pattern(tokens: &[Token], start: usize, end: usize) -> Option<Mat
     let end = trim_outer(tokens, start, end).1;
     if start >= end {
         return None;
+    }
+    if start + 1 == end {
+        match &tokens[start].kind {
+            TokenKind::Number(value) => {
+                return Some(MatchPattern::Literal {
+                    value: MatchLiteral::Int(value.clone()),
+                    span: tokens[start].span.clone(),
+                });
+            }
+            TokenKind::String(value) => {
+                return Some(MatchPattern::Literal {
+                    value: MatchLiteral::String(value.clone()),
+                    span: tokens[start].span.clone(),
+                });
+            }
+            TokenKind::Ident(value) if matches!(value.as_str(), "true" | "false") => {
+                return Some(MatchPattern::Literal {
+                    value: MatchLiteral::Bool(*value == "true"),
+                    span: tokens[start].span.clone(),
+                });
+            }
+            TokenKind::Keyword(value) if matches!(*value, "true" | "false") => {
+                return Some(MatchPattern::Literal {
+                    value: MatchLiteral::Bool(*value == "true"),
+                    span: tokens[start].span.clone(),
+                });
+            }
+            _ => {}
+        }
     }
     let name = ident_name(&tokens[start])?.to_string();
     if name == "_" {

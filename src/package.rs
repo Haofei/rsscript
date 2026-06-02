@@ -48,8 +48,22 @@ fn relative_path(base: &Path, path: &Path) -> String {
 }
 
 fn collect_regular_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
-    if path.is_file() {
+    let root = canonical_checked_root(path, "package file scan")?;
+    collect_regular_files_inner(&root, path, files)
+}
+
+fn collect_regular_files_inner(
+    root: &Path,
+    path: &Path,
+    files: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    let metadata = package_path_metadata(path, "package file scan")?;
+    ensure_package_path_within_root(root, path, "package file scan")?;
+    if metadata.is_file() {
         files.push(path.to_path_buf());
+        return Ok(());
+    }
+    if !metadata.is_dir() {
         return Ok(());
     }
     let entries = fs::read_dir(path)
@@ -65,17 +79,24 @@ fn collect_regular_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), St
         ) {
             continue;
         }
-        if path.is_dir() {
-            collect_regular_files(&path, files)?;
-        } else if path.is_file() {
-            files.push(path);
-        }
+        collect_regular_files_inner(root, &path, files)?;
     }
     Ok(())
 }
 
 fn copy_package_directory(source: &Path, destination: &Path) -> Result<(), String> {
-    if source.is_file() {
+    let root = canonical_checked_root(source, "package copy")?;
+    copy_package_directory_inner(&root, source, destination)
+}
+
+fn copy_package_directory_inner(
+    root: &Path,
+    source: &Path,
+    destination: &Path,
+) -> Result<(), String> {
+    let metadata = package_path_metadata(source, "package copy")?;
+    ensure_package_path_within_root(root, source, "package copy")?;
+    if metadata.is_file() {
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent)
                 .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
@@ -87,6 +108,9 @@ fn copy_package_directory(source: &Path, destination: &Path) -> Result<(), Strin
                 destination.display()
             )
         })?;
+        return Ok(());
+    }
+    if !metadata.is_dir() {
         return Ok(());
     }
     fs::create_dir_all(destination)
@@ -102,11 +126,50 @@ fn copy_package_directory(source: &Path, destination: &Path) -> Result<(), Strin
             continue;
         }
         let target = destination.join(name);
-        if path.is_dir() || path.is_file() {
-            copy_package_directory(&path, &target)?;
-        }
+        copy_package_directory_inner(root, &path, &target)?;
     }
     Ok(())
+}
+
+fn canonical_checked_root(path: &Path, operation: &str) -> Result<PathBuf, String> {
+    let metadata = package_path_metadata(path, operation)?;
+    if !(metadata.is_dir() || metadata.is_file()) {
+        return Err(format!(
+            "{operation} only accepts regular files or directories: {}",
+            path.display()
+        ));
+    }
+    fs::canonicalize(path)
+        .map_err(|error| format!("failed to canonicalize {}: {error}", path.display()))
+}
+
+pub(super) fn package_path_metadata(path: &Path, operation: &str) -> Result<fs::Metadata, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "{operation} rejects symlinks inside package input: {}",
+            path.display()
+        ));
+    }
+    Ok(metadata)
+}
+
+pub(super) fn ensure_package_path_within_root(
+    root: &Path,
+    path: &Path,
+    operation: &str,
+) -> Result<(), String> {
+    let canonical = fs::canonicalize(path)
+        .map_err(|error| format!("failed to canonicalize {}: {error}", path.display()))?;
+    if canonical.strip_prefix(root).is_ok() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{operation} path escapes package root: {}",
+            path.display()
+        ))
+    }
 }
 
 fn should_skip_vendor_copy_entry(name: &str) -> bool {

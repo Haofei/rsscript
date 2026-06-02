@@ -20,4 +20,4 @@ jobs:
           components: clippy, rustfmt
 
       - name: Check
-        run: cargo run --quiet --bin rss -- run rss/test-runner -- rss/test-runner/manifests/full.rsstest.toml
+        run: cargo run --quiet --bin rss -- test --all

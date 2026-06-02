@@ -92,10 +92,7 @@
         "Capability.from"
       ],
       "types": [
-        "Capability",
-        "argument",
-        "surface",
-        "with"
+        "Capability"
       ]
     },
     {
@@ -738,10 +735,7 @@
       "types": [
         "PoolError",
         "PoolStats",
-        "ResourcePool",
-        "can",
-        "pool",
-        "up"
+        "ResourcePool"
       ]
     },
     {

@@ -75,11 +75,8 @@ fn tool_requests_from_message(message: read JsonValue) -> List<ToolRequest> {
     let limit = tool_call_count(message)
     let mut index = 0
     while index < limit {
-        match tool_request_at(message, index) {
-            Some(request) => {
-                mut requests.push(request)
-            }
-            None => {}
+        if let Some(request) = tool_request_at(message, index) {
+            mut requests.push(request)
         }
         index = index + 1
     }

@@ -246,38 +246,106 @@ fn package_files(
 }
 
 fn collect_functions(source: &str) -> Vec<String> {
-    let mut functions = source
-        .lines()
-        .filter_map(|line| symbol_after_keyword(line.trim(), "fn"))
-        .collect::<Vec<_>>();
+    let mut functions = collect_symbols_after_keywords(source, &["fn"]);
     functions.sort();
     functions.dedup();
     functions
 }
 
 fn collect_types(source: &str) -> Vec<String> {
-    let mut types = Vec::new();
-    for line in source.lines().map(str::trim) {
-        for keyword in ["struct", "resource", "sum", "protocol"] {
-            if let Some(name) = symbol_after_keyword(line, keyword) {
-                types.push(name);
-            }
-        }
-    }
+    let mut types =
+        collect_symbols_after_keywords(source, &["struct", "resource", "sum", "protocol"]);
     types.sort();
     types.dedup();
     types
 }
 
-fn symbol_after_keyword(line: &str, keyword: &str) -> Option<String> {
-    let needle = format!("{keyword} ");
-    let index = line.find(&needle)?;
-    let rest = &line[index + needle.len()..];
-    let symbol = rest
-        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '.'))
-        .next()
-        .unwrap_or_default();
-    (!symbol.is_empty()).then(|| symbol.to_string())
+fn collect_symbols_after_keywords(source: &str, keywords: &[&str]) -> Vec<String> {
+    let mut symbols = Vec::new();
+    let bytes = source.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if starts_line_comment(bytes, index) {
+            index = skip_line_comment(bytes, index + 2);
+            continue;
+        }
+        if bytes[index] == b'"' {
+            index = skip_string_literal(bytes, index + 1);
+            continue;
+        }
+        if !is_ident_start(bytes[index]) {
+            index += 1;
+            continue;
+        }
+        let token_start = index;
+        index += 1;
+        while index < bytes.len() && is_ident_continue(bytes[index]) {
+            index += 1;
+        }
+        let token = &source[token_start..index];
+        if keywords.contains(&token) {
+            index = skip_ascii_whitespace(bytes, index);
+            if index < bytes.len() && is_symbol_start(bytes[index]) {
+                let symbol_start = index;
+                index += 1;
+                while index < bytes.len() && is_symbol_continue(bytes[index]) {
+                    index += 1;
+                }
+                symbols.push(source[symbol_start..index].to_string());
+            }
+        }
+    }
+    symbols
+}
+
+fn starts_line_comment(bytes: &[u8], index: usize) -> bool {
+    bytes.get(index) == Some(&b'/') && bytes.get(index + 1) == Some(&b'/')
+}
+
+fn skip_line_comment(bytes: &[u8], mut index: usize) -> usize {
+    while index < bytes.len() && bytes[index] != b'\n' {
+        index += 1;
+    }
+    index
+}
+
+fn skip_string_literal(bytes: &[u8], mut index: usize) -> usize {
+    let mut escaped = false;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        index += 1;
+        if escaped {
+            escaped = false;
+        } else if byte == b'\\' {
+            escaped = true;
+        } else if byte == b'"' {
+            break;
+        }
+    }
+    index
+}
+
+fn skip_ascii_whitespace(bytes: &[u8], mut index: usize) -> usize {
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+        index += 1;
+    }
+    index
+}
+
+fn is_ident_start(byte: u8) -> bool {
+    byte.is_ascii_alphabetic() || byte == b'_'
+}
+
+fn is_ident_continue(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn is_symbol_start(byte: u8) -> bool {
+    is_ident_start(byte)
+}
+
+fn is_symbol_continue(byte: u8) -> bool {
+    is_ident_continue(byte) || byte == b'.'
 }
 
 fn collect_named_files(

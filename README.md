@@ -1,10 +1,10 @@
 # RSScript
 
-**Semantic review evidence for AI-generated code. Turns behavior changes into PR-reviewable, CI-gateable proof.**
+**Prototype semantic review evidence for AI-generated code. Turns behavior changes into PR-reviewable proof for CI experiments.**
 
 ```text
 AI writes code → RSScript checks semantic boundaries → REIR produces evidence →
-CI blocks/approves the PR based on capability, mutation, and deployment proof.
+CI can gate the PR based on capability, mutation, and deployment proof.
 ```
 
 ## What it does
@@ -46,7 +46,7 @@ deployment grants, reconciliation, PR reporting, and CI gate decisions.
 ## GitHub Action
 
 ```yaml
-- uses: Haofei/rsscript/.github/actions/rsscript-review@v0
+- uses: Haofei/rsscript/.github/actions/rsscript-review@main
   with:
     head: my-service/
     grants: infra/prod-grants.reir.json
@@ -54,6 +54,8 @@ deployment grants, reconciliation, PR reporting, and CI gate decisions.
 ```
 
 The action posts a PR comment with the review decision and exits non-zero on missing capabilities.
+For production use, pin this action to a commit SHA. The toolchain and artifact
+schemas are still `0.1.x` prototype surfaces.
 
 ---
 
@@ -297,10 +299,16 @@ Internals can use local scratch and `*_into` forms for low-allocation paths, whi
 Review is meant to be semantic and stronger than textual diff.
 
 ```sh
-rss review --diff base/ changed/
+rss review --diff old.rss new.rss
 ```
 
 answers *what changed* — a function now mutates a parameter, retains a value, lost its `fresh` guarantee, opened a new resource scope, or crossed a native boundary.
+
+For package-level directory changes, use package review/diff commands instead:
+
+```sh
+rss pkg diff base-package/ changed-package/
+```
 
 ```sh
 rss review --map generated.rss

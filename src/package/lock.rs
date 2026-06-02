@@ -15,8 +15,9 @@ use super::{
     LoadedPackage, PackageArchiveFile, PackageLock, PackageLockDiff, PackageLockFieldChange,
     PackageLockMetadata, PackageLockPackage, PackageLockPackageChange, PackageReview,
     PackageReviewAwaitBoundary, PackageReviewFileKind, PackageRisk, PackageSource,
-    collect_regular_files, package_dependency_spec, package_feature_may_change_boundary_risk,
-    package_risk_label, relative_path,
+    collect_regular_files, ensure_package_path_within_root, package_dependency_spec,
+    package_feature_may_change_boundary_risk, package_path_metadata, package_risk_label,
+    relative_path,
 };
 
 pub fn lock_package_dir(package_dir: &Path) -> Result<PackageLock, String> {
@@ -373,7 +374,9 @@ pub(super) fn package_checksum(package: &LoadedPackage, native_hash: Option<&str
 
 pub(super) fn package_archive_files(package_dir: &Path) -> Result<Vec<PackageArchiveFile>, String> {
     let mut paths = Vec::new();
-    collect_package_archive_paths(package_dir, package_dir, &mut paths)?;
+    let root = std::fs::canonicalize(package_dir)
+        .map_err(|error| format!("failed to canonicalize {}: {error}", package_dir.display()))?;
+    collect_package_archive_paths(package_dir, &root, package_dir, &mut paths)?;
     paths.sort();
     paths
         .into_iter()
@@ -383,11 +386,17 @@ pub(super) fn package_archive_files(package_dir: &Path) -> Result<Vec<PackageArc
 
 fn collect_package_archive_paths(
     root: &Path,
+    canonical_root: &Path,
     path: &Path,
     files: &mut Vec<PathBuf>,
 ) -> Result<(), String> {
-    if path.is_file() {
+    let metadata = package_path_metadata(path, "package archive")?;
+    ensure_package_path_within_root(canonical_root, path, "package archive")?;
+    if metadata.is_file() {
         files.push(path.to_path_buf());
+        return Ok(());
+    }
+    if !metadata.is_dir() {
         return Ok(());
     }
     let entries = fs::read_dir(path)
@@ -400,9 +409,7 @@ fn collect_package_archive_paths(
         if should_skip_archive_entry(root, &path, &name.to_string_lossy()) {
             continue;
         }
-        if path.is_dir() || path.is_file() {
-            collect_package_archive_paths(root, &path, files)?;
-        }
+        collect_package_archive_paths(root, canonical_root, &path, files)?;
     }
     Ok(())
 }

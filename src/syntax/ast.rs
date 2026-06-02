@@ -463,7 +463,18 @@ pub enum MatchPattern {
         binding: Option<String>,
         span: Span,
     },
+    Literal {
+        value: MatchLiteral,
+        span: Span,
+    },
     Wildcard(Span),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MatchLiteral {
+    Int(String),
+    String(String),
+    Bool(bool),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

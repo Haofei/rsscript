@@ -6,7 +6,7 @@ use crate::hir::{
     CallResolution, FieldInfo, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirMatchArm, HirStmt,
     HirTypeKind, ParamEffect, ResolvedCalleeKind,
 };
-use crate::syntax::ast::{Callee, Expr, FunctionDecl, Item, MatchPattern, TypeRef};
+use crate::syntax::ast::{Callee, Expr, FunctionDecl, Item, MatchLiteral, MatchPattern, TypeRef};
 
 use super::local::{
     BodyState, FreshReturnIssue, FreshReturnIssueKind, LocalAnalysis, ManagedToLocalUse, MovedUse,
@@ -798,6 +798,9 @@ fn check_match_scrutinee_type(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
     if type_root_name(type_name) == "Option" || type_root_name(type_name) == "Result" {
         return;
     }
+    if matches!(type_name, "Int" | "String" | "Bool") {
+        return;
+    }
     // Allow matching on user-defined sum types
     if analyzer.hir.type_kind(type_name) == Some(crate::hir::HirTypeKind::Sum) {
         return;
@@ -805,14 +808,14 @@ fn check_match_scrutinee_type(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
     analyzer.diagnostics.push(
         Diagnostic::error(
             code::CONTROL_FLOW_TYPE_MISMATCH,
-            format!("match scrutinee has type `{type_name}`, expected `Option<T>`, `Result<T, E>`, or a declared sum type."),
+            format!("match scrutinee has type `{type_name}`, expected `Option<T>`, `Result<T, E>`, a declared sum type, or an `Int`/`String`/`Bool` literal match."),
             hir_expr_span(expr).clone(),
             "control-flow type mismatch",
         )
-        .with_cause("RSScript v0.6 `match` is limited to review-visible `Option`, `Result`, and declared sum type variant handling.")
+        .with_cause("RSScript v0.6 `match` is limited to review-visible `Option`, `Result`, declared sum type variants, and simple scalar literal dispatch.")
         .with_fix(
             "match_option_or_result",
-            "Match an `Option<T>`, `Result<T, E>`, or declared sum value; otherwise rewrite this branch as `if`.",
+            "Match an `Option<T>`, `Result<T, E>`, declared sum value, or scalar literal value; otherwise rewrite this branch as `if`.",
             "manual",
         ),
     );
@@ -827,6 +830,10 @@ fn check_match_patterns_match_scrutinee(
         return;
     };
     let root = type_root_name(type_name);
+    if matches!(type_name, "Int" | "String" | "Bool") {
+        check_literal_match_patterns(analyzer, type_name, arms);
+        return;
+    }
 
     // Determine allowed variants: built-in Option/Result or user-defined sum types
     let builtin_variants: &[&str] = match root {
@@ -855,26 +862,100 @@ fn check_match_patterns_match_scrutinee(
     };
 
     for arm in arms {
-        let MatchPattern::Variant { name, span, .. } = &arm.pattern else {
-            continue;
-        };
-        if allowed_variants.contains(&name.as_str()) {
-            continue;
+        match &arm.pattern {
+            MatchPattern::Variant { name, span, .. } => {
+                if allowed_variants.contains(&name.as_str()) {
+                    continue;
+                }
+                analyzer.diagnostics.push(
+                    Diagnostic::error(
+                        code::CONTROL_FLOW_TYPE_MISMATCH,
+                        format!(
+                            "match pattern `{name}` cannot match scrutinee type `{type_name}`."
+                        ),
+                        span.clone(),
+                        "match variant type mismatch",
+                    )
+                    .with_cause("RSScript match patterns must belong to the scrutinee's type.")
+                    .with_fix(
+                        "match_matching_variant_family",
+                        format!("Use variants of `{root}`: {}.", allowed_variants.join(", ")),
+                        "manual",
+                    ),
+                );
+            }
+            MatchPattern::Literal { span, .. } => {
+                analyzer.diagnostics.push(
+                    Diagnostic::error(
+                        code::CONTROL_FLOW_TYPE_MISMATCH,
+                        format!("literal match pattern cannot match scrutinee type `{type_name}`."),
+                        span.clone(),
+                        "match literal type mismatch",
+                    )
+                    .with_cause("Literal patterns are only allowed when matching `Int`, `String`, or `Bool` values.")
+                    .with_fix(
+                        "match_scalar_literal",
+                        "Use a variant pattern for Option/Result/sum matches, or match a scalar value.",
+                        "manual",
+                    ),
+                );
+            }
+            MatchPattern::Wildcard(_) => {}
         }
-        analyzer.diagnostics.push(
-            Diagnostic::error(
-                code::CONTROL_FLOW_TYPE_MISMATCH,
-                format!("match pattern `{name}` cannot match scrutinee type `{type_name}`."),
-                span.clone(),
-                "match variant type mismatch",
-            )
-            .with_cause("RSScript match patterns must belong to the scrutinee's type.")
-            .with_fix(
-                "match_matching_variant_family",
-                format!("Use variants of `{root}`: {}.", allowed_variants.join(", ")),
-                "manual",
-            ),
-        );
+    }
+}
+
+fn check_literal_match_patterns(
+    analyzer: &mut Analyzer<'_>,
+    type_name: &str,
+    arms: &[HirMatchArm],
+) {
+    for arm in arms {
+        match &arm.pattern {
+            MatchPattern::Literal { value, span } => {
+                let literal_type = match value {
+                    MatchLiteral::Int(_) => "Int",
+                    MatchLiteral::String(_) => "String",
+                    MatchLiteral::Bool(_) => "Bool",
+                };
+                if literal_type == type_name {
+                    continue;
+                }
+                analyzer.diagnostics.push(
+                    Diagnostic::error(
+                        code::CONTROL_FLOW_TYPE_MISMATCH,
+                        format!(
+                            "match literal has type `{literal_type}`, expected `{type_name}`."
+                        ),
+                        span.clone(),
+                        "match literal type mismatch",
+                    )
+                    .with_cause("Literal match patterns must have the same scalar type as the matched value.")
+                    .with_fix(
+                        "match_same_literal_type",
+                        format!("Use a `{type_name}` literal or `_` for the fallback arm."),
+                        "manual",
+                    ),
+                );
+            }
+            MatchPattern::Variant { name, span, .. } => {
+                analyzer.diagnostics.push(
+                    Diagnostic::error(
+                        code::CONTROL_FLOW_TYPE_MISMATCH,
+                        format!("variant match pattern `{name}` cannot match scalar type `{type_name}`."),
+                        span.clone(),
+                        "match variant type mismatch",
+                    )
+                    .with_cause("Scalar literal dispatch uses literal patterns, not Option/Result/sum variants.")
+                    .with_fix(
+                        "match_scalar_literal",
+                        "Use a literal pattern or `_` for scalar matches.",
+                        "manual",
+                    ),
+                );
+            }
+            MatchPattern::Wildcard(_) => {}
+        }
     }
 }
 

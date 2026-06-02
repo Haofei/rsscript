@@ -1962,9 +1962,17 @@ impl Analyzer<'_> {
 
     fn match_is_exhaustive_with_context(&self, value: &HirExpr, arms: &[HirMatchArm]) -> bool {
         let mut arm_names: HashSet<&str> = HashSet::new();
+        let mut bool_literals: HashSet<bool> = HashSet::new();
         for arm in arms {
             match &arm.pattern {
                 MatchPattern::Wildcard(_) => return true,
+                MatchPattern::Literal {
+                    value: crate::syntax::ast::MatchLiteral::Bool(value),
+                    ..
+                } => {
+                    bool_literals.insert(*value);
+                }
+                MatchPattern::Literal { .. } => {}
                 MatchPattern::Variant { name, .. } => {
                     arm_names.insert(name.as_str());
                 }
@@ -1974,6 +1982,9 @@ impl Analyzer<'_> {
             return builtin_match_is_exhaustive(&arm_names);
         };
         let root = self.resolve_type_alias(type_root_name(type_name));
+        if root == "Bool" {
+            return bool_literals.contains(&true) && bool_literals.contains(&false);
+        }
         let Some(variant_names) = self.match_variant_names_for_type(root) else {
             return builtin_match_is_exhaustive(&arm_names);
         };

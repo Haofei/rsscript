@@ -5,7 +5,7 @@ use crate::interfaces::builtin_interfaces;
 use crate::runtime_abi;
 use crate::syntax::ast::{
     Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FileFeature, FunctionDecl, GenericBound,
-    GenericParam, Item, MatchPattern, Param, Program, Stmt, TypeRef,
+    GenericParam, Item, MatchLiteral, MatchPattern, Param, Program, Stmt, TypeRef,
 };
 use crate::syntax::parse_source;
 
@@ -970,6 +970,7 @@ pub(super) fn stmt_span(statement: &Stmt) -> &Span {
 pub(super) fn lower_match_pattern(pattern: &MatchPattern) -> String {
     match pattern {
         MatchPattern::Wildcard(_) => "_".to_string(),
+        MatchPattern::Literal { value, .. } => lower_match_literal(value),
         MatchPattern::Variant {
             name,
             binding: Some(binding),
@@ -985,6 +986,7 @@ pub(super) fn lower_match_pattern(pattern: &MatchPattern) -> String {
 pub(super) fn lower_match_pattern_qualified(pattern: &MatchPattern, sum_type: &str) -> String {
     match pattern {
         MatchPattern::Wildcard(_) => "_".to_string(),
+        MatchPattern::Literal { value, .. } => lower_match_literal(value),
         MatchPattern::Variant {
             name,
             binding: Some(binding),
@@ -999,6 +1001,14 @@ pub(super) fn lower_match_pattern_qualified(pattern: &MatchPattern, sum_type: &s
         MatchPattern::Variant { name, .. } => {
             format!("{}::{}", rust_ident(sum_type), rust_ident(name))
         }
+    }
+}
+
+fn lower_match_literal(value: &MatchLiteral) -> String {
+    match value {
+        MatchLiteral::Int(value) => value.clone(),
+        MatchLiteral::String(value) => format!("{:?}", decode_string_token(value)),
+        MatchLiteral::Bool(value) => value.to_string(),
     }
 }
 

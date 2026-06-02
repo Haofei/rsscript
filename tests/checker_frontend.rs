@@ -1503,7 +1503,7 @@ fn main() -> Unit {
         diagnostics.iter().any(|diagnostic| {
             diagnostic.code == "RS0209"
                 && diagnostic.summary
-                    == "match scrutinee has type `String`, expected `Option<T>`, `Result<T, E>`, or a declared sum type."
+                    == "variant match pattern `Some` cannot match scalar type `String`."
         }),
         "{diagnostics:?}"
     );
