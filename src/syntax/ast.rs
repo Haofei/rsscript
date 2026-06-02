@@ -471,6 +471,14 @@ pub enum Expr {
     Ident(String, Span),
     Number(String, Span),
     String(String, Span),
+    ObjectLiteral {
+        fields: Vec<ObjectLiteralField>,
+        span: Span,
+    },
+    ArrayLiteral {
+        items: Vec<Expr>,
+        span: Span,
+    },
     Binary {
         op: BinaryOp,
         left: Box<Expr>,
@@ -526,6 +534,13 @@ pub enum Expr {
     Unknown(Span),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectLiteralField {
+    pub name: String,
+    pub value: Expr,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {
     Add,
@@ -572,6 +587,8 @@ impl Expr {
             Self::Ident(_, span)
             | Self::Number(_, span)
             | Self::String(_, span)
+            | Self::ObjectLiteral { span, .. }
+            | Self::ArrayLiteral { span, .. }
             | Self::Binary { span, .. }
             | Self::Field { span, .. }
             | Self::Index { span, .. }

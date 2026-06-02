@@ -1,7 +1,34 @@
-features: async, native
+features: async, native, local
 
 struct HttpResponse
+struct HttpRequest
 struct HttpError
+
+pub native fn HttpRequest.json(url: read Url, body: read String) -> fresh HttpRequest
+    effects(native)
+
+pub native fn HttpRequest.with_timeout(
+    request: take HttpRequest,
+    timeout_ms: Int,
+) -> fresh HttpRequest
+    effects(native)
+
+pub native fn HttpRequest.with_retry(
+    request: take HttpRequest,
+    attempts: Int,
+    backoff_ms: Int,
+) -> fresh HttpRequest
+    effects(native)
+
+pub native fn HttpRequest.with_header(
+    request: take HttpRequest,
+    name: read String,
+    value: read String,
+) -> fresh HttpRequest
+    effects(native)
+
+pub async native fn Http.send_async(request: take HttpRequest) -> Result<fresh HttpResponse, HttpError>
+    effects(native)
 
 pub native fn Http.get(url: read Url) -> Result<fresh HttpResponse, HttpError>
     effects(native)
@@ -9,10 +36,50 @@ pub native fn Http.get(url: read Url) -> Result<fresh HttpResponse, HttpError>
 pub async native fn Http.get_async(url: read Url) -> Result<fresh HttpResponse, HttpError>
     effects(native)
 
+pub async native fn Http.get_timeout_async(
+    url: read Url,
+    timeout_ms: Int,
+) -> Result<fresh HttpResponse, HttpError>
+    effects(native)
+
+pub async native fn Http.get_retry_async(
+    url: read Url,
+    timeout_ms: Int,
+    attempts: Int,
+    backoff_ms: Int,
+) -> Result<fresh HttpResponse, HttpError>
+    effects(native)
+
 pub native fn Http.post_json(url: read Url, body: read String) -> Result<fresh HttpResponse, HttpError>
     effects(native)
 
 pub async native fn Http.post_json_async(url: read Url, body: read String) -> Result<fresh HttpResponse, HttpError>
+    effects(native)
+
+pub async native fn Http.post_json_timeout_async(
+    url: read Url,
+    body: read String,
+    timeout_ms: Int,
+) -> Result<fresh HttpResponse, HttpError>
+    effects(native)
+
+pub async native fn Http.post_json_retry_async(
+    url: read Url,
+    body: read String,
+    timeout_ms: Int,
+    attempts: Int,
+    backoff_ms: Int,
+) -> Result<fresh HttpResponse, HttpError>
+    effects(native)
+
+pub async native fn Http.post_json_bearer_retry_async(
+    url: read Url,
+    body: read String,
+    token: read String,
+    timeout_ms: Int,
+    attempts: Int,
+    backoff_ms: Int,
+) -> Result<fresh HttpResponse, HttpError>
     effects(native)
 
 pub native fn Http.post_form(url: read Url, body: read String) -> Result<fresh HttpResponse, HttpError>
@@ -25,6 +92,9 @@ pub native fn HttpResponse.status(response: read HttpResponse) -> Int
     effects(native)
 
 pub native fn HttpResponse.text(response: read HttpResponse) -> fresh String
+    effects(native)
+
+pub native fn HttpResponse.lines(response: read HttpResponse) -> fresh List<String>
     effects(native)
 
 pub native fn HttpResponse.is_success(response: read HttpResponse) -> Bool

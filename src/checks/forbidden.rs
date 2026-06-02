@@ -252,7 +252,9 @@ fn check_operator_overload_attempts_in_expr(analyzer: &mut Analyzer<'_>, expr: &
                 check_operator_overload_attempts_in_block(analyzer, &arm.body);
             }
         }
-        HirExpr::Ident { .. }
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}
@@ -404,6 +406,8 @@ fn inferred_operand_type<'a>(analyzer: &'a Analyzer<'_>, expr: &'a HirExpr) -> O
         HirExpr::Field { access, .. } => access.type_name.as_deref(),
         HirExpr::Binary { .. }
         | HirExpr::Index { .. }
+        | HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
         | HirExpr::Closure { .. }
         | HirExpr::Unknown(_) => None,
     }
@@ -412,6 +416,7 @@ fn inferred_operand_type<'a>(analyzer: &'a Analyzer<'_>, expr: &'a HirExpr) -> O
 fn builtin_value_type_name(name: &str) -> Option<&'static str> {
     match name {
         "true" | "false" => Some("Bool"),
+        "null" => Some("JsonLiteral"),
         "Unit" => Some("Unit"),
         "None" => Some("Option<?>"),
         _ => None,

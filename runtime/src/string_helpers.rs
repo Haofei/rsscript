@@ -68,6 +68,22 @@ pub fn string_split(value: &str, delimiter: &str) -> Vec<String> {
     value.split(delimiter).map(str::to_string).collect()
 }
 
+pub fn string_slice(value: &str, start: i64, len: i64) -> String {
+    string_view_range(value, start, len).to_string()
+}
+
+pub fn string_index_of(value: &str, needle: &str) -> Option<i64> {
+    value.find(needle).map(|index| index as i64)
+}
+
+pub fn string_repeat(value: &str, count: i64) -> String {
+    value.repeat(count.max(0) as usize)
+}
+
+pub fn string_parse_int(value: &str) -> Option<i64> {
+    value.parse::<i64>().ok()
+}
+
 pub fn string_view(value: &str, start: i64, len: i64) -> &str {
     string_view_range(value, start, len)
 }

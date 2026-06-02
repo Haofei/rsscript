@@ -1,0 +1,14 @@
+version = 1
+
+[[package]]
+name = "rss-code-agent"
+version = "0.1.0"
+source = "path+examples/code-agent"
+checksum = "sha256:835861d6b55196660d383015c318cfcfd30f39afd642b343ea50f3ef6fbb1bf5"
+interface_hash = "sha256:36e6897d97ac40f70744171504605f1905c435cb09b5957a6dbd3b3f47852a13"
+review_hash = "sha256:f19e00ce73f055fcdc9352b870f6783e710498ffbd5687f500e047a9c633d364"
+features = []
+
+[metadata]
+rss_version = "0.1.0"
+created_by = "rsscript pkg lock"

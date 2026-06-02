@@ -2755,6 +2755,33 @@ async fn bad() -> Unit {
 }
 
 #[test]
+fn checker_allows_local_taken_into_awaited_call() {
+    let source = r#"
+features: async, local
+
+struct Image {
+    size: Int
+}
+
+async fn Image.upload(image: take Image) -> Unit
+
+async fn ok() -> Unit {
+    local image = Image(size: 1)
+    await Image.upload(image: take image)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("await-take-local-arg.rss", source);
+
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0031"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn checker_reports_spawn_as_unsupported_until_async_lowering_exists() {
     let source = r#"
 features: async

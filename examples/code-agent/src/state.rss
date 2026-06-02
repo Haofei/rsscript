@@ -1,0 +1,38 @@
+struct AgentState {
+    transcript: String
+    step: Int
+    finished: Bool
+}
+
+struct ToolLoopResult {
+    called_tool: Bool
+    transcript: String
+}
+
+fn AgentState.new(task: read String) -> fresh AgentState {
+    return AgentState(
+        transcript: String.concat(left: read "", right: read task),
+        step: 0,
+        finished: false,
+    )
+}
+
+fn AgentState.can_continue(state: read AgentState, max_steps: Int) -> Bool {
+    return state.finished == false && state.step < max_steps
+}
+
+fn append_tool_result(
+    transcript: read String,
+    name: read String,
+    arguments: read String,
+    result: read String,
+) -> fresh String {
+    let first = String.concat(left: read transcript, right: read "\n\nTool ")
+    let second = String.concat(left: read first, right: read name)
+    let third = String.concat(left: read second, right: read " was called with arguments:\n")
+    let fourth = String.concat(left: read third, right: read arguments)
+    let fifth = String.concat(left: read fourth, right: read "\n\nTool result:\n")
+    let sixth = String.concat(left: read fifth, right: read result)
+
+    return String.concat(left: read sixth, right: read "\n\nContinue. If the task is complete, answer without a tool call. Otherwise call the next needed tool.")
+}

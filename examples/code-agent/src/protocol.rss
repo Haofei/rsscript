@@ -1,0 +1,82 @@
+fn code_agent_instructions() -> String {
+    return "You are a RSScript code agent. Work in a bounded tool loop. Before writing code, discover APIs from schemas/core-package-index.json, then read the relevant core/*.rssi interface files and one nearby example when available. Do not guess function names or parameter names. Prefer small, reviewable changes. Use read_file before editing unfamiliar files. Use write_file for final artifacts. Use check_rss_file after writing RSScript code when available. If a check fails, revise within the loop budget. Do not invent hidden capabilities. Do not use native/local/take in ordinary RSScript examples unless the task explicitly requires them."
+}
+
+fn build_model_request(config: read AgentConfig, state: read AgentState) -> fresh String {
+    let messages = model_messages_json(state: read state)
+    let mut fields = List<String>.new()
+    List.push(list: mut fields, value: read Json.string_field(name: read "model", value: read config.model))
+    List.push(list: mut fields, value: read Json.raw_field(name: read "messages", value: read messages))
+    List.push(list: mut fields, value: read Json.raw_field(name: read "tools", value: read tool_specs_json()))
+    List.push(list: mut fields, value: read Json.bool_field(name: read "stream", value: false))
+
+    return Json.object(fields: read fields)
+}
+
+fn model_messages_json(state: read AgentState) -> fresh String {
+    let system_message = Json.encode(value: read {
+        "role": "system",
+        "content": code_agent_instructions(),
+    })
+    let user_message = Json.encode(value: read {
+        "role": "user",
+        "content": state.transcript,
+    })
+    let mut messages = List<String>.new()
+    List.push(list: mut messages, value: read system_message)
+    List.push(list: mut messages, value: read user_message)
+
+    return Json.array(items: read messages)
+}
+
+fn event_json(kind: read String, message: read String) -> fresh String {
+    return Json.encode(value: read {
+        "type": kind,
+        "message": message,
+    })
+}
+
+fn tool_call_id_at(response: read String, index: Int) -> String {
+    let first = "choices[0].message.tool_calls["
+    let second = String.concat(left: read first, right: read String.from_int(value: index))
+    let path = String.concat(left: read second, right: read "].id")
+    return Json.string_at_or(
+        text: read response,
+        path: read path,
+        fallback: read "",
+    )
+}
+
+fn tool_call_name_at(response: read String, index: Int) -> String {
+    let first = "choices[0].message.tool_calls["
+    let second = String.concat(left: read first, right: read String.from_int(value: index))
+    let path = String.concat(left: read second, right: read "].function.name")
+    return Json.string_at_or(
+        text: read response,
+        path: read path,
+        fallback: read "",
+    )
+}
+
+fn tool_call_arguments_at(response: read String, index: Int) -> String {
+    let first = "choices[0].message.tool_calls["
+    let second = String.concat(left: read first, right: read String.from_int(value: index))
+    let path = String.concat(left: read second, right: read "].function.arguments")
+    return Json.string_at_or(
+        text: read response,
+        path: read path,
+        fallback: read "",
+    )
+}
+
+fn response_content(response: read String) -> String {
+    return Json.string_at_or(
+        text: read response,
+        path: read "choices[0].message.content",
+        fallback: read response,
+    )
+}
+
+fn argument_field(arguments: read String, name: read String, fallback: read String) -> String {
+    return Json.string_at_or(text: read arguments, path: read name, fallback: read fallback)
+}

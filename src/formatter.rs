@@ -447,6 +447,28 @@ impl Formatter {
         match expr {
             Expr::Ident(name, _) | Expr::Number(name, _) => self.out.push_str(name),
             Expr::String(value, _) => self.string_literal(value),
+            Expr::ObjectLiteral { fields, .. } => {
+                self.out.push('{');
+                for (index, field) in fields.iter().enumerate() {
+                    if index > 0 {
+                        self.out.push_str(", ");
+                    }
+                    self.string_literal(&field.name);
+                    self.out.push_str(": ");
+                    self.expr(&field.value, 0);
+                }
+                self.out.push('}');
+            }
+            Expr::ArrayLiteral { items, .. } => {
+                self.out.push('[');
+                for (index, item) in items.iter().enumerate() {
+                    if index > 0 {
+                        self.out.push_str(", ");
+                    }
+                    self.expr(item, 0);
+                }
+                self.out.push(']');
+            }
             Expr::Binary {
                 op, left, right, ..
             } => {

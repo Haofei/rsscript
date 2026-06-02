@@ -10,6 +10,9 @@ pub fn Result.unwrap_or<T, E>(value: read Result<T, E>, default: read T) -> T
 pub fn Result.ok<T, E>(value: read Result<T, E>) -> Option<T>
     effects(pure)
 
+pub fn Result.err<T, E>(value: read Result<T, E>) -> Option<E>
+    effects(pure)
+
 pub fn Result.err_message<T, E>(value: read Result<T, E>) -> Option<String>
     effects(pure)
 
@@ -27,3 +30,8 @@ pub fn Result.map<T, E, U>(
     result: read Result<T, E>,
     mapper: noescape Fn(T) -> U,
 ) -> Result<U, E>
+
+pub fn Result.unwrap_or_else<T, E>(
+    result: read Result<T, E>,
+    fallback: noescape Fn(E) -> T,
+) -> T

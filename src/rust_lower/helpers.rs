@@ -221,7 +221,12 @@ fn validate_executable_declarations_in_expr(
                 validate_executable_declarations_in_block(&arm.body, context, diagnostics);
             }
         }
-        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        Expr::ObjectLiteral { .. }
+        | Expr::ArrayLiteral { .. }
+        | Expr::Ident(_, _)
+        | Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::Unknown(_) => {}
     }
 }
 
@@ -654,7 +659,12 @@ pub(super) fn collect_mutated_bindings_from_expr(expr: &Expr, names: &mut BTreeS
                 collect_mutated_bindings_from_block(&arm.body, names);
             }
         }
-        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        Expr::ObjectLiteral { .. }
+        | Expr::ArrayLiteral { .. }
+        | Expr::Ident(_, _)
+        | Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::Unknown(_) => {}
     }
 }
 
@@ -830,6 +840,12 @@ pub(super) fn closure_expr_mutates_unbound_name(expr: &Expr, bound: &BTreeSet<St
                     .iter()
                     .any(|arm| closure_block_mutates_unbound_name(&arm.body, bound))
         }
+        Expr::ObjectLiteral { fields, .. } => fields
+            .iter()
+            .any(|field| closure_expr_mutates_unbound_name(&field.value, bound)),
+        Expr::ArrayLiteral { items, .. } => items
+            .iter()
+            .any(|item| closure_expr_mutates_unbound_name(item, bound)),
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => false,
     }
 }

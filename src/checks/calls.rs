@@ -519,7 +519,9 @@ fn check_expr(
                 check_expr_block_without_return_contract(analyzer, function, &arm.body, context);
             }
         }
-        HirExpr::Ident { .. }
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}
@@ -2342,6 +2344,8 @@ fn callback_expr_is_fresh_value(
             })
         }
         HirExpr::Manage { .. }
+        | HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
         | HirExpr::Spawn { .. }
         | HirExpr::Await { .. }
         | HirExpr::Match { .. }
@@ -2363,6 +2367,8 @@ fn fresh_return_ident(expr: &HirExpr) -> Option<&str> {
             fresh_return_ident(base)
         }
         HirExpr::Manage { .. }
+        | HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
         | HirExpr::Spawn { .. }
         | HirExpr::Await { .. }
         | HirExpr::Field { .. }
@@ -2457,6 +2463,8 @@ fn check_callback_call_argument_types(
             }
         }
         HirExpr::Closure { .. }
+        | HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -2532,6 +2540,12 @@ fn callback_retained_local_use(
         HirExpr::Call { args, .. } => args
             .iter()
             .find_map(|arg| callback_retained_local_use(&arg.value, contract)),
+        HirExpr::ObjectLiteral { fields, .. } => fields
+            .iter()
+            .find_map(|field| callback_retained_local_use(&field.value, contract)),
+        HirExpr::ArrayLiteral { items, .. } => items
+            .iter()
+            .find_map(|item| callback_retained_local_use(item, contract)),
         HirExpr::Binary { left, right, .. } => callback_retained_local_use(left, contract)
             .or_else(|| callback_retained_local_use(right, contract)),
         HirExpr::Index { base, index, .. } => callback_retained_local_use(base, contract)
@@ -2697,6 +2711,8 @@ fn check_callback_operator_operand_types(
             }
         }
         HirExpr::Closure { .. }
+        | HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -3311,7 +3327,9 @@ fn local_closure_escape_use<'a>(
                 })
             })
         }
-        HirExpr::Ident { .. }
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => None,
@@ -3400,7 +3418,9 @@ fn noescape_escape_use<'a>(
                     })
                 })
             }),
-        HirExpr::Ident { .. }
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => None,
@@ -3527,7 +3547,9 @@ fn noescape_any_use<'a>(
                 })
             })
         }
-        HirExpr::Ident { .. }
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => None,
@@ -3652,7 +3674,9 @@ fn local_closure_any_use<'a>(
                     })
                 })
             }),
-        HirExpr::Ident { .. }
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => None,
@@ -3854,6 +3878,8 @@ fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
             .or_else(|| builtin_value_type_name(name)),
         HirExpr::Number { .. } => Some("Int"),
         HirExpr::String { .. } => Some("String"),
+        HirExpr::ObjectLiteral { type_name, .. } => type_name.as_deref(),
+        HirExpr::ArrayLiteral { type_name, .. } => type_name.as_deref(),
         HirExpr::Call {
             callee, type_name, ..
         } => type_name
@@ -3886,6 +3912,7 @@ fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
 fn builtin_value_type_name(name: &str) -> Option<&'static str> {
     match name {
         "true" | "false" => Some("Bool"),
+        "null" => Some("JsonLiteral"),
         "Unit" => Some("Unit"),
         "None" => Some("Option<?>"),
         _ => None,
@@ -4057,6 +4084,8 @@ fn hir_expr_span(expr: &HirExpr) -> &Span {
         HirExpr::Ident { span, .. }
         | HirExpr::Number { span, .. }
         | HirExpr::String { span, .. }
+        | HirExpr::ObjectLiteral { span, .. }
+        | HirExpr::ArrayLiteral { span, .. }
         | HirExpr::Binary { span, .. }
         | HirExpr::Field { span, .. }
         | HirExpr::Index { span, .. }

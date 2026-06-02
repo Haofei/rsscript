@@ -16,11 +16,24 @@ pub fn Map.get<K, V>(
     key: read K,
 ) -> Option<V>
 
+pub fn Map.get_or_default<K, V>(
+    map: read Map<K, V>,
+    key: read K,
+    default: read V,
+) -> V
+
 pub fn Map.insert<K, V>(
     map: mut Map<K, V>,
     key: read K,
     value: read V,
 ) -> Unit
+    effects(retains(key), retains(value))
+
+pub fn Map.insert_old<K, V>(
+    map: mut Map<K, V>,
+    key: read K,
+    value: read V,
+) -> Option<V>
     effects(retains(key), retains(value))
 
 pub fn Map.remove<K, V>(

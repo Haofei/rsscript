@@ -430,6 +430,16 @@ fn collect_all_async_let_spans_expr(expr: &Expr, async_lets: &mut Vec<crate::dia
                 collect_all_async_let_spans(&arm.body, async_lets);
             }
         }
+        Expr::ObjectLiteral { fields, .. } => {
+            for field in fields {
+                collect_all_async_let_spans_expr(&field.value, async_lets);
+            }
+        }
+        Expr::ArrayLiteral { items, .. } => {
+            for item in items {
+                collect_all_async_let_spans_expr(item, async_lets);
+            }
+        }
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
     }
 }
@@ -463,6 +473,16 @@ fn collect_task_group_async_lets_expr(
             collect_task_group_async_lets_expr(value, async_lets);
             for arm in arms {
                 collect_task_group_async_lets(&arm.body, async_lets);
+            }
+        }
+        Expr::ObjectLiteral { fields, .. } => {
+            for field in fields {
+                collect_task_group_async_lets_expr(&field.value, async_lets);
+            }
+        }
+        Expr::ArrayLiteral { items, .. } => {
+            for item in items {
+                collect_task_group_async_lets_expr(item, async_lets);
             }
         }
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
@@ -822,6 +842,12 @@ fn find_nested_task_group_await_span_expr<'a>(
                 arms.iter()
                     .find_map(|arm| find_task_group_await_span(&arm.body, name))
             }),
+        Expr::ObjectLiteral { fields, .. } => fields
+            .iter()
+            .find_map(|field| find_nested_task_group_await_span_expr(&field.value, name)),
+        Expr::ArrayLiteral { items, .. } => items
+            .iter()
+            .find_map(|item| find_nested_task_group_await_span_expr(item, name)),
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => None,
     }
 }
@@ -857,6 +883,16 @@ fn collect_task_group_awaited_handles_expr(expr: &Expr, awaited: &mut HashSet<St
             collect_task_group_awaited_handles_expr(value, awaited);
             for arm in arms {
                 collect_task_group_awaited_handles(&arm.body, awaited);
+            }
+        }
+        Expr::ObjectLiteral { fields, .. } => {
+            for field in fields {
+                collect_task_group_awaited_handles_expr(&field.value, awaited);
+            }
+        }
+        Expr::ArrayLiteral { items, .. } => {
+            for item in items {
+                collect_task_group_awaited_handles_expr(item, awaited);
             }
         }
         Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
@@ -1614,6 +1650,16 @@ impl Analyzer<'_> {
                     self.check_unsupported_syntax_block(&arm.body);
                 }
             }
+            Expr::ObjectLiteral { fields, .. } => {
+                for field in fields {
+                    self.check_unsupported_syntax_expr(&field.value);
+                }
+            }
+            Expr::ArrayLiteral { items, .. } => {
+                for item in items {
+                    self.check_unsupported_syntax_expr(item);
+                }
+            }
             Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) => {}
             Expr::Unknown(span) => self.unsupported_syntax(
                 span.clone(),
@@ -1919,7 +1965,9 @@ impl Analyzer<'_> {
                     );
                 }
             }
-            HirExpr::Ident { .. }
+            HirExpr::ObjectLiteral { .. }
+            | HirExpr::ArrayLiteral { .. }
+            | HirExpr::Ident { .. }
             | HirExpr::Number { .. }
             | HirExpr::String { .. }
             | HirExpr::Unknown(_) => {}
@@ -2828,7 +2876,11 @@ impl Analyzer<'_> {
                     self.check_unknown_bindings_in_block(&arm.body, &mut arm_visible);
                 }
             }
-            HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
+            HirExpr::ObjectLiteral { .. }
+            | HirExpr::ArrayLiteral { .. }
+            | HirExpr::Number { .. }
+            | HirExpr::String { .. }
+            | HirExpr::Unknown(_) => {}
         }
     }
 
@@ -3143,7 +3195,12 @@ impl Analyzer<'_> {
                     self.check_runtime_guarantee_block(guarantee, function_name, &arm.body);
                 }
             }
-            Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+            Expr::ObjectLiteral { .. }
+            | Expr::ArrayLiteral { .. }
+            | Expr::Ident(_, _)
+            | Expr::Number(_, _)
+            | Expr::String(_, _)
+            | Expr::Unknown(_) => {}
         }
     }
 
@@ -3505,7 +3562,12 @@ impl Analyzer<'_> {
                     self.check_resource_pool_calls_in_block(&arm.body);
                 }
             }
-            Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+            Expr::ObjectLiteral { .. }
+            | Expr::ArrayLiteral { .. }
+            | Expr::Ident(_, _)
+            | Expr::Number(_, _)
+            | Expr::String(_, _)
+            | Expr::Unknown(_) => {}
         }
     }
 
@@ -3623,7 +3685,12 @@ impl Analyzer<'_> {
                     self.check_resource_generic_calls_in_block(&arm.body);
                 }
             }
-            Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+            Expr::ObjectLiteral { .. }
+            | Expr::ArrayLiteral { .. }
+            | Expr::Ident(_, _)
+            | Expr::Number(_, _)
+            | Expr::String(_, _)
+            | Expr::Unknown(_) => {}
         }
     }
 
@@ -4232,7 +4299,12 @@ fn expr_first_cancellation_token(expr: &Expr) -> Option<crate::diagnostic::Span>
             arms.iter()
                 .find_map(|arm| block_first_cancellation_token(&arm.body))
         }),
-        Expr::Ident(..) | Expr::Number(..) | Expr::String(..) | Expr::Unknown(_) => None,
+        Expr::ObjectLiteral { .. }
+        | Expr::ArrayLiteral { .. }
+        | Expr::Ident(..)
+        | Expr::Number(..)
+        | Expr::String(..)
+        | Expr::Unknown(_) => None,
     }
 }
 
@@ -4266,7 +4338,12 @@ fn expr_first_await(expr: &Expr) -> Option<crate::diagnostic::Span> {
         Expr::Closure { body, .. } => block_first_await(body),
         Expr::Match { value, arms, .. } => expr_first_await(value)
             .or_else(|| arms.iter().find_map(|arm| block_first_await(&arm.body))),
-        Expr::Ident(..) | Expr::Number(..) | Expr::String(..) | Expr::Unknown(_) => None,
+        Expr::ObjectLiteral { .. }
+        | Expr::ArrayLiteral { .. }
+        | Expr::Ident(..)
+        | Expr::Number(..)
+        | Expr::String(..)
+        | Expr::Unknown(_) => None,
     }
 }
 
@@ -4582,7 +4659,12 @@ impl<'a> AssignChecker<'a> {
             | Expr::Spawn { value, .. }
             | Expr::Await { value, .. }
             | Expr::Try { value, .. } => self.expr(value),
-            Expr::Ident(..) | Expr::Number(..) | Expr::String(..) | Expr::Unknown(_) => {}
+            Expr::ObjectLiteral { .. }
+            | Expr::ArrayLiteral { .. }
+            | Expr::Ident(..)
+            | Expr::Number(..)
+            | Expr::String(..)
+            | Expr::Unknown(_) => {}
         }
     }
 
@@ -5275,13 +5357,17 @@ fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
         HirExpr::Number { .. } => Some("Int"),
         HirExpr::String { .. } => Some("String"),
         HirExpr::Binary { .. } | HirExpr::Index { .. } => None,
-        HirExpr::Closure { .. } | HirExpr::Unknown(_) => None,
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Closure { .. }
+        | HirExpr::Unknown(_) => None,
     }
 }
 
 fn builtin_value_type_name(name: &str) -> Option<&'static str> {
     match name {
         "true" | "false" => Some("Bool"),
+        "null" => Some("JsonLiteral"),
         "Unit" => Some("Unit"),
         _ => None,
     }
@@ -5441,7 +5527,7 @@ fn is_builtin_type_name(name: &str) -> bool {
 }
 
 fn builtin_value_ident(name: &str) -> bool {
-    matches!(name, "true" | "false" | "Unit" | "None")
+    matches!(name, "true" | "false" | "Unit" | "None" | "null")
 }
 
 fn type_ref_contains_name(ty: &TypeRef, name: &str) -> bool {

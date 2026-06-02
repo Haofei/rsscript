@@ -47,6 +47,22 @@ pub fn path_join<P: RuntimePath + ?Sized>(base: &P, child: &str) -> PathBuf {
     base.as_path().join(child)
 }
 
+pub fn path_normalize<P: RuntimePath + ?Sized>(path: &P) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.as_path().components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !normalized.pop() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
+
 pub fn path_to_string<P: RuntimePath + ?Sized>(path: &P) -> String {
     path.as_path().to_string_lossy().to_string()
 }
@@ -69,6 +85,19 @@ pub fn path_parent<P: RuntimePath + ?Sized>(path: &P) -> Option<PathBuf> {
 
 pub fn path_is_absolute<P: RuntimePath + ?Sized>(path: &P) -> bool {
     path.as_path().is_absolute()
+}
+
+pub fn path_with_extension<P: RuntimePath + ?Sized>(path: &P, extension: &str) -> PathBuf {
+    let mut path = path.as_path().to_path_buf();
+    path.set_extension(extension);
+    path
+}
+
+pub fn path_starts_with<P: RuntimePath + ?Sized, Q: RuntimePath + ?Sized>(
+    path: &P,
+    base: &Q,
+) -> bool {
+    path.as_path().starts_with(base.as_path())
 }
 
 pub trait RuntimeBytes {
@@ -140,6 +169,17 @@ pub fn file_write_bytes<P: RuntimePath + ?Sized, B: RuntimeBytes + ?Sized>(
     std::fs::write(path.as_path(), data.as_bytes_slice())
 }
 
+pub fn file_append_bytes<P: RuntimePath + ?Sized, B: RuntimeBytes + ?Sized>(
+    path: &P,
+    data: &B,
+) -> std::io::Result<()> {
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path.as_path())?;
+    file.write_all(data.as_bytes_slice())
+}
+
 pub fn file_write_string_to_path<P: RuntimePath + ?Sized>(
     path: &P,
     text: &str,
@@ -153,6 +193,10 @@ pub fn file_append_string<P: RuntimePath + ?Sized>(path: &P, text: &str) -> std:
         .append(true)
         .open(path.as_path())?;
     file.write_all(text.as_bytes())
+}
+
+pub fn file_remove<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<()> {
+    std::fs::remove_file(path.as_path())
 }
 
 pub fn file_read_all(file: &mut File) -> std::io::Result<Vec<u8>> {
@@ -272,6 +316,15 @@ pub fn directory_list_files<P: RuntimePath + ?Sized>(path: &P) -> std::io::Resul
     Ok(files)
 }
 
+pub fn directory_list_paths<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for entry in std::fs::read_dir(path.as_path())? {
+        paths.push(entry?.path());
+    }
+    paths.sort();
+    Ok(paths)
+}
+
 pub fn directory_exists<P: RuntimePath + ?Sized>(path: &P) -> bool {
     path.as_path().exists()
 }
@@ -286,6 +339,10 @@ pub fn directory_is_dir<P: RuntimePath + ?Sized>(path: &P) -> bool {
 
 pub fn directory_create_all<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<()> {
     std::fs::create_dir_all(path.as_path())
+}
+
+pub fn directory_create<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<()> {
+    std::fs::create_dir(path.as_path())
 }
 
 fn collect_directory_files(

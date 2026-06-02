@@ -22,6 +22,16 @@ pub fn Option.ok_or<T, E>(
     error: read E,
 ) -> Result<T, E>
 
+pub fn Option.or<T>(
+    value: read Option<T>,
+    fallback: read Option<T>,
+) -> Option<T>
+
+pub fn Option.filter<T>(
+    value: read Option<T>,
+    predicate: noescape Fn(T) -> Bool,
+) -> Option<T>
+
 pub fn Option.unwrap_or_else<T>(
     value: read Option<T>,
     default: noescape Fn() -> T,

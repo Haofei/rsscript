@@ -1,0 +1,217 @@
+fn tool_specs_json() -> fresh String {
+    let mut specs = List<String>.new()
+    List.push(list: mut specs, value: read Json.encode(value: read {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read a UTF-8 text file for the agent.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Relative path to read.",
+                    },
+                },
+                "required": ["path"],
+                "additionalProperties": false,
+            },
+        },
+    }))
+    List.push(list: mut specs, value: read Json.encode(value: read {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "Write a UTF-8 text file on behalf of the agent.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Relative path to write.",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "File content.",
+                    },
+                },
+                "required": ["path", "content"],
+                "additionalProperties": false,
+            },
+        },
+    }))
+    List.push(list: mut specs, value: read Json.encode(value: read {
+        "type": "function",
+        "function": {
+            "name": "check_rss_file",
+            "description": "Check that a generated RSScript file follows the requested read-file example shape.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Relative RSScript file path to check.",
+                    },
+                },
+                "required": ["path"],
+                "additionalProperties": false,
+            },
+        },
+    }))
+
+    return Json.array(items: read specs)
+}
+
+fn path_is_traversal_safe(path_text: read String) -> Bool {
+    let absolute = String.starts_with(value: read path_text, prefix: read "/")
+    let traversal = String.contains(value: read path_text, needle: read "..")
+    return absolute == false && traversal == false
+}
+
+fn path_in_workspace(workspace_root: read String, path_text: read String) -> Bool {
+    let safe = path_is_traversal_safe(path_text: read path_text)
+    let under_root = String.starts_with(value: read path_text, prefix: read workspace_root)
+    return safe && under_root
+}
+
+fn tool_path_error(path_text: read String, reason: read String) -> String {
+    return Json.encode(value: read {
+        "ok": false,
+        "path": path_text,
+        "error": reason,
+    })
+}
+
+fn file_read_result(path_text: read String) -> String {
+    let path = Path.from_string(value: read path_text)
+    match File.read_string(path: read path) {
+        Ok(text) => {
+            return Json.encode(value: read {
+                "ok": true,
+                "path": path_text,
+                "content": text,
+                "bytes": String.len(value: read text),
+            })
+        }
+        Err(error) => {
+            return Json.encode(value: read {
+                "ok": false,
+                "path": path_text,
+                "error": FileError.message(error: read error),
+            })
+        }
+    }
+}
+
+fn execute_read_file(arguments: read String) -> String {
+    let path_text = argument_field(arguments: read arguments, name: read "path", fallback: read "examples/AGENTS.md")
+    if path_is_traversal_safe(path_text: read path_text) == false {
+        return tool_path_error(
+            path_text: read path_text,
+            reason: read "path is not allowed: absolute paths and `..` traversal are rejected",
+        )
+    }
+    return file_read_result(path_text: read path_text)
+}
+
+fn file_write_result(path_text: read String, content: read String) -> String {
+    let path = Path.from_string(value: read path_text)
+    match File.write_string_to_path(path: read path, text: read content) {
+        Ok(_) => {
+            return Json.encode(value: read {
+                "ok": true,
+                "path": path_text,
+                "bytes": String.len(value: read content),
+            })
+        }
+        Err(error) => {
+            return Json.encode(value: read {
+                "ok": false,
+                "path": path_text,
+                "error": FileError.message(error: read error),
+            })
+        }
+    }
+}
+
+fn execute_write_file(arguments: read String, workspace_root: read String) -> String {
+    let default_path = "target/rsscript-agent-hello.txt"
+    let default_content = "hello world\n"
+    let path_text = argument_field(arguments: read arguments, name: read "path", fallback: read default_path)
+    let content = argument_field(arguments: read arguments, name: read "content", fallback: read default_content)
+    if path_in_workspace(workspace_root: read workspace_root, path_text: read path_text) == false {
+        let reason = String.concat(
+            left: read "writes are confined to the workspace root `",
+            right: read String.concat(left: read workspace_root, right: read "` (no absolute paths or `..`)"),
+        )
+        return tool_path_error(path_text: read path_text, reason: read reason)
+    }
+    return file_write_result(path_text: read path_text, content: read content)
+}
+
+fn execute_check_rss_file(arguments: read String, workspace_root: read String) -> String {
+    let path_text = argument_field(arguments: read arguments, name: read "path", fallback: read "target/rsscript-agent-read-file.rss")
+    if path_in_workspace(workspace_root: read workspace_root, path_text: read path_text) == false {
+        let reason = String.concat(
+            left: read "checks are confined to the workspace root `",
+            right: read String.concat(left: read workspace_root, right: read "` (no absolute paths or `..`)"),
+        )
+        return tool_path_error(path_text: read path_text, reason: read reason)
+    }
+
+    return rss_read_file_check_result(path_text: read path_text)
+}
+
+fn execute_tool(name: read String, arguments: read String, config: read AgentConfig) -> String {
+    if name == "read_file" {
+        return execute_read_file(arguments: read arguments)
+    }
+
+    if name == "write_file" {
+        return execute_write_file(arguments: read arguments, workspace_root: read config.workspace_root)
+    }
+
+    if name == "check_rss_file" {
+        return execute_check_rss_file(arguments: read arguments, workspace_root: read config.workspace_root)
+    }
+
+    return Json.encode(value: read {
+        "ok": false,
+        "tool": name,
+        "error": "unknown tool",
+    })
+}
+
+fn execute_tool_calls(response: read String, transcript: read String, config: read AgentConfig) -> fresh ToolLoopResult {
+    let mut tool_index = 0
+    let mut called_tool = false
+    let mut next_transcript = String.concat(left: read "", right: read transcript)
+
+    while tool_index < config.max_tool_calls {
+        let call_id = tool_call_id_at(response: read response, index: tool_index)
+        if call_id == "" {
+            tool_index = config.max_tool_calls
+        } else {
+            let tool_name = tool_call_name_at(response: read response, index: tool_index)
+            let arguments = tool_call_arguments_at(response: read response, index: tool_index)
+            Log.write(message: read event_json(kind: read "tool.requested", message: read tool_name))
+            Log.write(message: read arguments)
+
+            let tool_result = execute_tool(name: read tool_name, arguments: read arguments, config: read config)
+            Log.write(message: read event_json(kind: read "tool.completed", message: read tool_result))
+            next_transcript = append_tool_result(
+                transcript: read next_transcript,
+                name: read tool_name,
+                arguments: read arguments,
+                result: read tool_result,
+            )
+            called_tool = true
+            tool_index = tool_index + 1
+        }
+    }
+
+    return ToolLoopResult(
+        called_tool: called_tool,
+        transcript: String.concat(left: read "", right: read next_transcript),
+    )
+}

@@ -81,6 +81,11 @@ pub fn List.contains<T>(
     predicate: noescape Fn(T) -> Bool,
 ) -> Bool
 
+pub fn List.contains_value<T>(
+    list: read List<T>,
+    value: read T,
+) -> Bool
+
 pub fn List.is_empty<T>(list: read List<T>) -> Bool
 
 pub fn List.reverse<T>(list: read List<T>) -> fresh List<T>
@@ -134,5 +139,10 @@ pub fn List.skip<T>(
 pub fn List.first<T>(list: read List<T>) -> Option<T>
 
 pub fn List.last<T>(list: read List<T>) -> Option<T>
+
+pub fn List.remove_at<T>(
+    list: mut List<T>,
+    index: Int,
+) -> Option<T>
 
 pub fn List.join(list: read List<String>, separator: read String) -> fresh String

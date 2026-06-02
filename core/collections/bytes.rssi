@@ -6,6 +6,18 @@ pub fn Bytes.from_string(value: read String) -> fresh Bytes
 
 pub fn Bytes.from_buffer(buffer: read Buffer) -> fresh Bytes
 
+pub fn Bytes.len(value: read Bytes) -> Int
+
+pub fn Bytes.is_empty(value: read Bytes) -> Bool
+
+pub fn Bytes.concat(left: read Bytes, right: read Bytes) -> fresh Bytes
+
+pub fn Bytes.slice(
+    value: read Bytes,
+    start: Int,
+    len: Int,
+) -> fresh Bytes
+
 pub fn Bytes.view(
     value: read Bytes,
     start: Int,

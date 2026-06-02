@@ -1478,7 +1478,12 @@ fn collect_await_sites_from_expr(
                 );
             }
         }
-        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        Expr::ObjectLiteral { .. }
+        | Expr::ArrayLiteral { .. }
+        | Expr::Ident(_, _)
+        | Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::Unknown(_) => {}
     }
 }
 
@@ -1621,7 +1626,11 @@ fn collect_expr_uses(expr: &Expr, uses: &mut BTreeSet<String>) {
                 collect_block_uses(&arm.body, uses);
             }
         }
-        Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        Expr::ObjectLiteral { .. }
+        | Expr::ArrayLiteral { .. }
+        | Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::Unknown(_) => {}
     }
 }
 

@@ -11,6 +11,7 @@ use rsscript::{
 
 mod bbom;
 mod check;
+mod core_index;
 mod dev;
 mod fmt;
 mod lint;
@@ -31,6 +32,7 @@ pub fn run() -> ExitCode {
 
     match command {
         "check" => check::run_check(&args[2..]),
+        "core-index" => core_index::run_core_index(&args[2..]),
         "dev" => dev::run_dev(&args[2..]),
         "bbom" => bbom::run_bbom(&args[2..]),
         "lint" => lint::run_lint(&args[2..]),
@@ -332,6 +334,7 @@ pub(crate) fn print_usage() {
         "  rss review-pr --head <package-dir> --grants <grants.reir.json> [--base <package-dir>] [--target <name>] [--format markdown|ci-json|sarif]"
     );
     eprintln!("  rss contract [--json|--reir] <file.rssi ...>");
+    eprintln!("  rss core-index [--write <path>|--check <path>]");
     eprintln!("  rss bbom [--json] <file.rss | directory>");
     eprintln!("  rss bbom delta [--json] --from <old.rss> --to <new.rss>");
     eprintln!("  rss bbom policy [--json] --from <old.rss> --to <new.rss>");

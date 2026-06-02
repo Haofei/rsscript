@@ -630,8 +630,11 @@ fn read_name(text: read String) -> Result<String, JsonError> {
         },
     )?
     let profile = Json.field(value: read value, name: read "profile")?
+    let profile_again = Json.value_at(value: read value, path: read "profile")?
     let profile_name_value = Json.field(value: read profile, name: read "name")?
     let profile_name = Json.as_string(value: read profile_name_value)?
+    let profile_name_at = Json.string_at(text: read text, path: read "profile.name")?
+    let missing_name = Json.string_at_or(text: read text, path: read "profile.missing", fallback: read "unknown")
     let active = Json.field_bool(value: read profile, name: read "active")?
     let age = Json.field_int(value: read profile, name: read "age")?
     let age_value = Json.field(value: read profile, name: read "age")?
@@ -656,6 +659,9 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     ));
     assert!(rust.contains(
         "let profile = rsscript_runtime::json_field(&value, &\"profile\".to_string())?;"
+    ));
+    assert!(rust.contains(
+        "let profile_again = rsscript_runtime::json_value_at(&value, &\"profile\".to_string())?;"
     ));
     assert!(rust.contains("let count = rsscript_runtime::json_array_len(&value)?;"));
     assert!(rust.contains("let first = rsscript_runtime::json_array_get(&value, 0)?;"));
@@ -689,6 +695,12 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     assert!(
         rust.contains("let profile_name = rsscript_runtime::json_as_string(&profile_name_value)?;")
     );
+    assert!(rust.contains(
+        "let profile_name_at = rsscript_runtime::json_string_at(&text, &\"profile.name\".to_string())?;"
+    ));
+    assert!(rust.contains(
+        "let missing_name = rsscript_runtime::json_string_at_or(&text, &\"profile.missing\".to_string(), &\"unknown\".to_string());"
+    ));
     assert!(
         rust.contains(
             "let age = rsscript_runtime::json_field_int(&profile, &\"age\".to_string())?;"
@@ -708,6 +720,68 @@ fn read_name(text: read String) -> Result<String, JsonError> {
         rust.contains("let name_is_null = rsscript_runtime::json_is_null(&profile_name_value);")
     );
     assert!(rust.contains("return Ok(profile_name);"));
+}
+
+#[test]
+fn rust_lowering_maps_literals_and_json_encode_to_runtime_hooks() {
+    let source = r#"
+fn build(model: read String, prompt: read String) -> String {
+    let nums = [1, 2, 3]
+    let body = Json.encode(value: read {
+        "model": model,
+        "max_steps": 2,
+        "stream": false,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ],
+    })
+    return body
+}
+"#;
+    let rust = lower_source_to_rust("json-literal.rss", source).expect("source should lower");
+
+    assert!(
+        rust.contains("let nums = vec![1, 2, 3];"),
+        "list literal should lower to Vec, got:\n{rust}"
+    );
+    assert!(
+        rust.contains("rsscript_runtime::json_string_field(&\"model\".to_string(), &model)"),
+        "string object fields should use JSON string encoding, got:\n{rust}"
+    );
+    assert!(
+        rust.contains("rsscript_runtime::json_int_field(&\"max_steps\".to_string(), 2)"),
+        "int object fields should use JSON int encoding, got:\n{rust}"
+    );
+    assert!(
+        rust.contains("rsscript_runtime::json_bool_field(&\"stream\".to_string(), false)"),
+        "bool object fields should use JSON bool encoding, got:\n{rust}"
+    );
+    assert!(
+        rust.contains("rsscript_runtime::json_raw_field(&\"messages\".to_string(), &rsscript_runtime::json_array"),
+        "nested arrays should be embedded as raw JSON values, got:\n{rust}"
+    );
+}
+
+#[test]
+fn rust_lowering_maps_typed_bool_local_in_json_literal() {
+    let source = r#"
+fn report(first: Bool, second: Bool) -> String {
+    let ok: Bool = first && second
+    return Json.encode(value: read {
+        "ok": ok,
+    })
+}
+"#;
+    let rust = lower_source_to_rust("json-bool-local.rss", source).expect("source should lower");
+
+    assert!(rust.contains("let ok = first && second;"));
+    assert!(
+        rust.contains("rsscript_runtime::json_bool_field(&\"ok\".to_string(), ok)"),
+        "Json.encode should encode a typed Bool local as a JSON boolean, got:\n{rust}"
+    );
 }
 
 #[test]
@@ -904,6 +978,168 @@ fn run_query(url: read Url, sql: read String) -> Result<Unit, DbError> {
     assert!(rust.contains("-> Result<(), rsscript_runtime::DbError>"));
     assert!(rust.contains("let mut pool = rsscript_runtime::ResourcePool::try_from_factory(2, || rsscript_runtime::db_connection_try_open(&url))?;"));
     assert!(rust.contains("rsscript_runtime::db_connection_query(&mut conn, &sql)?;"));
+}
+
+#[test]
+fn rust_lowering_maps_p0_core_std_alignment_helpers() {
+    let source = r#"
+struct MyError {
+    message: String
+}
+
+fn fallback(error: read MyError) -> Int {
+    return 7
+}
+
+fn main() -> Result<Unit, MyError> {
+    let list = List<Int>.new()
+    List.push(list: mut list, value: read 1)
+    List.push(list: mut list, value: read 2)
+    let contains_two = List.contains_value(list: read list, value: read 2)
+    let removed_item = List.remove_at(list: mut list, index: 0)
+
+    let map = Map<String, Int>.new()
+    let old_missing = Map.insert_old(map: mut map, key: read "one", value: read 1)
+    let old_present = Map.insert_old(map: mut map, key: read "one", value: read 2)
+    let present = Map.get_or_default(map: read map, key: read "one", default: read 0)
+    let missing = Map.get_or_default(map: read map, key: read "missing", default: read 3)
+
+    let left = Set<String>.new()
+    let right = Set<String>.new()
+    Set.insert(set: mut left, value: read "a")
+    Set.insert(set: mut right, value: read "a")
+    Set.insert(set: mut right, value: read "b")
+    let unioned = Set.union(left: read left, right: read right)
+    let common = Set.intersection(left: read left, right: read right)
+    let only_right = Set.difference(left: read right, right: read left)
+    let subset = Set.is_subset(left: read left, right: read right)
+
+    let sliced = String.slice(value: read "abcdef", start: 1, len: 3)
+    let index = String.index_of(value: read "abcdef", needle: read "cd")
+    let repeated = String.repeat(value: read "ab", count: 2)
+    let parsed = String.parse_int(value: read "42")
+
+    let bytes = Bytes.from_string(value: read "ab")
+    let more = Bytes.from_string(value: read "cd")
+    let joined = Bytes.concat(left: read bytes, right: read more)
+    let bytes_len = Bytes.len(value: read joined)
+    let bytes_empty = Bytes.is_empty(value: read joined)
+    let bytes_slice = Bytes.slice(value: read joined, start: 1, len: 2)
+
+    let buffer = Buffer.new(size: 16)
+    let buffer_len = Buffer.len(buffer: read buffer)
+    let buffer_empty = Buffer.is_empty(buffer: read buffer)
+
+    let maybe = Option.or<Int>(value: read None, fallback: read Some(5))
+    let filtered = Option.filter<Int>(
+        value: read maybe,
+        predicate: |value| {
+            return value > 3
+        },
+    )
+    let err_value = Result.err<Int, MyError>(value: read Err(MyError(message: "bad")))
+    let recovered = Result.unwrap_or_else<Int, MyError>(
+        result: read Err(MyError(message: "bad")),
+        fallback: |error| {
+            return fallback(error: read error)
+        },
+    )
+
+    Assert.equal_bool(left: contains_two, right: true)
+    Assert.equal_int(left: present, right: 2)
+    Assert.equal_int(left: missing, right: 3)
+    Assert.equal_bool(left: subset, right: true)
+    Assert.equal_int(left: bytes_len, right: 4)
+    Assert.equal_bool(left: bytes_empty, right: false)
+    Assert.equal_int(left: buffer_len, right: 0)
+    Assert.equal_bool(left: buffer_empty, right: true)
+    Assert.equal_int(left: recovered, right: 7)
+    return Ok(Unit)
+}
+"#;
+    let rust = lower_source_to_rust("p0-core-helpers.rss", source).expect("source should lower");
+
+    assert!(rust.contains("rsscript_runtime::list_contains_value(&list, &2);"));
+    assert!(rust.contains("rsscript_runtime::list_remove_at(&mut list, 0);"));
+    assert!(rust.contains("rsscript_runtime::map_insert_old(&mut map, &\"one\".to_string(), &1);"));
+    assert!(rust.contains("rsscript_runtime::map_get_or_default(&map, &\"one\".to_string(), &0);"));
+    assert!(rust.contains("rsscript_runtime::set_union(&left, &right);"));
+    assert!(rust.contains("rsscript_runtime::set_intersection(&left, &right);"));
+    assert!(rust.contains("rsscript_runtime::set_difference(&right, &left);"));
+    assert!(rust.contains("rsscript_runtime::set_is_subset(&left, &right);"));
+    assert!(rust.contains("rsscript_runtime::string_slice(&\"abcdef\".to_string(), 1, 3);"));
+    assert!(rust.contains(
+        "rsscript_runtime::string_index_of(&\"abcdef\".to_string(), &\"cd\".to_string());"
+    ));
+    assert!(rust.contains("rsscript_runtime::string_repeat(&\"ab\".to_string(), 2);"));
+    assert!(rust.contains("rsscript_runtime::string_parse_int(&\"42\".to_string());"));
+    assert!(rust.contains("rsscript_runtime::bytes_concat(&bytes, &more);"));
+    assert!(rust.contains("rsscript_runtime::bytes_len(&joined);"));
+    assert!(rust.contains("rsscript_runtime::bytes_is_empty(&joined);"));
+    assert!(rust.contains("rsscript_runtime::bytes_slice(&joined, 1, 2);"));
+    assert!(rust.contains("rsscript_runtime::buffer_len(&buffer);"));
+    assert!(rust.contains("rsscript_runtime::buffer_is_empty(&buffer);"));
+    assert!(rust.contains("rsscript_runtime::option_or(&None, &Some(5));"));
+    assert!(rust.contains("rsscript_runtime::option_filter(&maybe, |value| {"));
+    assert!(rust.contains("rsscript_runtime::result_err(&Err(MyError {"));
+    assert!(rust.contains("rsscript_runtime::result_unwrap_or_else(&Err(MyError {"));
+}
+
+#[test]
+fn rust_lowering_maps_p1_application_core_helpers() {
+    let source = r#"
+fn main() -> Result<Unit, FileError> {
+    let root = Path.from_string(value: read "/tmp/rsscript-p1")
+    let nested = Path.join(base: read root, child: read "child")
+    let normalized = Path.normalize(path: read Path.join(base: read nested, child: read ".."))
+    let text_path = Path.with_extension(path: read Path.join(base: read root, child: read "out"), extension: read "txt")
+    let starts = Path.starts_with(path: read text_path, base: read root)
+
+    Directory.create_all(path: read root)?
+    if !Directory.exists(path: read nested) {
+        Directory.create(path: read nested)?
+    }
+    let listed = Directory.list_paths(path: read root)?
+
+    let data = Bytes.from_string(value: read "hello")
+    File.write_bytes(path: read text_path, data: read data)?
+    File.append_bytes(path: read text_path, data: read Bytes.from_string(value: read "!"))?
+    File.append_string(path: read text_path, text: read "\n")?
+    File.remove(path: read text_path)?
+
+    let args = Args.all()
+    let arg_count = Args.count()
+    let first_arg = Args.get(index: 0)
+    let fallback = Args.get_or_default(index: 1000, default: read "missing")
+
+    Log.error(message: read "p1")
+
+    Assert.equal_bool(left: starts, right: true)
+    return Ok(Unit)
+}
+
+fn process_main() -> Result<Unit, String> {
+    let proc = Process.run(command: read "printf", args: read List<String>.new())?
+    let proc_timeout = Process.run_timeout(command: read "printf", args: read List<String>.new(), timeout_ms: 1000)?
+    Assert.equal_int(left: proc.status, right: 0)
+    Assert.equal_int(left: proc_timeout.status, right: 0)
+    return Ok(Unit)
+}
+"#;
+    let rust = lower_source_to_rust("p1-core-helpers.rss", source).expect("source should lower");
+
+    assert!(rust.contains("rsscript_runtime::path_normalize("));
+    assert!(rust.contains("rsscript_runtime::path_with_extension("));
+    assert!(rust.contains("rsscript_runtime::path_starts_with("));
+    assert!(rust.contains("rsscript_runtime::directory_create(&nested)?;"));
+    assert!(rust.contains("rsscript_runtime::directory_list_paths(&root)?;"));
+    assert!(rust.contains("rsscript_runtime::file_append_bytes("));
+    assert!(rust.contains("rsscript_runtime::file_remove(&text_path)?;"));
+    assert!(rust.contains("rsscript_runtime::args_all();"));
+    assert!(rust.contains("rsscript_runtime::args_get(0);"));
+    assert!(rust.contains("rsscript_runtime::process_run(&\"printf\".to_string(),"));
+    assert!(rust.contains("rsscript_runtime::process_run_timeout(&\"printf\".to_string(),"));
+    assert!(rust.contains("rsscript_runtime::log_error(&\"p1\".to_string());"));
 }
 
 #[test]
@@ -1409,6 +1645,50 @@ async fn fetch_status(url: read Url) -> Result<Int, HttpError> {
         rust.contains("Ok(rsscript_runtime::http_response_status(&response))"),
         "response helpers should still map through runtime hooks, got:\n{rust}"
     );
+}
+
+#[test]
+fn rust_lowering_maps_agent_async_io_helpers() {
+    let source = r#"
+features: async, native, local
+
+async fn call_agent(url: read Url) -> Result<String, HttpError> {
+    let fields = List<String>.new()
+    List.push(list: mut fields, value: read Json.string_field(name: read "input", value: read "hello"))
+    List.push(list: mut fields, value: read Json.int_field(name: read "max_steps", value: 2))
+    List.push(list: mut fields, value: read Json.bool_field(name: read "stream", value: false))
+    let body = Json.object(fields: read fields)
+    local request = HttpRequest.json(url: read url, body: read body)
+    local authorized = HttpRequest.with_header(request: take request, name: read "Authorization", value: read "Bearer test_key")
+    local timed = HttpRequest.with_timeout(request: take authorized, timeout_ms: 5000)
+    local retried = HttpRequest.with_retry(request: take timed, attempts: 3, backoff_ms: 100)
+    let response = await Http.send_async(request: take retried)?
+    Log.trace(event: read "agent.response", message: read HttpResponse.text(response: read response))
+    let lines = HttpResponse.lines(response: read response)
+    return Ok(HttpResponse.text(response: read response))
+}
+
+async fn probe(url: read Url) -> Result<Int, HttpError> {
+    let response = await Http.get_timeout_async(url: read url, timeout_ms: 1000)?
+    let retried = await Http.get_retry_async(url: read url, timeout_ms: 1000, attempts: 2, backoff_ms: 10)?
+    return Ok(HttpResponse.status(response: read response) + HttpResponse.status(response: read retried))
+}
+"#;
+    let rust = lower_source_to_rust("agent-async-io.rss", source).expect("source should lower");
+
+    assert!(rust.contains("rsscript_runtime::json_string_field"));
+    assert!(rust.contains("rsscript_runtime::json_int_field"));
+    assert!(rust.contains("rsscript_runtime::json_bool_field"));
+    assert!(rust.contains("rsscript_runtime::json_object(&fields);"));
+    assert!(rust.contains("rsscript_runtime::http_request_json"));
+    assert!(rust.contains("rsscript_runtime::http_request_with_header"));
+    assert!(rust.contains("rsscript_runtime::http_request_with_timeout"));
+    assert!(rust.contains("rsscript_runtime::http_request_with_retry"));
+    assert!(rust.contains("rsscript_runtime::http_send_async"));
+    assert!(rust.contains("rsscript_runtime::http_get_timeout_async"));
+    assert!(rust.contains("rsscript_runtime::http_get_retry_async"));
+    assert!(rust.contains("rsscript_runtime::http_response_lines"));
+    assert!(rust.contains("rsscript_runtime::log_trace"));
 }
 
 #[test]
@@ -5246,6 +5526,48 @@ async fn run() -> Result<Unit, TimerError> {
     assert!(
         lowered.contains("Ok::<(), rsscript_runtime::TimerError>(())"),
         "task_group pending boundary should expose a Result<Unit, E> for `?`, got:\n{lowered}"
+    );
+}
+
+#[test]
+fn async_loop_preserves_statements_before_await_pending() {
+    let source = r#"
+features: async
+
+async fn run(url: read Url) -> Result<Unit, HttpError> {
+    let mut step = 0
+    while step < 2 {
+        let body = Json.encode(value: read {
+            "step": step,
+        })
+        let response = await Http.post_json_bearer_retry_async(
+            url: read url,
+            body: read body,
+            token: read "test_key",
+            timeout_ms: 1000,
+            attempts: 1,
+            backoff_ms: 0,
+        )?
+        Log.write(message: read HttpResponse.text(response: read response))
+        step = step + 1
+    }
+    return Ok(Unit)
+}
+"#;
+    let lowered =
+        lower_source_to_rust("async-loop-prefix.rss", source).expect("source should lower");
+
+    assert!(
+        lowered.contains("let body = rsscript_runtime::json_object"),
+        "async loop should emit statements before the await inside the poll loop, got:\n{lowered}"
+    );
+    assert!(
+        lowered.contains("rsscript_runtime::http_post_json_bearer_retry_async(&url, &body"),
+        "await pending should be constructed after the per-iteration body binding, got:\n{lowered}"
+    );
+    assert!(
+        !lowered.contains("cannot find value") && !lowered.contains("&request_body"),
+        "async loop lowering should not reference a dropped pre-await binding, got:\n{lowered}"
     );
 }
 

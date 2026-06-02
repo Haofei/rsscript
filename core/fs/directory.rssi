@@ -15,6 +15,12 @@ pub native fn Directory.create_all(path: read Path) -> Result<Unit, FileError>
 pub native fn Directory.list_files(path: read Path) -> Result<fresh List<String>, FileError>
     effects(native)
 
+pub native fn Directory.list_paths(path: read Path) -> Result<fresh List<Path>, FileError>
+    effects(native)
+
+pub native fn Directory.create(path: read Path) -> Result<Unit, FileError>
+    effects(native)
+
 pub native fn Directory.remove_file(path: read Path) -> Result<Unit, FileError>
     effects(native)
 

@@ -1,0 +1,47 @@
+features: async
+
+async fn main() -> Result<Unit, HttpError> {
+    let config = agent_config_from_env()
+    let task = agent_task_from_env()
+    let mut state = AgentState.new(task: read task)
+
+    Log.write(message: read event_json(kind: read "turn.started", message: read "code agent turn"))
+
+    while AgentState.can_continue(state: read state, max_steps: config.max_steps) {
+        let request_body = build_model_request(config: read config, state: read state)
+        let http = await Http.post_json_bearer_retry_async(
+            url: read config.endpoint,
+            body: read request_body,
+            token: read config.api_key,
+            timeout_ms: config.request_timeout_ms,
+            attempts: config.max_attempts,
+            backoff_ms: config.backoff_ms,
+        )?
+
+        let response = HttpResponse.text(response: read http)
+
+        if HttpResponse.is_success(response: read http) == false {
+            Log.error(message: read String.concat(left: read "agent HTTP status ", right: read String.from_int(value: HttpResponse.status(response: read http))))
+            Log.write(message: read event_json(kind: read "turn.failed", message: read response))
+            state.finished = true
+        } else {
+            Log.write(message: read event_json(kind: read "agent.response", message: read response))
+
+            let tool_result = execute_tool_calls(response: read response, transcript: read state.transcript, config: read config)
+            if tool_result.called_tool == false {
+                let content = response_content(response: read response)
+                Log.write(message: read event_json(kind: read "turn.completed", message: read content))
+                Log.write(message: read content)
+                state.finished = true
+            } else {
+                state.transcript = tool_result.transcript
+                state.step = state.step + 1
+                if state.step >= config.max_steps {
+                    Log.write(message: read event_json(kind: read "turn.budget_exhausted", message: read "stopped before completion: step budget exhausted"))
+                }
+            }
+        }
+    }
+
+    return Ok(Unit)
+}

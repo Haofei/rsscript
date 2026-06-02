@@ -288,6 +288,16 @@ pub enum HirExpr {
         value: String,
         span: Span,
     },
+    ObjectLiteral {
+        fields: Vec<HirObjectLiteralField>,
+        type_name: Option<String>,
+        span: Span,
+    },
+    ArrayLiteral {
+        items: Vec<HirExpr>,
+        type_name: Option<String>,
+        span: Span,
+    },
     Binary {
         op: BinaryOp,
         left: Box<HirExpr>,
@@ -353,6 +363,13 @@ pub enum HirExpr {
         span: Span,
     },
     Unknown(Span),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirObjectLiteralField {
+    pub name: String,
+    pub value: HirExpr,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1219,6 +1236,26 @@ fn lower_hir_expr(
             value: value.clone(),
             span: span.clone(),
         },
+        Expr::ObjectLiteral { fields, span } => HirExpr::ObjectLiteral {
+            fields: fields
+                .iter()
+                .map(|field| HirObjectLiteralField {
+                    name: field.name.clone(),
+                    value: lower_hir_expr(hir, function_name, &field.value, value_types),
+                    span: field.span.clone(),
+                })
+                .collect(),
+            type_name: infer_hir_expr_type(hir, expr, value_types),
+            span: span.clone(),
+        },
+        Expr::ArrayLiteral { items, span } => HirExpr::ArrayLiteral {
+            items: items
+                .iter()
+                .map(|item| lower_hir_expr(hir, function_name, item, value_types))
+                .collect(),
+            type_name: infer_hir_expr_type(hir, expr, value_types),
+            span: span.clone(),
+        },
         Expr::Binary {
             op,
             left,
@@ -1837,7 +1874,12 @@ fn collect_body_facts_in_expr(
                 collect_body_facts_in_block(hir, function_name, &arm.body, value_types, facts);
             }
         }
-        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        Expr::ObjectLiteral { .. }
+        | Expr::ArrayLiteral { .. }
+        | Expr::Ident(_, _)
+        | Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::Unknown(_) => {}
     }
 }
 
@@ -1976,6 +2018,14 @@ pub(crate) fn infer_hir_expr_type(
         Expr::Index { .. } => None,
         Expr::Number(_, _) => Some("Int".to_string()),
         Expr::String(_, _) => Some("String".to_string()),
+        Expr::ObjectLiteral { .. } => Some("JsonLiteral".to_string()),
+        Expr::ArrayLiteral { items, .. } => {
+            let item_type = items
+                .first()
+                .and_then(|item| infer_hir_expr_type(hir, item, value_types))
+                .unwrap_or_else(|| "?".to_string());
+            Some(format!("List<{item_type}>"))
+        }
         Expr::Closure { .. } | Expr::Unknown(_) => None,
     }
 }
@@ -2164,6 +2214,9 @@ fn infer_arg_expr_type(
                 format!("noescape Fn({params}) -> {return_type}")
             }),
         Expr::Match { .. } => infer_hir_expr_type(hir, expr, value_types),
+        Expr::ObjectLiteral { .. } | Expr::ArrayLiteral { .. } => {
+            infer_hir_expr_type(hir, expr, value_types)
+        }
         Expr::Field { .. }
         | Expr::Index { .. }
         | Expr::Binary { .. }
@@ -2480,6 +2533,7 @@ fn classify_return_expr(hir: &Hir, expr: &Expr) -> HirReturnProof {
         Expr::Match { arms, .. } => arms.first().map_or(HirReturnProof::Unknown, |arm| {
             classify_block_return_expr(hir, &arm.body)
         }),
+        Expr::ObjectLiteral { .. } | Expr::ArrayLiteral { .. } => HirReturnProof::Unknown,
         Expr::Field { .. }
         | Expr::Index { .. }
         | Expr::Binary { .. }

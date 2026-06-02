@@ -1,0 +1,26 @@
+fn rss_read_file_check_result(path_text: read String) -> String {
+    let path = Path.from_string(value: read path_text)
+    match File.read_string(path: read path) {
+        Ok(text) => {
+            let has_path = String.contains(value: read text, needle: read "Path.from_string")
+            let has_read = String.contains(value: read text, needle: read "File.read_string")
+            let has_result = String.contains(value: read text, needle: read "Result<String, FileError>")
+            let ok: Bool = has_path && has_read && has_result
+            return Json.encode(value: read {
+                "ok": ok,
+                "path": path_text,
+                "has_path_from_string": has_path,
+                "has_file_read_string": has_read,
+                "has_result_type": has_result,
+                "bytes": String.len(value: read text),
+            })
+        }
+        Err(error) => {
+            return Json.encode(value: read {
+                "ok": false,
+                "path": path_text,
+                "error": FileError.message(error: read error),
+            })
+        }
+    }
+}

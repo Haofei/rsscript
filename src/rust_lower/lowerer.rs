@@ -1278,7 +1278,8 @@ impl<'a> RustLowerer<'a> {
         stmt: &crate::syntax::ast::LoopStmt,
         error_ty: &str,
     ) -> Option<AsyncTaskGroupBoundary> {
-        let (await_stmt, rest) = split_loop_body_at_first_await(&stmt.body.statements)?;
+        let (before_await, await_stmt, rest) =
+            split_loop_body_at_first_await(&stmt.body.statements)?;
         if rest.iter().any(stmt_contains_await) {
             return None;
         }
@@ -1304,6 +1305,10 @@ impl<'a> RustLowerer<'a> {
             }
             _ => return None,
         };
+        let mut before_body = String::new();
+        for statement in before_await {
+            self.lower_stmt(statement, &mut before_body, 7);
+        }
         let mut rest_body = String::new();
         for statement in rest {
             self.lower_stmt(statement, &mut rest_body, 4);
@@ -1332,6 +1337,7 @@ impl<'a> RustLowerer<'a> {
                             return rsscript_runtime::AsyncPoll::Ready(Ok::<(), {error_ty}>(()));
                         }}
                         if {prefix}_pending.is_none() {{
+{before_body}
                             {prefix}_pending = Some({pending_expr});
                         }}
                         match rsscript_runtime::Pending::poll(
@@ -1885,6 +1891,31 @@ impl<'a> RustLowerer<'a> {
                     self.record_block_source_map(&arm.body, generated);
                 }
             }
+            Expr::ObjectLiteral { fields, span } => {
+                self.source_map.push(RustSourceMapEntry {
+                    kind: "object_literal".to_string(),
+                    source: span.clone(),
+                    generated: generated.clone(),
+                });
+                for field in fields {
+                    self.source_map.push(RustSourceMapEntry {
+                        kind: "object_literal_field".to_string(),
+                        source: field.span.clone(),
+                        generated: generated.clone(),
+                    });
+                    self.record_expr_source_map(&field.value, generated);
+                }
+            }
+            Expr::ArrayLiteral { items, span } => {
+                self.source_map.push(RustSourceMapEntry {
+                    kind: "array_literal".to_string(),
+                    source: span.clone(),
+                    generated: generated.clone(),
+                });
+                for item in items {
+                    self.record_expr_source_map(item, generated);
+                }
+            }
             Expr::Ident(_, span) => self.source_map.push(RustSourceMapEntry {
                 kind: "ident".to_string(),
                 source: span.clone(),
@@ -1939,6 +1970,15 @@ impl<'a> RustLowerer<'a> {
             }
             Expr::Number(value, _) => value.clone(),
             Expr::String(value, _) => format!("{:?}.to_string()", decode_string_token(value)),
+            Expr::ObjectLiteral { .. } => self.lower_json_value(expr),
+            Expr::ArrayLiteral { items, .. } => {
+                let items = items
+                    .iter()
+                    .map(|item| self.lower_owned_expr(item))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("vec![{items}]")
+            }
             Expr::Binary {
                 op, left, right, ..
             } => {
@@ -2001,6 +2041,13 @@ impl<'a> RustLowerer<'a> {
                 format!("{}[{}]", self.lower_expr(base), self.lower_expr(index))
             }
             Expr::Call { callee, args, span } => {
+                if is_json_encode_callee(callee)
+                    && let Some(value_arg) = args
+                        .iter()
+                        .find(|arg| arg.name.as_deref() == Some("value") || arg.name.is_none())
+                {
+                    return self.lower_json_value(&value_arg.value);
+                }
                 // `Task.cancellation_token()` resolves to the enclosing
                 // task_group's token, or a never-cancelled token outside one.
                 if let Callee::Qualified { namespace, name } = callee
@@ -2513,7 +2560,51 @@ impl<'a> RustLowerer<'a> {
 
     fn infer_expr_type(&self, expr: &Expr) -> Option<TypeRef> {
         match expr {
+            Expr::Ident(name, span) if name == "true" || name == "false" => Some(TypeRef {
+                name: "Bool".to_string(),
+                args: Vec::new(),
+                malformed_arg_spans: Vec::new(),
+                is_fresh: false,
+                is_noescape: false,
+                is_owned: false,
+                fn_params: Vec::new(),
+                fn_return: None,
+                span: span.clone(),
+            }),
+            Expr::Ident(name, span) if name == "null" => Some(TypeRef {
+                name: "JsonLiteral".to_string(),
+                args: Vec::new(),
+                malformed_arg_spans: Vec::new(),
+                is_fresh: false,
+                is_noescape: false,
+                is_owned: false,
+                fn_params: Vec::new(),
+                fn_return: None,
+                span: span.clone(),
+            }),
             Expr::Ident(name, _) => self.value_types.get(name).cloned(),
+            Expr::Number(_, span) => Some(TypeRef {
+                name: "Int".to_string(),
+                args: Vec::new(),
+                malformed_arg_spans: Vec::new(),
+                is_fresh: false,
+                is_noescape: false,
+                is_owned: false,
+                fn_params: Vec::new(),
+                fn_return: None,
+                span: span.clone(),
+            }),
+            Expr::String(_, span) => Some(TypeRef {
+                name: "String".to_string(),
+                args: Vec::new(),
+                malformed_arg_spans: Vec::new(),
+                is_fresh: false,
+                is_noescape: false,
+                is_owned: false,
+                fn_params: Vec::new(),
+                fn_return: None,
+                span: span.clone(),
+            }),
             Expr::Field { base, name, span } => {
                 let base_ty = self.infer_expr_type(base)?;
                 self.field_type(&base_ty.name, name).map(|ty| TypeRef {
@@ -2577,6 +2668,31 @@ impl<'a> RustLowerer<'a> {
                 .function_return_types
                 .get(&native_boundary_callee_key(callee))
                 .cloned(),
+            Expr::ObjectLiteral { span, .. } => Some(TypeRef {
+                name: "JsonLiteral".to_string(),
+                args: Vec::new(),
+                malformed_arg_spans: Vec::new(),
+                is_fresh: false,
+                is_noescape: false,
+                is_owned: false,
+                fn_params: Vec::new(),
+                fn_return: None,
+                span: span.clone(),
+            }),
+            Expr::ArrayLiteral { items, span } => {
+                let item_ty = items.first().and_then(|item| self.infer_expr_type(item));
+                Some(TypeRef {
+                    name: "List".to_string(),
+                    args: item_ty.into_iter().collect(),
+                    malformed_arg_spans: Vec::new(),
+                    is_fresh: false,
+                    is_noescape: false,
+                    is_owned: false,
+                    fn_params: Vec::new(),
+                    fn_return: None,
+                    span: span.clone(),
+                })
+            }
             Expr::Effect { value, .. } => self.infer_expr_type(value),
             Expr::Manage { value, .. } => self.infer_expr_type(value),
             Expr::Try { value, .. } => self
@@ -2642,6 +2758,81 @@ impl<'a> RustLowerer<'a> {
                 format!("{}.as_str()", self.lower_expr(expr))
             }
             _ => self.lower_expr(expr),
+        }
+    }
+
+    fn lower_json_value(&mut self, expr: &Expr) -> String {
+        match expr {
+            Expr::Effect { value, .. } | Expr::Manage { value, .. } => self.lower_json_value(value),
+            Expr::ObjectLiteral { fields, .. } => {
+                let fields = fields
+                    .iter()
+                    .map(|field| self.lower_json_field(&field.name, &field.value))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("rsscript_runtime::json_object(&vec![{fields}])")
+            }
+            Expr::ArrayLiteral { items, .. } => {
+                let items = items
+                    .iter()
+                    .map(|item| self.lower_json_array_item(item))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("rsscript_runtime::json_array(&vec![{items}])")
+            }
+            _ => self.lower_json_array_item(expr),
+        }
+    }
+
+    fn lower_json_field(&mut self, name: &str, value: &Expr) -> String {
+        let key = format!("{:?}.to_string()", decode_string_token(name));
+        match value {
+            Expr::ObjectLiteral { .. } | Expr::ArrayLiteral { .. } => {
+                let lowered = self.lower_json_value(value);
+                format!("rsscript_runtime::json_raw_field(&{key}, &{lowered})")
+            }
+            Expr::Ident(name, _) if name == "true" || name == "false" => {
+                format!("rsscript_runtime::json_bool_field(&{key}, {name})")
+            }
+            Expr::Ident(name, _) if name == "null" => {
+                format!("rsscript_runtime::json_raw_field(&{key}, \"null\")")
+            }
+            _ => match self.infer_expr_type(value).map(|ty| ty.name) {
+                Some(ty) if ty == "Int" => {
+                    format!(
+                        "rsscript_runtime::json_int_field(&{key}, {})",
+                        self.lower_expr(value)
+                    )
+                }
+                Some(ty) if ty == "Bool" => format!(
+                    "rsscript_runtime::json_bool_field(&{key}, {})",
+                    self.lower_expr(value)
+                ),
+                Some(ty) if ty == "JsonLiteral" => {
+                    let lowered = self.lower_expr(value);
+                    format!("rsscript_runtime::json_raw_field(&{key}, &{lowered})")
+                }
+                _ => format!(
+                    "rsscript_runtime::json_string_field(&{key}, &{})",
+                    self.lower_expr(value)
+                ),
+            },
+        }
+    }
+
+    fn lower_json_array_item(&mut self, value: &Expr) -> String {
+        match value {
+            Expr::ObjectLiteral { .. } | Expr::ArrayLiteral { .. } => self.lower_json_value(value),
+            Expr::Ident(name, _) if name == "true" || name == "false" => name.clone(),
+            Expr::Ident(name, _) if name == "null" => "null".to_string(),
+            _ => match self.infer_expr_type(value).map(|ty| ty.name) {
+                Some(ty) if ty == "Int" || ty == "Bool" => self.lower_expr(value),
+                Some(ty) if ty == "JsonLiteral" => self.lower_expr(value),
+                _ => format!(
+                    "rsscript_runtime::json_quote_string(&{})",
+                    self.lower_expr(value)
+                ),
+            },
         }
     }
 
@@ -2780,7 +2971,9 @@ impl<'a> RustLowerer<'a> {
             "File" => "rsscript_runtime::File".to_string(),
             "FileMetadata" => "rsscript_runtime::FileMetadata".to_string(),
             "FileError" | "IOError" => "std::io::Error".to_string(),
+            "ProcessOutput" => "rsscript_runtime::ProcessOutput".to_string(),
             "Request" => "rsscript_runtime::Request".to_string(),
+            "HttpRequest" => "rsscript_runtime::HttpRequest".to_string(),
             "Response" => "rsscript_runtime::Response".to_string(),
             "HttpResponse" => "rsscript_runtime::Response".to_string(),
             "HttpError" => "rsscript_runtime::HttpError".to_string(),
@@ -3084,14 +3277,14 @@ fn block_contains_await(block: &Block) -> bool {
     block.statements.iter().any(stmt_contains_await)
 }
 
-fn split_loop_body_at_first_await(statements: &[Stmt]) -> Option<(&Stmt, &[Stmt])> {
+fn split_loop_body_at_first_await(statements: &[Stmt]) -> Option<(&[Stmt], &Stmt, &[Stmt])> {
     for (index, statement) in statements.iter().enumerate() {
         match statement {
             Stmt::Let(stmt) if stmt.value.as_ref().and_then(async_await_inner).is_some() => {
-                return Some((statement, &statements[index + 1..]));
+                return Some((&statements[..index], statement, &statements[index + 1..]));
             }
             Stmt::Expr(expr) if async_await_inner(expr).is_some() => {
-                return Some((statement, &statements[index + 1..]));
+                return Some((&statements[..index], statement, &statements[index + 1..]));
             }
             other if stmt_contains_await(other) => return None,
             _ => {}
@@ -3115,8 +3308,20 @@ fn expr_contains_await(expr: &Expr) -> bool {
         Expr::Match { value, arms, .. } => {
             expr_contains_await(value) || arms.iter().any(|arm| block_contains_await(&arm.body))
         }
+        Expr::ObjectLiteral { fields, .. } => {
+            fields.iter().any(|field| expr_contains_await(&field.value))
+        }
+        Expr::ArrayLiteral { items, .. } => items.iter().any(expr_contains_await),
         Expr::Ident(..) | Expr::Number(..) | Expr::String(..) | Expr::Unknown(_) => false,
     }
+}
+
+fn is_json_encode_callee(callee: &Callee) -> bool {
+    matches!(
+        callee,
+        Callee::Qualified { namespace, name }
+            if type_root_name(namespace) == "Json" && type_root_name(name) == "encode"
+    )
 }
 
 fn generated_line_count(generated: &str) -> usize {

@@ -102,6 +102,10 @@ pub fn list_contains<T: Clone>(list: &[T], mut predicate: impl FnMut(T) -> bool)
     list.iter().any(|item| predicate(item.clone()))
 }
 
+pub fn list_contains_value<T: PartialEq>(list: &[T], value: &T) -> bool {
+    list.contains(value)
+}
+
 pub fn list_is_empty<T>(list: &[T]) -> bool {
     list.is_empty()
 }
@@ -159,6 +163,11 @@ pub fn list_join(list: &[String], separator: &str) -> String {
 
 pub fn list_last<T: Clone>(list: &[T]) -> Option<T> {
     list.last().cloned()
+}
+
+pub fn list_remove_at<T>(list: &mut Vec<T>, index: i64) -> Option<T> {
+    let index = usize::try_from(index).ok()?;
+    (index < list.len()).then(|| list.remove(index))
 }
 
 pub fn list_partition<T: Clone>(list: &[T], mut predicate: impl FnMut(T) -> bool) -> Vec<Vec<T>> {
@@ -230,8 +239,20 @@ pub fn map_get<K: Eq + Hash, V: Clone>(map: &HashMap<K, V>, key: &K) -> Option<V
     map.get(key).cloned()
 }
 
+pub fn map_get_or_default<K: Eq + Hash, V: Clone>(map: &HashMap<K, V>, key: &K, default: &V) -> V {
+    map.get(key).cloned().unwrap_or_else(|| default.clone())
+}
+
 pub fn map_insert<K: Eq + Hash + Clone, V: Clone>(map: &mut HashMap<K, V>, key: &K, value: &V) {
     map.insert(key.clone(), value.clone());
+}
+
+pub fn map_insert_old<K: Eq + Hash + Clone, V: Clone>(
+    map: &mut HashMap<K, V>,
+    key: &K,
+    value: &V,
+) -> Option<V> {
+    map.insert(key.clone(), value.clone())
 }
 
 pub fn map_remove<K: Eq + Hash, V>(map: &mut HashMap<K, V>, key: &K) -> Option<V> {
@@ -341,6 +362,20 @@ pub fn option_ok_or<T: Clone, E: Clone>(value: &Option<T>, error: &E) -> Result<
     value.as_ref().cloned().ok_or_else(|| error.clone())
 }
 
+pub fn option_or<T: Clone>(value: &Option<T>, fallback: &Option<T>) -> Option<T> {
+    value.clone().or_else(|| fallback.clone())
+}
+
+pub fn option_filter<T: Clone>(
+    value: &Option<T>,
+    mut predicate: impl FnMut(T) -> bool,
+) -> Option<T> {
+    value
+        .as_ref()
+        .cloned()
+        .and_then(|item| predicate(item.clone()).then_some(item))
+}
+
 pub fn option_unwrap_or<T: Clone>(value: &Option<T>, default: &T) -> T {
     value.as_ref().cloned().unwrap_or_else(|| default.clone())
 }
@@ -401,10 +436,27 @@ pub fn result_ok<T: Clone, E>(value: &Result<T, E>) -> Option<T> {
     }
 }
 
+pub fn result_err<T, E: Clone>(value: &Result<T, E>) -> Option<E> {
+    match value {
+        Ok(_) => None,
+        Err(error) => Some(error.clone()),
+    }
+}
+
 pub fn result_unwrap_or<T: Clone, E>(value: &Result<T, E>, default: &T) -> T {
     match value {
         Ok(ok) => ok.clone(),
         Err(_) => default.clone(),
+    }
+}
+
+pub fn result_unwrap_or_else<T: Clone, E: Clone>(
+    value: &Result<T, E>,
+    mut fallback: impl FnMut(E) -> T,
+) -> T {
+    match value {
+        Ok(ok) => ok.clone(),
+        Err(error) => fallback(error.clone()),
     }
 }
 
@@ -446,8 +498,32 @@ pub fn set_for_each<T: Clone>(set: &HashSet<T>, mut callback: impl FnMut(T)) {
     }
 }
 
+pub fn set_union<T: Eq + Hash + Clone>(left: &HashSet<T>, right: &HashSet<T>) -> HashSet<T> {
+    left.union(right).cloned().collect()
+}
+
+pub fn set_intersection<T: Eq + Hash + Clone>(left: &HashSet<T>, right: &HashSet<T>) -> HashSet<T> {
+    left.intersection(right).cloned().collect()
+}
+
+pub fn set_difference<T: Eq + Hash + Clone>(left: &HashSet<T>, right: &HashSet<T>) -> HashSet<T> {
+    left.difference(right).cloned().collect()
+}
+
+pub fn set_is_subset<T: Eq + Hash>(left: &HashSet<T>, right: &HashSet<T>) -> bool {
+    left.is_subset(right)
+}
+
 pub fn buffer_new(size: i64) -> Vec<u8> {
     Vec::with_capacity(size.max(0) as usize)
+}
+
+pub fn buffer_len(buffer: &[u8]) -> i64 {
+    buffer.len() as i64
+}
+
+pub fn buffer_is_empty(buffer: &[u8]) -> bool {
+    buffer.is_empty()
 }
 
 pub fn buffer_clear(buffer: &mut Vec<u8>) {
@@ -464,6 +540,25 @@ pub fn bytes_from_string(value: &str) -> Vec<u8> {
 
 pub fn bytes_from_buffer(buffer: &[u8]) -> Vec<u8> {
     buffer.to_vec()
+}
+
+pub fn bytes_len(value: &[u8]) -> i64 {
+    value.len() as i64
+}
+
+pub fn bytes_is_empty(value: &[u8]) -> bool {
+    value.is_empty()
+}
+
+pub fn bytes_concat(left: &[u8], right: &[u8]) -> Vec<u8> {
+    let mut result = Vec::with_capacity(left.len() + right.len());
+    result.extend_from_slice(left);
+    result.extend_from_slice(right);
+    result
+}
+
+pub fn bytes_slice(value: &[u8], start: i64, len: i64) -> Vec<u8> {
+    bytes_view_range(value, start, len).to_vec()
 }
 
 pub fn bytes_view(value: &[u8], start: i64, len: i64) -> &[u8] {

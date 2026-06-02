@@ -20,10 +20,16 @@ pub fn File.read_string(path: read Path) -> Result<String, FileError>
 pub fn File.write_bytes(path: read Path, data: read Bytes) -> Result<Unit, FileError>
     effects(native)
 
+pub fn File.append_bytes(path: read Path, data: read Bytes) -> Result<Unit, FileError>
+    effects(native)
+
 pub fn File.write_string_to_path(path: read Path, text: read String) -> Result<Unit, FileError>
     effects(native)
 
 pub fn File.append_string(path: read Path, text: read String) -> Result<Unit, FileError>
+    effects(native)
+
+pub fn File.remove(path: read Path) -> Result<Unit, FileError>
     effects(native)
 
 pub fn File.read_all(file: mut File) -> Result<fresh Bytes, FileError>

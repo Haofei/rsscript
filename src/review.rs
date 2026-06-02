@@ -1101,7 +1101,12 @@ fn collect_review_map_local_closure_bindings_expr(expr: &Expr, bindings: &mut BT
                 collect_review_map_local_closure_bindings_block(&arm.body, bindings);
             }
         }
-        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        Expr::ObjectLiteral { .. }
+        | Expr::ArrayLiteral { .. }
+        | Expr::Ident(_, _)
+        | Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::Unknown(_) => {}
     }
 }
 
@@ -1529,7 +1534,12 @@ fn collect_review_map_facts_expr(
             local_closure_bindings,
             facts,
         ),
-        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        Expr::ObjectLiteral { .. }
+        | Expr::ArrayLiteral { .. }
+        | Expr::Ident(_, _)
+        | Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::Unknown(_) => {}
     }
 }
 
@@ -1607,7 +1617,11 @@ fn collect_spawn_capture_names(expr: &Expr, captures: &mut BTreeSet<String>) {
                 collect_spawn_capture_names_from_stmt(statement, captures);
             }
         }
-        Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        Expr::ObjectLiteral { .. }
+        | Expr::ArrayLiteral { .. }
+        | Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::Unknown(_) => {}
     }
 }
 
@@ -1705,6 +1719,8 @@ fn spawn_capture_path(expr: &Expr) -> Option<String> {
         }
         Expr::Effect { value, .. } | Expr::Try { value, .. } => spawn_capture_path(value),
         Expr::Manage { .. }
+        | Expr::ObjectLiteral { .. }
+        | Expr::ArrayLiteral { .. }
         | Expr::Spawn { .. }
         | Expr::Await { .. }
         | Expr::Index { .. }
@@ -1861,7 +1877,9 @@ fn collect_review_map_hir_facts_expr(
                 collect_review_map_hir_facts_block(&arm.body, local_bindings, facts);
             }
         }
-        HirExpr::Ident { .. }
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}
@@ -2173,6 +2191,8 @@ fn collect_managed_closure_capture_names_expr(
             }
         }
         HirExpr::Field { .. }
+        | HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -2224,6 +2244,8 @@ fn hir_place_path_root(expr: &HirExpr) -> Option<&str> {
         | HirExpr::Await { value, .. }
         | HirExpr::Try { value, .. } => hir_place_path_root(value),
         HirExpr::Binary { .. }
+        | HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
         | HirExpr::Call { .. }
         | HirExpr::Closure { .. }
         | HirExpr::Match { .. }
@@ -2247,6 +2269,8 @@ fn hir_place_path_crosses_handle_field(expr: &HirExpr) -> bool {
         }
         HirExpr::Ident { .. } => false,
         HirExpr::Binary { .. }
+        | HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
         | HirExpr::Call { .. }
         | HirExpr::Closure { .. }
         | HirExpr::Match { .. }
@@ -3357,7 +3381,12 @@ fn collect_boundary_expr(expr: &Expr, path: &str, boundary: &mut BoundarySig) {
                 collect_boundary_block(&arm.body, &format!("{path}.arm{}", index + 1), boundary);
             }
         }
-        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        Expr::ObjectLiteral { .. }
+        | Expr::ArrayLiteral { .. }
+        | Expr::Ident(_, _)
+        | Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::Unknown(_) => {}
     }
 }
 
@@ -3384,6 +3413,7 @@ fn boundary_expr_subject(expr: &Expr) -> Option<String> {
         | Expr::Try { value, .. } => boundary_expr_subject(value),
         Expr::Field { name, .. } => Some(format!(".{name}")),
         Expr::Index { .. } => None,
+        Expr::ObjectLiteral { .. } | Expr::ArrayLiteral { .. } => None,
         Expr::Call { .. }
         | Expr::Binary { .. }
         | Expr::Closure { .. }

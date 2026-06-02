@@ -8,6 +8,17 @@ pub fn args_count() -> i64 {
     std::env::args().skip(1).count() as i64
 }
 
+pub fn args_all() -> Vec<String> {
+    std::env::args().skip(1).collect()
+}
+
+pub fn args_get(index: i64) -> Option<String> {
+    if index < 0 {
+        return None;
+    }
+    std::env::args().skip(1).nth(index as usize)
+}
+
 pub fn args_get_or_default(index: i64, default: &str) -> String {
     if index < 0 {
         return default.to_string();
@@ -16,6 +27,28 @@ pub fn args_get_or_default(index: i64, default: &str) -> String {
         .skip(1)
         .nth(index as usize)
         .unwrap_or_else(|| default.to_string())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessOutput {
+    pub status: i64,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+pub fn process_run(command: &str, args: &[String]) -> Result<ProcessOutput, String> {
+    let mut child = std::process::Command::new(command);
+    child.args(args);
+    if std::env::var_os("RSSCRIPT_RAMDISK_PATH").is_none()
+        && let Some(path) = default_ramdisk_root_dir()
+    {
+        child.env("RSSCRIPT_RAMDISK_PATH", path);
+    }
+
+    let output = child
+        .output()
+        .map_err(|error| format!("failed to run `{command}`: {error}"))?;
+    Ok(process_output(command, output))
 }
 
 pub fn process_run_stdout(command: &str, args: &[String]) -> Result<String, String> {
@@ -80,6 +113,68 @@ pub fn process_run_stdout_timeout(
             ));
         }
         std::thread::sleep((deadline - now).min(Duration::from_millis(10)));
+    }
+}
+
+pub fn process_run_timeout(
+    command: &str,
+    args: &[String],
+    timeout_ms: i64,
+) -> Result<ProcessOutput, String> {
+    if timeout_ms <= 0 {
+        return process_run(command, args);
+    }
+
+    let timeout_ms = u64::try_from(timeout_ms).unwrap_or(0);
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let mut child = std::process::Command::new(command);
+    child
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    if std::env::var_os("RSSCRIPT_RAMDISK_PATH").is_none()
+        && let Some(path) = default_ramdisk_root_dir()
+    {
+        child.env("RSSCRIPT_RAMDISK_PATH", path);
+    }
+    let mut child = child
+        .spawn()
+        .map_err(|error| format!("failed to run `{command}`: {error}"))?;
+    loop {
+        if child
+            .try_wait()
+            .map_err(|error| format!("failed to poll `{command}`: {error}"))?
+            .is_some()
+        {
+            let output = child
+                .wait_with_output()
+                .map_err(|error| format!("failed to collect `{command}` output: {error}"))?;
+            return Ok(process_output(command, output));
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            let _ = child.kill();
+            let output = child
+                .wait_with_output()
+                .map_err(|error| format!("failed to collect `{command}` output: {error}"))?;
+            return Err(format!(
+                "`{command}` timed out after {timeout_ms}ms: {}",
+                process_output_details(&output)
+            ));
+        }
+        std::thread::sleep((deadline - now).min(Duration::from_millis(10)));
+    }
+}
+
+fn process_output(command: &str, output: std::process::Output) -> ProcessOutput {
+    let status = output.status.code().map(i64::from).unwrap_or(-1);
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let _ = command;
+    ProcessOutput {
+        status,
+        stdout,
+        stderr,
     }
 }
 
@@ -272,4 +367,13 @@ fn default_ramdisk_root_dir() -> Option<std::path::PathBuf> {
 
 pub fn log_write(message: &str) {
     println!("{message}");
+}
+
+pub fn log_error(message: &str) {
+    eprintln!("{message}");
+}
+
+pub fn log_trace(event: &str, message: &str) {
+    tracing::info!(event, message, "rsscript_trace");
+    println!("trace {event}: {message}");
 }

@@ -22,6 +22,18 @@ pub struct Response {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpRequest {
+    method: String,
+    url: String,
+    headers: Vec<(String, String)>,
+    content_type: Option<String>,
+    body: Option<String>,
+    timeout_ms: i64,
+    attempts: i64,
+    backoff_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigValue {
     name: String,
 }
@@ -418,7 +430,81 @@ pub fn http_get(url: &str) -> Result<Response, HttpError> {
 
 pub fn http_get_async(url: &str) -> NativeAsyncPending<Result<Response, HttpError>> {
     let url = url.to_string();
-    spawn_tokio_native(async move { http_request_async("GET", &url, None, None).await })
+    spawn_tokio_native(async move { http_request_async("GET", &url, Vec::new(), None, None).await })
+}
+
+pub fn http_request_json(url: &str, body: &str) -> HttpRequest {
+    http_request_new(
+        "POST",
+        url,
+        Some("application/json".to_string()),
+        Some(body.to_string()),
+    )
+}
+
+fn http_request_new(
+    method: &str,
+    url: &str,
+    content_type: Option<String>,
+    body: Option<String>,
+) -> HttpRequest {
+    HttpRequest {
+        method: method.to_string(),
+        url: url.to_string(),
+        headers: Vec::new(),
+        content_type,
+        body,
+        timeout_ms: 0,
+        attempts: 1,
+        backoff_ms: 0,
+    }
+}
+
+pub fn http_request_with_timeout(mut request: HttpRequest, timeout_ms: i64) -> HttpRequest {
+    request.timeout_ms = timeout_ms;
+    request
+}
+
+pub fn http_request_with_retry(
+    mut request: HttpRequest,
+    attempts: i64,
+    backoff_ms: i64,
+) -> HttpRequest {
+    request.attempts = attempts;
+    request.backoff_ms = backoff_ms;
+    request
+}
+
+pub fn http_request_with_header(mut request: HttpRequest, name: &str, value: &str) -> HttpRequest {
+    request.headers.push((name.to_string(), value.to_string()));
+    request
+}
+
+pub fn http_send_async(request: HttpRequest) -> NativeAsyncPending<Result<Response, HttpError>> {
+    spawn_tokio_native(async move { http_request_retry_async(request).await })
+}
+
+pub fn http_get_timeout_async(
+    url: &str,
+    timeout_ms: i64,
+) -> NativeAsyncPending<Result<Response, HttpError>> {
+    let url = url.to_string();
+    spawn_tokio_native(async move {
+        http_request_timeout_async("GET", &url, Vec::new(), None, None, timeout_ms).await
+    })
+}
+
+pub fn http_get_retry_async(
+    url: &str,
+    timeout_ms: i64,
+    attempts: i64,
+    backoff_ms: i64,
+) -> NativeAsyncPending<Result<Response, HttpError>> {
+    let mut request = http_request_new("GET", url, None, None);
+    request.timeout_ms = timeout_ms;
+    request.attempts = attempts;
+    request.backoff_ms = backoff_ms;
+    spawn_tokio_native(async move { http_request_retry_async(request).await })
 }
 
 pub fn http_post_json(url: &str, _body: &str) -> Result<Response, HttpError> {
@@ -434,8 +520,77 @@ pub fn http_post_json_async(
     let url = url.to_string();
     let body = body.to_string();
     spawn_tokio_native(async move {
-        http_request_async("POST", &url, Some("application/json"), Some(body)).await
+        http_request_async(
+            "POST",
+            &url,
+            Vec::new(),
+            Some("application/json"),
+            Some(body),
+        )
+        .await
     })
+}
+
+pub fn http_post_json_timeout_async(
+    url: &str,
+    body: &str,
+    timeout_ms: i64,
+) -> NativeAsyncPending<Result<Response, HttpError>> {
+    let url = url.to_string();
+    let body = body.to_string();
+    spawn_tokio_native(async move {
+        http_request_timeout_async(
+            "POST",
+            &url,
+            Vec::new(),
+            Some("application/json"),
+            Some(body),
+            timeout_ms,
+        )
+        .await
+    })
+}
+
+pub fn http_post_json_retry_async(
+    url: &str,
+    body: &str,
+    timeout_ms: i64,
+    attempts: i64,
+    backoff_ms: i64,
+) -> NativeAsyncPending<Result<Response, HttpError>> {
+    let mut request = http_request_new(
+        "POST",
+        url,
+        Some("application/json".to_string()),
+        Some(body.to_string()),
+    );
+    request.timeout_ms = timeout_ms;
+    request.attempts = attempts;
+    request.backoff_ms = backoff_ms;
+    spawn_tokio_native(async move { http_request_retry_async(request).await })
+}
+
+pub fn http_post_json_bearer_retry_async(
+    url: &str,
+    body: &str,
+    token: &str,
+    timeout_ms: i64,
+    attempts: i64,
+    backoff_ms: i64,
+) -> NativeAsyncPending<Result<Response, HttpError>> {
+    let mut request = http_request_new(
+        "POST",
+        url,
+        Some("application/json".to_string()),
+        Some(body.to_string()),
+    );
+    request
+        .headers
+        .push(("Authorization".to_string(), format!("Bearer {token}")));
+    request.timeout_ms = timeout_ms;
+    request.attempts = attempts;
+    request.backoff_ms = backoff_ms;
+    spawn_tokio_native(async move { http_request_retry_async(request).await })
 }
 
 pub fn http_post_form(url: &str, _body: &str) -> Result<Response, HttpError> {
@@ -454,6 +609,7 @@ pub fn http_post_form_async(
         http_request_async(
             "POST",
             &url,
+            Vec::new(),
             Some("application/x-www-form-urlencoded"),
             Some(body),
         )
@@ -464,6 +620,7 @@ pub fn http_post_form_async(
 async fn http_request_async(
     method: &str,
     url: &str,
+    headers: Vec<(String, String)>,
     content_type: Option<&str>,
     body: Option<String>,
 ) -> Result<Response, HttpError> {
@@ -472,6 +629,9 @@ async fn http_request_async(
         message: format!("invalid HTTP method `{method}`: {error}"),
     })?;
     let mut request = client.request(method, url);
+    for (name, value) in headers {
+        request = request.header(name, value);
+    }
     if let Some(content_type) = content_type {
         request = request.header(reqwest::header::CONTENT_TYPE, content_type);
     }
@@ -491,12 +651,73 @@ async fn http_request_async(
     })
 }
 
+async fn http_request_timeout_async(
+    method: &str,
+    url: &str,
+    headers: Vec<(String, String)>,
+    content_type: Option<&str>,
+    body: Option<String>,
+    timeout_ms: i64,
+) -> Result<Response, HttpError> {
+    if timeout_ms <= 0 {
+        return http_request_async(method, url, headers, content_type, body).await;
+    }
+    tokio::time::timeout(
+        std::time::Duration::from_millis(timeout_ms as u64),
+        http_request_async(method, url, headers, content_type, body),
+    )
+    .await
+    .map_err(|_| HttpError {
+        message: format!("HTTP request to {url} timed out after {timeout_ms}ms"),
+    })?
+}
+
+async fn http_request_retry_async(request: HttpRequest) -> Result<Response, HttpError> {
+    let attempts = request.attempts.max(1);
+    let backoff_ms = request.backoff_ms.max(0) as u64;
+    let mut last_error = None;
+    let mut last_response = None;
+    for attempt in 0..attempts {
+        match http_request_timeout_async(
+            &request.method,
+            &request.url,
+            request.headers.clone(),
+            request.content_type.as_deref(),
+            request.body.clone(),
+            request.timeout_ms,
+        )
+        .await
+        {
+            Ok(response) => {
+                if response.status < 500 {
+                    return Ok(response);
+                }
+                last_response = Some(response);
+            }
+            Err(error) => last_error = Some(error),
+        }
+        if attempt + 1 < attempts && backoff_ms > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+        }
+    }
+    if let Some(response) = last_response {
+        return Ok(response);
+    }
+    Err(last_error.unwrap_or_else(|| HttpError {
+        message: format!("HTTP request to {} failed", request.url),
+    }))
+}
+
 pub fn http_response_status(response: &Response) -> i64 {
     response.status
 }
 
 pub fn http_response_text(response: &Response) -> String {
     response.body.clone()
+}
+
+pub fn http_response_lines(response: &Response) -> Vec<String> {
+    response.body.lines().map(str::to_string).collect()
 }
 
 pub fn http_response_is_success(response: &Response) -> bool {
@@ -841,6 +1062,30 @@ pub fn json_quote_string(value: &str) -> String {
     serde_json::to_string(value).expect("serializing a string to JSON cannot fail")
 }
 
+pub fn json_string_field(name: &str, value: &str) -> String {
+    format!("{}:{}", json_quote_string(name), json_quote_string(value))
+}
+
+pub fn json_int_field(name: &str, value: i64) -> String {
+    format!("{}:{value}", json_quote_string(name))
+}
+
+pub fn json_bool_field(name: &str, value: bool) -> String {
+    format!("{}:{value}", json_quote_string(name))
+}
+
+pub fn json_raw_field(name: &str, value: &str) -> String {
+    format!("{}:{value}", json_quote_string(name))
+}
+
+pub fn json_object(fields: &[String]) -> String {
+    format!("{{{}}}", fields.join(","))
+}
+
+pub fn json_array(items: &[String]) -> String {
+    format!("[{}]", items.join(","))
+}
+
 pub fn toml_parse_file<P: RuntimePath + ?Sized>(path: &P) -> Result<JsonValue, JsonError> {
     let text = std::fs::read_to_string(path.as_path())?;
     let value = text
@@ -899,6 +1144,108 @@ pub fn json_field_bool(value: &JsonValue, name: &str) -> Result<bool, JsonError>
         )));
     };
     Ok(flag)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum JsonPathPart {
+    Field(String),
+    Index(usize),
+}
+
+fn parse_json_path(path: &str) -> Result<Vec<JsonPathPart>, JsonError> {
+    let path = path.strip_prefix("$.").unwrap_or(path);
+    let path = path.strip_prefix('$').unwrap_or(path);
+    if path.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let chars = path.chars().collect::<Vec<_>>();
+    let mut parts = Vec::new();
+    let mut index = 0;
+    while index < chars.len() {
+        if chars[index] == '.' {
+            index += 1;
+            continue;
+        }
+
+        if chars[index] == '[' {
+            index += 1;
+            let start = index;
+            while index < chars.len() && chars[index] != ']' {
+                index += 1;
+            }
+            if index == chars.len() {
+                return Err(JsonError::new(format!(
+                    "JSON path `{path}` has an unterminated array index"
+                )));
+            }
+            let raw_index = chars[start..index].iter().collect::<String>();
+            let item_index = raw_index.parse::<usize>().map_err(|_| {
+                JsonError::new(format!(
+                    "JSON path `{path}` has invalid array index `{raw_index}`"
+                ))
+            })?;
+            parts.push(JsonPathPart::Index(item_index));
+            index += 1;
+            continue;
+        }
+
+        let start = index;
+        while index < chars.len() && chars[index] != '.' && chars[index] != '[' {
+            index += 1;
+        }
+        let field = chars[start..index].iter().collect::<String>();
+        if field.is_empty() {
+            return Err(JsonError::new(format!(
+                "JSON path `{path}` contains an empty field"
+            )));
+        }
+        parts.push(JsonPathPart::Field(field));
+    }
+
+    Ok(parts)
+}
+
+pub fn json_value_at(value: &JsonValue, path: &str) -> Result<JsonValue, JsonError> {
+    let mut current = &value.inner;
+    for part in parse_json_path(path)? {
+        match part {
+            JsonPathPart::Field(name) => {
+                let Some(next) = current.get(&name) else {
+                    return Err(JsonError::new(format!(
+                        "missing JSON field `{name}` at path `{path}`"
+                    )));
+                };
+                current = next;
+            }
+            JsonPathPart::Index(index) => {
+                let Some(items) = current.as_array() else {
+                    return Err(JsonError::new(format!(
+                        "JSON path `{path}` expected an array before index `{index}`"
+                    )));
+                };
+                let Some(next) = items.get(index) else {
+                    return Err(JsonError::new(format!(
+                        "JSON array index `{index}` is out of bounds at path `{path}`"
+                    )));
+                };
+                current = next;
+            }
+        }
+    }
+    Ok(JsonValue {
+        inner: current.clone(),
+    })
+}
+
+pub fn json_string_at(text: &str, path: &str) -> Result<String, JsonError> {
+    let value = json_parse(text)?;
+    let item = json_value_at(&value, path)?;
+    json_as_string(&item)
+}
+
+pub fn json_string_at_or(text: &str, path: &str, fallback: &str) -> String {
+    json_string_at(text, path).unwrap_or_else(|_| fallback.to_string())
 }
 
 pub fn json_as_string(value: &JsonValue) -> Result<String, JsonError> {
@@ -1270,6 +1617,43 @@ mod tests {
     }
 
     #[test]
+    fn http_send_async_returns_final_server_error_response_body() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
+        let addr = listener.local_addr().expect("listener addr should exist");
+        let handle = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().expect("client should connect");
+                let mut request = [0_u8; 2048];
+                let read = stream.read(&mut request).expect("request should read");
+                let request = String::from_utf8_lossy(&request[..read]);
+                assert!(request.starts_with("POST /agent HTTP/1.1"));
+                assert!(request.contains("authorization: Bearer test_key"));
+                stream
+                    .write_all(
+                        b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 17\r\nConnection: close\r\n\r\n{\"error\":\"codex\"}",
+                    )
+                    .expect("response should write");
+            }
+        });
+
+        let mut request = http_request_json(&format!("http://{addr}/agent"), r#"{"messages":[]}"#);
+        request = http_request_with_header(request, "Authorization", "Bearer test_key");
+        request = http_request_with_retry(request, 2, 0);
+
+        let mut executor = Executor::new();
+        let response = executor
+            .run_pending(http_send_async(request))
+            .expect("HTTP status response should be returned to caller");
+
+        assert_eq!(response.status, 500);
+        assert_eq!(response.body, r#"{"error":"codex"}"#);
+        handle.join().expect("server thread should finish");
+    }
+
+    #[test]
     fn http_get_async_reports_invalid_url_errors() {
         let mut executor = Executor::new();
         let error = executor
@@ -1289,6 +1673,53 @@ mod tests {
 
         let ports = json_field(&value, "ports").expect("ports field exists");
         assert_eq!(json_array_len(&ports).expect("ports is an array"), 2);
+    }
+
+    #[test]
+    fn json_path_helpers_read_nested_fields_and_arrays() {
+        let text = r#"{
+            "choices": [
+                {
+                    "message": {
+                        "content": "done",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "function": {
+                                    "name": "write_file",
+                                    "arguments": "{\"path\":\"hello.txt\"}"
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        }"#;
+        let value = json_parse(text).expect("JSON should parse");
+
+        assert_eq!(
+            json_as_string(
+                &json_value_at(&value, "choices[0].message.tool_calls[0].function.name")
+                    .expect("path should resolve")
+            )
+            .expect("path value should be string"),
+            "write_file"
+        );
+        assert_eq!(
+            json_string_at(text, "$.choices[0].message.content")
+                .expect("string path should resolve"),
+            "done"
+        );
+        assert_eq!(
+            json_string_at_or(text, "choices[0].message.missing", "fallback"),
+            "fallback"
+        );
+        assert!(
+            json_value_at(&value, "choices[2].message")
+                .expect_err("missing index should fail")
+                .message
+                .contains("out of bounds")
+        );
     }
 
     #[test]

@@ -1,6 +1,12 @@
 features: native
 
+pub native fn Args.all() -> fresh List<String>
+    effects(native)
+
 pub native fn Args.count() -> Int
+    effects(native)
+
+pub native fn Args.get(index: Int) -> Option<String>
     effects(native)
 
 pub native fn Args.get_or_default(

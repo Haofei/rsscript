@@ -86,6 +86,28 @@ pub fn String.split(
 ) -> fresh List<String>
     effects(pure)
 
+pub fn String.slice(
+    value: read String,
+    start: Int,
+    len: Int,
+) -> fresh String
+    effects(pure)
+
+pub fn String.index_of(
+    value: read String,
+    needle: read String,
+) -> Option<Int>
+    effects(pure)
+
+pub fn String.repeat(
+    value: read String,
+    count: Int,
+) -> fresh String
+    effects(pure)
+
+pub fn String.parse_int(value: read String) -> Option<Int>
+    effects(pure)
+
 pub fn String.view(
     value: read String,
     start: Int,

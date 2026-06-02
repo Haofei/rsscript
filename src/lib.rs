@@ -10,6 +10,7 @@
 mod analyzer;
 pub mod bbom;
 mod checks;
+mod core_index;
 mod diagnostic;
 mod formatter;
 mod hir;
@@ -27,6 +28,7 @@ pub use analyzer::{
     analyze_source_with_interfaces_without_core, analyze_source_without_core,
     analyze_sources_with_interfaces, analyze_sources_with_interfaces_without_core, core_interfaces,
 };
+pub use core_index::core_package_index_json;
 pub use diagnostic::{
     Diagnostic, DiagnosticExplanation, Severity, Span, explain_diagnostic_code,
     format_diagnostic_explanation, format_diagnostics_human, format_diagnostics_json,

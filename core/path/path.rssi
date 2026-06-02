@@ -2,6 +2,9 @@ pub fn Path.from_string(value: read String) -> fresh Path
 
 pub fn Path.join(base: read Path, child: read String) -> fresh Path
 
+pub fn Path.normalize(path: read Path) -> fresh Path
+    effects(pure)
+
 pub fn Path.to_string(path: read Path) -> fresh String
     effects(pure)
 
@@ -15,4 +18,10 @@ pub fn Path.parent(path: read Path) -> Option<Path>
     effects(pure)
 
 pub fn Path.is_absolute(path: read Path) -> Bool
+    effects(pure)
+
+pub fn Path.with_extension(path: read Path, extension: read String) -> fresh Path
+    effects(pure)
+
+pub fn Path.starts_with(path: read Path, base: read Path) -> Bool
     effects(pure)

@@ -30,3 +30,23 @@ pub fn Set.for_each<T>(
     set: read Set<T>,
     callback: noescape Fn(T) -> Unit,
 ) -> Unit
+
+pub fn Set.union<T>(
+    left: read Set<T>,
+    right: read Set<T>,
+) -> fresh Set<T>
+
+pub fn Set.intersection<T>(
+    left: read Set<T>,
+    right: read Set<T>,
+) -> fresh Set<T>
+
+pub fn Set.difference<T>(
+    left: read Set<T>,
+    right: read Set<T>,
+) -> fresh Set<T>
+
+pub fn Set.is_subset<T>(
+    left: read Set<T>,
+    right: read Set<T>,
+) -> Bool

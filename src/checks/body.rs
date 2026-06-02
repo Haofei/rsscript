@@ -278,12 +278,61 @@ fn collect_expr_uses(expr: &HirExpr, uses: &mut HashSet<String>) {
                 collect_block_uses(&arm.body, uses);
             }
         }
-        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
+    }
+}
+
+fn collect_await_operand_live_uses(expr: &HirExpr, uses: &mut HashSet<String>) {
+    match expr {
+        HirExpr::Effect {
+            effect: ParamEffect::Take,
+            ..
+        }
+        | HirExpr::Manage { .. } => {}
+        HirExpr::Ident { name, .. } => {
+            if !is_builtin_value_ident(name) {
+                uses.insert(name.clone());
+            }
+        }
+        HirExpr::Binary { left, right, .. } => {
+            collect_await_operand_live_uses(left, uses);
+            collect_await_operand_live_uses(right, uses);
+        }
+        HirExpr::Field { base, .. } => collect_await_operand_live_uses(base, uses),
+        HirExpr::Index { base, index, .. } => {
+            collect_await_operand_live_uses(base, uses);
+            collect_await_operand_live_uses(index, uses);
+        }
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                collect_await_operand_live_uses(&arg.value, uses);
+            }
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. } => collect_await_operand_live_uses(value, uses),
+        HirExpr::Closure { body, .. } => collect_block_uses(body, uses),
+        HirExpr::Match { value, arms, .. } => {
+            collect_await_operand_live_uses(value, uses);
+            for arm in arms {
+                collect_block_uses(&arm.body, uses);
+            }
+        }
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
     }
 }
 
 fn is_builtin_value_ident(name: &str) -> bool {
-    matches!(name, "Unit" | "true" | "false")
+    matches!(name, "Unit" | "true" | "false" | "null")
 }
 
 fn remove_stmt_bindings(statement: &HirStmt, uses: &mut HashSet<String>) {
@@ -870,7 +919,7 @@ fn check_expr_semantics_with_context(
         HirExpr::Await { value, .. } => {
             check_await_operand(analyzer, value, expr);
             let mut await_live_after = live_after.clone();
-            collect_expr_uses(value, &mut await_live_after);
+            collect_await_operand_live_uses(value, &mut await_live_after);
             check_await_live_values(analyzer, state, expr, &await_live_after);
             check_expr_semantics_with_context(
                 analyzer,
@@ -1045,7 +1094,9 @@ fn check_expr_semantics_with_context(
                 );
             }
         }
-        HirExpr::Ident { .. }
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}
@@ -1219,7 +1270,9 @@ fn check_await_placement_expr(
                 check_await_placement(analyzer, &arm.body, function_is_async);
             }
         }
-        HirExpr::Ident { .. }
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}
@@ -1318,6 +1371,8 @@ fn expr_span(expr: &HirExpr) -> &Span {
         HirExpr::Ident { span, .. }
         | HirExpr::Number { span, .. }
         | HirExpr::String { span, .. }
+        | HirExpr::ObjectLiteral { span, .. }
+        | HirExpr::ArrayLiteral { span, .. }
         | HirExpr::Binary { span, .. }
         | HirExpr::Field { span, .. }
         | HirExpr::Index { span, .. }
@@ -1422,6 +1477,8 @@ fn expr_is_fresh_shell(expr: &HirExpr) -> bool {
         },
         HirExpr::Try { value, .. } | HirExpr::Effect { value, .. } => expr_is_fresh_shell(value),
         HirExpr::Ident { .. }
+        | HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Binary { .. }
@@ -1543,7 +1600,9 @@ fn weak_field_access_requiring_upgrade(expr: &HirExpr) -> Option<&crate::hir::Hi
                 })
             })
         }
-        HirExpr::Ident { .. }
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => None,
@@ -1731,6 +1790,8 @@ fn constructor_arg_place_path(expr: &HirExpr) -> Option<PlacePath> {
         }
         HirExpr::Ident { .. } | HirExpr::Field { .. } | HirExpr::Index { .. } => place_path(expr),
         HirExpr::Manage { .. }
+        | HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
         | HirExpr::Spawn { .. }
         | HirExpr::Await { .. }
         | HirExpr::Call { .. }
@@ -1787,6 +1848,12 @@ fn constructor_arg_uses_managed_inline_value(
             | CallResolution::Ambiguous { .. }
             | CallResolution::Unknown => false,
         },
+        HirExpr::ObjectLiteral { fields, .. } => fields
+            .iter()
+            .any(|field| constructor_arg_uses_managed_inline_value(analyzer, &field.value, state)),
+        HirExpr::ArrayLiteral { items, .. } => items
+            .iter()
+            .any(|item| constructor_arg_uses_managed_inline_value(analyzer, item, state)),
         HirExpr::Binary { .. }
         | HirExpr::Match { .. }
         | HirExpr::Closure { .. }
@@ -1944,7 +2011,11 @@ fn collect_spawn_capture_idents(expr: &HirExpr, captures: &mut Vec<(String, Span
                 }
             }
         }
-        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
     }
 }
 
@@ -2264,7 +2335,9 @@ fn collect_closure_effect_accesses_expr(
                 collect_closure_effect_accesses_block(&arm.body, bound, out);
             }
         }
-        HirExpr::Ident { .. }
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}
@@ -2313,6 +2386,10 @@ fn expr_moves_path(expr: &HirExpr) -> bool {
         HirExpr::Index { base, index, .. } => expr_moves_path(base) || expr_moves_path(index),
         HirExpr::Binary { left, right, .. } => expr_moves_path(left) || expr_moves_path(right),
         HirExpr::Call { args, .. } => args.iter().any(|arg| expr_moves_path(&arg.value)),
+        HirExpr::ObjectLiteral { fields, .. } => {
+            fields.iter().any(|field| expr_moves_path(&field.value))
+        }
+        HirExpr::ArrayLiteral { items, .. } => items.iter().any(expr_moves_path),
         HirExpr::Closure { .. }
         | HirExpr::Match { .. }
         | HirExpr::Ident { .. }
@@ -2471,7 +2548,9 @@ fn check_try_error_types_expr(
                 check_try_error_types(analyzer, &arm.body, function_error_type);
             }
         }
-        HirExpr::Ident { .. }
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}
@@ -2496,13 +2575,17 @@ fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
         HirExpr::Number { .. } => Some("Int"),
         HirExpr::String { .. } => Some("String"),
         HirExpr::Binary { .. } | HirExpr::Index { .. } => None,
-        HirExpr::Closure { .. } | HirExpr::Unknown(_) => None,
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Closure { .. }
+        | HirExpr::Unknown(_) => None,
     }
 }
 
 fn builtin_value_type_name(name: &str) -> Option<&'static str> {
     match name {
         "true" | "false" => Some("Bool"),
+        "null" => Some("JsonLiteral"),
         "Unit" => Some("Unit"),
         "None" => Some("Option<?>"),
         _ => None,
@@ -2514,6 +2597,8 @@ fn hir_expr_span(expr: &HirExpr) -> &Span {
         HirExpr::Ident { span, .. }
         | HirExpr::Number { span, .. }
         | HirExpr::String { span, .. }
+        | HirExpr::ObjectLiteral { span, .. }
+        | HirExpr::ArrayLiteral { span, .. }
         | HirExpr::Binary { span, .. }
         | HirExpr::Field { span, .. }
         | HirExpr::Index { span, .. }
@@ -2994,6 +3079,8 @@ fn apply_expr_effects(expr: &HirExpr, state: &mut BodyState) {
             apply_expr_effects(index, state);
         }
         HirExpr::Closure { .. }
+        | HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -3339,7 +3426,9 @@ fn check_resource_pool_lease_expr(
                 }
             }
         }
-        HirExpr::Ident { .. }
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}
@@ -3403,7 +3492,9 @@ fn check_resource_producer_expr(
                 }
             }
         }
-        HirExpr::Ident { .. }
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}
@@ -3875,7 +3966,11 @@ fn collect_resource_pool_factory_resource_captures_expr(
                 );
             }
         }
-        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
     }
 }
 
@@ -4022,7 +4117,9 @@ fn check_lazy_factory_captures_expr(
                 check_lazy_factory_captures_block(analyzer, &arm.body, bindings);
             }
         }
-        HirExpr::Ident { .. }
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}
@@ -4197,7 +4294,11 @@ fn collect_lazy_factory_capture_idents_expr(
                 collect_lazy_factory_capture_idents_block(&arm.body, &mut scoped, captures);
             }
         }
-        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => {}
     }
 }
 
@@ -4348,7 +4449,9 @@ fn check_resource_pool_discards_expr(
                 check_resource_pool_discards(analyzer, &arm.body, lease_bindings);
             }
         }
-        HirExpr::Ident { .. }
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}
@@ -4394,6 +4497,8 @@ fn resource_pool_fallible_factory_expr(expr: &HirExpr) -> Option<&HirExpr> {
         | HirExpr::Field { .. }
         | HirExpr::Index { .. }
         | HirExpr::Binary { .. }
+        | HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
         | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
@@ -4797,7 +4902,9 @@ fn check_resource_pool_active_lease_expr(
                 check_resource_pool_active_lease_block(analyzer, active_pool, &arm.body);
             }
         }
-        HirExpr::Ident { .. }
+        HirExpr::ObjectLiteral { .. }
+        | HirExpr::ArrayLiteral { .. }
+        | HirExpr::Ident { .. }
         | HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}

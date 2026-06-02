@@ -2,3 +2,9 @@ features: native
 
 pub fn Log.write(message: read String) -> Unit
     effects(native)
+
+pub fn Log.error(message: read String) -> Unit
+    effects(native)
+
+pub fn Log.trace(event: read String, message: read String) -> Unit
+    effects(native)

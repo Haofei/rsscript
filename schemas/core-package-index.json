@@ -1,0 +1,983 @@
+{
+  "schema": "rss.core_package_index.v1",
+  "generated_by": "build.rs",
+  "default_core": [
+    {
+      "path": "core/async/cancellation.rssi",
+      "module": "async.cancellation",
+      "functions": [
+        "CancellationSource.cancel",
+        "CancellationSource.new",
+        "CancellationSource.token",
+        "CancellationToken.is_cancelled"
+      ],
+      "types": [
+        "CancellationSource",
+        "CancellationToken"
+      ]
+    },
+    {
+      "path": "core/async/deadline.rssi",
+      "module": "async.deadline",
+      "functions": [
+        "Deadline.after",
+        "Deadline.after_ms",
+        "Deadline.is_expired",
+        "Deadline.remaining_ms"
+      ],
+      "types": [
+        "Deadline"
+      ]
+    },
+    {
+      "path": "core/async/stream.rssi",
+      "module": "async.stream",
+      "functions": [
+        "Receiver.into_stream",
+        "Stream.collect_list",
+        "Stream.from_list",
+        "Stream.next"
+      ],
+      "types": [
+        "Stream"
+      ]
+    },
+    {
+      "path": "core/async/task.rssi",
+      "module": "async.task",
+      "functions": [
+        "Task.cancellation_token"
+      ],
+      "types": []
+    },
+    {
+      "path": "core/async/timer.rssi",
+      "module": "async.timer",
+      "functions": [
+        "Timer.sleep",
+        "Timer.sleep_cancellable",
+        "Timer.sleep_until"
+      ],
+      "types": [
+        "TimerError"
+      ]
+    },
+    {
+      "path": "core/cache/cache.rssi",
+      "module": "cache.cache",
+      "functions": [
+        "Cache.get",
+        "Cache.insert",
+        "Cache.lookup",
+        "Cache.new"
+      ],
+      "types": []
+    },
+    {
+      "path": "core/cache/image_cache.rssi",
+      "module": "cache.image_cache",
+      "functions": [
+        "ImageCache.len",
+        "ImageCache.new",
+        "ImageCache.store"
+      ],
+      "types": [
+        "ImageCache"
+      ]
+    },
+    {
+      "path": "core/capability/capability.rssi",
+      "module": "capability.capability",
+      "functions": [
+        "Capability.from"
+      ],
+      "types": [
+        "Capability",
+        "argument",
+        "surface",
+        "with"
+      ]
+    },
+    {
+      "path": "core/channel/channel.rssi",
+      "module": "channel.channel",
+      "functions": [
+        "Channel.bounded",
+        "Channel.receiver",
+        "Channel.sender",
+        "ChannelError.message",
+        "Receiver.close",
+        "Receiver.recv",
+        "Receiver.recv_cancellable",
+        "Sender.close",
+        "Sender.send",
+        "Sender.send_cancellable"
+      ],
+      "types": [
+        "Channel",
+        "ChannelError",
+        "Receiver",
+        "Sender"
+      ]
+    },
+    {
+      "path": "core/clock/clock.rssi",
+      "module": "clock.clock",
+      "functions": [
+        "Clock.now",
+        "Clock.system_unix_ms",
+        "Duration.add",
+        "Duration.as_ms",
+        "Duration.as_seconds",
+        "Duration.ms",
+        "Duration.seconds",
+        "Instant.elapsed"
+      ],
+      "types": [
+        "Duration",
+        "Instant"
+      ]
+    },
+    {
+      "path": "core/cmp/ord.rssi",
+      "module": "cmp.ord",
+      "functions": [
+        "compare"
+      ],
+      "types": [
+        "Ord"
+      ]
+    },
+    {
+      "path": "core/collections/buffer.rssi",
+      "module": "collections.buffer",
+      "functions": [
+        "Buffer.clear",
+        "Buffer.consume",
+        "Buffer.is_empty",
+        "Buffer.len",
+        "Buffer.new",
+        "Buffer.view",
+        "BufferView.is_empty",
+        "BufferView.len",
+        "BufferView.slice",
+        "BufferView.to_bytes"
+      ],
+      "types": [
+        "BufferView"
+      ]
+    },
+    {
+      "path": "core/collections/bytes.rssi",
+      "module": "collections.bytes",
+      "functions": [
+        "Bytes.concat",
+        "Bytes.consume",
+        "Bytes.from_buffer",
+        "Bytes.from_string",
+        "Bytes.is_empty",
+        "Bytes.len",
+        "Bytes.slice",
+        "Bytes.view",
+        "BytesView.is_empty",
+        "BytesView.len",
+        "BytesView.slice",
+        "BytesView.starts_with",
+        "BytesView.to_bytes"
+      ],
+      "types": [
+        "BytesView"
+      ]
+    },
+    {
+      "path": "core/collections/list.rssi",
+      "module": "collections.list",
+      "functions": [
+        "List.all",
+        "List.any",
+        "List.append",
+        "List.clear",
+        "List.consume",
+        "List.contains",
+        "List.contains_value",
+        "List.count_where",
+        "List.filter",
+        "List.find",
+        "List.first",
+        "List.flat_map",
+        "List.fold",
+        "List.get",
+        "List.group_by",
+        "List.is_empty",
+        "List.join",
+        "List.last",
+        "List.len",
+        "List.map",
+        "List.new",
+        "List.partition",
+        "List.pop",
+        "List.push",
+        "List.remove_at",
+        "List.reverse",
+        "List.set",
+        "List.skip",
+        "List.slice",
+        "List.sort",
+        "List.sort_by",
+        "List.sort_with",
+        "List.take",
+        "List.try_fold"
+      ],
+      "types": []
+    },
+    {
+      "path": "core/collections/map.rssi",
+      "module": "collections.map",
+      "functions": [
+        "Map.clear",
+        "Map.contains_key",
+        "Map.filter",
+        "Map.fold",
+        "Map.for_each",
+        "Map.get",
+        "Map.get_or_default",
+        "Map.insert",
+        "Map.insert_old",
+        "Map.is_empty",
+        "Map.keys",
+        "Map.len",
+        "Map.map_values",
+        "Map.merge",
+        "Map.new",
+        "Map.remove",
+        "Map.try_fold",
+        "Map.values"
+      ],
+      "types": [
+        "Map"
+      ]
+    },
+    {
+      "path": "core/collections/set.rssi",
+      "module": "collections.set",
+      "functions": [
+        "Set.clear",
+        "Set.contains",
+        "Set.difference",
+        "Set.for_each",
+        "Set.insert",
+        "Set.intersection",
+        "Set.is_empty",
+        "Set.is_subset",
+        "Set.len",
+        "Set.new",
+        "Set.remove",
+        "Set.to_list",
+        "Set.union"
+      ],
+      "types": [
+        "Set"
+      ]
+    },
+    {
+      "path": "core/config/config.rssi",
+      "module": "config.config",
+      "functions": [
+        "Config.load",
+        "Config.name",
+        "ConfigStore.name",
+        "ConfigStore.new",
+        "ConfigStore.replace"
+      ],
+      "types": [
+        "ConfigStore",
+        "ConfigValue"
+      ]
+    },
+    {
+      "path": "core/config/rules.rssi",
+      "module": "config.rules",
+      "functions": [
+        "Config.new",
+        "Config.rule_count",
+        "GlobalConfig.new",
+        "GlobalConfig.replace",
+        "GlobalConfig.rule_count",
+        "RuleLoader.load_rules"
+      ],
+      "types": [
+        "Config",
+        "GlobalConfig",
+        "Rule"
+      ]
+    },
+    {
+      "path": "core/counter/counter.rssi",
+      "module": "counter.counter",
+      "functions": [
+        "Counter.add",
+        "Counter.new",
+        "Counter.value"
+      ],
+      "types": [
+        "Counter"
+      ]
+    },
+    {
+      "path": "core/csv/csv.rssi",
+      "module": "csv.csv",
+      "functions": [
+        "Csv.open_read",
+        "Csv.parse_row",
+        "Csv.read_into",
+        "Csv.rows",
+        "Row.field_string",
+        "RowBuffer.new"
+      ],
+      "types": [
+        "Row",
+        "RowBuffer"
+      ]
+    },
+    {
+      "path": "core/db/db.rssi",
+      "module": "db.db",
+      "functions": [
+        "Db.close",
+        "DbConnection.open",
+        "DbConnection.query",
+        "DbConnection.try_open"
+      ],
+      "types": [
+        "DbConnection"
+      ]
+    },
+    {
+      "path": "core/encoding/encoding.rssi",
+      "module": "encoding.encoding",
+      "functions": [
+        "Base64.decode",
+        "Base64.decode_string",
+        "Base64.encode",
+        "Base64.encode_bytes",
+        "DecodeError.message",
+        "Hex.decode",
+        "Hex.encode",
+        "Hex.encode_string",
+        "Url.decode_component",
+        "Url.encode_component"
+      ],
+      "types": [
+        "DecodeError"
+      ]
+    },
+    {
+      "path": "core/env/env.rssi",
+      "module": "env.env",
+      "functions": [
+        "Env.current_dir",
+        "Env.get",
+        "Env.get_or_default",
+        "Env.home_dir",
+        "Env.set",
+        "Env.set_current_dir",
+        "Env.temp_dir"
+      ],
+      "types": []
+    },
+    {
+      "path": "core/fs/directory.rssi",
+      "module": "fs.directory",
+      "functions": [
+        "Directory.copy_file",
+        "Directory.create",
+        "Directory.create_all",
+        "Directory.exists",
+        "Directory.is_dir",
+        "Directory.is_file",
+        "Directory.list_files",
+        "Directory.list_paths",
+        "Directory.metadata",
+        "Directory.read_string",
+        "Directory.remove_dir_all",
+        "Directory.remove_file",
+        "Directory.rename",
+        "Directory.write_string"
+      ],
+      "types": [
+        "FileMetadata"
+      ]
+    },
+    {
+      "path": "core/fs/file.rssi",
+      "module": "fs.file",
+      "functions": [
+        "File.append_bytes",
+        "File.append_string",
+        "File.bytes_stream",
+        "File.exists",
+        "File.open",
+        "File.open_read",
+        "File.open_write",
+        "File.read_all",
+        "File.read_all_async",
+        "File.read_all_string",
+        "File.read_all_string_async",
+        "File.read_bytes",
+        "File.read_into",
+        "File.read_string",
+        "File.remove",
+        "File.write",
+        "File.write_async",
+        "File.write_buffer",
+        "File.write_buffer_view",
+        "File.write_bytes",
+        "File.write_bytes_view",
+        "File.write_string",
+        "File.write_string_async",
+        "File.write_string_to_path",
+        "FileError.message"
+      ],
+      "types": [
+        "File"
+      ]
+    },
+    {
+      "path": "core/hash/hash.rssi",
+      "module": "hash.hash",
+      "functions": [
+        "Hash.sha256_bytes",
+        "Hash.sha256_file",
+        "Hash.sha256_string"
+      ],
+      "types": []
+    },
+    {
+      "path": "core/http/client.rssi",
+      "module": "http.client",
+      "functions": [
+        "Http.get",
+        "Http.get_async",
+        "Http.get_retry_async",
+        "Http.get_timeout_async",
+        "Http.post_form",
+        "Http.post_form_async",
+        "Http.post_json",
+        "Http.post_json_async",
+        "Http.post_json_bearer_retry_async",
+        "Http.post_json_retry_async",
+        "Http.post_json_timeout_async",
+        "Http.send_async",
+        "HttpError.message",
+        "HttpRequest.json",
+        "HttpRequest.with_header",
+        "HttpRequest.with_retry",
+        "HttpRequest.with_timeout",
+        "HttpResponse.is_success",
+        "HttpResponse.lines",
+        "HttpResponse.status",
+        "HttpResponse.text"
+      ],
+      "types": [
+        "HttpError",
+        "HttpRequest",
+        "HttpResponse"
+      ]
+    },
+    {
+      "path": "core/http/http.rssi",
+      "module": "http.http",
+      "functions": [
+        "Request.new",
+        "Request.path",
+        "Response.body",
+        "Response.ok",
+        "Response.status"
+      ],
+      "types": [
+        "Request",
+        "Response"
+      ]
+    },
+    {
+      "path": "core/image/image.rssi",
+      "module": "image.image",
+      "functions": [
+        "Image.inspect",
+        "Image.load",
+        "Image.normalize",
+        "Image.resize",
+        "Image.save",
+        "Image.sharpen"
+      ],
+      "types": [
+        "Image"
+      ]
+    },
+    {
+      "path": "core/interpreter/interpreter.rssi",
+      "module": "interpreter.interpreter",
+      "functions": [
+        "Environment.bind_function",
+        "Environment.child",
+        "Environment.has_function",
+        "Environment.has_parent",
+        "Environment.root",
+        "FunctionObject.has_closure",
+        "FunctionObject.new"
+      ],
+      "types": [
+        "Environment",
+        "FunctionObject"
+      ]
+    },
+    {
+      "path": "core/json/json.rssi",
+      "module": "json.json",
+      "functions": [
+        "Json.array",
+        "Json.array_bools",
+        "Json.array_contains_prefix",
+        "Json.array_contains_string",
+        "Json.array_contains_substring",
+        "Json.array_count_where",
+        "Json.array_fold",
+        "Json.array_get",
+        "Json.array_ints",
+        "Json.array_len",
+        "Json.array_strings",
+        "Json.as_bool",
+        "Json.as_int",
+        "Json.as_string",
+        "Json.bool_field",
+        "Json.encode",
+        "Json.field",
+        "Json.field_bool",
+        "Json.field_int",
+        "Json.field_string",
+        "Json.int_field",
+        "Json.is_array",
+        "Json.is_null",
+        "Json.is_object",
+        "Json.object",
+        "Json.object_keys",
+        "Json.object_len",
+        "Json.parse",
+        "Json.parse_file",
+        "Json.quote_string",
+        "Json.raw_field",
+        "Json.string_at",
+        "Json.string_at_or",
+        "Json.string_field",
+        "Json.value_at",
+        "JsonError.message"
+      ],
+      "types": [
+        "JsonLiteral",
+        "JsonValue"
+      ]
+    },
+    {
+      "path": "core/log/log.rssi",
+      "module": "log.log",
+      "functions": [
+        "Log.error",
+        "Log.trace",
+        "Log.write"
+      ],
+      "types": []
+    },
+    {
+      "path": "core/option/option.rssi",
+      "module": "option.option",
+      "functions": [
+        "Option.and_then",
+        "Option.filter",
+        "Option.is_none",
+        "Option.is_some",
+        "Option.map",
+        "Option.ok_or",
+        "Option.or",
+        "Option.unwrap_or",
+        "Option.unwrap_or_else"
+      ],
+      "types": []
+    },
+    {
+      "path": "core/os/os.rssi",
+      "module": "os.os",
+      "functions": [
+        "Args.all",
+        "Args.count",
+        "Args.get",
+        "Args.get_or_default",
+        "OS.close"
+      ],
+      "types": []
+    },
+    {
+      "path": "core/path/path.rssi",
+      "module": "path.path",
+      "functions": [
+        "Path.extension",
+        "Path.file_name",
+        "Path.from_string",
+        "Path.is_absolute",
+        "Path.join",
+        "Path.normalize",
+        "Path.parent",
+        "Path.starts_with",
+        "Path.to_string",
+        "Path.with_extension"
+      ],
+      "types": []
+    },
+    {
+      "path": "core/process/process.rssi",
+      "module": "process.process",
+      "functions": [
+        "Process.run",
+        "Process.run_many_stdout",
+        "Process.run_many_stdout_timeout",
+        "Process.run_stdout",
+        "Process.run_stdout_timeout",
+        "Process.run_timeout"
+      ],
+      "types": [
+        "ProcessOutput"
+      ]
+    },
+    {
+      "path": "core/random/random.rssi",
+      "module": "random.random",
+      "functions": [
+        "Random.bool",
+        "Random.bytes",
+        "Random.float",
+        "Random.int",
+        "Random.string",
+        "Uuid.new_v4"
+      ],
+      "types": []
+    },
+    {
+      "path": "core/regex/regex.rssi",
+      "module": "regex.regex",
+      "functions": [
+        "Regex.captures",
+        "Regex.compile",
+        "Regex.find",
+        "Regex.is_match",
+        "Regex.replace_all",
+        "Regex.split",
+        "RegexError.message"
+      ],
+      "types": [
+        "Regex",
+        "RegexError"
+      ]
+    },
+    {
+      "path": "core/resource/resource_pool.rssi",
+      "module": "resource.resource_pool",
+      "functions": [
+        "PoolError.message",
+        "PoolStats.available",
+        "PoolStats.capacity",
+        "PoolStats.created",
+        "PoolStats.in_use",
+        "ResourcePool.borrow",
+        "ResourcePool.discard",
+        "ResourcePool.lazy",
+        "ResourcePool.new",
+        "ResourcePool.stats",
+        "ResourcePool.try_borrow",
+        "ResourcePool.try_lazy",
+        "ResourcePool.try_new"
+      ],
+      "types": [
+        "PoolError",
+        "PoolStats",
+        "ResourcePool",
+        "can",
+        "pool",
+        "up"
+      ]
+    },
+    {
+      "path": "core/result/result.rssi",
+      "module": "result.result",
+      "functions": [
+        "Result.and_then",
+        "Result.err",
+        "Result.err_message",
+        "Result.is_err",
+        "Result.is_ok",
+        "Result.map",
+        "Result.map_error",
+        "Result.ok",
+        "Result.unwrap_or",
+        "Result.unwrap_or_else"
+      ],
+      "types": []
+    },
+    {
+      "path": "core/string/string.rssi",
+      "module": "string.string",
+      "functions": [
+        "String.after",
+        "String.before",
+        "String.concat",
+        "String.contains",
+        "String.ends_with",
+        "String.from_bool",
+        "String.from_int",
+        "String.index_of",
+        "String.is_empty",
+        "String.join",
+        "String.len",
+        "String.lines",
+        "String.parse_int",
+        "String.repeat",
+        "String.replace",
+        "String.slice",
+        "String.split",
+        "String.starts_with",
+        "String.strip_prefix",
+        "String.to_lowercase",
+        "String.to_uppercase",
+        "String.trim",
+        "String.view",
+        "StringBuilder.finish",
+        "StringBuilder.new",
+        "StringBuilder.push",
+        "StringView.after",
+        "StringView.before",
+        "StringView.contains",
+        "StringView.is_empty",
+        "StringView.len",
+        "StringView.slice",
+        "StringView.starts_with",
+        "StringView.to_string"
+      ],
+      "types": [
+        "StringBuilder",
+        "StringView"
+      ]
+    },
+    {
+      "path": "core/tempdir/tempdir.rssi",
+      "module": "tempdir.tempdir",
+      "functions": [
+        "TempDir.keep",
+        "TempDir.new",
+        "TempDir.new_in",
+        "TempDir.path"
+      ],
+      "types": [
+        "TempDir"
+      ]
+    },
+    {
+      "path": "core/test/assert.rssi",
+      "module": "test.assert",
+      "functions": [
+        "Assert.equal",
+        "Assert.equal_bool",
+        "Assert.equal_int"
+      ],
+      "types": []
+    },
+    {
+      "path": "core/toml/toml.rssi",
+      "module": "toml.toml",
+      "functions": [
+        "Toml.parse_file"
+      ],
+      "types": []
+    },
+    {
+      "path": "core/url/url.rssi",
+      "module": "url.url",
+      "functions": [
+        "Url.from_string"
+      ],
+      "types": []
+    },
+    {
+      "path": "core/weak/weak.rssi",
+      "module": "weak.weak",
+      "functions": [
+        "Weak.downgrade",
+        "Weak.from",
+        "Weak.upgrade"
+      ],
+      "types": []
+    },
+    {
+      "path": "core/yaml/yaml.rssi",
+      "module": "yaml.yaml",
+      "functions": [
+        "Yaml.parse",
+        "Yaml.parse_file"
+      ],
+      "types": []
+    }
+  ],
+  "packages": [
+    {
+      "kind": "adapter",
+      "name": "rss-sqlite",
+      "version": "0.1.0",
+      "path": "rss/adapters/sqlite",
+      "interface_files": [
+        "interface/lib.rssi"
+      ],
+      "source_files": [],
+      "native_rust": {
+        "crate_name": "rss_sqlite_native",
+        "path": "native/rust"
+      },
+      "virtual_package": null,
+      "dependencies": [],
+      "dev_dependencies": []
+    },
+    {
+      "kind": "core",
+      "name": "rss-core-cli",
+      "version": "0.1.0",
+      "path": "rss/core/cli",
+      "interface_files": [
+        "interface/lib.rssi"
+      ],
+      "source_files": [],
+      "native_rust": {
+        "crate_name": "rss_cli_native",
+        "path": "native/rust"
+      },
+      "virtual_package": null,
+      "dependencies": [],
+      "dev_dependencies": []
+    },
+    {
+      "kind": "core",
+      "name": "rss-core-crypto",
+      "version": "0.1.0",
+      "path": "rss/core/crypto",
+      "interface_files": [
+        "interface/lib.rssi"
+      ],
+      "source_files": [],
+      "native_rust": {
+        "crate_name": "rss_crypto_native",
+        "path": "native/rust"
+      },
+      "virtual_package": null,
+      "dependencies": [],
+      "dev_dependencies": []
+    },
+    {
+      "kind": "core",
+      "name": "rss-core-http-server",
+      "version": "0.1.0",
+      "path": "rss/core/http-server",
+      "interface_files": [
+        "interface/lib.rssi"
+      ],
+      "source_files": [],
+      "native_rust": null,
+      "virtual_package": {
+        "has_default": false,
+        "provider": "http"
+      },
+      "dependencies": [],
+      "dev_dependencies": []
+    },
+    {
+      "kind": "core",
+      "name": "rss-core-telemetry",
+      "version": "0.1.0",
+      "path": "rss/core/telemetry",
+      "interface_files": [
+        "interface/lib.rssi"
+      ],
+      "source_files": [
+        "src/lib.rss"
+      ],
+      "native_rust": null,
+      "virtual_package": {
+        "has_default": true,
+        "provider": "telemetry"
+      },
+      "dependencies": [],
+      "dev_dependencies": []
+    },
+    {
+      "kind": "package",
+      "name": "rss-rayon",
+      "version": "0.1.0",
+      "path": "rss/rayon",
+      "interface_files": [
+        "interface/lib.rssi"
+      ],
+      "source_files": [],
+      "native_rust": {
+        "crate_name": "rss_rayon_native",
+        "path": "native/rust"
+      },
+      "virtual_package": null,
+      "dependencies": [],
+      "dev_dependencies": []
+    },
+    {
+      "kind": "package",
+      "name": "rss-rayon-sort-fixture",
+      "version": "0.1.0",
+      "path": "rss/rayon/tests/sort-fixture",
+      "interface_files": [
+        "interface/lib.rssi"
+      ],
+      "source_files": [],
+      "native_rust": {
+        "crate_name": "rss_rayon_sort_fixture",
+        "path": "native/rust"
+      },
+      "virtual_package": null,
+      "dependencies": [],
+      "dev_dependencies": []
+    },
+    {
+      "kind": "package",
+      "name": "rss-rayon-sort-speed",
+      "version": "0.1.0",
+      "path": "rss/rayon/tests/sort-speed",
+      "interface_files": [],
+      "source_files": [
+        "src/main.rss"
+      ],
+      "native_rust": null,
+      "virtual_package": null,
+      "dependencies": [
+        "rss-rayon",
+        "rss-rayon-sort-fixture"
+      ],
+      "dev_dependencies": []
+    },
+    {
+      "kind": "package",
+      "name": "rss-test-runner",
+      "version": "0.1.0",
+      "path": "rss/test-runner",
+      "interface_files": [
+        "interface/lib.rssi"
+      ],
+      "source_files": [
+        "src/main.rss"
+      ],
+      "native_rust": null,
+      "virtual_package": null,
+      "dependencies": [],
+      "dev_dependencies": []
+    }
+  ]
+}

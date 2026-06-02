@@ -5,10 +5,10 @@ use crate::syntax::ast::{
     AssignStmt, BinaryOp, Block, CallArg, Callee, ConstDecl, DataEffect, DuplicateFileFeature,
     EffectDecl, Expr, FieldDecl, FileFeature, FileFeatureScope, ForStmt, FunctionDecl,
     GenericBound, GenericParam, IfStmt, Item, LetElseStmt, LetKind, LetStmt, LoopStmt, MatchArm,
-    MatchPattern, MatchStmt, ModuleDecl, Param, Program, ProtocolDecl, ProtocolImpl,
-    ProtocolImplMapping, ReturnStmt, SelectArm, SelectStmt, Stmt, SumTypeDecl, SumVariant,
-    TaskGroupStmt, TypeAliasDecl, TypeDecl, TypeKind, TypeRef, UnknownFileFeature, UseDecl,
-    WithStmt,
+    MatchPattern, MatchStmt, ModuleDecl, ObjectLiteralField, Param, Program, ProtocolDecl,
+    ProtocolImpl, ProtocolImplMapping, ReturnStmt, SelectArm, SelectStmt, Stmt, SumTypeDecl,
+    SumVariant, TaskGroupStmt, TypeAliasDecl, TypeDecl, TypeKind, TypeRef, UnknownFileFeature,
+    UseDecl, WithStmt,
 };
 
 pub fn parse_source(file: &str, source: &str) -> Program {
@@ -1981,6 +1981,14 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
         });
     }
 
+    if let Some(array) = parse_array_literal_expr(tokens, start, end) {
+        return Some(array);
+    }
+
+    if let Some(object) = parse_object_literal_expr(tokens, start, end) {
+        return Some(object);
+    }
+
     if let Some(call) = parse_call_expr(tokens, start, end) {
         return Some(call);
     }
@@ -2007,6 +2015,73 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
         TokenKind::String(value) => Some(Expr::String(value.clone(), tokens[start].span.clone())),
         _ => Some(Expr::Unknown(tokens[start].span.clone())),
     }
+}
+
+fn parse_array_literal_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
+    if !tokens.get(start).is_some_and(|token| token.symbol("["))
+        || !tokens
+            .get(end.checked_sub(1)?)
+            .is_some_and(|token| token.symbol("]"))
+    {
+        return None;
+    }
+    let close = find_matching(tokens, start, "[", "]")?;
+    if close + 1 != end {
+        return None;
+    }
+    let items = split_param_ranges(tokens, start + 1, close)
+        .into_iter()
+        .filter_map(|range| {
+            if range.empty_span.is_some() {
+                return None;
+            }
+            parse_expr(tokens, range.start, range.end)
+        })
+        .collect();
+    Some(Expr::ArrayLiteral {
+        items,
+        span: tokens[start].span.clone(),
+    })
+}
+
+fn parse_object_literal_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
+    if !tokens.get(start).is_some_and(|token| token.symbol("{"))
+        || !tokens
+            .get(end.checked_sub(1)?)
+            .is_some_and(|token| token.symbol("}"))
+    {
+        return None;
+    }
+    let close = find_matching(tokens, start, "{", "}")?;
+    if close + 1 != end {
+        return None;
+    }
+    let mut fields = Vec::new();
+    for range in split_param_ranges(tokens, start + 1, close) {
+        if range.empty_span.is_some() {
+            continue;
+        }
+        let Some(colon) = find_top_level_symbol(tokens, range.start, range.end, ":") else {
+            return None;
+        };
+        let Some(TokenKind::String(name)) = tokens.get(range.start).map(|token| &token.kind) else {
+            return None;
+        };
+        if range.start + 1 != colon {
+            return None;
+        }
+        let value = parse_expr(tokens, colon + 1, range.end)
+            .unwrap_or_else(|| Expr::Unknown(tokens[range.start].span.clone()));
+        fields.push(ObjectLiteralField {
+            name: name.clone(),
+            value,
+            span: tokens[range.start].span.clone(),
+        });
+    }
+    Some(Expr::ObjectLiteral {
+        fields,
+        span: tokens[start].span.clone(),
+    })
 }
 
 fn parse_binary_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
