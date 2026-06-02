@@ -261,7 +261,7 @@ fn core_interface_files_have_no_diagnostics() {
 
 #[test]
 fn examples_have_no_diagnostics_and_lower_to_runnable_packages() {
-    for path in common::fixture_paths("examples") {
+    for path in common::recursive_fixture_paths("examples/scripts") {
         let source = common::read_fixture(&path);
         let diagnostics = analyze_source_with_core(path.to_str().unwrap(), &source);
         assert_eq!(diagnostics, Vec::new(), "{}", path.display());

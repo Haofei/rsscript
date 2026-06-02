@@ -791,9 +791,15 @@ mod tests {
 
     #[test]
     fn name_matches_filter_is_substring() {
-        assert!(super::name_matches_filter("rss examples lint", ""));
-        assert!(super::name_matches_filter("rss examples lint", "lint"));
-        assert!(!super::name_matches_filter("rss examples lint", "package"));
+        assert!(super::name_matches_filter("rss script examples lint", ""));
+        assert!(super::name_matches_filter(
+            "rss script examples lint",
+            "lint"
+        ));
+        assert!(!super::name_matches_filter(
+            "rss script examples lint",
+            "package"
+        ));
     }
 
     #[test]

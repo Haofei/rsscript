@@ -4686,7 +4686,7 @@ impl Writer for BufferWriter {
 fn syntax_parser_accepts_all_fixtures() {
     let mut paths = common::fixture_paths("tests/fixtures/pass");
     paths.extend(common::fixture_paths("tests/fixtures/fail"));
-    paths.extend(common::fixture_paths("examples"));
+    paths.extend(common::recursive_fixture_paths("examples/scripts"));
 
     for path in paths {
         let source = common::read_fixture(&path);

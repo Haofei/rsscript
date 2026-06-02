@@ -160,7 +160,7 @@ fn file_read_result(path_text: read String, actual_path: read Path) -> fresh Jso
 }
 
 fn execute_read_file(arguments: read String, repo_root: read Path) -> fresh JsonValue {
-    let path_text = argument_field(arguments, "path", "examples/code-agent/AGENTS.md")
+    let path_text = argument_field(arguments, "path", "examples/packages/code-agent/AGENTS.md")
     match resolve_repo_path(repo_root, path_text) {
         Ok(path) => {
             return file_read_result(path_text, path)
@@ -383,7 +383,7 @@ fn execute_check_rss_file(
 }
 
 fn execute_check_rss_package(arguments: read String, repo_root: read Path) -> fresh JsonValue {
-    let path_text = argument_field(arguments, "path", "examples/code-agent")
+    let path_text = argument_field(arguments, "path", "examples/packages/code-agent")
     let timeout_ms = bounded_limit(argument_int(arguments, "timeout_ms", 120000), 120000, 300000)
     match resolve_repo_path(repo_root, path_text) {
         Ok(path) => {

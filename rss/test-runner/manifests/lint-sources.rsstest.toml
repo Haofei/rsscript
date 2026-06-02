@@ -13,13 +13,22 @@ args = [
 ]
 
 [[tests]]
-name = "examples lint"
+name = "script examples lint"
 kind = "command_for_each_file"
-directory = "examples"
+directory = "examples/scripts"
 extension = ".rss"
-recursive = false
+recursive = true
 command = "target/debug/rss"
 args = ["lint"]
+
+[[tests]]
+name = "package examples check"
+kind = "command_for_each_path"
+command = "target/debug/rss"
+args = ["pkg"]
+paths = [
+  "examples/packages/code-agent",
+]
 
 [[tests]]
 name = "passing root fixtures have no diagnostics"

@@ -408,7 +408,7 @@ rss test     [--all] [--json] [--filter <substring>]
 ### Hello world
 
 ```sh
-cargo run -- run examples/hello.rss
+cargo run -- run examples/scripts/basic/hello.rss
 ```
 
 ```rust

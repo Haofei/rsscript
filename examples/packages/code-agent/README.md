@@ -5,7 +5,7 @@ This package is a small RSScript code agent that talks to an OpenAI-compatible c
 Run it against the local Codex bridge:
 
 ```sh
-AGENT_API_KEY=test_key cargo run -- run examples/code-agent
+AGENT_API_KEY=test_key cargo run -- run examples/packages/code-agent
 ```
 
 The example is intentionally structured like a simplified Codex loop:
@@ -53,4 +53,4 @@ network behavior are not hard-coded:
 - **Budget**: when the step budget is exhausted before the task finishes, the
   agent emits a `turn.budget_exhausted` event.
 
-The agent should not guess RSScript APIs. It reads `examples/code-agent/AGENTS.md`, then `schemas/core-package-index.json`, then the relevant `core/**/*.rssi` files before writing RSScript code.
+The agent should not guess RSScript APIs. It reads `examples/packages/code-agent/AGENTS.md`, then `schemas/core-package-index.json`, then the relevant `core/**/*.rssi` files before writing RSScript code.
