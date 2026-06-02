@@ -20,7 +20,7 @@ const USAGE: &str = "Usage:
   reir collect --producer terraform-plan --from plan.json [--out bundle.json] [--json]
   reir reconcile --required required.json --granted granted.json [--target name] [--json]
   reir reconcile [--bundle bundle.json] [--target name] [--out reconciled.json] [--json]
-  reir report-pr --required required.json --granted granted.json [--target name]
+  reir report-pr --required required.json --granted granted.json [--target name] [--ci-json]
   reir diff --baseline baseline.json --current current.json [--json] [--fail-on-change]
   reir slice --bundle bundle.json [--kind <slice-kind>] [--json]
   reir merge file1.json file2.json [...] --out merged.json

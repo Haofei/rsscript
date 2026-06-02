@@ -473,6 +473,86 @@ rss-dep = {{ path = "{}", features = ["turbo"] }}
 }
 
 #[test]
+fn package_review_rejects_source_path_escape() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-source-path-escape");
+    fs::create_dir_all(temp_dir.join("interface")).expect("interface dir should be created");
+    fs::write(
+        temp_dir.join("rsspkg.toml"),
+        r#"[package]
+name = "rss-path-escape"
+version = "0.1.0"
+edition = "2026"
+
+[interfaces]
+paths = ["interface"]
+
+[sources]
+paths = ["../outside"]
+"#,
+    )
+    .expect("manifest should be written");
+    fs::write(
+        temp_dir.join("interface/lib.rssi"),
+        r#"pub fn App.run() -> Unit
+"#,
+    )
+    .expect("interface should be written");
+
+    let error = review_package_dir(&temp_dir).expect_err("escaped source root should fail");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(error.contains("source root `../outside` must not escape the package root"));
+}
+
+#[test]
+fn package_check_reports_unknown_dependency_table_key() {
+    let root_dir = common::unique_temp_dir("rsscript-package-dep-unknown-key-root");
+    let dep_dir = common::unique_temp_dir("rsscript-package-dep-unknown-key-dep");
+    common::write_named_package_fixture(
+        &dep_dir,
+        "rss-dep",
+        "0.2.0",
+        "",
+        r#"pub fn Dep.parse(text: read String) -> String
+"#,
+    );
+    common::write_named_package_fixture(
+        &root_dir,
+        "rss-app",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-dep = {{ path = "{}", typo = true }}
+"#,
+            common::toml_path(&dep_dir)
+        ),
+        r#"pub fn App.run() -> Unit
+"#,
+    );
+    fs::write(
+        root_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&root_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&root_dir).expect("package check should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&root_dir);
+    let _ = fs::remove_dir_all(&dep_dir);
+
+    assert!(!check.ok);
+    assert!(json["diagnostics"].as_array().is_some_and(|diagnostics| {
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["summary"] == "dependency `rss-dep` has unknown key `typo`."
+                && diagnostic["label"] == "unknown dependency key"
+        })
+    }));
+}
+
+#[test]
 fn package_check_rejects_git_dependency_source() {
     let temp_dir = common::unique_temp_dir("rsscript-package-git-dependency-source");
     common::write_named_package_fixture(

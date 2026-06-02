@@ -71,6 +71,11 @@ fn collect_dependency_feature_resolution_diagnostics_from_map(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), String> {
     for (name, value) in dependencies {
+        diagnostics.extend(package_dependency_unknown_key_diagnostics(
+            package_dir,
+            name,
+            value,
+        ));
         let spec = package_dependency_spec(name, value);
         if spec.git.is_some() {
             diagnostics.push(package_unsupported_dependency_source_diagnostic(
@@ -127,6 +132,43 @@ fn collect_dependency_feature_resolution_diagnostics_from_map(
         visiting.remove(&canonical);
     }
     Ok(())
+}
+
+fn package_dependency_unknown_key_diagnostics(
+    package_dir: &Path,
+    dependency: &str,
+    value: &toml::Value,
+) -> Vec<Diagnostic> {
+    let Some(table) = value.as_table() else {
+        return Vec::new();
+    };
+    const ALLOWED_KEYS: &[&str] = &[
+        "version",
+        "path",
+        "git",
+        "features",
+        "compile_only",
+        "test_only",
+        "platform_provided",
+    ];
+    table
+        .keys()
+        .filter(|key| !ALLOWED_KEYS.contains(&key.as_str()))
+        .map(|key| {
+            Diagnostic::error(
+                code::PACKAGE_REVIEW_POLICY_VIOLATION,
+                format!("dependency `{dependency}` has unknown key `{key}`."),
+                super::package_dependency_span(package_dir, dependency),
+                "unknown dependency key",
+            )
+            .with_cause("Package dependency metadata is review-critical and unknown keys cannot be ignored.")
+            .with_fix(
+                "remove_unknown_dependency_key",
+                format!("Remove `{key}` or replace it with a supported dependency key."),
+                "manual",
+            )
+        })
+        .collect()
 }
 
 fn package_unsupported_dependency_source_diagnostic(

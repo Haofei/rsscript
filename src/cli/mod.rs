@@ -1,7 +1,7 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rsscript::{
@@ -9,19 +9,14 @@ use rsscript::{
     lower_sources_to_rust_package_with_options, package_lowering_input,
 };
 
-mod bbom;
 mod check;
-mod core_index;
 mod dev;
 mod fmt;
 mod lint;
-mod lower;
 mod package;
-mod remap;
 mod review;
 mod run_cmd;
 mod test_cmd;
-mod verify;
 
 pub fn run() -> ExitCode {
     let args: Vec<String> = env::args().collect();
@@ -32,25 +27,13 @@ pub fn run() -> ExitCode {
 
     match command {
         "check" => check::run_check(&args[2..]),
-        "core-index" => core_index::run_core_index(&args[2..]),
         "dev" => dev::run_dev(&args[2..]),
-        "bbom" => bbom::run_bbom(&args[2..]),
         "lint" => lint::run_lint(&args[2..]),
         "fmt" => fmt::run_fmt(&args[2..]),
         "review" => review::run_review(&args[2..]),
-        "review-pr" => review::run_review_pr(&args[2..]),
-        "contract" => review::run_contract_review(&args[2..]),
         "pkg" => package::run_package(&args[2..]),
-        "package" => {
-            eprintln!("unknown command `package`; use `rss pkg ...`.");
-            print_usage();
-            ExitCode::from(2)
-        }
-        "lower" => lower::run_lower(&args[2..]),
         "run" => run_cmd::run_generated_rust(&args[2..]),
         "test" => test_cmd::run_test(&args[2..]),
-        "remap-rustc" => remap::run_remap_rustc(&args[2..]),
-        "verify-rust" => verify::run_verify_rust(&args[2..]),
         _ => {
             print_usage();
             ExitCode::from(2)
@@ -91,22 +74,6 @@ pub(crate) fn parse_path_args(args: &[String]) -> Result<(bool, Option<&str>), S
     }
 
     Ok((json, path))
-}
-pub(crate) fn parse_multi_path_args(args: &[String]) -> Result<(bool, Vec<&str>), String> {
-    let mut json = false;
-    let mut paths = Vec::new();
-
-    for arg in args {
-        if arg == "--json" {
-            json = true;
-        } else if arg.starts_with("--") {
-            return Err(format!("unknown argument `{arg}`."));
-        } else {
-            paths.push(arg.as_str());
-        }
-    }
-
-    Ok((json, paths))
 }
 pub(crate) fn required_flag_value<'a>(
     args: &'a [String],
@@ -214,10 +181,6 @@ pub(crate) fn generated_package_name(path: &str) -> String {
         .to_string()
 }
 
-pub(crate) fn verify_temp_dir(package_name: &str) -> PathBuf {
-    temp_package_dir("rsscript-verify", package_name)
-}
-
 pub(crate) fn run_temp_dir(package_name: &str) -> PathBuf {
     temp_package_dir("rsscript-run", package_name)
 }
@@ -248,57 +211,6 @@ fn ramdisk_root_dir() -> Option<PathBuf> {
     env::var_os("RSSCRIPT_RAMDISK_PATH")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .or_else(default_ramdisk_root_dir)
-}
-
-#[cfg(target_os = "macos")]
-fn default_ramdisk_root_dir() -> Option<PathBuf> {
-    let path = PathBuf::from("/Volumes/RSScriptRAMDisk");
-    if path.is_dir() {
-        return Some(path);
-    }
-
-    let gib = env::var("RSSCRIPT_RAMDISK_GIB")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(8);
-    let sectors = gib
-        .saturating_mul(1024)
-        .saturating_mul(1024)
-        .saturating_mul(1024)
-        / 512;
-    let attach = Command::new("hdiutil")
-        .arg("attach")
-        .arg("-nomount")
-        .arg(format!("ram://{sectors}"))
-        .output()
-        .ok()?;
-    if !attach.status.success() {
-        return None;
-    }
-    let device = String::from_utf8_lossy(&attach.stdout).trim().to_string();
-    if device.is_empty() {
-        return None;
-    }
-
-    let erase = Command::new("diskutil")
-        .arg("erasevolume")
-        .arg("HFS+")
-        .arg("RSScriptRAMDisk")
-        .arg(device)
-        .output()
-        .ok()?;
-    if !erase.status.success() || !path.is_dir() {
-        return None;
-    }
-
-    Some(path)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn default_ramdisk_root_dir() -> Option<PathBuf> {
-    None
 }
 
 pub(crate) fn cleanup_temp_dir(path: &Path) {
@@ -318,42 +230,18 @@ pub(crate) fn print_usage() {
         "  rss dev [--lint] [--run] [--release] [--json] [--once] [--core|--no-core] [--interface <file.rssi> ...] <file-or-package-directory>"
     );
     eprintln!("  rss fmt <file.rss>");
-    eprintln!("  rss lower --rust <file.rss>");
-    eprintln!("  rss lower --rust <file.rss> --out-dir <directory>");
     eprintln!("  rss run [--json] [--release] <file-or-package-directory> [-- <args>...]");
     eprintln!(
         "  rss run [--json] [--release] <file-or-package-directory> --out-dir <directory> [-- <args>...]"
     );
-    eprintln!("  rss test [--json] [--filter <substring>] <manifest.rsstest.toml> [filter]");
-    eprintln!("  rss remap-rustc [--json] <rsscript-source-map.json> <rustc-json-lines>");
-    eprintln!("  rss verify-rust [--json] <file-or-package-directory>");
-    eprintln!("  rss verify-rust [--json] <file-or-package-directory> --out-dir <directory>");
+    eprintln!("  rss test [--all] [--json] [--filter <substring>]");
     eprintln!("  rss review [--json] --diff <old.rss> <new.rss>");
     eprintln!("  rss review [--json] --map <file-or-directory>");
-    eprintln!(
-        "  rss review-pr --head <package-dir> --grants <grants.reir.json> [--base <package-dir>] [--target <name>] [--format markdown|ci-json|sarif]"
-    );
-    eprintln!("  rss contract [--json|--reir] <file.rssi ...>");
-    eprintln!("  rss core-index [--write <path>|--check <path>]");
-    eprintln!("  rss bbom [--json] <file.rss | directory>");
-    eprintln!("  rss bbom delta [--json] --from <old.rss> --to <new.rss>");
-    eprintln!("  rss bbom policy [--json] --from <old.rss> --to <new.rss>");
-    eprintln!("  rss pkg check [--json|--reir] [package-directory]");
-    eprintln!("  rss pkg review [--json|--reir] [package-directory]");
-    eprintln!(
-        "  rss pkg review update [--json|--reir] --from <old-rsspkg.lock> --to <new-rsspkg.lock>"
-    );
-    eprintln!("  rss pkg lock [--json|--reir] <package-directory>");
-    eprintln!("  rss pkg tree [--json|--reir] [package-directory]");
-    eprintln!(
-        "  rss pkg publish --dry-run [--json|--reir] [--registry <directory>] [package-directory]"
-    );
-    eprintln!("  rss pkg vendor [--dry-run] [--json|--reir] [package-directory]");
-    eprintln!("  rss pkg metadata [--dry-run|--verify] [--json|--reir] [package-directory]");
-    eprintln!("  rss pkg diff [--json|--reir] <old-package-directory> <new-package-directory>");
-    eprintln!(
-        "  rss pkg reir diff [--json] [--fail-on-change] --from <baseline-reir.json> --to <current-reir.json>"
-    );
+    eprintln!("  rss pkg [--json] [package-directory]");
+    eprintln!("  rss pkg review [--json] [package-directory]");
+    eprintln!("  rss pkg diff [--json] <old-package-directory> <new-package-directory>");
+    eprintln!("  rss pkg ci [--json] [package-directory]");
+    eprintln!("  rss pkg publish --dry-run [--json] [--registry <directory>] [package-directory]");
 }
 
 #[cfg(test)]
@@ -372,14 +260,6 @@ mod tests {
         let error = super::parse_path_args(&values).expect_err("extra path should fail");
 
         assert_eq!(error, "unexpected extra path `two.rss`.");
-    }
-
-    #[test]
-    fn parse_multi_path_args_rejects_unknown_flags() {
-        let values = args(&["--wat", "source-map.json", "rustc.json"]);
-        let error = super::parse_multi_path_args(&values).expect_err("unknown flag should fail");
-
-        assert_eq!(error, "unknown argument `--wat`.");
     }
 
     #[test]

@@ -86,16 +86,16 @@ Before committing a semantic change, run the static local gate:
 cargo fmt --check
 cargo clippy -q --workspace -- -D warnings
 cargo test -q --workspace
-cargo run --quiet --bin rss -- run rss/test-runner -- rss/test-runner/manifests/check.rsstest.toml
+cargo run --quiet --bin rss -- test
 cargo build --quiet --bin rss
 target/debug/rss run rss/test-runner -- rss/test-runner/manifests/lint-sources.rsstest.toml
 git diff --check
 ```
 
-For the default full development gate, use:
+For the full development gate, use:
 
 ```sh
-cargo run --quiet --bin rss -- run rss/test-runner -- rss/test-runner/manifests/full.rsstest.toml
+cargo run --quiet --bin rss -- test --all
 ```
 
 This full manifest must stay static-first. Do not add executable examples,
@@ -162,7 +162,7 @@ so the repository only consumes a mounted RAM disk path instead of trying to
 create one.
 
 ```sh
-cargo run --quiet --bin rss -- run rss/test-runner -- rss/test-runner/manifests/full.rsstest.toml
+cargo run --quiet --bin rss -- run rss/test-runner -- rss/test-runner/manifests/all.rsstest.toml
 ```
 
 Do not point these paths back at the SSD for normal development; if a test has

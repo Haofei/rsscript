@@ -524,6 +524,9 @@ pub(super) fn package_native_rust_review(
     let author_parallel = package_declares_parallel_native_api(sources);
     let backend = scan.native_parallel_backends.first().cloned();
     let mut risk_reasons = Vec::new();
+    if native_path_escapes_package(&path) {
+        risk_reasons.push("native Rust wrapper path is outside the package root".to_string());
+    }
     if author_parallel {
         risk_reasons.push("native API declares parallel worker execution".to_string());
     }
@@ -553,6 +556,14 @@ pub(super) fn package_native_rust_review(
             source_scan_best_effort: scan,
         },
     }
+}
+
+fn native_path_escapes_package(path: &str) -> bool {
+    let path = Path::new(path);
+    path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
 }
 
 fn package_declares_parallel_native_api(sources: &[PackageSource]) -> bool {
@@ -718,14 +729,14 @@ fn scan_native_cargo_metadata(
         .arg("--no-deps")
         .arg("--manifest-path")
         .arg(&scan_cargo_toml)
-        .output()
-        .map_err(|error| {
-            format!(
-                "failed to run cargo metadata for {}: {error}",
-                cargo_toml.display()
-            )
-        })?;
+        .output();
     let _ = fs::remove_dir_all(&scan_root);
+    let output = output.map_err(|error| {
+        format!(
+            "failed to run cargo metadata for {}: {error}",
+            cargo_toml.display()
+        )
+    })?;
     if !output.status.success() {
         reasons.push("native Rust cargo metadata failed".to_string());
         return Ok(NativeCargoMetadataScan::default());

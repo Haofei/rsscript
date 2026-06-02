@@ -100,7 +100,7 @@ pub(crate) fn run_check(args: &[String]) -> ExitCode {
             eprintln!("{error}");
             return ExitCode::from(2);
         }
-        return run_package_check(options.json, false, path);
+        return run_package_check(options.json, path);
     }
 
     let source = match fs::read_to_string(path) {

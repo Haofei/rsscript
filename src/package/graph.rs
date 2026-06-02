@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use super::lock::effective_interface_hash;
+use super::review::review_package_dir_with_features;
 use super::source_set::{
     ManifestDependencyBudget, ManifestProviderChoice, load_package_manifest,
     load_package_with_features, resolve_package_features, selected_root_package_features,
@@ -9,7 +10,6 @@ use super::source_set::{
 use super::{
     PackageDependencyKind, PackageDependencySpec, PackageGraphCheck, PackageRisk, PackageTree,
     PackageTreeNode, PackageTreeSummary, package_dependency_spec, package_identity,
-    review_package_dir,
 };
 
 pub fn package_tree(package_dir: &Path) -> Result<PackageTree, String> {
@@ -260,10 +260,10 @@ fn package_tree_node(
     visiting: &mut BTreeSet<String>,
 ) -> Result<PackageTreeNode, String> {
     let package = load_package_with_features(package_dir, selected_features)?;
-    let review = review_package_dir(package_dir)?;
     let features = selected_features
         .map(|features| features.to_vec())
         .unwrap_or_else(|| selected_root_package_features(&package.manifest));
+    let review = review_package_dir_with_features(package_dir, Some(&features))?;
     let interface_effective_hash = effective_interface_hash(&package.sources, &features);
     let identity = package_identity(&package.manifest);
     let visit_key = super::canonical_path_label(package_dir);

@@ -1889,7 +1889,7 @@ pub fn rsscript_json_to_bundle(
     Ok(bundle)
 }
 
-/// Build a REIR bundle from the JSON emitted by `rss pkg lock --json`.
+/// Build a REIR bundle from RSScript package lock JSON.
 pub fn rsscript_lock_json_to_bundle(lock_json: &str) -> Result<Bundle, serde_json::Error> {
     let lock = package_lock_input_from_json(lock_json)?;
     let producer = Producer {
@@ -1907,7 +1907,7 @@ pub fn rsscript_lock_json_to_bundle(lock_json: &str) -> Result<Bundle, serde_jso
     Ok(bundle)
 }
 
-/// Build a REIR bundle from the JSON emitted by `rss pkg check --json`.
+/// Build a REIR bundle from RSScript package check JSON.
 pub fn rsscript_check_json_to_bundle(check_json: &str) -> Result<Bundle, serde_json::Error> {
     let check = package_check_input_from_json(check_json)?;
     let producer = Producer {
@@ -1925,7 +1925,7 @@ pub fn rsscript_check_json_to_bundle(check_json: &str) -> Result<Bundle, serde_j
     Ok(bundle)
 }
 
-/// Build a REIR bundle from the JSON emitted by `rss pkg review update --json`.
+/// Build a REIR bundle from RSScript package lock diff JSON.
 pub fn rsscript_lock_diff_json_to_bundle(
     lock_diff_json: &str,
 ) -> Result<Bundle, serde_json::Error> {
@@ -1945,7 +1945,7 @@ pub fn rsscript_lock_diff_json_to_bundle(
     Ok(bundle)
 }
 
-/// Build a REIR bundle from the JSON emitted by `rss pkg tree --json`.
+/// Build a REIR bundle from RSScript package tree JSON.
 pub fn rsscript_tree_json_to_bundle(tree_json: &str) -> Result<Bundle, serde_json::Error> {
     let tree = package_tree_input_from_json(tree_json)?;
     let producer = Producer {
@@ -1964,7 +1964,7 @@ pub fn rsscript_tree_json_to_bundle(tree_json: &str) -> Result<Bundle, serde_jso
     Ok(bundle)
 }
 
-/// Build a REIR bundle from the JSON emitted by `rss pkg publish --dry-run --json`.
+/// Build a REIR bundle from RSScript package publish JSON.
 pub fn rsscript_publish_json_to_bundle(publish_json: &str) -> Result<Bundle, serde_json::Error> {
     let publish = package_publish_input_from_json(publish_json)?;
     let producer = Producer {
@@ -1982,7 +1982,7 @@ pub fn rsscript_publish_json_to_bundle(publish_json: &str) -> Result<Bundle, ser
     Ok(bundle)
 }
 
-/// Build a REIR bundle from the JSON emitted by `rss pkg metadata --json`.
+/// Build a REIR bundle from RSScript package metadata JSON.
 pub fn rsscript_metadata_json_to_bundle(metadata_json: &str) -> Result<Bundle, serde_json::Error> {
     let metadata = package_metadata_input_from_json(metadata_json)?;
     let producer = Producer {
@@ -2002,7 +2002,7 @@ pub fn rsscript_metadata_json_to_bundle(metadata_json: &str) -> Result<Bundle, s
     Ok(bundle)
 }
 
-/// Build a REIR bundle from the JSON emitted by `rss pkg vendor --json`.
+/// Build a REIR bundle from RSScript package vendor JSON.
 pub fn rsscript_vendor_json_to_bundle(vendor_json: &str) -> Result<Bundle, serde_json::Error> {
     let vendor = package_vendor_input_from_json(vendor_json)?;
     let producer = Producer {

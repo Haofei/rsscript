@@ -1,12 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
 use crate::package::PackageReviewFileKind;
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Manifest {
     pub(super) package: ManifestPackage,
     #[serde(default)]
@@ -34,6 +35,7 @@ pub(super) struct Manifest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ManifestPackage {
     pub(super) name: String,
     pub(super) version: String,
@@ -41,6 +43,7 @@ pub(super) struct ManifestPackage {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ManifestPathSection {
     #[serde(default)]
     pub(super) paths: Vec<String>,
@@ -51,6 +54,7 @@ pub(super) struct ManifestPathSection {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ManifestFeaturePathSection {
     #[serde(default)]
     pub(super) paths: Vec<String>,
@@ -59,12 +63,14 @@ pub(super) struct ManifestFeaturePathSection {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ManifestDependencyPolicy {
     #[serde(default)]
     pub(super) budget: ManifestDependencyBudget,
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ManifestDependencyBudget {
     pub(super) max_direct_dependencies: Option<usize>,
     pub(super) max_total_packages: Option<usize>,
@@ -124,12 +130,14 @@ pub(super) struct ManifestReviewExpect {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ManifestNative {
     #[serde(default)]
     pub(super) rust: Option<ManifestNativeRust>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ManifestNativeRust {
     #[serde(default)]
     pub(super) enabled: bool,
@@ -146,17 +154,21 @@ pub(super) struct ManifestNativeRust {
     pub(super) proc_macros: Option<String>,
     #[serde(rename = "unsafe")]
     pub(super) unsafe_policy: Option<String>,
+    pub(super) native_links: Option<String>,
+    pub(super) ffi: Option<String>,
     #[serde(default)]
     pub(super) links: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ManifestNativeRustFeature {
     #[serde(default)]
     pub(super) cargo_features: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ManifestNativeRustPolicy {
     pub(super) build_scripts: Option<String>,
     pub(super) proc_macros: Option<String>,
@@ -176,6 +188,7 @@ pub(super) struct ManifestVirtual {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ManifestProviderImplementation {
     pub(super) version: Option<String>,
     #[serde(default)]
@@ -195,13 +208,17 @@ impl<'de> Deserialize<'de> for ManifestProviderChoice {
         D: serde::Deserializer<'de>,
     {
         #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct ProviderChoiceTable {
+            package: Option<String>,
+            version: Option<String>,
+        }
+
+        #[derive(Deserialize)]
         #[serde(untagged)]
         enum ProviderChoice {
             Package(String),
-            Table {
-                package: Option<String>,
-                version: Option<String>,
-            },
+            Table(ProviderChoiceTable),
         }
 
         match ProviderChoice::deserialize(deserializer)? {
@@ -209,9 +226,10 @@ impl<'de> Deserialize<'de> for ManifestProviderChoice {
                 package: Some(package),
                 version: None,
             }),
-            ProviderChoice::Table { package, version } => {
-                Ok(ManifestProviderChoice { package, version })
-            }
+            ProviderChoice::Table(table) => Ok(ManifestProviderChoice {
+                package: table.package,
+                version: table.version,
+            }),
         }
     }
 }
@@ -237,11 +255,13 @@ impl ManifestNativeRust {
     }
 
     pub(super) fn effective_native_links(&self) -> Option<&str> {
-        self.policy.native_links.as_deref()
+        self.native_links
+            .as_deref()
+            .or(self.policy.native_links.as_deref())
     }
 
     pub(super) fn effective_ffi(&self) -> Option<&str> {
-        self.policy.ffi.as_deref()
+        self.ffi.as_deref().or(self.policy.ffi.as_deref())
     }
 }
 
@@ -416,12 +436,13 @@ fn read_package_sources_excluding(
     kind: PackageReviewFileKind,
 ) -> Result<Vec<PackageSource>, String> {
     let mut sources = Vec::new();
+    let package_root = canonical_package_root(package_dir)?;
     let excluded_roots = excluded_roots
         .iter()
-        .map(|root| package_dir.join(root))
-        .collect::<Vec<_>>();
+        .map(|root| confined_manifest_path(package_dir, &package_root, root, "source root"))
+        .collect::<Result<Vec<_>, _>>()?;
     for root in roots {
-        let root_path = package_dir.join(root);
+        let root_path = confined_manifest_path(package_dir, &package_root, root, "source root")?;
         if !root_path.exists() {
             continue;
         }
@@ -431,15 +452,67 @@ fn read_package_sources_excluding(
         for file in files {
             let contents = fs::read_to_string(&file)
                 .map_err(|error| format!("failed to read {}: {error}", file.display()))?;
+            let relative_path = super::relative_path(&package_root, &file);
+            let display_path = package_dir.join(&relative_path).display().to_string();
             sources.push(PackageSource {
-                path: file.display().to_string(),
-                relative_path: super::relative_path(package_dir, &file),
+                path: display_path,
+                relative_path,
                 contents,
                 kind,
             });
         }
     }
     Ok(sources)
+}
+
+pub(super) fn canonical_package_root(package_dir: &Path) -> Result<PathBuf, String> {
+    package_dir.canonicalize().map_err(|error| {
+        format!(
+            "failed to canonicalize package root {}: {error}",
+            package_dir.display()
+        )
+    })
+}
+
+pub(super) fn validate_manifest_relative_path(value: &str, label: &str) -> Result<(), String> {
+    let path = Path::new(value);
+    if path.is_absolute() {
+        return Err(format!(
+            "{label} `{value}` must be relative to the package root."
+        ));
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(format!(
+            "{label} `{value}` must not escape the package root with `..`."
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn confined_manifest_path(
+    package_dir: &Path,
+    package_root: &Path,
+    value: &str,
+    label: &str,
+) -> Result<PathBuf, String> {
+    validate_manifest_relative_path(value, label)?;
+    let path = package_dir.join(value);
+    if !path.exists() {
+        return Ok(path);
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("failed to canonicalize {label} `{value}`: {error}"))?;
+    canonical.strip_prefix(package_root).map_err(|_| {
+        format!(
+            "{label} `{value}` resolves outside package root {}.",
+            package_root.display()
+        )
+    })?;
+    Ok(canonical)
 }
 
 fn collect_rsscript_files_excluding(

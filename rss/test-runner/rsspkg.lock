@@ -11,4 +11,4 @@ features = []
 
 [metadata]
 rss_version = "0.1.0"
-created_by = "rsscript pkg lock"
+created_by = "rsscript pkg"

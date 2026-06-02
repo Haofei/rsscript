@@ -11,8 +11,6 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use super::print_usage;
-
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// `rss test` is the native productized entry point over `.rsstest.toml`
@@ -73,14 +71,20 @@ struct Summary {
 }
 
 #[derive(Debug)]
-struct Options<'a> {
-    manifest: Option<&'a str>,
+struct Options {
+    all: bool,
     filter: String,
     json: bool,
 }
 
-fn parse_test_args(args: &[String]) -> Result<Options<'_>, String> {
-    let mut manifest = None;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TestProfile {
+    Default,
+    All,
+}
+
+fn parse_test_args(args: &[String]) -> Result<Options, String> {
+    let mut all = false;
     let mut filter = String::new();
     let mut json = false;
     let mut index = 0;
@@ -88,6 +92,7 @@ fn parse_test_args(args: &[String]) -> Result<Options<'_>, String> {
     while let Some(arg) = args.get(index) {
         match arg.as_str() {
             "--json" => json = true,
+            "--all" => all = true,
             "--filter" => {
                 index += 1;
                 filter = super::required_flag_value(args, index, "--filter")?.to_string();
@@ -95,20 +100,12 @@ fn parse_test_args(args: &[String]) -> Result<Options<'_>, String> {
             other if other.starts_with("--") => {
                 return Err(format!("unknown argument `{other}`."));
             }
-            other if manifest.is_none() => manifest = Some(other),
-            // A second positional is the name filter, matching the self-hosted
-            // runner's `rss run rss/test-runner -- <manifest> <filter>`.
-            other if filter.is_empty() => filter = other.to_string(),
-            other => return Err(format!("unexpected extra argument `{other}`.")),
+            other => return Err(format!("unexpected argument `{other}`.")),
         }
         index += 1;
     }
 
-    Ok(Options {
-        manifest,
-        filter,
-        json,
-    })
+    Ok(Options { all, filter, json })
 }
 
 pub(crate) fn run_test(args: &[String]) -> ExitCode {
@@ -119,22 +116,31 @@ pub(crate) fn run_test(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let Some(manifest_path) = options.manifest else {
-        print_usage();
-        return ExitCode::from(2);
+    let manifest_path = match resolve_manifest_path(&options) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
     };
 
-    let contents = match fs::read_to_string(manifest_path) {
+    let contents = match fs::read_to_string(&manifest_path) {
         Ok(contents) => contents,
         Err(error) => {
-            eprintln!("failed to read manifest {manifest_path}: {error}");
+            eprintln!(
+                "failed to read manifest {}: {error}",
+                manifest_path.display()
+            );
             return ExitCode::from(2);
         }
     };
     let tests = match parse_manifest(&contents) {
         Ok(manifest) => manifest.tests,
         Err(error) => {
-            eprintln!("failed to parse manifest {manifest_path}: {error}");
+            eprintln!(
+                "failed to parse manifest {}: {error}",
+                manifest_path.display()
+            );
             return ExitCode::from(2);
         }
     };
@@ -191,6 +197,29 @@ pub(crate) fn run_test(args: &[String]) -> ExitCode {
     } else {
         ExitCode::SUCCESS
     }
+}
+
+fn resolve_manifest_path(options: &Options) -> Result<PathBuf, String> {
+    let profile = if options.all {
+        TestProfile::All
+    } else {
+        TestProfile::Default
+    };
+    let manifest = profile_manifest(profile);
+    if manifest.exists() {
+        return Ok(manifest.to_path_buf());
+    }
+    Err(format!(
+        "missing RSScript test manifest {}",
+        manifest.display()
+    ))
+}
+
+fn profile_manifest(profile: TestProfile) -> &'static Path {
+    Path::new(match profile {
+        TestProfile::Default => "rss/test-runner/manifests/default.rsstest.toml",
+        TestProfile::All => "rss/test-runner/manifests/all.rsstest.toml",
+    })
 }
 
 fn parse_manifest(contents: &str) -> Result<Manifest, String> {
@@ -628,26 +657,34 @@ mod tests {
     }
 
     #[test]
-    fn parse_test_args_reads_manifest_and_filter() {
-        let values = args(&["manifest.rsstest.toml", "--filter", "lint"]);
+    fn parse_test_args_reads_filter() {
+        let values = args(&["--filter", "lint"]);
         let options = super::parse_test_args(&values).expect("arguments should parse");
 
-        assert_eq!(options.manifest, Some("manifest.rsstest.toml"));
         assert_eq!(options.filter, "lint");
         assert!(!options.json);
     }
 
     #[test]
-    fn parse_test_args_accepts_positional_filter() {
-        let values = args(&["manifest.rsstest.toml", "examples"]);
-        let options = super::parse_test_args(&values).expect("arguments should parse");
+    fn parse_test_args_rejects_positionals() {
+        let values = args(&["manifest.rsstest.toml"]);
+        let error = super::parse_test_args(&values).expect_err("positional should fail");
 
-        assert_eq!(options.filter, "examples");
+        assert_eq!(error, "unexpected argument `manifest.rsstest.toml`.");
+    }
+
+    #[test]
+    fn parse_test_args_accepts_all() {
+        let values = args(&["--all", "--filter", "lint"]);
+        let options = super::parse_test_args(&values).expect("all flag should parse");
+
+        assert!(options.all);
+        assert_eq!(options.filter, "lint");
     }
 
     #[test]
     fn parse_test_args_rejects_unknown_flag() {
-        let values = args(&["--watch", "manifest.rsstest.toml"]);
+        let values = args(&["--watch"]);
         let error = super::parse_test_args(&values).expect_err("unknown flag should fail");
 
         assert_eq!(error, "unknown argument `--watch`.");

@@ -25,6 +25,7 @@ fn report_pr_cli_matches_s3_demo_golden_comment() {
         .expect("reir crate should live under the workspace root");
     let temp_dir = unique_temp_dir("rsscript-reir-report-pr-cli");
     fs::create_dir_all(&temp_dir).expect("temporary directory should be created");
+    let package_review_json = temp_dir.join("package-review.json");
     let head_reir = temp_dir.join("head.reir.json");
 
     let package_review = Command::new("cargo")
@@ -37,18 +38,43 @@ fn report_pr_cli_matches_s3_demo_golden_comment() {
             "--",
             "pkg",
             "review",
-            "--reir",
+            "--json",
             "demos/s3-iam-reir/scenarios/03-code-adds-delete",
         ])
         .output()
         .expect("rss pkg review command should run");
     assert!(
         !package_review.stdout.is_empty(),
-        "rss pkg review should emit the REIR bundle even when package risk makes the review command non-zero\nstderr:\n{}",
+        "rss pkg review should emit package-manager JSON\nstderr:\n{}",
         String::from_utf8_lossy(&package_review.stderr)
     );
-    let bundle: Bundle = serde_json::from_slice(&package_review.stdout)
-        .expect("rss pkg review --reir should emit valid REIR JSON");
+    fs::write(&package_review_json, &package_review.stdout)
+        .expect("package review JSON should be written");
+
+    let collect = Command::new(env!("CARGO_BIN_EXE_reir"))
+        .current_dir(workspace)
+        .args([
+            "collect",
+            "--producer",
+            "rsscript",
+            "--package-review",
+            package_review_json
+                .to_str()
+                .expect("temporary path should be utf-8"),
+            "--out",
+            head_reir.to_str().expect("temporary path should be utf-8"),
+        ])
+        .output()
+        .expect("reir collect command should run");
+    assert!(
+        collect.status.success(),
+        "reir collect should convert package-manager JSON to REIR\nstderr:\n{}",
+        String::from_utf8_lossy(&collect.stderr)
+    );
+
+    let bundle_json = fs::read(&head_reir).expect("head REIR bundle should be readable");
+    let bundle: Bundle =
+        serde_json::from_slice(&bundle_json).expect("reir collect should emit valid REIR JSON");
     assert!(bundle.facts.iter().any(|fact| {
         fact.role == Some(FactRole::Required)
             && fact
@@ -56,7 +82,6 @@ fn report_pr_cli_matches_s3_demo_golden_comment() {
                 .as_ref()
                 .is_some_and(|capability| capability.action.as_deref() == Some("s3:DeleteObject"))
     }));
-    fs::write(&head_reir, &package_review.stdout).expect("head REIR bundle should be written");
 
     let report_pr = Command::new(env!("CARGO_BIN_EXE_reir"))
         .current_dir(workspace)

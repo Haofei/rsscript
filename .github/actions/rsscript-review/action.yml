@@ -11,10 +11,6 @@ inputs:
     description: 'Deployment target name (e.g., prod, staging)'
     required: false
     default: 'prod'
-  format:
-    description: 'Output format: markdown, ci-json, sarif'
-    required: false
-    default: 'markdown'
   post-comment:
     description: 'Whether to post a PR comment (requires GITHUB_TOKEN)'
     required: false
@@ -53,54 +49,83 @@ runs:
           echo "::endgroup::"
         fi
 
-    - name: Run review-pr
+    - name: Run RSScript and REIR review
       id: review
       shell: bash
+      env:
+        INPUT_HEAD: ${{ inputs.head }}
+        INPUT_GRANTS: ${{ inputs.grants }}
+        INPUT_TARGET: ${{ inputs.target }}
       run: |
-        REVIEW_OUTPUT_FILE="${RUNNER_TEMP:-/tmp}/rsscript-review-output.txt"
+        TEMP_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/rsscript-review.XXXXXX")"
+        PACKAGE_REVIEW_JSON="$TEMP_DIR/package-review.json"
+        PACKAGE_CHECK_JSON="$TEMP_DIR/package-check.json"
+        REQUIRED_REIR_JSON="$TEMP_DIR/required.reir.json"
+        REVIEW_OUTPUT_FILE="$TEMP_DIR/review.md"
+        CI_JSON_FILE="$TEMP_DIR/ci-gate.json"
+        COMMENT_FILE="$TEMP_DIR/pr-comment.md"
+
         set +e
-        rss review-pr \
-          --head "${{ inputs.head }}" \
-          --grants "${{ inputs.grants }}" \
-          --target "${{ inputs.target }}" \
-          --format "${{ inputs.format }}" > "$REVIEW_OUTPUT_FILE"
+        rss pkg review --json "$INPUT_HEAD" > "$PACKAGE_REVIEW_JSON"
+        PACKAGE_REVIEW_EXIT_CODE=$?
+        rss pkg ci --json "$INPUT_HEAD" > "$PACKAGE_CHECK_JSON"
+        PACKAGE_CHECK_EXIT_CODE=$?
+        set -e
+        if [ $PACKAGE_REVIEW_EXIT_CODE -ne 0 ] && [ ! -s "$PACKAGE_REVIEW_JSON" ]; then
+          echo "::error::rss pkg review --json failed without producing package review JSON"
+          exit $PACKAGE_REVIEW_EXIT_CODE
+        fi
+        if [ $PACKAGE_CHECK_EXIT_CODE -ne 0 ] && [ ! -s "$PACKAGE_CHECK_JSON" ]; then
+          echo "::error::rss pkg ci --json failed without producing package check JSON"
+          exit $PACKAGE_CHECK_EXIT_CODE
+        fi
+        reir collect \
+          --producer rsscript \
+          --package-review "$PACKAGE_REVIEW_JSON" \
+          --package-check "$PACKAGE_CHECK_JSON" \
+          --out "$REQUIRED_REIR_JSON"
+
+        set +e
+        reir report-pr \
+          --required "$REQUIRED_REIR_JSON" \
+          --granted "$INPUT_GRANTS" \
+          --target "$INPUT_TARGET" > "$REVIEW_OUTPUT_FILE"
         EXIT_CODE=$?
         set -e
-        REVIEW_OUTPUT=$(cat "$REVIEW_OUTPUT_FILE")
-        COMMENT_FILE="${RUNNER_TEMP:-/tmp}/rsscript-pr-comment.md"
         cp "$REVIEW_OUTPUT_FILE" "$COMMENT_FILE"
 
         # Write outputs
+        COMMENT_DELIMITER="RSSCRIPT_REVIEW_$(uuidgen 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4().hex)')"
         {
-          echo "comment<<RSSCRIPT_REVIEW_EOF"
+          echo "comment<<$COMMENT_DELIMITER"
           cat "$REVIEW_OUTPUT_FILE"
-          echo "RSSCRIPT_REVIEW_EOF"
+          echo "$COMMENT_DELIMITER"
         } >> "$GITHUB_OUTPUT"
         echo "comment_file=$COMMENT_FILE" >> "$GITHUB_OUTPUT"
 
         # Also produce CI JSON for structured consumption
         set +e
-        rss review-pr \
-          --head "${{ inputs.head }}" \
-          --grants "${{ inputs.grants }}" \
-          --target "${{ inputs.target }}" \
-          --format ci-json > /tmp/rsscript-ci-gate.json
+        reir report-pr \
+          --required "$REQUIRED_REIR_JSON" \
+          --granted "$INPUT_GRANTS" \
+          --target "$INPUT_TARGET" \
+          --ci-json > "$CI_JSON_FILE"
         CI_JSON_EXIT_CODE=$?
         set -e
-        if [ $CI_JSON_EXIT_CODE -ne 0 ] && [ ! -s /tmp/rsscript-ci-gate.json ]; then
-          echo "::error::rss review-pr --format ci-json failed without producing CI JSON"
+        if [ $CI_JSON_EXIT_CODE -ne 0 ] && [ ! -s "$CI_JSON_FILE" ]; then
+          echo "::error::reir report-pr --ci-json failed without producing CI JSON"
           exit $CI_JSON_EXIT_CODE
         fi
-        echo "ci_json=/tmp/rsscript-ci-gate.json" >> $GITHUB_OUTPUT
+        echo "ci_json=$CI_JSON_FILE" >> "$GITHUB_OUTPUT"
 
-        if [ -s /tmp/rsscript-ci-gate.json ]; then
-          REVIEW_STATUS=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status","unknown"))' /tmp/rsscript-ci-gate.json)
+        if [ -s "$CI_JSON_FILE" ]; then
+          REVIEW_STATUS=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status","unknown"))' "$CI_JSON_FILE")
         elif [ $EXIT_CODE -ne 0 ]; then
           REVIEW_STATUS="fail"
         else
           REVIEW_STATUS="pass"
         fi
-        echo "status=$REVIEW_STATUS" >> $GITHUB_OUTPUT
+        echo "status=$REVIEW_STATUS" >> "$GITHUB_OUTPUT"
 
     - name: Post PR comment
       if: inputs.post-comment == 'true' && github.event_name == 'pull_request'

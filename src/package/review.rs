@@ -23,7 +23,7 @@ use super::native::{
     native_binding_interface_sources, package_native_binding_diagnostics, package_native_bindings,
     package_native_rust_review,
 };
-use super::source_set::{Manifest, PackageSource, load_package};
+use super::source_set::{Manifest, PackageSource, load_package, load_package_with_features};
 use super::{
     PackageDependencyKind, PackageNativeRustReview, PackageProviderImplementation, PackageReview,
     PackageReviewAwaitBoundary, PackageReviewAwaitSite, PackageReviewCapability,
@@ -34,7 +34,17 @@ use super::{
 };
 
 pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
-    let package = load_package(package_dir)?;
+    review_package_dir_with_features(package_dir, None)
+}
+
+pub(super) fn review_package_dir_with_features(
+    package_dir: &Path,
+    selected_features: Option<&[String]>,
+) -> Result<PackageReview, String> {
+    let package = match selected_features {
+        Some(features) => load_package_with_features(package_dir, Some(features))?,
+        None => load_package(package_dir)?,
+    };
     let manifest = &package.manifest;
     let sources = &package.sources;
     let dependency_interfaces = collect_dependency_interface_sources(package_dir, manifest)?;

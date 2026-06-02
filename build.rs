@@ -107,6 +107,12 @@ struct ManifestVirtual {
 }
 
 fn main() {
+    if let Err(error) = write_core_package_index() {
+        panic!("{error}");
+    }
+}
+
+fn write_core_package_index() -> Result<(), String> {
     println!("cargo:rerun-if-changed=core");
     println!("cargo:rerun-if-changed=rss");
 
@@ -114,8 +120,8 @@ fn main() {
     let index = CorePackageIndex {
         schema: "rss.core_package_index.v1",
         generated_by: "build.rs",
-        default_core: default_core_entries(&manifest_dir),
-        packages: package_entries(&manifest_dir),
+        default_core: default_core_entries(&manifest_dir)?,
+        packages: package_entries(&manifest_dir)?,
     };
     let json = serde_json::to_string_pretty(&index).expect("core package index should serialize");
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("out dir"));
@@ -123,20 +129,22 @@ fn main() {
         out_dir.join("rss-core-package-index.json"),
         format!("{json}\n"),
     )
-    .expect("core package index should be written");
+    .map_err(|error| format!("core package index should be written: {error}"))?;
+    Ok(())
 }
 
-fn default_core_entries(root: &Path) -> Vec<CoreInterfaceEntry> {
+fn default_core_entries(root: &Path) -> Result<Vec<CoreInterfaceEntry>, String> {
     let core_dir = root.join("core");
     let mut files = Vec::new();
-    collect_files_with_extension(&core_dir, "rssi", &mut files);
+    collect_files_with_extension(&core_dir, "rssi", &mut files)?;
     files.sort();
     files
         .into_iter()
         .map(|path| {
-            let source = fs::read_to_string(&path).unwrap_or_default();
+            let source = fs::read_to_string(&path)
+                .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
             let relative = relative_path(root, &path);
-            CoreInterfaceEntry {
+            Ok(CoreInterfaceEntry {
                 module: relative
                     .trim_start_matches("core/")
                     .trim_end_matches(".rssi")
@@ -144,26 +152,33 @@ fn default_core_entries(root: &Path) -> Vec<CoreInterfaceEntry> {
                 path: relative,
                 functions: collect_functions(&source),
                 types: collect_types(&source),
-            }
+            })
         })
         .collect()
 }
 
-fn package_entries(root: &Path) -> Vec<PackageEntry> {
+fn package_entries(root: &Path) -> Result<Vec<PackageEntry>, String> {
     let rss_dir = root.join("rss");
     let mut manifests = Vec::new();
-    collect_named_files(&rss_dir, "rsspkg.toml", &mut manifests);
+    collect_named_files(&rss_dir, "rsspkg.toml", &mut manifests)?;
     manifests.sort();
     manifests
         .into_iter()
-        .filter_map(|manifest_path| package_entry(root, &manifest_path))
+        .map(|manifest_path| package_entry(root, &manifest_path))
         .collect()
 }
 
-fn package_entry(root: &Path, manifest_path: &Path) -> Option<PackageEntry> {
-    let package_dir = manifest_path.parent()?;
-    let source = fs::read_to_string(manifest_path).ok()?;
-    let manifest: Manifest = toml::from_str(&source).ok()?;
+fn package_entry(root: &Path, manifest_path: &Path) -> Result<PackageEntry, String> {
+    let package_dir = manifest_path.parent().ok_or_else(|| {
+        format!(
+            "package manifest has no parent: {}",
+            manifest_path.display()
+        )
+    })?;
+    let source = fs::read_to_string(manifest_path)
+        .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
+    let manifest: Manifest = toml::from_str(&source)
+        .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
     let relative_dir = relative_path(root, package_dir);
     let native_rust = manifest
         .native
@@ -174,7 +189,7 @@ fn package_entry(root: &Path, manifest_path: &Path) -> Option<PackageEntry> {
                 path: rust.path,
             })
         });
-    Some(PackageEntry {
+    Ok(PackageEntry {
         kind: package_kind(&relative_dir),
         name: manifest.package.name,
         version: manifest.package.version,
@@ -184,8 +199,8 @@ fn package_entry(root: &Path, manifest_path: &Path) -> Option<PackageEntry> {
             &manifest.interfaces.paths,
             "interface",
             "rssi",
-        ),
-        source_files: package_files(package_dir, &manifest.sources.paths, "src", "rss"),
+        )?,
+        source_files: package_files(package_dir, &manifest.sources.paths, "src", "rss")?,
         native_rust,
         virtual_package: manifest
             .virtual_package
@@ -213,7 +228,7 @@ fn package_files(
     roots: &[String],
     default_root: &str,
     extension: &str,
-) -> Vec<String> {
+) -> Result<Vec<String>, String> {
     let roots = if roots.is_empty() {
         vec![default_root.to_string()]
     } else {
@@ -221,13 +236,13 @@ fn package_files(
     };
     let mut files = Vec::new();
     for root in roots {
-        collect_files_with_extension(&package_dir.join(root), extension, &mut files);
+        collect_files_with_extension(&package_dir.join(root), extension, &mut files)?;
     }
     files.sort();
-    files
+    Ok(files
         .into_iter()
         .map(|path| relative_path(package_dir, &path))
-        .collect()
+        .collect())
 }
 
 fn collect_functions(source: &str) -> Vec<String> {
@@ -265,34 +280,52 @@ fn symbol_after_keyword(line: &str, keyword: &str) -> Option<String> {
     (!symbol.is_empty()).then(|| symbol.to_string())
 }
 
-fn collect_named_files(path: &Path, file_name: &str, files: &mut Vec<PathBuf>) {
+fn collect_named_files(
+    path: &Path,
+    file_name: &str,
+    files: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
     if path.is_file() {
         if path.file_name().and_then(|name| name.to_str()) == Some(file_name) {
             files.push(path.to_path_buf());
         }
-        return;
+        return Ok(());
     }
-    let Ok(entries) = fs::read_dir(path) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        collect_named_files(&entry.path(), file_name, files);
+    let entries = fs::read_dir(path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| format!("failed to read entry in {}: {error}", path.display()))?;
+        collect_named_files(&entry.path(), file_name, files)?;
     }
+    Ok(())
 }
 
-fn collect_files_with_extension(path: &Path, extension: &str, files: &mut Vec<PathBuf>) {
+fn collect_files_with_extension(
+    path: &Path,
+    extension: &str,
+    files: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
     if path.is_file() {
         if path.extension().and_then(|value| value.to_str()) == Some(extension) {
             files.push(path.to_path_buf());
         }
-        return;
+        return Ok(());
     }
-    let Ok(entries) = fs::read_dir(path) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        collect_files_with_extension(&entry.path(), extension, files);
+    let entries = fs::read_dir(path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| format!("failed to read entry in {}: {error}", path.display()))?;
+        collect_files_with_extension(&entry.path(), extension, files)?;
     }
+    Ok(())
 }
 
 fn relative_path(root: &Path, path: &Path) -> String {

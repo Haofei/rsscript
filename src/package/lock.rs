@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 
 use crate::formatter::format_source;
 
+use super::review::review_package_dir_with_features;
 use super::source_set::{
     ManifestNativeRust, load_package, load_package_manifest, load_package_with_features,
     resolve_package_features, selected_root_package_features,
@@ -15,7 +16,7 @@ use super::{
     PackageLockMetadata, PackageLockPackage, PackageLockPackageChange, PackageReview,
     PackageReviewAwaitBoundary, PackageReviewFileKind, PackageRisk, PackageSource,
     collect_regular_files, package_dependency_spec, package_feature_may_change_boundary_risk,
-    package_risk_label, relative_path, review_package_dir,
+    package_risk_label, relative_path,
 };
 
 pub fn lock_package_dir(package_dir: &Path) -> Result<PackageLock, String> {
@@ -44,7 +45,7 @@ pub fn lock_package_dir(package_dir: &Path) -> Result<PackageLock, String> {
         packages,
         metadata: PackageLockMetadata {
             rsscript_version: env!("CARGO_PKG_VERSION").to_string(),
-            created_by: "rsscript pkg lock".to_string(),
+            created_by: "rsscript pkg".to_string(),
         },
     })
 }
@@ -54,7 +55,7 @@ pub(super) fn lock_package_entry(
     package: &LoadedPackage,
     features: Vec<String>,
 ) -> Result<PackageLockPackage, String> {
-    let review = review_package_dir(package_dir)?;
+    let review = review_package_dir_with_features(package_dir, Some(&features))?;
     let native = package
         .manifest
         .native
