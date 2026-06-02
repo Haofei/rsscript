@@ -957,6 +957,44 @@
     },
     {
       "kind": "package",
+      "name": "rss-core-properties",
+      "version": "0.1.0",
+      "path": "rss/core-properties",
+      "interface_files": [],
+      "source_files": [
+        "src/main.rss",
+        "src/properties_collections.rss",
+        "src/properties_core.rss",
+        "src/properties_json.rss",
+        "src/properties_result_option.rss",
+        "src/properties_state.rss",
+        "src/properties_views.rss"
+      ],
+      "native_rust": null,
+      "virtual_package": null,
+      "dependencies": [
+        "rss-quickcheck"
+      ],
+      "dev_dependencies": []
+    },
+    {
+      "kind": "package",
+      "name": "rss-quickcheck",
+      "version": "0.1.0",
+      "path": "rss/quickcheck",
+      "interface_files": [
+        "interface/lib.rssi"
+      ],
+      "source_files": [
+        "src/lib.rss"
+      ],
+      "native_rust": null,
+      "virtual_package": null,
+      "dependencies": [],
+      "dev_dependencies": []
+    },
+    {
+      "kind": "package",
       "name": "rss-rayon",
       "version": "0.1.0",
       "path": "rss/rayon",

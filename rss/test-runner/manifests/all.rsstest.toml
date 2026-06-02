@@ -70,7 +70,16 @@ command = "target/debug/rss"
 args = ["pkg"]
 paths = [
   "examples/packages/code-agent",
+  "rss/quickcheck",
+  "rss/core-properties",
 ]
+
+[[tests]]
+name = "core package properties"
+kind = "command_success"
+command = "target/debug/rss"
+timeout_ms = 60000
+args = ["run", "rss/core-properties"]
 
 [[tests]]
 name = "passing root fixtures have no diagnostics"

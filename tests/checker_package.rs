@@ -6602,6 +6602,70 @@ fn main() -> Unit {
 }
 
 #[test]
+fn package_lowering_input_includes_path_dependency_sources() {
+    let root_dir = common::unique_temp_dir("rsscript-package-source-dep-root");
+    let dep_dir = common::unique_temp_dir("rsscript-package-source-dep-lib");
+    common::write_named_package_fixture(
+        &dep_dir,
+        "rss-helper-dep",
+        "0.1.0",
+        "",
+        r#"pub fn Helper.answer() -> Int
+"#,
+    );
+    fs::create_dir_all(dep_dir.join("src")).expect("dep source dir should be created");
+    fs::write(
+        dep_dir.join("src/lib.rss"),
+        r#"pub fn Helper.answer() -> Int {
+    return 42
+}
+"#,
+    )
+    .expect("dep source should be written");
+
+    common::write_named_package_fixture(
+        &root_dir,
+        "rss-helper-root",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-helper-dep = {{ path = "{}" }}
+"#,
+            common::toml_path(&dep_dir)
+        ),
+        "",
+    );
+    fs::create_dir_all(root_dir.join("src")).expect("root source dir should be created");
+    fs::write(
+        root_dir.join("src/main.rss"),
+        r#"fn main() -> Unit {
+    let answer = Helper.answer()
+    Assert.equal_int(left: answer, right: 42)
+    return Unit
+}
+"#,
+    )
+    .expect("root source should be written");
+
+    let input = package_lowering_input(&root_dir).expect("package should lower");
+    let package = lower_sources_to_rust_package_with_options(
+        &input.sources,
+        &input.package.name,
+        "/workspace/rsscript/runtime",
+        &input.interfaces,
+        &input.native_dependencies,
+    )
+    .expect("package source should lower with dependency source");
+    let _ = fs::remove_dir_all(&root_dir);
+    let _ = fs::remove_dir_all(&dep_dir);
+
+    assert!(input.sources.iter().any(|(path, source)| {
+        path.contains("rsscript-package-source-dep-lib") && source.contains("Helper.answer")
+    }));
+    assert!(package.lib_rs.contains("fn Helper_answer"));
+}
+
+#[test]
 fn package_lowering_input_records_checked_in_rayon_wrapper_dependency() {
     let root_dir = common::unique_temp_dir("rsscript-package-rust-rayon-root");
     let rayon_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("rss/rayon");

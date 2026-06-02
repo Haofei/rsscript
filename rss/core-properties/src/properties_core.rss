@@ -1,0 +1,240 @@
+features: local
+
+fn prop_int_in_range(value: Int) -> fresh PropertyResult {
+    return Property.expect_bool(value: value >= -10 && value <= 10)
+}
+
+fn prop_bool_roundtrip(value: Bool) -> fresh PropertyResult {
+    let text = String.from_bool(value: value)
+    let true_case = value && text == "true"
+    let false_case = value == false && text == "false"
+    let ok = true_case || false_case
+    return Property.expect_bool(value: ok)
+}
+
+fn prop_int_parse_roundtrip(value: Int) -> fresh PropertyResult {
+    let text = String.from_int(value: value)
+    match String.parse_int(value: read text) {
+        Some(parsed) => {
+            return Property.expect_bool(value: parsed == value)
+        }
+        None => {
+            return Property.fail(
+                message: read "parse_int failed",
+                counterexample: read String.from_int(value: value),
+            )
+        }
+    }
+}
+
+fn prop_string_concat_len(value: read String) -> fresh PropertyResult {
+    let doubled = String.concat(left: read value, right: read value)
+    let expected_len = String.len(value: read value) * 2
+    return Property.expect_bool(value: String.len(value: read doubled) == expected_len)
+}
+
+fn prop_string_trim_no_growth(value: read String) -> fresh PropertyResult {
+    let trimmed = String.trim(value: read value)
+    return Property.expect_bool(value: String.len(value: read trimmed) <= String.len(value: read value))
+}
+
+fn prop_string_uppercase_preserves_len(value: read String) -> fresh PropertyResult {
+    let upper = String.to_uppercase(value: read value)
+    return Property.expect_bool(value: String.len(value: read upper) == String.len(value: read value))
+}
+
+fn prop_string_split_join_roundtrip(value: read String) -> fresh PropertyResult {
+    let parts = String.split(value: read value, delimiter: read "a")
+    let joined = List.join(list: read parts, separator: read "a")
+    return Property.expect_bool(value: joined == value)
+}
+
+fn prop_string_strip_prefix_roundtrip(value: read String) -> fresh PropertyResult {
+    let half_len = String.len(value: read value) / 2
+    let prefix = String.slice(value: read value, start: 0, len: half_len)
+    match String.strip_prefix(value: read value, prefix: read prefix) {
+        Some(rest) => {
+            let rebuilt = String.concat(left: read prefix, right: read rest)
+            return Property.expect_bool(value: rebuilt == value)
+        }
+        None => {
+            return Property.fail(message: read "strip_prefix failed for actual prefix", counterexample: read value)
+        }
+    }
+}
+
+fn prop_string_before_after_roundtrip(value: read String) -> fresh PropertyResult {
+    if String.contains(value: read value, needle: read "m") == false {
+        return Property.discard()
+    }
+
+    match String.before(value: read value, delimiter: read "m") {
+        Some(before) => {
+            match String.after(value: read value, delimiter: read "m") {
+                Some(after) => {
+                    let left = String.concat(left: read before, right: read "m")
+                    let rebuilt = String.concat(left: read left, right: read after)
+                    return Property.expect_bool(value: rebuilt == value)
+                }
+                None => {
+                    return Property.fail(message: read "after failed for contained delimiter", counterexample: read value)
+                }
+            }
+        }
+        None => {
+            return Property.fail(message: read "before failed for contained delimiter", counterexample: read value)
+        }
+    }
+}
+
+fn prop_string_concat_pair_contains_both(value: read StringPair) -> fresh PropertyResult {
+    let combined = String.concat(left: read value.left, right: read value.right)
+    let has_left_prefix = String.starts_with(value: read combined, prefix: read value.left)
+    let has_right_suffix = String.ends_with(value: read combined, suffix: read value.right)
+    return Property.expect_bool(value: has_left_prefix && has_right_suffix)
+}
+
+fn prop_string_list_join_split_roundtrip(values: read List<String>) -> fresh PropertyResult {
+    if List.len(list: read values) == 0 {
+        return Property.discard()
+    }
+
+    let joined = List.join(list: read values, separator: read "|")
+    let split = String.split(value: read joined, delimiter: read "|")
+    if List.len(list: read values) != List.len(list: read split) {
+        return Property.fail(message: read "split length changed", counterexample: read joined)
+    }
+
+    let mut index = 0
+    while index < List.len(list: read values) {
+        if List.get(list: read values, index: index) != List.get(list: read split, index: index) {
+            return Property.fail(message: read "split item changed", counterexample: read joined)
+        }
+        index = index + 1
+    }
+    return Property.pass()
+}
+
+pub fn QuickCheckCore.run() -> Unit {
+    let range_summary = Property.check_int(
+        name: read "generated ints stay in requested range",
+        cases: 200,
+        seed: 20260602,
+        range: read IntRange.new(min: -10, max: 10),
+        property: |value| {
+            return prop_int_in_range(value: value)
+        },
+    )
+    Property.assert_passed(summary: read range_summary)
+
+    let bool_summary = Property.check_bool(
+        name: read "bool string roundtrip",
+        cases: 200,
+        seed: 20260602,
+        property: |value| {
+            return prop_bool_roundtrip(value: value)
+        },
+    )
+    Property.assert_passed(summary: read bool_summary)
+
+    let parse_summary = Property.check_int(
+        name: read "int parse roundtrip",
+        cases: 200,
+        seed: 20260602,
+        range: read IntRange.new(min: -10000, max: 10000),
+        property: |value| {
+            return prop_int_parse_roundtrip(value: value)
+        },
+    )
+    Property.assert_passed(summary: read parse_summary)
+
+    let concat_summary = Property.check_string(
+        name: read "string concat doubles length",
+        cases: 200,
+        seed: 20260602,
+        input: read StringGen.new(max_len: 40),
+        property: |value| {
+            return prop_string_concat_len(value: read value)
+        },
+    )
+    Property.assert_passed(summary: read concat_summary)
+
+    let trim_summary = Property.check_string(
+        name: read "string trim never grows input",
+        cases: 200,
+        seed: 20260602,
+        input: read StringGen.new(max_len: 40),
+        property: |value| {
+            return prop_string_trim_no_growth(value: read value)
+        },
+    )
+    Property.assert_passed(summary: read trim_summary)
+
+    let uppercase_summary = Property.check_string(
+        name: read "string uppercase preserves length",
+        cases: 200,
+        seed: 20260602,
+        input: read StringGen.new(max_len: 40),
+        property: |value| {
+            return prop_string_uppercase_preserves_len(value: read value)
+        },
+    )
+    Property.assert_passed(summary: read uppercase_summary)
+
+    let split_join_summary = Property.check_string(
+        name: read "string split join roundtrip",
+        cases: 200,
+        seed: 20260602,
+        input: read StringGen.new(max_len: 40),
+        property: |value| {
+            return prop_string_split_join_roundtrip(value: read value)
+        },
+    )
+    Property.assert_passed(summary: read split_join_summary)
+
+    let strip_prefix_summary = Property.check_string(
+        name: read "string strip prefix roundtrip",
+        cases: 200,
+        seed: 20260602,
+        input: read StringGen.new(max_len: 40),
+        property: |value| {
+            return prop_string_strip_prefix_roundtrip(value: read value)
+        },
+    )
+    Property.assert_passed(summary: read strip_prefix_summary)
+
+    let before_after_summary = Property.check_string(
+        name: read "string before after roundtrip",
+        cases: 400,
+        seed: 20260602,
+        input: read StringGen.new(max_len: 80),
+        property: |value| {
+            return prop_string_before_after_roundtrip(value: read value)
+        },
+    )
+    Property.assert_passed(summary: read before_after_summary)
+
+    let concat_pair_summary = Property.check_string_pair(
+        name: read "string concat pair preserves prefix and suffix",
+        cases: 200,
+        seed: 20260602,
+        input: read StringPairGen.new(max_len: 40),
+        property: |value| {
+            return prop_string_concat_pair_contains_both(value: read value)
+        },
+    )
+    Property.assert_passed(summary: read concat_pair_summary)
+
+    let join_split_list_summary = Property.check_string_list(
+        name: read "string list join split roundtrip",
+        cases: 200,
+        seed: 20260602,
+        input: read StringListGen.new(max_len: 40, max_item_len: 20),
+        property: |values| {
+            return prop_string_list_join_split_roundtrip(values: read values)
+        },
+    )
+    Property.assert_passed(summary: read join_split_list_summary)
+
+    return Unit
+}

@@ -1,0 +1,159 @@
+features: local
+
+fn non_negative(value: Int) -> Int {
+    if value < 0 {
+        return 0 - value
+    }
+    return value
+}
+
+fn prop_string_view_len_bounds(value: read String) -> fresh PropertyResult {
+    let len = String.len(value: read value)
+    let start = len / 2
+    let view = String.view(value: read value, start: start, len: len)
+    return Property.expect_bool(value: StringView.len(value: read view) <= len - start)
+}
+
+fn prop_string_view_slice_len_bounds(value: read String) -> fresh PropertyResult {
+    let len = String.len(value: read value)
+    let view = String.view(value: read value, start: 0, len: len)
+    let slice = StringView.slice(value: read view, start: len / 2, len: len)
+    return Property.expect_bool(value: StringView.len(value: read slice) <= len)
+}
+
+fn prop_string_view_to_string_matches_slice(value: read String) -> fresh PropertyResult {
+    let len = String.len(value: read value)
+    let count = len / 2
+    let view = String.view(value: read value, start: 0, len: count)
+    let text = StringView.to_string(value: read view)
+    let expected = String.slice(value: read value, start: 0, len: count)
+    return Property.expect_bool(value: text == expected)
+}
+
+fn prop_bytes_from_string_len(value: read String) -> fresh PropertyResult {
+    let bytes = Bytes.from_string(value: read value)
+    return Property.expect_bool(value: Bytes.len(value: read bytes) == String.len(value: read value))
+}
+
+fn prop_bytes_concat_len(value: read String) -> fresh PropertyResult {
+    let left = Bytes.from_string(value: read value)
+    let right = Bytes.from_string(value: read value)
+    let joined = Bytes.concat(left: read left, right: read right)
+    return Property.expect_bool(value: Bytes.len(value: read joined) == String.len(value: read value) * 2)
+}
+
+fn prop_bytes_slice_len_bounds(value: read String) -> fresh PropertyResult {
+    let bytes = Bytes.from_string(value: read value)
+    let len = Bytes.len(value: read bytes)
+    let start = len / 2
+    let slice = Bytes.slice(value: read bytes, start: start, len: len)
+    return Property.expect_bool(value: Bytes.len(value: read slice) <= len - start)
+}
+
+fn prop_bytes_view_to_bytes_len(value: read String) -> fresh PropertyResult {
+    let bytes = Bytes.from_string(value: read value)
+    let len = Bytes.len(value: read bytes)
+    let count = len / 2
+    let view = Bytes.view(value: read bytes, start: 0, len: count)
+    let copied = BytesView.to_bytes(value: read view)
+    return Property.expect_bool(value: Bytes.len(value: read copied) == count)
+}
+
+fn prop_buffer_view_len_bounds(value: Int) -> fresh PropertyResult {
+    let size = non_negative(value: value) / 100
+    let buffer = Buffer.new(size: size)
+    let view = Buffer.view(buffer: read buffer, start: size / 2, len: size)
+    return Property.expect_bool(value: BufferView.len(value: read view) <= size)
+}
+
+pub fn QuickCheckViews.run() -> Unit {
+    let string_view_len = Property.check_string(
+        name: read "string view length stays in bounds",
+        cases: 200,
+        seed: 20260602,
+        input: read StringGen.new(max_len: 80),
+        property: |value| {
+            return prop_string_view_len_bounds(value: read value)
+        },
+    )
+    Property.assert_passed(summary: read string_view_len)
+
+    let string_view_slice = Property.check_string(
+        name: read "string view slice length stays in bounds",
+        cases: 200,
+        seed: 20260602,
+        input: read StringGen.new(max_len: 80),
+        property: |value| {
+            return prop_string_view_slice_len_bounds(value: read value)
+        },
+    )
+    Property.assert_passed(summary: read string_view_slice)
+
+    let string_view_text = Property.check_string(
+        name: read "string view to_string matches slice",
+        cases: 200,
+        seed: 20260602,
+        input: read StringGen.new(max_len: 80),
+        property: |value| {
+            return prop_string_view_to_string_matches_slice(value: read value)
+        },
+    )
+    Property.assert_passed(summary: read string_view_text)
+
+    let bytes_len = Property.check_string(
+        name: read "bytes from string has matching ascii length",
+        cases: 200,
+        seed: 20260602,
+        input: read StringGen.new(max_len: 80),
+        property: |value| {
+            return prop_bytes_from_string_len(value: read value)
+        },
+    )
+    Property.assert_passed(summary: read bytes_len)
+
+    let bytes_concat = Property.check_string(
+        name: read "bytes concat adds lengths",
+        cases: 200,
+        seed: 20260602,
+        input: read StringGen.new(max_len: 80),
+        property: |value| {
+            return prop_bytes_concat_len(value: read value)
+        },
+    )
+    Property.assert_passed(summary: read bytes_concat)
+
+    let bytes_slice = Property.check_string(
+        name: read "bytes slice length stays in bounds",
+        cases: 200,
+        seed: 20260602,
+        input: read StringGen.new(max_len: 80),
+        property: |value| {
+            return prop_bytes_slice_len_bounds(value: read value)
+        },
+    )
+    Property.assert_passed(summary: read bytes_slice)
+
+    let bytes_view = Property.check_string(
+        name: read "bytes view to_bytes preserves length",
+        cases: 200,
+        seed: 20260602,
+        input: read StringGen.new(max_len: 80),
+        property: |value| {
+            return prop_bytes_view_to_bytes_len(value: read value)
+        },
+    )
+    Property.assert_passed(summary: read bytes_view)
+
+    let buffer_view = Property.check_int(
+        name: read "buffer view length stays in bounds",
+        cases: 200,
+        seed: 20260602,
+        range: read IntRange.new(min: -10000, max: 10000),
+        property: |value| {
+            return prop_buffer_view_len_bounds(value: value)
+        },
+    )
+    Property.assert_passed(summary: read buffer_view)
+
+    return Unit
+}

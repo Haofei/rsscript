@@ -1,0 +1,10 @@
+[package]
+name = "rss-core-properties"
+version = "0.1.0"
+edition = "2026"
+
+[sources]
+paths = ["src"]
+
+[dependencies]
+rss-quickcheck = { path = "../quickcheck" }

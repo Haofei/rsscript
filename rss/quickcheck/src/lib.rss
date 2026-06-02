@@ -1,0 +1,1140 @@
+features: local
+
+pub struct Rng {
+    state: Int
+}
+
+pub struct PropertyResult {
+    ok: Bool
+    discarded: Bool
+    label: String
+    message: String
+    counterexample: String
+}
+
+pub struct PropertySummary {
+    name: String
+    passed: Int
+    discarded: Int
+    total: Int
+    seed: Int
+    failed: Bool
+    failure: String
+    counterexample: String
+}
+
+pub struct IntRange {
+    min: Int
+    max: Int
+}
+
+pub struct IntListGen {
+    max_len: Int
+    range: IntRange
+}
+
+pub struct BoolListGen {
+    max_len: Int
+}
+
+pub struct IntPair {
+    left: Int
+    right: Int
+}
+
+pub struct IntPairGen {
+    left: IntRange
+    right: IntRange
+}
+
+pub struct IntListPair {
+    left: List<Int>
+    right: List<Int>
+}
+
+pub struct IntListPairGen {
+    max_len: Int
+    range: IntRange
+}
+
+pub struct StringGen {
+    max_len: Int
+}
+
+pub struct StringPair {
+    left: String
+    right: String
+}
+
+pub struct StringPairGen {
+    max_len: Int
+}
+
+pub struct StringListGen {
+    max_len: Int
+    max_item_len: Int
+}
+
+fn positive_mod(value: Int, modulus: Int) -> Int {
+    let quotient = value / modulus
+    let reduced = value - quotient * modulus
+    if reduced < 0 {
+        return reduced + modulus
+    }
+    return reduced
+}
+
+fn bounded_cases(cases: Int) -> Int {
+    if cases <= 0 {
+        return 100
+    }
+    return cases
+}
+
+fn bounded_range_min(min: Int, max: Int) -> Int {
+    if min <= max {
+        return min
+    }
+    return max
+}
+
+fn bounded_range_max(min: Int, max: Int) -> Int {
+    if min <= max {
+        return max
+    }
+    return min
+}
+
+pub fn Rng.seed(seed: Int) -> fresh Rng {
+    let normalized = positive_mod(value: seed, modulus: 2147483647)
+    if normalized == 0 {
+        return Rng(state: 1)
+    }
+    return Rng(state: normalized)
+}
+
+pub fn Rng.next(rng: read Rng) -> fresh Rng {
+    let next = positive_mod(value: rng.state * 48271, modulus: 2147483647)
+    return Rng(state: next)
+}
+
+pub fn Rng.int(rng: read Rng, range: read IntRange) -> Int {
+    let low = bounded_range_min(min: range.min, max: range.max)
+    let high = bounded_range_max(min: range.min, max: range.max)
+    let span = high - low + 1
+    return low + positive_mod(value: rng.state, modulus: span)
+}
+
+pub fn Rng.bool(rng: read Rng) -> Bool {
+    return Rng.int(rng: read rng, range: read IntRange(min: 0, max: 1)) == 1
+}
+
+pub fn IntRange.new(min: Int, max: Int) -> fresh IntRange {
+    return IntRange(min: min, max: max)
+}
+
+pub fn IntListGen.new(max_len: Int, range: read IntRange) -> fresh IntListGen {
+    return IntListGen(max_len: max_len, range: IntRange(min: range.min, max: range.max))
+}
+
+pub fn BoolListGen.new(max_len: Int) -> fresh BoolListGen {
+    return BoolListGen(max_len: max_len)
+}
+
+pub fn IntPairGen.new(left: read IntRange, right: read IntRange) -> fresh IntPairGen {
+    return IntPairGen(
+        left: IntRange(min: left.min, max: left.max),
+        right: IntRange(min: right.min, max: right.max),
+    )
+}
+
+pub fn IntListPairGen.new(max_len: Int, range: read IntRange) -> fresh IntListPairGen {
+    return IntListPairGen(max_len: max_len, range: IntRange(min: range.min, max: range.max))
+}
+
+pub fn StringGen.new(max_len: Int) -> fresh StringGen {
+    return StringGen(max_len: max_len)
+}
+
+pub fn StringPairGen.new(max_len: Int) -> fresh StringPairGen {
+    return StringPairGen(max_len: max_len)
+}
+
+pub fn StringListGen.new(max_len: Int, max_item_len: Int) -> fresh StringListGen {
+    return StringListGen(max_len: max_len, max_item_len: max_item_len)
+}
+
+pub fn Property.pass() -> fresh PropertyResult {
+    return PropertyResult(
+        ok: true,
+        discarded: false,
+        label: "",
+        message: "",
+        counterexample: "",
+    )
+}
+
+pub fn Property.fail(message: read String, counterexample: read String) -> fresh PropertyResult {
+    return PropertyResult(
+        ok: false,
+        discarded: false,
+        label: "",
+        message: String.copy(value: read message),
+        counterexample: String.copy(value: read counterexample),
+    )
+}
+
+pub fn Property.discard() -> fresh PropertyResult {
+    return PropertyResult(
+        ok: false,
+        discarded: true,
+        label: "",
+        message: "",
+        counterexample: "",
+    )
+}
+
+pub fn Property.expect_bool(value: Bool) -> fresh PropertyResult {
+    if value {
+        return Property.pass()
+    }
+    return Property.fail(message: read "property returned false", counterexample: read "")
+}
+
+pub fn PropertyResult.label(result: read PropertyResult, label: read String) -> fresh PropertyResult {
+    return PropertyResult(
+        ok: result.ok,
+        discarded: result.discarded,
+        label: String.copy(value: read label),
+        message: String.copy(value: read result.message),
+        counterexample: String.copy(value: read result.counterexample),
+    )
+}
+
+fn int_counterexample(value: Int) -> fresh String {
+    return String.from_int(value: value)
+}
+
+fn bool_counterexample(value: Bool) -> fresh String {
+    return String.from_bool(value: value)
+}
+
+fn string_counterexample(value: read String) -> fresh String {
+    return String.concat(
+        left: read "\"",
+        right: read String.concat(left: read value, right: read "\""),
+    )
+}
+
+fn string_pair_counterexample(value: read StringPair) -> fresh String {
+    let left = String.concat(left: read "left=", right: read string_counterexample(value: read value.left))
+    let mid = String.concat(left: read left, right: read " right=")
+    return String.concat(left: read mid, right: read string_counterexample(value: read value.right))
+}
+
+fn int_list_counterexample(values: read List<Int>) -> fresh String {
+    local parts = List<String>.new()
+    let mut index = 0
+    while index < List.len(list: read values) {
+        let value = List.get(list: read values, index: index)
+        List.push(list: mut parts, value: read String.from_int(value: value))
+        index = index + 1
+    }
+    return String.concat(
+        left: read "[",
+        right: read String.concat(
+            left: read List.join(list: read parts, separator: read ", "),
+            right: read "]",
+        ),
+    )
+}
+
+fn bool_list_counterexample(values: read List<Bool>) -> fresh String {
+    local parts = List<String>.new()
+    let mut index = 0
+    while index < List.len(list: read values) {
+        let value = List.get(list: read values, index: index)
+        List.push(list: mut parts, value: read String.from_bool(value: value))
+        index = index + 1
+    }
+    return String.concat(
+        left: read "[",
+        right: read String.concat(
+            left: read List.join(list: read parts, separator: read ", "),
+            right: read "]",
+        ),
+    )
+}
+
+fn string_list_counterexample(values: read List<String>) -> fresh String {
+    local parts = List<String>.new()
+    let mut index = 0
+    while index < List.len(list: read values) {
+        let value = List.get(list: read values, index: index)
+        List.push(list: mut parts, value: read string_counterexample(value: read value))
+        index = index + 1
+    }
+    return String.concat(
+        left: read "[",
+        right: read String.concat(
+            left: read List.join(list: read parts, separator: read ", "),
+            right: read "]",
+        ),
+    )
+}
+
+fn int_pair_counterexample(value: read IntPair) -> fresh String {
+    let left = String.concat(left: read "left=", right: read String.from_int(value: value.left))
+    let mid = String.concat(left: read left, right: read " right=")
+    return String.concat(left: read mid, right: read String.from_int(value: value.right))
+}
+
+fn int_list_pair_counterexample(value: read IntListPair) -> fresh String {
+    let left = String.concat(left: read "left=", right: read int_list_counterexample(values: read value.left))
+    let mid = String.concat(left: read left, right: read " right=")
+    return String.concat(left: read mid, right: read int_list_counterexample(values: read value.right))
+}
+
+fn result_with_counterexample(result: read PropertyResult, counterexample: read String) -> fresh PropertyResult {
+    if String.is_empty(value: read result.counterexample) {
+        return PropertyResult(
+            ok: result.ok,
+            discarded: result.discarded,
+            label: String.copy(value: read result.label),
+            message: String.copy(value: read result.message),
+            counterexample: String.copy(value: read counterexample),
+        )
+    }
+    return PropertyResult(
+        ok: result.ok,
+        discarded: result.discarded,
+        label: String.copy(value: read result.label),
+        message: String.copy(value: read result.message),
+        counterexample: String.copy(value: read result.counterexample),
+    )
+}
+
+fn failed_summary(
+    name: read String,
+    passed: Int,
+    discarded: Int,
+    total: Int,
+    seed: Int,
+    result: read PropertyResult,
+) -> fresh PropertySummary {
+    return PropertySummary(
+        name: String.copy(value: read name),
+        passed: passed,
+        discarded: discarded,
+        total: total,
+        seed: seed,
+        failed: true,
+        failure: String.copy(value: read result.message),
+        counterexample: String.copy(value: read result.counterexample),
+    )
+}
+
+fn passed_summary(
+    name: read String,
+    passed: Int,
+    discarded: Int,
+    total: Int,
+    seed: Int,
+) -> fresh PropertySummary {
+    return PropertySummary(
+        name: String.copy(value: read name),
+        passed: passed,
+        discarded: discarded,
+        total: total,
+        seed: seed,
+        failed: false,
+        failure: "",
+        counterexample: "",
+    )
+}
+
+fn shrink_int_failure(value: Int, property: noescape Fn(Int) -> fresh PropertyResult) -> fresh PropertyResult {
+    let zero = property(0)
+    if zero.ok == false && zero.discarded == false {
+        return result_with_counterexample(
+            result: read zero,
+            counterexample: read int_counterexample(value: 0),
+        )
+    }
+
+    let half = value / 2
+    if half != value {
+        let candidate = property(half)
+        if candidate.ok == false && candidate.discarded == false {
+            return result_with_counterexample(
+                result: read candidate,
+                counterexample: read int_counterexample(value: half),
+            )
+        }
+    }
+
+    let original = property(value)
+    return result_with_counterexample(
+        result: read original,
+        counterexample: read int_counterexample(value: value),
+    )
+}
+
+pub fn Property.check_int(
+    name: read String,
+    cases: Int,
+    seed: Int,
+    range: read IntRange,
+    property: noescape Fn(Int) -> fresh PropertyResult,
+) -> fresh PropertySummary {
+    let mut rng = Rng.seed(seed: seed)
+    let total = bounded_cases(cases: cases)
+    let mut passed = 0
+    let mut discarded = 0
+    let mut index = 0
+
+    while index < total {
+        rng = Rng.next(rng: read rng)
+        let value = Rng.int(rng: read rng, range: read range)
+        let result = property(value)
+        if result.discarded {
+            discarded = discarded + 1
+        } else {
+            if result.ok {
+                passed = passed + 1
+            } else {
+                let shrunk = shrink_int_failure(value: value, property: property)
+                return failed_summary(
+                    name: read name,
+                    passed: passed,
+                    discarded: discarded,
+                    total: total,
+                    seed: seed,
+                    result: read shrunk,
+                )
+            }
+        }
+        index = index + 1
+    }
+
+    return passed_summary(name: read name, passed: passed, discarded: discarded, total: total, seed: seed)
+}
+
+pub fn Property.check_bool(
+    name: read String,
+    cases: Int,
+    seed: Int,
+    property: noescape Fn(Bool) -> fresh PropertyResult,
+) -> fresh PropertySummary {
+    let mut rng = Rng.seed(seed: seed)
+    let total = bounded_cases(cases: cases)
+    let mut passed = 0
+    let mut discarded = 0
+    let mut index = 0
+
+    while index < total {
+        rng = Rng.next(rng: read rng)
+        let value = Rng.bool(rng: read rng)
+        let result = property(value)
+        if result.discarded {
+            discarded = discarded + 1
+        } else {
+            if result.ok {
+                passed = passed + 1
+            } else {
+                let with_input = result_with_counterexample(
+                    result: read result,
+                    counterexample: read bool_counterexample(value: value),
+                )
+                return failed_summary(
+                    name: read name,
+                    passed: passed,
+                    discarded: discarded,
+                    total: total,
+                    seed: seed,
+                    result: read with_input,
+                )
+            }
+        }
+        index = index + 1
+    }
+
+    return passed_summary(name: read name, passed: passed, discarded: discarded, total: total, seed: seed)
+}
+
+fn gen_bool_list(rng: read Rng, input: read BoolListGen) -> fresh List<Bool> {
+    let bounded_len = bounded_range_max(min: 0, max: input.max_len)
+    let len = Rng.int(rng: read rng, range: read IntRange(min: 0, max: bounded_len))
+    let mut item_rng = Rng.next(rng: read rng)
+    local values = List<Bool>.new()
+    let mut index = 0
+    while index < len {
+        item_rng = Rng.next(rng: read item_rng)
+        List.push(list: mut values, value: read Rng.bool(rng: read item_rng))
+        index = index + 1
+    }
+    return values
+}
+
+fn shrink_bool_list_failure(
+    values: read List<Bool>,
+    property: noescape Fn(List<Bool>) -> fresh PropertyResult,
+) -> fresh PropertyResult {
+    local empty = List<Bool>.new()
+    let empty_result = property(empty)
+    if empty_result.ok == false && empty_result.discarded == false {
+        return result_with_counterexample(
+            result: read empty_result,
+            counterexample: read "[]",
+        )
+    }
+
+    let half_len = List.len(list: read values) / 2
+    if half_len > 0 {
+        let half = List.take(list: read values, count: half_len)
+        let half_counterexample = bool_list_counterexample(values: read half)
+        let half_result = property(half)
+        if half_result.ok == false && half_result.discarded == false {
+            return result_with_counterexample(
+                result: read half_result,
+                counterexample: read half_counterexample,
+            )
+        }
+    }
+
+    let original_value = List.slice(list: read values, start: 0, len: List.len(list: read values))
+    let original = property(original_value)
+    return result_with_counterexample(
+        result: read original,
+        counterexample: read bool_list_counterexample(values: read values),
+    )
+}
+
+pub fn Property.check_bool_list(
+    name: read String,
+    cases: Int,
+    seed: Int,
+    input: read BoolListGen,
+    property: noescape Fn(List<Bool>) -> fresh PropertyResult,
+) -> fresh PropertySummary {
+    let mut rng = Rng.seed(seed: seed)
+    let total = bounded_cases(cases: cases)
+    let mut passed = 0
+    let mut discarded = 0
+    let mut index = 0
+
+    while index < total {
+        rng = Rng.next(rng: read rng)
+        let values = gen_bool_list(rng: read rng, input: read input)
+        let property_input = List.slice(list: read values, start: 0, len: List.len(list: read values))
+        let result = property(property_input)
+        if result.discarded {
+            discarded = discarded + 1
+        } else {
+            if result.ok {
+                passed = passed + 1
+            } else {
+                let shrunk = shrink_bool_list_failure(values: read values, property: property)
+                return failed_summary(
+                    name: read name,
+                    passed: passed,
+                    discarded: discarded,
+                    total: total,
+                    seed: seed,
+                    result: read shrunk,
+                )
+            }
+        }
+        index = index + 1
+    }
+
+    return passed_summary(name: read name, passed: passed, discarded: discarded, total: total, seed: seed)
+}
+
+fn letter_from_index(value: Int) -> String {
+    match value {
+        0 => {
+            return "a"
+        }
+        1 => {
+            return "b"
+        }
+        2 => {
+            return "c"
+        }
+        3 => {
+            return "d"
+        }
+        4 => {
+            return "e"
+        }
+        5 => {
+            return "f"
+        }
+        6 => {
+            return "g"
+        }
+        7 => {
+            return "h"
+        }
+        8 => {
+            return "i"
+        }
+        9 => {
+            return "j"
+        }
+        10 => {
+            return "k"
+        }
+        11 => {
+            return "l"
+        }
+        12 => {
+            return "m"
+        }
+        13 => {
+            return "n"
+        }
+        14 => {
+            return "o"
+        }
+        15 => {
+            return "p"
+        }
+        16 => {
+            return "q"
+        }
+        17 => {
+            return "r"
+        }
+        18 => {
+            return "s"
+        }
+        19 => {
+            return "t"
+        }
+        20 => {
+            return "u"
+        }
+        21 => {
+            return "v"
+        }
+        22 => {
+            return "w"
+        }
+        23 => {
+            return "x"
+        }
+        24 => {
+            return "y"
+        }
+        _ => {
+            return "z"
+        }
+    }
+}
+
+fn gen_string(rng: read Rng, input: read StringGen) -> fresh String {
+    let bounded_len = bounded_range_max(min: 0, max: input.max_len)
+    let len = Rng.int(rng: read rng, range: read IntRange(min: 0, max: bounded_len))
+    let mut item_rng = Rng.next(rng: read rng)
+    local builder = StringBuilder.new()
+    let mut index = 0
+    while index < len {
+        item_rng = Rng.next(rng: read item_rng)
+        let letter_index = Rng.int(rng: read item_rng, range: read IntRange(min: 0, max: 25))
+        StringBuilder.push(builder: mut builder, value: read letter_from_index(value: letter_index))
+        index = index + 1
+    }
+    return StringBuilder.finish(builder: take builder)
+}
+
+fn gen_string_pair(rng: read Rng, input: read StringPairGen) -> fresh StringPair {
+    let left_rng = Rng.next(rng: read rng)
+    let right_rng = Rng.next(rng: read left_rng)
+    let string_gen = StringGen(max_len: input.max_len)
+    local left_value = gen_string(rng: read left_rng, input: read string_gen)
+    local right_value = gen_string(rng: read right_rng, input: read string_gen)
+    return StringPair(left: take left_value, right: take right_value)
+}
+
+fn gen_string_list(rng: read Rng, input: read StringListGen) -> fresh List<String> {
+    let bounded_len = bounded_range_max(min: 0, max: input.max_len)
+    let len = Rng.int(rng: read rng, range: read IntRange(min: 0, max: bounded_len))
+    let string_gen = StringGen(max_len: input.max_item_len)
+    let mut item_rng = Rng.next(rng: read rng)
+    local values = List<String>.new()
+    let mut index = 0
+    while index < len {
+        item_rng = Rng.next(rng: read item_rng)
+        let value = gen_string(rng: read item_rng, input: read string_gen)
+        List.push(list: mut values, value: read value)
+        index = index + 1
+    }
+    return values
+}
+
+fn shrink_string_failure(value: read String, property: noescape Fn(String) -> fresh PropertyResult) -> fresh PropertyResult {
+    let empty = property("")
+    if empty.ok == false && empty.discarded == false {
+        return result_with_counterexample(
+            result: read empty,
+            counterexample: read "\"\"",
+        )
+    }
+
+    let half_len = String.len(value: read value) / 2
+    if half_len > 0 {
+        let half = String.slice(value: read value, start: 0, len: half_len)
+        let half_counterexample = string_counterexample(value: read half)
+        let half_result = property(half)
+        if half_result.ok == false && half_result.discarded == false {
+            return result_with_counterexample(
+                result: read half_result,
+                counterexample: read half_counterexample,
+            )
+        }
+    }
+
+    let original = property(String.copy(value: read value))
+    return result_with_counterexample(
+        result: read original,
+        counterexample: read string_counterexample(value: read value),
+    )
+}
+
+fn shrink_string_pair_failure(
+    value: read StringPair,
+    property: noescape Fn(StringPair) -> fresh PropertyResult,
+) -> fresh PropertyResult {
+    let empty = StringPair(left: "", right: "")
+    let empty_result = property(empty)
+    if empty_result.ok == false && empty_result.discarded == false {
+        return result_with_counterexample(
+            result: read empty_result,
+            counterexample: read "left=\"\" right=\"\"",
+        )
+    }
+
+    let original_value = StringPair(
+        left: String.copy(value: read value.left),
+        right: String.copy(value: read value.right),
+    )
+    let original = property(original_value)
+    return result_with_counterexample(
+        result: read original,
+        counterexample: read string_pair_counterexample(value: read value),
+    )
+}
+
+fn shrink_string_list_failure(
+    values: read List<String>,
+    property: noescape Fn(List<String>) -> fresh PropertyResult,
+) -> fresh PropertyResult {
+    local empty = List<String>.new()
+    let empty_result = property(empty)
+    if empty_result.ok == false && empty_result.discarded == false {
+        return result_with_counterexample(
+            result: read empty_result,
+            counterexample: read "[]",
+        )
+    }
+
+    let half_len = List.len(list: read values) / 2
+    if half_len > 0 {
+        let half = List.take(list: read values, count: half_len)
+        let half_counterexample = string_list_counterexample(values: read half)
+        let half_result = property(half)
+        if half_result.ok == false && half_result.discarded == false {
+            return result_with_counterexample(
+                result: read half_result,
+                counterexample: read half_counterexample,
+            )
+        }
+    }
+
+    let original_value = List.slice(list: read values, start: 0, len: List.len(list: read values))
+    let original = property(original_value)
+    return result_with_counterexample(
+        result: read original,
+        counterexample: read string_list_counterexample(values: read values),
+    )
+}
+
+pub fn Property.check_string(
+    name: read String,
+    cases: Int,
+    seed: Int,
+    input: read StringGen,
+    property: noescape Fn(String) -> fresh PropertyResult,
+) -> fresh PropertySummary {
+    let mut rng = Rng.seed(seed: seed)
+    let total = bounded_cases(cases: cases)
+    let mut passed = 0
+    let mut discarded = 0
+    let mut index = 0
+
+    while index < total {
+        rng = Rng.next(rng: read rng)
+        let value = gen_string(rng: read rng, input: read input)
+        let result = property(String.copy(value: read value))
+        if result.discarded {
+            discarded = discarded + 1
+        } else {
+            if result.ok {
+                passed = passed + 1
+            } else {
+                let shrunk = shrink_string_failure(value: read value, property: property)
+                return failed_summary(
+                    name: read name,
+                    passed: passed,
+                    discarded: discarded,
+                    total: total,
+                    seed: seed,
+                    result: read shrunk,
+                )
+            }
+        }
+        index = index + 1
+    }
+
+    return passed_summary(name: read name, passed: passed, discarded: discarded, total: total, seed: seed)
+}
+
+pub fn Property.check_string_pair(
+    name: read String,
+    cases: Int,
+    seed: Int,
+    input: read StringPairGen,
+    property: noescape Fn(StringPair) -> fresh PropertyResult,
+) -> fresh PropertySummary {
+    let mut rng = Rng.seed(seed: seed)
+    let total = bounded_cases(cases: cases)
+    let mut passed = 0
+    let mut discarded = 0
+    let mut index = 0
+
+    while index < total {
+        rng = Rng.next(rng: read rng)
+        let value = gen_string_pair(rng: read rng, input: read input)
+        let input_value = StringPair(
+            left: String.copy(value: read value.left),
+            right: String.copy(value: read value.right),
+        )
+        let result = property(input_value)
+        if result.discarded {
+            discarded = discarded + 1
+        } else {
+            if result.ok {
+                passed = passed + 1
+            } else {
+                let shrunk = shrink_string_pair_failure(value: read value, property: property)
+                return failed_summary(
+                    name: read name,
+                    passed: passed,
+                    discarded: discarded,
+                    total: total,
+                    seed: seed,
+                    result: read shrunk,
+                )
+            }
+        }
+        index = index + 1
+    }
+
+    return passed_summary(name: read name, passed: passed, discarded: discarded, total: total, seed: seed)
+}
+
+pub fn Property.check_string_list(
+    name: read String,
+    cases: Int,
+    seed: Int,
+    input: read StringListGen,
+    property: noescape Fn(List<String>) -> fresh PropertyResult,
+) -> fresh PropertySummary {
+    let mut rng = Rng.seed(seed: seed)
+    let total = bounded_cases(cases: cases)
+    let mut passed = 0
+    let mut discarded = 0
+    let mut index = 0
+
+    while index < total {
+        rng = Rng.next(rng: read rng)
+        let values = gen_string_list(rng: read rng, input: read input)
+        let property_input = List.slice(list: read values, start: 0, len: List.len(list: read values))
+        let result = property(property_input)
+        if result.discarded {
+            discarded = discarded + 1
+        } else {
+            if result.ok {
+                passed = passed + 1
+            } else {
+                let shrunk = shrink_string_list_failure(values: read values, property: property)
+                return failed_summary(
+                    name: read name,
+                    passed: passed,
+                    discarded: discarded,
+                    total: total,
+                    seed: seed,
+                    result: read shrunk,
+                )
+            }
+        }
+        index = index + 1
+    }
+
+    return passed_summary(name: read name, passed: passed, discarded: discarded, total: total, seed: seed)
+}
+
+fn gen_int_list(rng: read Rng, input: read IntListGen) -> fresh List<Int> {
+    let bounded_len = bounded_range_max(min: 0, max: input.max_len)
+    let len = Rng.int(rng: read rng, range: read IntRange(min: 0, max: bounded_len))
+    let mut item_rng = Rng.next(rng: read rng)
+    local values = List<Int>.new()
+    let mut index = 0
+    while index < len {
+        item_rng = Rng.next(rng: read item_rng)
+        let value = Rng.int(rng: read item_rng, range: read input.range)
+        List.push(list: mut values, value: read value)
+        index = index + 1
+    }
+    return values
+}
+
+fn gen_int_pair(rng: read Rng, input: read IntPairGen) -> fresh IntPair {
+    let left_rng = Rng.next(rng: read rng)
+    let right_rng = Rng.next(rng: read left_rng)
+    return IntPair(
+        left: Rng.int(rng: read left_rng, range: read input.left),
+        right: Rng.int(rng: read right_rng, range: read input.right),
+    )
+}
+
+fn gen_int_list_pair(rng: read Rng, input: read IntListPairGen) -> fresh IntListPair {
+    let left_rng = Rng.next(rng: read rng)
+    let right_rng = Rng.next(rng: read left_rng)
+    let list_gen = IntListGen(max_len: input.max_len, range: IntRange(min: input.range.min, max: input.range.max))
+    local left_values = gen_int_list(rng: read left_rng, input: read list_gen)
+    local right_values = gen_int_list(rng: read right_rng, input: read list_gen)
+    return IntListPair(
+        left: take left_values,
+        right: take right_values,
+    )
+}
+
+fn shrink_list_failure(
+    values: read List<Int>,
+    property: noescape Fn(List<Int>) -> fresh PropertyResult,
+) -> fresh PropertyResult {
+    local empty = List<Int>.new()
+    let empty_result = property(empty)
+    if empty_result.ok == false && empty_result.discarded == false {
+        return result_with_counterexample(
+            result: read empty_result,
+            counterexample: read "[]",
+        )
+    }
+
+    let half_len = List.len(list: read values) / 2
+    if half_len > 0 {
+        let half = List.take(list: read values, count: half_len)
+        let half_counterexample = int_list_counterexample(values: read half)
+        let half_result = property(half)
+        if half_result.ok == false && half_result.discarded == false {
+            return result_with_counterexample(
+                result: read half_result,
+                counterexample: read half_counterexample,
+            )
+        }
+    }
+
+    let original_value = List.slice(list: read values, start: 0, len: List.len(list: read values))
+    let original = property(original_value)
+    return result_with_counterexample(
+        result: read original,
+        counterexample: read int_list_counterexample(values: read values),
+    )
+}
+
+fn shrink_int_pair_failure(
+    value: read IntPair,
+    property: noescape Fn(IntPair) -> fresh PropertyResult,
+) -> fresh PropertyResult {
+    let zero = IntPair(left: 0, right: 0)
+    let zero_result = property(zero)
+    if zero_result.ok == false && zero_result.discarded == false {
+        return result_with_counterexample(
+            result: read zero_result,
+            counterexample: read "left=0 right=0",
+        )
+    }
+
+    let original_value = IntPair(left: value.left, right: value.right)
+    let original = property(original_value)
+    return result_with_counterexample(
+        result: read original,
+        counterexample: read int_pair_counterexample(value: read value),
+    )
+}
+
+fn shrink_int_list_pair_failure(
+    value: read IntListPair,
+    property: noescape Fn(IntListPair) -> fresh PropertyResult,
+) -> fresh PropertyResult {
+    local left_empty = List<Int>.new()
+    local right_empty = List<Int>.new()
+    let empty_pair = IntListPair(left: take left_empty, right: take right_empty)
+    let empty_result = property(empty_pair)
+    if empty_result.ok == false && empty_result.discarded == false {
+        return result_with_counterexample(
+            result: read empty_result,
+            counterexample: read "left=[] right=[]",
+        )
+    }
+
+    local left_copy = List.slice(list: read value.left, start: 0, len: List.len(list: read value.left))
+    local right_copy = List.slice(list: read value.right, start: 0, len: List.len(list: read value.right))
+    let original_value = IntListPair(left: take left_copy, right: take right_copy)
+    let original = property(original_value)
+    return result_with_counterexample(
+        result: read original,
+        counterexample: read int_list_pair_counterexample(value: read value),
+    )
+}
+
+pub fn Property.check_int_list(
+    name: read String,
+    cases: Int,
+    seed: Int,
+    input: read IntListGen,
+    property: noescape Fn(List<Int>) -> fresh PropertyResult,
+) -> fresh PropertySummary {
+    let mut rng = Rng.seed(seed: seed)
+    let total = bounded_cases(cases: cases)
+    let mut passed = 0
+    let mut discarded = 0
+    let mut index = 0
+
+    while index < total {
+        rng = Rng.next(rng: read rng)
+        let values = gen_int_list(rng: read rng, input: read input)
+        let input = List.slice(list: read values, start: 0, len: List.len(list: read values))
+        let result = property(input)
+        if result.discarded {
+            discarded = discarded + 1
+        } else {
+            if result.ok {
+                passed = passed + 1
+            } else {
+                let shrunk = shrink_list_failure(values: read values, property: property)
+                return failed_summary(
+                    name: read name,
+                    passed: passed,
+                    discarded: discarded,
+                    total: total,
+                    seed: seed,
+                    result: read shrunk,
+                )
+            }
+        }
+        index = index + 1
+    }
+
+    return passed_summary(name: read name, passed: passed, discarded: discarded, total: total, seed: seed)
+}
+
+pub fn Property.check_int_pair(
+    name: read String,
+    cases: Int,
+    seed: Int,
+    input: read IntPairGen,
+    property: noescape Fn(IntPair) -> fresh PropertyResult,
+) -> fresh PropertySummary {
+    let mut rng = Rng.seed(seed: seed)
+    let total = bounded_cases(cases: cases)
+    let mut passed = 0
+    let mut discarded = 0
+    let mut index = 0
+
+    while index < total {
+        rng = Rng.next(rng: read rng)
+        let value = gen_int_pair(rng: read rng, input: read input)
+        let input_value = IntPair(left: value.left, right: value.right)
+        let result = property(input_value)
+        if result.discarded {
+            discarded = discarded + 1
+        } else {
+            if result.ok {
+                passed = passed + 1
+            } else {
+                let shrunk = shrink_int_pair_failure(value: read value, property: property)
+                return failed_summary(
+                    name: read name,
+                    passed: passed,
+                    discarded: discarded,
+                    total: total,
+                    seed: seed,
+                    result: read shrunk,
+                )
+            }
+        }
+        index = index + 1
+    }
+
+    return passed_summary(name: read name, passed: passed, discarded: discarded, total: total, seed: seed)
+}
+
+pub fn Property.check_int_list_pair(
+    name: read String,
+    cases: Int,
+    seed: Int,
+    input: read IntListPairGen,
+    property: noescape Fn(IntListPair) -> fresh PropertyResult,
+) -> fresh PropertySummary {
+    let mut rng = Rng.seed(seed: seed)
+    let total = bounded_cases(cases: cases)
+    let mut passed = 0
+    let mut discarded = 0
+    let mut index = 0
+
+    while index < total {
+        rng = Rng.next(rng: read rng)
+        let value = gen_int_list_pair(rng: read rng, input: read input)
+        local left_input = List.slice(list: read value.left, start: 0, len: List.len(list: read value.left))
+        local right_input = List.slice(list: read value.right, start: 0, len: List.len(list: read value.right))
+        let input_value = IntListPair(left: take left_input, right: take right_input)
+        let result = property(input_value)
+        if result.discarded {
+            discarded = discarded + 1
+        } else {
+            if result.ok {
+                passed = passed + 1
+            } else {
+                let shrunk = shrink_int_list_pair_failure(value: read value, property: property)
+                return failed_summary(
+                    name: read name,
+                    passed: passed,
+                    discarded: discarded,
+                    total: total,
+                    seed: seed,
+                    result: read shrunk,
+                )
+            }
+        }
+        index = index + 1
+    }
+
+    return passed_summary(name: read name, passed: passed, discarded: discarded, total: total, seed: seed)
+}
+
+pub fn Property.assert_passed(summary: read PropertySummary) -> Unit {
+    if summary.failed {
+        let named = String.concat(left: read "quickcheck failed: ", right: read summary.name)
+        let reason = String.concat(left: read named, right: read " reason=")
+        let with_reason = String.concat(left: read reason, right: read summary.failure)
+        let counterexample = String.concat(left: read with_reason, right: read " counterexample=")
+        Log.write(message: read String.concat(left: read counterexample, right: read summary.counterexample))
+    }
+    Assert.equal_bool(left: summary.failed, right: false)
+    return Unit
+}

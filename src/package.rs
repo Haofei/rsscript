@@ -24,7 +24,8 @@ pub const PACKAGE_REVIEW_METADATA_SCHEMA: &str = "rss.review.package.v1";
 
 pub use check::check_package_dir;
 use dependency::{
-    PackageDependencySpec, collect_dependency_interface_sources, package_dependency_spec,
+    PackageDependencySpec, collect_dependency_interface_sources,
+    collect_dependency_lowering_sources, package_dependency_spec,
     package_feature_resolution_diagnostics,
 };
 pub use diff::diff_package_dirs;

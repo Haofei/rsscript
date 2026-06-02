@@ -2051,6 +2051,7 @@ fn main() -> Unit {
 fn rust_lowering_maps_builtin_operators_to_rust_expressions() {
     let source = r#"
 fn main() -> Unit {
+    let negative = -1
     let difference = 44 - 2
     let product = 6 * 7
     let quotient = product / 2
@@ -2066,6 +2067,7 @@ fn main() -> Unit {
     let rust = lower_source_to_rust("operators.rss", source).expect("source should lower");
 
     assert!(rust.contains("let difference = 44 - 2;"));
+    assert!(rust.contains("let negative = -1;"));
     assert!(rust.contains("let product = 6 * 7;"));
     assert!(rust.contains("let quotient = product / 2;"));
     assert!(rust.contains("let equal = product == 42;"));

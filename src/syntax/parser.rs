@@ -1996,6 +1996,10 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
         return None;
     }
 
+    if let Some(number) = parse_negative_number_expr(tokens, start, end) {
+        return Some(number);
+    }
+
     if tokens[start].symbol("|")
         && let Some(closure) = parse_closure_expr(tokens, start, end)
     {
@@ -2131,6 +2135,19 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
         )),
         _ => Some(Expr::Unknown(tokens[start].span.clone())),
     }
+}
+
+fn parse_negative_number_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
+    if start + 2 != end || !tokens.get(start)?.symbol("-") {
+        return None;
+    }
+    let TokenKind::Number(value) = &tokens.get(start + 1)?.kind else {
+        return None;
+    };
+    Some(Expr::Number(
+        format!("-{value}"),
+        tokens[start].span.clone(),
+    ))
 }
 
 fn parse_array_literal_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {

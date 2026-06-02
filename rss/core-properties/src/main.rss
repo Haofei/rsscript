@@ -1,0 +1,13 @@
+features: local
+
+fn main() -> Unit {
+    QuickCheckCore.run()
+    QuickCheckJson.run()
+    QuickCheckCollections.run()
+    QuickCheckResultOption.run()
+    QuickCheckViews.run()
+    QuickCheckState.run()
+
+    Log.write(message: read "quickcheck properties ok")
+    return Unit
+}

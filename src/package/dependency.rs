@@ -37,6 +37,22 @@ pub(super) fn collect_dependency_interface_sources(
     Ok(sources)
 }
 
+pub(super) fn collect_dependency_lowering_sources(
+    package_dir: &Path,
+    manifest: &Manifest,
+) -> Result<Vec<PackageSource>, String> {
+    let mut visiting = BTreeSet::new();
+    let mut sources = Vec::new();
+    collect_dependency_lowering_sources_from_map(
+        package_dir,
+        &manifest.dependencies,
+        &mut visiting,
+        &mut sources,
+    )?;
+    sources.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(sources)
+}
+
 pub(super) fn package_feature_resolution_diagnostics(
     package_dir: &Path,
     manifest: &Manifest,
@@ -284,6 +300,50 @@ fn collect_dependency_interface_sources_from_map(
             visiting,
             sources,
         )?;
+        visiting.remove(&canonical);
+    }
+    Ok(())
+}
+
+fn collect_dependency_lowering_sources_from_map(
+    package_dir: &Path,
+    dependencies: &BTreeMap<String, toml::Value>,
+    visiting: &mut BTreeSet<String>,
+    sources: &mut Vec<PackageSource>,
+) -> Result<(), String> {
+    for (name, value) in dependencies {
+        let spec = package_dependency_spec(name, value);
+        if spec.platform_provided || spec.test_only {
+            continue;
+        }
+        let Some(path) = &spec.path else {
+            continue;
+        };
+        let dependency_dir = package_dir.join(path);
+        if !dependency_dir.join("rsspkg.toml").exists() {
+            continue;
+        }
+        let canonical = canonical_path_label(&dependency_dir);
+        if !visiting.insert(canonical.clone()) {
+            continue;
+        }
+        let dependency_manifest = load_package_manifest(&dependency_dir)?;
+        let selected_features = resolve_package_features(&dependency_manifest, &spec.features);
+        let dependency_package =
+            load_package_with_features(&dependency_dir, Some(&selected_features.selected))?;
+        collect_dependency_lowering_sources_from_map(
+            &dependency_dir,
+            &dependency_package.manifest.dependencies,
+            visiting,
+            sources,
+        )?;
+        sources.extend(
+            dependency_package
+                .sources
+                .iter()
+                .filter(|source| source.kind == PackageReviewFileKind::Source)
+                .cloned(),
+        );
         visiting.remove(&canonical);
     }
     Ok(())

@@ -1,0 +1,23 @@
+version = 1
+
+[[package]]
+name = "rss-core-properties"
+version = "0.1.0"
+source = "path+rss/core-properties"
+checksum = "sha256:1db3e058bc372c18d70d6ca7634ede314b6e9fafbba3976635ec736bfd252a56"
+interface_hash = "sha256:36e6897d97ac40f70744171504605f1905c435cb09b5957a6dbd3b3f47852a13"
+review_hash = "sha256:04301590ac0cbd19ecd27cf36e907a51b3e73ae60560b2cb004a73f947b5b0a4"
+features = []
+
+[[package]]
+name = "rss-quickcheck"
+version = "0.1.0"
+source = "path+rss/core-properties/../quickcheck"
+checksum = "sha256:f07a06f95d5a31f56daedd27c0c26d34a400659a0e5c935976a62d7e7831822f"
+interface_hash = "sha256:39d4fe5382251d41297e6d0b4393bc4a455f13b5e415366a966ba0944d0f2f1f"
+review_hash = "sha256:befe1b5705d6651c43a4d6995e31dc274f3f32191c64a6a3ad1b377d10085668"
+features = []
+
+[metadata]
+rss_version = "0.1.0"
+created_by = "rsscript pkg"
