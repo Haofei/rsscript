@@ -18,7 +18,7 @@ async fn main() -> Result<Unit, HttpError> {
         let response = http.text()
         if http.is_success() == false {
             let status = http.status().to_string()
-            let status_message = "agent HTTP status ".concat(status)
+            let status_message = ["agent HTTP status ", status].join("")
             Log.error(message: read status_message)
             Log.trace(event: read "turn.failed", message: read response)
             state.finished = true

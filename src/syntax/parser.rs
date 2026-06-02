@@ -2017,6 +2017,10 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
         )),
         TokenKind::Number(value) => Some(Expr::Number(value.clone(), tokens[start].span.clone())),
         TokenKind::String(value) => Some(Expr::String(value.clone(), tokens[start].span.clone())),
+        TokenKind::MultilineString(value) => Some(Expr::MultilineString(
+            value.clone(),
+            tokens[start].span.clone(),
+        )),
         _ => Some(Expr::Unknown(tokens[start].span.clone())),
     }
 }

@@ -760,8 +760,9 @@ fn check_for_iterable_type(
     let Some(type_name) = type_name else {
         return;
     };
-    if (!is_async && list_element_type(type_name).is_some())
-        || (is_async && stream_item_type(type_name).is_some())
+    let bare_type_name = strip_fresh_type(type_name);
+    if (!is_async && list_element_type(bare_type_name).is_some())
+        || (is_async && stream_item_type(bare_type_name).is_some())
     {
         return;
     }
@@ -1599,7 +1600,7 @@ fn body_callee_display(callee: &Callee) -> String {
 fn body_expr_label(expr: &Expr) -> String {
     match expr {
         Expr::Ident(name, _) => name.clone(),
-        Expr::String(value, _) => format!("{value:?}"),
+        Expr::String(value, _) | Expr::MultilineString(value, _) => format!("{value:?}"),
         Expr::Field { base, name, .. } => format!("{}.{}", body_expr_label(base), name),
         Expr::Index { base, .. } => format!("{}[]", body_expr_label(base)),
         Expr::Call { callee, .. } => format!("{}()", body_callee_display(callee)),
@@ -4829,6 +4830,13 @@ fn stream_item_type(type_name: &str) -> Option<&str> {
         .strip_prefix("Stream<")
         .and_then(|type_name| type_name.strip_suffix('>'))?;
     split_top_level_type_args(inner).into_iter().next()
+}
+
+fn strip_fresh_type(type_name: &str) -> &str {
+    type_name
+        .strip_prefix("fresh ")
+        .map(str::trim)
+        .unwrap_or(type_name)
 }
 
 fn split_top_level_type_args(args: &str) -> Vec<&str> {

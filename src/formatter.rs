@@ -472,7 +472,8 @@ impl Formatter {
     fn expr_at(&mut self, expr: &Expr, parent_precedence: u8, indent: usize) {
         match expr {
             Expr::Ident(name, _) | Expr::Number(name, _) => self.out.push_str(name),
-            Expr::String(value, _) => self.string_literal(value),
+            Expr::String(value, _) => self.string_literal_at(value, indent),
+            Expr::MultilineString(value, _) => self.multiline_string_literal(value, indent),
             Expr::ObjectLiteral { fields, .. } => {
                 self.object_literal(fields, indent);
             }
@@ -565,7 +566,8 @@ impl Formatter {
                 self.out.push('|');
                 self.out.push_str(&params.join(", "));
                 self.out.push_str("| {\n");
-                self.block(body, 1);
+                self.block(body, indent + 1);
+                self.indent(indent);
                 self.out.push('}');
             }
             Expr::Match { value, arms, .. } => {
@@ -649,36 +651,40 @@ impl Formatter {
     }
 
     fn call_expr(&mut self, callee: &Callee, args: &[CallArg], indent: usize) {
-        let inline = format!(
-            "{}({})",
-            inline_callee(callee).unwrap_or_else(|| {
-                let mut formatter = Formatter { out: String::new() };
-                formatter.callee(callee);
-                formatter.out
-            }),
-            args.iter()
-                .map(format_call_arg)
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        if inline.len() <= MAX_INLINE_SIGNATURE_LEN || args.len() <= 1 {
-            self.out.push_str(&inline);
+        if let Some(inline) = inline_call_expr(callee, args) {
+            if inline.len() <= MAX_INLINE_SIGNATURE_LEN {
+                self.out.push_str(&inline);
+                return;
+            }
+        }
+
+        if args.len() <= 1 {
+            self.callee_at(callee, indent);
+            self.out.push('(');
+            if let Some(arg) = args.first() {
+                self.call_arg(arg, indent);
+            }
+            self.out.push(')');
             return;
         }
 
-        self.callee(callee);
+        self.callee_at(callee, indent);
         self.out.push_str("(\n");
         for arg in args {
             self.indent(indent + 1);
-            if let Some(name) = &arg.name {
-                self.out.push_str(name);
-                self.out.push_str(": ");
-            }
-            self.expr_at(&arg.value, 0, indent + 1);
+            self.call_arg(arg, indent + 1);
             self.out.push_str(",\n");
         }
         self.indent(indent);
         self.out.push(')');
+    }
+
+    fn call_arg(&mut self, arg: &CallArg, indent: usize) {
+        if let Some(name) = &arg.name {
+            self.out.push_str(name);
+            self.out.push_str(": ");
+        }
+        self.expr_at(&arg.value, 0, indent);
     }
 
     fn receiver_call_chain(&mut self, expr: &Expr, indent: usize) -> bool {
@@ -758,7 +764,7 @@ impl Formatter {
         self.out.push(')');
     }
 
-    fn callee(&mut self, callee: &Callee) {
+    fn callee_at(&mut self, callee: &Callee, indent: usize) {
         match callee {
             Callee::Name(name) => self.out.push_str(name),
             Callee::Qualified { namespace, name } => {
@@ -775,7 +781,7 @@ impl Formatter {
                     self.out.push_str(effect.as_str());
                     self.out.push(' ');
                 }
-                self.expr(receiver, 0);
+                self.expr_at(receiver, 0, indent);
                 self.out.push('.');
                 self.out.push_str(method);
             }
@@ -783,18 +789,33 @@ impl Formatter {
     }
 
     fn string_literal(&mut self, value: &str) {
-        self.out.push('"');
-        for ch in value.chars() {
-            match ch {
-                '\\' => self.out.push_str("\\\\"),
-                '"' => self.out.push_str("\\\""),
-                '\n' => self.out.push_str("\\n"),
-                '\r' => self.out.push_str("\\r"),
-                '\t' => self.out.push_str("\\t"),
-                _ => self.out.push(ch),
-            }
+        self.string_literal_at(value, 0);
+    }
+
+    fn string_literal_at(&mut self, value: &str, indent: usize) {
+        if value.contains('\n') && !value.contains("\"\"\"") {
+            self.multiline_string_literal(value, indent);
+            return;
         }
         self.out.push('"');
+        self.out.push_str(value);
+        self.out.push('"');
+    }
+
+    fn multiline_string_literal(&mut self, value: &str, indent: usize) {
+        self.out.push_str("\"\"\"");
+        let mut lines = value.split('\n').peekable();
+        if let Some(first) = lines.next() {
+            self.out.push_str(first);
+        }
+        while let Some(line) = lines.next() {
+            self.out.push('\n');
+            if lines.peek().is_none() && line.is_empty() {
+                self.indent(indent);
+            }
+            self.out.push_str(line);
+        }
+        self.out.push_str("\"\"\"");
     }
 
     fn indent(&mut self, indent: usize) {
@@ -855,10 +876,7 @@ fn type_ref_contains_fresh(ty: &TypeRef) -> bool {
     ty.is_fresh
         || ty.args.iter().any(type_ref_contains_fresh)
         || ty.fn_params.iter().any(type_ref_contains_fresh)
-        || ty
-            .fn_return
-            .as_deref()
-            .is_some_and(type_ref_contains_fresh)
+        || ty.fn_return.as_deref().is_some_and(type_ref_contains_fresh)
 }
 
 fn format_call_arg(arg: &CallArg) -> String {
@@ -875,6 +893,7 @@ fn inline_expr(expr: &Expr) -> Option<String> {
     match expr {
         Expr::Ident(name, _) | Expr::Number(name, _) => Some(name.clone()),
         Expr::String(value, _) => Some(quoted_string(value)),
+        Expr::MultilineString(value, _) => Some(format!("\"\"\"{value}\"\"\"")),
         Expr::ObjectLiteral { fields, .. } => inline_object_literal(fields),
         Expr::MapLiteral { entries, .. } => inline_map_literal(entries),
         Expr::ArrayLiteral { items, .. } => inline_array_literal(items),
@@ -917,6 +936,15 @@ fn inline_call_arg(arg: &CallArg) -> Option<String> {
         Some(name) => format!("{name}: {value}"),
         None => value,
     })
+}
+
+fn inline_call_expr(callee: &Callee, args: &[CallArg]) -> Option<String> {
+    let args = args
+        .iter()
+        .map(inline_call_arg)
+        .collect::<Option<Vec<_>>>()?
+        .join(", ");
+    Some(format!("{}({args})", inline_callee(callee)?))
 }
 
 fn inline_callee(callee: &Callee) -> Option<String> {
@@ -1421,6 +1449,56 @@ fn config() -> fresh AgentConfig {
     )
 }
 "#
+        );
+    }
+
+    #[test]
+    fn formats_closure_bodies_at_expression_indent() {
+        let source = r#"fn count_next(values:read List<Int>)->Int{
+return values.map(|item|{
+return item + 1
+}).len()
+}
+"#;
+
+        assert_eq!(
+            format_source("closure-indent.rss", source),
+            r#"fn count_next(values: read List<Int>) -> Int {
+    return values.map(|item| {
+        return item + 1
+    }).len()
+}
+"#
+        );
+    }
+
+    #[test]
+    fn preserves_multiline_string_literals() {
+        let source = "fn prompt() -> String {\nreturn \"\"\"First line\nSecond line\"\"\"\n}\n";
+
+        assert_eq!(
+            format_source("multiline-string.rss", source),
+            "fn prompt() -> String {\n    return \"\"\"First line\nSecond line\"\"\"\n}\n"
+        );
+    }
+
+    #[test]
+    fn preserves_multiline_string_backslashes_as_raw_text() {
+        let source = "fn prompt() -> String {\nreturn \"\"\"literal \\n text\"\"\"\n}\n";
+
+        assert_eq!(
+            format_source("multiline-string-raw.rss", source),
+            "fn prompt() -> String {\n    return \"\"\"literal \\n text\"\"\"\n}\n"
+        );
+    }
+
+    #[test]
+    fn preserves_escaped_string_literals_without_reescaping() {
+        let source = "fn text() -> String {\nreturn \"hello\\\\n\"\n}\n";
+
+        assert_eq!(
+            format_source("escaped-string.rss", source),
+            "fn text() -> String {\n    return \"hello\\\\n\"\n}\n"
         );
     }
 

@@ -1,5 +1,15 @@
 fn code_agent_instructions() -> String {
-    return "You are a RSScript code agent. Work in a bounded tool loop. Before writing code, discover APIs from schemas/core-package-index.json, then read the relevant core/*.rssi interface files and one nearby example when available. Do not guess function names or parameter names. Prefer small, reviewable changes. Use read_file before editing unfamiliar files. Use write_file for final artifacts. Use check_rss_file after writing RSScript code when available. If a check fails, revise within the loop budget. Do not invent hidden capabilities. Do not use native/local/take in ordinary RSScript examples unless the task explicitly requires them."
+    return """You are a RSScript code agent.
+Work in a bounded tool loop.
+Before writing code, discover APIs from schemas/core-package-index.json, then read the relevant core/*.rssi interface files and one nearby example when available.
+Do not guess function names or parameter names.
+Prefer small, reviewable changes.
+Use read_file before editing unfamiliar files.
+Use write_file for final artifacts.
+Use check_rss_file after writing RSScript code when available.
+If a check fails, revise within the loop budget.
+Do not invent hidden capabilities.
+Do not use native/local/take in ordinary RSScript examples unless the task explicitly requires them."""
 }
 
 fn build_model_request(config: read AgentConfig, state: read AgentState) -> fresh JsonValue {
@@ -9,15 +19,9 @@ fn build_model_request(config: read AgentConfig, state: read AgentState) -> fres
 }
 
 fn model_messages(messages: read List<AgentMessage>) -> fresh JsonValue {
-    let mut values = List<JsonValue>.new()
-    let mut index = 0
-    let limit = messages.len()
-    while index < limit {
-        let message = messages.get(index)
-        mut values.push(message.value)
-        index = index + 1
-    }
-    return values.to_json_values()
+    return messages.map(|message| {
+        return message.value
+    }).to_json_values()
 }
 
 fn response_content(response: read String) -> String {
@@ -32,12 +36,23 @@ fn assistant_fallback_message(content: read String) -> fresh JsonValue {
     return {"role": "assistant", "content": content}
 }
 
-fn tool_call_at(message: read JsonValue, index: Int) -> fresh Result<JsonValue, JsonError> {
+fn tool_call_at(message: read JsonValue, index: Int) -> Result<fresh JsonValue, JsonError> {
     let calls = message.field("tool_calls")?
     return calls.array_get(index)
 }
 
-fn tool_request_from_call(call: read JsonValue) -> fresh Result<ToolRequest, JsonError> {
+fn tool_call_count(message: read JsonValue) -> Int {
+    match message.field("tool_calls") {
+        Ok(calls) => {
+            return calls.array_len().unwrap_or(0)
+        }
+        Err => {
+            return 0
+        }
+    }
+}
+
+fn tool_request_from_call(call: read JsonValue) -> Result<fresh ToolRequest, JsonError> {
     let id = call.field_string("id")?
     let name = call.at_string("function.name")?
     let arguments = call.at_string("function.arguments")?
@@ -45,9 +60,30 @@ fn tool_request_from_call(call: read JsonValue) -> fresh Result<ToolRequest, Jso
 }
 
 fn tool_request_at(message: read JsonValue, index: Int) -> Option<ToolRequest> {
-    return tool_call_at(message, index).and_then(|call| {
-    return tool_request_from_call(call)
-}).ok()
+    match tool_call_at(message, index) {
+        Ok(call) => {
+            return tool_request_from_call(call).ok()
+        }
+        Err => {
+            return None
+        }
+    }
+}
+
+fn tool_requests_from_message(message: read JsonValue) -> List<ToolRequest> {
+    let mut requests = List<ToolRequest>.new()
+    let limit = tool_call_count(message)
+    let mut index = 0
+    while index < limit {
+        match tool_request_at(message, index) {
+            Some(request) => {
+                mut requests.push(request)
+            }
+            None => {}
+        }
+        index = index + 1
+    }
+    return requests
 }
 
 fn argument_field(arguments: read String, name: read String, fallback: read String) -> String {

@@ -30,10 +30,11 @@ fn AgentMessage.tool(call_id: read String, content: read String) -> fresh AgentM
 }
 
 fn AgentState.new(task: read String) -> fresh AgentState {
-    let mut messages = List<AgentMessage>.new()
-    mut messages.push(AgentMessage.system(code_agent_instructions()))
-    mut messages.push(AgentMessage.user(task))
-    return AgentState(messages, step: 0, finished: false)
+    return AgentState(
+        messages: [AgentMessage.system(code_agent_instructions()), AgentMessage.user(task)],
+        step: 0,
+        finished: false,
+    )
 }
 
 fn AgentState.can_continue(state: read AgentState, max_steps: Int) -> Bool {

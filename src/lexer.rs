@@ -5,6 +5,7 @@ pub enum TokenKind {
     Ident(String),
     Number(String),
     String(String),
+    MultilineString(String),
     Keyword(&'static str),
     Symbol(&'static str),
     Eof,
@@ -19,9 +20,10 @@ pub struct Token {
 impl Token {
     pub fn text(&self) -> String {
         match &self.kind {
-            TokenKind::Ident(value) | TokenKind::Number(value) | TokenKind::String(value) => {
-                value.clone()
-            }
+            TokenKind::Ident(value)
+            | TokenKind::Number(value)
+            | TokenKind::String(value)
+            | TokenKind::MultilineString(value) => value.clone(),
             TokenKind::Keyword(value) | TokenKind::Symbol(value) => (*value).to_string(),
             TokenKind::Eof => "<eof>".to_string(),
         }
@@ -65,6 +67,9 @@ impl Lexer<'_> {
             match ch {
                 ch if ch.is_whitespace() => self.bump_whitespace(),
                 '/' if self.peek_next() == Some('/') => self.bump_line_comment(),
+                '"' if self.peek_n(1) == Some('"') && self.peek_n(2) == Some('"') => {
+                    self.lex_multiline_string()
+                }
                 '"' => self.lex_string(),
                 ch if ch.is_ascii_digit() => self.lex_number(),
                 ch if is_ident_start(ch) => self.lex_ident_or_keyword(),
@@ -128,6 +133,7 @@ impl Lexer<'_> {
     fn lex_string(&mut self) {
         let start_line = self.line;
         let start_column = self.column;
+        let token_start = self.index;
         self.bump();
         let start_index = self.index;
         while let Some(ch) = self.peek() {
@@ -151,7 +157,43 @@ impl Lexer<'_> {
                 file: self.file.to_string(),
                 line: start_line,
                 column: start_column,
-                length: self.column.saturating_sub(start_column).max(1),
+                length: self.index.saturating_sub(token_start).max(1),
+            },
+        });
+    }
+
+    fn lex_multiline_string(&mut self) {
+        let start_line = self.line;
+        let start_column = self.column;
+        let token_start = self.index;
+        self.bump();
+        self.bump();
+        self.bump();
+        let start_index = self.index;
+        while self.peek().is_some() {
+            if self.peek() == Some('"')
+                && self.peek_n(1) == Some('"')
+                && self.peek_n(2) == Some('"')
+            {
+                break;
+            }
+            self.bump();
+        }
+        let value = self.chars[start_index..self.index.min(self.chars.len())]
+            .iter()
+            .collect();
+        if self.peek() == Some('"') && self.peek_n(1) == Some('"') && self.peek_n(2) == Some('"') {
+            self.bump();
+            self.bump();
+            self.bump();
+        }
+        self.tokens.push(Token {
+            kind: TokenKind::MultilineString(value),
+            span: Span {
+                file: self.file.to_string(),
+                line: start_line,
+                column: start_column,
+                length: self.index.saturating_sub(token_start).max(1),
             },
         });
     }
@@ -240,6 +282,10 @@ impl Lexer<'_> {
 
     fn peek_next(&self) -> Option<char> {
         self.chars.get(self.index + 1).copied()
+    }
+
+    fn peek_n(&self, offset: usize) -> Option<char> {
+        self.chars.get(self.index + offset).copied()
     }
 }
 

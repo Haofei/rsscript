@@ -130,7 +130,7 @@ fn path_in_workspace(workspace_root: read String, path_text: read String) -> Boo
     return safe && under_root
 }
 
-fn resolve_repo_path(repo_root: read Path, path_text: read String) -> fresh Result<Path, String> {
+fn resolve_repo_path(repo_root: read Path, path_text: read String) -> Result<fresh Path, String> {
     return repo_root.resolve_relative(path_text)
 }
 
@@ -188,10 +188,7 @@ fn collect_files_recursive(
     }
     match root.list_files() {
         Ok(names) => {
-            let mut index = 0
-            let limit = names.len()
-            while index < limit {
-                let name = names.get(index)
+            for name in names {
                 let full = root.join(name)
                 let display_root = display_root_text.to_path()
                 let display_full = display_root.join(name)
@@ -201,7 +198,6 @@ fn collect_files_recursive(
                 } else {
                     push_listed_file(mut results, display_full_text, max_results)
                 }
-                index = index + 1
             }
         }
         Err => {
@@ -234,6 +230,28 @@ fn execute_list_files(arguments: read String, repo_root: read Path) -> fresh Jso
     }
 }
 
+fn path_contains_query(path: read Path, query: read String) -> Bool {
+    match path.read_string() {
+        Ok(text) => {
+            return text.contains(query)
+        }
+        Err => {
+            return false
+        }
+    }
+}
+
+fn file_contains_query(repo_root: read Path, file_path: read String, query: read String) -> Bool {
+    match resolve_repo_path(repo_root, file_path) {
+        Ok(path) => {
+            return path_contains_query(path, query)
+        }
+        Err => {
+            return false
+        }
+    }
+}
+
 fn execute_search_text(arguments: read String, repo_root: read Path) -> fresh JsonValue {
     let path_text = argument_field(arguments, "path", ".")
     let query = argument_field(arguments, "query", "")
@@ -251,26 +269,10 @@ fn execute_search_text(arguments: read String, repo_root: read Path) -> fresh Js
         }
     }
     let mut matches = List<String>.new()
-    let mut index = 0
-    let limit = files.len()
-    while index < limit && matches.len() < max_results {
-        let file_path = files.get(index)
-        match resolve_repo_path(repo_root, file_path) {
-            Ok(path) => {
-                match path.read_string() {
-                    Ok(text) => {
-                        if text.contains(query) {
-                            mut matches.push(file_path)
-                        }
-                    }
-                    Err => {
-                    }
-                }
-            }
-            Err => {
-            }
+    for file_path in files {
+        if matches.len() < max_results && file_contains_query(repo_root, file_path, query) {
+            mut matches.push(file_path)
         }
-        index = index + 1
     }
     let matches_value = matches.to_json_strings()
     let match_count = matches.len()
@@ -339,9 +341,11 @@ fn execute_write_file(
     let path_text = argument_field(arguments, "path", default_path)
     let content = argument_field(arguments, "content", default_content)
     if path_in_workspace(workspace_root, path_text) == false {
-        let reason = "writes are confined to the workspace root `"
-            .concat(workspace_root)
-            .concat("` (no absolute paths or `..`)")
+        let reason = [
+            "writes are confined to the workspace root `",
+            workspace_root,
+            "` (no absolute paths or `..`)",
+        ].join("")
         return tool_path_error(path_text, reason)
     }
     match resolve_repo_path(repo_root, path_text) {
@@ -361,9 +365,11 @@ fn execute_check_rss_file(
 ) -> fresh JsonValue {
     let path_text = argument_field(arguments, "path", "target/rsscript-agent-read-file.rss")
     if path_in_workspace(workspace_root, path_text) == false {
-        let reason = "checks are confined to the workspace root `"
-            .concat(workspace_root)
-            .concat("` (no absolute paths or `..`)")
+        let reason = [
+            "checks are confined to the workspace root `",
+            workspace_root,
+            "` (no absolute paths or `..`)",
+        ].join("")
         return tool_path_error(path_text, reason)
     }
     match resolve_repo_path(repo_root, path_text) {
@@ -453,35 +459,21 @@ fn execute_tool_calls(
     config: read AgentConfig,
 ) -> fresh ToolLoopResult {
     let runtime = CoreToolRuntime
-    let mut tool_index = 0
     let mut called_tool = false
     let mut next_messages = List<AgentMessage>.new()
-    let mut message_index = 0
-    let message_limit = messages.len()
-    while message_index < message_limit {
-        let message = messages.get(message_index)
-        mut next_messages.push(message)
-        message_index = message_index + 1
-    }
+    mut next_messages.append(messages)
     match response.json_parse() {
         Ok(root) => {
             let assistant_message = assistant_message_value(root, response_content(response))
             mut next_messages.push(AgentMessage.from_value(assistant_message))
-            while tool_index < config.max_tool_calls {
-                match tool_request_at(assistant_message, tool_index) {
-                    Some(request) => {
-                        Log.trace(event: read "tool.requested", message: read request.name)
-                        Log.write(message: read request.arguments)
-                        let result = runtime.execute(request, config)
-                        Log.write_json(value: read result.content)
-                        mut next_messages.push(AgentMessage.tool(result.id, result.content.to_string()))
-                        called_tool = true
-                        tool_index = tool_index + 1
-                    }
-                    None => {
-                        tool_index = config.max_tool_calls
-                    }
-                }
+            let requests = tool_requests_from_message(assistant_message).take(config.max_tool_calls)
+            for request in requests {
+                Log.trace(event: read "tool.requested", message: read request.name)
+                Log.write(message: read request.arguments)
+                let result = runtime.execute(request, config)
+                Log.write_json(value: read result.content)
+                mut next_messages.push(AgentMessage.tool(result.id, result.content.to_string()))
+                called_tool = true
             }
         }
         Err => {

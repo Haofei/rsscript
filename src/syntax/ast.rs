@@ -471,6 +471,7 @@ pub enum Expr {
     Ident(String, Span),
     Number(String, Span),
     String(String, Span),
+    MultilineString(String, Span),
     ObjectLiteral {
         fields: Vec<ObjectLiteralField>,
         span: Span,
@@ -598,6 +599,7 @@ impl Expr {
             Self::Ident(_, span)
             | Self::Number(_, span)
             | Self::String(_, span)
+            | Self::MultilineString(_, span)
             | Self::ObjectLiteral { span, .. }
             | Self::MapLiteral { span, .. }
             | Self::ArrayLiteral { span, .. }

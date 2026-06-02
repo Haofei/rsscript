@@ -220,6 +220,7 @@ fn run(path: read Path) -> Result<Int, FileError> {
     List.set(list: mut items, index: 0, value: read 2)
     let copy = List.slice(list: read items, start: 0, len: 1)
     List.append(list: mut items, values: read copy)
+    mut items.append(copy)
     List.pop(list: mut items)
     let part = List.slice(list: read items, start: 0, len: 2)
     if File.exists(path: read path) {
@@ -237,6 +238,7 @@ fn run(path: read Path) -> Result<Int, FileError> {
 
     assert!(rust.contains("rsscript_runtime::list_set"));
     assert!(rust.contains("rsscript_runtime::list_append"));
+    assert!(rust.contains("rsscript_runtime::list_append(&mut items, &copy);"));
     assert!(rust.contains("rsscript_runtime::list_pop"));
     assert!(rust.contains("rsscript_runtime::list_slice"));
     assert!(rust.contains("rsscript_runtime::file_exists"));
@@ -413,6 +415,9 @@ fn main() -> Result<Unit, JsonError> {
             return item + 1
         },
     )
+    let receiver_mapped = list.map(|item| {
+        return item + 2
+    })
     let order = Ord.compare(self: read 1, other: read 2)
     List.sort<Int>(list: mut list)
     List.sort_with<Int>(
@@ -450,6 +455,7 @@ fn main() -> Result<Unit, JsonError> {
     }
     Assert.equal_int(left: List.len(list: read filtered), right: 1)
     Assert.equal_int(left: List.get(list: read mapped, index: 0), right: 11)
+    Assert.equal_int(left: List.get(list: read receiver_mapped, index: 0), right: 12)
     Assert.equal_int(left: folded.value, right: 10)
     Assert.equal_int(left: try_folded.value, right: 10)
     return Ok(Unit)
@@ -467,6 +473,7 @@ fn main() -> Result<Unit, JsonError> {
     assert!(rust.contains("let found = rsscript_runtime::list_find(&list, |item| {"));
     assert!(rust.contains("let filtered = rsscript_runtime::list_filter(&list, |item| {"));
     assert!(rust.contains("let mapped = rsscript_runtime::list_map(&list, |item| {"));
+    assert!(rust.contains("let receiver_mapped = rsscript_runtime::list_map(&list, |item: i64| {"));
     assert!(rust.contains("let order = rsscript_runtime::ord_compare(&1, &2);"));
     assert!(rust.contains("rsscript_runtime::list_sort(&mut list);"));
     assert!(rust.contains("rsscript_runtime::list_sort_with(&mut list, |left, right| {"));
@@ -843,10 +850,12 @@ fn read_name(text: read String) -> Result<String, JsonError> {
         "let has_profile_named_prefix = rsscript_runtime::json_array_contains_prefix(&value, &\"pro\".to_string())?;"
     ));
     assert!(
-        rust.contains("let matching = rsscript_runtime::json_array_count_where(&value, |item| {")
+        rust.contains(
+            "let matching = rsscript_runtime::json_array_count_where(&value, |item: rsscript_runtime::JsonValue| {"
+        )
     );
     assert!(rust.contains(
-        "let folded = rsscript_runtime::json_array_fold(&value, &IntBox { value: 0 }, |state, item| {"
+        "let folded = rsscript_runtime::json_array_fold(&value, &IntBox { value: 0 }, |state, item: rsscript_runtime::JsonValue| {"
     ));
     assert!(rust.contains("let text = rsscript_runtime::json_as_string(&item)?;"));
     assert!(
@@ -1502,6 +1511,23 @@ fn json_text() -> String {
 }
 
 #[test]
+fn rust_lowering_preserves_multiline_string_literals() {
+    let source = "fn prompt() -> String {\n    return \"\"\"First line\nSecond line\"\"\"\n}\n";
+    let rust = lower_source_to_rust("multiline-string.rss", source).expect("source should lower");
+
+    assert!(rust.contains("return \"First line\\nSecond line\".to_string();"));
+}
+
+#[test]
+fn rust_lowering_does_not_decode_multiline_string_backslashes() {
+    let source = "fn prompt() -> String {\n    return \"\"\"literal \\n text\"\"\"\n}\n";
+    let rust =
+        lower_source_to_rust("multiline-string-raw.rss", source).expect("source should lower");
+
+    assert!(rust.contains("return \"literal \\\\n text\".to_string();"));
+}
+
+#[test]
 fn rust_lowering_maps_log_write_to_runtime_output_hook() {
     let source = r#"
 fn main() -> Unit {
@@ -1637,6 +1663,7 @@ fn main() -> Unit {
     let joined = String.join(parts: read lines, separator: read ",")
     let root = "target/"
     let path_message = String.join(parts: read ["root=", root, " ok"], separator: read "")
+    let receiver_joined = ["root=", root, " ok"].join("")
     let stripped = String.strip_prefix(value: read "pub fn Api.run()", prefix: read "pub fn ")
     let before = String.before(value: read "Api.run() -> Unit", delimiter: read "(")
     let after = String.after(value: read "Api.run() -> Unit", delimiter: read "-> ")
@@ -1686,6 +1713,12 @@ fn main() -> Unit {
             "let path_message = rsscript_runtime::string_join(&vec![\"root=\".to_string(), root.clone(), \" ok\".to_string()], &\"\".to_string());"
         ),
         "String.join should materialize read String bindings inside List<String> literals, got:\n{rust}"
+    );
+    assert!(
+        rust.contains(
+            "let receiver_joined = rsscript_runtime::list_join(&vec![\"root=\".to_string(), root.clone(), \" ok\".to_string()], &\"\".to_string());"
+        ),
+        "List.join receiver calls should borrow the separator, got:\n{rust}"
     );
     assert!(rust.contains("let ok = rsscript_runtime::string_from_bool(true);"));
     assert!(rust.contains("let length = rsscript_runtime::string_len(&message);"));
@@ -2766,25 +2799,17 @@ fn main() -> Int {
 #[test]
 fn rust_lowering_allows_multiline_receiver_chain_after_closure() {
     let source = r#"
-sum ParseError {
-    Bad
-}
-
-fn keep(value: Int) -> Result<Int, ParseError> {
-    return Ok(value)
-}
-
-fn parse(value: read Result<Int, ParseError>) -> Option<Int> {
-    return value.and_then(|item| {
-        return keep(item)
-    }).ok()
+fn parse(value: read Option<Int>) -> Int {
+    return value.map(|item| {
+        return item + 1
+    }).unwrap_or(0)
 }
 "#;
     let rust = lower_source_to_rust("multiline-receiver-chain-after-closure.rss", source)
         .expect("multiline receiver chain after closure should lower");
 
-    assert!(rust.contains("rsscript_runtime::result_ok(&rsscript_runtime::result_and_then("));
-    assert!(rust.contains("|item| {"));
+    assert!(rust.contains("rsscript_runtime::option_unwrap_or(&rsscript_runtime::option_map("));
+    assert!(rust.contains("|item: i64| {"));
 }
 
 #[test]

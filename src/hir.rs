@@ -1263,6 +1263,10 @@ fn lower_hir_expr(
             value: value.clone(),
             span: span.clone(),
         },
+        Expr::MultilineString(value, span) => HirExpr::String {
+            value: value.clone(),
+            span: span.clone(),
+        },
         Expr::ObjectLiteral { fields, span } => HirExpr::ObjectLiteral {
             fields: fields
                 .iter()
@@ -1924,6 +1928,7 @@ fn collect_body_facts_in_expr(
         | Expr::Ident(_, _)
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => {}
     }
 }
@@ -2065,7 +2070,7 @@ pub(crate) fn infer_hir_expr_type(
         }
         Expr::Index { .. } => None,
         Expr::Number(_, _) => Some("Int".to_string()),
-        Expr::String(_, _) => Some("String".to_string()),
+        Expr::String(_, _) | Expr::MultilineString(_, _) => Some("String".to_string()),
         Expr::ObjectLiteral { .. } => Some("JsonLiteral".to_string()),
         Expr::MapLiteral { .. } => Some("MapLiteral".to_string()),
         Expr::ArrayLiteral { items, .. } => {
@@ -2271,6 +2276,7 @@ fn infer_arg_expr_type(
         | Expr::Binary { .. }
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => None,
     }
 }
@@ -2426,7 +2432,7 @@ fn result_ok_type(type_name: &str) -> Option<String> {
 }
 
 fn list_element_type(type_name: &str) -> Option<String> {
-    let inner = type_name
+    let inner = strip_fresh_type(type_name)
         .strip_prefix("List<")
         .and_then(|rest| rest.strip_suffix('>'))?;
     split_top_level_type_args(inner)
@@ -2436,7 +2442,7 @@ fn list_element_type(type_name: &str) -> Option<String> {
 }
 
 fn stream_item_type(type_name: &str) -> Option<String> {
-    let inner = type_name
+    let inner = strip_fresh_type(type_name)
         .strip_prefix("Stream<")
         .and_then(|rest| rest.strip_suffix('>'))?;
     split_top_level_type_args(inner)
@@ -2611,6 +2617,7 @@ fn classify_return_expr(
         | Expr::Closure { .. }
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => HirReturnProof::Unknown,
     }
 }
@@ -2653,7 +2660,7 @@ fn callee_display(callee: &Callee) -> String {
 fn receiver_call_label(receiver: &Expr) -> String {
     match receiver {
         Expr::Ident(name, _) => name.clone(),
-        Expr::String(value, _) => format!("{value:?}"),
+        Expr::String(value, _) | Expr::MultilineString(value, _) => format!("{value:?}"),
         Expr::Field { base, name, .. } => format!("{}.{}", receiver_call_label(base), name),
         Expr::Index { base, .. } => format!("{}[]", receiver_call_label(base)),
         Expr::Call { callee, .. } => format!("{}()", callee_display(callee)),

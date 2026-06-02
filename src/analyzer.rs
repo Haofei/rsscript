@@ -472,7 +472,11 @@ fn collect_all_async_let_spans_expr(expr: &Expr, async_lets: &mut Vec<crate::dia
                 collect_all_async_let_spans_expr(item, async_lets);
             }
         }
-        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        Expr::Ident(_, _)
+        | Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::MultilineString(_, _)
+        | Expr::Unknown(_) => {}
     }
 }
 
@@ -523,7 +527,11 @@ fn collect_task_group_async_lets_expr(
                 collect_task_group_async_lets_expr(item, async_lets);
             }
         }
-        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        Expr::Ident(_, _)
+        | Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::MultilineString(_, _)
+        | Expr::Unknown(_) => {}
     }
 }
 
@@ -890,7 +898,11 @@ fn find_nested_task_group_await_span_expr<'a>(
         Expr::ArrayLiteral { items, .. } => items
             .iter()
             .find_map(|item| find_nested_task_group_await_span_expr(item, name)),
-        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => None,
+        Expr::Ident(_, _)
+        | Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::MultilineString(_, _)
+        | Expr::Unknown(_) => None,
     }
 }
 
@@ -943,7 +955,11 @@ fn collect_task_group_awaited_handles_expr(expr: &Expr, awaited: &mut HashSet<St
                 collect_task_group_awaited_handles_expr(item, awaited);
             }
         }
-        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => {}
+        Expr::Ident(_, _)
+        | Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::MultilineString(_, _)
+        | Expr::Unknown(_) => {}
     }
 }
 
@@ -1722,7 +1738,10 @@ impl Analyzer<'_> {
                     self.check_unsupported_syntax_expr(item);
                 }
             }
-            Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) => {}
+            Expr::Ident(_, _)
+            | Expr::Number(_, _)
+            | Expr::String(_, _)
+            | Expr::MultilineString(_, _) => {}
             Expr::Unknown(span) => self.unsupported_syntax(
                 span.clone(),
                 "unsupported expression",
@@ -3275,6 +3294,7 @@ impl Analyzer<'_> {
             | Expr::Ident(_, _)
             | Expr::Number(_, _)
             | Expr::String(_, _)
+            | Expr::MultilineString(_, _)
             | Expr::Unknown(_) => {}
         }
     }
@@ -3648,6 +3668,7 @@ impl Analyzer<'_> {
             | Expr::Ident(_, _)
             | Expr::Number(_, _)
             | Expr::String(_, _)
+            | Expr::MultilineString(_, _)
             | Expr::Unknown(_) => {}
         }
     }
@@ -3777,6 +3798,7 @@ impl Analyzer<'_> {
             | Expr::Ident(_, _)
             | Expr::Number(_, _)
             | Expr::String(_, _)
+            | Expr::MultilineString(_, _)
             | Expr::Unknown(_) => {}
         }
     }
@@ -4399,6 +4421,7 @@ fn expr_first_cancellation_token(expr: &Expr) -> Option<crate::diagnostic::Span>
         | Expr::Ident(..)
         | Expr::Number(..)
         | Expr::String(..)
+        | Expr::MultilineString(..)
         | Expr::Unknown(_) => None,
     }
 }
@@ -4446,6 +4469,7 @@ fn expr_first_await(expr: &Expr) -> Option<crate::diagnostic::Span> {
         | Expr::Ident(..)
         | Expr::Number(..)
         | Expr::String(..)
+        | Expr::MultilineString(..)
         | Expr::Unknown(_) => None,
     }
 }
@@ -4773,6 +4797,7 @@ impl<'a> AssignChecker<'a> {
             | Expr::Ident(..)
             | Expr::Number(..)
             | Expr::String(..)
+            | Expr::MultilineString(..)
             | Expr::Unknown(_) => {}
         }
     }
@@ -5512,7 +5537,7 @@ fn callee_display(callee: &Callee) -> String {
 fn analyzer_expr_label(expr: &Expr) -> String {
     match expr {
         Expr::Ident(name, _) => name.clone(),
-        Expr::String(value, _) => format!("{value:?}"),
+        Expr::String(value, _) | Expr::MultilineString(value, _) => format!("{value:?}"),
         Expr::Field { base, name, .. } => format!("{}.{}", analyzer_expr_label(base), name),
         Expr::Index { base, .. } => format!("{}[]", analyzer_expr_label(base)),
         Expr::Call { callee, .. } => format!("{}()", callee_display(callee)),

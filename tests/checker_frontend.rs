@@ -1991,7 +1991,7 @@ fn main() -> Unit {
         .expect("callback with parameter should lower");
 
     assert!(rust.contains("callback(41)"));
-    assert!(rust.contains("|item|"));
+    assert!(rust.contains("|item: i64|"));
 }
 
 #[test]
@@ -3504,6 +3504,27 @@ fn run(items: read List<Int>) -> Unit {
     let lowered = lower_source_to_rust("for.rss", source).expect("for should lower");
     assert!(lowered.contains("for item in (items).iter().cloned()"));
     assert!(lowered.contains("let copy = item;"));
+}
+
+#[test]
+fn checker_accepts_fresh_list_for_loop() {
+    let source = r#"
+fn names() -> fresh List<String> {
+    return ["a", "b"]
+}
+
+fn run() -> String {
+    for name in names() {
+        return name
+    }
+    return ""
+}
+"#;
+    let diagnostics = analyze_source("fresh-list-for.rss", source);
+    assert_eq!(diagnostics, Vec::new());
+
+    let lowered = lower_source_to_rust("fresh-list-for.rss", source).expect("for should lower");
+    assert!(lowered.contains("for name in (names()).iter()"));
 }
 
 #[test]

@@ -2028,11 +2028,13 @@ impl<'a> RustLowerer<'a> {
                 source: span.clone(),
                 generated: generated.clone(),
             }),
-            Expr::String(_, span) => self.source_map.push(RustSourceMapEntry {
-                kind: "string".to_string(),
-                source: span.clone(),
-                generated: generated.clone(),
-            }),
+            Expr::String(_, span) | Expr::MultilineString(_, span) => {
+                self.source_map.push(RustSourceMapEntry {
+                    kind: "string".to_string(),
+                    source: span.clone(),
+                    generated: generated.clone(),
+                })
+            }
             Expr::Unknown(_) => {}
         }
     }
@@ -2072,6 +2074,7 @@ impl<'a> RustLowerer<'a> {
             }
             Expr::Number(value, _) => value.clone(),
             Expr::String(value, _) => format!("{:?}.to_string()", decode_string_token(value)),
+            Expr::MultilineString(value, _) => format!("{value:?}.to_string()"),
             Expr::ObjectLiteral { .. } => self.lower_json_value(expr),
             Expr::MapLiteral { span, .. } => unreachable_lowering("map literal", span),
             Expr::ArrayLiteral { items, .. } => {
@@ -2283,6 +2286,20 @@ impl<'a> RustLowerer<'a> {
                         {
                             self.lower_expr(receiver)
                         }
+                        DataEffect::Read
+                            if receiver_type.as_ref().is_some_and(|ty| {
+                                (ty.name == "List"
+                                    && matches!(receiver.as_ref(), Expr::ArrayLiteral { .. }))
+                                    || (ty.name == "Map"
+                                        && matches!(receiver.as_ref(), Expr::MapLiteral { .. }))
+                            }) =>
+                        {
+                            let receiver_type = receiver_type.as_ref().expect("checked above");
+                            format!(
+                                "&{}",
+                                self.lower_expr_for_expected_type(receiver, receiver_type)
+                            )
+                        }
                         DataEffect::Read => format!("&{}", self.lower_expr(receiver)),
                         DataEffect::Take => self.lower_expr(receiver),
                     };
@@ -2309,6 +2326,18 @@ impl<'a> RustLowerer<'a> {
                                         DataEffect::Mut => format!("&mut {lowered}"),
                                         DataEffect::Take => lowered,
                                     };
+                                }
+                                if arg.name.is_none() {
+                                    if expected.name == "Fn" {
+                                        return self
+                                            .lower_expr_for_expected_type(&arg.value, &expected);
+                                    }
+                                    let lowered =
+                                        self.lower_receiver_positional_arg(&arg.value, &expected);
+                                    if is_copy_type_ref(&expected) {
+                                        return lowered;
+                                    }
+                                    return format!("&{lowered}");
                                 }
                                 return self
                                     .lower_call_arg_for_expected_type(&arg.value, &expected);
@@ -2522,6 +2551,11 @@ impl<'a> RustLowerer<'a> {
     }
 
     fn lower_expr_for_expected_type(&mut self, expr: &Expr, expected: &TypeRef) -> String {
+        if expected.name == "Fn"
+            && let Expr::Closure { params, body, .. } = expr
+        {
+            return self.lower_closure_for_expected_fn(params, body, expected);
+        }
         if let Expr::Call {
             callee: Callee::Name(name),
             args,
@@ -2590,6 +2624,83 @@ impl<'a> RustLowerer<'a> {
             return format!("{lowered}.clone()");
         }
         self.lower_expr(expr)
+    }
+
+    fn lower_closure_for_expected_fn(
+        &mut self,
+        params: &[String],
+        body: &Block,
+        expected: &TypeRef,
+    ) -> String {
+        let previous_value_types = self.value_types.clone();
+        for (param, ty) in params.iter().zip(expected.fn_params.iter()) {
+            self.value_types.insert(param.clone(), ty.clone());
+        }
+        let lowered_params = params
+            .iter()
+            .enumerate()
+            .map(|(index, param)| {
+                let name = rust_ident(param);
+                expected
+                    .fn_params
+                    .get(index)
+                    .filter(|ty| self.type_ref_is_concrete_for_annotation(ty))
+                    .map(|ty| {
+                        format!(
+                            "{name}: {}",
+                            self.lower_type_ref(ty, ManagedPosition::Param)
+                        )
+                    })
+                    .unwrap_or(name)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let previous_return_type = self.current_return_type.take();
+        if let [Stmt::Expr(value)] = body.statements.as_slice() {
+            let lowered = format!("|{lowered_params}| {}", self.lower_expr(value));
+            self.current_return_type = previous_return_type;
+            self.value_types = previous_value_types;
+            return lowered;
+        }
+        let mut out = String::new();
+        out.push_str(&format!("|{lowered_params}| {{\n"));
+        self.lower_block(body, &mut out, 1);
+        out.push('}');
+        self.current_return_type = previous_return_type;
+        self.value_types = previous_value_types;
+        out
+    }
+
+    fn type_ref_is_concrete_for_annotation(&self, ty: &TypeRef) -> bool {
+        let root_is_concrete = matches!(
+            ty.name.as_str(),
+            "Unit"
+                | "Bool"
+                | "Int"
+                | "Float"
+                | "String"
+                | "JsonValue"
+                | "Path"
+                | "List"
+                | "Map"
+                | "Set"
+                | "Option"
+                | "Result"
+        ) || self.type_kinds.contains_key(&ty.name)
+            || capability_protocol_name(&ty.name).is_some();
+        root_is_concrete
+            && ty
+                .args
+                .iter()
+                .all(|arg| self.type_ref_is_concrete_for_annotation(arg))
+            && ty
+                .fn_params
+                .iter()
+                .all(|param| self.type_ref_is_concrete_for_annotation(param))
+            && ty
+                .fn_return
+                .as_deref()
+                .is_none_or(|return_ty| self.type_ref_is_concrete_for_annotation(return_ty))
     }
 
     fn lower_await_expr(&mut self, expr: &Expr) -> String {
@@ -2719,6 +2830,9 @@ impl<'a> RustLowerer<'a> {
     }
 
     fn lower_call_arg_for_expected_type(&mut self, value: &Expr, expected: &TypeRef) -> String {
+        if expected.name == "Fn" {
+            return self.lower_expr_for_expected_type(value, expected);
+        }
         match value {
             Expr::Call {
                 callee:
@@ -3180,11 +3294,88 @@ impl<'a> RustLowerer<'a> {
                 .map(|(name, _)| name.as_str())
         };
         let resolved_arg_name = arg_name.or_else(positional_name);
-        if type_root_name(namespace) == "List" && resolved_arg_name == Some("value") {
+        if type_root_name(namespace) == "List" {
             let receiver_type = receiver_type?;
             let item_type = receiver_type.args.first()?.clone();
             return match type_root_name(method) {
-                "push" | "set" => Some(item_type),
+                "push" | "set" if resolved_arg_name == Some("value") => Some(item_type),
+                "append" if resolved_arg_name == Some("values") => Some(TypeRef {
+                    name: "List".to_string(),
+                    args: vec![item_type],
+                    malformed_arg_spans: Vec::new(),
+                    is_fresh: false,
+                    is_noescape: false,
+                    is_owned: false,
+                    fn_params: Vec::new(),
+                    fn_return: None,
+                    span: receiver_type.span.clone(),
+                }),
+                "join" if resolved_arg_name == Some("separator") => {
+                    Some(simple_type_ref("String", &receiver_type.span))
+                }
+                "count_where" | "any" | "all" | "find" | "filter"
+                    if resolved_arg_name == Some("predicate") =>
+                {
+                    Some(fn_type_ref(
+                        vec![item_type],
+                        Some(simple_type_ref("Bool", &receiver_type.span)),
+                        &receiver_type.span,
+                    ))
+                }
+                "map" if resolved_arg_name == Some("mapper") => {
+                    Some(fn_type_ref(vec![item_type], None, &receiver_type.span))
+                }
+                "flat_map" if resolved_arg_name == Some("mapper") => {
+                    Some(fn_type_ref(vec![item_type], None, &receiver_type.span))
+                }
+                "sort_with" if resolved_arg_name == Some("compare") => Some(fn_type_ref(
+                    vec![item_type.clone(), item_type],
+                    Some(simple_type_ref("Int", &receiver_type.span)),
+                    &receiver_type.span,
+                )),
+                _ => None,
+            };
+        }
+        if type_root_name(namespace) == "Result" {
+            let receiver_type = receiver_type?;
+            let ok_type = receiver_type.args.first()?.clone();
+            let err_type = receiver_type.args.get(1)?.clone();
+            return match type_root_name(method) {
+                "unwrap_or" if resolved_arg_name == Some("default") => Some(ok_type),
+                "map" if resolved_arg_name == Some("mapper") => {
+                    Some(fn_type_ref(vec![ok_type], None, &receiver_type.span))
+                }
+                "and_then" if resolved_arg_name == Some("mapper") => Some(fn_type_ref(
+                    vec![ok_type],
+                    Some(TypeRef {
+                        name: "Result".to_string(),
+                        args: vec![simple_type_ref("Unit", &receiver_type.span), err_type],
+                        malformed_arg_spans: Vec::new(),
+                        is_fresh: false,
+                        is_noescape: false,
+                        is_owned: false,
+                        fn_params: Vec::new(),
+                        fn_return: None,
+                        span: receiver_type.span.clone(),
+                    }),
+                    &receiver_type.span,
+                )),
+                _ => None,
+            };
+        }
+        if type_root_name(namespace) == "Option" {
+            let receiver_type = receiver_type?;
+            let item_type = receiver_type.args.first()?.clone();
+            return match type_root_name(method) {
+                "unwrap_or" if resolved_arg_name == Some("default") => Some(item_type),
+                "map" | "and_then" if resolved_arg_name == Some("mapper") => {
+                    Some(fn_type_ref(vec![item_type], None, &receiver_type.span))
+                }
+                "filter" if resolved_arg_name == Some("predicate") => Some(fn_type_ref(
+                    vec![item_type],
+                    Some(simple_type_ref("Bool", &receiver_type.span)),
+                    &receiver_type.span,
+                )),
                 _ => None,
             };
         }
@@ -3293,7 +3484,7 @@ impl<'a> RustLowerer<'a> {
     }
 
     fn is_string_comparison_operand(&self, expr: &Expr) -> bool {
-        matches!(expr, Expr::String(_, _))
+        matches!(expr, Expr::String(_, _) | Expr::MultilineString(_, _))
             || self
                 .infer_expr_type(expr)
                 .is_some_and(|ty| ty.name == "String" && ty.args.is_empty())
@@ -3302,6 +3493,7 @@ impl<'a> RustLowerer<'a> {
     fn lower_string_comparison_operand(&mut self, expr: &Expr) -> String {
         match expr {
             Expr::String(value, _) => format!("{:?}", decode_string_token(value)),
+            Expr::MultilineString(value, _) => format!("{value:?}"),
             _ if self.is_string_comparison_operand(expr) => {
                 format!("{}.as_str()", self.lower_expr(expr))
             }
@@ -4030,7 +4222,11 @@ fn expr_contains_await(expr: &Expr) -> bool {
             .iter()
             .any(|entry| expr_contains_await(&entry.key) || expr_contains_await(&entry.value)),
         Expr::ArrayLiteral { items, .. } => items.iter().any(expr_contains_await),
-        Expr::Ident(..) | Expr::Number(..) | Expr::String(..) | Expr::Unknown(_) => false,
+        Expr::Ident(..)
+        | Expr::Number(..)
+        | Expr::String(..)
+        | Expr::MultilineString(..)
+        | Expr::Unknown(_) => false,
     }
 }
 
@@ -4048,6 +4244,34 @@ fn type_ref_from_display(name: &str, span: &Span) -> TypeRef {
         is_owned: false,
         fn_params: Vec::new(),
         fn_return: None,
+        span: span.clone(),
+    }
+}
+
+fn simple_type_ref(name: &str, span: &Span) -> TypeRef {
+    TypeRef {
+        name: name.to_string(),
+        args: Vec::new(),
+        malformed_arg_spans: Vec::new(),
+        is_fresh: false,
+        is_noescape: false,
+        is_owned: false,
+        fn_params: Vec::new(),
+        fn_return: None,
+        span: span.clone(),
+    }
+}
+
+fn fn_type_ref(params: Vec<TypeRef>, return_ty: Option<TypeRef>, span: &Span) -> TypeRef {
+    TypeRef {
+        name: "Fn".to_string(),
+        args: Vec::new(),
+        malformed_arg_spans: Vec::new(),
+        is_fresh: false,
+        is_noescape: true,
+        is_owned: false,
+        fn_params: params,
+        fn_return: return_ty.map(Box::new),
         span: span.clone(),
     }
 }
@@ -4099,7 +4323,7 @@ fn infer_const_type(expr: &Expr) -> String {
                 "i64".to_string()
             }
         }
-        Expr::String(_, _) => "&'static str".to_string(),
+        Expr::String(_, _) | Expr::MultilineString(_, _) => "&'static str".to_string(),
         Expr::Ident(name, _) if name == "true" || name == "false" => "bool".to_string(),
         _ => "i64".to_string(), // fallback
     }
@@ -4111,6 +4335,7 @@ fn lower_const_value(expr: &Expr) -> String {
         Expr::String(value, _) => {
             format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
         }
+        Expr::MultilineString(value, _) => format!("{value:?}"),
         Expr::Ident(name, _) if name == "true" || name == "false" => name.clone(),
         _ => "()".to_string(), // unsupported const expression
     }

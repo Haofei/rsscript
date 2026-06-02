@@ -4,9 +4,9 @@ version = 1
 name = "rss-code-agent"
 version = "0.1.0"
 source = "path+examples/code-agent"
-checksum = "sha256:81e0dc2d62797b630bee71682c157a979abbea854e5da38179fbc9ac222dde74"
+checksum = "sha256:52f9d936a26f85c60d1fc278b6aa295f5bf736b00a6eb5563486c47eb721cf29"
 interface_hash = "sha256:36e6897d97ac40f70744171504605f1905c435cb09b5957a6dbd3b3f47852a13"
-review_hash = "sha256:066e97267b6f284ddb97fca182ea5f66014a0dc32ff770fe167edd763eeeab0c"
+review_hash = "sha256:8c3408f14175c0777b2c97abf301eb00c4f5d56bc5aa877faacec26e05a4899d"
 features = []
 
 [metadata]

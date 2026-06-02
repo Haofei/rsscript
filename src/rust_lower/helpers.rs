@@ -227,6 +227,7 @@ fn validate_executable_declarations_in_expr(
         | Expr::Ident(_, _)
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => {}
     }
 }
@@ -727,6 +728,7 @@ pub(super) fn collect_mutated_bindings_from_expr(expr: &Expr, names: &mut BTreeS
         | Expr::Ident(_, _)
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => {}
     }
 }
@@ -924,7 +926,11 @@ pub(super) fn closure_expr_mutates_unbound_name(expr: &Expr, bound: &BTreeSet<St
         Expr::ArrayLiteral { items, .. } => items
             .iter()
             .any(|item| closure_expr_mutates_unbound_name(item, bound)),
-        Expr::Ident(_, _) | Expr::Number(_, _) | Expr::String(_, _) | Expr::Unknown(_) => false,
+        Expr::Ident(_, _)
+        | Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::MultilineString(_, _)
+        | Expr::Unknown(_) => false,
     }
 }
 

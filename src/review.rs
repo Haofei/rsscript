@@ -1112,6 +1112,7 @@ fn collect_review_map_local_closure_bindings_expr(expr: &Expr, bindings: &mut BT
         | Expr::Ident(_, _)
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => {}
     }
 }
@@ -1382,7 +1383,7 @@ fn review_map_expr_type_name(expr: &Expr, hir: &Hir) -> Option<String> {
             review_map_expr_type_name(value, hir).and_then(|ty| result_ok_type_name(&ty))
         }
         Expr::Await { value, .. } => review_map_expr_type_name(value, hir),
-        Expr::String(_, _) => Some("String".to_string()),
+        Expr::String(_, _) | Expr::MultilineString(_, _) => Some("String".to_string()),
         Expr::Number(_, _) => Some("Int".to_string()),
         Expr::Ident(name, _) if matches!(name.as_str(), "true" | "false") => {
             Some("Bool".to_string())
@@ -1626,6 +1627,7 @@ fn collect_review_map_facts_expr(
         | Expr::Ident(_, _)
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => {}
     }
 }
@@ -1714,6 +1716,7 @@ fn collect_spawn_capture_names(expr: &Expr, captures: &mut BTreeSet<String>) {
         | Expr::ArrayLiteral { .. }
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => {}
     }
 }
@@ -1824,6 +1827,7 @@ fn spawn_capture_path(expr: &Expr) -> Option<String> {
         | Expr::Match { .. }
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => None,
     }
 }
@@ -2461,7 +2465,7 @@ fn review_map_expr_type_name_with_facts(
 fn review_expr_label(expr: &Expr) -> String {
     match expr {
         Expr::Ident(name, _) => name.clone(),
-        Expr::String(value, _) => format!("{value:?}"),
+        Expr::String(value, _) | Expr::MultilineString(value, _) => format!("{value:?}"),
         Expr::Field { base, name, .. } => format!("{}.{}", review_expr_label(base), name),
         Expr::Index { base, .. } => format!("{}[]", review_expr_label(base)),
         Expr::Call { callee, .. } => format!("{}()", review_callee_display(callee)),
@@ -3608,6 +3612,7 @@ fn collect_boundary_expr(expr: &Expr, path: &str, boundary: &mut BoundarySig) {
         | Expr::Ident(_, _)
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => {}
     }
 }
@@ -3642,6 +3647,7 @@ fn boundary_expr_subject(expr: &Expr) -> Option<String> {
         | Expr::Match { .. }
         | Expr::Number(_, _)
         | Expr::String(_, _)
+        | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => None,
     }
 }
