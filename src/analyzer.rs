@@ -32,7 +32,7 @@ fn resource_result_return_arg_allowed(
 pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
     let tokens = lex(file, source);
     let syntax_program = parse_source(file, source);
-    let hir = Hir::from_syntax(&syntax_program);
+    let hir = Hir::from_syntax_with_standard_package_interfaces(&syntax_program);
     analyze_program(tokens, syntax_program, hir, builtin_interface_programs())
 }
 
@@ -54,8 +54,12 @@ pub fn core_interfaces() -> &'static [(&'static str, &'static str)] {
     CORE_INTERFACES
 }
 
+pub fn standard_package_interfaces() -> &'static [(&'static str, &'static str)] {
+    crate::interfaces::STANDARD_PACKAGE_INTERFACES
+}
+
 pub fn analyze_source_with_core(file: &str, source: &str) -> Vec<Diagnostic> {
-    analyze_source_with_interfaces(file, source, CORE_INTERFACES)
+    analyze_source(file, source)
 }
 
 pub fn analyze_source_with_interfaces(
@@ -137,8 +141,7 @@ pub fn analyze_sources_with_interfaces_without_core(
 }
 
 fn builtin_interface_programs() -> Vec<crate::syntax::ast::Program> {
-    CORE_INTERFACES
-        .iter()
+    crate::interfaces::default_interfaces()
         .map(|(file, source)| parse_source(file, source))
         .collect()
 }

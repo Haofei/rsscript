@@ -71,6 +71,7 @@ args = ["pkg"]
 paths = [
   "examples/packages/code-agent",
   "rss/async",
+  "rss/async-runtime",
   "rss/quickcheck",
   "rss/core-properties",
 ]

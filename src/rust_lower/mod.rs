@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use crate::analyzer::{analyze_source_with_core, analyze_sources_with_interfaces};
+use crate::analyzer::{analyze_source_with_core, analyze_sources_with_interfaces_without_core};
 use crate::diagnostic::Diagnostic;
-use crate::interfaces::builtin_interfaces;
+use crate::interfaces::{builtin_interfaces, default_interfaces, standard_package_interfaces};
 use crate::syntax::ast::{Program, merge_programs};
 use crate::syntax::parse_source;
 
@@ -51,7 +51,13 @@ pub fn lower_source_to_rust_with_map(
     if !lowering_diagnostics.is_empty() {
         return Err(lowering_diagnostics);
     }
-    Ok(lower_program_to_rust_with_map(&program))
+    let interface_programs = default_interfaces()
+        .map(|(file, source)| parse_source(file, source))
+        .collect::<Vec<_>>();
+    Ok(lower_program_to_rust_with_map_with_interfaces(
+        &program,
+        &interface_programs,
+    ))
 }
 
 pub fn lower_source_to_rust_package(
@@ -84,7 +90,19 @@ pub fn lower_sources_to_rust_package_with_interfaces(
     runtime_path: &str,
     interfaces: &[(String, String)],
 ) -> Result<GeneratedRustPackage, Vec<Diagnostic>> {
-    lower_sources_to_rust_package_with_options(sources, package_name, runtime_path, interfaces, &[])
+    let mut defaulted_interfaces = standard_package_interfaces()
+        .map(|(path, contents)| (path.to_string(), contents.to_string()))
+        .collect::<Vec<_>>();
+    defaulted_interfaces.extend(interfaces.iter().cloned());
+    defaulted_interfaces.sort_by(|left, right| left.0.cmp(&right.0));
+    defaulted_interfaces.dedup_by(|left, right| left.0 == right.0);
+    lower_sources_to_rust_package_with_options(
+        sources,
+        package_name,
+        runtime_path,
+        &defaulted_interfaces,
+        &[],
+    )
 }
 
 pub fn lower_sources_to_rust_package_with_options(
@@ -104,7 +122,7 @@ pub fn lower_sources_to_rust_package_with_options(
         .iter()
         .map(|(path, contents)| (path.as_str(), contents.as_str()))
         .collect::<Vec<_>>();
-    let diagnostics = analyze_sources_with_interfaces(&source_refs, &interface_refs);
+    let diagnostics = analyze_sources_with_interfaces_without_core(&source_refs, &interface_refs);
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity.is_error())
@@ -126,7 +144,15 @@ pub fn lower_sources_to_rust_package_with_options(
     if !lowering_diagnostics.is_empty() {
         return Err(lowering_diagnostics);
     }
-    let lowered = lower_program_to_rust_with_map_with_native_bindings(&program, native_bindings);
+    let interface_programs = interface_refs
+        .iter()
+        .map(|(file, source)| parse_source(file, source))
+        .collect::<Vec<_>>();
+    let lowered = lower_program_to_rust_with_map_with_native_bindings(
+        &program,
+        native_bindings,
+        &interface_programs,
+    );
     let package_name = cargo_package_name(package_name);
     let native_dependency_toml = native_dependencies
         .iter()
@@ -233,12 +259,31 @@ pub fn lower_program_to_rust(program: &Program) -> String {
 }
 
 pub fn lower_program_to_rust_with_map(program: &Program) -> LoweredRust {
-    lower_program_to_rust_with_map_with_native_bindings(program, BTreeMap::new())
+    let interface_programs = default_interfaces()
+        .map(|(file, source)| parse_source(file, source))
+        .collect::<Vec<_>>();
+    lower_program_to_rust_with_map_with_native_bindings(
+        program,
+        BTreeMap::new(),
+        &interface_programs,
+    )
 }
 
 fn lower_program_to_rust_with_map_with_native_bindings(
     program: &Program,
     native_bindings: BTreeMap<String, String>,
+    interface_programs: &[Program],
 ) -> LoweredRust {
-    RustLowerer::new(program, native_bindings).lower()
+    RustLowerer::new(program, native_bindings, interface_programs).lower()
+}
+
+fn lower_program_to_rust_with_map_with_interfaces(
+    program: &Program,
+    interface_programs: &[Program],
+) -> LoweredRust {
+    lower_program_to_rust_with_map_with_native_bindings(
+        program,
+        BTreeMap::new(),
+        interface_programs,
+    )
 }

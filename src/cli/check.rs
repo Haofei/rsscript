@@ -3,8 +3,8 @@ use std::process::ExitCode;
 
 use rsscript::{
     analyze_source_with_interfaces, analyze_source_with_interfaces_without_core,
-    analyze_source_without_core, core_interfaces, explain_diagnostic_code,
-    format_diagnostic_explanation, format_diagnostics_human, format_diagnostics_json,
+    analyze_source_without_core, explain_diagnostic_code, format_diagnostic_explanation,
+    format_diagnostics_human, format_diagnostics_json, standard_package_interfaces,
 };
 
 use super::package::run_package_check;
@@ -123,7 +123,7 @@ pub(crate) fn run_check(args: &[String]) -> ExitCode {
         .map(|interface| (interface.path.as_str(), interface.contents.as_str()))
         .collect::<Vec<_>>();
     let diagnostics = if options.use_core {
-        let mut combined = core_interfaces().to_vec();
+        let mut combined = standard_package_interfaces().to_vec();
         combined.extend(interface_refs);
         analyze_source_with_interfaces(path, &source, &combined)
     } else if interface_refs.is_empty() {

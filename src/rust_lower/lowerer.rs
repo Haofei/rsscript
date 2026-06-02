@@ -45,7 +45,11 @@ struct AsyncTaskGroupBoundary {
 }
 
 impl<'a> RustLowerer<'a> {
-    pub(super) fn new(program: &'a Program, native_bindings: BTreeMap<String, String>) -> Self {
+    pub(super) fn new(
+        program: &'a Program,
+        native_bindings: BTreeMap<String, String>,
+        interface_programs: &[Program],
+    ) -> Self {
         let type_kinds = program
             .items
             .iter()
@@ -59,17 +63,19 @@ impl<'a> RustLowerer<'a> {
                 | Item::Use(_) => None,
             })
             .collect();
-        let native_boundary_callees = collect_native_boundary_callees(program);
-        let async_native_boundary_callees = collect_async_native_boundary_callees(program);
+        let native_boundary_callees = collect_native_boundary_callees(program, interface_programs);
+        let async_native_boundary_callees =
+            collect_async_native_boundary_callees(program, interface_programs);
         let protocol_names = program
             .protocols
             .iter()
             .map(|protocol| protocol.name.clone())
             .collect();
-        let function_return_types = collect_function_return_types(program);
-        let function_param_types = collect_function_param_types(program);
-        let function_param_effects = collect_function_param_effects(program);
-        let retained_params_by_callee = collect_function_retained_params(program);
+        let function_return_types = collect_function_return_types(program, interface_programs);
+        let function_param_types = collect_function_param_types(program, interface_programs);
+        let function_param_effects = collect_function_param_effects(program, interface_programs);
+        let retained_params_by_callee =
+            collect_function_retained_params(program, interface_programs);
 
         Self {
             program,

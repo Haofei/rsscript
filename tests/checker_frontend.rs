@@ -2580,10 +2580,10 @@ fn checker_accepts_await_inside_async_function() {
     let source = r#"
 features: async
 
-async fn Timer.sleep(ms: Int) -> Unit
+async fn TestTimer.sleep(ms: Int) -> Unit
 
 async fn receive() -> Unit {
-    await Timer.sleep(ms: 1)
+    await TestTimer.sleep(ms: 1)
     return Unit
 }
 "#;
@@ -2597,10 +2597,10 @@ fn checker_rejects_await_outside_async_function() {
     let source = r#"
 features: async
 
-async fn Timer.sleep(ms: Int) -> Unit
+async fn TestTimer.sleep(ms: Int) -> Unit
 
 fn receive() -> Unit {
-    await Timer.sleep(ms: 1)
+    await TestTimer.sleep(ms: 1)
     return Unit
 }
 "#;

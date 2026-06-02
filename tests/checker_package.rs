@@ -6815,6 +6815,166 @@ fn main() -> Result<Unit, String> {
 }
 
 #[test]
+fn package_requires_explicit_async_dependency_for_timer_api() {
+    let root_dir = common::unique_temp_dir("rsscript-package-async-missing-dependency");
+    common::write_named_package_fixture(&root_dir, "rss-async-app", "0.1.0", "", "");
+    fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        root_dir.join("src/main.rss"),
+        r#"features: async
+
+async fn main() -> Result<Unit, TimerError> {
+    await Timer.sleep(ms: 1)?
+    return Ok(Unit)
+}
+"#,
+    )
+    .expect("source should be written");
+    fs::write(
+        root_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&root_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&root_dir).expect("package check should complete");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&root_dir);
+
+    assert!(!check.ok);
+    assert!(json["diagnostics"].as_array().is_some_and(|diagnostics| {
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["summary"]
+                .as_str()
+                .is_some_and(|summary| summary.contains("unknown type `TimerError`"))
+                || diagnostic["summary"]
+                    .as_str()
+                    .is_some_and(|summary| summary.contains("unresolved function `Timer.sleep`"))
+        })
+    }));
+}
+
+#[test]
+fn package_check_rejects_async_interface_dependency_without_provider() {
+    let root_dir = common::unique_temp_dir("rsscript-package-async-no-provider");
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let async_dir = repo.join("rss/async");
+    common::write_named_package_fixture(
+        &root_dir,
+        "rss-async-app",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-async = {{ path = "{}" }}
+"#,
+            common::toml_path(&async_dir)
+        ),
+        "",
+    );
+    fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        root_dir.join("src/main.rss"),
+        r#"features: async
+
+async fn main() -> Result<Unit, TimerError> {
+    await Timer.sleep(ms: 1)?
+    return Ok(Unit)
+}
+"#,
+    )
+    .expect("source should be written");
+    fs::write(
+        root_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&root_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&root_dir).expect("package check should complete");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&root_dir);
+
+    assert!(!check.ok);
+    assert!(json["graph"]["reasons"].as_array().is_some_and(|reasons| {
+        reasons.iter().any(|reason| {
+            reason
+                == "interface-only dependency `rss-async` requires an implementation provider for executable builds"
+        })
+    }));
+}
+
+#[test]
+fn package_check_accepts_async_runtime_provider_and_lowers_timer_api() {
+    let root_dir = common::unique_temp_dir("rsscript-package-async-provider");
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let async_dir = repo.join("rss/async");
+    let async_runtime_dir = repo.join("rss/async-runtime");
+    common::write_named_package_fixture(
+        &root_dir,
+        "rss-async-app",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-async = {{ path = "{}" }}
+rss-async-runtime = {{ path = "{}" }}
+
+[providers]
+async = "rss-async-runtime"
+"#,
+            common::toml_path(&async_dir),
+            common::toml_path(&async_runtime_dir)
+        ),
+        "",
+    );
+    fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        root_dir.join("src/main.rss"),
+        r#"features: async
+
+async fn main() -> Result<Unit, TimerError> {
+    await Timer.sleep(ms: 1)?
+    return Ok(Unit)
+}
+"#,
+    )
+    .expect("source should be written");
+    fs::write(
+        root_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&root_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&root_dir).expect("package check should succeed");
+    let input = package_lowering_input(&root_dir).expect("package should lower");
+    let package = lower_sources_to_rust_package_with_options(
+        &input.sources,
+        &input.package.name,
+        "/workspace/rsscript/runtime",
+        &input.interfaces,
+        &input.native_dependencies,
+    )
+    .expect("package source should lower with async provider");
+    let _ = fs::remove_dir_all(&root_dir);
+
+    assert!(check.ok);
+    assert!(input.interfaces.iter().any(|(path, _)| {
+        path.ends_with("rss/async/interface/timer.rssi")
+            || path.ends_with("rss\\async\\interface\\timer.rssi")
+    }));
+    assert!(
+        package
+            .lib_rs
+            .contains("rsscript_runtime::timer_sleep_native_start")
+    );
+}
+
+#[test]
 fn package_vendor_can_emit_reir_supply_chain_facts() {
     let temp_dir = common::unique_temp_dir("rsscript-package-vendor-reir");
     let root_dir = temp_dir.join("app");

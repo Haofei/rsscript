@@ -7,6 +7,7 @@ use crate::hir::{
     CallResolution, FunctionSig as HirFunctionSig, Hir, HirBindingKind, HirBlock, HirExpr, HirStmt,
     ParamEffect, ResolvedCalleeKind,
 };
+use crate::interfaces::standard_package_interfaces;
 use crate::syntax::ast::{
     Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature, FunctionDecl,
     GenericBound, Item, LetKind, MatchPattern, Param, Program, ProtocolImpl, Stmt, TypeDecl,
@@ -460,7 +461,8 @@ pub fn format_review_json(findings: &[ReviewFinding]) -> String {
 }
 
 pub fn review_map_sources(sources: Vec<(&str, &str)>) -> ReviewMap {
-    review_map_sources_with_interfaces(sources, &[])
+    let interfaces = standard_package_interfaces().collect::<Vec<_>>();
+    review_map_sources_with_interfaces(sources, &interfaces)
 }
 
 pub(crate) fn review_map_sources_with_interfaces(

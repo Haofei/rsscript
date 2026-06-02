@@ -355,23 +355,33 @@ pub(super) fn is_result_constructor_expr(expr: &Expr) -> bool {
     }
 }
 
-pub(super) fn collect_function_return_types(program: &Program) -> BTreeMap<String, TypeRef> {
+pub(super) fn collect_function_return_types(
+    program: &Program,
+    interface_programs: &[Program],
+) -> BTreeMap<String, TypeRef> {
     let mut return_types = BTreeMap::new();
     collect_program_function_return_types(program, &mut return_types);
     for (file, source) in builtin_interfaces() {
         let interface_program = parse_source(file, source);
         collect_program_function_return_types(&interface_program, &mut return_types);
     }
+    for interface_program in interface_programs {
+        collect_program_function_return_types(interface_program, &mut return_types);
+    }
     return_types
 }
 
 pub(super) fn collect_function_param_types(
     program: &Program,
+    interface_programs: &[Program],
 ) -> BTreeMap<String, Vec<(String, TypeRef)>> {
     let mut param_types = BTreeMap::new();
     for (file, source) in builtin_interfaces() {
         let interface_program = parse_source(file, source);
         collect_program_function_param_types(&interface_program, &mut param_types);
+    }
+    for interface_program in interface_programs {
+        collect_program_function_param_types(interface_program, &mut param_types);
     }
     collect_program_function_param_types(program, &mut param_types);
     param_types
@@ -379,11 +389,15 @@ pub(super) fn collect_function_param_types(
 
 pub(super) fn collect_function_param_effects(
     program: &Program,
+    interface_programs: &[Program],
 ) -> BTreeMap<String, Vec<(String, Option<DataEffect>)>> {
     let mut param_effects = BTreeMap::new();
     for (file, source) in builtin_interfaces() {
         let interface_program = parse_source(file, source);
         collect_program_function_param_effects(&interface_program, &mut param_effects);
+    }
+    for interface_program in interface_programs {
+        collect_program_function_param_effects(interface_program, &mut param_effects);
     }
     collect_program_function_param_effects(program, &mut param_effects);
     param_effects
@@ -427,11 +441,15 @@ fn collect_program_function_param_types(
 
 pub(super) fn collect_function_retained_params(
     program: &Program,
+    interface_programs: &[Program],
 ) -> BTreeMap<String, BTreeSet<String>> {
     let mut retained_params = BTreeMap::new();
     for (file, source) in builtin_interfaces() {
         let interface_program = parse_source(file, source);
         collect_program_function_retained_params(&interface_program, &mut retained_params);
+    }
+    for interface_program in interface_programs {
+        collect_program_function_retained_params(interface_program, &mut retained_params);
     }
     collect_program_function_retained_params(program, &mut retained_params);
     retained_params
@@ -472,21 +490,33 @@ pub(super) fn collect_program_function_return_types(
     }
 }
 
-pub(super) fn collect_native_boundary_callees(program: &Program) -> BTreeSet<String> {
+pub(super) fn collect_native_boundary_callees(
+    program: &Program,
+    interface_programs: &[Program],
+) -> BTreeSet<String> {
     let mut callees = BTreeSet::new();
     for (file, source) in builtin_interfaces() {
         let interface = parse_source(file, source);
         collect_native_boundary_callees_from_program(&interface, &mut callees);
     }
+    for interface in interface_programs {
+        collect_native_boundary_callees_from_program(interface, &mut callees);
+    }
     collect_native_boundary_callees_from_program(program, &mut callees);
     callees
 }
 
-pub(super) fn collect_async_native_boundary_callees(program: &Program) -> BTreeSet<String> {
+pub(super) fn collect_async_native_boundary_callees(
+    program: &Program,
+    interface_programs: &[Program],
+) -> BTreeSet<String> {
     let mut callees = BTreeSet::new();
     for (file, source) in builtin_interfaces() {
         let interface = parse_source(file, source);
         collect_async_native_boundary_callees_from_program(&interface, &mut callees);
+    }
+    for interface in interface_programs {
+        collect_async_native_boundary_callees_from_program(interface, &mut callees);
     }
     collect_async_native_boundary_callees_from_program(program, &mut callees);
     callees

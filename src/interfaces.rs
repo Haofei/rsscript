@@ -1,7 +1,7 @@
-// Default signatures visible to single-file checks and Rust lowering. This
-// includes language/core interfaces plus standard package contracts that are
-// still prelude-visible while package imports mature.
-pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
+// Standard package contracts that are prelude-visible only for single-file
+// checks/lowering. Package review and package lowering must receive these
+// through explicit package dependencies instead.
+pub(crate) const STANDARD_PACKAGE_INTERFACES: &[(&str, &str)] = &[
     (
         "rss/async/interface/cancellation.rssi",
         include_str!("../rss/async/interface/cancellation.rssi"),
@@ -26,6 +26,9 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         "rss/async/interface/timer.rssi",
         include_str!("../rss/async/interface/timer.rssi"),
     ),
+];
+
+pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
     (
         "core/capability/capability.rssi",
         include_str!("../core/capability/capability.rssi"),
@@ -170,4 +173,15 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
 
 pub(crate) fn builtin_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
     CORE_INTERFACES.iter().copied()
+}
+
+pub(crate) fn default_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
+    CORE_INTERFACES
+        .iter()
+        .chain(STANDARD_PACKAGE_INTERFACES.iter())
+        .copied()
+}
+
+pub(crate) fn standard_package_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
+    STANDARD_PACKAGE_INTERFACES.iter().copied()
 }

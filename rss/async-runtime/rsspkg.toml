@@ -1,0 +1,12 @@
+[package]
+name = "rss-async-runtime"
+version = "0.1.0"
+edition = "2026"
+
+[sources]
+paths = ["src"]
+
+[implements."rss-async"]
+version = "0.1"
+interface_features = []
+interface_effective_hash = "sha256:3f45f6e1b6f9da848527aeff030887b68b7c05eb0bc38c682cea24a08c1fba06"

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::diagnostic::Span;
-use crate::interfaces::builtin_interfaces;
+use crate::interfaces::{builtin_interfaces, standard_package_interfaces};
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl,
     GenericBound, Item, LetKind, MatchPattern, Param, Program as SyntaxProgram, ProtocolImpl, Stmt,
@@ -425,32 +425,40 @@ impl Hir {
         Self::from_syntax_with_interfaces(program, &[])
     }
 
+    pub fn from_syntax_with_standard_package_interfaces(program: &SyntaxProgram) -> Self {
+        Self::from_syntax_with_interfaces_options(program, &[], true, true)
+    }
+
     pub fn from_syntax_without_builtin_interfaces(program: &SyntaxProgram) -> Self {
-        Self::from_syntax_with_interfaces_options(program, &[], false)
+        Self::from_syntax_with_interfaces_options(program, &[], false, false)
     }
 
     pub fn from_syntax_with_interfaces(
         program: &SyntaxProgram,
         interfaces: &[SyntaxProgram],
     ) -> Self {
-        Self::from_syntax_with_interfaces_options(program, interfaces, true)
+        Self::from_syntax_with_interfaces_options(program, interfaces, true, false)
     }
 
     pub fn from_syntax_with_interfaces_without_builtin_interfaces(
         program: &SyntaxProgram,
         interfaces: &[SyntaxProgram],
     ) -> Self {
-        Self::from_syntax_with_interfaces_options(program, interfaces, false)
+        Self::from_syntax_with_interfaces_options(program, interfaces, false, false)
     }
 
     fn from_syntax_with_interfaces_options(
         program: &SyntaxProgram,
         interfaces: &[SyntaxProgram],
         include_builtin_interfaces: bool,
+        include_standard_package_interfaces: bool,
     ) -> Self {
         let mut hir = Self::default();
         if include_builtin_interfaces {
             hir.insert_builtin_interfaces();
+        }
+        if include_standard_package_interfaces {
+            hir.insert_standard_package_interfaces();
         }
         let mut type_symbols: HashMap<String, (DuplicateSymbolKind, Span)> = HashMap::new();
         let mut callable_symbols: HashMap<String, (DuplicateSymbolKind, Span)> = HashMap::new();
@@ -769,6 +777,13 @@ impl Hir {
 
     fn insert_builtin_interfaces(&mut self) {
         for (file, source) in builtin_interfaces() {
+            let program = parse_source(file, source);
+            self.insert_builtin_interface(&program);
+        }
+    }
+
+    fn insert_standard_package_interfaces(&mut self) {
+        for (file, source) in standard_package_interfaces() {
             let program = parse_source(file, source);
             self.insert_builtin_interface(&program);
         }

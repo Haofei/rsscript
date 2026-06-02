@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::analyzer::{
-    analyze_source_with_interfaces, analyze_sources_with_interfaces, core_interfaces,
+    analyze_source_with_interfaces, analyze_sources_with_interfaces_without_core, core_interfaces,
 };
 use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::{CallResolution, Hir};
@@ -80,7 +80,14 @@ pub(super) fn review_package_dir_with_features(
     let interface_frontend_diagnostics = interface_refs
         .iter()
         .flat_map(|(path, contents)| {
-            analyze_source_with_interfaces(path, contents, &contract_external_interfaces)
+            let mut visible_interfaces = contract_external_interfaces.clone();
+            visible_interfaces.extend(
+                interface_refs
+                    .iter()
+                    .filter(|(interface_path, _)| interface_path != path)
+                    .copied(),
+            );
+            analyze_source_with_interfaces(path, contents, &visible_interfaces)
         })
         .collect::<Vec<_>>();
     let interface_diagnostic_exports =
@@ -96,7 +103,7 @@ pub(super) fn review_package_dir_with_features(
     ));
     diagnostics.extend(package_virtual_diagnostics(package_dir, manifest, sources));
     diagnostics.extend(interface_frontend_diagnostics);
-    diagnostics.extend(analyze_sources_with_interfaces(
+    diagnostics.extend(analyze_sources_with_interfaces_without_core(
         &source_refs,
         &source_interfaces,
     ));
