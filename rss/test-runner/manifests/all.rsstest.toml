@@ -28,16 +28,24 @@ paths = [
 ]
 
 [[tests]]
-name = "workspace tests pass"
+name = "rsscript tests pass"
 kind = "command_success"
 command = "cargo"
-timeout_ms = 120000
-args = ["test", "--workspace"]
+timeout_ms = 180000
+args = ["test", "-q", "-p", "rsscript"]
+
+[[tests]]
+name = "runtime tests pass"
+kind = "command_success"
+command = "cargo"
+timeout_ms = 60000
+args = ["test", "-q", "-p", "rsscript-runtime"]
 
 [[tests]]
 name = "rss binary builds"
 kind = "command_success"
 command = "cargo"
+timeout_ms = 60000
 args = ["build", "--quiet", "--bin", "rss"]
 
 [[tests]]

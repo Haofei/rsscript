@@ -1,0 +1,41 @@
+features: async, native, local
+
+async fn write_then_read(path: read Path) -> Result<String, FileError> {
+    await File.write_string_async(path: read path, text: read "hello async io")?
+    let text = await File.read_all_string_async(path: read path)?
+    return Ok(text)
+}
+
+async fn fetch_status(url: read Url) -> Result<Int, HttpError> {
+    let response = await Http.get_async(url: read url)?
+    return Ok(HttpResponse.status(response: read response))
+}
+
+fn stream_local_inputs(path: read Path) -> Result<Unit, ChannelError> {
+    let chunks: Stream<Bytes> = File.bytes_stream(path: read path, chunk_size: 4096)?
+    let rows: Stream<Row> = Csv.rows(path: read path, buffer_size: 8192)?
+    return Ok(Unit)
+}
+
+async fn run_tool() -> Result<String, String> {
+    let args = List<String>.new()
+    let stdout = await Process.run_stdout_async(command: read "printf", args: read args)?
+    return Ok(stdout)
+}
+
+async fn connect_tcp() -> Result<TcpStream, TcpError> {
+    let stream = await Tcp.connect(host: read "127.0.0.1", port: 8080)?
+    return Ok(stream)
+}
+
+async fn connect_websocket(url: read Url) -> Result<WebSocket, WebSocketError> {
+    let socket = await WebSocket.connect(url: read url)?
+    return Ok(socket)
+}
+
+async fn main() -> Result<Unit, FileError> {
+    let path = Path.from_string(value: read "rsscript-async-common-io.txt")
+    let text = await write_then_read(path: read path)?
+    Log.write(message: read text)
+    return Ok(Unit)
+}

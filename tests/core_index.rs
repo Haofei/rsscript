@@ -31,6 +31,6 @@ fn async_surface_is_indexed_as_standard_package_not_default_core() {
     assert_eq!(async_package["path"], "rss/async");
     assert_eq!(
         async_package["interface_files"].as_array().map(Vec::len),
-        Some(6)
+        Some(12)
     );
 }

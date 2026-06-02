@@ -15,6 +15,22 @@ pub(crate) const STANDARD_PACKAGE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../rss/async/interface/deadline.rssi"),
     ),
     (
+        "rss/async/interface/file.rssi",
+        include_str!("../rss/async/interface/file.rssi"),
+    ),
+    (
+        "rss/async/interface/http.rssi",
+        include_str!("../rss/async/interface/http.rssi"),
+    ),
+    (
+        "rss/async/interface/process.rssi",
+        include_str!("../rss/async/interface/process.rssi"),
+    ),
+    (
+        "rss/async/interface/csv.rssi",
+        include_str!("../rss/async/interface/csv.rssi"),
+    ),
+    (
         "rss/async/interface/stream.rssi",
         include_str!("../rss/async/interface/stream.rssi"),
     ),
@@ -23,8 +39,16 @@ pub(crate) const STANDARD_PACKAGE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../rss/async/interface/task.rssi"),
     ),
     (
+        "rss/async/interface/tcp.rssi",
+        include_str!("../rss/async/interface/tcp.rssi"),
+    ),
+    (
         "rss/async/interface/timer.rssi",
         include_str!("../rss/async/interface/timer.rssi"),
+    ),
+    (
+        "rss/async/interface/websocket.rssi",
+        include_str!("../rss/async/interface/websocket.rssi"),
     ),
 ];
 

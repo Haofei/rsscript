@@ -1,0 +1,15 @@
+[package]
+name = "rss-lsp"
+version = "0.1.0"
+edition = "2024"
+description = "Language server for RsScript (.rss / .rssi)"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "rss-lsp"
+path = "src/main.rs"
+
+[dependencies]
+rsscript = { path = ".." }
+tower-lsp = "0.20"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std"] }

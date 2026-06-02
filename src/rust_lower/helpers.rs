@@ -1232,10 +1232,36 @@ pub(super) fn is_async_runtime_intrinsic_callee(callee: &Callee) -> bool {
                 "File",
                 "read_all_async" | "read_all_string_async" | "write_async" | "write_string_async",
             )
-            | ("Http", "get_async" | "post_form_async" | "post_json_async")
+            | (
+                "Http",
+                "get_async"
+                    | "get_timeout_async"
+                    | "get_retry_async"
+                    | "send_async"
+                    | "post_form_async"
+                    | "post_json_async"
+                    | "post_json_timeout_async"
+                    | "post_json_retry_async"
+                    | "post_json_bearer_retry_async",
+            )
+            | (
+                "Process",
+                "run_async"
+                    | "run_timeout_async"
+                    | "run_stdout_async"
+                    | "run_stdout_timeout_async"
+                    | "run_many_stdout_async"
+                    | "run_many_stdout_timeout_async",
+            )
             | ("Sender", "send" | "send_cancellable")
             | ("Receiver", "recv" | "recv_cancellable")
             | ("Stream", "next")
+            | ("Tcp", "connect")
+            | ("TcpStream", "read" | "write" | "write_all" | "shutdown")
+            | (
+                "WebSocket",
+                "connect" | "send_text" | "send_bytes" | "recv_text" | "recv_bytes" | "close"
+            )
     )
 }
 

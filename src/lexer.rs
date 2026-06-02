@@ -297,38 +297,77 @@ fn is_ident_continue(ch: char) -> bool {
     ch == '_' || ch.is_ascii_alphanumeric()
 }
 
+/// Highlight category for a keyword-like token.
+///
+/// This drives the generated VS Code TextMate grammar
+/// (`src/editor_grammar.rs` → `editors/vscode/syntaxes/rsscript.tmLanguage.json`).
+/// After changing any of the keyword tables below, regenerate the grammar with
+/// `cargo run --bin gen-grammar`; the `vscode_grammar_is_up_to_date` test fails
+/// until you do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeywordCategory {
+    Control,
+    Declaration,
+    Modifier,
+    Ownership,
+}
+
+/// Every reserved keyword the lexer recognizes, paired with how it should be
+/// highlighted. This is the single source of truth: [`keyword`] derives the
+/// lexer's reserved set from it, and the grammar generator derives its
+/// highlight rules from it.
+pub const KEYWORDS: &[(&str, KeywordCategory)] = &[
+    // Control flow
+    ("if", KeywordCategory::Control),
+    ("else", KeywordCategory::Control),
+    ("for", KeywordCategory::Control),
+    ("in", KeywordCategory::Control),
+    ("match", KeywordCategory::Control),
+    ("loop", KeywordCategory::Control),
+    ("while", KeywordCategory::Control),
+    ("break", KeywordCategory::Control),
+    ("continue", KeywordCategory::Control),
+    ("return", KeywordCategory::Control),
+    // Declarations
+    ("features", KeywordCategory::Declaration),
+    ("class", KeywordCategory::Declaration),
+    ("struct", KeywordCategory::Declaration),
+    ("resource", KeywordCategory::Declaration),
+    ("handle", KeywordCategory::Declaration),
+    ("fn", KeywordCategory::Declaration),
+    ("let", KeywordCategory::Declaration),
+    // Modifiers
+    ("pub", KeywordCategory::Modifier),
+    ("async", KeywordCategory::Modifier),
+    ("effects", KeywordCategory::Modifier),
+    ("drop", KeywordCategory::Modifier),
+    ("with", KeywordCategory::Modifier),
+    ("as", KeywordCategory::Modifier),
+    // Ownership / binding modes
+    ("read", KeywordCategory::Ownership),
+    ("mut", KeywordCategory::Ownership),
+    ("take", KeywordCategory::Ownership),
+    ("fresh", KeywordCategory::Ownership),
+    ("manage", KeywordCategory::Ownership),
+    ("weak", KeywordCategory::Ownership),
+    ("local", KeywordCategory::Ownership),
+];
+
+/// Words the lexer treats as plain identifiers but the parser interprets as
+/// keywords in specific positions (see `src/syntax/parser.rs`). They are not
+/// part of the reserved set, but the grammar still highlights them.
+pub const CONTEXTUAL_KEYWORDS: &[(&str, KeywordCategory)] = &[
+    ("await", KeywordCategory::Control),
+    ("native", KeywordCategory::Modifier),
+];
+
+/// Built-in literals and result/option constructors recognized by the parser
+/// (see `src/syntax/parser.rs`). Highlighted as language constants.
+pub const BUILTIN_CONSTANTS: &[&str] = &["true", "false", "Ok", "Err", "Some", "None", "Unit"];
+
 fn keyword(text: &str) -> Option<&'static str> {
-    Some(match text {
-        "features" => "features",
-        "class" => "class",
-        "struct" => "struct",
-        "resource" => "resource",
-        "handle" => "handle",
-        "weak" => "weak",
-        "drop" => "drop",
-        "let" => "let",
-        "local" => "local",
-        "with" => "with",
-        "as" => "as",
-        "fn" => "fn",
-        "pub" => "pub",
-        "async" => "async",
-        "return" => "return",
-        "read" => "read",
-        "mut" => "mut",
-        "take" => "take",
-        "fresh" => "fresh",
-        "manage" => "manage",
-        "effects" => "effects",
-        "if" => "if",
-        "else" => "else",
-        "for" => "for",
-        "in" => "in",
-        "match" => "match",
-        "loop" => "loop",
-        "while" => "while",
-        "break" => "break",
-        "continue" => "continue",
-        _ => return None,
-    })
+    KEYWORDS
+        .iter()
+        .find(|(value, _)| *value == text)
+        .map(|(value, _)| *value)
 }

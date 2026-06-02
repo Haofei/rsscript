@@ -1,0 +1,34 @@
+features: async, native, local
+
+// WebSocket client IO is provider-backed. Text and bytes are explicit separate
+// operations so review can see which frame type a call expects.
+
+struct WebSocket
+struct WebSocketError
+
+pub async native fn WebSocket.connect(url: read Url) -> Result<fresh WebSocket, WebSocketError>
+    effects(native)
+
+pub async native fn WebSocket.send_text(
+    socket: read WebSocket,
+    text: read String,
+) -> Result<Unit, WebSocketError>
+    effects(native)
+
+pub async native fn WebSocket.send_bytes(
+    socket: read WebSocket,
+    bytes: read Bytes,
+) -> Result<Unit, WebSocketError>
+    effects(native)
+
+pub async native fn WebSocket.recv_text(socket: read WebSocket) -> Result<Option<String>, WebSocketError>
+    effects(native)
+
+pub async native fn WebSocket.recv_bytes(socket: read WebSocket) -> Result<Option<Bytes>, WebSocketError>
+    effects(native)
+
+pub async native fn WebSocket.close(socket: read WebSocket) -> Result<Unit, WebSocketError>
+    effects(native)
+
+pub fn WebSocketError.message(error: read WebSocketError) -> fresh String
+    effects(pure)

@@ -11,11 +11,6 @@ pub fn Csv.read_into(
     buffer: mut RowBuffer,
 ) -> Result<Unit, CsvError>
 
-pub fn Csv.rows(
-    path: read Path,
-    buffer_size: Int,
-) -> Result<fresh Stream<Row>, ChannelError>
-
 pub fn Csv.parse_row(buffer: read RowBuffer) -> Result<fresh Row, CsvError>
 
 pub fn Row.field_string(

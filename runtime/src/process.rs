@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use crate::{JsonValue, json_to_string};
+use crate::{NativeAsyncPending, spawn_tokio_native};
 
 pub fn os_close(fd: i64) {
     let _ = fd;
@@ -53,6 +54,19 @@ pub fn process_run(command: &str, args: &[String]) -> Result<ProcessOutput, Stri
     Ok(process_output(command, output))
 }
 
+pub fn process_run_async(
+    command: &str,
+    args: &[String],
+) -> NativeAsyncPending<Result<ProcessOutput, String>> {
+    let command = command.to_string();
+    let args = args.to_vec();
+    spawn_tokio_native(async move {
+        tokio::task::spawn_blocking(move || process_run(&command, &args))
+            .await
+            .map_err(|error| format!("process task failed: {error}"))?
+    })
+}
+
 pub fn process_run_stdout(command: &str, args: &[String]) -> Result<String, String> {
     let mut child = std::process::Command::new(command);
     child.args(args);
@@ -66,6 +80,19 @@ pub fn process_run_stdout(command: &str, args: &[String]) -> Result<String, Stri
         .output()
         .map_err(|error| format!("failed to run `{command}`: {error}"))?;
     process_output_result(command, output)
+}
+
+pub fn process_run_stdout_async(
+    command: &str,
+    args: &[String],
+) -> NativeAsyncPending<Result<String, String>> {
+    let command = command.to_string();
+    let args = args.to_vec();
+    spawn_tokio_native(async move {
+        tokio::task::spawn_blocking(move || process_run_stdout(&command, &args))
+            .await
+            .map_err(|error| format!("process task failed: {error}"))?
+    })
 }
 
 pub fn process_run_stdout_timeout(
@@ -118,6 +145,20 @@ pub fn process_run_stdout_timeout(
     }
 }
 
+pub fn process_run_stdout_timeout_async(
+    command: &str,
+    args: &[String],
+    timeout_ms: i64,
+) -> NativeAsyncPending<Result<String, String>> {
+    let command = command.to_string();
+    let args = args.to_vec();
+    spawn_tokio_native(async move {
+        tokio::task::spawn_blocking(move || process_run_stdout_timeout(&command, &args, timeout_ms))
+            .await
+            .map_err(|error| format!("process task failed: {error}"))?
+    })
+}
+
 pub fn process_run_timeout(
     command: &str,
     args: &[String],
@@ -166,6 +207,20 @@ pub fn process_run_timeout(
         }
         std::thread::sleep((deadline - now).min(Duration::from_millis(10)));
     }
+}
+
+pub fn process_run_timeout_async(
+    command: &str,
+    args: &[String],
+    timeout_ms: i64,
+) -> NativeAsyncPending<Result<ProcessOutput, String>> {
+    let command = command.to_string();
+    let args = args.to_vec();
+    spawn_tokio_native(async move {
+        tokio::task::spawn_blocking(move || process_run_timeout(&command, &args, timeout_ms))
+            .await
+            .map_err(|error| format!("process task failed: {error}"))?
+    })
 }
 
 fn process_output(command: &str, output: std::process::Output) -> ProcessOutput {
@@ -220,6 +275,24 @@ pub fn process_run_many_stdout(
     process_run_many_stdout_with_runner(command, args, appended_args, jobs, process_run_stdout)
 }
 
+pub fn process_run_many_stdout_async(
+    command: &str,
+    args: &[String],
+    appended_args: &[String],
+    jobs: i64,
+) -> NativeAsyncPending<Result<Vec<String>, String>> {
+    let command = command.to_string();
+    let args = args.to_vec();
+    let appended_args = appended_args.to_vec();
+    spawn_tokio_native(async move {
+        tokio::task::spawn_blocking(move || {
+            process_run_many_stdout(&command, &args, &appended_args, jobs)
+        })
+        .await
+        .map_err(|error| format!("process task failed: {error}"))?
+    })
+}
+
 pub fn process_run_many_stdout_timeout(
     command: &str,
     args: &[String],
@@ -229,6 +302,25 @@ pub fn process_run_many_stdout_timeout(
 ) -> Result<Vec<String>, String> {
     process_run_many_stdout_with_runner(command, args, appended_args, jobs, |command, args| {
         process_run_stdout_timeout(command, args, timeout_ms)
+    })
+}
+
+pub fn process_run_many_stdout_timeout_async(
+    command: &str,
+    args: &[String],
+    appended_args: &[String],
+    jobs: i64,
+    timeout_ms: i64,
+) -> NativeAsyncPending<Result<Vec<String>, String>> {
+    let command = command.to_string();
+    let args = args.to_vec();
+    let appended_args = appended_args.to_vec();
+    spawn_tokio_native(async move {
+        tokio::task::spawn_blocking(move || {
+            process_run_many_stdout_timeout(&command, &args, &appended_args, jobs, timeout_ms)
+        })
+        .await
+        .map_err(|error| format!("process task failed: {error}"))?
     })
 }
 
@@ -315,6 +407,20 @@ fn process_worker_count(jobs: i64) -> usize {
         .map(usize::from)
         .unwrap_or(4)
         .max(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Executor;
+
+    #[test]
+    fn process_run_stdout_async_completes_on_native_runtime() {
+        let args = vec!["--version".to_string()];
+        let stdout = Executor::new()
+            .run_pending(super::process_run_stdout_async("cargo", &args))
+            .expect("cargo --version should run");
+        assert!(stdout.contains("cargo"));
+    }
 }
 
 #[cfg(target_os = "macos")]

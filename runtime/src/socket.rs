@@ -1,0 +1,143 @@
+use std::sync::Arc;
+
+use crate::{NativeAsyncPending, spawn_tokio_native};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TcpError {
+    message: String,
+}
+
+impl TcpError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+pub fn tcp_error_message(error: &TcpError) -> String {
+    error.message.clone()
+}
+
+#[derive(Clone)]
+pub struct RssTcpStream {
+    stream: Arc<tokio::sync::Mutex<tokio::net::TcpStream>>,
+}
+
+pub fn tcp_connect(host: &str, port: i64) -> NativeAsyncPending<Result<RssTcpStream, TcpError>> {
+    let host = host.to_string();
+    spawn_tokio_native(async move {
+        if port <= 0 || port > u16::MAX as i64 {
+            return Err(TcpError::new("TCP port must be between 1 and 65535"));
+        }
+        let addr = format!("{host}:{port}");
+        let stream = tokio::net::TcpStream::connect(&addr)
+            .await
+            .map_err(|error| TcpError::new(format!("TCP connect to `{addr}` failed: {error}")))?;
+        Ok(RssTcpStream {
+            stream: Arc::new(tokio::sync::Mutex::new(stream)),
+        })
+    })
+}
+
+pub fn tcp_stream_read(
+    stream: &RssTcpStream,
+    max_bytes: i64,
+) -> NativeAsyncPending<Result<Vec<u8>, TcpError>> {
+    let stream = Arc::clone(&stream.stream);
+    spawn_tokio_native(async move {
+        if max_bytes <= 0 {
+            return Err(TcpError::new("TCP read max_bytes must be positive"));
+        }
+        let mut buffer = vec![0; max_bytes as usize];
+        let mut stream = stream.lock().await;
+        let read = stream
+            .read(&mut buffer)
+            .await
+            .map_err(|error| TcpError::new(format!("TCP read failed: {error}")))?;
+        buffer.truncate(read);
+        Ok(buffer)
+    })
+}
+
+pub fn tcp_stream_write(
+    stream: &RssTcpStream,
+    data: &[u8],
+) -> NativeAsyncPending<Result<i64, TcpError>> {
+    let stream = Arc::clone(&stream.stream);
+    let data = data.to_vec();
+    spawn_tokio_native(async move {
+        let mut stream = stream.lock().await;
+        let written = stream
+            .write(&data)
+            .await
+            .map_err(|error| TcpError::new(format!("TCP write failed: {error}")))?;
+        Ok(written as i64)
+    })
+}
+
+pub fn tcp_stream_write_all(
+    stream: &RssTcpStream,
+    data: &[u8],
+) -> NativeAsyncPending<Result<(), TcpError>> {
+    let stream = Arc::clone(&stream.stream);
+    let data = data.to_vec();
+    spawn_tokio_native(async move {
+        let mut stream = stream.lock().await;
+        stream
+            .write_all(&data)
+            .await
+            .map_err(|error| TcpError::new(format!("TCP write_all failed: {error}")))?;
+        Ok(())
+    })
+}
+
+pub fn tcp_stream_shutdown(stream: &RssTcpStream) -> NativeAsyncPending<Result<(), TcpError>> {
+    let stream = Arc::clone(&stream.stream);
+    spawn_tokio_native(async move {
+        let mut stream = stream.lock().await;
+        stream
+            .shutdown()
+            .await
+            .map_err(|error| TcpError::new(format!("TCP shutdown failed: {error}")))?;
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    use crate::Executor;
+
+    #[test]
+    fn tcp_stream_round_trips_bytes_on_native_runtime() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
+        let port = listener
+            .local_addr()
+            .expect("listener should have addr")
+            .port();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().expect("client should connect");
+            let mut buffer = [0; 4];
+            socket.read_exact(&mut buffer).expect("server should read");
+            assert_eq!(&buffer, b"ping");
+            socket.write_all(b"pong").expect("server should write");
+        });
+
+        let mut executor = Executor::new();
+        let stream = executor
+            .run_pending(super::tcp_connect("127.0.0.1", i64::from(port)))
+            .expect("TCP connect should succeed");
+        executor
+            .run_pending(super::tcp_stream_write_all(&stream, b"ping"))
+            .expect("TCP write should succeed");
+        let response = executor
+            .run_pending(super::tcp_stream_read(&stream, 4))
+            .expect("TCP read should succeed");
+        assert_eq!(response, b"pong");
+        server.join().expect("server thread should finish");
+    }
+}

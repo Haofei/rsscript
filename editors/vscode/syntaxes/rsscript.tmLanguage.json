@@ -1,0 +1,182 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "RsScript",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#function-definition"
+    },
+    {
+      "include": "#named-arguments"
+    },
+    {
+      "include": "#call"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#operators"
+    }
+  ],
+  "repository": {
+    "call": {
+      "patterns": [
+        {
+          "captures": {
+            "1": {
+              "name": "entity.name.type.rsscript"
+            },
+            "2": {
+              "name": "punctuation.accessor.rsscript"
+            },
+            "3": {
+              "name": "entity.name.function.call.rsscript"
+            }
+          },
+          "match": "(?:([A-Z][A-Za-z0-9_]*)\\s*(\\.))?([a-z_][A-Za-z0-9_]*)\\s*(?=\\()"
+        }
+      ]
+    },
+    "comments": {
+      "patterns": [
+        {
+          "begin": "//",
+          "end": "$",
+          "name": "comment.line.double-slash.rsscript"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "match": "\\b(true|false|Ok|Err|Some|None|Unit)\\b",
+          "name": "constant.language.rsscript"
+        }
+      ]
+    },
+    "function-definition": {
+      "patterns": [
+        {
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.rsscript"
+            },
+            "2": {
+              "name": "entity.name.type.rsscript"
+            },
+            "3": {
+              "name": "punctuation.accessor.rsscript"
+            },
+            "4": {
+              "name": "entity.name.function.rsscript"
+            }
+          },
+          "match": "\\b(fn)\\s+(?:([A-Z][A-Za-z0-9_]*)\\s*(\\.))?([a-z_][A-Za-z0-9_]*)"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "match": "\\b(if|else|for|in|match|loop|while|break|continue|return|await)\\b",
+          "name": "keyword.control.rsscript"
+        },
+        {
+          "match": "\\b(features|class|struct|resource|handle|fn|let)\\b",
+          "name": "keyword.declaration.rsscript"
+        },
+        {
+          "match": "\\b(pub|async|effects|drop|with|as|native)\\b",
+          "name": "storage.modifier.rsscript"
+        },
+        {
+          "match": "\\b(read|mut|take|fresh|manage|weak|local)\\b",
+          "name": "storage.modifier.ownership.rsscript"
+        }
+      ]
+    },
+    "named-arguments": {
+      "patterns": [
+        {
+          "captures": {
+            "1": {
+              "name": "variable.parameter.rsscript"
+            },
+            "2": {
+              "name": "punctuation.separator.rsscript"
+            }
+          },
+          "match": "\\b([a-z_][A-Za-z0-9_]*)\\s*(:)(?!:)"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "match": "\\b[0-9][0-9]*(\\.[0-9]+)?\\b",
+          "name": "constant.numeric.rsscript"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "match": "->",
+          "name": "keyword.operator.arrow.rsscript"
+        },
+        {
+          "match": "\\?",
+          "name": "keyword.operator.error-propagation.rsscript"
+        },
+        {
+          "match": "(==|!=|<=|>=|&&|\\|\\||[+\\-*/=<>!&])",
+          "name": "keyword.operator.rsscript"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "begin": "\"\"\"",
+          "end": "\"\"\"",
+          "name": "string.quoted.triple.rsscript"
+        },
+        {
+          "begin": "\"",
+          "end": "\"",
+          "name": "string.quoted.double.rsscript",
+          "patterns": [
+            {
+              "match": "\\\\.",
+              "name": "constant.character.escape.rsscript"
+            }
+          ]
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b",
+          "name": "entity.name.type.rsscript"
+        }
+      ]
+    }
+  },
+  "scopeName": "source.rsscript"
+}

@@ -1,0 +1,62 @@
+{
+  "name": "rsscript",
+  "displayName": "RsScript",
+  "description": "Syntax highlighting and language server for RsScript (.rss / .rssi)",
+  "version": "0.1.0",
+  "publisher": "rsscript",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.70.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:rsscript"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "rsscript",
+        "aliases": [
+          "RsScript",
+          "rsscript"
+        ],
+        "extensions": [
+          ".rss",
+          ".rssi"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "rsscript",
+        "scopeName": "source.rsscript",
+        "path": "./syntaxes/rsscript.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "RsScript",
+      "properties": {
+        "rsscript.server.path": {
+          "type": "string",
+          "default": "rss-lsp",
+          "description": "Path to the rss-lsp language server binary. If not on PATH, set an absolute path (e.g. ${workspaceFolder}/target/release/rss-lsp)."
+        },
+        "rsscript.server.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the RsScript language server (diagnostics, hover, formatting)."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.70.0"
+  }
+}

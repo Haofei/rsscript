@@ -3828,6 +3828,10 @@ impl<'a> RustLowerer<'a> {
                 self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
             ),
             "ChannelError" => "rsscript_runtime::ChannelError".to_string(),
+            "TcpStream" => "rsscript_runtime::RssTcpStream".to_string(),
+            "TcpError" => "rsscript_runtime::TcpError".to_string(),
+            "WebSocket" => "rsscript_runtime::RssWebSocket".to_string(),
+            "WebSocketError" => "rsscript_runtime::WebSocketError".to_string(),
             "PoolStats" => "rsscript_runtime::PoolStats".to_string(),
             "PoolError" => "rsscript_runtime::PoolError".to_string(),
             "Regex" => "rsscript_runtime::RssRegex".to_string(),

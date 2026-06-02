@@ -240,6 +240,51 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     ),
     runtime_intrinsic("Stream", "from_list", "rsscript_runtime::stream_from_list"),
     runtime_intrinsic("Stream", "next", "rsscript_runtime::stream_next"),
+    runtime_intrinsic("Tcp", "connect", "rsscript_runtime::tcp_connect"),
+    runtime_intrinsic("TcpStream", "read", "rsscript_runtime::tcp_stream_read"),
+    runtime_intrinsic("TcpStream", "write", "rsscript_runtime::tcp_stream_write"),
+    runtime_intrinsic(
+        "TcpStream",
+        "write_all",
+        "rsscript_runtime::tcp_stream_write_all",
+    ),
+    runtime_intrinsic(
+        "TcpStream",
+        "shutdown",
+        "rsscript_runtime::tcp_stream_shutdown",
+    ),
+    runtime_intrinsic("TcpError", "message", "rsscript_runtime::tcp_error_message"),
+    runtime_intrinsic(
+        "WebSocket",
+        "connect",
+        "rsscript_runtime::websocket_connect",
+    ),
+    runtime_intrinsic(
+        "WebSocket",
+        "send_text",
+        "rsscript_runtime::websocket_send_text",
+    ),
+    runtime_intrinsic(
+        "WebSocket",
+        "send_bytes",
+        "rsscript_runtime::websocket_send_bytes",
+    ),
+    runtime_intrinsic(
+        "WebSocket",
+        "recv_text",
+        "rsscript_runtime::websocket_recv_text",
+    ),
+    runtime_intrinsic(
+        "WebSocket",
+        "recv_bytes",
+        "rsscript_runtime::websocket_recv_bytes",
+    ),
+    runtime_intrinsic("WebSocket", "close", "rsscript_runtime::websocket_close"),
+    runtime_intrinsic(
+        "WebSocketError",
+        "message",
+        "rsscript_runtime::websocket_error_message",
+    ),
     runtime_intrinsic(
         "ChannelError",
         "message",
@@ -826,8 +871,18 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Process", "run", "rsscript_runtime::process_run"),
     runtime_intrinsic(
         "Process",
+        "run_async",
+        "rsscript_runtime::process_run_async",
+    ),
+    runtime_intrinsic(
+        "Process",
         "run_timeout",
         "rsscript_runtime::process_run_timeout",
+    ),
+    runtime_intrinsic(
+        "Process",
+        "run_timeout_async",
+        "rsscript_runtime::process_run_timeout_async",
     ),
     runtime_intrinsic(
         "Process",
@@ -836,8 +891,18 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     ),
     runtime_intrinsic(
         "Process",
+        "run_stdout_async",
+        "rsscript_runtime::process_run_stdout_async",
+    ),
+    runtime_intrinsic(
+        "Process",
         "run_stdout_timeout",
         "rsscript_runtime::process_run_stdout_timeout",
+    ),
+    runtime_intrinsic(
+        "Process",
+        "run_stdout_timeout_async",
+        "rsscript_runtime::process_run_stdout_timeout_async",
     ),
     runtime_intrinsic(
         "Process",
@@ -846,8 +911,18 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     ),
     runtime_intrinsic(
         "Process",
+        "run_many_stdout_async",
+        "rsscript_runtime::process_run_many_stdout_async",
+    ),
+    runtime_intrinsic(
+        "Process",
         "run_many_stdout_timeout",
         "rsscript_runtime::process_run_many_stdout_timeout",
+    ),
+    runtime_intrinsic(
+        "Process",
+        "run_many_stdout_timeout_async",
+        "rsscript_runtime::process_run_many_stdout_timeout_async",
     ),
     runtime_intrinsic("Regex", "captures", "rsscript_runtime::regex_captures"),
     runtime_intrinsic("Regex", "compile", "rsscript_runtime::regex_compile"),

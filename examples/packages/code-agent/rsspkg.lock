@@ -4,9 +4,27 @@ version = 1
 name = "rss-code-agent"
 version = "0.1.0"
 source = "path+examples/packages/code-agent"
-checksum = "sha256:a05c88de4137f15d22150212a5bb4e6706ace280fc90e4bccc3ad72fc90c873c"
+checksum = "sha256:760d17ab6f7438eb56af9f8df66913b513e9c3a53fc0f6b30665ddabaffdba14"
 interface_hash = "sha256:36e6897d97ac40f70744171504605f1905c435cb09b5957a6dbd3b3f47852a13"
-review_hash = "sha256:8c3408f14175c0777b2c97abf301eb00c4f5d56bc5aa877faacec26e05a4899d"
+review_hash = "sha256:2ea47752ccce650a9fbf1251c190a93f06e02229ae78c288708c72dc17d8f17c"
+features = []
+
+[[package]]
+name = "rss-async"
+version = "0.1.0"
+source = "path+examples/packages/code-agent/../../../rss/async"
+checksum = "sha256:8d4e419f18940c8bc9fa9fcddab94241a5a06bee9ae0227c942ca89df2716811"
+interface_hash = "sha256:af950044537870ee454b4541da58c1bc27ea48f73fa17a4271eb5ed30b272997"
+review_hash = "sha256:b08a1b208760e87daa873b49d53dc3963173c8bd3f3eadf55818c2378d7f6677"
+features = []
+
+[[package]]
+name = "rss-async-runtime"
+version = "0.1.0"
+source = "path+examples/packages/code-agent/../../../rss/async-runtime"
+checksum = "sha256:ac89b1719cbd2e94cd5692363c3edd22a5cfda3696d5b949e408984c56795dce"
+interface_hash = "sha256:36e6897d97ac40f70744171504605f1905c435cb09b5957a6dbd3b3f47852a13"
+review_hash = "sha256:0408dcb040095e552141e2b14676ac012e75204ae206eb07b0a849fd40bea4ee"
 features = []
 
 [metadata]

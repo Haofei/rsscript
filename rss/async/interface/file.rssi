@@ -1,0 +1,22 @@
+features: async, native, local
+
+// Async file IO belongs to the async provider surface. It reuses core File,
+// Path, Bytes, and FileError types but does not make core imply async.
+
+pub async native fn File.read_all_async(path: read Path) -> Result<fresh Bytes, FileError>
+    effects(native)
+
+pub async native fn File.read_all_string_async(path: read Path) -> Result<String, FileError>
+    effects(native)
+
+pub async native fn File.write_async(path: read Path, data: read Bytes) -> Result<Unit, FileError>
+    effects(native)
+
+pub async native fn File.write_string_async(path: read Path, text: read String) -> Result<Unit, FileError>
+    effects(native)
+
+pub fn File.bytes_stream(
+    path: read Path,
+    chunk_size: Int,
+) -> Result<fresh Stream<Bytes>, ChannelError>
+    effects(native)

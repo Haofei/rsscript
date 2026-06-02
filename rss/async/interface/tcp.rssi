@@ -1,0 +1,37 @@
+features: async, native, local
+
+// TCP client sockets are provider-backed async IO. The public surface is
+// deliberately narrow: connect, byte read/write, and explicit shutdown.
+
+struct TcpError
+struct TcpStream
+
+pub async native fn Tcp.connect(
+    host: read String,
+    port: Int,
+) -> Result<fresh TcpStream, TcpError>
+    effects(native)
+
+pub async native fn TcpStream.read(
+    stream: read TcpStream,
+    max_bytes: Int,
+) -> Result<fresh Bytes, TcpError>
+    effects(native)
+
+pub async native fn TcpStream.write(
+    stream: read TcpStream,
+    data: read Bytes,
+) -> Result<Int, TcpError>
+    effects(native)
+
+pub async native fn TcpStream.write_all(
+    stream: read TcpStream,
+    data: read Bytes,
+) -> Result<Unit, TcpError>
+    effects(native)
+
+pub async native fn TcpStream.shutdown(stream: read TcpStream) -> Result<Unit, TcpError>
+    effects(native)
+
+pub fn TcpError.message(error: read TcpError) -> fresh String
+    effects(pure)

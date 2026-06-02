@@ -1861,6 +1861,82 @@ fn main() -> Result<Unit, String> {
 }
 
 #[test]
+fn rust_lowering_maps_async_process_calls_to_runtime_pending_hooks() {
+    let source = r#"
+features: async
+
+async fn run_command() -> Result<String, String> {
+    let args = List<String>.new()
+    List.push(list: mut args, value: read "hello")
+    let stdout = await Process.run_stdout_async(command: read "printf", args: read args)?
+    return Ok(stdout)
+}
+"#;
+    let rust = lower_source_to_rust("async-process.rss", source).expect("source should lower");
+
+    assert!(rust.contains("-> impl rsscript_runtime::Pending<Result<String, String>>"));
+    assert!(
+        rust.contains("rsscript_runtime::pending_try(rsscript_runtime::process_run_stdout_async"),
+        "async process call should lower to runtime pending hook, got:\n{rust}"
+    );
+}
+
+#[test]
+fn rust_lowering_maps_async_tcp_calls_to_runtime_pending_hooks() {
+    let source = r#"
+features: async
+
+async fn ping() -> Result<Bytes, TcpError> {
+    let stream = await Tcp.connect(host: read "127.0.0.1", port: 8080)?
+    let payload = Bytes.from_string(value: read "ping")
+    await TcpStream.write_all(stream: read stream, data: read payload)?
+    let response = await TcpStream.read(stream: read stream, max_bytes: 4)?
+    await TcpStream.shutdown(stream: read stream)?
+    return Ok(response)
+}
+"#;
+    let rust = lower_source_to_rust("async-tcp.rss", source).expect("source should lower");
+
+    assert!(
+        rust.contains(
+            "fn ping() -> impl rsscript_runtime::Pending<Result<Vec<u8>, rsscript_runtime::TcpError>>"
+        ),
+        "async TCP function should lower to pending, got:\n{rust}"
+    );
+    assert!(rust.contains("rsscript_runtime::tcp_connect"));
+    assert!(rust.contains("rsscript_runtime::tcp_stream_write_all"));
+    assert!(rust.contains("rsscript_runtime::tcp_stream_read"));
+    assert!(rust.contains("rsscript_runtime::tcp_stream_shutdown"));
+}
+
+#[test]
+fn rust_lowering_maps_async_websocket_calls_to_runtime_pending_hooks() {
+    let source = r#"
+features: async
+
+async fn exchange(url: read Url) -> Result<Option<String>, WebSocketError> {
+    let socket = await WebSocket.connect(url: read url)?
+    await WebSocket.send_text(socket: read socket, text: read "ping")?
+    let response = await WebSocket.recv_text(socket: read socket)?
+    await WebSocket.close(socket: read socket)?
+    return Ok(response)
+}
+"#;
+    let rust = lower_source_to_rust("async-websocket.rss", source).expect("source should lower");
+
+    assert!(
+        rust.contains(
+            "fn exchange(url: &String) -> impl rsscript_runtime::Pending<Result<Option<String>, rsscript_runtime::WebSocketError>>"
+        ),
+        "async WebSocket function should lower to pending, got:\n{rust}"
+    );
+    assert!(rust.contains("rsscript_runtime::websocket_connect"));
+    assert!(rust.contains("rsscript_runtime::websocket_send_text"));
+    assert!(rust.contains("rsscript_runtime::websocket_recv_text"));
+    assert!(rust.contains("rsscript_runtime::websocket_close"));
+}
+
+#[test]
 fn rust_lowering_maps_stdlib_facade_calls_to_runtime_hooks() {
     let source = r#"
 features: native, local

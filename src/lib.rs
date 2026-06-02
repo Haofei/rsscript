@@ -12,6 +12,7 @@ pub mod bbom;
 mod checks;
 mod core_index;
 mod diagnostic;
+mod editor_grammar;
 mod formatter;
 mod hir;
 mod interfaces;
@@ -21,6 +22,7 @@ mod package;
 mod review;
 mod runtime_abi;
 mod rust_lower;
+mod symbols;
 pub mod syntax;
 
 pub use analyzer::{
@@ -34,6 +36,7 @@ pub use diagnostic::{
     Diagnostic, DiagnosticExplanation, Severity, Span, explain_diagnostic_code,
     format_diagnostic_explanation, format_diagnostics_human, format_diagnostics_json,
 };
+pub use editor_grammar::{VSCODE_GRAMMAR_PATH, vscode_tmlanguage_json};
 pub use formatter::{format_program, format_source};
 pub use lint::lint_source;
 pub use package::{
@@ -77,3 +80,4 @@ pub use rust_lower::{
     lower_sources_to_rust_package_with_options, parse_runtime_diagnostics, parse_source_map_json,
     remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines, write_generated_rust_package,
 };
+pub use symbols::{Definition, Reference, SymbolIndex, SymbolKind, symbol_index};

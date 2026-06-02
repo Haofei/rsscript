@@ -4,9 +4,9 @@ version = 1
 name = "rss-async-runtime"
 version = "0.1.0"
 source = "path+rss/async-runtime"
-checksum = "sha256:c4ba76b52c8b1e4d232d57a7591db66a9431da821fd341129a22a4b5b926387a"
+checksum = "sha256:ac89b1719cbd2e94cd5692363c3edd22a5cfda3696d5b949e408984c56795dce"
 interface_hash = "sha256:36e6897d97ac40f70744171504605f1905c435cb09b5957a6dbd3b3f47852a13"
-review_hash = "sha256:fff68310a8c5f5e0f1318b9e91b2bbd8c1a5864bd015dabee1fcd8ca069f83b5"
+review_hash = "sha256:0408dcb040095e552141e2b14676ac012e75204ae206eb07b0a849fd40bea4ee"
 features = []
 
 [metadata]

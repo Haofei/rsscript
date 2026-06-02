@@ -8,6 +8,7 @@ args = ["fmt", "--check"]
 name = "clippy has no warnings"
 kind = "command_success"
 command = "cargo"
+timeout_ms = 60000
 args = ["clippy", "--workspace", "--", "-D", "warnings"]
 
 [[tests]]
@@ -27,10 +28,18 @@ paths = [
 ]
 
 [[tests]]
-name = "workspace tests compile"
+name = "rsscript tests compile"
 kind = "command_success"
 command = "cargo"
-args = ["test", "--workspace", "--no-run"]
+timeout_ms = 60000
+args = ["test", "-p", "rsscript", "--no-run"]
+
+[[tests]]
+name = "runtime tests compile"
+kind = "command_success"
+command = "cargo"
+timeout_ms = 60000
+args = ["test", "-p", "rsscript-runtime", "--no-run"]
 
 [[tests]]
 name = "git diff has no whitespace errors"

@@ -6857,6 +6857,164 @@ async fn main() -> Result<Unit, TimerError> {
 }
 
 #[test]
+fn package_requires_explicit_async_dependency_for_async_file_io() {
+    let root_dir = common::unique_temp_dir("rsscript-package-async-file-missing-dependency");
+    common::write_named_package_fixture(&root_dir, "rss-async-file-app", "0.1.0", "", "");
+    fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        root_dir.join("src/main.rss"),
+        r#"features: async
+
+async fn load(path: read Path) -> Result<String, FileError> {
+    let text = await File.read_all_string_async(path: read path)?
+    return Ok(text)
+}
+"#,
+    )
+    .expect("source should be written");
+    fs::write(
+        root_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&root_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&root_dir).expect("package check should complete");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&root_dir);
+
+    assert!(!check.ok);
+    assert!(json["diagnostics"].as_array().is_some_and(|diagnostics| {
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["summary"].as_str().is_some_and(|summary| {
+                summary.contains("call to `File.read_all_string_async` does not resolve")
+            })
+        })
+    }));
+}
+
+#[test]
+fn package_requires_explicit_async_dependency_for_async_process_io() {
+    let root_dir = common::unique_temp_dir("rsscript-package-async-process-missing-dependency");
+    common::write_named_package_fixture(&root_dir, "rss-async-process-app", "0.1.0", "", "");
+    fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        root_dir.join("src/main.rss"),
+        r#"features: async
+
+async fn run_command() -> Result<String, String> {
+    let stdout = await Process.run_stdout_async(command: read "printf", args: read List<String>.new())?
+    return Ok(stdout)
+}
+"#,
+    )
+    .expect("source should be written");
+    fs::write(
+        root_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&root_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&root_dir).expect("package check should complete");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&root_dir);
+
+    assert!(!check.ok);
+    assert!(json["diagnostics"].as_array().is_some_and(|diagnostics| {
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["summary"].as_str().is_some_and(|summary| {
+                summary.contains("call to `Process.run_stdout_async` does not resolve")
+            })
+        })
+    }));
+}
+
+#[test]
+fn package_requires_explicit_async_dependency_for_async_tcp_io() {
+    let root_dir = common::unique_temp_dir("rsscript-package-async-tcp-missing-dependency");
+    common::write_named_package_fixture(&root_dir, "rss-async-tcp-app", "0.1.0", "", "");
+    fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        root_dir.join("src/main.rss"),
+        r#"features: async
+
+async fn connect() -> Result<TcpStream, TcpError> {
+    let stream = await Tcp.connect(host: read "127.0.0.1", port: 8080)?
+    return Ok(stream)
+}
+"#,
+    )
+    .expect("source should be written");
+    fs::write(
+        root_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&root_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&root_dir).expect("package check should complete");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&root_dir);
+
+    assert!(!check.ok);
+    assert!(json["diagnostics"].as_array().is_some_and(|diagnostics| {
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["summary"].as_str().is_some_and(|summary| {
+                summary.contains("unknown type `TcpStream`")
+                    || summary.contains("call to `Tcp.connect` does not resolve")
+            })
+        })
+    }));
+}
+
+#[test]
+fn package_requires_explicit_async_dependency_for_async_websocket_io() {
+    let root_dir = common::unique_temp_dir("rsscript-package-async-websocket-missing-dependency");
+    common::write_named_package_fixture(&root_dir, "rss-async-websocket-app", "0.1.0", "", "");
+    fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        root_dir.join("src/main.rss"),
+        r#"features: async
+
+async fn connect(url: read Url) -> Result<WebSocket, WebSocketError> {
+    let socket = await WebSocket.connect(url: read url)?
+    return Ok(socket)
+}
+"#,
+    )
+    .expect("source should be written");
+    fs::write(
+        root_dir.join("rsspkg.lock"),
+        format_package_lock_toml(
+            &lock_package_dir(&root_dir).expect("initial lock should be generated"),
+        ),
+    )
+    .expect("lock should be written");
+
+    let check = check_package_dir(&root_dir).expect("package check should complete");
+    let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
+        .expect("package check JSON should parse");
+    let _ = fs::remove_dir_all(&root_dir);
+
+    assert!(!check.ok);
+    assert!(json["diagnostics"].as_array().is_some_and(|diagnostics| {
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["summary"].as_str().is_some_and(|summary| {
+                summary.contains("unknown type `WebSocket`")
+                    || summary.contains("call to `WebSocket.connect` does not resolve")
+            })
+        })
+    }));
+}
+
+#[test]
 fn package_check_rejects_async_interface_dependency_without_provider() {
     let root_dir = common::unique_temp_dir("rsscript-package-async-no-provider");
     let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -6881,6 +7039,38 @@ rss-async = {{ path = "{}" }}
 async fn main() -> Result<Unit, TimerError> {
     await Timer.sleep(ms: 1)?
     return Ok(Unit)
+}
+
+async fn load(path: read Path) -> Result<String, FileError> {
+    await File.write_string_async(path: read path, text: read "hello")?
+    let text = await File.read_all_string_async(path: read path)?
+    return Ok(text)
+}
+
+async fn fetch(url: read Url) -> Result<Int, HttpError> {
+    let response = await Http.get_async(url: read url)?
+    return Ok(HttpResponse.status(response: read response))
+}
+
+fn stream_file(path: read Path) -> Result<Unit, ChannelError> {
+    let chunks: Stream<Bytes> = File.bytes_stream(path: read path, chunk_size: 4096)?
+    let rows: Stream<Row> = Csv.rows(path: read path, buffer_size: 8192)?
+    return Ok(Unit)
+}
+
+async fn run_command() -> Result<String, String> {
+    let stdout = await Process.run_stdout_async(command: read "printf", args: read List<String>.new())?
+    return Ok(stdout)
+}
+
+async fn connect_tcp() -> Result<TcpStream, TcpError> {
+    let stream = await Tcp.connect(host: read "127.0.0.1", port: 8080)?
+    return Ok(stream)
+}
+
+async fn connect_websocket(url: read Url) -> Result<WebSocket, WebSocketError> {
+    let socket = await WebSocket.connect(url: read url)?
+    return Ok(socket)
 }
 "#,
     )
@@ -6939,6 +7129,38 @@ async fn main() -> Result<Unit, TimerError> {
     await Timer.sleep(ms: 1)?
     return Ok(Unit)
 }
+
+async fn load(path: read Path) -> Result<String, FileError> {
+    await File.write_string_async(path: read path, text: read "hello")?
+    let text = await File.read_all_string_async(path: read path)?
+    return Ok(text)
+}
+
+async fn fetch(url: read Url) -> Result<Int, HttpError> {
+    let response = await Http.get_async(url: read url)?
+    return Ok(HttpResponse.status(response: read response))
+}
+
+fn stream_file(path: read Path) -> Result<Unit, ChannelError> {
+    let chunks: Stream<Bytes> = File.bytes_stream(path: read path, chunk_size: 4096)?
+    let rows: Stream<Row> = Csv.rows(path: read path, buffer_size: 8192)?
+    return Ok(Unit)
+}
+
+async fn run_command() -> Result<String, String> {
+    let stdout = await Process.run_stdout_async(command: read "printf", args: read List<String>.new())?
+    return Ok(stdout)
+}
+
+async fn connect_tcp() -> Result<TcpStream, TcpError> {
+    let stream = await Tcp.connect(host: read "127.0.0.1", port: 8080)?
+    return Ok(stream)
+}
+
+async fn connect_websocket(url: read Url) -> Result<WebSocket, WebSocketError> {
+    let socket = await WebSocket.connect(url: read url)?
+    return Ok(socket)
+}
 "#,
     )
     .expect("source should be written");
@@ -6967,11 +7189,59 @@ async fn main() -> Result<Unit, TimerError> {
         path.ends_with("rss/async/interface/timer.rssi")
             || path.ends_with("rss\\async\\interface\\timer.rssi")
     }));
+    assert!(input.interfaces.iter().any(|(path, _)| {
+        path.ends_with("rss/async/interface/file.rssi")
+            || path.ends_with("rss\\async\\interface\\file.rssi")
+    }));
+    assert!(input.interfaces.iter().any(|(path, _)| {
+        path.ends_with("rss/async/interface/http.rssi")
+            || path.ends_with("rss\\async\\interface\\http.rssi")
+    }));
+    assert!(input.interfaces.iter().any(|(path, _)| {
+        path.ends_with("rss/async/interface/process.rssi")
+            || path.ends_with("rss\\async\\interface\\process.rssi")
+    }));
+    assert!(input.interfaces.iter().any(|(path, _)| {
+        path.ends_with("rss/async/interface/tcp.rssi")
+            || path.ends_with("rss\\async\\interface\\tcp.rssi")
+    }));
+    assert!(input.interfaces.iter().any(|(path, _)| {
+        path.ends_with("rss/async/interface/websocket.rssi")
+            || path.ends_with("rss\\async\\interface\\websocket.rssi")
+    }));
     assert!(
         package
             .lib_rs
             .contains("rsscript_runtime::timer_sleep_native_start")
     );
+    assert!(
+        package
+            .lib_rs
+            .contains("rsscript_runtime::file_write_string_async")
+    );
+    assert!(
+        package
+            .lib_rs
+            .contains("rsscript_runtime::file_read_all_string_async")
+    );
+    assert!(package.lib_rs.contains("rsscript_runtime::http_get_async"));
+    assert!(
+        package
+            .lib_rs
+            .contains("rsscript_runtime::process_run_stdout_async")
+    );
+    assert!(package.lib_rs.contains("rsscript_runtime::tcp_connect"));
+    assert!(
+        package
+            .lib_rs
+            .contains("rsscript_runtime::websocket_connect")
+    );
+    assert!(
+        package
+            .lib_rs
+            .contains("rsscript_runtime::file_bytes_stream")
+    );
+    assert!(package.lib_rs.contains("rsscript_runtime::csv_rows"));
 }
 
 #[test]
