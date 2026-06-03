@@ -14,11 +14,11 @@ LLMs); everything else lives here.
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Module boundaries of the checker/lowering implementation. |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | Local verification flow and development discipline. |
 
-## Design drafts (not yet normative)
+## Implementation-planning specs (not yet normative)
 
 | Doc | Idea |
 |-----|------|
-| [RSScript_AI_Generation_Feedback_v0.1_Draft.md](RSScript_AI_Generation_Feedback_v0.1_Draft.md) | Agent-facing generation oracle plus fast interpreter feedback loop for AI-generated RSScript. |
+| [RSScript_AI_Generation_Feedback_v0.1.md](RSScript_AI_Generation_Feedback_v0.1.md) | Agent-facing generation oracle plus fast interpreter feedback loop for AI-generated RSScript. |
 
 ## Conventions
 
