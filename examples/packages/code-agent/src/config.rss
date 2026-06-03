@@ -60,7 +60,7 @@ fn agent_config_from_env() -> fresh AgentConfig {
 }
 
 fn default_agent_task() -> String {
-    return """Read examples/packages/code-agent/AGENTS.md.
+    return """Read AGENT.md, then read examples/packages/code-agent/AGENTS.md.
 Use rss_ide symbols/definition to find the file IO API, then read the relevant core interface.
 Write target/rsscript-agent-read-file.rss containing a concise RSScript function that reads a UTF-8 file with File.read_string.
 After writing, call rss_check for examples/packages/code-agent.

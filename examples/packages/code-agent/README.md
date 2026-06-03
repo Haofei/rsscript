@@ -69,4 +69,8 @@ network behavior are not hard-coded:
 - **Budget**: when the step budget is exhausted before the task finishes, the
   agent emits a `turn.budget_exhausted` event and returns an error.
 
-The agent should not guess RSScript APIs. It reads `examples/packages/code-agent/AGENTS.md`, uses `rss_ide` or direct `read` calls against `schemas/core-package-index.json`, then opens the relevant indexed `.rssi` files under `core/` or `rss/*/interface/` before writing RSScript code.
+The agent should not guess RSScript APIs. It reads the repository root
+`AGENT.md` first, then `examples/packages/code-agent/AGENTS.md`, uses `rss_ide`
+or direct `read` calls against `schemas/core-package-index.json`, then opens the
+relevant indexed `.rssi` files under `core/` or `rss/*/interface/` before writing
+RSScript code.

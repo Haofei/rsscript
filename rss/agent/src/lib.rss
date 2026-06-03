@@ -100,6 +100,7 @@ pub fn ModelConfig.from_env(env: read ModelEnv, defaults: read ModelDefaults) ->
 
 pub fn Prompt.code_agent(model: read ModelConfig) -> fresh Prompt {
     let instructions: List<String> = [
+        "Before writing RSScript, read the repository root AGENT.md and the nearest package AGENTS.md.",
         "Discover files before reading unfamiliar code.",
         "Use rss_ide for diagnostics, symbols, outline, hover, definition, and references before guessing APIs.",
         "Make small edits.",

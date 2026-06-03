@@ -13,4 +13,4 @@ When extending it:
 7. Do not add `features: native` or `features: local` to the agent source.
 8. Prefer `rss_check` and `rss_cmd` over `shell` for RSScript commands.
 
-For RSScript APIs, read this file and `schemas/core-package-index.json`, then open the exact `.rssi` file named by the index. Built-in language/core signatures live under `core/`; standard packages such as `rss-async` live under `rss/*/interface/`.
+For the RSScript language and package manager themselves, read the root `AGENT.md` guide first — it covers syntax, the ownership/effect model, and `rsspkg.toml`. For RSScript APIs, read this file and `schemas/core-package-index.json`, then open the exact `.rssi` file named by the index. Built-in language/core signatures live under `core/`; standard packages such as `rss-async` live under `rss/*/interface/`.

@@ -47,7 +47,11 @@ rss fmt    <file.rss>                     # canonical formatter
 rss run    <file-or-package-dir> [-- <args>...]   # lower to Rust + build + run
 rss test   [--all] [--filter <substr>]
 rss dev    [--run] [--once] <file-or-dir> # watch loop
-rss pkg    check|review|tree|lock|diff|publish|metadata|vendor [--json|--reir] [dir]
+rss pkg    [--json] [dir]            # package health check
+rss pkg    review [--json] [dir]     # review surface
+rss pkg    diff [--json] <old-dir> <new-dir>
+rss pkg    ci [--json] [dir]         # CI-facing package check
+rss pkg    publish --dry-run [--json] [--registry <dir>] [dir]
 ```
 
 `--core` (default) loads the implicit standard library (`String`, `List`, `Map`,
@@ -351,7 +355,7 @@ protocol declarations may appear too.
 The package manager is a **semantic / review layer over Cargo**, not a Cargo
 replacement. Cargo builds native Rust and owns `Cargo.lock`; `rss pkg` owns
 `.rssi` contracts, RSS dependency resolution, `rsspkg.lock`, feature-conditioned
-interfaces, semantic dependency diff, and computed review/risk metadata.
+interfaces, semantic package diff, and computed review/risk metadata.
 
 ### 10.1 `rsspkg.toml`
 
@@ -423,7 +427,7 @@ provider-agnostic.
 ```text
 my-pkg/
   rsspkg.toml
-  rsspkg.lock          # semantic lock (rss pkg lock)
+  rsspkg.lock          # semantic lock checked by rss pkg
   interface/*.rssi     # public contracts
   src/*.rss            # implementation
   native/rust/         # optional Rust wrapper (Cargo crate) + bindings
@@ -432,13 +436,11 @@ my-pkg/
 ### 10.4 Review-first workflow
 
 ```sh
-rss pkg check  [dir]                 # manifest + interfaces + sources + lock + graph, NO native build
-rss pkg tree   [dir]                 # dependency graph annotated with risk: [low|elevated|high, native, build.rs, ...]
-rss pkg review [dir] [--json|--reir] # public-contract / risk / native-boundary report
-rss pkg diff   <old-dir> <new-dir>   # semantic diff of two package versions
-rss pkg review update --from old.lock --to new.lock   # what semantically changed on upgrade
-rss pkg lock   <dir>                 # write rsspkg.lock
-rss pkg publish --dry-run [--registry <dir>] [dir]
+rss pkg [--json] [dir]                         # manifest + interfaces + sources + lock + graph, NO native build
+rss pkg review [--json] [dir]                  # public-contract / risk / native-boundary report
+rss pkg diff [--json] <old-dir> <new-dir>      # semantic diff of two package versions
+rss pkg ci [--json] [dir]                      # CI-facing package check
+rss pkg publish --dry-run [--json] [--registry <dir>] [dir]
 ```
 
 Commands that only read/resolve/review **never execute** a dependency's
