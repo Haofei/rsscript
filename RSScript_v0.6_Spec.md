@@ -97,6 +97,23 @@ machinery, and backend representation never define RSScript semantics or leak
 into the user surface. Valid RSScript code must not require understanding the
 generated Rust. (Detail: sections 2.7, 4.)
 
+**Article VIII — Explicitness is a budget, not a virtue.**
+Explicitness serves review and has negative returns past the review-relevant set.
+A marker that does not change the answer to a reviewer's question is not safety;
+it is noise, and noise erodes the very signal Article III exists to protect. A
+marker is admitted only if its question has more than one admissible answer; what
+is forced, mechanically derivable, or merely the safe default stays silent. The
+operative discipline is to mark the departure and hide the norm, so that
+annotation density tracks review-critical risk instead of uniform ceremony.
+Article III mandates that review-critical facts be visible at every call site;
+this article bounds that mandate — a restated fact earns its call-site place only
+when it is review-load-bearing and its deciding context is remote, and any point
+where the language spells out a default rather than a departure (the canonical
+case is the call-site `read` effect) is a deliberate, recorded exception that
+must carry its justification, never an unexamined habit. Article II removes
+capabilities by subtraction; this article removes ceremony by the same test.
+(Detail: section 2A.)
+
 ---
 
 ## 0. Reading Guide and Normative Hierarchy
@@ -328,6 +345,128 @@ rejected influences in section 20.1 are the first applications of this rule.
 Receiver-call shorthand (§14.6.1) passes this test: it requires a mandatory
 effect keyword, resolves uniquely or rejects, and is mechanically expandable to
 its single canonical form.
+
+---
+
+## 2A. The Explicitness Budget
+
+*Elaborates Constitution Article VIII, and bounds the mandate of Article III.
+Chapter 2 establishes that review-critical behavior must be explicit; this
+chapter establishes that explicitness is finite and must be spent, not maximized.*
+
+### 2A.1 Reviewability is the objective; explicitness is the instrument
+
+The boundary between "too implicit" and "too explicit" feels blurry only when
+explicitness is mistaken for the goal. It is not the goal — reviewability is. As
+an instrument, explicitness has a *parabolic* return:
+
+```text
+too implicit   mutation, retention, ownership, and boundary crossings are hidden
+               -> the reviewer cannot see what must be verified -> unreviewable
+
+too explicit   every line is keyword ceremony; the one load-bearing marker is
+               buried under forced and default ones
+               -> the reviewer cannot find what must be verified -> unreviewable
+```
+
+Both extremes fail the *same* property. The optimum is interior: maximize the
+**signal-to-noise ratio of review-critical information**, not the count of
+explicit tokens. An annotation that adds a token without adding a decision moves
+the design toward the second failure, not away from the first.
+
+### 2A.2 The rule: mark the departure, hide the norm
+
+A reviewer scans for what is *unusual* and what *changes*. Make the safe default
+invisible and only departures from it explicit; then every explicit token is a
+signal, and annotation density tracks risk. Spelling the default out as well
+buries the departures.
+
+Classify every candidate marker:
+
+```text
+review-load-bearing   what mutates, what is retained, who owns a resource,
+(must be explicit)     what is fresh, what crosses local/managed/native/unsafe/
+                       async, what public contract changed
+                       -> the reviewer is obligated to verify exactly these
+
+forced / derivable /   only one legal value; or mechanically inferable; or simply
+default (must be       the common safe case
+silent)                -> the token adds no decision, only noise
+```
+
+The admission test for a marker (the dual of §2.8's test for a feature):
+
+```text
+1. Is there a real choice here? (two or more admissible answers)
+   If the value is forced, it is not a decision — drop it.
+2. Would a reviewer judge wrong, or unsafely, if it were hidden?
+   (does it bear on mutation / retention / ownership / lifetime /
+    boundary / public contract?) If not, it is ceremony.
+3. Is the deciding context already cheaply visible right here?
+   If the decision is made far away and the stakes are high, restate it
+   locally; if it is local and in view, do not.
+
+explicit  =  (real choice) AND (review-critical) AND (deciding context remote)
+```
+
+The model already obeys this almost everywhere: `managed` is the silent default
+and `local` is the marked departure; non-retaining is silent and `retains(...)`
+is marked; a managed return is silent and `fresh` is marked; safe/sync is silent
+and `native` / `unsafe` / `async` / `await` are marked. In each case the amount
+of annotation a function carries is proportional to the review risk it presents,
+which is exactly the property review wants.
+
+### 2A.3 Worked example: the call-site `read` effect
+
+There is one place RSScript spells out a default rather than a departure, and it
+is the cleanest illustration of the tension this chapter governs. Every
+by-reference or managed argument carries a data-effect keyword at the call site,
+including the common `read` case (an omitted effect is the error RS0202, not an
+inferred `read`); only Copy scalars are passed bare:
+
+```rust
+cache_put(cache: mut cache, key: read key, value: read value)
+//                          ^^^^        ^^^^   the default, written out at every use
+```
+
+When a call has several `read` arguments and one `mut`, the load-bearing `mut`
+is diluted by the repeated `read`. By §2A.2 the default should be silent, so
+this is the design's most visible ceremony tax.
+
+RSScript nonetheless **keeps** the call-site `read` as a deliberate, recorded
+exception under Article VIII, for two reasons that are themselves review
+properties:
+
+```text
+1. Mutation and consumption must be legible at the call without resolving the
+   callee's signature, which may live in another file or a package interface.
+   A visible baseline `read` makes a `mut`/`take` departure unambiguous and
+   makes an omitted effect a detectable error rather than a silent "assume read".
+2. It keeps the call site a complete review artifact: the effect of every
+   argument is present where the call is read, not inferred from elsewhere.
+```
+
+The cost is acknowledged, not denied: uniform `read` is partly wallpaper. The
+alternative is therefore preserved, not excluded (Article VI). A future form may
+make `read` the omittable default so that only `mut`/`take` are written — if
+call-site self-description is judged to buy less than the gain in signal density.
+The binding constraint any such form must satisfy: **an omitted effect must
+remain a hard error, never an inferred `read`**, so that absence can never quietly
+mean "unreviewed." Until then, the spec spends this ceremony knowingly, with its
+justification on the record — which is precisely what Article VIII requires of any
+spelled-out default.
+
+### 2A.4 Consequence for feature admission
+
+Section 2.8 admits a feature only if it is review-phraseable and expressible in
+explicit, named, single-canonical syntax. Article VIII adds a third clause: a
+feature that passes both can still be rejected if its canonical syntax forces
+ceremony that buries signal — if making it explicit would require restating
+forced or default facts at every use. Admission therefore asks not only "can this
+be made explicit and canonical?" but "does its explicit form spend the
+explicitness budget on a decision, or on noise?" A feature whose only explicit
+form is ceremony is failed by the same test that removes hidden behavior; the two
+are the same discipline applied to the two failure modes of §2A.1.
 
 ---
 

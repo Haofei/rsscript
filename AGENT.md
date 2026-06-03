@@ -34,6 +34,31 @@ One canonical spelling per operation — no shorthand alternatives, no inference
 7. Method calls are **qualified by type**: `Image.resize(image: mut image, ...)`,
    not `image.resize(...)` (except the receiver shorthand in §3.4).
 
+### The explicitness budget (the meta-rule behind all of the above)
+
+RSS is explicit *to make review cheap* — not for its own sake. More keywords is
+not safer; ceremony that states nothing buries the one marker that matters. So:
+
+> **Mark the departure, keep the norm silent.** Reach for a marker only when it
+> is true and a reviewer would have to verify it. The safe default needs no word.
+
+| Departure marker | Use **only** when it is actually true |
+|------------------|----------------------------------------|
+| `mut` / `take`   | you really modify / consume the value (else `read`) |
+| `local`          | you need an exclusive fast value (else stay managed — no marker) |
+| `manage`         | you are moving a `local` into the managed world |
+| `fresh`          | you return a newly-created value across the boundary |
+| `effects(retains(...))` | the function keeps a parameter alive after return |
+| `native` / `unsafe` / `async` | the body actually crosses that boundary |
+
+Do not add a marker "to be safe": writing `mut` when you only read, or `local`
+when managed is fine, is wrong (often a checker error) and adds review noise.
+Before emitting any keyword, ask: *is there a real choice here, and would a
+reviewer judge wrong if it were absent?* If not, leave it out. (`read` at call
+sites is the one default RSS still writes — required by the checker, RS0202;
+write it, but treat it as the exception, not the pattern. Spec: Constitution
+Article VIII and §2A.)
+
 ---
 
 ## 1. Running the toolchain (binary is `rss`)
