@@ -114,6 +114,25 @@ must carry its justification, never an unexamined habit. Article II removes
 capabilities by subtraction; this article removes ceremony by the same test.
 (Detail: section 2A.)
 
+**Article IX — Generation locality: the source must be cheap to generate, not only cheap to review.**
+The AI generator is a first-class consumer of the language surface, alongside the
+human reviewer (Article I). What a reviewer pays in attention, a generator pays in
+tokens and context locality. Code that forces a model to jump across a file to
+resolve a definition, or to hold distant context to emit the next token, degrades
+both generation accuracy and the model's cache reuse — and the same nonlocality
+raises a human's read cost. The surface must therefore be writable and readable
+*linearly*: declarations are flat and top-level, a type's methods are qualified
+top-level functions rather than bodies buried inside an enclosing `impl`/class
+block, signatures carry everything needed to use them without scanning elsewhere
+(Article III), and nesting that forces backtracking is avoided. This article is
+the generator-side sibling of Article VIII: both treat the source as a finite
+budget — Article VIII spends it on the reviewer's questions, Article IX on the
+generator's locality — and they are usually satisfied together, because flat,
+explicit, local code is cheaper for both. Where they conflict, the conflict is
+named and decided, not hidden; in particular, a feature that lowers reviewer
+ceremony by adding a nonlocal inference rule is paid for in generator locality and
+must be weighed as such. (Detail: section 2B.)
+
 ---
 
 ## 0. Reading Guide and Normative Hierarchy
@@ -492,6 +511,90 @@ be made explicit and canonical?" but "does its explicit form spend the
 explicitness budget on a decision, or on noise?" A feature whose only explicit
 form is ceremony is failed by the same test that removes hidden behavior; the two
 are the same discipline applied to the two failure modes of §2A.1.
+
+---
+
+## 2B. Generation Locality
+
+*Elaborates Constitution Article IX. Where §2A bounds the source for the human
+reviewer, this chapter shapes the same source for the AI generator. The two are
+siblings: one minimizes attention cost, the other minimizes token and context
+cost, and they share most of their conclusions.*
+
+### 2B.1 The generator is a consumer of the surface, too
+
+Article I names review as the bottleneck, but generation accuracy is its
+precondition: code that is never generated correctly is never reviewed. The
+source text therefore has two readers — the human reviewer and the model that
+produced it — and both pay to read it. A language built as an AI codegen target
+must price the generator's cost into the surface, not only the reviewer's.
+
+A model emits code left to right, one token at a time, conditioned on everything
+before it. Two properties follow:
+
+```text
+locality   resolving the next token should depend on nearby text, not on a
+           definition far away in the file. Nonlocal dependencies force the
+           model to carry more context and raise its error rate; they also
+           defeat prefix/cache reuse, making generation slower.
+
+option space   at each point, fewer admissible continuations means a sharper
+               distribution and fewer ways to be wrong. One canonical spelling
+               (Article II, §2.3) is a generation property before it is a
+               review property.
+```
+
+The same nonlocality that costs the model also costs the human: a reader who
+must scroll to another block to learn what a call does pays the same tax. So the
+generator's interest and the reviewer's interest usually point the same way.
+
+### 2B.2 What locality requires of the surface
+
+```text
+flat, top-level declarations   no construct that hides a definition inside an
+                               enclosing block the reader/model must hold open.
+
+methods as qualified functions a type's operations are `fn Type.method(...)` at
+                               top level, not bodies buried in an `impl`/class
+                               block separated from their call sites.
+
+self-contained signatures      a signature carries its argument names, types,
+                               effects, freshness, and errors (Article III), so
+                               using it never requires scanning elsewhere.
+
+shallow nesting                control flow nests only as deep as the logic
+                               demands; ceremony does not add structural depth.
+
+one canonical form             a single spelling per operation (§2.3) shrinks
+                               the model's option space at every step.
+```
+
+### 2B.3 RSScript already satisfies this; the rule is to keep it
+
+These are not new requirements; they describe what RSScript already is, and the
+article exists to keep future features from eroding it. Methods are already
+top-level qualified functions — there is no `impl` block in which a method body
+sits far from its type. Public signatures are already mandatory and complete
+(Article III, §2.5). There is already exactly one canonical spelling per
+operation (§2.3). The work of Article IX is conservative: a candidate feature
+that reintroduces nonlocality — a method form whose meaning depends on a distant
+block, a construct that must be resolved by scanning the file, a second spelling
+that widens the option space — is failed for the same reason ceremony is failed,
+because it taxes a consumer of the surface.
+
+### 2B.4 Interaction with the explicitness budget
+
+Article VIII (§2A) and Article IX usually agree, and the call-site `read` effect
+(§2A.3) is where they agree most sharply: each repeated default `read` both
+dilutes the reviewer's signal *and* spends generator tokens on a forced value, so
+both budgets push the same way. The two can also disagree, and the disagreement
+is the useful part. A feature that lowers reviewer ceremony by adding a *nonlocal
+inference rule* — "you may omit this here because it can be inferred from
+somewhere else" — buys §2A's signal density at the cost of §2B's locality: the
+omitted fact is now resolved by looking away from the call. Article IX is
+therefore a check on "just infer it": inference that stays local is free to both
+budgets, while inference that reaches across the file trades one consumer's cost
+for the other's and must be decided openly, not assumed to be a pure win.
 
 ---
 

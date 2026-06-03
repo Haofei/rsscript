@@ -3212,9 +3212,14 @@ must be displayed and included in semantic dependency diff.
 
 ## 17. CLI Design
 
-Canonical package-management commands live under `rss pkg`. The implemented
-v0.6 prototype surface uses `--json` for package-manager JSON and `--reir` for
-REIR bundle or diff JSON where listed:
+Canonical package-management commands live under `rss pkg`, with `--json` for
+package-manager JSON and `--reir` for REIR bundle or diff JSON where listed. The
+subcommands wired into the CLI **today** are `rss pkg [dir]` (the default check),
+`rss pkg review`, `rss pkg diff`, `rss pkg ci`, `rss pkg publish --dry-run`,
+`rss pkg lock`, `rss pkg tree`, `rss pkg metadata`, and `rss pkg vendor`. The two
+remaining forms below — `rss pkg review update` and `rss pkg reir diff` — are part
+of the canonical design and backed by library functions, but are not yet exposed
+as their own CLI subcommands. The full canonical surface:
 
 ```sh
 rss pkg check    [--json|--reir] [package-directory]

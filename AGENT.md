@@ -78,6 +78,8 @@ rss pkg    review [--json] [dir]     # review surface
 rss pkg    diff [--json] <old-dir> <new-dir>
 rss pkg    ci [--json] [dir]         # CI-facing package check
 rss pkg    publish --dry-run [--json] [--registry <dir>] [dir]
+rss pkg    lock [dir]                # (re)write rsspkg.lock from the resolved graph
+rss pkg    tree|metadata|vendor [--json|--reir] [dir]
 ```
 
 `--core` (default) loads the implicit standard library (`String`, `List`, `Map`,
@@ -467,6 +469,10 @@ rss pkg review [--json] [dir]                  # public-contract / risk / native
 rss pkg diff [--json] <old-dir> <new-dir>      # semantic diff of two package versions
 rss pkg ci [--json] [dir]                      # CI-facing package check
 rss pkg publish --dry-run [--json] [--registry <dir>] [dir]
+rss pkg lock [dir]                             # (re)write rsspkg.lock from the resolved graph
+rss pkg tree [--json|--reir] [dir]             # dependency graph annotated with risk
+rss pkg metadata [--verify|--dry-run] [dir]    # write/verify review + REIR metadata
+rss pkg vendor [--dry-run] [dir]               # vendor path dependencies
 ```
 
 Commands that only read/resolve/review **never execute** a dependency's

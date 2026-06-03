@@ -247,6 +247,10 @@ pub(crate) fn print_usage() {
     eprintln!("  rss pkg diff [--json] <old-package-directory> <new-package-directory>");
     eprintln!("  rss pkg ci [--json] [package-directory]");
     eprintln!("  rss pkg publish --dry-run [--json] [--registry <directory>] [package-directory]");
+    eprintln!("  rss pkg lock [--json|--reir] [package-directory]");
+    eprintln!("  rss pkg tree [--json|--reir] [package-directory]");
+    eprintln!("  rss pkg metadata [--verify|--dry-run] [--json|--reir] [package-directory]");
+    eprintln!("  rss pkg vendor [--dry-run] [--json|--reir] [package-directory]");
 }
 
 #[cfg(test)]

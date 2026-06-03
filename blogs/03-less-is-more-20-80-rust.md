@@ -73,6 +73,18 @@ And the load-bearing content — *this function mutates the cache and retains th
 
 The trick is not that the second version is cleverer. The trick is that the second version *doesn't have a lot of the language features the first version uses*. The expressive ceiling is lower. For the cases where lowering the ceiling costs you nothing (most application code), you gain readability for free.
 
+## Resources you can see being released
+
+The same move applies to the other thing application code does constantly: acquire a resource, use it, release it. In Rust that's RAII — correct, invisible, and a frequent source of "wait, when does this lock actually drop?" review questions, because the release is implicit in a scope you have to reconstruct in your head. RSScript makes the scope a syntactic block:
+
+```rust
+with File.open_write(path: read path)? as file {
+    File.write(file: mut file, data: read text)?
+}
+```
+
+The file is open exactly inside the braces and closed at the closing brace, including on the early return that `?` might trigger. A reviewer doesn't trace lifetimes to find the release point; the release point is *the brace they're already looking at*. It's the same idea as `using` in Python, `defer` in Swift, RAII in C++ — but lifted into visible structure instead of inferred from scope, because "when is this released" is a review question and review questions belong in the syntax. Pooled resources work the same way: `with ResourcePool.borrow(pool: mut pool) as conn { ... }` borrows for the block and returns the connection at the brace. The pattern is uniform, and uniform patterns are cheap to review because you learn the shape once.
+
 ## Writer cost stays small, reader gain is large
 
 A common reaction to this design is: "but now the function author has to think about retention, that's extra cognitive load." This concern doesn't survive contact with the way the cognitive load distributes across writers and readers.

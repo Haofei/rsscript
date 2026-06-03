@@ -116,7 +116,19 @@ pub fn set_name(user: &mut User, name: impl Into<String>) {
 
 The function is called from three places, all of which pass `String` directly. The `impl Into<String>` flexibility is unused, but it makes the signature harder to read and forces the reviewer to think about which conversions are legal here. AI defaults to maximum API flexibility because library code does that. Application code shouldn't, but AI doesn't know it's writing application code.
 
-## 8. The 400-line module with no review map
+## 8. Deriving the entire universe
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Default)]
+pub struct RetryPolicy {
+    pub max_attempts: u32,
+    pub backoff_ms: u64,
+}
+```
+
+Ten derives on a struct that is constructed in exactly one place, compared nowhere, used as a hash key never, and serialized only because someone imagined a future where it might be. Each derive is a small promise — *this type is totally ordered, this type is a valid map key, this type round-trips through JSON* — and a careful reviewer has to register every promise and ask whether it's load-bearing. Here, none of them are. The struct wanted `Clone`, maybe `Debug`. The other eight are there because library types derive the full set, and library types derive the full set because a library genuinely can't know which capabilities its callers will reach for. Application code does know. It just doesn't get asked, because the model is writing in library register ([the subject of the next post](02-ai-writes-library-code.md)) and library register derives everything by reflex.
+
+## 9. The 400-line module with no review map
 
 Worst of all, the cumulative effect: an AI-generated module is a wall of locally-correct code with no signal about where the risk lives. Twenty functions, all roughly the same shape, all roughly equally formatted. The reviewer can't tell which three are load-bearing and which seventeen are mechanical helpers. So they read all twenty.
 

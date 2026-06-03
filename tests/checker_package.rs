@@ -4169,8 +4169,8 @@ fn docs_do_not_reintroduce_legacy_gc_runtime_surface() {
 
     for relative_path in [
         "README.md",
-        "RSScript_v0.6_Spec.md",
-        "RSScript_Package_Manager_Design_v0.6.md",
+        "specs/RSScript_v0.6_Spec.md",
+        "specs/RSScript_Package_Manager_Design_v0.6.md",
     ] {
         let source = fs::read_to_string(root.join(relative_path))
             .unwrap_or_else(|error| panic!("{relative_path} should read: {error}"));
@@ -4193,7 +4193,7 @@ fn docs_do_not_reintroduce_legacy_gc_runtime_surface() {
 #[test]
 fn package_manager_spec_uses_current_http_and_env_facade_shapes() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let spec = fs::read_to_string(root.join("RSScript_Package_Manager_Design_v0.6.md"))
+    let spec = fs::read_to_string(root.join("specs/RSScript_Package_Manager_Design_v0.6.md"))
         .expect("package manager spec should be readable");
 
     for stale in [
@@ -4226,7 +4226,7 @@ fn package_manager_spec_uses_current_http_and_env_facade_shapes() {
 #[test]
 fn package_manager_spec_uses_implemented_provider_resolution_manifest_shape() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let spec = fs::read_to_string(root.join("RSScript_Package_Manager_Design_v0.6.md"))
+    let spec = fs::read_to_string(root.join("specs/RSScript_Package_Manager_Design_v0.6.md"))
         .expect("package manager spec should be readable");
 
     for stale in ["[provider]", "mode = \"platform_provided\""] {
@@ -4252,7 +4252,7 @@ fn package_manager_spec_uses_implemented_provider_resolution_manifest_shape() {
 #[test]
 fn reir_spec_keeps_os_close_as_descriptor_cleanup_not_external_capability() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let spec = fs::read_to_string(root.join("Review_Evidence_IR_Spec_v0.2.md"))
+    let spec = fs::read_to_string(root.join("specs/Review_Evidence_IR_Spec_v0.2.md"))
         .expect("REIR spec should be readable");
 
     assert!(spec.contains("`OS.close`"));
@@ -4263,7 +4263,7 @@ fn reir_spec_keeps_os_close_as_descriptor_cleanup_not_external_capability() {
 #[test]
 fn rss_spec_keeps_protocol_dynamic_dispatch_deferred() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let spec = fs::read_to_string(root.join("RSScript_v0.6_Spec.md"))
+    let spec = fs::read_to_string(root.join("specs/RSScript_v0.6_Spec.md"))
         .unwrap_or_else(|error| panic!("RSScript spec should read: {error}"));
 
     for forbidden in [

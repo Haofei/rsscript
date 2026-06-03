@@ -38,6 +38,8 @@ This is the single most-underrated lesson. **You don't need to build a backend i
 
 This is so cheap that it should be the obvious move. It isn't, because language designers are trained to think a "real" language has its own backend. Building on top of someone else's compiler feels like cheating. It also feels small, because there's less to build. But the value isn't in the backend; the value is in the front end. RSScript is structured around accepting that asymmetry.
 
+And it matters that the backend is *Rust* specifically, not just "some lower-level language." Lowering to C would inherit a backend but not its safety — you'd be one generation bug away from a use-after-free, and your shiny review-first front end would sit on top of an unsound foundation. Lowering to Rust means the generated code goes through the borrow checker, so the lowering itself has a second, independent verifier: if my front end emits something that violates ownership, rustc rejects it, and that's a bug in my compiler I find immediately instead of a memory-safety hole I ship. The managed model maps cleanly onto reference-counted Rust types; `local` maps onto ordinary Rust ownership; the `with` blocks map onto RAII. The semantic distance between RSScript and Rust is small enough that the lowering is mostly mechanical and the mapping is auditable — which is the whole point, because [the review-first promise](03-less-is-more-20-80-rust.md) would be hollow if the thing you actually run were a black box. You can read the generated Rust when you need to. You rarely need to. But "rarely need to, can when you must" is only possible because the target is a safe, high-level-enough language, not a raw codegen layer.
+
 **Most of them predate the AI review crunch.** Hylo, Vale, Roc were designed when the bottleneck was *humans writing code*. Their pitch was "Rust is too hard to write, here's something easier." That's true, but it has always been true, and people who learn Rust mostly stop finding it hard after a few months. So the value of "easier to write" has a hard ceiling: it competes with the user's willingness to spend a quarter learning Rust.
 
 What changed in 2024-2025 is that the bottleneck moved from writing to *reviewing*. AI generates code at superhuman rates; the review capacity stays human. The value proposition for a smaller language changes from "easier to write" (which has a fixed ceiling) to "easier to review" (which scales with how much code AI is generating). That value proposition was not available to projects designed before AI. They were solving the right problem at the wrong time — or rather, the value of solving it was orders of magnitude lower then than it is now.
@@ -100,5 +102,7 @@ Until then: the problem is real, the moment is real, the moves are visible. Whet
 
 ---
 
-*That's the series. Thanks for reading.*
-*— Previous posts: [1](01-100k-lines-of-ai-rust.md), [2](02-ai-writes-library-code.md), [3](03-less-is-more-20-80-rust.md)*
+*That was the first arc of this series — the argument, made before the language was real. The next posts are the second arc: what actually building it taught me, starting with the design decision the argument made unavoidable.*
+
+*Next: [Explicit is a budget, not a virtue](05-explicit-is-a-budget.md).*
+*Previous: [1](01-100k-lines-of-ai-rust.md), [2](02-ai-writes-library-code.md), [3](03-less-is-more-20-80-rust.md)*
