@@ -742,6 +742,10 @@ Provider resolution rules:
    requested interface effective hash remains the same, the public RSScript
    contract is unchanged. The substitution is still a graph-risk and
    implementation review event and must be reported by update review.
+8. Provider choice is executable-root scoped. The resolved executable graph has
+   exactly one selected provider for each virtual/interface package identity.
+   Dependency-local or consumer-local provider overrides are not defined in
+   v0.6.
 ```
 
 Root-level provider choice is expressed in the consuming package:
@@ -754,6 +758,13 @@ posix-env = { path = "../posix-env" }
 [providers]
 platform-env = { package = "posix-env", version = "0.1.0" }
 ```
+
+Provider selection is intentionally not scoped to individual downstream
+consumers. A reviewer should not need to ask which implementation a particular
+dependency received: the executable graph has one provider answer per
+virtual/interface package. Tests may use a different root manifest to select a
+test provider, but that is a different executable graph, not an in-graph local
+override.
 
 If the target platform supplies the interface directly, the consumer marks that
 dependency instead:
@@ -976,9 +987,11 @@ A feature veto is not a request to silently remove the feature. If the graph
 cannot be resolved without the denied feature, resolution is review-rejected and
 must be changed by selecting another package, selected feature set, or provider.
 
-No package override, feature-pinning, or patch mechanism is defined in v0.6. A
-future override mechanism may be added only if it preserves feature visibility,
-lockfile determinism, and review metadata for the unified graph.
+No package override, feature-pinning, provider override, or patch mechanism is
+defined in v0.6. Provider selection remains root-scoped for the whole executable
+graph. A future override mechanism for package sources may be added only if it
+preserves feature visibility, lockfile determinism, and review metadata for the
+unified graph; consumer-local provider overrides are a non-goal.
 
 ### 6.7 `[review.policy]`
 
@@ -3903,14 +3916,9 @@ members = [
 A workspace should share one `rsspkg.lock` by default. Native Cargo builds may
 share one generated Cargo workspace.
 
-Development overrides may later use:
-
-```toml
-[patch]
-rss-json = { path = "../rss-json" }
-```
-
-Patch syntax can be deferred until after local path dependencies work.
+Development package-source overrides are not part of v0.6. Local path
+dependencies cover the initial development workflow; provider selection still
+stays root-scoped for the executable graph.
 
 Workspace-level review policy may override package-local default policy for CI.
 Package-local policy is still useful for publish readiness and expected risk.
@@ -4042,9 +4050,10 @@ The following questions remain open for post-MVP design or implementation policy
 15. Should a future provider declaration support contract-compatible interface
     ranges rather than an exact `interface_effective_hash`, and how would a
     registry validate freshness without local rechecking?
-16. Should v0.6 define a patch/override or feature-pinning mechanism for cases
-    where additive feature unification selects a policy-forbidden feature, and
-    how can such a mechanism remain deterministic and review-visible?
+16. Should a post-v0.6 package-source patch mechanism exist for development
+    workflows where local path dependencies are insufficient, and how can it
+    remain deterministic and review-visible without introducing consumer-local
+    provider overrides?
 17. Should registry metadata optionally cache a non-authoritative transitive
     exposed-interface closure for search and UX, while the normative effective
     interface hash keeps only directly referenced public dependency identities?

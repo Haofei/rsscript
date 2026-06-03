@@ -9,7 +9,7 @@ Architecture note: v0.6 uses **RSScript frontend -> Rust source lowering -> rust
 Language features implemented:
   - Receiver-call shorthand (§14.6.1): `mut cache.put(key: read k, value: read v)`
     with mandatory effect keyword, unique resolution, and ambiguity rejection.
-  - Match expressions in expression position: `let x = match v { ... }`
+  - Match expressions in expression position: `let x = match read v { ... }`
     with same exhaustiveness and payload-binding rules as statement form.
   - Extended collection pipeline (§18.2): List.sort_by, List.group_by,
     List.partition, List.flat_map, List.take, List.skip, List.first,
@@ -1032,22 +1032,168 @@ resource opened in the body drops at the end of each iteration. `break` and
 ### `match` (statement form)
 
 ```text
-match <value> { <arm> => { ... } ... }
+match <effect> <value> { <arm> => { ... } ... }
 ```
 
-In v0.6, `match` is over the standard `Option<T>` / `Result<T, E>` variant
-shapes and declared RSScript `sum` types. The scrutinee must have type
-`Option<T>`, `Result<T, E>`, or a declared sum type. Arm variants must match the
-scrutinee family: `Option<T>` arms may use `Some`/`None`, `Result<T, E>` arms may
-use `Ok`/`Err`, and sum-type arms use that sum's declared variants. Mixing
-variant families is a diagnostic before lowering, not a Rust backend error. It
-must be exhaustive: it covers `Some`/`None`, `Ok`/`Err`, every declared sum
-variant, or includes `_`; a non-exhaustive match is a diagnostic before lowering.
-Arm rules:
+`match` dispatches on a scrutinee value and binds arm-local views or local
+places. A pattern does not introduce a new ownership model. It is a structured
+set of named projections from the scrutinee place, and the ordinary
+`read`/`mut`/`take`, local-move, resource, and conflict-root rules decide which
+bindings are legal.
+
+The scrutinee effect is part of the source surface:
 
 ```text
-- payload variants may bind the payload (`Some(value)`, `Ok(value)`) or ignore it
-  with payload wildcard syntax (`Some(_)`, `Ok(_)`, `Err(_)`).
+match read expr { ... }     // arm bindings are read views by default
+match mut node { ... }      // arm bindings are read views by default; fields may request mut
+match take node { ... }     // local-only consuming match; arm bindings move by default
+```
+
+A bare `match expr { ... }` is accepted only when the scrutinee is an owned
+temporary whose materialization mode is visible at the expression site, such as
+the result of a fresh call or `?` expression. Otherwise, omitting `read`, `mut`,
+or `take` is a diagnostic. The checker must not silently infer the scrutinee
+effect from the binding pattern.
+
+Patterns may match the standard `Option<T>` and `Result<T, E>` variant shapes,
+declared RSScript `sum` variants, scalar literals (`Int`, `String`, `Bool`), and
+structured fields of a matched variant or struct. Arm variants must match the
+scrutinee family: `Option<T>` arms may use `Some`/`None`, `Result<T, E>` arms may
+use `Ok`/`Err`, and sum-type arms use that sum's declared variants. Mixing
+variant families is a diagnostic before lowering, not a Rust backend error.
+
+Pattern forms:
+
+```text
+_                                  // fallback; binds nothing
+Some(value), Ok(value), Err(error) // single-payload variant binding
+Some(_), Ok(_), Err(_)             // payload wildcard
+Variant                            // payload-free variant
+Variant { field, other: read x }   // structured variant payload
+Struct { field, other: mut x }     // struct destructuring
+Struct { field, .. }               // ignore the remaining fields
+42, "ready", true                  // scalar literal patterns
+```
+
+`as` / `@` whole-value bindings are intentionally not part of this surface. They
+bind a parent place and one or more child places at the same time and therefore
+need extra overlap rules. A future version may add them after the place-conflict
+model is extended.
+
+#### Pattern Binding Effects
+
+The scrutinee effect sets the default binding effect for the arm:
+
+```text
+match read expr:
+    bare binding -> read
+    explicit read allowed
+    explicit mut/take rejected
+
+match mut expr:
+    bare binding -> read
+    explicit read allowed
+    explicit mut allowed only for a legal mutable local place
+    explicit take rejected
+
+match take expr:
+    requires features: local unless expr is an owned temporary
+    bare binding -> take
+    explicit read/mut/take allowed when the projected place permits it
+```
+
+Binding effects are monotonic. A child binding may ask for less authority than
+the scrutinee effect, but never more. A `read` scrutinee cannot yield a `mut` or
+`take` binding; a `mut` scrutinee cannot yield a stronger capability than the
+root mutable place provides; a `take` scrutinee consumes the matched local value.
+
+Examples:
+
+```rust
+match read expr {
+    Call { callee, args } => {
+        // callee: read, args: read
+    }
+}
+
+match mut node {
+    Call { callee: read c, args: mut a } => {
+        // c is a read view, a is a mutable field place when the root is local.
+    }
+}
+
+features: local
+
+match take node {
+    Binary { left, right } => {
+        // left and right are moved from disjoint fields.
+    }
+}
+```
+
+Managed values are read-only under structured patterns in v0.6. Matching a
+managed `class`, managed `struct`, managed `Option`, managed `Result`, or managed
+sum value binds only read views of its fields or payloads. Field mutation of a
+managed object remains an explicit API operation such as
+`Type.update(self: mut value, ...)`; patterns do not expose managed field write
+guards or moves. A pattern that requests `mut` or `take` from a managed value is
+a frontend diagnostic.
+
+Local values, enabled with `features: local`, may be split into disjoint places.
+Different fields are disjoint and may be bound together. Nested or overlapping
+places conflict when either binding requests `mut` or `take`; this is the same
+place-conflict rule used for call arguments and assignments. Moving both a base
+place and one of its fields is rejected as a move-base/field conflict. Resource,
+`handle`, and `weak` fields cannot be moved out by pattern destructuring unless
+the existing resource and handle rules explicitly permit that transfer; by
+default they may only be read.
+
+Wildcard and rest patterns bind nothing:
+
+```rust
+features: local
+
+match take expr {
+    Binary { left: _, right } => {
+        // right is moved. left is not bound, but expr as a whole is still
+        // consumed by the match and the remaining fields drop at arm exit.
+    }
+}
+```
+
+#### Guards
+
+An arm may include a read-only guard:
+
+```rust
+match read expr {
+    Call { args } if List.is_empty(list: read args) => { ... }
+    Call { args } => { ... }
+    _ => { ... }
+}
+```
+
+Guard expressions may read pattern bindings but may not mutate, move, retain, or
+otherwise consume them. A guard runs before the arm is selected; allowing
+`mut`/`take` in a guard would hide control-flow-dependent mutation inside
+matching. An arm with a guard does not count as exhaustive coverage for its
+variant or literal shape; an unguarded arm or `_` is still required to prove
+exhaustiveness.
+
+#### Exhaustiveness
+
+A `match` must be exhaustive before lowering. It covers `Some`/`None`, `Ok`/`Err`,
+every declared sum variant, every scalar literal subset with a `_` fallback, or
+includes `_`. Structured field patterns refine a variant or struct but do not by
+themselves add new top-level variants. Guarded arms are ignored for coverage.
+
+The checker may conservatively avoid proving unreachable arms for complex nested
+patterns, but it must reject a non-exhaustive match where a visible top-level
+variant family is missing and no `_` fallback is present.
+
+Arm-local rules:
+
+```text
 - a variant payload binding obeys the same data-effect, move, and resource rules
   as any other binding; a payload that is a resource cannot escape its arm.
 - a `with` resource opened inside an arm drops at that arm's exit.
@@ -1058,19 +1204,19 @@ Arm rules:
 ### `match` (expression form)
 
 ```text
-let result = match <value> { <arm> => { <expr> } ... }
+let result = match <effect> <value> { <arm> => { <expr> } ... }
 ```
 
 A `match` may also appear in expression position. The same exhaustiveness,
-variant-family, and payload-binding rules from the statement form apply. Each arm
-body is a block whose last expression is the arm's produced value. All arms must
-produce values of a compatible type.
+variant-family, pattern-binding, guard, and place-conflict rules from the
+statement form apply. Each arm body is a block whose last expression is the arm's
+produced value. All arms must produce values of a compatible type.
 
 ```rust
 sum Direction { North South East West }
 
 fn direction_name(d: read Direction) -> String {
-    let name = match d {
+    let name = match read d {
         North => { "north" }
         South => { "south" }
         East => { "east" }
@@ -1084,7 +1230,7 @@ Match expressions compose with `let` bindings, function arguments, and `return`:
 
 ```rust
 fn classify(result: read Result<Int, String>) -> String {
-    return match result {
+    return match read result {
         Ok(value) => { "success" }
         Err(msg) => { read msg }
     }
@@ -1095,8 +1241,8 @@ Review metadata treats a match expression identically to a match statement: each
 arm is a branch, the join is conservative, and exhaustiveness is checked before
 lowering.
 
-A payload binding has no `read`/`mut`/`take` syntax of its own, so its mode is
-fixed by the **scrutinee's** materialization mode:
+Payload and field bindings inherit their default mode from the scrutinee effect,
+and may explicitly narrow the mode at the projected field:
 
 ```text
 - matching a managed/read Option/Result binds a non-Copy payload as a managed

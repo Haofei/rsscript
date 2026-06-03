@@ -76,7 +76,7 @@ impl Lexer<'_> {
                 '-' if self.peek_next() == Some('>') => self.push_two("->"),
                 '=' if self.peek_next() == Some('>') => self.push_two("=>"),
                 ':' | ',' | '.' | '(' | ')' | '{' | '}' | '<' | '>' | '[' | ']' | '?' | '|'
-                | '&' | '+' | '-' | '*' | '/' | '=' | '!' | ';' => self.push_one(),
+                | '&' | '+' | '-' | '*' | '/' | '=' | '!' | ';' | '#' => self.push_one(),
                 _ => self.push_one(),
             }
         }
@@ -237,6 +237,7 @@ impl Lexer<'_> {
             '=' => "=",
             '!' => "!",
             ';' => ";",
+            '#' => "#",
             _ => "?",
         };
         self.tokens.push(Token {

@@ -7,8 +7,8 @@ use crate::hir::{
     HirTypeKind, ParamEffect, ResolvedCalleeKind,
 };
 use crate::syntax::ast::{
-    Block as SyntaxBlock, Callee, DataEffect, Expr, FunctionDecl, Item, MatchLiteral, MatchPattern,
-    Stmt as SyntaxStmt, TypeRef,
+    Block as SyntaxBlock, Callee, DataEffect, Expr, FileFeature, FunctionDecl, Item,
+    MatchFieldPattern, MatchLiteral, MatchPattern, Stmt as SyntaxStmt, TypeRef,
 };
 
 use super::local::{
@@ -1191,11 +1191,7 @@ fn remove_stmt_bindings(statement: &HirStmt, uses: &mut HashSet<String>) {
         }
         HirStmt::Match { arms, .. } => {
             for arm in arms {
-                if let MatchPattern::Variant {
-                    binding: Some(binding),
-                    ..
-                } = &arm.pattern
-                {
+                for binding in arm.pattern.binding_names() {
                     uses.remove(binding);
                 }
             }
@@ -1420,15 +1416,25 @@ fn check_stmt_semantics(
             );
             merge_loop_state(state, &base_state, body_state, body_flow, true)
         }
-        HirStmt::Match { value, arms, .. } => {
+        HirStmt::Match {
+            value,
+            scrutinee_effect,
+            arms,
+            ..
+        } => {
             check_match_scrutinee_type(analyzer, value);
             check_match_patterns_match_scrutinee(analyzer, value, arms);
+            check_match_pattern_effects(analyzer, value, *scrutinee_effect, arms);
+            if *scrutinee_effect == Some(DataEffect::Take) {
+                check_take_operand_is_local(analyzer, value, &arm_span(arms), state);
+            }
             check_expr_semantics(analyzer, local_analysis, value, state, live_after);
             if check_resource_contexts {
                 check_resource_pool_lease_expr(analyzer, value, false);
                 check_resource_producer_expr(analyzer, value, false);
             }
             apply_expr_effects(value, state);
+            apply_match_scrutinee_effect(*scrutinee_effect, value, &arm_span(arms), state);
 
             let base_state = state.clone();
             let mut all_return = !arms.is_empty();
@@ -1635,18 +1641,21 @@ fn check_match_scrutinee_type(analyzer: &mut Analyzer<'_>, expr: &HirExpr) {
     if matches!(type_name, "Int" | "String" | "Bool") {
         return;
     }
-    // Allow matching on user-defined sum types
-    if analyzer.hir.type_kind(type_name) == Some(crate::hir::HirTypeKind::Sum) {
+    // Allow matching on user-defined sum/struct/class types.
+    if matches!(
+        analyzer.hir.type_kind(type_name),
+        Some(HirTypeKind::Sum | HirTypeKind::Struct | HirTypeKind::Class)
+    ) {
         return;
     }
     analyzer.diagnostics.push(
         Diagnostic::error(
             code::CONTROL_FLOW_TYPE_MISMATCH,
-            format!("match scrutinee has type `{type_name}`, expected `Option<T>`, `Result<T, E>`, a declared sum type, or an `Int`/`String`/`Bool` literal match."),
+            format!("match scrutinee has type `{type_name}`, expected `Option<T>`, `Result<T, E>`, a declared sum/struct/class type, or an `Int`/`String`/`Bool` literal match."),
             hir_expr_span(expr).clone(),
             "control-flow type mismatch",
         )
-        .with_cause("RSScript v0.6 `match` is limited to review-visible `Option`, `Result`, declared sum type variants, and simple scalar literal dispatch.")
+        .with_cause("RSScript v0.6 `match` is limited to review-visible `Option`, `Result`, declared sum/struct/class patterns, and simple scalar literal dispatch.")
         .with_fix(
             "match_option_or_result",
             "Match an `Option<T>`, `Result<T, E>`, declared sum value, or scalar literal value; otherwise rewrite this branch as `if`.",
@@ -1663,62 +1672,26 @@ fn check_match_patterns_match_scrutinee(
     let Some(type_name) = hir_expr_type_name(expr) else {
         return;
     };
-    let root = type_root_name(type_name);
-    if matches!(type_name, "Int" | "String" | "Bool") {
-        check_literal_match_patterns(analyzer, type_name, arms);
-        return;
-    }
-
-    // Determine allowed variants: built-in Option/Result or user-defined sum types
-    let builtin_variants: &[&str] = match root {
-        "Option" => &["Some", "None"],
-        "Result" => &["Ok", "Err"],
-        _ => &[],
-    };
-
-    let allowed_variants: Vec<&str> = if !builtin_variants.is_empty() {
-        builtin_variants.to_vec()
-    } else {
-        // Look up the sum type definition by name
-        let mut found = Vec::new();
-        for item in &analyzer.syntax_program.items {
-            if let Item::SumType(sum) = item {
-                if sum.name == root {
-                    found = sum.variants.iter().map(|v| v.name.as_str()).collect();
-                    break;
-                }
-            }
-        }
-        if found.is_empty() {
-            return; // Not a known sum type; cannot validate
-        }
-        found
-    };
-
     for arm in arms {
-        match &arm.pattern {
-            MatchPattern::Variant { name, span, .. } => {
-                if allowed_variants.contains(&name.as_str()) {
-                    continue;
-                }
-                analyzer.diagnostics.push(
-                    Diagnostic::error(
-                        code::CONTROL_FLOW_TYPE_MISMATCH,
-                        format!(
-                            "match pattern `{name}` cannot match scrutinee type `{type_name}`."
-                        ),
-                        span.clone(),
-                        "match variant type mismatch",
-                    )
-                    .with_cause("RSScript match patterns must belong to the scrutinee's type.")
-                    .with_fix(
-                        "match_matching_variant_family",
-                        format!("Use variants of `{root}`: {}.", allowed_variants.join(", ")),
-                        "manual",
-                    ),
-                );
-            }
-            MatchPattern::Literal { span, .. } => {
+        check_match_pattern_matches_type(analyzer, &arm.pattern, type_name);
+    }
+}
+
+fn check_match_pattern_matches_type(
+    analyzer: &mut Analyzer<'_>,
+    pattern: &MatchPattern,
+    type_name: &str,
+) {
+    let root = type_root_name(type_name);
+    match pattern {
+        MatchPattern::Binding { .. } | MatchPattern::Wildcard(_) => {}
+        MatchPattern::Literal { value, span } => {
+            let literal_type = match value {
+                MatchLiteral::Int(_) => "Int",
+                MatchLiteral::String(_) => "String",
+                MatchLiteral::Bool(_) => "Bool",
+            };
+            if literal_type != type_name {
                 analyzer.diagnostics.push(
                     Diagnostic::error(
                         code::CONTROL_FLOW_TYPE_MISMATCH,
@@ -1726,70 +1699,582 @@ fn check_match_patterns_match_scrutinee(
                         span.clone(),
                         "match literal type mismatch",
                     )
-                    .with_cause("Literal patterns are only allowed when matching `Int`, `String`, or `Bool` values.")
-                    .with_fix(
-                        "match_scalar_literal",
-                        "Use a variant pattern for Option/Result/sum matches, or match a scalar value.",
-                        "manual",
+                    .with_cause(
+                        "Literal patterns are only allowed when matching `Int`, `String`, or `Bool` values.",
                     ),
                 );
             }
-            MatchPattern::Wildcard(_) => {}
+        }
+        MatchPattern::Variant {
+            name,
+            binding,
+            span,
+        } if root == "Option" => {
+            if !matches!(name.as_str(), "Some" | "None") {
+                push_match_variant_type_mismatch(
+                    analyzer,
+                    name,
+                    type_name,
+                    &["Some".to_string(), "None".to_string()],
+                    span,
+                );
+                return;
+            }
+            if name == "Some"
+                && let Some(binding) = binding
+                && let Some(inner) =
+                    type_arg_names(type_name).and_then(|args| args.first().copied())
+            {
+                check_match_pattern_matches_type(analyzer, binding, inner);
+            }
+        }
+        MatchPattern::Variant {
+            name,
+            binding,
+            span,
+        } if root == "Result" => {
+            if !matches!(name.as_str(), "Ok" | "Err") {
+                push_match_variant_type_mismatch(
+                    analyzer,
+                    name,
+                    type_name,
+                    &["Ok".to_string(), "Err".to_string()],
+                    span,
+                );
+                return;
+            }
+            if let Some(binding) = binding
+                && let Some(args) = type_arg_names(type_name)
+            {
+                let payload_type = if name == "Ok" {
+                    args.first()
+                } else {
+                    args.get(1)
+                };
+                if let Some(payload_type) = payload_type {
+                    check_match_pattern_matches_type(analyzer, binding, payload_type);
+                }
+            }
+        }
+        MatchPattern::Variant {
+            name,
+            binding,
+            span,
+        } => {
+            let Some((_, fields)) = pattern_sum_variant_fields(analyzer, root, name) else {
+                let allowed = allowed_sum_variant_names(analyzer, root);
+                if allowed.is_empty() {
+                    push_variant_or_struct_cannot_match(analyzer, name, type_name, span);
+                } else {
+                    push_match_variant_type_mismatch(analyzer, name, type_name, &allowed, span);
+                }
+                return;
+            };
+            if let Some(binding) = binding
+                && let Some(field) = fields.first()
+            {
+                check_match_pattern_matches_type(analyzer, binding, &field.type_name);
+            }
+        }
+        MatchPattern::Struct {
+            name, fields, span, ..
+        } => {
+            let declared = if name == root
+                && matches!(
+                    analyzer.hir.type_kind(root),
+                    Some(HirTypeKind::Struct | HirTypeKind::Class)
+                ) {
+                analyzer
+                    .hir
+                    .type_info(root)
+                    .map(|info| info.fields.values().cloned().collect::<Vec<FieldInfo>>())
+            } else {
+                pattern_sum_variant_fields(analyzer, root, name).map(|(_, fields)| fields)
+            };
+            let Some(declared) = declared else {
+                push_variant_or_struct_cannot_match(analyzer, name, type_name, span);
+                return;
+            };
+            for field in fields {
+                if let Some(pattern) = &field.pattern
+                    && let Some(field_info) = declared
+                        .iter()
+                        .find(|candidate| candidate.name == field.name)
+                {
+                    check_match_pattern_matches_type(analyzer, pattern, &field_info.type_name);
+                }
+            }
         }
     }
 }
 
-fn check_literal_match_patterns(
+fn push_variant_or_struct_cannot_match(
     analyzer: &mut Analyzer<'_>,
+    name: &str,
     type_name: &str,
+    span: &Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::CONTROL_FLOW_TYPE_MISMATCH,
+            format!("match pattern `{name}` cannot match scrutinee type `{type_name}`."),
+            span.clone(),
+            "match pattern type mismatch",
+        )
+        .with_cause("RSScript match patterns must belong to the scrutinee's type."),
+    );
+}
+
+fn push_match_variant_type_mismatch(
+    analyzer: &mut Analyzer<'_>,
+    name: &str,
+    type_name: &str,
+    allowed: &[String],
+    span: &Span,
+) {
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::CONTROL_FLOW_TYPE_MISMATCH,
+            format!("match pattern `{name}` cannot match scrutinee type `{type_name}`."),
+            span.clone(),
+            "match variant type mismatch",
+        )
+        .with_cause("RSScript match patterns must belong to the scrutinee's type.")
+        .with_fix(
+            "match_matching_variant_family",
+            format!(
+                "Use variants of `{}`: {}.",
+                type_root_name(type_name),
+                allowed.join(", ")
+            ),
+            "manual",
+        ),
+    );
+}
+
+fn allowed_sum_variant_names(analyzer: &Analyzer<'_>, root: &str) -> Vec<String> {
+    match root {
+        "Option" => return vec!["Some".to_string(), "None".to_string()],
+        "Result" => return vec!["Ok".to_string(), "Err".to_string()],
+        _ => {}
+    }
+    analyzer
+        .syntax_program
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::SumType(sum) if sum.name == root => Some(
+                sum.variants
+                    .iter()
+                    .map(|variant| variant.name.clone())
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+fn pattern_sum_variant_fields(
+    analyzer: &Analyzer<'_>,
+    root: &str,
+    variant_name: &str,
+) -> Option<(String, Vec<FieldInfo>)> {
+    analyzer
+        .hir
+        .sum_type_for_variant(variant_name)
+        .filter(|sum| *sum == root)?;
+    analyzer
+        .hir
+        .sum_variant_fields(variant_name)
+        .map(<[FieldInfo]>::to_vec)
+        .map(|fields| (root.to_string(), fields))
+}
+
+fn check_match_pattern_effects(
+    analyzer: &mut Analyzer<'_>,
+    value: &HirExpr,
+    scrutinee_effect: Option<DataEffect>,
     arms: &[HirMatchArm],
 ) {
+    let scrutinee_type = hir_expr_type_name(value).map(str::to_string);
+    let managed_class_scrutinee = hir_expr_type_name(value)
+        .map(type_root_name)
+        .is_some_and(|root| analyzer.hir.type_kind(root) == Some(HirTypeKind::Class));
+    if scrutinee_effect == Some(DataEffect::Take)
+        && !analyzer.syntax_program.has_feature(FileFeature::Local)
+        && let Some(first_arm) = arms.first()
+    {
+        analyzer.diagnostics.push(
+            Diagnostic::error(
+                code::FEATURE_VIOLATION,
+                "`match take` requires `features: local`.",
+                first_arm.span.clone(),
+                "missing local feature",
+            )
+            .with_cause("Taking fields out of a pattern is a local ownership capability.")
+            .with_fix(
+                "add_local_feature",
+                "Add `features: local` or match the value with `read`.",
+                "manual",
+            ),
+        );
+    }
     for arm in arms {
-        match &arm.pattern {
-            MatchPattern::Literal { value, span } => {
-                let literal_type = match value {
-                    MatchLiteral::Int(_) => "Int",
-                    MatchLiteral::String(_) => "String",
-                    MatchLiteral::Bool(_) => "Bool",
-                };
-                if literal_type == type_name {
-                    continue;
-                }
-                analyzer.diagnostics.push(
-                    Diagnostic::error(
-                        code::CONTROL_FLOW_TYPE_MISMATCH,
-                        format!(
-                            "match literal has type `{literal_type}`, expected `{type_name}`."
-                        ),
-                        span.clone(),
-                        "match literal type mismatch",
-                    )
-                    .with_cause("Literal match patterns must have the same scalar type as the matched value.")
-                    .with_fix(
-                        "match_same_literal_type",
-                        format!("Use a `{type_name}` literal or `_` for the fallback arm."),
-                        "manual",
-                    ),
-                );
-            }
-            MatchPattern::Variant { name, span, .. } => {
-                analyzer.diagnostics.push(
-                    Diagnostic::error(
-                        code::CONTROL_FLOW_TYPE_MISMATCH,
-                        format!("variant match pattern `{name}` cannot match scalar type `{type_name}`."),
-                        span.clone(),
-                        "match variant type mismatch",
-                    )
-                    .with_cause("Scalar literal dispatch uses literal patterns, not Option/Result/sum variants.")
-                    .with_fix(
-                        "match_scalar_literal",
-                        "Use a literal pattern or `_` for scalar matches.",
-                        "manual",
-                    ),
-                );
-            }
-            MatchPattern::Wildcard(_) => {}
+        if matches!(arm.pattern, MatchPattern::Struct { .. }) && scrutinee_effect.is_none() {
+            analyzer.diagnostics.push(
+                Diagnostic::error(
+                    code::MISSING_DATA_EFFECT,
+                    "structured match patterns require an explicit scrutinee effect.",
+                    arm.span.clone(),
+                    "missing match scrutinee effect",
+                )
+                .with_cause("A structured pattern projects fields from the scrutinee, so the source must spell `match read`, `match mut`, or `match take`.")
+                .with_fix(
+                    "spell_match_effect",
+                    "Add `read`, `mut`, or `take` after `match`.",
+                    "manual",
+                ),
+            );
         }
+        check_pattern_field_effects(
+            analyzer,
+            scrutinee_type.as_deref(),
+            scrutinee_effect,
+            managed_class_scrutinee,
+            &arm.pattern,
+        );
+        if let Some(guard) = &arm.guard
+            && let Some((effect, span)) = first_mutating_effect_expr(guard)
+        {
+            analyzer.diagnostics.push(
+                Diagnostic::error(
+                    code::READ_VIEW_MUTATION,
+                    format!("match guard cannot use `{}`.", effect.as_str()),
+                    span.clone(),
+                    "guard mutation is not allowed",
+                )
+                .with_cause("A guard runs before the arm is selected and may only read pattern bindings.")
+                .with_fix(
+                    "make_guard_read_only",
+                    "Move mutation into the selected arm body or rewrite the guard as a read-only predicate.",
+                    "manual",
+                ),
+            );
+        }
+    }
+}
+
+fn check_pattern_field_effects(
+    analyzer: &mut Analyzer<'_>,
+    scrutinee_type: Option<&str>,
+    scrutinee_effect: Option<DataEffect>,
+    managed_class_scrutinee: bool,
+    pattern: &MatchPattern,
+) {
+    let MatchPattern::Struct {
+        name,
+        fields,
+        has_rest,
+        span,
+        ..
+    } = pattern
+    else {
+        return;
+    };
+    check_struct_pattern_fields(analyzer, scrutinee_type, name, fields, *has_rest, span);
+    let mut seen_fields: HashMap<&str, (DataEffect, Span)> = HashMap::new();
+    for field in fields {
+        let effective_effect = field.effect.unwrap_or(match scrutinee_effect {
+            Some(DataEffect::Take) => DataEffect::Take,
+            _ => DataEffect::Read,
+        });
+        if let Some((previous_effect, previous_span)) =
+            seen_fields.insert(field.name.as_str(), (effective_effect, field.span.clone()))
+        {
+            let conflicts = matches!(previous_effect, DataEffect::Mut | DataEffect::Take)
+                || matches!(effective_effect, DataEffect::Mut | DataEffect::Take);
+            if conflicts {
+                analyzer.diagnostics.push(
+                    Diagnostic::error(
+                        code::FIELD_PARTIAL_ACCESS_CONFLICT,
+                        format!(
+                            "pattern field `{}` is bound more than once with mutable or taking access.",
+                            field.name
+                        ),
+                        field.span.clone(),
+                        "pattern field conflict",
+                    )
+                    .with_cause(format!(
+                        "The previous binding for `{}` was at {}:{}.",
+                        field.name, previous_span.line, previous_span.column
+                    ))
+                    .with_fix(
+                        "remove_overlapping_pattern_binding",
+                        "Bind each mutable or taking field place at most once in a pattern.",
+                        "manual",
+                    ),
+                );
+            }
+        }
+        if field.ignored {
+            continue;
+        };
+        let effect = effective_effect;
+        if managed_class_scrutinee && matches!(effect, DataEffect::Mut | DataEffect::Take) {
+            analyzer.diagnostics.push(
+                Diagnostic::error(
+                    code::READ_VIEW_MUTATION,
+                    format!(
+                        "managed pattern field `{}` cannot request `{}`.",
+                        field.name,
+                        effect.as_str()
+                    ),
+                    field.span.clone(),
+                    "managed pattern field is read-only",
+                )
+                .with_cause("Managed class values are shared runtime objects; structured patterns expose only read views of their fields.")
+                .with_fix(
+                    "use_read_pattern",
+                    "Use a read field binding and perform managed mutation through an explicit method.",
+                    "manual",
+                ),
+            );
+            continue;
+        }
+        let allowed = match scrutinee_effect {
+            Some(DataEffect::Read) => effect == DataEffect::Read,
+            Some(DataEffect::Mut) => matches!(effect, DataEffect::Read | DataEffect::Mut),
+            Some(DataEffect::Take) => true,
+            None => effect == DataEffect::Read,
+        };
+        if !allowed {
+            analyzer.diagnostics.push(
+                Diagnostic::error(
+                    code::READ_VIEW_MUTATION,
+                    format!(
+                        "field pattern `{}` requests `{}` from a weaker match scrutinee.",
+                        field.name,
+                        effect.as_str()
+                    ),
+                    field.span.clone(),
+                    "pattern effect is not allowed",
+                )
+                .with_cause("Pattern binding effects are monotonic: a child field cannot request more authority than the scrutinee effect provides.")
+                .with_fix(
+                    "weaken_pattern_effect",
+                    "Use `read` for this field or strengthen the match scrutinee effect when the value is local and mutable.",
+                    "manual",
+                ),
+            );
+        }
+    }
+}
+
+fn check_struct_pattern_fields(
+    analyzer: &mut Analyzer<'_>,
+    scrutinee_type: Option<&str>,
+    pattern_name: &str,
+    fields: &[MatchFieldPattern],
+    has_rest: bool,
+    pattern_span: &Span,
+) {
+    let Some(declared_fields) = declared_pattern_fields(analyzer, scrutinee_type, pattern_name)
+    else {
+        return;
+    };
+    let declared_names: HashSet<&str> = declared_fields.iter().map(String::as_str).collect();
+    let mut seen_fields: HashMap<&str, Span> = HashMap::new();
+    for field in fields {
+        if let Some(previous_span) = seen_fields.insert(field.name.as_str(), field.span.clone()) {
+            analyzer.diagnostics.push(
+                Diagnostic::error(
+                    code::FIELD_PARTIAL_ACCESS_CONFLICT,
+                    format!("pattern field `{}` is listed more than once.", field.name),
+                    field.span.clone(),
+                    "duplicate pattern field",
+                )
+                .with_cause(format!(
+                    "The previous projection of `{}` was at {}:{}.",
+                    field.name, previous_span.line, previous_span.column
+                ))
+                .with_fix(
+                    "remove_duplicate_pattern_field",
+                    "List each field at most once in a structured pattern.",
+                    "manual",
+                ),
+            );
+        }
+        if !declared_names.contains(field.name.as_str()) {
+            analyzer.diagnostics.push(
+                Diagnostic::error(
+                    code::UNKNOWN_FIELD,
+                    format!("unknown field `{}` on type `{pattern_name}`.", field.name),
+                    field.span.clone(),
+                    "unknown field",
+                )
+                .with_cause("Structured match patterns may only project declared fields.")
+                .with_fix(
+                    "use_declared_pattern_field",
+                    format!("Use a field declared on `{pattern_name}` or update the pattern."),
+                    "manual",
+                ),
+            );
+        }
+    }
+    if !has_rest && fields.len() < declared_fields.len() {
+        analyzer.diagnostics.push(
+            Diagnostic::error(
+                code::CONTROL_FLOW_TYPE_MISMATCH,
+                format!("pattern `{pattern_name} {{ ... }}` omits fields without `..`."),
+                fields
+                    .last()
+                    .map(|field| field.span.clone())
+                    .unwrap_or_else(|| pattern_span.clone()),
+                "pattern omits fields",
+            )
+            .with_cause("Omitted fields must be visible in review; write `..` when intentionally ignoring the rest.")
+            .with_fix(
+                "add_pattern_rest",
+                format!("Write `{pattern_name} {{ ..., .. }}` when omitting fields."),
+                "manual",
+            ),
+        );
+    }
+}
+
+fn declared_pattern_fields(
+    analyzer: &Analyzer<'_>,
+    scrutinee_type: Option<&str>,
+    pattern_name: &str,
+) -> Option<Vec<String>> {
+    let scrutinee_root = scrutinee_type.map(type_root_name)?;
+    if analyzer
+        .hir
+        .sum_type_for_variant(pattern_name)
+        .is_some_and(|sum| sum == scrutinee_root)
+    {
+        return analyzer
+            .syntax_program
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::SumType(sum) if sum.name == scrutinee_root => sum
+                    .variants
+                    .iter()
+                    .find(|variant| variant.name == pattern_name)
+                    .map(|variant| {
+                        variant
+                            .fields
+                            .iter()
+                            .map(|field| field.name.clone())
+                            .collect()
+                    }),
+                _ => None,
+            });
+    }
+    if pattern_name == scrutinee_root {
+        return analyzer.hir.type_info(scrutinee_root).map(|type_info| {
+            type_info
+                .fields
+                .values()
+                .map(|field| field.name.clone())
+                .collect()
+        });
+    }
+    None
+}
+
+fn first_mutating_effect_expr(expr: &HirExpr) -> Option<(DataEffect, &crate::diagnostic::Span)> {
+    match expr {
+        HirExpr::Effect { effect, span, .. } if matches!(effect, ParamEffect::Mut) => {
+            Some((DataEffect::Mut, span))
+        }
+        HirExpr::Effect { effect, span, .. } if matches!(effect, ParamEffect::Take) => {
+            Some((DataEffect::Take, span))
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. } => first_mutating_effect_expr(value),
+        HirExpr::Binary { left, right, .. } => {
+            first_mutating_effect_expr(left).or_else(|| first_mutating_effect_expr(right))
+        }
+        HirExpr::Field { base, .. } => first_mutating_effect_expr(base),
+        HirExpr::Index { base, index, .. } => {
+            first_mutating_effect_expr(base).or_else(|| first_mutating_effect_expr(index))
+        }
+        HirExpr::Call { args, .. } => args
+            .iter()
+            .find_map(|arg| first_mutating_effect_expr(&arg.value)),
+        HirExpr::Closure { body, .. } => {
+            body.statements.iter().find_map(first_mutating_effect_stmt)
+        }
+        HirExpr::Match { value, arms, .. } => first_mutating_effect_expr(value).or_else(|| {
+            arms.iter().find_map(|arm| {
+                arm.guard
+                    .as_ref()
+                    .and_then(first_mutating_effect_expr)
+                    .or_else(|| first_mutating_effect_block(&arm.body))
+            })
+        }),
+        HirExpr::MapLiteral { entries, .. } => entries.iter().find_map(|entry| {
+            first_mutating_effect_expr(&entry.key)
+                .or_else(|| first_mutating_effect_expr(&entry.value))
+        }),
+        HirExpr::ObjectLiteral { fields, .. } => fields
+            .iter()
+            .find_map(|field| first_mutating_effect_expr(&field.value)),
+        HirExpr::ArrayLiteral { items, .. } => items.iter().find_map(first_mutating_effect_expr),
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Unknown(_) => None,
+    }
+}
+
+fn first_mutating_effect_block(block: &HirBlock) -> Option<(DataEffect, &crate::diagnostic::Span)> {
+    block.statements.iter().find_map(first_mutating_effect_stmt)
+}
+
+fn first_mutating_effect_stmt(stmt: &HirStmt) -> Option<(DataEffect, &crate::diagnostic::Span)> {
+    match stmt {
+        HirStmt::Let { value, .. } => value.as_ref().and_then(first_mutating_effect_expr),
+        HirStmt::Return { value, .. } => value.as_ref().and_then(first_mutating_effect_expr),
+        HirStmt::With { resource, body, .. } => {
+            first_mutating_effect_expr(resource).or_else(|| first_mutating_effect_block(body))
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => first_mutating_effect_expr(condition)
+            .or_else(|| first_mutating_effect_block(then_body))
+            .or_else(|| else_body.as_ref().and_then(first_mutating_effect_block)),
+        HirStmt::Loop {
+            condition, body, ..
+        } => condition
+            .as_ref()
+            .and_then(first_mutating_effect_expr)
+            .or_else(|| first_mutating_effect_block(body)),
+        HirStmt::For { iterable, body, .. } => {
+            first_mutating_effect_expr(iterable).or_else(|| first_mutating_effect_block(body))
+        }
+        HirStmt::Match { value, arms, .. } => first_mutating_effect_expr(value).or_else(|| {
+            arms.iter().find_map(|arm| {
+                arm.guard
+                    .as_ref()
+                    .and_then(first_mutating_effect_expr)
+                    .or_else(|| first_mutating_effect_block(&arm.body))
+            })
+        }),
+        HirStmt::Select { arms, .. } => arms.iter().find_map(|arm| {
+            first_mutating_effect_expr(&arm.operation)
+                .or_else(|| first_mutating_effect_block(&arm.body))
+        }),
+        HirStmt::Expr(value) => first_mutating_effect_expr(value),
+        HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => None,
     }
 }
 
@@ -1993,12 +2478,17 @@ fn check_expr_semantics_with_context(
         }
         HirExpr::Match {
             value,
+            scrutinee_effect,
             arms,
             type_name,
             ..
         } => {
             check_match_scrutinee_type(analyzer, value);
             check_match_patterns_match_scrutinee(analyzer, value, arms);
+            check_match_pattern_effects(analyzer, value, *scrutinee_effect, arms);
+            if *scrutinee_effect == Some(DataEffect::Take) {
+                check_take_operand_is_local(analyzer, value, &arm_span(arms), state);
+            }
             check_match_expression_arm_types(analyzer, arms, type_name.as_deref());
             check_expr_semantics_with_context(
                 analyzer,
@@ -4089,7 +4579,15 @@ fn apply_expr_effects(expr: &HirExpr, state: &mut BodyState) {
             apply_expr_effects(value, state)
         }
         HirExpr::Try { value, .. } => apply_expr_effects(value, state),
-        HirExpr::Match { value, .. } => apply_expr_effects(value, state),
+        HirExpr::Match {
+            value,
+            scrutinee_effect,
+            span,
+            ..
+        } => {
+            apply_expr_effects(value, state);
+            apply_match_scrutinee_effect(*scrutinee_effect, value, span, state);
+        }
         HirExpr::Binary { left, right, .. } => {
             apply_expr_effects(left, state);
             apply_expr_effects(right, state);
@@ -4113,6 +4611,32 @@ fn apply_expr_effects(expr: &HirExpr, state: &mut BodyState) {
         | HirExpr::String { .. }
         | HirExpr::Unknown(_) => {}
     }
+}
+
+fn apply_match_scrutinee_effect(
+    effect: Option<DataEffect>,
+    value: &HirExpr,
+    span: &Span,
+    state: &mut BodyState,
+) {
+    if effect != Some(DataEffect::Take) {
+        return;
+    }
+    if let Some(path) = place_path(value) {
+        state.mark_moved(&place_path_display(&path), span.clone());
+    }
+}
+
+fn arm_span(arms: &[HirMatchArm]) -> Span {
+    arms.first().map_or_else(
+        || Span {
+            file: String::new(),
+            line: 1,
+            column: 1,
+            length: 1,
+        },
+        |arm| arm.span.clone(),
+    )
 }
 
 fn check_moved_uses(analyzer: &mut Analyzer<'_>, local_analysis: &LocalAnalysis) {
@@ -4969,12 +5493,8 @@ fn collect_resource_pool_factory_resource_captures_stmt(
             collect_resource_pool_factory_resource_captures_expr(value, state, bound, captures);
             for arm in arms {
                 let mut scoped = bound.clone();
-                if let MatchPattern::Variant {
-                    binding: Some(binding),
-                    ..
-                } = &arm.pattern
-                {
-                    scoped.insert(binding.clone());
+                for binding in arm.pattern.binding_names() {
+                    scoped.insert(binding.to_string());
                 }
                 collect_resource_pool_factory_resource_captures_block(
                     &arm.body,
@@ -5336,12 +5856,8 @@ fn collect_lazy_factory_capture_idents_stmt(
             collect_lazy_factory_capture_idents_expr(value, bound, captures);
             for arm in arms {
                 let mut scoped = bound.clone();
-                if let MatchPattern::Variant {
-                    binding: Some(binding),
-                    ..
-                } = &arm.pattern
-                {
-                    scoped.insert(binding.clone());
+                for binding in arm.pattern.binding_names() {
+                    scoped.insert(binding.to_string());
                 }
                 collect_lazy_factory_capture_idents_block(&arm.body, &mut scoped, captures);
             }
@@ -5406,12 +5922,8 @@ fn collect_lazy_factory_capture_idents_expr(
             collect_lazy_factory_capture_idents_expr(value, bound, captures);
             for arm in arms {
                 let mut scoped = bound.clone();
-                if let MatchPattern::Variant {
-                    binding: Some(binding),
-                    ..
-                } = &arm.pattern
-                {
-                    scoped.insert(binding.clone());
+                for binding in arm.pattern.binding_names() {
+                    scoped.insert(binding.to_string());
                 }
                 collect_lazy_factory_capture_idents_block(&arm.body, &mut scoped, captures);
             }
@@ -6121,6 +6633,34 @@ fn type_root_name(type_name: &str) -> &str {
     type_name
         .split_once('<')
         .map_or(type_name, |(root, _)| root)
+}
+
+fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
+    let start = type_name.find('<')?;
+    let end = type_name.rfind('>')?;
+    if end <= start {
+        return None;
+    }
+    let inner = &type_name[start + 1..end];
+    let mut args = Vec::new();
+    let mut depth = 0usize;
+    let mut part_start = 0usize;
+    for (index, ch) in inner.char_indices() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                args.push(inner[part_start..index].trim());
+                part_start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    let tail = inner[part_start..].trim();
+    if !tail.is_empty() {
+        args.push(tail);
+    }
+    Some(args)
 }
 
 fn is_resource_pool_type(type_name: &str) -> bool {

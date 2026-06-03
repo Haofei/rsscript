@@ -1677,19 +1677,24 @@ impl<'a> RustLowerer<'a> {
                 self.lower_select_stmt(stmt, out, indent);
             }
             Stmt::Match(stmt) => {
-                // Determine if this is a sum type match (qualify variant patterns)
-                let sum_type_name = self.find_sum_type_for_match(&stmt.arms);
                 let scrutinee_type = self.infer_expr_type(&stmt.value);
                 let scrutinee =
                     self.lower_match_scrutinee_expr(&stmt.value, scrutinee_type.as_ref());
                 out.push_str(&format!("{pad}match {scrutinee} {{\n"));
                 for arm in &stmt.arms {
-                    let pattern = if let Some(ref sum_name) = sum_type_name {
-                        lower_match_pattern_qualified(&arm.pattern, sum_name)
-                    } else {
-                        lower_match_pattern(&arm.pattern)
-                    };
-                    out.push_str(&format!("{}{} => {{\n", "    ".repeat(indent + 1), pattern));
+                    let pattern =
+                        self.lower_match_pattern_typed(&arm.pattern, scrutinee_type.as_ref());
+                    let guard = arm
+                        .guard
+                        .as_ref()
+                        .map(|guard| format!(" if {}", self.lower_expr(guard)))
+                        .unwrap_or_default();
+                    out.push_str(&format!(
+                        "{}{}{} => {{\n",
+                        "    ".repeat(indent + 1),
+                        pattern,
+                        guard
+                    ));
                     let scoped_binding =
                         match_binding_type_ref(&arm.pattern, scrutinee_type.as_ref());
                     let previous_value_type = scoped_binding
@@ -1731,21 +1736,10 @@ impl<'a> RustLowerer<'a> {
                 self.lower_block(&stmt.else_body, out, indent + 1);
                 out.push_str(&format!("{pad}}};\n"));
                 if !stmt.binding_name.is_empty() {
-                    let binding_type = match &stmt.pattern {
-                        MatchPattern::Variant {
-                            name,
-                            binding: Some(_),
-                            ..
-                        } => self
-                            .infer_expr_type(&stmt.value)
-                            .and_then(|ty| match name.as_str() {
-                                "Some" if ty.name == "Option" => ty.args.first().cloned(),
-                                "Ok" if ty.name == "Result" => ty.args.first().cloned(),
-                                "Err" if ty.name == "Result" => ty.args.get(1).cloned(),
-                                _ => None,
-                            }),
-                        _ => None,
-                    };
+                    let binding_type = self
+                        .infer_expr_type(&stmt.value)
+                        .and_then(|ty| match_binding_type_ref(&stmt.pattern, Some(&ty)))
+                        .map(|(_, ty)| ty);
                     if let Some(binding_type) = binding_type {
                         if self.is_class_type(&binding_type) {
                             self.managed_bindings.insert(stmt.binding_name.clone());
@@ -2526,18 +2520,19 @@ impl<'a> RustLowerer<'a> {
                 out
             }
             Expr::Match { value, arms, .. } => {
-                let sum_type_name = self.find_sum_type_for_match(arms);
                 let scrutinee_type = self.infer_expr_type(value);
                 let scrutinee = self.lower_match_scrutinee_expr(value, scrutinee_type.as_ref());
                 let mut out = format!("match {scrutinee} {{\n");
                 for arm in arms {
-                    let pattern = if let Some(ref sum_name) = sum_type_name {
-                        lower_match_pattern_qualified(&arm.pattern, sum_name)
-                    } else {
-                        lower_match_pattern(&arm.pattern)
-                    };
+                    let pattern =
+                        self.lower_match_pattern_typed(&arm.pattern, scrutinee_type.as_ref());
+                    let guard = arm
+                        .guard
+                        .as_ref()
+                        .map(|guard| format!(" if {}", self.lower_expr(guard)))
+                        .unwrap_or_default();
                     out.push_str(&format!(
-                        "    {pattern} => {}",
+                        "    {pattern}{guard} => {}",
                         self.lower_expr_block(&arm.body, 1)
                     ));
                     out.push_str(",\n");
@@ -3961,14 +3956,34 @@ impl<'a> RustLowerer<'a> {
                     self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
                 )
             }
+            "Deque" if ty.args.len() == 1 => format!(
+                "std::collections::VecDeque<{}>",
+                self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
+            ),
             "Map" if ty.args.len() == 2 => format!(
                 "std::collections::HashMap<{}, {}>",
+                self.lower_type_ref(&ty.args[0], ManagedPosition::Nested),
+                self.lower_type_ref(&ty.args[1], ManagedPosition::Nested)
+            ),
+            "SortedMap" if ty.args.len() == 2 => format!(
+                "std::collections::BTreeMap<{}, {}>",
+                self.lower_type_ref(&ty.args[0], ManagedPosition::Nested),
+                self.lower_type_ref(&ty.args[1], ManagedPosition::Nested)
+            ),
+            "PersistentMap" if ty.args.len() == 2 => format!(
+                "rsscript_runtime::RssPersistentMap<{}, {}>",
                 self.lower_type_ref(&ty.args[0], ManagedPosition::Nested),
                 self.lower_type_ref(&ty.args[1], ManagedPosition::Nested)
             ),
             "Set" if ty.args.len() == 1 => {
                 format!(
                     "std::collections::HashSet<{}>",
+                    self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
+                )
+            }
+            "SortedSet" if ty.args.len() == 1 => {
+                format!(
+                    "std::collections::BTreeSet<{}>",
                     self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
                 )
             }
@@ -4108,27 +4123,6 @@ impl<'a> RustLowerer<'a> {
         format!("rsscript_runtime::weak(&{})", self.lower_expr(expr))
     }
 
-    fn find_sum_type_for_match(&self, arms: &[crate::syntax::ast::MatchArm]) -> Option<String> {
-        // Check if any arm variant name matches a sum type's variant
-        for arm in arms {
-            if let MatchPattern::Variant { name, .. } = &arm.pattern {
-                // Skip built-in Option/Result variants
-                if matches!(name.as_str(), "Some" | "None" | "Ok" | "Err") {
-                    return None;
-                }
-                // Find which sum type owns this variant
-                for item in &self.program.items {
-                    if let Item::SumType(sum) = item {
-                        if sum.variants.iter().any(|v| v.name == *name) {
-                            return Some(sum.name.clone());
-                        }
-                    }
-                }
-            }
-        }
-        None
-    }
-
     fn lower_match_scrutinee_expr(
         &mut self,
         value: &Expr,
@@ -4140,6 +4134,166 @@ impl<'a> RustLowerer<'a> {
         } else {
             lowered
         }
+    }
+
+    fn lower_match_pattern_typed(
+        &self,
+        pattern: &MatchPattern,
+        value_type: Option<&TypeRef>,
+    ) -> String {
+        match pattern {
+            MatchPattern::Binding { name, .. } => rust_ident(name),
+            MatchPattern::Wildcard(_) => "_".to_string(),
+            MatchPattern::Literal { value, .. } => lower_match_literal(value),
+            MatchPattern::Variant { name, binding, .. }
+                if name == "Some" && value_type.is_some_and(|ty| ty.name == "Option") =>
+            {
+                let inner = value_type.and_then(|ty| ty.args.first());
+                let payload = binding
+                    .as_ref()
+                    .map(|binding| self.lower_match_pattern_typed(binding, inner))
+                    .unwrap_or_else(|| "_".to_string());
+                format!("Some({payload})")
+            }
+            MatchPattern::Variant { name, binding, .. }
+                if matches!(name.as_str(), "Ok" | "Err")
+                    && value_type.is_some_and(|ty| ty.name == "Result") =>
+            {
+                let inner = value_type.and_then(|ty| {
+                    if name == "Ok" {
+                        ty.args.first()
+                    } else {
+                        ty.args.get(1)
+                    }
+                });
+                let payload = binding
+                    .as_ref()
+                    .map(|binding| self.lower_match_pattern_typed(binding, inner))
+                    .unwrap_or_else(|| "_".to_string());
+                format!("{}({payload})", rust_ident(name))
+            }
+            MatchPattern::Variant { name, binding, .. } => {
+                if let Some((sum_name, fields)) = self.sum_variant_fields_for_type(value_type, name)
+                {
+                    if fields.is_empty() {
+                        return format!("{}::{}", rust_ident(&sum_name), rust_ident(name));
+                    }
+                    let mut parts = Vec::new();
+                    let single_field = fields.len() == 1;
+                    for field in &fields {
+                        let field_pattern = if single_field {
+                            binding
+                                .as_ref()
+                                .map(|binding| {
+                                    self.lower_match_pattern_typed(binding, Some(&field.ty))
+                                })
+                                .unwrap_or_else(|| "_".to_string())
+                        } else {
+                            "_".to_string()
+                        };
+                        parts.push(format!("{}: {}", rust_ident(&field.name), field_pattern));
+                    }
+                    return format!(
+                        "{}::{} {{ {} }}",
+                        rust_ident(&sum_name),
+                        rust_ident(name),
+                        parts.join(", ")
+                    );
+                }
+                lower_match_pattern(pattern)
+            }
+            MatchPattern::Struct {
+                name,
+                fields,
+                has_rest,
+                ..
+            } => self.lower_struct_match_pattern_typed(name, fields, *has_rest, value_type),
+        }
+    }
+
+    fn lower_struct_match_pattern_typed(
+        &self,
+        name: &str,
+        fields: &[crate::syntax::ast::MatchFieldPattern],
+        has_rest: bool,
+        value_type: Option<&TypeRef>,
+    ) -> String {
+        let namespace = value_type.and_then(|ty| {
+            self.sum_variant_fields_for_type(Some(ty), name)
+                .map(|(sum_name, _)| sum_name)
+        });
+        let path = namespace
+            .as_ref()
+            .map(|sum_name| format!("{}::{}", rust_ident(sum_name), rust_ident(name)))
+            .unwrap_or_else(|| rust_ident(name));
+        let declared_fields = self.pattern_declared_field_types(value_type, name);
+        let mut parts = Vec::new();
+        for field in fields {
+            if field.ignored {
+                parts.push(format!("{}: _", rust_ident(&field.name)));
+            } else if let Some(pattern) = &field.pattern {
+                let field_type = declared_fields
+                    .as_ref()
+                    .and_then(|fields| fields.iter().find(|candidate| candidate.name == field.name))
+                    .map(|field| &field.ty);
+                parts.push(format!(
+                    "{}: {}",
+                    rust_ident(&field.name),
+                    self.lower_match_pattern_typed(pattern, field_type)
+                ));
+            } else if let Some(binding) = &field.binding {
+                let binding_text = if field.effect == Some(crate::syntax::ast::DataEffect::Mut) {
+                    format!("mut {}", rust_ident(binding))
+                } else {
+                    rust_ident(binding)
+                };
+                if binding == &field.name
+                    && field.effect != Some(crate::syntax::ast::DataEffect::Mut)
+                {
+                    parts.push(rust_ident(&field.name));
+                } else {
+                    parts.push(format!("{}: {binding_text}", rust_ident(&field.name)));
+                }
+            }
+        }
+        if has_rest {
+            parts.push("..".to_string());
+        }
+        format!("{path} {{ {} }}", parts.join(", "))
+    }
+
+    fn pattern_declared_field_types(
+        &self,
+        value_type: Option<&TypeRef>,
+        pattern_name: &str,
+    ) -> Option<Vec<FieldDecl>> {
+        let root = value_type?.name.as_str();
+        if let Some((_, fields)) = self.sum_variant_fields_for_type(value_type, pattern_name) {
+            return Some(fields);
+        }
+        if pattern_name == root {
+            return self.program.items.iter().find_map(|item| match item {
+                Item::Type(type_decl) if type_decl.name == root => Some(type_decl.fields.clone()),
+                _ => None,
+            });
+        }
+        None
+    }
+
+    fn sum_variant_fields_for_type(
+        &self,
+        value_type: Option<&TypeRef>,
+        variant_name: &str,
+    ) -> Option<(String, Vec<FieldDecl>)> {
+        let root = &value_type?.name;
+        self.program.items.iter().find_map(|item| match item {
+            Item::SumType(sum) if &sum.name == root => sum
+                .variants
+                .iter()
+                .find(|variant| variant.name == variant_name)
+                .map(|variant| (sum.name.clone(), variant.fields.clone())),
+            _ => None,
+        })
     }
 
     fn find_sum_type_for_variant(&self, variant_name: &str) -> Option<String> {
@@ -4164,7 +4318,9 @@ impl<'a> RustLowerer<'a> {
 fn match_pattern_span(pattern: &MatchPattern) -> Span {
     match pattern {
         MatchPattern::Variant { span, .. }
+        | MatchPattern::Struct { span, .. }
         | MatchPattern::Literal { span, .. }
+        | MatchPattern::Binding { span, .. }
         | MatchPattern::Wildcard(span) => span.clone(),
     }
 }
@@ -4268,6 +4424,9 @@ fn match_binding_type_ref(
     pattern: &MatchPattern,
     value_type: Option<&TypeRef>,
 ) -> Option<(String, TypeRef)> {
+    if let MatchPattern::Binding { name, .. } = pattern {
+        return value_type.cloned().map(|ty| (name.clone(), ty));
+    }
     let MatchPattern::Variant {
         name,
         binding: Some(binding),
@@ -4282,17 +4441,17 @@ fn match_binding_type_ref(
             .args
             .first()
             .cloned()
-            .map(|ty| (binding.clone(), ty)),
+            .and_then(|ty| match_binding_type_ref(binding, Some(&ty))),
         "Ok" if value_type.name == "Result" => value_type
             .args
             .first()
             .cloned()
-            .map(|ty| (binding.clone(), ty)),
+            .and_then(|ty| match_binding_type_ref(binding, Some(&ty))),
         "Err" if value_type.name == "Result" => value_type
             .args
             .get(1)
             .cloned()
-            .map(|ty| (binding.clone(), ty)),
+            .and_then(|ty| match_binding_type_ref(binding, Some(&ty))),
         _ => None,
     }
 }

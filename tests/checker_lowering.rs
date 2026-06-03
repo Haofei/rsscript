@@ -489,6 +489,55 @@ fn main() -> Result<Unit, JsonError> {
 }
 
 #[test]
+fn rust_lowering_maps_deque_core_calls_to_runtime_hooks() {
+    let source = r#"
+fn main() -> Unit {
+    let queue = Deque<Int>.new()
+    Deque.push_back<Int>(deque: mut queue, value: read 2)
+    Deque.push_front<Int>(deque: mut queue, value: read 1)
+    Deque.push_back<Int>(deque: mut queue, value: read 3)
+    let len = Deque.len<Int>(deque: read queue)
+    let empty = Deque.is_empty<Int>(deque: read queue)
+    let values = Deque.to_list<Int>(deque: read queue)
+    let front = Deque.pop_front<Int>(deque: mut queue)
+    let back = Deque.pop_back<Int>(deque: mut queue)
+    Assert.equal_int(left: len, right: 3)
+    Assert.equal_bool(left: empty, right: false)
+    Assert.equal_int(left: List.get<Int>(list: read values, index: 0), right: 1)
+    match front {
+        Some(value) => {
+            Assert.equal_int(left: value, right: 1)
+        }
+        None => {
+            Assert.equal_bool(left: false, right: true)
+        }
+    }
+    match back {
+        Some(value) => {
+            Assert.equal_int(left: value, right: 3)
+        }
+        None => {
+            Assert.equal_bool(left: false, right: true)
+        }
+    }
+    Deque.clear<Int>(deque: mut queue)
+    Assert.equal_bool(left: Deque.is_empty<Int>(deque: read queue), right: true)
+}
+"#;
+    let rust = lower_source_to_rust("deque.rss", source).expect("source should lower");
+
+    assert!(rust.contains("let mut queue = rsscript_runtime::deque_new();"));
+    assert!(rust.contains("rsscript_runtime::deque_push_back(&mut queue, &2);"));
+    assert!(rust.contains("rsscript_runtime::deque_push_front(&mut queue, &1);"));
+    assert!(rust.contains("let len = rsscript_runtime::deque_len(&queue);"));
+    assert!(rust.contains("let empty = rsscript_runtime::deque_is_empty(&queue);"));
+    assert!(rust.contains("let values = rsscript_runtime::deque_to_list(&queue);"));
+    assert!(rust.contains("let front = rsscript_runtime::deque_pop_front(&mut queue);"));
+    assert!(rust.contains("let back = rsscript_runtime::deque_pop_back(&mut queue);"));
+    assert!(rust.contains("rsscript_runtime::deque_clear(&mut queue);"));
+}
+
+#[test]
 fn rust_lowering_maps_pipeline_core_calls_to_runtime_hooks() {
     let source = r#"
 features: local
@@ -511,7 +560,7 @@ fn main() -> Result<Unit, String> {
     }).map(|item| {
         return item + 10
     }).collect()
-    let pipeline = Pipeline.from_list<Int>(list: read xs)
+    let pipeline = xs.pipeline()
     let parsed: FalliblePipeline<CountBox, String> = Pipeline.try_map<Int, CountBox, String>(
         pipeline: read pipeline,
         mapper: |item| {
@@ -562,7 +611,7 @@ fn main() -> Result<Unit, String> {
         return item + 10
     }).collect()
     let zs: List<Int> = Pipeline.try_map<Int, Int, String>(
-        pipeline: read Pipeline.from_list<Int>(list: read xs),
+        pipeline: read xs.pipeline(),
         mapper: |item| {
             return parse_positive(value: item)
         },
@@ -604,6 +653,27 @@ fn main() -> Result<Unit, String> {
         String::from_utf8_lossy(&output.stderr)
     );
     fs::remove_dir_all(&package_dir).expect("temp package should be removed");
+}
+
+#[test]
+fn rust_lowering_supports_while_is_pattern() {
+    let source = r#"
+fn main(value: read Option<Int>) -> Int {
+    let mut total = 0
+    while read value is Some(item) {
+        total = total + item
+        break
+    }
+    return total
+}
+"#;
+    let rust = lower_source_to_rust("while-is.rss", source).expect("source should lower");
+
+    assert!(rust.contains("loop {"));
+    assert!(rust.contains("match "));
+    assert!(rust.contains("Some(item)"));
+    assert!(rust.contains("_ => {"));
+    assert!(rust.contains("break;"));
 }
 
 #[test]
@@ -689,6 +759,134 @@ fn main() -> Unit {
     ));
     assert!(rust.contains("let set_empty = rsscript_runtime::set_is_empty(&set);"));
     assert!(rust.contains("rsscript_runtime::set_clear(&mut set);"));
+}
+
+#[test]
+fn rust_lowering_maps_sorted_collections_to_btree_runtime_hooks() {
+    let source = r#"
+fn main() -> Unit {
+    let map = SortedMap<Int, String>.new()
+    SortedMap.insert<Int, String>(map: mut map, key: read 2, value: read "two")
+    SortedMap.insert<Int, String>(map: mut map, key: read 1, value: read "one")
+    let map_len = SortedMap.len<Int, String>(map: read map)
+    let has_two = SortedMap.contains_key<Int, String>(map: read map, key: read 2)
+    let first = SortedMap.get<Int, String>(map: read map, key: read 1)
+    let keys = SortedMap.keys<Int, String>(map: read map)
+    let values = SortedMap.values<Int, String>(map: read map)
+    let removed = SortedMap.remove<Int, String>(map: mut map, key: read 2)
+
+    let set = SortedSet<Int>.new()
+    let inserted_two = SortedSet.insert<Int>(set: mut set, value: read 2)
+    let inserted_one = SortedSet.insert<Int>(set: mut set, value: read 1)
+    let set_len = SortedSet.len<Int>(set: read set)
+    let has_one = SortedSet.contains<Int>(set: read set, value: read 1)
+    let ordered = SortedSet.to_list<Int>(set: read set)
+    let removed_one = SortedSet.remove<Int>(set: mut set, value: read 1)
+
+    Assert.equal_int(left: map_len, right: 2)
+    Assert.equal_bool(left: has_two, right: true)
+    Assert.equal_int(left: List.get<Int>(list: read keys, index: 0), right: 1)
+    Assert.equal(left: read List.get<String>(list: read values, index: 0), right: read "one")
+    match first {
+        Some(value) => {
+            Assert.equal(left: read value, right: read "one")
+        }
+        None => {
+            Assert.equal_bool(left: false, right: true)
+        }
+    }
+    match removed {
+        Some(value) => {
+            Assert.equal(left: read value, right: read "two")
+        }
+        None => {
+            Assert.equal_bool(left: false, right: true)
+        }
+    }
+
+    Assert.equal_bool(left: inserted_two, right: true)
+    Assert.equal_bool(left: inserted_one, right: true)
+    Assert.equal_int(left: set_len, right: 2)
+    Assert.equal_bool(left: has_one, right: true)
+    Assert.equal_int(left: List.get<Int>(list: read ordered, index: 0), right: 1)
+    Assert.equal_bool(left: removed_one, right: true)
+    SortedMap.clear<Int, String>(map: mut map)
+    SortedSet.clear<Int>(set: mut set)
+    Assert.equal_bool(left: SortedMap.is_empty<Int, String>(map: read map), right: true)
+    Assert.equal_bool(left: SortedSet.is_empty<Int>(set: read set), right: true)
+}
+"#;
+    let rust = lower_source_to_rust("sorted-collections.rss", source).expect("source should lower");
+
+    assert!(rust.contains("let mut map = rsscript_runtime::sorted_map_new();"));
+    assert!(
+        rust.contains("rsscript_runtime::sorted_map_insert(&mut map, &2, &\"two\".to_string());")
+    );
+    assert!(rust.contains("let map_len = rsscript_runtime::sorted_map_len(&map);"));
+    assert!(rust.contains("let has_two = rsscript_runtime::sorted_map_contains_key(&map, &2);"));
+    assert!(rust.contains("let first = rsscript_runtime::sorted_map_get(&map, &1);"));
+    assert!(rust.contains("let keys = rsscript_runtime::sorted_map_keys(&map);"));
+    assert!(rust.contains("let values = rsscript_runtime::sorted_map_values(&map);"));
+    assert!(rust.contains("let removed = rsscript_runtime::sorted_map_remove(&mut map, &2);"));
+    assert!(rust.contains("let mut set = rsscript_runtime::sorted_set_new();"));
+    assert!(rust.contains("let inserted_two = rsscript_runtime::sorted_set_insert(&mut set, &2);"));
+    assert!(rust.contains("let ordered = rsscript_runtime::sorted_set_to_list(&set);"));
+    assert!(rust.contains("let removed_one = rsscript_runtime::sorted_set_remove(&mut set, &1);"));
+    assert!(rust.contains("rsscript_runtime::sorted_map_clear(&mut map);"));
+    assert!(rust.contains("rsscript_runtime::sorted_set_clear(&mut set);"));
+}
+
+#[test]
+fn rust_lowering_maps_persistent_map_to_runtime_hooks() {
+    let source = r#"
+fn main() -> Unit {
+    let empty = PersistentMap<String, Int>.new()
+    let one = PersistentMap.insert<String, Int>(map: read empty, key: read "one", value: read 1)
+    let two = PersistentMap.insert<String, Int>(map: read one, key: read "two", value: read 2)
+    let old_missing = PersistentMap.contains_key<String, Int>(map: read empty, key: read "one")
+    let has_one = PersistentMap.contains_key<String, Int>(map: read one, key: read "one")
+    let value = PersistentMap.get<String, Int>(map: read one, key: read "one")
+    let removed = PersistentMap.remove<String, Int>(map: read two, key: read "one")
+    let cleared = PersistentMap.clear<String, Int>(map: read two)
+
+    Assert.equal_bool(left: old_missing, right: false)
+    Assert.equal_bool(left: has_one, right: true)
+    Assert.equal_int(left: PersistentMap.len<String, Int>(map: read two), right: 2)
+    Assert.equal_bool(left: PersistentMap.is_empty<String, Int>(map: read cleared), right: true)
+    match value {
+        Some(item) => {
+            Assert.equal_int(left: item, right: 1)
+        }
+        None => {
+            Assert.equal_bool(left: false, right: true)
+        }
+    }
+    Assert.equal_bool(left: PersistentMap.contains_key<String, Int>(map: read removed, key: read "one"), right: false)
+    Assert.equal_bool(left: PersistentMap.contains_key<String, Int>(map: read two, key: read "one"), right: true)
+}
+"#;
+    let rust = lower_source_to_rust("persistent-map.rss", source).expect("source should lower");
+
+    assert!(rust.contains("let empty = rsscript_runtime::persistent_map_new();"));
+    assert!(rust.contains(
+        "let one = rsscript_runtime::persistent_map_insert(&empty, &\"one\".to_string(), &1);"
+    ));
+    assert!(rust.contains(
+        "let two = rsscript_runtime::persistent_map_insert(&one, &\"two\".to_string(), &2);"
+    ));
+    assert!(rust.contains(
+        "let old_missing = rsscript_runtime::persistent_map_contains_key(&empty, &\"one\".to_string());"
+    ));
+    assert!(
+        rust.contains(
+            "let value = rsscript_runtime::persistent_map_get(&one, &\"one\".to_string());"
+        )
+    );
+    assert!(rust.contains(
+        "let removed = rsscript_runtime::persistent_map_remove(&two, &\"one\".to_string());"
+    ));
+    assert!(rust.contains("let cleared = rsscript_runtime::persistent_map_clear(&two);"));
+    assert!(!rust.contains("imbl::HashMap"));
 }
 
 #[test]
@@ -1780,6 +1978,36 @@ fn main() -> Unit {
     let ends = String.ends_with(value: read message, suffix: read "world")
     let contains = String.contains(value: read message, needle: read "lo wo")
     let lines = String.lines(value: read "one\ntwo")
+    let chars = String.chars(value: read "a1 \n")
+    let first_char = List.get(list: read chars, index: 0)
+    let second_char = List.get(list: read chars, index: 1)
+    let third_char = List.get(list: read chars, index: 2)
+    let fourth_char = List.get(list: read chars, index: 3)
+    let char_alpha = Char.is_alpha(value: read first_char)
+    let char_digit = Char.is_digit(value: read second_char)
+    let char_space = Char.is_whitespace(value: read third_char)
+    let char_alnum = Char.is_alphanumeric(value: read second_char)
+    let char_code = Char.to_code(value: read first_char)
+    let char_from_code = Char.from_code(value: 97)
+    let char_compare = Char.compare(left: read first_char, right: read second_char)
+    let char_text = Char.to_string(value: read fourth_char)
+    Assert.equal_bool(left: char_alpha, right: true)
+    Assert.equal_bool(left: char_digit, right: true)
+    Assert.equal_bool(left: char_space, right: true)
+    Assert.equal_bool(left: char_alnum, right: true)
+    Assert.equal_int(left: char_code, right: 97)
+    let compare_less = char_compare < 0
+    match char_from_code {
+        Some(value) => {
+            let same_char = Char.compare(left: read value, right: read first_char)
+            Assert.equal_int(left: same_char, right: 0)
+        }
+        None => {
+            Assert.equal_bool(left: false, right: true)
+        }
+    }
+    Assert.equal_bool(left: compare_less, right: true)
+    Assert.equal(left: read char_text, right: read "\n")
     let joined = String.join(parts: read lines, separator: read ",")
     let root = "target/"
     let path_message = String.join(parts: read ["root=", root, " ok"], separator: read "")
@@ -1854,6 +2082,21 @@ fn main() -> Unit {
     assert!(
         rust.contains("let lines = rsscript_runtime::string_lines(&\"one\\ntwo\".to_string());")
     );
+    assert!(rust.contains("let chars = rsscript_runtime::string_chars(&\"a1 \\n\".to_string());"));
+    assert!(rust.contains("let char_alpha = rsscript_runtime::char_is_alpha(&first_char);"));
+    assert!(rust.contains("let char_digit = rsscript_runtime::char_is_digit(&second_char);"));
+    assert!(rust.contains("let char_space = rsscript_runtime::char_is_whitespace(&third_char);"));
+    assert!(
+        rust.contains("let char_alnum = rsscript_runtime::char_is_alphanumeric(&second_char);")
+    );
+    assert!(rust.contains("let char_code = rsscript_runtime::char_to_code(&first_char);"));
+    assert!(rust.contains("let char_from_code = rsscript_runtime::char_from_code(97);"));
+    assert!(
+        rust.contains(
+            "let char_compare = rsscript_runtime::char_compare(&first_char, &second_char);"
+        )
+    );
+    assert!(rust.contains("let char_text = rsscript_runtime::char_to_string(&fourth_char);"));
     assert!(
         rust.contains("let joined = rsscript_runtime::string_join(&lines, &\",\".to_string());")
     );
@@ -3161,6 +3404,116 @@ fn main() -> String {
 
     assert!(rust.contains("let runtime = Runtime::CoreRuntime;"));
     assert!(rust.contains("return Runtime_name(&runtime);"));
+}
+
+#[test]
+fn rust_lowering_supports_structured_match_patterns_and_guards() {
+    let source = r#"
+sum Expr {
+    Call(callee: String, arg_count: Int)
+    Literal(value: String)
+}
+
+fn describe(expr: read Expr) -> String {
+    return match read expr {
+        Call { callee, arg_count } if arg_count == 0 => {
+            read callee
+        }
+        Call { callee, .. } => {
+            read callee
+        }
+        Literal { value } => {
+            read value
+        }
+    }
+}
+"#;
+    let rust = lower_source_to_rust("structured-match.rss", source)
+        .expect("structured match should lower");
+
+    assert!(rust.contains("match expr"));
+    assert!(rust.contains("Expr::Call { callee, arg_count } if arg_count == 0"));
+    assert!(rust.contains("Expr::Call { callee, .. }"));
+    assert!(rust.contains("Expr::Literal { value }"));
+}
+
+#[test]
+fn rust_lowering_supports_nested_match_patterns() {
+    let source = r#"
+sum Callee {
+    Name(value: String)
+    Builtin
+}
+
+sum Expr {
+    Call(callee: Callee)
+    Literal(value: String)
+}
+
+fn describe(expr: read Expr) -> String {
+    return match read expr {
+        Call { callee: Name(value) } => {
+            read value
+        }
+        Call { callee: Builtin } => {
+            "builtin"
+        }
+        Literal { value } => {
+            read value
+        }
+    }
+}
+"#;
+    let rust = lower_source_to_rust("nested-match.rss", source).expect("nested match should lower");
+
+    assert!(rust.contains("Expr::Call { callee: Callee::Name { value: value } }"));
+    assert!(rust.contains("Callee::Builtin"));
+    assert!(rust.contains("Expr::Literal { value }"));
+}
+
+#[test]
+fn rust_lowering_supports_struct_match_patterns() {
+    let source = r#"
+struct User {
+    name: String
+}
+
+fn name_of(user: read User) -> String {
+    return match read user {
+        User { name } => {
+            read name
+        }
+    }
+}
+"#;
+    let rust = lower_source_to_rust("struct-match.rss", source).expect("struct match should lower");
+
+    assert!(rust.contains("match user"));
+    assert!(rust.contains("User { name }"));
+}
+
+#[test]
+fn rust_lowering_supports_local_take_match_patterns() {
+    let source = r#"
+features: local
+
+struct User {
+    name: String
+}
+
+fn main() -> String {
+    local user = User(name: "rss")
+    return match take user {
+        User { name } => {
+            read name
+        }
+    }
+}
+"#;
+    let rust = lower_source_to_rust("take-match.rss", source).expect("take match should lower");
+
+    assert!(rust.contains("match user"));
+    assert!(rust.contains("User { name }"));
 }
 
 #[test]
@@ -5919,6 +6272,49 @@ fn write_line<W: Writer>(
 "#;
     let diagnostics = analyze_source("protocol.rss", source);
     assert_eq!(diagnostics, Vec::new());
+}
+
+#[test]
+fn parser_accepts_protocol_default_impl_marker_without_body() {
+    let source = r#"
+protocol Writer {
+    fn flush(self: mut Self) -> Unit = _
+}
+
+struct BufferWriter
+
+fn BufferWriter.flush(self: mut BufferWriter) -> Unit {
+    return Unit
+}
+
+impl Writer for BufferWriter {
+    flush = BufferWriter.flush
+}
+"#;
+    let program = parse_source("protocol-default-marker.rss", source);
+    let marker = program.items.iter().any(|item| {
+        matches!(item, Item::Function(function) if function.name == "Writer.flush" && function.default_impl_marker && !function.has_body)
+    });
+    assert!(marker, "protocol method should retain `= _` marker");
+    assert_eq!(
+        analyze_source("protocol-default-marker.rss", source),
+        Vec::new()
+    );
+}
+
+#[test]
+fn checker_rejects_default_impl_marker_outside_protocol_contract() {
+    let source = r#"
+fn flush() -> Unit = _
+"#;
+    let diagnostics = analyze_source("default-marker-outside-protocol.rss", source);
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0015"
+                && diagnostic.label == "unsupported default implementation marker"
+        }),
+        "{diagnostics:#?}"
+    );
 }
 
 #[test]

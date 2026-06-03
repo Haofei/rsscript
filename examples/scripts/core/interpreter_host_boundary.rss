@@ -1,0 +1,4 @@
+fn main() -> Unit {
+    let value = Env.get_or_default(name: read "RSSCRIPT_EVAL_HOST_BOUNDARY", default: read "missing")
+    Log.write(message: read value)
+}

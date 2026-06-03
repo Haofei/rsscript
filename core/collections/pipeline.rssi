@@ -1,14 +1,8 @@
-features: local
-
 struct Pipeline<T>
 
 struct FalliblePipeline<T, E>
 
 pub fn List.pipeline<T>(
-    list: read List<T>,
-) -> fresh Pipeline<T>
-
-pub fn Pipeline.from_list<T>(
     list: read List<T>,
 ) -> fresh Pipeline<T>
 

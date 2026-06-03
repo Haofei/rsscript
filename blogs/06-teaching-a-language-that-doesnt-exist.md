@@ -85,4 +85,4 @@ A zero-data language isn't a handicap you spend the project working around. It's
 
 ---
 
-*Next: [I'm not the only one: MoonBit and the shape of an AI-native language](07-not-the-only-one-moonbit.md) — a peer showed up, more AI-native than I expected, and it had already shipped the layer I just called a frontier.*
+*Next: [The agent that writes the language](07-the-agent-that-writes-the-language.md) — the first real program in RSScript is, fittingly, an AI agent that writes RSScript, and the most important thing it produced wasn't the agent. It was a bug the compiler couldn't see and review could.*

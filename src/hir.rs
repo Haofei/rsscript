@@ -56,6 +56,14 @@ pub struct FunctionSig {
     pub is_builtin: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HirProtocolImpl {
+    protocol: String,
+    type_name: String,
+    mappings: Vec<crate::syntax::ast::ProtocolImplMapping>,
+    is_current_program: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HirTypeKind {
     Class,
@@ -253,6 +261,7 @@ pub enum HirStmt {
     },
     Match {
         value: HirExpr,
+        scrutinee_effect: Option<DataEffect>,
         arms: Vec<HirMatchArm>,
         span: Span,
     },
@@ -269,6 +278,7 @@ pub enum HirStmt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HirMatchArm {
     pub pattern: MatchPattern,
+    pub guard: Option<HirExpr>,
     pub body: HirBlock,
     pub span: Span,
 }
@@ -374,6 +384,7 @@ pub enum HirExpr {
     },
     Match {
         value: Box<HirExpr>,
+        scrutinee_effect: Option<DataEffect>,
         arms: Vec<HirMatchArm>,
         type_name: Option<String>,
         span: Span,
@@ -419,6 +430,7 @@ pub struct Hir {
     types: HashMap<String, TypeInfo>,
     fields_by_name: HashMap<String, Vec<FieldInfo>>,
     sum_variant_types: HashMap<String, String>,
+    sum_variant_fields: HashMap<String, Vec<FieldInfo>>,
     duplicate_symbols: Vec<DuplicateSymbol>,
     call_sites: Vec<HirCallSite>,
     bindings: Vec<HirBinding>,
@@ -427,7 +439,7 @@ pub struct Hir {
     returns: Vec<HirReturn>,
     feature_uses: Vec<HirFeatureUse>,
     function_bodies: HashMap<String, HirFunctionBody>,
-    protocol_impls: Vec<ProtocolImpl>,
+    protocol_impls: Vec<HirProtocolImpl>,
 }
 
 impl Hir {
@@ -473,14 +485,24 @@ impl Hir {
         let mut type_symbols: HashMap<String, (DuplicateSymbolKind, Span)> = HashMap::new();
         let mut callable_symbols: HashMap<String, (DuplicateSymbolKind, Span)> = HashMap::new();
         for interface in interfaces {
-            hir.protocol_impls.extend(interface.protocol_impls.clone());
+            hir.extend_protocol_impls(&interface.protocol_impls, false);
             hir.collect_item_signatures(interface, &mut type_symbols, &mut callable_symbols);
         }
-        hir.protocol_impls.extend(program.protocol_impls.clone());
+        hir.extend_protocol_impls(&program.protocol_impls, true);
         hir.collect_item_signatures(program, &mut type_symbols, &mut callable_symbols);
         hir.normalize_class_typed_handle_fields();
         hir.collect_body_facts(program);
         hir
+    }
+
+    fn extend_protocol_impls(&mut self, impls: &[ProtocolImpl], is_current_program: bool) {
+        self.protocol_impls
+            .extend(impls.iter().map(|protocol_impl| HirProtocolImpl {
+                protocol: protocol_impl.protocol.clone(),
+                type_name: protocol_impl.type_name.clone(),
+                mappings: protocol_impl.mappings.clone(),
+                is_current_program,
+            }));
     }
 
     /// A field whose declared type is a `class` is always a handle field
@@ -575,6 +597,10 @@ impl Hir {
                     for variant in &sum.variants {
                         self.sum_variant_types
                             .insert(variant.name.clone(), sum.name.clone());
+                        self.sum_variant_fields.insert(
+                            variant.name.clone(),
+                            variant.fields.iter().map(field_info_from_decl).collect(),
+                        );
                     }
                 }
                 Item::TypeAlias(_) | Item::Const(_) | Item::Module(_) | Item::Use(_) => {}
@@ -610,6 +636,10 @@ impl Hir {
 
     pub fn sum_type_for_variant(&self, variant_name: &str) -> Option<&str> {
         self.sum_variant_types.get(variant_name).map(String::as_str)
+    }
+
+    pub fn sum_variant_fields(&self, variant_name: &str) -> Option<&[FieldInfo]> {
+        self.sum_variant_fields.get(variant_name).map(Vec::as_slice)
     }
 
     #[cfg(test)]
@@ -741,6 +771,9 @@ impl Hir {
         }
 
         for protocol_impl in &self.protocol_impls {
+            if !protocol_impl.is_current_program {
+                continue;
+            }
             if protocol_impl.type_name != receiver_root {
                 continue;
             }
@@ -1045,9 +1078,11 @@ fn lower_hir_stmts(
                     .map(|(_, type_name)| type_name);
             let mut statements = vec![HirStmt::Match {
                 value: lower_hir_expr(hir, function_name, &stmt.value, value_types),
+                scrutinee_effect: None,
                 arms: vec![
                     HirMatchArm {
                         pattern: stmt.pattern.clone(),
+                        guard: None,
                         body: HirBlock {
                             statements: Vec::new(),
                             span: stmt.span.clone(),
@@ -1056,6 +1091,7 @@ fn lower_hir_stmts(
                     },
                     HirMatchArm {
                         pattern: MatchPattern::Wildcard(stmt.span.clone()),
+                        guard: None,
                         body: {
                             let mut else_types = value_types.clone();
                             lower_hir_block(hir, function_name, &stmt.else_body, &mut else_types)
@@ -1203,13 +1239,17 @@ fn lower_hir_stmt(
                 .iter()
                 .map(|arm| {
                     let mut arm_types = value_types.clone();
-                    if let Some((binding, type_name)) =
-                        match_pattern_binding_type(&arm.pattern, value_type.as_deref())
+                    for (binding, type_name) in
+                        match_pattern_binding_types(hir, &arm.pattern, value_type.as_deref())
                     {
                         arm_types.insert(binding, type_name);
                     }
                     HirMatchArm {
                         pattern: arm.pattern.clone(),
+                        guard: arm
+                            .guard
+                            .as_ref()
+                            .map(|guard| lower_hir_expr(hir, function_name, guard, &arm_types)),
                         body: lower_hir_block(hir, function_name, &arm.body, &mut arm_types),
                         span: arm.span.clone(),
                     }
@@ -1217,6 +1257,7 @@ fn lower_hir_stmt(
                 .collect();
             HirStmt::Match {
                 value,
+                scrutinee_effect: stmt.scrutinee_effect,
                 arms,
                 span: stmt.span.clone(),
             }
@@ -1459,7 +1500,12 @@ fn lower_hir_expr(
                 span: span.clone(),
             }
         }
-        Expr::Match { value, arms, span } => {
+        Expr::Match {
+            value,
+            scrutinee_effect,
+            arms,
+            span,
+        } => {
             let value_type = infer_hir_expr_type(hir, value, value_types);
             let lowered_value = lower_hir_expr(hir, function_name, value, value_types);
             let mut match_type = None;
@@ -1467,8 +1513,8 @@ fn lower_hir_expr(
                 .iter()
                 .map(|arm| {
                     let mut arm_types = value_types.clone();
-                    if let Some((binding, type_name)) =
-                        match_pattern_binding_type(&arm.pattern, value_type.as_deref())
+                    for (binding, type_name) in
+                        match_pattern_binding_types(hir, &arm.pattern, value_type.as_deref())
                     {
                         arm_types.insert(binding, type_name);
                     }
@@ -1477,6 +1523,10 @@ fn lower_hir_expr(
                     }
                     HirMatchArm {
                         pattern: arm.pattern.clone(),
+                        guard: arm
+                            .guard
+                            .as_ref()
+                            .map(|guard| lower_hir_expr(hir, function_name, guard, &arm_types)),
                         body: lower_hir_block(hir, function_name, &arm.body, &mut arm_types),
                         span: arm.span.clone(),
                     }
@@ -1484,6 +1534,7 @@ fn lower_hir_expr(
                 .collect();
             HirExpr::Match {
                 value: Box::new(lowered_value),
+                scrutinee_effect: *scrutinee_effect,
                 arms: lowered_arms,
                 type_name: match_type,
                 span: span.clone(),
@@ -1736,8 +1787,8 @@ fn collect_body_facts_in_stmt(
             let value_type = infer_hir_expr_type(hir, &stmt.value, value_types);
             for arm in &stmt.arms {
                 let mut arm_types = value_types.clone();
-                if let Some((binding, type_name)) =
-                    match_pattern_binding_type(&arm.pattern, value_type.as_deref())
+                for (binding, type_name) in
+                    match_pattern_binding_types(hir, &arm.pattern, value_type.as_deref())
                 {
                     facts.bindings.push(HirBinding {
                         function_name: function_name.to_string(),
@@ -2538,6 +2589,9 @@ fn match_pattern_binding_type(
     pattern: &MatchPattern,
     value_type: Option<&str>,
 ) -> Option<(String, String)> {
+    if let MatchPattern::Binding { name, .. } = pattern {
+        return value_type.map(|ty| (name.clone(), ty.to_string()));
+    }
     let MatchPattern::Variant {
         name,
         binding: Some(binding),
@@ -2551,7 +2605,7 @@ fn match_pattern_binding_type(
         .strip_prefix("Option<")
         .and_then(|rest| rest.strip_suffix('>'));
     if name == "Some" {
-        return inner.map(|ty| (binding.clone(), ty.trim().to_string()));
+        return inner.and_then(|ty| match_pattern_binding_type(binding, Some(ty.trim())));
     }
     let inner = value_type
         .strip_prefix("Result<")
@@ -2560,12 +2614,103 @@ fn match_pattern_binding_type(
     match name.as_str() {
         "Ok" => args
             .first()
-            .map(|ty| (binding.clone(), ty.trim().to_string())),
+            .and_then(|ty| match_pattern_binding_type(binding, Some(ty.trim()))),
         "Err" => args
             .get(1)
-            .map(|ty| (binding.clone(), ty.trim().to_string())),
+            .and_then(|ty| match_pattern_binding_type(binding, Some(ty.trim()))),
         _ => None,
     }
+}
+
+fn match_pattern_binding_types(
+    hir: &Hir,
+    pattern: &MatchPattern,
+    value_type: Option<&str>,
+) -> Vec<(String, String)> {
+    if let MatchPattern::Binding { name, .. } = pattern {
+        return value_type
+            .map(|ty| vec![(name.clone(), ty.to_string())])
+            .unwrap_or_default();
+    }
+    if let Some(binding) = match_pattern_binding_type(pattern, value_type) {
+        return vec![binding];
+    }
+
+    if let MatchPattern::Variant {
+        name,
+        binding: Some(binding),
+        ..
+    } = pattern
+    {
+        let Some(value_type) = value_type else {
+            return Vec::new();
+        };
+        let root = type_root_name(value_type);
+        if hir
+            .sum_type_for_variant(name)
+            .is_some_and(|sum| sum == root)
+            && let Some(field_types) = hir.sum_variant_fields.get(name)
+            && let Some(field_type) = field_types.first()
+        {
+            return match_pattern_binding_types(hir, binding, Some(&field_type.type_name));
+        }
+    }
+
+    let MatchPattern::Struct { name, fields, .. } = pattern else {
+        return Vec::new();
+    };
+    let Some(value_type) = value_type else {
+        return Vec::new();
+    };
+
+    let root = type_root_name(value_type);
+    let field_types = if hir
+        .sum_type_for_variant(name)
+        .is_some_and(|sum| sum == root)
+    {
+        hir.sum_variant_fields.get(name)
+    } else {
+        None
+    };
+
+    if let Some(field_types) = field_types {
+        return collect_struct_pattern_binding_types(hir, fields, field_types);
+    }
+
+    if name == root
+        && let Some(type_info) = hir.type_info(root)
+    {
+        let field_types = type_info.fields.values().cloned().collect::<Vec<_>>();
+        return collect_struct_pattern_binding_types(hir, fields, &field_types);
+    }
+
+    Vec::new()
+}
+
+fn collect_struct_pattern_binding_types(
+    hir: &Hir,
+    fields: &[crate::syntax::ast::MatchFieldPattern],
+    field_types: &[FieldInfo],
+) -> Vec<(String, String)> {
+    let mut bindings = Vec::new();
+    for field in fields.iter().filter(|field| !field.ignored) {
+        let Some(field_type) = field_types
+            .iter()
+            .find(|candidate| candidate.name == field.name)
+        else {
+            continue;
+        };
+        if let Some(pattern) = &field.pattern {
+            bindings.extend(match_pattern_binding_types(
+                hir,
+                pattern,
+                Some(&field_type.type_name),
+            ));
+        } else if let Some(binding) = &field.binding {
+            bindings.push((binding.clone(), field_type.type_name.clone()));
+        }
+    }
+    bindings
 }
 
 fn split_top_level_type_args(args: &str) -> Vec<&str> {

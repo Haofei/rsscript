@@ -79,6 +79,10 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../core/collections/bytes.rssi"),
     ),
     (
+        "core/collections/deque.rssi",
+        include_str!("../core/collections/deque.rssi"),
+    ),
+    (
         "core/collections/list.rssi",
         include_str!("../core/collections/list.rssi"),
     ),
@@ -91,8 +95,20 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../core/collections/pipeline.rssi"),
     ),
     (
+        "core/collections/persistent_map.rssi",
+        include_str!("../core/collections/persistent_map.rssi"),
+    ),
+    (
         "core/collections/set.rssi",
         include_str!("../core/collections/set.rssi"),
+    ),
+    (
+        "core/collections/sorted_map.rssi",
+        include_str!("../core/collections/sorted_map.rssi"),
+    ),
+    (
+        "core/collections/sorted_set.rssi",
+        include_str!("../core/collections/sorted_set.rssi"),
     ),
     (
         "core/config/config.rssi",

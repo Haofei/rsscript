@@ -2,15 +2,16 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use rsscript::{
     Diagnostic, format_diagnostics_human, format_diagnostics_json, lower_source_to_rust_package,
     lower_sources_to_rust_package_with_options, package_lowering_input,
 };
 
+mod bench;
 mod check;
 mod dev;
+mod eval;
 mod fmt;
 mod ide;
 mod lint;
@@ -27,11 +28,14 @@ pub fn run() -> ExitCode {
     };
 
     match command {
+        "bench" => bench::run_bench(&args[2..]),
         "check" => check::run_check(&args[2..]),
         "dev" => dev::run_dev(&args[2..]),
+        "eval" => eval::run_eval(&args[2..]),
         "ide" => ide::run_ide(&args[2..]),
         "lint" => lint::run_lint(&args[2..]),
         "fmt" => fmt::run_fmt(&args[2..]),
+        "new" => package::run_new_package(&args[2..]),
         "review" => review::run_review(&args[2..]),
         "pkg" => package::run_package(&args[2..]),
         "run" => run_cmd::run_generated_rust(&args[2..]),
@@ -183,30 +187,62 @@ pub(crate) fn generated_package_name(path: &str) -> String {
         .to_string()
 }
 
-pub(crate) fn run_temp_dir(package_name: &str) -> PathBuf {
-    temp_package_dir("rsscript-run", package_name)
-}
-
-fn temp_package_dir(prefix: &str, package_name: &str) -> PathBuf {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    temp_root_dir().join(format!(
-        "{prefix}-{package_name}-{}-{now}",
-        std::process::id()
+pub(crate) fn run_cache_dir(input_path: &str, package_name: &str) -> PathBuf {
+    let key = stable_input_key(input_path);
+    run_cache_root_dir().join(format!(
+        "{}-{}",
+        sanitize_path_component(package_name),
+        stable_hash_hex(&key)
     ))
 }
 
-fn temp_root_dir() -> PathBuf {
-    let root = env::var_os("RSSCRIPT_TEMP_DIR")
+fn run_cache_root_dir() -> PathBuf {
+    let root = env::var_os("RSSCRIPT_RUN_CACHE_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .or_else(|| ramdisk_root_dir().map(|root| root.join("rsscript-temp")))
-        .unwrap_or_else(env::temp_dir);
+        .unwrap_or_else(|| {
+            env::current_dir()
+                .unwrap_or_else(|_| env::temp_dir())
+                .join("target")
+                .join("rsscript-run-cache")
+        });
     let _ = fs::create_dir_all(&root);
-
     root
+}
+
+fn stable_input_key(input_path: &str) -> String {
+    let path = Path::new(input_path);
+    path.canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .display()
+        .to_string()
+}
+
+fn stable_hash_hex(value: &str) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}
+
+fn sanitize_path_component(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if sanitized.is_empty() {
+        "rsscript-generated".to_string()
+    } else {
+        sanitized
+    }
 }
 
 fn ramdisk_root_dir() -> Option<PathBuf> {
@@ -224,6 +260,9 @@ pub(crate) fn is_package_directory(path: &str) -> bool {
 }
 pub(crate) fn print_usage() {
     eprintln!("usage:");
+    eprintln!(
+        "  rss bench [--json] [--iterations <n>] [--warmup <n>] <file-or-package-directory> [-- <args>...]"
+    );
     eprintln!("  rss check [--json] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>");
     eprintln!("  rss check [--json] <package-directory>");
     eprintln!("  rss lint [--json] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>");
@@ -231,18 +270,23 @@ pub(crate) fn print_usage() {
     eprintln!(
         "  rss dev [--lint] [--run] [--release] [--json] [--once] [--core|--no-core] [--interface <file.rssi> ...] <file-or-package-directory>"
     );
+    eprintln!("  rss eval <file.rss>");
     eprintln!("  rss fmt <file.rss>");
+    eprintln!("  rss new <package-name>");
     eprintln!(
-        "  rss ide --json <diagnostics|symbols|outline|hover|definition|references> <file-or-package-directory> [--line <n>] [--column <n>] [--query <text>] [--max <n>]"
+        "  rss ide --json <diagnostics|symbols|outline|hover|definition|references|generate> <file-or-package-directory> [--line <n>] [--column <n>] [--query <text>] [--max <n>]"
     );
-    eprintln!("  rss run [--json] [--release] <file-or-package-directory> [-- <args>...]");
     eprintln!(
-        "  rss run [--json] [--release] <file-or-package-directory> --out-dir <directory> [-- <args>...]"
+        "  rss run [--json] [--release] [--dry-run] <file-or-package-directory> [-- <args>...]"
+    );
+    eprintln!(
+        "  rss run [--json] [--release] [--dry-run] <file-or-package-directory> --out-dir <directory> [-- <args>...]"
     );
     eprintln!("  rss test [--all] [--json] [--filter <substring>]");
     eprintln!("  rss review [--json] --diff <old.rss> <new.rss>");
     eprintln!("  rss review [--json] --map <file-or-directory>");
     eprintln!("  rss pkg [--json] [package-directory]");
+    eprintln!("  rss pkg add <dependency|dependency@version|path-to-package>");
     eprintln!("  rss pkg review [--json] [package-directory]");
     eprintln!("  rss pkg diff [--json] <old-package-directory> <new-package-directory>");
     eprintln!("  rss pkg ci [--json] [package-directory]");
@@ -306,6 +350,22 @@ mod tests {
         assert!(error.contains("RSSCRIPT_RUNTIME_PATH"));
         assert!(error.contains(&missing.display().to_string()));
         fs::remove_dir_all(root).expect("temp runtime path should clean up");
+    }
+
+    #[test]
+    fn run_cache_dir_is_stable_per_input_path() {
+        let first = super::run_cache_dir("examples/one.rss", "demo");
+        let second = super::run_cache_dir("examples/one.rss", "demo");
+        let other = super::run_cache_dir("examples/two.rss", "demo");
+
+        assert_eq!(first, second);
+        assert_ne!(first, other);
+        assert!(
+            first
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("demo-"))
+        );
     }
 
     fn unique_temp_dir(name: &str) -> PathBuf {

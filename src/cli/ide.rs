@@ -3,10 +3,11 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use rsscript::{
-    Definition, PackageReviewFileKind, Reference, RssDocumentSymbol, Severity, Span, SymbolKind,
-    SymbolLookup, analyze_source_with_core, analyze_source_with_interfaces,
-    analyze_sources_with_interfaces, document_symbols, format_diagnostics_json_with_source,
-    lint_source, package_sources_with_dependency_interfaces, symbol_index,
+    Definition, PackageReviewFileKind, Reference, RssDocumentSymbol, Severity, Span,
+    SymbolCompleteness, SymbolKind, SymbolLookup, analyze_source_with_core,
+    analyze_source_with_interfaces, analyze_sources_with_interfaces, document_symbols,
+    format_diagnostics_json_with_source, lint_source, package_sources_with_dependency_interfaces,
+    prefix_status, symbol_index, valid_continuations,
 };
 use serde_json::{Value, json};
 
@@ -78,6 +79,7 @@ pub(crate) fn run_ide(args: &[String]) -> ExitCode {
                 options.include_declaration,
             )
         }),
+        "generate" => ide_generate(&documents, &target_path, options.max),
         _ => Err(format!("unknown rss ide action `{action}`.")),
     };
 
@@ -338,6 +340,31 @@ fn ide_outline(documents: &[IdeDocument], target_path: &str) -> Result<Value, St
         "action": "outline",
         "path": document.path,
         "symbols": outline,
+    }))
+}
+
+fn ide_generate(documents: &[IdeDocument], target_path: &str, max: usize) -> Result<Value, String> {
+    let document = target_document(documents, target_path)?;
+    let ctx = rsscript::GenerateContext {
+        file: &document.path,
+        partial_source: &document.contents,
+        symbol_completeness: SymbolCompleteness::Complete,
+    };
+    let status = prefix_status(&ctx);
+    let continuations = valid_continuations(
+        &ctx,
+        rsscript::ContinuationOptions {
+            max_returned_names: max,
+            max_probe_candidates: max,
+            include_snippets: false,
+        },
+    );
+    Ok(json!({
+        "ok": true,
+        "action": "generate",
+        "path": document.path,
+        "prefix_status": status,
+        "continuations": continuations,
     }))
 }
 

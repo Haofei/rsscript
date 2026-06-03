@@ -38,6 +38,46 @@ pub fn string_lines(value: &str) -> Vec<String> {
     value.lines().map(str::to_string).collect()
 }
 
+pub fn string_chars(value: &str) -> Vec<char> {
+    value.chars().collect()
+}
+
+pub fn char_is_digit(value: &char) -> bool {
+    value.is_ascii_digit()
+}
+
+pub fn char_is_alpha(value: &char) -> bool {
+    value.is_ascii_alphabetic()
+}
+
+pub fn char_is_whitespace(value: &char) -> bool {
+    value.is_whitespace()
+}
+
+pub fn char_is_alphanumeric(value: &char) -> bool {
+    value.is_ascii_alphanumeric()
+}
+
+pub fn char_to_code(value: &char) -> i64 {
+    *value as u32 as i64
+}
+
+pub fn char_from_code(value: i64) -> Option<char> {
+    u32::try_from(value).ok().and_then(char::from_u32)
+}
+
+pub fn char_compare(left: &char, right: &char) -> i64 {
+    match left.cmp(right) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    }
+}
+
+pub fn char_to_string(value: &char) -> String {
+    value.to_string()
+}
+
 pub fn string_join(parts: &[String], separator: &str) -> String {
     parts.join(separator)
 }
@@ -168,5 +208,22 @@ mod tests {
         assert_eq!(string_view(value, 0, 3), "aé");
         assert_eq!(string_view(value, 2, 2), "é");
         assert_eq!(string_view_slice(value, 100, 5), "");
+    }
+
+    #[test]
+    fn char_helpers_cover_lexer_classification() {
+        assert_eq!(string_chars("a1 \n"), vec!['a', '1', ' ', '\n']);
+        assert!(char_is_alpha(&'a'));
+        assert!(char_is_digit(&'1'));
+        assert!(char_is_whitespace(&'\n'));
+        assert!(char_is_alphanumeric(&'a'));
+        assert!(char_is_alphanumeric(&'1'));
+        assert_eq!(char_to_code(&'a'), 97);
+        assert_eq!(char_from_code(97), Some('a'));
+        assert_eq!(char_from_code(-1), None);
+        assert_eq!(char_compare(&'a', &'b'), -1);
+        assert_eq!(char_compare(&'a', &'a'), 0);
+        assert_eq!(char_compare(&'b', &'a'), 1);
+        assert_eq!(char_to_string(&'a'), "a");
     }
 }

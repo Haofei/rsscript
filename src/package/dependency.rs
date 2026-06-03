@@ -39,6 +39,31 @@ pub(super) fn collect_dependency_interface_sources(
     Ok(sources)
 }
 
+pub(super) fn collect_dependency_interface_sources_for_tests(
+    package_dir: &Path,
+    manifest: &Manifest,
+) -> Result<Vec<PackageSource>, String> {
+    let mut visiting = BTreeSet::new();
+    let mut seen = BTreeSet::new();
+    let mut sources = Vec::new();
+    collect_dependency_interface_sources_from_map(
+        package_dir,
+        &manifest.dependencies,
+        &mut visiting,
+        &mut seen,
+        &mut sources,
+    )?;
+    collect_dependency_interface_sources_from_map(
+        package_dir,
+        &manifest.dev_dependencies,
+        &mut visiting,
+        &mut seen,
+        &mut sources,
+    )?;
+    sources.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(sources)
+}
+
 pub(super) fn collect_dependency_lowering_sources(
     package_dir: &Path,
     manifest: &Manifest,

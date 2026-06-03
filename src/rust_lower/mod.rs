@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io;
 use std::path::Path;
 
 use crate::analyzer::{analyze_source_with_core, analyze_sources_with_interfaces_without_core};
@@ -221,41 +222,92 @@ pub fn write_generated_rust_package(
     let src_dir = out_dir.join("src");
     fs::create_dir_all(&src_dir)
         .map_err(|error| format!("failed to create {}: {error}", src_dir.display()))?;
-    fs::write(out_dir.join("Cargo.toml"), &package.cargo_toml).map_err(|error| {
-        format!(
-            "failed to write {}: {error}",
-            out_dir.join("Cargo.toml").display()
-        )
-    })?;
-    fs::write(src_dir.join("lib.rs"), &package.lib_rs).map_err(|error| {
-        format!(
-            "failed to write {}: {error}",
-            src_dir.join("lib.rs").display()
-        )
-    })?;
+    write_if_changed(&out_dir.join("Cargo.toml"), &package.cargo_toml)?;
+    write_if_changed(&src_dir.join("lib.rs"), &package.lib_rs)?;
     if let Some(main_rs) = &package.main_rs {
-        fs::write(src_dir.join("main.rs"), main_rs).map_err(|error| {
-            format!(
-                "failed to write {}: {error}",
-                src_dir.join("main.rs").display()
-            )
-        })?;
+        write_if_changed(&src_dir.join("main.rs"), main_rs)?;
+    } else {
+        remove_if_exists(&src_dir.join("main.rs"))?;
     }
-    fs::write(
-        out_dir.join("rsscript-source-map.json"),
+    write_if_changed(
+        &out_dir.join("rsscript-source-map.json"),
         &package.source_map_json,
-    )
-    .map_err(|error| {
-        format!(
-            "failed to write {}: {error}",
-            out_dir.join("rsscript-source-map.json").display()
-        )
-    })?;
+    )?;
     Ok(())
+}
+
+fn write_if_changed(path: &Path, contents: &str) -> Result<(), String> {
+    match fs::read_to_string(path) {
+        Ok(existing) if existing == contents => return Ok(()),
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!("failed to read {}: {error}", path.display()));
+        }
+    }
+    fs::write(path, contents)
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
+    Ok(())
+}
+
+fn remove_if_exists(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("failed to remove {}: {error}", path.display())),
+    }
 }
 
 pub fn lower_program_to_rust(program: &Program) -> String {
     lower_program_to_rust_with_map(program).rust_source
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::{GeneratedRustPackage, write_generated_rust_package};
+
+    #[test]
+    fn generated_package_write_skips_unchanged_files() {
+        let out_dir = unique_temp_dir("rsscript-write-generated");
+        let package = GeneratedRustPackage {
+            package_name: "rsscript_test".to_string(),
+            cargo_toml: "[package]\nname = \"rsscript_test\"\n".to_string(),
+            lib_rs: "pub fn value() -> i64 { 1 }\n".to_string(),
+            main_rs: Some("fn main() {}\n".to_string()),
+            source_map_json: "[]\n".to_string(),
+        };
+
+        write_generated_rust_package(&out_dir, &package).expect("initial write should succeed");
+        let lib_rs = out_dir.join("src/lib.rs");
+        let mut permissions = fs::metadata(&lib_rs)
+            .expect("lib.rs metadata should exist")
+            .permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&lib_rs, permissions).expect("lib.rs should become readonly");
+
+        write_generated_rust_package(&out_dir, &package)
+            .expect("unchanged readonly lib.rs should not be rewritten");
+
+        let mut permissions = fs::metadata(&lib_rs)
+            .expect("lib.rs metadata should exist")
+            .permissions();
+        permissions.set_readonly(false);
+        fs::set_permissions(&lib_rs, permissions).expect("lib.rs should become writable");
+        fs::remove_dir_all(out_dir).expect("temp generated package should clean up");
+    }
+
+    fn unique_temp_dir(name: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("{name}-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&path).expect("temp directory should create");
+        path
+    }
 }
 
 pub fn lower_program_to_rust_with_map(program: &Program) -> LoweredRust {

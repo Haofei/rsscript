@@ -19,6 +19,8 @@ pub(super) struct PackageFunctionContract {
     pub(super) return_type: Option<String>,
     pub(super) returns_fresh: bool,
     pub(super) is_async: bool,
+    pub(super) default_impl_marker: bool,
+    pub(super) deprecated_reason: Option<String>,
     pub(super) effects: BTreeSet<String>,
     pub(super) span: crate::diagnostic::Span,
 }
@@ -507,6 +509,7 @@ pub(super) fn package_function_contracts_match(
         && interface.return_type == source.return_type
         && interface.returns_fresh == source.returns_fresh
         && interface.is_async == source.is_async
+        && interface.deprecated_reason == source.deprecated_reason
         && interface.effects == source.effects
 }
 
@@ -1051,6 +1054,9 @@ fn package_function_review_export(
     if contract.is_async {
         reasons.push("async boundary".to_string());
     }
+    if let Some(reason) = &contract.deprecated_reason {
+        reasons.push(format!("deprecated: {reason}"));
+    }
     for param in &contract.params {
         if matches!(param.effect, Some("mut" | "take")) {
             reasons.push(format!(
@@ -1273,6 +1279,8 @@ fn package_function_contract(function: &FunctionDecl) -> PackageFunctionContract
         return_type: function.return_ty.as_ref().map(package_type_name),
         returns_fresh: function.returns_fresh,
         is_async: function.is_async,
+        default_impl_marker: function.default_impl_marker,
+        deprecated_reason: function.deprecated_reason.clone(),
         effects: function.effects.iter().map(package_effect_name).collect(),
         span: function.span.clone(),
     }
@@ -1558,6 +1566,15 @@ pub(super) fn package_function_contract_label(contract: &PackageFunctionContract
                 .cloned()
                 .collect::<Vec<_>>()
                 .join(", ")
+        ));
+    }
+    if contract.default_impl_marker {
+        label.push_str(" = _");
+    }
+    if let Some(reason) = &contract.deprecated_reason {
+        label.push_str(&format!(
+            " #deprecated(\"{}\")",
+            reason.replace('\\', "\\\\").replace('"', "\\\"")
         ));
     }
     label

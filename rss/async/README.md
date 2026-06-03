@@ -10,7 +10,7 @@ RSScript keeps async split into three layers:
   channels, streams, async file IO, async HTTP calls, async process IO, and
   TCP/WebSocket client IO, plus file/CSV streaming.
 
-This follows the same broad package shape as MoonBit async: async IO and
+The async surface is split by package: async IO and
 coordination APIs live in packages instead of becoming special syntax. RSScript
 keeps its own review model by preserving explicit `async`, `native`, `read`,
 `mut`, `take`, and effect boundaries in the `.rssi` contract.

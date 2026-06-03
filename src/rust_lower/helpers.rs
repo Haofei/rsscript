@@ -999,42 +999,72 @@ pub(super) fn stmt_span(statement: &Stmt) -> &Span {
 
 pub(super) fn lower_match_pattern(pattern: &MatchPattern) -> String {
     match pattern {
+        MatchPattern::Binding { name, .. } => rust_ident(name),
         MatchPattern::Wildcard(_) => "_".to_string(),
         MatchPattern::Literal { value, .. } => lower_match_literal(value),
         MatchPattern::Variant {
             name,
             binding: Some(binding),
             ..
-        } => format!("{}({})", rust_ident(name), rust_ident(binding)),
+        } => format!("{}({})", rust_ident(name), lower_match_pattern(binding)),
         MatchPattern::Variant { name, .. } if matches!(name.as_str(), "Some" | "Ok" | "Err") => {
             format!("{}(_)", rust_ident(name))
         }
         MatchPattern::Variant { name, .. } => rust_ident(name),
+        MatchPattern::Struct {
+            name,
+            fields,
+            has_rest,
+            ..
+        } => lower_struct_match_pattern(None, name, fields, *has_rest),
     }
 }
 
-pub(super) fn lower_match_pattern_qualified(pattern: &MatchPattern, sum_type: &str) -> String {
-    match pattern {
-        MatchPattern::Wildcard(_) => "_".to_string(),
-        MatchPattern::Literal { value, .. } => lower_match_literal(value),
-        MatchPattern::Variant {
-            name,
-            binding: Some(binding),
-            ..
-        } => format!(
-            "{}::{} {{ {}: {}, .. }}",
-            rust_ident(sum_type),
-            rust_ident(name),
-            rust_ident(binding),
-            rust_ident(binding)
-        ),
-        MatchPattern::Variant { name, .. } => {
-            format!("{}::{}", rust_ident(sum_type), rust_ident(name))
+fn lower_struct_match_pattern(
+    namespace: Option<&str>,
+    name: &str,
+    fields: &[crate::syntax::ast::MatchFieldPattern],
+    has_rest: bool,
+) -> String {
+    let path = if let Some(namespace) = namespace {
+        format!("{}::{}", rust_ident(namespace), rust_ident(name))
+    } else {
+        rust_ident(name)
+    };
+    let mut parts = Vec::new();
+    for field in fields {
+        if field.ignored {
+            parts.push(format!("{}: _", rust_ident(&field.name)));
+        } else if let Some(pattern) = &field.pattern {
+            parts.push(format!(
+                "{}: {}",
+                rust_ident(&field.name),
+                lower_match_pattern(pattern)
+            ));
+        } else if let Some(binding) = &field.binding {
+            let binding_text = if field.effect == Some(crate::syntax::ast::DataEffect::Mut) {
+                format!("mut {}", rust_ident(binding))
+            } else {
+                rust_ident(binding)
+            };
+            if binding == &field.name {
+                if field.effect == Some(crate::syntax::ast::DataEffect::Mut) {
+                    parts.push(format!("{}: {binding_text}", rust_ident(&field.name)));
+                } else {
+                    parts.push(rust_ident(&field.name));
+                }
+            } else {
+                parts.push(format!("{}: {}", rust_ident(&field.name), binding_text));
+            }
         }
     }
+    if has_rest {
+        parts.push("..".to_string());
+    }
+    format!("{path} {{ {} }}", parts.join(", "))
 }
 
-fn lower_match_literal(value: &MatchLiteral) -> String {
+pub(super) fn lower_match_literal(value: &MatchLiteral) -> String {
     match value {
         MatchLiteral::Int(value) => value.clone(),
         MatchLiteral::String(value) => format!("{:?}", decode_string_token(value)),

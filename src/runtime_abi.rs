@@ -1,9 +1,15 @@
 pub(crate) struct RuntimeIntrinsic {
     pub(crate) rust_target: &'static str,
     pub(crate) managed_handle_args: &'static [&'static str],
+    pub(crate) interpreter: Option<InterpreterIntrinsic>,
     namespace: &'static str,
     name: &'static str,
 }
+
+include!(concat!(
+    env!("OUT_DIR"),
+    "/rss-interpreter-intrinsics-enum.rs"
+));
 
 const fn runtime_intrinsic(
     namespace: &'static str,
@@ -15,6 +21,7 @@ const fn runtime_intrinsic(
         name,
         rust_target,
         managed_handle_args: &[],
+        interpreter: None,
     }
 }
 
@@ -29,6 +36,22 @@ const fn runtime_intrinsic_with_handles(
         name,
         rust_target,
         managed_handle_args,
+        interpreter: None,
+    }
+}
+
+const fn runtime_intrinsic_with_interpreter(
+    namespace: &'static str,
+    name: &'static str,
+    rust_target: &'static str,
+    interpreter: InterpreterIntrinsic,
+) -> RuntimeIntrinsic {
+    RuntimeIntrinsic {
+        namespace,
+        name,
+        rust_target,
+        managed_handle_args: &[],
+        interpreter: Some(interpreter),
     }
 }
 
@@ -783,6 +806,15 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "message",
         "rsscript_runtime::json_error_message",
     ),
+    runtime_intrinsic("Deque", "clear", "rsscript_runtime::deque_clear"),
+    runtime_intrinsic("Deque", "is_empty", "rsscript_runtime::deque_is_empty"),
+    runtime_intrinsic("Deque", "len", "rsscript_runtime::deque_len"),
+    runtime_intrinsic("Deque", "new", "rsscript_runtime::deque_new"),
+    runtime_intrinsic("Deque", "pop_back", "rsscript_runtime::deque_pop_back"),
+    runtime_intrinsic("Deque", "pop_front", "rsscript_runtime::deque_pop_front"),
+    runtime_intrinsic("Deque", "push_back", "rsscript_runtime::deque_push_back"),
+    runtime_intrinsic("Deque", "push_front", "rsscript_runtime::deque_push_front"),
+    runtime_intrinsic("Deque", "to_list", "rsscript_runtime::deque_to_list"),
     runtime_intrinsic("Ord", "compare", "rsscript_runtime::ord_compare"),
     runtime_intrinsic("List", "all", "rsscript_runtime::list_all"),
     runtime_intrinsic("List", "any", "rsscript_runtime::list_any"),
@@ -825,10 +857,25 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("List", "to_json_strings", "rsscript_runtime::json_strings"),
     runtime_intrinsic("List", "to_json_values", "rsscript_runtime::json_values"),
     runtime_intrinsic("List", "try_fold", "rsscript_runtime::list_try_fold"),
-    runtime_intrinsic("Log", "error", "rsscript_runtime::log_error"),
+    runtime_intrinsic_with_interpreter(
+        "Log",
+        "error",
+        "rsscript_runtime::log_error",
+        InterpreterIntrinsic::LogError,
+    ),
     runtime_intrinsic("Log", "error_json", "rsscript_runtime::log_error_json"),
-    runtime_intrinsic("Log", "trace", "rsscript_runtime::log_trace"),
-    runtime_intrinsic("Log", "write", "rsscript_runtime::log_write"),
+    runtime_intrinsic_with_interpreter(
+        "Log",
+        "trace",
+        "rsscript_runtime::log_trace",
+        InterpreterIntrinsic::LogTrace,
+    ),
+    runtime_intrinsic_with_interpreter(
+        "Log",
+        "write",
+        "rsscript_runtime::log_write",
+        InterpreterIntrinsic::LogWrite,
+    ),
     runtime_intrinsic("Log", "write_json", "rsscript_runtime::log_write_json"),
     runtime_intrinsic("Map", "clear", "rsscript_runtime::map_clear"),
     runtime_intrinsic("Map", "contains_key", "rsscript_runtime::map_contains_key"),
@@ -852,16 +899,51 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Map", "remove", "rsscript_runtime::map_remove"),
     runtime_intrinsic("Map", "try_fold", "rsscript_runtime::map_try_fold"),
     runtime_intrinsic("Map", "values", "rsscript_runtime::map_values"),
-    runtime_intrinsic(
-        "Pipeline",
-        "from_list",
-        "rsscript_runtime::pipeline_from_list",
-    ),
     runtime_intrinsic("Pipeline", "map", "rsscript_runtime::pipeline_map"),
     runtime_intrinsic("Pipeline", "filter", "rsscript_runtime::pipeline_filter"),
     runtime_intrinsic("Pipeline", "each", "rsscript_runtime::pipeline_each"),
     runtime_intrinsic("Pipeline", "try_map", "rsscript_runtime::pipeline_try_map"),
     runtime_intrinsic("Pipeline", "collect", "rsscript_runtime::pipeline_collect"),
+    runtime_intrinsic(
+        "PersistentMap",
+        "clear",
+        "rsscript_runtime::persistent_map_clear",
+    ),
+    runtime_intrinsic(
+        "PersistentMap",
+        "contains_key",
+        "rsscript_runtime::persistent_map_contains_key",
+    ),
+    runtime_intrinsic(
+        "PersistentMap",
+        "get",
+        "rsscript_runtime::persistent_map_get",
+    ),
+    runtime_intrinsic(
+        "PersistentMap",
+        "insert",
+        "rsscript_runtime::persistent_map_insert",
+    ),
+    runtime_intrinsic(
+        "PersistentMap",
+        "is_empty",
+        "rsscript_runtime::persistent_map_is_empty",
+    ),
+    runtime_intrinsic(
+        "PersistentMap",
+        "len",
+        "rsscript_runtime::persistent_map_len",
+    ),
+    runtime_intrinsic(
+        "PersistentMap",
+        "new",
+        "rsscript_runtime::persistent_map_new",
+    ),
+    runtime_intrinsic(
+        "PersistentMap",
+        "remove",
+        "rsscript_runtime::persistent_map_remove",
+    ),
     runtime_intrinsic(
         "FalliblePipeline",
         "map",
@@ -1083,21 +1165,101 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Set", "new", "rsscript_runtime::set_new"),
     runtime_intrinsic("Set", "remove", "rsscript_runtime::set_remove"),
     runtime_intrinsic("Set", "to_list", "rsscript_runtime::set_to_list"),
-    runtime_intrinsic("Int", "to_string", "rsscript_runtime::string_from_int"),
+    runtime_intrinsic("SortedMap", "clear", "rsscript_runtime::sorted_map_clear"),
+    runtime_intrinsic(
+        "SortedMap",
+        "contains_key",
+        "rsscript_runtime::sorted_map_contains_key",
+    ),
+    runtime_intrinsic("SortedMap", "get", "rsscript_runtime::sorted_map_get"),
+    runtime_intrinsic("SortedMap", "insert", "rsscript_runtime::sorted_map_insert"),
+    runtime_intrinsic(
+        "SortedMap",
+        "is_empty",
+        "rsscript_runtime::sorted_map_is_empty",
+    ),
+    runtime_intrinsic("SortedMap", "keys", "rsscript_runtime::sorted_map_keys"),
+    runtime_intrinsic("SortedMap", "len", "rsscript_runtime::sorted_map_len"),
+    runtime_intrinsic("SortedMap", "new", "rsscript_runtime::sorted_map_new"),
+    runtime_intrinsic("SortedMap", "remove", "rsscript_runtime::sorted_map_remove"),
+    runtime_intrinsic("SortedMap", "values", "rsscript_runtime::sorted_map_values"),
+    runtime_intrinsic("SortedSet", "clear", "rsscript_runtime::sorted_set_clear"),
+    runtime_intrinsic(
+        "SortedSet",
+        "contains",
+        "rsscript_runtime::sorted_set_contains",
+    ),
+    runtime_intrinsic(
+        "SortedSet",
+        "is_empty",
+        "rsscript_runtime::sorted_set_is_empty",
+    ),
+    runtime_intrinsic("SortedSet", "insert", "rsscript_runtime::sorted_set_insert"),
+    runtime_intrinsic("SortedSet", "len", "rsscript_runtime::sorted_set_len"),
+    runtime_intrinsic("SortedSet", "new", "rsscript_runtime::sorted_set_new"),
+    runtime_intrinsic("SortedSet", "remove", "rsscript_runtime::sorted_set_remove"),
+    runtime_intrinsic(
+        "SortedSet",
+        "to_list",
+        "rsscript_runtime::sorted_set_to_list",
+    ),
+    runtime_intrinsic("Char", "compare", "rsscript_runtime::char_compare"),
+    runtime_intrinsic("Char", "from_code", "rsscript_runtime::char_from_code"),
+    runtime_intrinsic(
+        "Char",
+        "is_alphanumeric",
+        "rsscript_runtime::char_is_alphanumeric",
+    ),
+    runtime_intrinsic("Char", "is_alpha", "rsscript_runtime::char_is_alpha"),
+    runtime_intrinsic("Char", "is_digit", "rsscript_runtime::char_is_digit"),
+    runtime_intrinsic(
+        "Char",
+        "is_whitespace",
+        "rsscript_runtime::char_is_whitespace",
+    ),
+    runtime_intrinsic("Char", "to_code", "rsscript_runtime::char_to_code"),
+    runtime_intrinsic("Char", "to_string", "rsscript_runtime::char_to_string"),
+    runtime_intrinsic_with_interpreter(
+        "Int",
+        "to_string",
+        "rsscript_runtime::string_from_int",
+        InterpreterIntrinsic::IntToString,
+    ),
     runtime_intrinsic("String", "after", "rsscript_runtime::string_after"),
     runtime_intrinsic("String", "contains", "rsscript_runtime::string_contains"),
     runtime_intrinsic("String", "before", "rsscript_runtime::string_before"),
-    runtime_intrinsic("String", "concat", "rsscript_runtime::string_concat"),
+    runtime_intrinsic_with_interpreter(
+        "String",
+        "concat",
+        "rsscript_runtime::string_concat",
+        InterpreterIntrinsic::StringConcat,
+    ),
     runtime_intrinsic("String", "copy", "rsscript_runtime::string_copy"),
     runtime_intrinsic("String", "ends_with", "rsscript_runtime::string_ends_with"),
     runtime_intrinsic("String", "env", "rsscript_runtime::env_get"),
     runtime_intrinsic("String", "env_or", "rsscript_runtime::env_get_or_default"),
     runtime_intrinsic("String", "from_bool", "rsscript_runtime::string_from_bool"),
-    runtime_intrinsic("String", "from_int", "rsscript_runtime::string_from_int"),
-    runtime_intrinsic("String", "is_empty", "rsscript_runtime::string_is_empty"),
+    runtime_intrinsic_with_interpreter(
+        "String",
+        "from_int",
+        "rsscript_runtime::string_from_int",
+        InterpreterIntrinsic::StringFromInt,
+    ),
+    runtime_intrinsic_with_interpreter(
+        "String",
+        "is_empty",
+        "rsscript_runtime::string_is_empty",
+        InterpreterIntrinsic::StringIsEmpty,
+    ),
     runtime_intrinsic("String", "index_of", "rsscript_runtime::string_index_of"),
     runtime_intrinsic("String", "join", "rsscript_runtime::string_join"),
-    runtime_intrinsic("String", "len", "rsscript_runtime::string_len"),
+    runtime_intrinsic("String", "chars", "rsscript_runtime::string_chars"),
+    runtime_intrinsic_with_interpreter(
+        "String",
+        "len",
+        "rsscript_runtime::string_len",
+        InterpreterIntrinsic::StringLen,
+    ),
     runtime_intrinsic("String", "lines", "rsscript_runtime::string_lines"),
     runtime_intrinsic("String", "replace", "rsscript_runtime::string_replace"),
     runtime_intrinsic("String", "repeat", "rsscript_runtime::string_repeat"),
@@ -1207,3 +1369,75 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Yaml", "parse", "rsscript_runtime::yaml_parse"),
     runtime_intrinsic("Yaml", "parse_file", "rsscript_runtime::yaml_parse_file"),
 ];
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use crate::interfaces::default_interfaces;
+    use crate::syntax::ast::Item;
+    use crate::syntax::parse_source;
+
+    use super::RUNTIME_INTRINSICS;
+
+    #[test]
+    fn runtime_intrinsic_keys_are_unique() {
+        let mut seen = HashSet::new();
+        for intrinsic in RUNTIME_INTRINSICS {
+            assert!(
+                seen.insert((intrinsic.namespace, intrinsic.name)),
+                "duplicate runtime intrinsic {}.{}",
+                intrinsic.namespace,
+                intrinsic.name
+            );
+        }
+    }
+
+    #[test]
+    fn interpreter_intrinsics_have_lowering_targets() {
+        let interpreter_intrinsics = RUNTIME_INTRINSICS
+            .iter()
+            .filter(|intrinsic| intrinsic.interpreter.is_some())
+            .collect::<Vec<_>>();
+
+        assert!(
+            !interpreter_intrinsics.is_empty(),
+            "interpreter intrinsic set should be declared in runtime ABI"
+        );
+        for intrinsic in interpreter_intrinsics {
+            assert!(
+                intrinsic.rust_target.starts_with("rsscript_runtime::"),
+                "interpreter intrinsic {}.{} has invalid Rust target `{}`",
+                intrinsic.namespace,
+                intrinsic.name,
+                intrinsic.rust_target
+            );
+        }
+    }
+
+    #[test]
+    fn interpreter_intrinsics_have_core_interface_signatures() {
+        let mut public_functions = HashSet::new();
+        for (path, source) in default_interfaces() {
+            let program = parse_source(path, source);
+            for item in program.items {
+                if let Item::Function(function) = item
+                    && function.is_public
+                {
+                    public_functions.insert(function.name);
+                }
+            }
+        }
+
+        for intrinsic in RUNTIME_INTRINSICS
+            .iter()
+            .filter(|intrinsic| intrinsic.interpreter.is_some())
+        {
+            let signature = format!("{}.{}", intrinsic.namespace, intrinsic.name);
+            assert!(
+                public_functions.contains(&signature),
+                "interpreter intrinsic `{signature}` has no bundled public core interface signature"
+            );
+        }
+    }
+}

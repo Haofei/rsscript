@@ -1590,6 +1590,632 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_requires_effect_for_structured_match_patterns() {
+    let source = r#"
+sum Expr {
+    Call(callee: String)
+}
+
+fn main(expr: read Expr) -> Unit {
+    match expr {
+        Call { callee } => {
+            return Unit
+        }
+    }
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("match-structured-effect.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0202"
+                && diagnostic
+                    .summary
+                    .contains("structured match patterns require an explicit scrutinee effect")
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_rejects_mutating_match_guards() {
+    let source = r#"
+sum Expr {
+    Call(callee: String)
+}
+
+fn main(expr: read Expr) -> Unit {
+    match read expr {
+        Call { callee } if mut callee => {
+            return Unit
+        }
+        Call { callee } => {
+            return Unit
+        }
+    }
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("match-guard-mut.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0310"
+                && diagnostic.summary.contains("match guard cannot use `mut`")
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_requires_local_for_take_match() {
+    let source = r#"
+sum Expr {
+    Call(callee: String)
+}
+
+fn main(expr: read Expr) -> Unit {
+    match take expr {
+        Call { callee } => {
+            return Unit
+        }
+    }
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("match-take-local.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0101"
+                && diagnostic
+                    .summary
+                    .contains("`match take` requires `features: local`")
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_rejects_mut_field_binding_from_managed_class_pattern() {
+    let source = r#"
+class Node {
+    name: String
+}
+
+fn main(node: read Node) -> Unit {
+    match mut node {
+        Node { name: mut value } => {
+            return Unit
+        }
+    }
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("match-managed-mut-field.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0310"
+                && diagnostic
+                    .summary
+                    .contains("managed pattern field `name` cannot request `mut`")
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_marks_scrutinee_moved_after_take_match() {
+    let source = r#"
+features: local
+
+struct User {
+    name: String
+}
+
+fn main() -> String {
+    local user = User(name: "x")
+    match take user {
+        User { name } => {
+        }
+    }
+    return describe(user: read user)
+}
+
+fn describe(user: read User) -> String {
+    return "user"
+}
+"#;
+    let diagnostics = analyze_source("match-take-use-after.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0401"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_uses_structured_sum_pattern_field_type() {
+    let source = r#"
+sum Expr {
+    Call(callee: String)
+}
+
+fn main(expr: read Expr) -> Unit {
+    match read expr {
+        Call { callee } => {
+            if callee == 1 {
+                return Unit
+            }
+        }
+    }
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("match-sum-field-type.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0210"
+                && diagnostic.summary
+                    == "operator `==` has operands `String` and `Int`, expected matching operand types."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_marks_scrutinee_moved_after_take_match_expression() {
+    let source = r#"
+features: local
+
+struct User {
+    name: String
+}
+
+fn main() -> String {
+    local user = User(name: "x")
+    let label = match take user {
+        User { name } => {
+            "done"
+        }
+    }
+    return describe(user: read user)
+}
+
+fn describe(user: read User) -> String {
+    return "user"
+}
+"#;
+    let diagnostics = analyze_source("match-take-expr-use-after.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0401"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_uses_nested_option_result_pattern_binding_type() {
+    let source = r#"
+fn build() -> Result<Option<String>, BuildError> {
+    return Ok(Some("rss"))
+}
+
+fn main() -> Unit {
+    match build() {
+        Ok(Some(value)) => {
+            if value == 1 {
+                return Unit
+            }
+        }
+        Ok(None) => {
+            return Unit
+        }
+        Err(error) => {
+            return Unit
+        }
+    }
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("match-nested-option-result.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0210"
+                && diagnostic.summary
+                    == "operator `==` has operands `String` and `Int`, expected matching operand types."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_uses_nested_struct_field_pattern_binding_type() {
+    let source = r#"
+sum Callee {
+    Name(value: String)
+    Builtin
+}
+
+sum Expr {
+    Call(callee: Callee)
+}
+
+fn main(expr: read Expr) -> Unit {
+    match read expr {
+        Call { callee: Name(value) } => {
+            if value == 1 {
+                return Unit
+            }
+        }
+    }
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("match-nested-field.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0210"
+                && diagnostic.summary
+                    == "operator `==` has operands `String` and `Int`, expected matching operand types."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_non_exhaustive_nested_struct_field_pattern() {
+    let source = r#"
+sum Callee {
+    Name(value: String)
+    Builtin
+}
+
+sum Expr {
+    Call(callee: Callee)
+}
+
+fn main(expr: read Expr) -> String {
+    match read expr {
+        Call { callee: Name(value) } => {
+            return read value
+        }
+    }
+}
+"#;
+    let diagnostics = analyze_source("match-nested-field-non-exhaustive.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0021"
+                && diagnostic.label == "non-exhaustive match"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_accepts_exhaustive_nested_struct_field_patterns() {
+    let source = r#"
+sum Callee {
+    Name(value: String)
+    Builtin
+}
+
+sum Expr {
+    Call(callee: Callee)
+}
+
+fn main(expr: read Expr) -> String {
+    match read expr {
+        Call { callee: Name(value) } => {
+            return read value
+        }
+        Call { callee: Builtin } => {
+            return "builtin"
+        }
+    }
+}
+"#;
+    let diagnostics = analyze_source("match-nested-field-exhaustive.rss", source);
+
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0021"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_reports_non_exhaustive_multi_field_pattern_matrix() {
+    let source = r#"
+sum Pair {
+    Both(left: Bool, right: Bool)
+}
+
+fn main(pair: read Pair) -> String {
+    match read pair {
+        Both { left: true, right: true } => {
+            return "tt"
+        }
+        Both { left: true, right: false } => {
+            return "tf"
+        }
+        Both { left: false, right: true } => {
+            return "ft"
+        }
+    }
+}
+"#;
+    let diagnostics = analyze_source("match-multi-field-matrix-missing.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0021"
+                && diagnostic.label == "non-exhaustive match"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_accepts_exhaustive_multi_field_pattern_matrix() {
+    let source = r#"
+sum Pair {
+    Both(left: Bool, right: Bool)
+}
+
+fn main(pair: read Pair) -> String {
+    match read pair {
+        Both { left: true, right: true } => {
+            return "tt"
+        }
+        Both { left: true, right: false } => {
+            return "tf"
+        }
+        Both { left: false, right: true } => {
+            return "ft"
+        }
+        Both { left: false, right: false } => {
+            return "ff"
+        }
+    }
+}
+"#;
+    let diagnostics = analyze_source("match-multi-field-matrix-complete.rss", source);
+
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0021"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_accepts_multi_field_pattern_matrix_with_wildcards() {
+    let source = r#"
+sum Pair {
+    Both(left: Bool, right: Bool)
+}
+
+fn main(pair: read Pair) -> String {
+    match read pair {
+        Both { left: true, right: true } => {
+            return "tt"
+        }
+        Both { left: true, right: false } => {
+            return "tf"
+        }
+        Both { left: false, right: _ } => {
+            return "f"
+        }
+    }
+}
+"#;
+    let diagnostics = analyze_source("match-multi-field-matrix-wildcard.rss", source);
+
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0021"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_rejects_overlapping_mut_pattern_fields() {
+    let source = r#"
+features: local
+
+struct User {
+    name: String
+}
+
+fn main(user: mut User) -> Unit {
+    match mut user {
+        User { name: mut left, name: mut right } => {
+            return Unit
+        }
+    }
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("match-pattern-field-conflict.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0302"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_rejects_unknown_structured_pattern_fields() {
+    let source = r#"
+struct Point {
+    x: Int
+    y: Int
+}
+
+fn main(point: read Point) -> Int {
+    return match read point {
+        Point { x, z, .. } => {
+            z
+        }
+    }
+}
+"#;
+    let diagnostics = analyze_source("match-pattern-unknown-field.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0025"
+                && diagnostic.summary == "unknown field `z` on type `Point`."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_rejects_duplicate_structured_pattern_fields() {
+    let source = r#"
+struct Point {
+    x: Int
+    y: Int
+}
+
+fn main(point: read Point) -> Int {
+    return match read point {
+        Point { x, x, .. } => {
+            x
+        }
+    }
+}
+"#;
+    let diagnostics = analyze_source("match-pattern-duplicate-field.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0302"
+                && diagnostic.summary == "pattern field `x` is listed more than once."
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_requires_rest_marker_when_structured_pattern_omits_fields() {
+    let source = r#"
+struct Point {
+    x: Int
+    y: Int
+}
+
+fn main(point: read Point) -> Int {
+    return match read point {
+        Point { x } => {
+            x
+        }
+    }
+}
+"#;
+    let diagnostics = analyze_source("match-pattern-missing-rest.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0209" && diagnostic.summary.contains("omits fields without `..`")
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_accepts_if_is_with_then_scoped_pattern_bindings() {
+    let source = r#"
+sum Expr {
+    Call(callee: String, args: Int)
+    Name(value: String)
+}
+
+fn main(expr: read Expr) -> String {
+    if read expr is Call { callee, args } {
+        if args == 0 {
+            return callee
+        }
+    } else {
+        return "other"
+    }
+    return "done"
+}
+"#;
+    let diagnostics = analyze_source("if-is-pattern.rss", source);
+
+    assert_eq!(diagnostics, Vec::new(), "{diagnostics:?}");
+}
+
+#[test]
+fn checker_rejects_if_is_binding_outside_then_scope() {
+    let source = r#"
+sum Expr {
+    Call(callee: String)
+    Name(value: String)
+}
+
+fn main(expr: read Expr) -> String {
+    if read expr is Call { callee } {
+        return callee
+    }
+    return callee
+}
+"#;
+    let diagnostics = analyze_source("if-is-scope.rss", source);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0026" && diagnostic.summary.contains("`callee`")
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_does_not_accept_if_is_without_explicit_effect() {
+    let source = r#"
+sum Expr {
+    Call(callee: String)
+    Name(value: String)
+}
+
+fn main(expr: read Expr) -> String {
+    if expr is Call { callee } {
+        return callee
+    }
+    return "done"
+}
+"#;
+    let diagnostics = analyze_source("if-is-no-effect.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0015" || diagnostic.code == "RS0209"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 fn checker_reports_noescape_callback_return_type_mismatch() {
     let source = r#"
 fn apply(callback: noescape Fn() -> String) -> Unit {
@@ -2492,6 +3118,58 @@ fn render(body: read String) -> fresh HtmlEscaped {
 
     assert_eq!(
         analyze_source_with_interfaces("page.rss", source, &[("html.rssi", interface)]),
+        Vec::new()
+    );
+}
+
+#[test]
+fn receiver_call_does_not_resolve_through_dependency_interface_protocol_impl() {
+    let interface = r#"
+protocol Formatter {
+    fn format(self: read Self) -> fresh String
+}
+
+struct Report {
+    title: String
+}
+
+pub fn ReportFormatter.format(self: read Report) -> fresh String
+
+impl Formatter for Report {
+    format = ReportFormatter.format
+}
+"#;
+    let source = r#"
+fn display(report: read Report) -> fresh String {
+    return read report.format()
+}
+"#;
+    let diagnostics =
+        analyze_source_with_interfaces("caller.rss", source, &[("formatter.rssi", interface)]);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0206" && diagnostic.summary.contains("read report.format")
+        }),
+        "dependency interface protocol impls must not make receiver shorthand resolve: {diagnostics:#?}"
+    );
+}
+
+#[test]
+fn receiver_call_still_resolves_through_explicit_protocol_bound_from_interface() {
+    let interface = r#"
+protocol Formatter {
+    fn format(self: read Self) -> fresh String
+}
+"#;
+    let source = r#"
+fn display<T: Formatter>(value: read T) -> fresh String {
+    return read value.format()
+}
+"#;
+
+    assert_eq!(
+        analyze_source_with_interfaces("caller.rss", source, &[("formatter.rssi", interface)]),
         Vec::new()
     );
 }

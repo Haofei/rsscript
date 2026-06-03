@@ -1,0 +1,27 @@
+struct SortedSet<T>
+
+pub fn SortedSet.new<T: Ord>() -> fresh SortedSet<T>
+
+pub fn SortedSet.len<T: Ord>(set: read SortedSet<T>) -> Int
+
+pub fn SortedSet.is_empty<T: Ord>(set: read SortedSet<T>) -> Bool
+
+pub fn SortedSet.contains<T: Ord>(
+    set: read SortedSet<T>,
+    value: read T,
+) -> Bool
+
+pub fn SortedSet.insert<T: Ord>(
+    set: mut SortedSet<T>,
+    value: read T,
+) -> Bool
+    effects(retains(value))
+
+pub fn SortedSet.remove<T: Ord>(
+    set: mut SortedSet<T>,
+    value: read T,
+) -> Bool
+
+pub fn SortedSet.clear<T: Ord>(set: mut SortedSet<T>) -> Unit
+
+pub fn SortedSet.to_list<T: Ord>(set: read SortedSet<T>) -> fresh List<T>

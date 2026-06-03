@@ -9,7 +9,7 @@ use crate::hir::{CallResolution, Hir};
 use crate::lint::lint_source;
 use crate::review::{ReviewMap, ReviewMapClassification, review_map_sources_with_interfaces};
 use crate::runtime_abi;
-use crate::syntax::ast::{Block, Callee, Expr, Item, MatchPattern, Stmt, TypeKind, merge_programs};
+use crate::syntax::ast::{Block, Callee, Expr, Item, Stmt, TypeKind, merge_programs};
 use crate::syntax::parse_source;
 
 use super::contract::{
@@ -28,9 +28,9 @@ use super::{
     PackageDependencyKind, PackageNativeRustReview, PackageProviderImplementation, PackageReview,
     PackageReviewAwaitBoundary, PackageReviewAwaitSite, PackageReviewCapability,
     PackageReviewDependency, PackageReviewFile, PackageReviewFileKind, PackageReviewSummary,
-    PackageRisk, PackageVirtual, collect_dependency_interface_sources, dedup_diagnostics,
-    package_dependency_spec, package_feature_may_change_boundary_risk,
-    package_feature_resolution_diagnostics,
+    PackageRisk, PackageVirtual, collect_dependency_interface_sources,
+    collect_dependency_interface_sources_for_tests, dedup_diagnostics, package_dependency_spec,
+    package_feature_may_change_boundary_risk, package_feature_resolution_diagnostics,
 };
 
 pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
@@ -48,6 +48,8 @@ pub(super) fn review_package_dir_with_features(
     let manifest = &package.manifest;
     let sources = &package.sources;
     let dependency_interfaces = collect_dependency_interface_sources(package_dir, manifest)?;
+    let test_dependency_interfaces =
+        collect_dependency_interface_sources_for_tests(package_dir, manifest)?;
     let native_bindings = package_native_bindings(package_dir)?;
     let native_binding_interfaces = native_binding_interface_sources(sources, &native_bindings);
 
@@ -75,6 +77,11 @@ pub(super) fn review_package_dir_with_features(
     let source_refs = sources
         .iter()
         .filter(|source| source.kind == PackageReviewFileKind::Source)
+        .map(|source| (source.path.as_str(), source.contents.as_str()))
+        .collect::<Vec<_>>();
+    let test_refs = sources
+        .iter()
+        .filter(|source| source.kind == PackageReviewFileKind::Test)
         .map(|source| (source.path.as_str(), source.contents.as_str()))
         .collect::<Vec<_>>();
     let interface_frontend_diagnostics = interface_refs
@@ -107,6 +114,28 @@ pub(super) fn review_package_dir_with_features(
         &source_refs,
         &source_interfaces,
     ));
+    if !test_refs.is_empty() {
+        let mut test_interfaces = source_interfaces.clone();
+        let mut seen_test_interfaces = test_interfaces
+            .iter()
+            .map(|(path, _)| (*path).to_string())
+            .collect::<BTreeSet<_>>();
+        test_interfaces.extend(
+            test_dependency_interfaces
+                .iter()
+                .map(|source| (source.path.as_str(), source.contents.as_str()))
+                .filter(|(path, _)| seen_test_interfaces.insert((*path).to_string())),
+        );
+        if source_refs.is_empty() {
+            test_interfaces.extend(interface_refs.clone());
+        } else {
+            test_interfaces.extend(source_refs.clone());
+        }
+        diagnostics.extend(analyze_sources_with_interfaces_without_core(
+            &test_refs,
+            &test_interfaces,
+        ));
+    }
     diagnostics.extend(package_interface_contract_diagnostics(
         sources,
         &native_bindings,
@@ -1244,12 +1273,8 @@ fn collect_await_sites_from_stmt(
             );
             for arm in &stmt.arms {
                 let mut arm_scoped_live = scoped_live.clone();
-                if let MatchPattern::Variant {
-                    binding: Some(binding),
-                    ..
-                } = &arm.pattern
-                {
-                    arm_scoped_live.insert(binding.clone());
+                for binding in arm.pattern.binding_names() {
+                    arm_scoped_live.insert(binding.to_string());
                 }
                 collect_await_sites_from_block(
                     function,
@@ -1732,11 +1757,7 @@ fn remove_stmt_bindings(statement: &Stmt, uses: &mut BTreeSet<String>) {
         }
         Stmt::Match(stmt) => {
             for arm in &stmt.arms {
-                if let MatchPattern::Variant {
-                    binding: Some(binding),
-                    ..
-                } = &arm.pattern
-                {
+                for binding in arm.pattern.binding_names() {
                     uses.remove(binding);
                 }
             }

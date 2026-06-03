@@ -4,6 +4,30 @@ struct StringBuilder
 
 struct StringView
 
+pub fn Char.is_digit(value: read Char) -> Bool
+    effects(pure)
+
+pub fn Char.is_alpha(value: read Char) -> Bool
+    effects(pure)
+
+pub fn Char.is_whitespace(value: read Char) -> Bool
+    effects(pure)
+
+pub fn Char.is_alphanumeric(value: read Char) -> Bool
+    effects(pure)
+
+pub fn Char.to_code(value: read Char) -> Int
+    effects(pure)
+
+pub fn Char.from_code(value: Int) -> Option<Char>
+    effects(pure)
+
+pub fn Char.compare(left: read Char, right: read Char) -> Int
+    effects(pure)
+
+pub fn Char.to_string(value: read Char) -> fresh String
+    effects(pure)
+
 pub fn String.concat(left: read String, right: read String) -> fresh String
     effects(pure)
 
@@ -78,6 +102,9 @@ pub fn String.contains(
     effects(pure)
 
 pub fn String.lines(value: read String) -> fresh List<String>
+    effects(pure)
+
+pub fn String.chars(value: read String) -> fresh List<Char>
     effects(pure)
 
 pub fn String.join(

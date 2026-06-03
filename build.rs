@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -106,8 +106,81 @@ struct ManifestVirtual {
     provider: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct InterpreterIntrinsicSpec {
+    namespace: &'static str,
+    name: &'static str,
+    variant: &'static str,
+    eval_kind: InterpreterEvalKind,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum InterpreterEvalKind {
+    IntToString,
+    StringConcat,
+    StringIsEmpty,
+    StringLen,
+    LogError,
+    LogTrace,
+    LogWrite,
+}
+
+const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
+    InterpreterIntrinsicSpec {
+        namespace: "Int",
+        name: "to_string",
+        variant: "IntToString",
+        eval_kind: InterpreterEvalKind::IntToString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "concat",
+        variant: "StringConcat",
+        eval_kind: InterpreterEvalKind::StringConcat,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "from_int",
+        variant: "StringFromInt",
+        eval_kind: InterpreterEvalKind::IntToString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "is_empty",
+        variant: "StringIsEmpty",
+        eval_kind: InterpreterEvalKind::StringIsEmpty,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "len",
+        variant: "StringLen",
+        eval_kind: InterpreterEvalKind::StringLen,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Log",
+        name: "error",
+        variant: "LogError",
+        eval_kind: InterpreterEvalKind::LogError,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Log",
+        name: "trace",
+        variant: "LogTrace",
+        eval_kind: InterpreterEvalKind::LogTrace,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Log",
+        name: "write",
+        variant: "LogWrite",
+        eval_kind: InterpreterEvalKind::LogWrite,
+    },
+];
+
 fn main() {
     if let Err(error) = write_core_package_index() {
+        panic!("{error}");
+    }
+    if let Err(error) = write_interpreter_intrinsics() {
         panic!("{error}");
     }
 }
@@ -131,6 +204,102 @@ fn write_core_package_index() -> Result<(), String> {
     )
     .map_err(|error| format!("core package index should be written: {error}"))?;
     Ok(())
+}
+
+fn write_interpreter_intrinsics() -> Result<(), String> {
+    println!("cargo:rerun-if-changed=core");
+    println!("cargo:rerun-if-changed=rss");
+
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
+    ensure_interpreter_intrinsic_interfaces(&manifest_dir)?;
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("out dir"));
+    fs::write(
+        out_dir.join("rss-interpreter-intrinsics-enum.rs"),
+        generated_interpreter_intrinsic_enum(),
+    )
+    .map_err(|error| format!("interpreter intrinsic enum should be written: {error}"))?;
+    fs::write(
+        out_dir.join("rss-interpreter-intrinsics-dispatch.rs"),
+        generated_interpreter_intrinsic_dispatch(),
+    )
+    .map_err(|error| format!("interpreter intrinsic dispatcher should be written: {error}"))?;
+    Ok(())
+}
+
+fn ensure_interpreter_intrinsic_interfaces(root: &Path) -> Result<(), String> {
+    let mut functions = BTreeSet::new();
+    let mut files = Vec::new();
+    collect_files_with_extension(&root.join("core"), "rssi", &mut files)?;
+    collect_files_with_extension(&root.join("rss"), "rssi", &mut files)?;
+    for path in files {
+        let source = fs::read_to_string(&path)
+            .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+        functions.extend(collect_functions(&source));
+    }
+    for intrinsic in INTERPRETER_INTRINSICS {
+        let signature = format!("{}.{}", intrinsic.namespace, intrinsic.name);
+        if !functions.contains(&signature) {
+            return Err(format!(
+                "interpreter intrinsic `{signature}` has no bundled public interface signature"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn generated_interpreter_intrinsic_enum() -> String {
+    let mut out = String::new();
+    out.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n");
+    out.push_str("pub(crate) enum InterpreterIntrinsic {\n");
+    for intrinsic in INTERPRETER_INTRINSICS {
+        out.push_str("    ");
+        out.push_str(intrinsic.variant);
+        out.push_str(",\n");
+    }
+    out.push_str("}\n");
+    out
+}
+
+fn generated_interpreter_intrinsic_dispatch() -> String {
+    let mut out = String::new();
+    out.push_str(
+        "fn eval_generated_runtime_intrinsic(\n    interpreter: &mut Interpreter<'_>,\n    intrinsic: InterpreterIntrinsic,\n    args: &[crate::syntax::ast::CallArg],\n) -> Result<Value, EvalError> {\n    match intrinsic {\n",
+    );
+    for intrinsic in INTERPRETER_INTRINSICS {
+        out.push_str("        InterpreterIntrinsic::");
+        out.push_str(intrinsic.variant);
+        out.push_str(" => ");
+        out.push_str(eval_kind_body(intrinsic.eval_kind));
+        out.push_str(",\n");
+    }
+    out.push_str("    }\n}\n");
+    out
+}
+
+fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
+    match kind {
+        InterpreterEvalKind::IntToString => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(expect_int(value)?.to_string()))\n        }"
+        }
+        InterpreterEvalKind::StringConcat => {
+            "{\n            let left = interpreter.eval_named_or_positional_arg(args, \"left\", 0)?;\n            let right = interpreter.eval_named_or_positional_arg(args, \"right\", 1)?;\n            Ok(Value::String(format!(\"{}{}\", expect_string(left)?, expect_string(right)?)))\n        }"
+        }
+        InterpreterEvalKind::StringIsEmpty => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(expect_string(value)?.is_empty()))\n        }"
+        }
+        InterpreterEvalKind::StringLen => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Int(expect_string(value)?.chars().count() as i64))\n        }"
+        }
+        InterpreterEvalKind::LogError => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"message\", 0)?;\n            interpreter.stderr.push_str(&expect_string(value)?);\n            interpreter.stderr.push('\\n');\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::LogTrace => {
+            "{\n            let event = interpreter.eval_named_or_positional_arg(args, \"event\", 0)?;\n            let message = interpreter.eval_named_or_positional_arg(args, \"message\", 1)?;\n            interpreter.stdout.push_str(\"trace \");\n            interpreter.stdout.push_str(&expect_string(event)?);\n            interpreter.stdout.push_str(\": \");\n            interpreter.stdout.push_str(&expect_string(message)?);\n            interpreter.stdout.push('\\n');\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::LogWrite => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"message\", 0)?;\n            interpreter.stdout.push_str(&expect_string(value)?);\n            interpreter.stdout.push('\\n');\n            Ok(Value::Unit)\n        }"
+        }
+    }
 }
 
 fn default_core_entries(root: &Path) -> Result<Vec<CoreInterfaceEntry>, String> {

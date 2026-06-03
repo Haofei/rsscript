@@ -425,15 +425,14 @@ impl Formatter {
             }
             Stmt::Match(stmt) => {
                 self.out.push_str("match ");
+                if let Some(effect) = stmt.scrutinee_effect {
+                    self.out.push_str(data_effect_name(effect));
+                    self.out.push(' ');
+                }
                 self.expr_at(&stmt.value, 0, indent);
                 self.out.push_str(" {\n");
                 for arm in &stmt.arms {
-                    self.indent(indent + 1);
-                    self.match_pattern(&arm.pattern);
-                    self.out.push_str(" => {\n");
-                    self.block(&arm.body, indent + 2);
-                    self.indent(indent + 1);
-                    self.out.push_str("}\n");
+                    self.match_arm(arm, indent);
                 }
                 self.indent(indent);
                 self.out.push('}');
@@ -598,17 +597,21 @@ impl Formatter {
                 self.indent(indent);
                 self.out.push('}');
             }
-            Expr::Match { value, arms, .. } => {
+            Expr::Match {
+                value,
+                scrutinee_effect,
+                arms,
+                ..
+            } => {
                 self.out.push_str("match ");
+                if let Some(effect) = scrutinee_effect {
+                    self.out.push_str(data_effect_name(*effect));
+                    self.out.push(' ');
+                }
                 self.expr_at(value, 0, indent);
                 self.out.push_str(" {\n");
                 for arm in arms {
-                    self.indent(indent + 1);
-                    self.match_pattern(&arm.pattern);
-                    self.out.push_str(" => {\n");
-                    self.block(&arm.body, indent + 2);
-                    self.indent(indent + 1);
-                    self.out.push_str("}\n");
+                    self.match_arm(arm, indent);
                 }
                 self.indent(indent);
                 self.out.push('}');
@@ -748,8 +751,22 @@ impl Formatter {
         self.out.push_str(&type_ref_text(ty));
     }
 
+    fn match_arm(&mut self, arm: &crate::syntax::ast::MatchArm, indent: usize) {
+        self.indent(indent + 1);
+        self.match_pattern(&arm.pattern);
+        if let Some(guard) = &arm.guard {
+            self.out.push_str(" if ");
+            self.expr_at(guard, 0, indent + 1);
+        }
+        self.out.push_str(" => {\n");
+        self.block(&arm.body, indent + 2);
+        self.indent(indent + 1);
+        self.out.push_str("}\n");
+    }
+
     fn match_pattern(&mut self, pattern: &MatchPattern) {
         match pattern {
+            MatchPattern::Binding { name, .. } => self.out.push_str(name),
             MatchPattern::Wildcard(_) => self.out.push('_'),
             MatchPattern::Literal { value, .. } => match value {
                 crate::syntax::ast::MatchLiteral::Int(value) => self.out.push_str(value),
@@ -769,10 +786,52 @@ impl Formatter {
             } => {
                 self.out.push_str(name);
                 self.out.push('(');
-                self.out.push_str(binding);
+                self.match_pattern(binding);
                 self.out.push(')');
             }
             MatchPattern::Variant { name, .. } => self.out.push_str(name),
+            MatchPattern::Struct {
+                name,
+                fields,
+                has_rest,
+                ..
+            } => {
+                self.out.push_str(name);
+                self.out.push_str(" { ");
+                let mut first = true;
+                for field in fields {
+                    if !first {
+                        self.out.push_str(", ");
+                    }
+                    first = false;
+                    self.out.push_str(&field.name);
+                    let needs_rhs = field.ignored
+                        || field.effect.is_some()
+                        || field.pattern.is_some()
+                        || field.binding.as_deref() != Some(field.name.as_str());
+                    if needs_rhs {
+                        self.out.push_str(": ");
+                        if let Some(effect) = field.effect {
+                            self.out.push_str(data_effect_name(effect));
+                            self.out.push(' ');
+                        }
+                        if field.ignored {
+                            self.out.push('_');
+                        } else if let Some(pattern) = &field.pattern {
+                            self.match_pattern(pattern);
+                        } else if let Some(binding) = &field.binding {
+                            self.out.push_str(binding);
+                        }
+                    }
+                }
+                if *has_rest {
+                    if !first {
+                        self.out.push_str(", ");
+                    }
+                    self.out.push_str("..");
+                }
+                self.out.push_str(" }");
+            }
         }
     }
 
@@ -1278,6 +1337,42 @@ fn save(image: read Image, path: read Path) -> Result<Unit, IOError>
     local tmp = Image.clone(image: read image)?
     Image.save(image: read tmp, path: read path)
     return Unit
+}
+"#
+        );
+    }
+
+    #[test]
+    fn formats_effectful_struct_match_patterns() {
+        let source = r#"fn inspect(expr:read Expr)->String{
+match read expr{
+Call{callee,args} if List.is_empty(list:read args)=>{
+return callee
+}
+Binary{left:_,right:read rhs,..}=>{
+return rhs
+}
+_=>{
+return ""
+}
+}
+}
+"#;
+
+        assert_eq!(
+            format_source("pattern.rss", source),
+            r#"fn inspect(expr: read Expr) -> String {
+    match read expr {
+        Call { callee, args } if List.is_empty(list: read args) => {
+            return callee
+        }
+        Binary { left: _, right: read rhs, .. } => {
+            return rhs
+        }
+        _ => {
+            return ""
+        }
+    }
 }
 "#
         );

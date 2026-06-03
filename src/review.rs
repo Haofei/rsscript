@@ -717,6 +717,9 @@ fn review_map_region_draft(
     if function.is_public {
         reasons.push("public entry point".to_string());
     }
+    if let Some(reason) = &function.deprecated_reason {
+        reasons.push(format!("deprecated: {reason}"));
+    }
     if is_entry_function(&function.name) {
         reasons.push("entry point".to_string());
     }
@@ -2198,12 +2201,8 @@ fn collect_managed_closure_capture_names_block(
                 );
                 for arm in arms {
                     let mut arm_locals = closure_locals.clone();
-                    if let crate::syntax::ast::MatchPattern::Variant {
-                        binding: Some(binding),
-                        ..
-                    } = &arm.pattern
-                    {
-                        arm_locals.insert(binding.clone());
+                    for binding in arm.pattern.binding_names() {
+                        arm_locals.insert(binding.to_string());
                     }
                     collect_managed_closure_capture_names_block(
                         &arm.body,
@@ -2557,6 +2556,9 @@ fn review_map_match_binding_type(
     pattern: &MatchPattern,
     value_type: Option<&str>,
 ) -> Option<(String, String)> {
+    if let MatchPattern::Binding { name, .. } = pattern {
+        return value_type.map(|ty| (name.clone(), ty.to_string()));
+    }
     let MatchPattern::Variant {
         name,
         binding: Some(binding),
@@ -2568,15 +2570,15 @@ fn review_map_match_binding_type(
     let value_type = value_type?;
     let args = type_arg_names(value_type)?;
     match name.as_str() {
-        "Some" if type_root_name(value_type) == "Option" => {
-            args.first().map(|ty| (binding.clone(), (*ty).to_string()))
-        }
-        "Ok" if type_root_name(value_type) == "Result" => {
-            args.first().map(|ty| (binding.clone(), (*ty).to_string()))
-        }
-        "Err" if type_root_name(value_type) == "Result" => {
-            args.get(1).map(|ty| (binding.clone(), (*ty).to_string()))
-        }
+        "Some" if type_root_name(value_type) == "Option" => args
+            .first()
+            .and_then(|ty| review_map_match_binding_type(binding, Some(ty))),
+        "Ok" if type_root_name(value_type) == "Result" => args
+            .first()
+            .and_then(|ty| review_map_match_binding_type(binding, Some(ty))),
+        "Err" if type_root_name(value_type) == "Result" => args
+            .get(1)
+            .and_then(|ty| review_map_match_binding_type(binding, Some(ty))),
         _ => None,
     }
 }

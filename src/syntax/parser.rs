@@ -5,10 +5,11 @@ use crate::syntax::ast::{
     AssignStmt, BinaryOp, Block, CallArg, Callee, ConstDecl, DataEffect, DuplicateFileFeature,
     EffectDecl, Expr, FieldDecl, FileFeature, FileFeatureScope, ForStmt, FunctionDecl,
     GenericBound, GenericParam, IfStmt, Item, LetElseStmt, LetKind, LetStmt, LoopStmt,
-    MapLiteralEntry, MatchArm, MatchLiteral, MatchPattern, MatchStmt, ModuleDecl,
-    ObjectLiteralField, Param, Program, ProtocolDecl, ProtocolImpl, ProtocolImplMapping,
-    ReturnStmt, SelectArm, SelectStmt, Stmt, SumTypeDecl, SumVariant, TaskGroupStmt, TypeAliasDecl,
-    TypeDecl, TypeKind, TypeRef, UnknownFileFeature, UseDecl, WithStmt,
+    MapLiteralEntry, MatchArm, MatchFieldPattern, MatchLiteral, MatchPattern, MatchStmt,
+    ModuleDecl, ObjectLiteralField, Param, Program, ProtocolDecl, ProtocolImpl,
+    ProtocolImplMapping, ReturnStmt, SelectArm, SelectStmt, Stmt, SumTypeDecl, SumVariant,
+    TaskGroupStmt, TypeAliasDecl, TypeDecl, TypeKind, TypeRef, UnknownFileFeature, UseDecl,
+    WithStmt,
 };
 
 pub fn parse_source(file: &str, source: &str) -> Program {
@@ -141,6 +142,7 @@ impl Parser<'_> {
                 || self.at_ident("async")
                 || self.at_ident("native")
                 || self.at_ident("fn")
+                || self.at_symbol("#")
             {
                 let start = self.index;
                 if let Some(item) = self.parse_function_decl() {
@@ -439,7 +441,33 @@ impl Parser<'_> {
     }
 
     fn parse_function_decl(&mut self) -> Option<FunctionDecl> {
+        let start = self.index;
         let span = self.current()?.span.clone();
+        let mut deprecated_reason = None;
+        while self.at_symbol("#") {
+            self.index += 1;
+            if !self.at_ident("deprecated") {
+                self.index = start;
+                return None;
+            }
+            self.index += 1;
+            if !self.at_symbol("(") {
+                self.index = start;
+                return None;
+            }
+            self.index += 1;
+            let Some(TokenKind::String(reason)) = self.current().map(|token| &token.kind) else {
+                self.index = start;
+                return None;
+            };
+            deprecated_reason = Some(reason.clone());
+            self.index += 1;
+            if !self.at_symbol(")") {
+                self.index = start;
+                return None;
+            }
+            self.index += 1;
+        }
         let mut is_public = false;
         let mut is_async = false;
         let mut is_native = false;
@@ -485,7 +513,11 @@ impl Parser<'_> {
                 self.index += 1;
             }
             let return_start = self.index;
-            while self.index < signature_end && !self.at_ident("effects") && !self.at_symbol("{") {
+            while self.index < signature_end
+                && !self.at_ident("effects")
+                && !self.at_symbol("{")
+                && !self.at_symbol("=")
+            {
                 if self.at_ident("fresh") {
                     returns_fresh = true;
                 }
@@ -503,6 +535,11 @@ impl Parser<'_> {
             effects = parsed_effects.effects;
             malformed_effect_spans = parsed_effects.malformed_spans;
             self.index = close + 1;
+        }
+        let default_impl_marker =
+            self.index + 1 < signature_end && self.at_symbol("=") && self.peek_ident(1, "_");
+        if default_impl_marker {
+            self.index += 2;
         }
         let (has_body, body) = if self.at_symbol("{") {
             let open = self.index;
@@ -529,6 +566,8 @@ impl Parser<'_> {
             is_async,
             is_native,
             has_body,
+            default_impl_marker,
+            deprecated_reason,
             type_params,
             malformed_generic_param_spans,
             params,
@@ -1350,7 +1389,10 @@ fn try_parse_let_else(tokens: &[Token], start: usize, limit: usize) -> Option<(S
         binding: if binding_name.is_empty() {
             None
         } else {
-            Some(binding_name.clone())
+            Some(Box::new(MatchPattern::Binding {
+                name: binding_name.clone(),
+                span: tokens[pattern_start + 2].span.clone(),
+            }))
         },
         span: tokens[pattern_start].span.clone(),
     };
@@ -1487,6 +1529,9 @@ fn parse_with_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize
 }
 
 fn parse_if_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
+    if let Some(parsed) = parse_if_is_stmt(tokens, start, limit) {
+        return parsed;
+    }
     let Some(open) = find_control_body_open(tokens, start, limit) else {
         return (
             Stmt::MalformedIf(tokens[start].span.clone()),
@@ -1549,6 +1594,150 @@ fn parse_if_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) 
     )
 }
 
+struct IsCondition {
+    value: Expr,
+    effect: DataEffect,
+    pattern: MatchPattern,
+    body_open: usize,
+    body_close: usize,
+}
+
+fn parse_is_condition(tokens: &[Token], start: usize, limit: usize) -> Option<IsCondition> {
+    let effect = parse_data_effect(tokens.get(start))?;
+    let is_index = find_top_level_ident(tokens, start + 1, limit, "is")?;
+    if is_index <= start + 1 {
+        return None;
+    }
+    for body_open in top_level_body_open_candidates(tokens, is_index + 1, limit) {
+        let Some(body_close) = find_matching(tokens, body_open, "{", "}") else {
+            continue;
+        };
+        if !control_body_close_can_end(tokens, body_close, limit) {
+            continue;
+        }
+        let Some(pattern) = parse_match_pattern(tokens, is_index + 1, body_open) else {
+            continue;
+        };
+        let value = parse_expr(tokens, start + 1, is_index)
+            .unwrap_or_else(|| Expr::Unknown(tokens[start].span.clone()));
+        return Some(IsCondition {
+            value,
+            effect,
+            pattern,
+            body_open,
+            body_close,
+        });
+    }
+    None
+}
+
+fn top_level_body_open_candidates(
+    tokens: &[Token],
+    start: usize,
+    limit: usize,
+) -> impl Iterator<Item = usize> + '_ {
+    let mut depth = 0usize;
+    (start..limit).filter(move |index| {
+        let token = &tokens[*index];
+        if token.symbol("{") {
+            if depth == 0 {
+                return true;
+            }
+            depth += 1;
+            return false;
+        }
+        if token.symbol("(") || token.symbol("[") {
+            depth += 1;
+        } else if token.symbol("}") || token.symbol(")") || token.symbol("]") {
+            depth = depth.saturating_sub(1);
+        }
+        false
+    })
+}
+
+fn control_body_close_can_end(tokens: &[Token], body_close: usize, limit: usize) -> bool {
+    let next = body_close + 1;
+    next >= limit
+        || matches!(
+            tokens.get(next).map(|token| &token.kind),
+            Some(TokenKind::Eof)
+        )
+        || tokens
+            .get(next)
+            .is_some_and(|token| token.is_ident_text("else") || token.symbol("}"))
+        || tokens
+            .get(next)
+            .is_some_and(|token| token.span.line > tokens[body_close].span.line)
+}
+
+fn parse_if_is_stmt(tokens: &[Token], start: usize, limit: usize) -> Option<(Stmt, usize)> {
+    let IsCondition {
+        value,
+        effect,
+        pattern,
+        body_open: open,
+        body_close: close,
+    } = parse_is_condition(tokens, start + 1, limit)?;
+    let then_body = parse_block(tokens, open, close);
+    let mut next = close + 1;
+    let else_body = if tokens
+        .get(next)
+        .is_some_and(|token| token.is_ident_text("else"))
+    {
+        if tokens.get(next + 1).is_some_and(|token| token.symbol("{")) {
+            let else_open = next + 1;
+            let else_close = find_matching(tokens, else_open, "{", "}")?;
+            next = else_close + 1;
+            parse_block(tokens, else_open, else_close)
+        } else if tokens
+            .get(next + 1)
+            .is_some_and(|token| token.is_ident_text("if"))
+        {
+            let span = tokens[next + 1].span.clone();
+            let (else_if, else_next) = parse_if_stmt(tokens, next + 1, limit);
+            next = else_next;
+            Block {
+                statements: vec![else_if],
+                span,
+            }
+        } else {
+            return Some((
+                Stmt::MalformedIf(tokens[start].span.clone()),
+                statement_end(tokens, next, limit),
+            ));
+        }
+    } else {
+        Block {
+            statements: Vec::new(),
+            span: tokens[start].span.clone(),
+        }
+    };
+
+    Some((
+        Stmt::Match(MatchStmt {
+            value,
+            scrutinee_effect: Some(effect),
+            arms: vec![
+                MatchArm {
+                    pattern,
+                    guard: None,
+                    body: then_body,
+                    span: tokens[start].span.clone(),
+                },
+                MatchArm {
+                    pattern: MatchPattern::Wildcard(tokens[start].span.clone()),
+                    guard: None,
+                    body: else_body,
+                    span: tokens[start].span.clone(),
+                },
+            ],
+            malformed_arm_spans: Vec::new(),
+            span: tokens[start].span.clone(),
+        }),
+        next,
+    ))
+}
+
 fn parse_if_let_stmt(
     tokens: &[Token],
     start: usize,
@@ -1603,14 +1792,17 @@ fn parse_if_let_stmt(
     (
         Stmt::Match(MatchStmt {
             value,
+            scrutinee_effect: None,
             arms: vec![
                 MatchArm {
                     pattern,
+                    guard: None,
                     body: then_body,
                     span: tokens[start].span.clone(),
                 },
                 MatchArm {
                     pattern: MatchPattern::Wildcard(tokens[start].span.clone()),
+                    guard: None,
                     body: else_body,
                     span: tokens[start].span.clone(),
                 },
@@ -1623,6 +1815,11 @@ fn parse_if_let_stmt(
 }
 
 fn parse_loop_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
+    if tokens[start].is_ident_text("while")
+        && let Some(parsed) = parse_while_is_stmt(tokens, start, limit)
+    {
+        return parsed;
+    }
     let Some(open) = find_control_body_open(tokens, start, limit) else {
         return (
             Stmt::MalformedLoop(tokens[start].span.clone()),
@@ -1652,6 +1849,50 @@ fn parse_loop_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize
         }),
         close + 1,
     )
+}
+
+fn parse_while_is_stmt(tokens: &[Token], start: usize, limit: usize) -> Option<(Stmt, usize)> {
+    let IsCondition {
+        value,
+        effect,
+        pattern,
+        body_open: open,
+        body_close: close,
+    } = parse_is_condition(tokens, start + 1, limit)?;
+    let body = parse_block(tokens, open, close);
+    Some((
+        Stmt::Loop(LoopStmt {
+            condition: None,
+            body: Block {
+                statements: vec![Stmt::Match(MatchStmt {
+                    value,
+                    scrutinee_effect: Some(effect),
+                    arms: vec![
+                        MatchArm {
+                            pattern,
+                            guard: None,
+                            body,
+                            span: tokens[start].span.clone(),
+                        },
+                        MatchArm {
+                            pattern: MatchPattern::Wildcard(tokens[start].span.clone()),
+                            guard: None,
+                            body: Block {
+                                statements: vec![Stmt::Break(tokens[start].span.clone())],
+                                span: tokens[start].span.clone(),
+                            },
+                            span: tokens[start].span.clone(),
+                        },
+                    ],
+                    malformed_arm_spans: Vec::new(),
+                    span: tokens[start].span.clone(),
+                })],
+                span: tokens[start].span.clone(),
+            },
+            span: tokens[start].span.clone(),
+        }),
+        close + 1,
+    ))
 }
 
 fn parse_for_stmt(tokens: &[Token], start: usize, limit: usize, is_async: bool) -> (Stmt, usize) {
@@ -1804,7 +2045,8 @@ fn parse_match_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usiz
     let Some(close) = find_matching(tokens, open, "{", "}") else {
         return (Stmt::MalformedMatch(tokens[start].span.clone()), limit);
     };
-    let Some(value) = parse_expr(tokens, start + 1, open) else {
+    let (scrutinee_effect, value_start) = parse_match_scrutinee_effect(tokens, start + 1, open);
+    let Some(value) = parse_expr(tokens, value_start, open) else {
         return (Stmt::MalformedMatch(tokens[start].span.clone()), close + 1);
     };
 
@@ -1812,6 +2054,7 @@ fn parse_match_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usiz
     (
         Stmt::Match(MatchStmt {
             value,
+            scrutinee_effect,
             arms: parsed_arms.arms,
             malformed_arm_spans: parsed_arms.malformed_spans,
             span: tokens[start].span.clone(),
@@ -1831,16 +2074,33 @@ fn parse_match_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> 
     if close + 1 != end {
         return None;
     }
-    let value = parse_expr(tokens, start + 1, brace_start)?;
+    let (scrutinee_effect, value_start) =
+        parse_match_scrutinee_effect(tokens, start + 1, brace_start);
+    let value = parse_expr(tokens, value_start, brace_start)?;
     let parsed_arms = parse_match_arms(tokens, brace_start + 1, close);
     if parsed_arms.arms.is_empty() {
         return None;
     }
     Some(Expr::Match {
         value: Box::new(value),
+        scrutinee_effect,
         arms: parsed_arms.arms,
         span: tokens[start].span.clone(),
     })
+}
+
+fn parse_match_scrutinee_effect(
+    tokens: &[Token],
+    start: usize,
+    end: usize,
+) -> (Option<DataEffect>, usize) {
+    if start < end
+        && let Some(effect) = parse_data_effect(tokens.get(start))
+    {
+        (Some(effect), start + 1)
+    } else {
+        (None, start)
+    }
 }
 
 fn find_match_expr_arms_open(tokens: &[Token], start: usize, end: usize) -> Option<usize> {
@@ -1886,7 +2146,17 @@ fn parse_match_arms(tokens: &[Token], start: usize, end: usize) -> ParsedMatchAr
             index = line_end.max(index + 1);
             continue;
         };
-        let pattern = if let Some(pattern) = parse_match_pattern(tokens, index, arrow) {
+        let (pattern_end, guard) = split_match_pattern_guard(tokens, index, arrow).map_or(
+            (arrow, None),
+            |(pattern_end, guard_start)| {
+                (
+                    pattern_end,
+                    parse_expr(tokens, guard_start, arrow)
+                        .or_else(|| Some(Expr::Unknown(tokens[guard_start].span.clone()))),
+                )
+            },
+        );
+        let pattern = if let Some(pattern) = parse_match_pattern(tokens, index, pattern_end) {
             pattern
         } else {
             malformed_spans.push(tokens[index].span.clone());
@@ -1919,6 +2189,7 @@ fn parse_match_arms(tokens: &[Token], start: usize, end: usize) -> ParsedMatchAr
         };
         arms.push(MatchArm {
             pattern,
+            guard,
             body,
             span: tokens[index].span.clone(),
         });
@@ -1928,6 +2199,20 @@ fn parse_match_arms(tokens: &[Token], start: usize, end: usize) -> ParsedMatchAr
         arms,
         malformed_spans,
     }
+}
+
+fn split_match_pattern_guard(tokens: &[Token], start: usize, end: usize) -> Option<(usize, usize)> {
+    let mut depth = 0usize;
+    for (index, token) in tokens.iter().enumerate().take(end).skip(start) {
+        if token.symbol("(") || token.symbol("{") || token.symbol("[") {
+            depth += 1;
+        } else if token.symbol(")") || token.symbol("}") || token.symbol("]") {
+            depth = depth.saturating_sub(1);
+        } else if depth == 0 && token.is_ident_text("if") {
+            return Some((index, index + 1));
+        }
+    }
+    None
 }
 
 fn parse_match_pattern(tokens: &[Token], start: usize, end: usize) -> Option<MatchPattern> {
@@ -1969,14 +2254,35 @@ fn parse_match_pattern(tokens: &[Token], start: usize, end: usize) -> Option<Mat
     if name == "_" {
         return Some(MatchPattern::Wildcard(tokens[start].span.clone()));
     }
+    if tokens.get(start + 1).is_some_and(|token| token.symbol("{")) {
+        let close = find_matching(tokens, start + 1, "{", "}")?;
+        if close + 1 != end {
+            return None;
+        }
+        let (fields, has_rest) = parse_match_field_patterns(tokens, start + 2, close)?;
+        return Some(MatchPattern::Struct {
+            name,
+            fields,
+            has_rest,
+            span: tokens[start].span.clone(),
+        });
+    }
     let binding = if tokens.get(start + 1).is_some_and(|token| token.symbol("(")) {
         let close = find_matching(tokens, start + 1, "(", ")")?;
         if close + 1 != end {
             return None;
         }
-        (start + 2..close)
-            .find_map(|index| ident_name(&tokens[index]).map(str::to_string))
-            .filter(|binding| binding != "_")
+        if start + 2 == close {
+            None
+        } else if start + 3 == close && tokens[start + 2].is_ident_text("_") {
+            Some(Box::new(MatchPattern::Wildcard(
+                tokens[start + 2].span.clone(),
+            )))
+        } else if start + 3 == close {
+            parse_single_payload_pattern(tokens, start + 2)
+        } else {
+            parse_match_pattern(tokens, start + 2, close).map(Box::new)
+        }
     } else if start + 1 == end {
         None
     } else {
@@ -1987,6 +2293,150 @@ fn parse_match_pattern(tokens: &[Token], start: usize, end: usize) -> Option<Mat
         binding,
         span: tokens[start].span.clone(),
     })
+}
+
+fn parse_match_field_patterns(
+    tokens: &[Token],
+    start: usize,
+    end: usize,
+) -> Option<(Vec<MatchFieldPattern>, bool)> {
+    let mut fields = Vec::new();
+    let mut has_rest = false;
+    for range in split_param_ranges(tokens, start, end) {
+        if range.empty_span.is_some() {
+            continue;
+        }
+        if (range.start + 1 == range.end && tokens[range.start].symbol(".."))
+            || (range.start + 2 == range.end
+                && tokens[range.start].symbol(".")
+                && tokens[range.start + 1].symbol("."))
+        {
+            has_rest = true;
+            continue;
+        }
+        let name = ident_name(tokens.get(range.start)?)?.to_string();
+        if name == "_" {
+            return None;
+        }
+        if let Some(colon) = find_top_level_symbol(tokens, range.start, range.end, ":") {
+            if colon != range.start + 1 {
+                return None;
+            }
+            let rhs_start = colon + 1;
+            if rhs_start >= range.end {
+                return None;
+            }
+            if rhs_start + 1 == range.end && tokens[rhs_start].is_ident_text("_") {
+                fields.push(MatchFieldPattern {
+                    name,
+                    binding: None,
+                    pattern: None,
+                    effect: None,
+                    ignored: true,
+                    span: tokens[range.start].span.clone(),
+                });
+                continue;
+            }
+            let (effect, binding_start) =
+                if let Some(effect) = parse_data_effect(tokens.get(rhs_start)) {
+                    (Some(effect), rhs_start + 1)
+                } else {
+                    (None, rhs_start)
+                };
+            let (binding, pattern, ignored) = if binding_start + 1 == range.end {
+                if tokens[binding_start].is_ident_text("_") {
+                    (None, None, true)
+                } else if let Some(pattern) =
+                    parse_single_literal_or_constructor_pattern(tokens, binding_start)
+                {
+                    (None, Some(pattern), false)
+                } else {
+                    let binding = ident_name(tokens.get(binding_start)?)?.to_string();
+                    (Some(binding), None, false)
+                }
+            } else {
+                (
+                    None,
+                    parse_match_pattern(tokens, binding_start, range.end).map(Box::new),
+                    false,
+                )
+            };
+            if pattern.is_none() && binding.is_none() && !ignored {
+                return None;
+            }
+            fields.push(MatchFieldPattern {
+                name,
+                binding,
+                pattern,
+                effect,
+                ignored,
+                span: tokens[range.start].span.clone(),
+            });
+        } else {
+            if range.start + 1 != range.end {
+                return None;
+            }
+            fields.push(MatchFieldPattern {
+                binding: Some(name.clone()),
+                pattern: None,
+                name,
+                effect: None,
+                ignored: false,
+                span: tokens[range.start].span.clone(),
+            });
+        }
+    }
+    Some((fields, has_rest))
+}
+
+fn parse_single_payload_pattern(tokens: &[Token], index: usize) -> Option<Box<MatchPattern>> {
+    if tokens[index].is_ident_text("_") {
+        return Some(Box::new(MatchPattern::Wildcard(tokens[index].span.clone())));
+    }
+    if let Some(pattern) = parse_single_literal_or_constructor_pattern(tokens, index) {
+        return Some(pattern);
+    }
+    ident_name(&tokens[index])
+        .filter(|binding| *binding != "_")
+        .map(|binding| {
+            Box::new(MatchPattern::Binding {
+                name: binding.to_string(),
+                span: tokens[index].span.clone(),
+            })
+        })
+}
+
+fn parse_single_literal_or_constructor_pattern(
+    tokens: &[Token],
+    index: usize,
+) -> Option<Box<MatchPattern>> {
+    match &tokens[index].kind {
+        TokenKind::Number(_) | TokenKind::String(_) => {
+            parse_match_pattern(tokens, index, index + 1).map(Box::new)
+        }
+        TokenKind::Ident(value) if matches!(value.as_str(), "true" | "false") => {
+            parse_match_pattern(tokens, index, index + 1).map(Box::new)
+        }
+        TokenKind::Keyword(value) if matches!(*value, "true" | "false") => {
+            parse_match_pattern(tokens, index, index + 1).map(Box::new)
+        }
+        _ => {
+            let name = ident_name(&tokens[index])?;
+            if starts_like_constructor(name) {
+                Some(Box::new(MatchPattern::Variant {
+                    name: name.to_string(),
+                    binding: None,
+                    span: tokens[index].span.clone(),
+                }))
+            } else {
+                None
+            }
+        }
+    }
+}
+
+fn starts_like_constructor(name: &str) -> bool {
+    name.chars().next().is_some_and(char::is_uppercase)
 }
 
 fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
@@ -3117,6 +3567,20 @@ fn find_top_level_symbol(
         } else if token.symbol(")") || token.symbol("}") || token.symbol("]") {
             depth = depth.saturating_sub(1);
         } else if depth == 0 && token.symbol(symbol) {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn find_top_level_ident(tokens: &[Token], start: usize, end: usize, ident: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    for (index, token) in tokens.iter().enumerate().take(end).skip(start) {
+        if token.symbol("(") || token.symbol("{") || token.symbol("[") {
+            depth += 1;
+        } else if token.symbol(")") || token.symbol("}") || token.symbol("]") {
+            depth = depth.saturating_sub(1);
+        } else if depth == 0 && token.is_ident_text(ident) {
             return Some(index);
         }
     }

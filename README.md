@@ -1,10 +1,10 @@
 # RSScript
 
-**Prototype semantic review evidence for AI-generated code. Turns behavior changes into PR-reviewable proof for CI experiments.**
+**Prototype semantic review evidence for AI-generated code. Turns behavior changes into PR-reviewable evidence for CI experiments.**
 
 ```text
 AI writes code → RSScript checks semantic boundaries → REIR produces evidence →
-CI can gate the PR based on capability, mutation, and deployment proof.
+CI can gate the PR based on capability, mutation, and deployment evidence.
 ```
 
 ## What it does
@@ -43,11 +43,26 @@ Block this PR before deploy.
 RSScript owns language and package-manager checks. REIR owns system evidence,
 deployment grants, reconciliation, PR reporting, and CI gate decisions.
 
+The product surface is the whole toolchain, not only the syntax: `check`, `lint`,
+`fmt`, `pkg`, LSP/IDE facts, AGENT guidance, constrained generation, review maps,
+and doc/test guards are designed as one AI-native feedback loop. A language with
+no training-data footprint needs the toolchain to make the intended shape cheap
+for agents to generate and cheap for reviewers to inspect.
+
 RSScript and REIR produce review evidence; they are not an execution sandbox.
 Core APIs such as `File`, `Env`, `HTTP`, and `Process` can touch the host when a
 program runs. Their role in the review pipeline is to emit explicit capability
 facts like filesystem access, environment access, network client access, and
 process spawn so CI policy can see and gate the boundary.
+
+They are also not formal proof systems. Formal verification is strongest when a
+property is precise and local enough to prove against one function, module, or
+protocol. PR review has a different throughput problem: thousands of changed
+lines may cross source code, packages, native wrappers, deployment manifests,
+IAM, and runtime observations. REIR is the evidence layer for that review path.
+It records what each producer can support, keeps unknown and best-effort facts
+visible, and lets CI compare changed semantic facts instead of re-reading every
+raw artifact.
 
 ## GitHub Action
 
@@ -390,7 +405,7 @@ The spec includes a semantic guarantee table that marks each promise as `static`
 
 ### What's implemented
 
-- **Runtime hooks and async library surface** are split deliberately. The language owns `async fn`, `await`, `task_group`, `select`, and `await for`; the compiler runtime owns the hidden `Pending`/executor substrate; the standard `rss-async` package owns the user-facing async API: `Deadline`, `Timer`, `CancellationSource`/`CancellationToken`, bounded MPSC `Channel`, `Stream`, async file IO, async HTTP client calls, async process IO, TCP client sockets, WebSocket client IO, and CSV/file streaming. Executable packages must select a reviewed backend provider such as `rss-async-runtime` with `[providers] async = "rss-async-runtime"`; single-file scripts keep a default async surface for quick iteration. This follows the same broad shape as MoonBit's package-based async model while keeping RSScript's review/effect boundaries explicit. A user `async fn` lowers to a value implementing `Pending<Ret>` rather than running an executor inline. Top-level suspension boundaries compose into that pending chain; `if`/`loop`/`match`/`with` statements that contain awaits lower as explicit async statement boundaries, while awaits embedded in ordinary expression arguments remain rejected with `RS0411` until full async expression lowering lands. `task_group { async let ... }` constructs child pendings without running them, drives siblings with one cooperative poll loop, wires structured cancellation through `Task.cancellation_token()`, and drains discarded scoped background tasks. `Channel.bounded<T>` is a bounded MPSC channel with explicit sender/receiver endpoints, async send/recv plus cancellable variants, and `Receiver.into_stream`/`Stream.next` support `await for`. `ChannelError` remains opaque (`ChannelError.message`/`?`) rather than a matchable `Closed`/`Cancelled`/`InvalidCapacity` sum. The remaining core runtime hooks cover `Log`, `Assert`, `Args`, `OS`, and common `List` / `String` / `Json` / `Path` / `Directory` / `File` / `Map` / `Set` / `Buffer` helpers, plus `Toml`, `Yaml`, `Csv`, `Clock`, `Regex`, `Hash`, `TempDir`, `Env`, `Process`, `Random` / `Uuid`, encoding helpers, `Cache`, `Image` / `ImageCache`, HTTP handler/client facades, a DB resource-pool, config and rules reload, interpreter object links, `StringBuilder`, and `Counter`.
+- **Runtime hooks and async library surface** are split deliberately. The language owns `async fn`, `await`, `task_group`, `select`, and `await for`; the compiler runtime owns the hidden `Pending`/executor substrate; the standard `rss-async` package owns the user-facing async API: `Deadline`, `Timer`, `CancellationSource`/`CancellationToken`, bounded MPSC `Channel`, `Stream`, async file IO, async HTTP client calls, async process IO, TCP client sockets, WebSocket client IO, and CSV/file streaming. Executable packages must select a reviewed backend provider such as `rss-async-runtime` with `[providers] async = "rss-async-runtime"`; single-file scripts keep a default async surface for quick iteration. RSScript's review and effect boundaries stay explicit throughout. A user `async fn` lowers to a value implementing `Pending<Ret>` rather than running an executor inline. Top-level suspension boundaries compose into that pending chain; `if`/`loop`/`match`/`with` statements that contain awaits lower as explicit async statement boundaries, while awaits embedded in ordinary expression arguments remain rejected with `RS0411` until full async expression lowering lands. `task_group { async let ... }` constructs child pendings without running them, drives siblings with one cooperative poll loop, wires structured cancellation through `Task.cancellation_token()`, and drains discarded scoped background tasks. `Channel.bounded<T>` is a bounded MPSC channel with explicit sender/receiver endpoints, async send/recv plus cancellable variants, and `Receiver.into_stream`/`Stream.next` support `await for`. `ChannelError` remains opaque (`ChannelError.message`/`?`) rather than a matchable `Closed`/`Cancelled`/`InvalidCapacity` sum. The remaining core runtime hooks cover `Log`, `Assert`, `Args`, `OS`, and common `List` / `String` / `Json` / `Path` / `Directory` / `File` / `Map` / `Set` / `Buffer` helpers, plus `Toml`, `Yaml`, `Csv`, `Clock`, `Regex`, `Hash`, `TempDir`, `Env`, `Process`, `Random` / `Uuid`, encoding helpers, `Cache`, `Image` / `ImageCache`, HTTP handler/client facades, a DB resource-pool, config and rules reload, interpreter object links, `StringBuilder`, and `Counter`.
 - **Compiler-owned derives:** `derives(...)` is a closed set the compiler expands into generated Rust — `Debug`, `Clone`, `Eq`, `Ord`, `Hash`, `JsonEncode`/`JsonDecode` (serde), and the review-only `Schema`/`ReviewSchema` markers. `Eq` and `Ord` are the canonical spellings (Rust's `PartialEq`/`PartialOrd` are not a separate surface). Because the expansion is compiler-owned, the checker validates derive *requirements* before lowering (`RS0211`): `Eq`/`Ord`/`Hash` reject `Float` fields, `handle`/`weak` fields (which lower to `Managed<T>`), `Map`/`Set` fields for `Ord`/`Hash`, and struct/sum fields whose type does not derive the same trait — recursing through `List`/`Option`/`Result` and `Map`/`Set` element types so `Map<String, Float>` is caught for `Eq`. `JsonEncode`/`JsonDecode` require struct/sum fields to derive the matching JSON trait, and `JsonDecode` additionally rejects non-`Eq`/`Hash` `Map` keys and `Set` elements (e.g. a `Float` key). Generic parameters are accepted as ordinary fields (the derive adds the matching `T: Trait` bound) but rejected in a `Map`-key/`Set`-element position at any nesting depth — where the required `Hash` bound cannot be expressed — and a local generic type's arguments are checked too, so `Key<Float>` deriving `Eq` is caught. This `RS0211` check is conservative — it only rejects fields the backend would reject, so it never refuses a program rustc would accept — and it keeps the `Float: Eq` style trait-bound error explained in RSScript instead of leaking from rustc. Separately, `resource` types are move-only RAII values that default to `Debug` only: a distinct policy (`RS0212`) rejects value derives like `Clone`/`Eq`/`Ord`/`Hash`/`JsonEncode`/`JsonDecode` on a resource and allows only the implicit `Debug` and the review-only `Schema`/`ReviewSchema` markers. Unlike `RS0211`, this is a deliberate RSScript ownership rule, so it rejects some derives the Rust backend could itself expand (e.g. `Eq` on a resource with only `Int` fields).
 - **Controlled assignment:** `let mut x = e` declares a reassignable local and `x = e` updates it. Assignment is allowed only when the compiler can prove the left side is a legal mutable place: the target's root must be a `let mut` local — a plain `let`/`local` binding is immutable (`RS0311`), a parameter is not a reassignable local (`RS0311`), and the left side must be a place (a local, field, or index) rather than a call result like `get_user().name = ...` (`RS0311`). Field assignment (`obj.field = e`) and `List` index assignment (`list[i] = e`) are executable controlled-assignment forms; other indexed types still require explicit APIs such as `Map.insert` and report `RS0312`. When both sides are known, the assigned value's type must match the place's type (`RS0313`), so an `Int = String` style error is reported in RSScript instead of leaking from rustc. `mut` must appear explicitly in the binding, so mutation stays visible to the type system and review facts. A local reassignment is a behavior fact, not a risk elevation — the review map classifies it like any other local mutation.
 - **Lowering basics:** simple operations keep `.rssi` signatures for checking but lower directly to Rust std expressions and runtime hooks. Literals, arithmetic/comparison operators, `Option<T>` constructors, and surface types (`Bytes`, `Buffer`, `Path`, `List<T>`, `Map<K,V>`, `Set<T>`) lower to the matching Rust forms. User-defined operator overloading stays forbidden.
@@ -412,6 +427,7 @@ rss dev      [--once] [--core|--no-core] [--interface <f.rssi> ...] <file-or-pac
 rss dev      --lint [--once] [--core|--no-core] [--interface <f.rssi> ...] <file-or-package-directory>
 rss dev      --run [--release] [--once] <file-or-package-directory>
 rss dev      --json --once [...]   # --json requires --once
+rss eval     <file.rss>
 rss fmt      <file.rss>
 rss review   [--json] --diff <old.rss> <new.rss>
 rss review   [--json] --map  <file-or-directory>
@@ -433,6 +449,7 @@ rss test     [--all] [--json] [--filter <substring>]
 - `rss check` loads bundled core `.rssi` signatures by default for single files; pointed at a directory with `rsspkg.toml`, it runs package check.
 - `rss lint` reuses the frontend checks and emits warnings. The first lint is `RSL001` — public signatures over the review budget for parameter count, generics, effects, or nested-type depth.
 - `rss dev` is the inner-loop watcher: it reruns `rss check` (add `--lint`, or `--run` for the cargo-backed run path) on every save, polling source modification times with no extra dependency. The default `check` loop never invokes cargo, so frontend feedback stays in the tens-of-milliseconds range; `--once` runs a single pass for scripts and CI. It watches `.rss`, `.rssi`, `.toml`, and `.lock` files, skipping `target/`, `.git/`, and generated directories. To keep behavior unambiguous, `rss dev` rejects flag combinations it would otherwise ignore: `--json` requires `--once` (watch mode interleaves human status lines that would corrupt JSON); `--lint` runs the lint loop alone and is mutually exclusive with `--run`; `--release` applies only to `--run`; and `--run` does not accept `--core`/`--no-core`/`--interface` (those apply only to the check loop).
+- `rss eval` runs the checked tree-walk interpreter for pure local feedback. P0 supports scalar/control-flow/user-function/struct/sum-pattern programs plus a small pure runtime-intrinsic subset; unsupported native, host, async, and resource boundaries fail closed instead of falling back to Rust lowering.
 - `rss test` runs the default test set; `--all` runs the full test set. `--filter` selects tests by name substring, and `--json` emits a machine-readable summary.
 - Human diagnostics render the offending source line in a rustc-style gutter with an aligned caret and inline label (falling back to a caret-only view when the source file is unavailable, e.g. synthetic spans). `--json` output is unchanged.
 - `rss review --map` validates inputs first, so files with frontend errors get diagnostics instead of misleading classifications. `--json` reports `unknown_ratio` and `unknown_function_ratio` directly.
@@ -441,7 +458,7 @@ rss test     [--all] [--json] [--filter <substring>]
 - `rss pkg diff` compares two local package directories and reports semantic package changes.
 - `rss pkg ci` is the CI-facing package check entrypoint. It uses the same package health rules as `rss pkg`, with stable `--json` output for automation.
 - `rss pkg publish --dry-run` runs pre-publish checks without uploading and reports whether the package is ready.
-- `rss run` lowers a single file (or a package with `src/main.rss`) to a temporary Rust package and delegates to `cargo run`; package lowering carries enabled `[native.rust]` wrappers through as generated Cargo path dependencies and maps `native/bindings.rssbind.toml` call bindings into generated Rust calls. `--release` delegates to Cargo's release profile, `--out-dir` keeps the generated package, and arguments after `--` reach the program through the core `Args` API.
+- `rss run` lowers a single file (or a package with `src/main.rss`) to a temporary Rust package and delegates to `cargo run`; package lowering carries enabled `[native.rust]` wrappers through as generated Cargo path dependencies and maps `native/bindings.rssbind.toml` call bindings into generated Rust calls. `--dry-run` prints the generated `Cargo.toml`, lowered Rust, and cargo invocation without executing it; `--release` delegates to Cargo's release profile, `--out-dir` keeps the generated package, and arguments after `--` reach the program through the core `Args` API.
 
 ### Hello world
 
@@ -484,6 +501,13 @@ These intentionally exclude Dart-style conveniences that conflict with review-fi
 ## Non-goals
 
 RSScript prioritizes reviewable semantics over syntactic cleverness or maximal expressiveness. It deliberately avoids implicit conversions, user-defined operator overloading, hidden allocation, hidden retention, macro-heavy metaprogramming, complex public signatures, Rust-style lifetime syntax, C++-style implicit magic, and TypeScript-style type gymnastics.
+
+RSScript also does not own a separate build graph or build executor. `rss run` lowers to a Rust package and delegates execution to Cargo; fast edit-run feedback belongs to the HIR interpreter, while Cargo remains the Rust build substrate.
+
+RSScript deliberately holds the lower-to-Rust niche. It is not trying to be a
+multi-target/full-stack language that also emits JavaScript, mobile UI code, or
+database schemas. Breadth would dilute the review-first bet; Rust lowering is
+the backend contract.
 
 The goal is code humans and tools can review reliably.
 

@@ -13,7 +13,7 @@ Non-scope: RSScript language semantics, RSScript package dependency resolution, 
 - Capability-binding call-graph propagation now produces REIR required-capability
   facts for each reachable API path.
 - S3 IAM scenario demonstrates end-to-end: code requires → IAM grants →
-  reconciliation proof → review summary.
+  reconciliation result → review summary.
 - Evidence bundle format includes reconciliation result (pass/fail/partial)
   with per-capability detail.
 - Adapter profile for RSScript package metadata now emits structured
@@ -46,7 +46,7 @@ find many facts inside source, IaC, dependency metadata, or runtime logs. REIR's
 non-replaceable value is connecting facts that belong to different layers and
 checking whether the combined path is safe, available, consistent, and changed.
 
-The first product proof is **cross-layer capability reconciliation**:
+The first product demonstration is **cross-layer capability reconciliation**:
 
 ```text
 code requires a capability
@@ -66,7 +66,32 @@ role does not grant s3:PutObject on that resource
 result: missing capability; this deployment is likely to fail at runtime
 ```
 
-### 0.1 Normative boundary
+### 0.1 Review evidence, not formal proof
+
+REIR is the review evidence layer. It is not an SMT system, proof assistant, or
+complete verifier for arbitrary program behavior.
+
+Formal verification is valuable when the target property is precise, local, and
+stable enough to model. Review has a different scaling problem. A real PR can
+change source code, generated code, package metadata, native wrappers,
+deployment identity, IAM, runtime configuration, and observed behavior at the
+same time. The reviewer usually needs to answer a throughput question:
+
+```text
+what new semantic facts changed,
+which facts are backed by source or producer-owned semantics,
+which facts are best-effort or unknown,
+and which changed facts cross a deployment or capability boundary?
+```
+
+REIR optimizes for that review path. It records evidence, acquisition mode,
+confidence, precision, subject identity, and diff identity so review can move
+from O(total artifact volume) toward O(changed semantic facts). A producer may
+emit authoritative facts only for semantics it owns. Heuristic scans,
+AI-inferred facts, incomplete analysis, and runtime observations must remain
+marked as such rather than being upgraded into proof.
+
+### 0.2 Normative boundary
 
 REIR owns the shape of review evidence. It does **not** own the semantics of any
 producer.
@@ -85,7 +110,7 @@ source-derived fact can be authoritative only for the source semantics it owns.
 A scanner-derived or AI-inferred fact must remain lower-confidence and must carry
 its acquisition mode.
 
-### 0.2 Compatibility with RSScript v0.5 specs
+### 0.3 Compatibility with RSScript v0.5 specs
 
 This specification is compatible with the RSScript language and package-manager
 specifications by treating them as producer specifications, not as sub-sections
@@ -114,7 +139,7 @@ REIR does not add RSScript syntax, RSScript effects, RSScript type rules,
 package resolution rules, `.rssi` normalization rules, or native wrapper
 conformance rules.
 
-### 0.3 Design thesis
+### 0.4 Design thesis
 
 Software generation cost is collapsing. Review cost does not collapse with it.
 The limiting question is no longer whether a human or AI can read enough raw
@@ -2051,7 +2076,7 @@ app code or infrastructure declarations.
 
 ## 19. MVP: Cross-Layer Capability Reconciliation
 
-The first REIR product proof should be cross-layer capability reconciliation for
+The first REIR product demonstration should be cross-layer capability reconciliation for
 deployment safety.
 
 ### 19.1 MVP question

@@ -14,8 +14,10 @@ mod core_index;
 mod diagnostic;
 mod editor_grammar;
 mod formatter;
+mod generate;
 mod hir;
 mod interfaces;
+mod interpreter;
 mod lexer;
 mod lint;
 mod package;
@@ -39,6 +41,12 @@ pub use diagnostic::{
 };
 pub use editor_grammar::{VSCODE_GRAMMAR_PATH, vscode_tmlanguage_json};
 pub use formatter::{format_program, format_source};
+pub use generate::{
+    CommitBehavior, Completion, CompletionKind, ContinuationOptions, Continuations, Effect,
+    ExpectedType, GenerateContext, LiteralClass, PrefixStatus, SymbolCompleteness, TextRange,
+    TypeRef, prefix_status, valid_continuations,
+};
+pub use interpreter::{EvalError, EvalOutput, eval_source_main};
 pub use lint::lint_source;
 pub use package::{
     PackageArchiveFile, PackageCheck, PackageCheckLock, PackageDependencyKind, PackageDiff,

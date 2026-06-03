@@ -15,6 +15,8 @@ pub(super) struct Manifest {
     #[serde(default)]
     pub(super) sources: ManifestPathSection,
     #[serde(default)]
+    pub(super) tests: ManifestPathSection,
+    #[serde(default)]
     pub(super) dependencies: BTreeMap<String, toml::Value>,
     #[serde(default, rename = "dev-dependencies")]
     pub(super) dev_dependencies: BTreeMap<String, toml::Value>,
@@ -308,6 +310,7 @@ pub(super) fn load_package_with_features(
         selected_interface_feature_paths(&manifest, &selected_features);
     let excluded_feature_interface_roots = all_interface_feature_paths(&manifest);
     let source_roots = default_paths(&manifest.sources.paths, "src");
+    let test_roots = manifest.tests.paths.clone();
     let mut sources = Vec::new();
     sources.extend(read_package_sources_excluding(
         package_dir,
@@ -324,6 +327,11 @@ pub(super) fn load_package_with_features(
         package_dir,
         &source_roots,
         PackageReviewFileKind::Source,
+    )?);
+    sources.extend(read_package_sources(
+        package_dir,
+        &test_roots,
+        PackageReviewFileKind::Test,
     )?);
     sources.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(LoadedPackage {

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +21,42 @@ pub fn ord_compare<T: Ord>(left: &T, right: &T) -> i64 {
 
 pub fn list_new<T>() -> Vec<T> {
     Vec::new()
+}
+
+pub fn deque_new<T>() -> VecDeque<T> {
+    VecDeque::new()
+}
+
+pub fn deque_push_back<T: Clone>(deque: &mut VecDeque<T>, value: &T) {
+    deque.push_back(value.clone());
+}
+
+pub fn deque_push_front<T: Clone>(deque: &mut VecDeque<T>, value: &T) {
+    deque.push_front(value.clone());
+}
+
+pub fn deque_pop_back<T>(deque: &mut VecDeque<T>) -> Option<T> {
+    deque.pop_back()
+}
+
+pub fn deque_pop_front<T>(deque: &mut VecDeque<T>) -> Option<T> {
+    deque.pop_front()
+}
+
+pub fn deque_clear<T>(deque: &mut VecDeque<T>) {
+    deque.clear();
+}
+
+pub fn deque_len<T>(deque: &VecDeque<T>) -> i64 {
+    deque.len() as i64
+}
+
+pub fn deque_is_empty<T>(deque: &VecDeque<T>) -> bool {
+    deque.is_empty()
+}
+
+pub fn deque_to_list<T: Clone>(deque: &VecDeque<T>) -> Vec<T> {
+    deque.iter().cloned().collect()
 }
 
 pub fn list_push<T: Clone>(list: &mut Vec<T>, value: &T) {
@@ -366,6 +402,90 @@ pub fn map_new<K, V>() -> HashMap<K, V> {
     HashMap::new()
 }
 
+pub type RssPersistentMap<K, V> = imbl::HashMap<K, V>;
+
+pub fn persistent_map_new<K, V>() -> RssPersistentMap<K, V> {
+    RssPersistentMap::new()
+}
+
+pub fn persistent_map_len<K, V>(map: &RssPersistentMap<K, V>) -> i64 {
+    map.len() as i64
+}
+
+pub fn persistent_map_is_empty<K, V>(map: &RssPersistentMap<K, V>) -> bool {
+    map.is_empty()
+}
+
+pub fn persistent_map_contains_key<K: Eq + Hash, V>(map: &RssPersistentMap<K, V>, key: &K) -> bool {
+    map.contains_key(key)
+}
+
+pub fn persistent_map_get<K: Eq + Hash, V: Clone>(
+    map: &RssPersistentMap<K, V>,
+    key: &K,
+) -> Option<V> {
+    map.get(key).cloned()
+}
+
+pub fn persistent_map_insert<K: Eq + Hash + Clone, V: Clone>(
+    map: &RssPersistentMap<K, V>,
+    key: &K,
+    value: &V,
+) -> RssPersistentMap<K, V> {
+    map.update(key.clone(), value.clone())
+}
+
+pub fn persistent_map_remove<K: Eq + Hash + Clone, V: Clone>(
+    map: &RssPersistentMap<K, V>,
+    key: &K,
+) -> RssPersistentMap<K, V> {
+    map.without(key)
+}
+
+pub fn persistent_map_clear<K, V>(_map: &RssPersistentMap<K, V>) -> RssPersistentMap<K, V> {
+    RssPersistentMap::new()
+}
+
+pub fn sorted_map_new<K, V>() -> BTreeMap<K, V> {
+    BTreeMap::new()
+}
+
+pub fn sorted_map_len<K, V>(map: &BTreeMap<K, V>) -> i64 {
+    map.len() as i64
+}
+
+pub fn sorted_map_is_empty<K, V>(map: &BTreeMap<K, V>) -> bool {
+    map.is_empty()
+}
+
+pub fn sorted_map_contains_key<K: Ord, V>(map: &BTreeMap<K, V>, key: &K) -> bool {
+    map.contains_key(key)
+}
+
+pub fn sorted_map_get<K: Ord, V: Clone>(map: &BTreeMap<K, V>, key: &K) -> Option<V> {
+    map.get(key).cloned()
+}
+
+pub fn sorted_map_insert<K: Ord + Clone, V: Clone>(map: &mut BTreeMap<K, V>, key: &K, value: &V) {
+    map.insert(key.clone(), value.clone());
+}
+
+pub fn sorted_map_remove<K: Ord, V>(map: &mut BTreeMap<K, V>, key: &K) -> Option<V> {
+    map.remove(key)
+}
+
+pub fn sorted_map_clear<K, V>(map: &mut BTreeMap<K, V>) {
+    map.clear();
+}
+
+pub fn sorted_map_keys<K: Clone, V>(map: &BTreeMap<K, V>) -> Vec<K> {
+    map.keys().cloned().collect()
+}
+
+pub fn sorted_map_values<K, V: Clone>(map: &BTreeMap<K, V>) -> Vec<V> {
+    map.values().cloned().collect()
+}
+
 pub fn map_from_entries<K: Eq + Hash, V>(entries: Vec<(K, V)>) -> HashMap<K, V> {
     entries.into_iter().collect()
 }
@@ -611,6 +731,38 @@ pub fn set_new<T>() -> HashSet<T> {
     HashSet::new()
 }
 
+pub fn sorted_set_new<T>() -> BTreeSet<T> {
+    BTreeSet::new()
+}
+
+pub fn sorted_set_len<T>(set: &BTreeSet<T>) -> i64 {
+    set.len() as i64
+}
+
+pub fn sorted_set_is_empty<T>(set: &BTreeSet<T>) -> bool {
+    set.is_empty()
+}
+
+pub fn sorted_set_contains<T: Ord>(set: &BTreeSet<T>, value: &T) -> bool {
+    set.contains(value)
+}
+
+pub fn sorted_set_insert<T: Ord + Clone>(set: &mut BTreeSet<T>, value: &T) -> bool {
+    set.insert(value.clone())
+}
+
+pub fn sorted_set_remove<T: Ord>(set: &mut BTreeSet<T>, value: &T) -> bool {
+    set.remove(value)
+}
+
+pub fn sorted_set_clear<T>(set: &mut BTreeSet<T>) {
+    set.clear();
+}
+
+pub fn sorted_set_to_list<T: Clone>(set: &BTreeSet<T>) -> Vec<T> {
+    set.iter().cloned().collect()
+}
+
 pub fn set_len<T>(set: &HashSet<T>) -> i64 {
     set.len() as i64
 }
@@ -794,5 +946,77 @@ mod view_tests {
 
         list_clear(&mut items);
         assert!(items.is_empty());
+    }
+
+    #[test]
+    fn deque_helpers_cover_both_ends() {
+        let mut deque = deque_new();
+        deque_push_back(&mut deque, &2);
+        deque_push_front(&mut deque, &1);
+        deque_push_back(&mut deque, &3);
+
+        assert_eq!(deque_len(&deque), 3);
+        assert!(!deque_is_empty(&deque));
+        assert_eq!(deque_to_list(&deque), vec![1, 2, 3]);
+        assert_eq!(deque_pop_front(&mut deque), Some(1));
+        assert_eq!(deque_pop_back(&mut deque), Some(3));
+        assert_eq!(deque_pop_front(&mut deque), Some(2));
+        assert_eq!(deque_pop_front(&mut deque), None);
+
+        deque_push_back(&mut deque, &4);
+        deque_clear(&mut deque);
+        assert!(deque_is_empty(&deque));
+    }
+
+    #[test]
+    fn sorted_collections_iterate_in_key_order() {
+        let mut map = sorted_map_new();
+        sorted_map_insert(&mut map, &2, &"two".to_string());
+        sorted_map_insert(&mut map, &1, &"one".to_string());
+        sorted_map_insert(&mut map, &3, &"three".to_string());
+
+        assert_eq!(sorted_map_len(&map), 3);
+        assert!(sorted_map_contains_key(&map, &2));
+        assert_eq!(sorted_map_get(&map, &1), Some("one".to_string()));
+        assert_eq!(sorted_map_keys(&map), vec![1, 2, 3]);
+        assert_eq!(
+            sorted_map_values(&map),
+            vec!["one".to_string(), "two".to_string(), "three".to_string()]
+        );
+        assert_eq!(sorted_map_remove(&mut map, &2), Some("two".to_string()));
+        sorted_map_clear(&mut map);
+        assert!(sorted_map_is_empty(&map));
+
+        let mut set = sorted_set_new();
+        assert!(sorted_set_insert(&mut set, &3));
+        assert!(sorted_set_insert(&mut set, &1));
+        assert!(sorted_set_insert(&mut set, &2));
+        assert!(!sorted_set_insert(&mut set, &2));
+
+        assert_eq!(sorted_set_len(&set), 3);
+        assert!(sorted_set_contains(&set, &1));
+        assert_eq!(sorted_set_to_list(&set), vec![1, 2, 3]);
+        assert!(sorted_set_remove(&mut set, &2));
+        sorted_set_clear(&mut set);
+        assert!(sorted_set_is_empty(&set));
+    }
+
+    #[test]
+    fn persistent_map_updates_return_fresh_maps() {
+        let empty = persistent_map_new();
+        let one = persistent_map_insert(&empty, &"one".to_string(), &1);
+        let two = persistent_map_insert(&one, &"two".to_string(), &2);
+        let removed = persistent_map_remove(&two, &"one".to_string());
+        let cleared = persistent_map_clear(&two);
+
+        assert!(persistent_map_is_empty(&empty));
+        assert_eq!(persistent_map_len(&one), 1);
+        assert_eq!(persistent_map_len(&two), 2);
+        assert_eq!(persistent_map_get(&one, &"one".to_string()), Some(1));
+        assert_eq!(persistent_map_get(&empty, &"one".to_string()), None);
+        assert!(persistent_map_contains_key(&two, &"two".to_string()));
+        assert_eq!(persistent_map_get(&removed, &"one".to_string()), None);
+        assert_eq!(persistent_map_get(&two, &"one".to_string()), Some(1));
+        assert!(persistent_map_is_empty(&cleared));
     }
 }

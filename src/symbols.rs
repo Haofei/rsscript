@@ -721,8 +721,13 @@ impl Builder<'_> {
             Stmt::Match(match_stmt) => {
                 self.visit_expr(&match_stmt.value);
                 for arm in &match_stmt.arms {
+                    self.push_scope();
                     self.visit_pattern(&arm.pattern);
+                    if let Some(guard) = &arm.guard {
+                        self.visit_expr(guard);
+                    }
                     self.visit_block(&arm.body);
+                    self.pop_scope();
                 }
             }
             Stmt::TaskGroup(task_group) => self.visit_block(&task_group.body),
@@ -764,13 +769,28 @@ impl Builder<'_> {
     }
 
     fn visit_pattern(&mut self, pattern: &MatchPattern) {
-        if let MatchPattern::Variant {
-            binding: Some(binding),
-            span,
-            ..
-        } = pattern
-        {
-            self.define(binding, SymbolKind::Local, span, None);
+        match pattern {
+            MatchPattern::Binding { name, span } => {
+                self.define(name, SymbolKind::Local, span, None);
+            }
+            MatchPattern::Variant {
+                binding: Some(binding),
+                ..
+            } => self.visit_pattern(binding),
+            MatchPattern::Struct { fields, .. } => {
+                for field in fields {
+                    if let Some(pattern) = &field.pattern {
+                        self.visit_pattern(pattern);
+                    } else if !field.ignored
+                        && let Some(binding) = &field.binding
+                    {
+                        self.define(binding, SymbolKind::Local, &field.span, None);
+                    }
+                }
+            }
+            MatchPattern::Variant { binding: None, .. }
+            | MatchPattern::Literal { .. }
+            | MatchPattern::Wildcard(_) => {}
         }
     }
 
@@ -818,6 +838,9 @@ impl Builder<'_> {
                 for arm in arms {
                     self.push_scope();
                     self.visit_pattern(&arm.pattern);
+                    if let Some(guard) = &arm.guard {
+                        self.visit_expr(guard);
+                    }
                     self.visit_block(&arm.body);
                     self.pop_scope();
                 }

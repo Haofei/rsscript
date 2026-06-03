@@ -736,9 +736,15 @@ fn collect_ordered_moved_uses_from_stmt(
             }
             collect_ordered_moved_uses_from_block(body, entry_states, moved_uses);
         }
-        HirStmt::Match { value, arms, .. } => {
+        HirStmt::Match {
+            value,
+            scrutinee_effect,
+            arms,
+            ..
+        } => {
             if let Some(mut state) = entry_state {
                 collect_ordered_moved_uses_from_expr(value, &mut state, moved_uses);
+                apply_match_take_move(*scrutinee_effect, value, &mut state);
             }
             for arm in arms {
                 collect_ordered_moved_uses_from_block(&arm.body, entry_states, moved_uses);
@@ -852,10 +858,35 @@ fn collect_ordered_moved_uses_from_expr(
                 }
             }
         }
-        HirExpr::Number { .. }
-        | HirExpr::String { .. }
-        | HirExpr::Match { .. }
-        | HirExpr::Unknown(_) => {}
+        HirExpr::Number { .. } | HirExpr::String { .. } | HirExpr::Unknown(_) => {}
+        HirExpr::Match {
+            value,
+            scrutinee_effect,
+            arms,
+            ..
+        } => {
+            collect_ordered_moved_uses_from_expr(value, state, moved_uses);
+            apply_match_take_move(*scrutinee_effect, value, state);
+            for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    collect_ordered_moved_uses_from_expr(guard, state, moved_uses);
+                }
+                collect_ordered_moved_uses_from_block(&arm.body, &HashMap::new(), moved_uses);
+            }
+        }
+    }
+}
+
+fn apply_match_take_move(
+    effect: Option<crate::syntax::ast::DataEffect>,
+    value: &HirExpr,
+    state: &mut BodyState,
+) {
+    if effect != Some(crate::syntax::ast::DataEffect::Take) {
+        return;
+    }
+    if let Some((path, span)) = hir_expr_path(value) {
+        state.mark_moved(&path, span);
     }
 }
 
@@ -1805,7 +1836,24 @@ fn collect_hir_stmt_effect_events(statement: &HirStmt, events: &mut Vec<HirEffec
             ..
         } => collect_hir_expr_effect_events(condition, events),
         HirStmt::For { iterable, .. } => collect_hir_expr_effect_events(iterable, events),
-        HirStmt::Match { value, .. } => collect_hir_expr_effect_events(value, events),
+        HirStmt::Match {
+            value,
+            scrutinee_effect,
+            ..
+        } => {
+            collect_hir_expr_effect_events(value, events);
+            if *scrutinee_effect == Some(crate::syntax::ast::DataEffect::Take)
+                && let Some((path, span)) = hir_expr_path(value)
+            {
+                events.push(HirEffectEvent {
+                    function_name: String::new(),
+                    kind: HirEffectEventKind::Take,
+                    binding_name: path,
+                    span: span.clone(),
+                    value_span: span,
+                });
+            }
+        }
         HirStmt::Select { arms, .. } => {
             for arm in arms {
                 collect_hir_expr_effect_events(&arm.operation, events);
@@ -1860,8 +1908,34 @@ fn collect_hir_expr_effect_events(expr: &HirExpr, events: &mut Vec<HirEffectEven
             collect_hir_expr_effect_events(base, events);
             collect_hir_expr_effect_events(index, events);
         }
+        HirExpr::Match {
+            value,
+            scrutinee_effect,
+            arms,
+            ..
+        } => {
+            collect_hir_expr_effect_events(value, events);
+            if *scrutinee_effect == Some(crate::syntax::ast::DataEffect::Take)
+                && let Some((path, span)) = hir_expr_path(value)
+            {
+                events.push(HirEffectEvent {
+                    function_name: String::new(),
+                    kind: HirEffectEventKind::Take,
+                    binding_name: path,
+                    span: span.clone(),
+                    value_span: span,
+                });
+            }
+            for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    collect_hir_expr_effect_events(guard, events);
+                }
+                for statement in &arm.body.statements {
+                    collect_hir_stmt_effect_events(statement, events);
+                }
+            }
+        }
         HirExpr::Closure { .. }
-        | HirExpr::Match { .. }
         | HirExpr::MapLiteral { .. }
         | HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
@@ -2285,6 +2359,9 @@ fn fresh_match_pattern_binding(
         ..
     } = &arm.pattern
     else {
+        return None;
+    };
+    let crate::syntax::ast::MatchPattern::Binding { name: binding, .. } = binding.as_ref() else {
         return None;
     };
     let payload_type = fresh_payload_type_for_variant(value_type, name)?;

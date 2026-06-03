@@ -270,6 +270,8 @@ pub struct FunctionDecl {
     pub is_async: bool,
     pub is_native: bool,
     pub has_body: bool,
+    pub default_impl_marker: bool,
+    pub deprecated_reason: Option<String>,
     pub type_params: Vec<GenericParam>,
     pub malformed_generic_param_spans: Vec<Span>,
     pub params: Vec<Param>,
@@ -451,6 +453,7 @@ pub struct SelectArm {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchStmt {
     pub value: Expr,
+    pub scrutinee_effect: Option<DataEffect>,
     pub arms: Vec<MatchArm>,
     pub malformed_arm_spans: Vec<Span>,
     pub span: Span,
@@ -459,15 +462,26 @@ pub struct MatchStmt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchArm {
     pub pattern: MatchPattern,
+    pub guard: Option<Expr>,
     pub body: Block,
     pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MatchPattern {
+    Binding {
+        name: String,
+        span: Span,
+    },
     Variant {
         name: String,
-        binding: Option<String>,
+        binding: Option<Box<MatchPattern>>,
+        span: Span,
+    },
+    Struct {
+        name: String,
+        fields: Vec<MatchFieldPattern>,
+        has_rest: bool,
         span: Span,
     },
     Literal {
@@ -475,6 +489,50 @@ pub enum MatchPattern {
         span: Span,
     },
     Wildcard(Span),
+}
+
+impl MatchPattern {
+    pub fn constructor_name(&self) -> Option<&str> {
+        match self {
+            Self::Variant { name, .. } | Self::Struct { name, .. } => Some(name),
+            Self::Binding { .. } | Self::Literal { .. } | Self::Wildcard(_) => None,
+        }
+    }
+
+    pub fn binding_names(&self) -> Vec<&str> {
+        match self {
+            Self::Binding { name, .. } => vec![name.as_str()],
+            Self::Variant {
+                binding: Some(binding),
+                ..
+            } => binding.binding_names(),
+            Self::Struct { fields, .. } => fields
+                .iter()
+                .flat_map(|field| {
+                    if field.ignored {
+                        Vec::new()
+                    } else if let Some(pattern) = &field.pattern {
+                        pattern.binding_names()
+                    } else {
+                        field.binding.as_deref().into_iter().collect()
+                    }
+                })
+                .collect(),
+            Self::Variant { binding: None, .. } | Self::Literal { .. } | Self::Wildcard(_) => {
+                Vec::new()
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchFieldPattern {
+    pub name: String,
+    pub binding: Option<String>,
+    pub pattern: Option<Box<MatchPattern>>,
+    pub effect: Option<DataEffect>,
+    pub ignored: bool,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -554,6 +612,7 @@ pub enum Expr {
     },
     Match {
         value: Box<Expr>,
+        scrutinee_effect: Option<DataEffect>,
         arms: Vec<MatchArm>,
         span: Span,
     },

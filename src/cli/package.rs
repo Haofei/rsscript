@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use rsscript::{
@@ -55,6 +55,7 @@ pub(crate) fn run_package(args: &[String]) -> ExitCode {
             dry_run,
             path,
         } => run_package_vendor(json, reir, dry_run, path),
+        PackageCommand::Add { dependency } => run_package_add(dependency),
     }
 }
 
@@ -106,6 +107,9 @@ pub(crate) enum PackageCommand<'a> {
         dry_run: bool,
         path: &'a str,
     },
+    Add {
+        dependency: &'a str,
+    },
 }
 
 fn parse_package_args(args: &[String]) -> Result<PackageCommand<'_>, String> {
@@ -134,7 +138,7 @@ fn parse_package_args(args: &[String]) -> Result<PackageCommand<'_>, String> {
             return Err(format!("unknown argument `{arg}`."));
         } else if matches!(
             arg.as_str(),
-            "review" | "diff" | "ci" | "publish" | "lock" | "tree" | "metadata" | "vendor"
+            "review" | "diff" | "ci" | "publish" | "lock" | "tree" | "metadata" | "vendor" | "add"
         ) {
             words.push(arg.as_str());
         } else {
@@ -145,6 +149,9 @@ fn parse_package_args(args: &[String]) -> Result<PackageCommand<'_>, String> {
 
     if json && reir {
         return Err("`--json` and `--reir` cannot be combined.".to_owned());
+    }
+    if json && matches!(words.as_slice(), ["add"]) {
+        return Err("`--json` is not supported for `rss pkg add`.".to_owned());
     }
     if dry_run && !matches!(words.as_slice(), ["publish"] | ["vendor"] | ["metadata"]) {
         return Err(
@@ -158,7 +165,12 @@ fn parse_package_args(args: &[String]) -> Result<PackageCommand<'_>, String> {
     if verify && !matches!(words.as_slice(), ["metadata"]) {
         return Err("`--verify` is only supported for `rss pkg metadata`.".to_owned());
     }
-    if reir && !matches!(words.as_slice(), ["lock"] | ["tree"] | ["metadata"] | ["vendor"]) {
+    if reir
+        && !matches!(
+            words.as_slice(),
+            ["lock"] | ["tree"] | ["metadata"] | ["vendor"]
+        )
+    {
         return Err(
             "`--reir` is only supported for `rss pkg lock`, `tree`, `metadata`, or `vendor`."
                 .to_owned(),
@@ -230,8 +242,70 @@ fn parse_package_args(args: &[String]) -> Result<PackageCommand<'_>, String> {
             dry_run,
             path,
         }),
+        (["add"], [dependency]) => Ok(PackageCommand::Add { dependency }),
         _ => Err("invalid package arguments.".to_string()),
     }
+}
+
+pub(crate) fn run_new_package(args: &[String]) -> ExitCode {
+    let Some(name) = args.first() else {
+        eprintln!("missing package name.");
+        return ExitCode::from(2);
+    };
+    if args.len() > 1 {
+        eprintln!("unexpected extra argument `{}`.", args[1]);
+        return ExitCode::from(2);
+    }
+    match create_new_package(Path::new(name), name) {
+        Ok(()) => {
+            println!("created RSScript package `{name}`");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn create_new_package(path: &Path, name: &str) -> Result<(), String> {
+    validate_package_name(name)?;
+    if path.exists() {
+        return Err(format!("package path already exists: {}", path.display()));
+    }
+    fs::create_dir_all(path.join("src"))
+        .map_err(|error| format!("failed to create {}: {error}", path.display()))?;
+    fs::write(path.join("rsspkg.toml"), package_manifest_template(name))
+        .map_err(|error| format!("failed to write {}/rsspkg.toml: {error}", path.display()))?;
+    fs::write(path.join("src/main.rss"), package_main_template(name))
+        .map_err(|error| format!("failed to write {}/src/main.rss: {error}", path.display()))?;
+    let lock = lock_package_dir(path)?;
+    fs::write(path.join("rsspkg.lock"), format_package_lock_toml(&lock))
+        .map_err(|error| format!("failed to write {}/rsspkg.lock: {error}", path.display()))?;
+    Ok(())
+}
+
+fn package_manifest_template(name: &str) -> String {
+    format!(
+        r#"[package]
+name = "{name}"
+version = "0.1.0"
+edition = "2026"
+
+[sources]
+paths = ["src"]
+"#
+    )
+}
+
+fn package_main_template(name: &str) -> String {
+    format!(
+        r#"fn main() -> Unit {{
+    Log.write(message: read "hello {name}")
+    return Unit
+}}
+"#
+    )
 }
 
 pub(crate) fn run_package_check(json: bool, path: &str) -> ExitCode {
@@ -377,7 +451,13 @@ fn run_package_tree(json: bool, reir: bool, path: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn run_package_metadata(json: bool, reir: bool, verify: bool, dry_run: bool, path: &str) -> ExitCode {
+fn run_package_metadata(
+    json: bool,
+    reir: bool,
+    verify: bool,
+    dry_run: bool,
+    path: &str,
+) -> ExitCode {
     let report = if verify {
         package_metadata_verify(Path::new(path))
     } else {
@@ -430,10 +510,126 @@ fn run_package_vendor(json: bool, reir: bool, dry_run: bool, path: &str) -> Exit
     }
 }
 
+fn run_package_add(dependency: &str) -> ExitCode {
+    match add_dependency_to_package(Path::new("."), dependency) {
+        Ok(name) => {
+            println!("added dependency `{name}`");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn add_dependency_to_package(package_dir: &Path, dependency: &str) -> Result<String, String> {
+    let manifest_path = package_dir.join("rsspkg.toml");
+    let source = fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
+    let mut manifest: toml::Value = toml::from_str(&source)
+        .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
+    let (name, value) = dependency_value(package_dir, dependency)?;
+    let table = manifest
+        .as_table_mut()
+        .ok_or_else(|| "rsspkg.toml must be a TOML table.".to_string())?;
+    let dependencies = table
+        .entry("dependencies")
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+        .as_table_mut()
+        .ok_or_else(|| "`[dependencies]` must be a TOML table.".to_string())?;
+    dependencies.insert(name.clone(), value);
+    let rendered = toml::to_string_pretty(&manifest)
+        .map_err(|error| format!("failed to render {}: {error}", manifest_path.display()))?;
+    fs::write(&manifest_path, rendered)
+        .map_err(|error| format!("failed to write {}: {error}", manifest_path.display()))?;
+    Ok(name)
+}
+
+fn dependency_value(package_dir: &Path, dependency: &str) -> Result<(String, toml::Value), String> {
+    let candidate_path = dependency_path(package_dir, dependency);
+    if candidate_path.join("rsspkg.toml").is_file() {
+        let name = package_name_from_manifest(&candidate_path.join("rsspkg.toml"))?;
+        validate_package_name(&name)?;
+        let mut table = toml::map::Map::new();
+        table.insert(
+            "path".to_string(),
+            toml::Value::String(normalized_path_text(dependency)),
+        );
+        return Ok((name, toml::Value::Table(table)));
+    }
+
+    if let Some((name, version)) = dependency.split_once('@') {
+        validate_package_name(name)?;
+        if version.is_empty() {
+            return Err("dependency version cannot be empty.".to_string());
+        }
+        return Ok((name.to_string(), toml::Value::String(version.to_string())));
+    }
+
+    validate_package_name(dependency)?;
+    Ok((dependency.to_string(), toml::Value::String("*".to_string())))
+}
+
+fn dependency_path(package_dir: &Path, dependency: &str) -> PathBuf {
+    let path = PathBuf::from(dependency);
+    if path.is_absolute() {
+        path
+    } else {
+        package_dir.join(path)
+    }
+}
+
+fn package_name_from_manifest(manifest_path: &Path) -> Result<String, String> {
+    let source = fs::read_to_string(manifest_path)
+        .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
+    let manifest: toml::Value = toml::from_str(&source)
+        .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
+    manifest
+        .get("package")
+        .and_then(toml::Value::as_table)
+        .and_then(|package| package.get("name"))
+        .and_then(toml::Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| format!("{} is missing `[package] name`.", manifest_path.display()))
+}
+
+fn normalized_path_text(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+fn validate_package_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("package name cannot be empty.".to_string());
+    }
+    if !name
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err(format!(
+            "package name `{name}` may only contain ASCII letters, digits, `_`, or `-`."
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!("{name}-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&path).expect("temp dir should be created");
+        path
     }
 
     #[test]
@@ -541,7 +737,10 @@ mod tests {
         let values = args(&["metadata", "--verify", "pkgdir"]);
         match super::parse_package_args(&values).expect("metadata --verify should parse") {
             super::PackageCommand::Metadata {
-                verify, dry_run, path, ..
+                verify,
+                dry_run,
+                path,
+                ..
             } => {
                 assert!(verify && !dry_run);
                 assert_eq!(path, "pkgdir");
@@ -554,6 +753,17 @@ mod tests {
             super::PackageCommand::Vendor { dry_run, path, .. } => {
                 assert!(dry_run);
                 assert_eq!(path, ".");
+            }
+            other => panic!("unexpected package command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_package_args_accepts_add() {
+        let values = args(&["add", "rss-async"]);
+        match super::parse_package_args(&values).expect("add should parse") {
+            super::PackageCommand::Add { dependency } => {
+                assert_eq!(dependency, "rss-async");
             }
             other => panic!("unexpected package command: {other:?}"),
         }
@@ -601,5 +811,52 @@ mod tests {
         let values = args(&["publish", "package"]);
         let error = super::parse_package_args(&values).expect_err("publish should require dry-run");
         assert_eq!(error, "`rss pkg publish` currently requires `--dry-run`.");
+
+        let values = args(&["add", "--json", "dep"]);
+        let error = super::parse_package_args(&values).expect_err("add json should fail");
+        assert_eq!(error, "`--json` is not supported for `rss pkg add`.");
+    }
+
+    #[test]
+    fn new_package_writes_minimal_package_skeleton() {
+        let root = temp_dir("rsscript-new-package");
+        let package_dir = root.join("hello-rss");
+
+        super::create_new_package(&package_dir, "hello-rss")
+            .expect("new package should be created");
+
+        let manifest =
+            fs::read_to_string(package_dir.join("rsspkg.toml")).expect("manifest should exist");
+        let main = fs::read_to_string(package_dir.join("src/main.rss")).expect("main should exist");
+        let lock = fs::read_to_string(package_dir.join("rsspkg.lock")).expect("lock should exist");
+        assert!(manifest.contains("name = \"hello-rss\""));
+        assert!(manifest.contains("[sources]"));
+        assert!(main.contains("hello hello-rss"));
+        assert!(lock.contains("version = 1"));
+        assert!(lock.contains("name = \"hello-rss\""));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn package_add_writes_version_and_path_dependencies() {
+        let root = temp_dir("rsscript-pkg-add");
+        let app = root.join("app");
+        let dep = root.join("dep");
+        super::create_new_package(&app, "app").expect("app package should be created");
+        super::create_new_package(&dep, "dep-pkg").expect("dep package should be created");
+
+        super::add_dependency_to_package(&app, "rss-async@0.1.0")
+            .expect("version dependency should add");
+        let relative_dep = "../dep";
+        super::add_dependency_to_package(&app, relative_dep).expect("path dependency should add");
+
+        let manifest =
+            fs::read_to_string(app.join("rsspkg.toml")).expect("manifest should be readable");
+        assert!(manifest.contains("rss-async = \"0.1.0\""));
+        assert!(manifest.contains("[dependencies.dep-pkg]"));
+        assert!(manifest.contains("path = \"../dep\""));
+
+        let _ = fs::remove_dir_all(root);
     }
 }

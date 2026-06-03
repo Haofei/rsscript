@@ -1,0 +1,31 @@
+struct PersistentMap<K, V>
+
+pub fn PersistentMap.new<K, V>() -> fresh PersistentMap<K, V>
+
+pub fn PersistentMap.len<K, V>(map: read PersistentMap<K, V>) -> Int
+
+pub fn PersistentMap.is_empty<K, V>(map: read PersistentMap<K, V>) -> Bool
+
+pub fn PersistentMap.contains_key<K, V>(
+    map: read PersistentMap<K, V>,
+    key: read K,
+) -> Bool
+
+pub fn PersistentMap.get<K, V>(
+    map: read PersistentMap<K, V>,
+    key: read K,
+) -> Option<V>
+
+pub fn PersistentMap.insert<K, V>(
+    map: read PersistentMap<K, V>,
+    key: read K,
+    value: read V,
+) -> fresh PersistentMap<K, V>
+    effects(retains(key), retains(value))
+
+pub fn PersistentMap.remove<K, V>(
+    map: read PersistentMap<K, V>,
+    key: read K,
+) -> fresh PersistentMap<K, V>
+
+pub fn PersistentMap.clear<K, V>(map: read PersistentMap<K, V>) -> fresh PersistentMap<K, V>

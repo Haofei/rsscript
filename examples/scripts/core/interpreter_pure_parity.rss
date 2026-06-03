@@ -1,0 +1,19 @@
+struct Expr {
+    left: Int
+    right: Int
+}
+
+fn render(value: Int) -> fresh String {
+    return String.concat(left: read "value=", right: read value.to_string())
+}
+
+fn main() -> Unit {
+    let expr = Expr(left: 20, right: 22)
+    match read expr {
+        Expr { left, right } => {
+            let total = left + right
+            Log.write(message: read render(value: total))
+            Log.trace(event: read "eval.parity", message: read "done")
+        }
+    }
+}

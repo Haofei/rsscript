@@ -520,6 +520,7 @@ pub struct PackageProviderImplementation {
 pub enum PackageReviewFileKind {
     Interface,
     Source,
+    Test,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

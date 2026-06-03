@@ -794,6 +794,250 @@ fn package_review_reports_interface_implementation_signature_mismatch() {
 }
 
 #[test]
+fn package_review_exports_deprecation_reason() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-deprecated-export");
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-deprecated-export",
+        "0.1.0",
+        "",
+        r#"#deprecated("use Render.render_v2")
+pub fn Render.render(body: read String) -> String
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("src/lib.rss"),
+        r#"#deprecated("use Render.render_v2")
+pub fn Render.render(body: read String) -> String {
+    return body
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(review.diagnostics.is_empty(), "{:?}", review.diagnostics);
+    assert!(json["exports"].as_array().is_some_and(|exports| {
+        exports.iter().any(|export| {
+            export["name"] == "Render.render"
+                && export["kind"] == "function"
+                && export["reasons"].as_array().is_some_and(|reasons| {
+                    reasons
+                        .iter()
+                        .any(|reason| reason == "deprecated: use Render.render_v2")
+                })
+        })
+    }));
+}
+
+#[test]
+fn package_tests_can_see_package_internals_without_exporting_them() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-test-scope");
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-test-scope",
+        "0.1.0",
+        r#"[tests]
+paths = ["tests"]
+"#,
+        r#"pub fn Public.answer() -> Int
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::create_dir_all(temp_dir.join("tests")).expect("tests dir should be created");
+    fs::write(
+        temp_dir.join("src/lib.rss"),
+        r#"fn private_answer() -> Int {
+    return 41
+}
+
+pub fn Public.answer() -> Int {
+    return private_answer() + 1
+}
+"#,
+    )
+    .expect("source should be written");
+    fs::write(
+        temp_dir.join("tests/private.rss"),
+        r#"fn test_private_answer() -> Unit {
+    Assert.equal_int(left: private_answer(), right: 41)
+}
+"#,
+    )
+    .expect("test source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(review.diagnostics.is_empty(), "{:?}", review.diagnostics);
+    assert!(json["files"].as_array().is_some_and(|files| {
+        files.iter().any(|file| {
+            file["kind"] == "test"
+                && file["path"]
+                    .as_str()
+                    .is_some_and(|path| path.ends_with("tests/private.rss"))
+        })
+    }));
+    assert!(json["exports"].as_array().is_some_and(|exports| {
+        exports
+            .iter()
+            .any(|export| export["name"] == "Public.answer" && export["kind"] == "function")
+            && !exports
+                .iter()
+                .any(|export| export["name"] == "private_answer")
+            && !exports
+                .iter()
+                .any(|export| export["name"] == "test_private_answer")
+    }));
+}
+
+#[test]
+fn package_tests_see_dev_dependency_interfaces_not_internals() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-test-dev-scope");
+    let dep_dir = temp_dir.join("deps/helper");
+    common::write_named_package_fixture(
+        &dep_dir,
+        "rss-helper",
+        "0.1.0",
+        "",
+        r#"pub fn Helper.public() -> Int
+"#,
+    );
+    fs::create_dir_all(dep_dir.join("src")).expect("dependency source dir should be created");
+    fs::write(
+        dep_dir.join("src/lib.rss"),
+        r#"fn Helper.secret() -> Int {
+    return 7
+}
+
+pub fn Helper.public() -> Int {
+    return Helper.secret()
+}
+"#,
+    )
+    .expect("dependency source should be written");
+
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-test-dev-scope",
+        "0.1.0",
+        r#"[tests]
+paths = ["tests"]
+
+[dev-dependencies.helper]
+path = "deps/helper"
+"#,
+        r#"pub fn Public.answer() -> Int
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::create_dir_all(temp_dir.join("tests")).expect("tests dir should be created");
+    fs::write(
+        temp_dir.join("src/lib.rss"),
+        r#"pub fn Public.answer() -> Int {
+    return 1
+}
+"#,
+    )
+    .expect("source should be written");
+    fs::write(
+        temp_dir.join("tests/dev_dep.rss"),
+        r#"fn test_dev_dependency_scope() -> Unit {
+    Assert.equal_int(left: Helper.public(), right: 7)
+    Assert.equal_int(left: Helper.secret(), right: 7)
+}
+"#,
+    )
+    .expect("test source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let diagnostics = review
+        .diagnostics
+        .iter()
+        .map(|diagnostic| {
+            format!(
+                "{}:{}:{}",
+                diagnostic.code, diagnostic.label, diagnostic.summary
+            )
+        })
+        .collect::<Vec<_>>();
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("Helper.secret")),
+        "{diagnostics:?}"
+    );
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("Helper.public")),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn package_review_reports_deprecation_reason_contract_mismatch() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-deprecated-mismatch");
+    common::write_named_package_fixture(
+        &temp_dir,
+        "rss-deprecated-mismatch",
+        "0.1.0",
+        "",
+        r#"#deprecated("use Render.render_v2")
+pub fn Render.render(body: read String) -> String
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("src/lib.rss"),
+        r#"#deprecated("use Render.render_fast")
+pub fn Render.render(body: read String) -> String {
+    return body
+}
+"#,
+    )
+    .expect("source should be written");
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let causes = review
+        .diagnostics
+        .iter()
+        .flat_map(|diagnostic| diagnostic.causes.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(review.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "RS1301" && diagnostic.label == "interface/source signature mismatch"
+    }));
+    assert!(
+        causes.iter().any(|cause| {
+            cause.contains(
+                "interface: pub fn Render.render(body: read String) -> String #deprecated(\"use Render.render_v2\")",
+            )
+        }),
+        "{causes:?}"
+    );
+    assert!(
+        causes.iter().any(|cause| {
+            cause.contains(
+                "source: pub fn Render.render(body: read String) -> String #deprecated(\"use Render.render_fast\")",
+            )
+        }),
+        "{causes:?}"
+    );
+}
+
+#[test]
 fn package_review_reports_missing_interface_type_declaration() {
     let temp_dir = common::unique_temp_dir("rsscript-package-missing-interface-type");
     common::write_named_package_fixture(
@@ -2598,6 +2842,8 @@ fn package_review_exports_protocol_impl_contracts() {
         r#"protocol Writer {
     fn write(self: mut Self, message: read String) -> Unit
         effects(retains(message))
+
+    fn flush(self: mut Self) -> Unit = _
 }
 
 struct BufferWriter
@@ -2605,8 +2851,11 @@ struct BufferWriter
 pub fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit
     effects(retains(message))
 
+pub fn BufferWriter.flush(self: mut BufferWriter) -> Unit
+
 impl Writer for BufferWriter {
     write = BufferWriter.write
+    flush = BufferWriter.flush
 }
 "#,
     );
@@ -2638,6 +2887,11 @@ impl Writer for BufferWriter {
                 && export["classification"] == "review_if_changed"
                 && export["reasons"].as_array().is_some_and(|reasons| {
                     reasons.iter().any(|reason| reason == "method `write`")
+                        && reasons.iter().any(|reason| reason == "method `flush`")
+                        && reasons.iter().any(|reason| {
+                            reason
+                                == "method contract `fn Writer.flush(self: mut Self) -> Unit = _`"
+                        })
                         && reasons.iter().any(|reason| {
                             reason
                                 == "method contract `fn Writer.write(self: mut Self, message: read String) -> Unit effects(retains(message))`"
