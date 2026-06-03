@@ -18,8 +18,7 @@ LLMs); everything else lives here.
 
 | Doc | Idea |
 |-----|------|
-| [RSScript_Constrained_Generation_v0.1_Draft.md](RSScript_Constrained_Generation_v0.1_Draft.md) | Compiler-as-decoding-oracle: forbid illegal tokens during LLM generation (Article IX tooling). |
-| [RSScript_Interpreter_v0.1_Draft.md](RSScript_Interpreter_v0.1_Draft.md) | Fast tree-walking interpreter for ms-level behavioral feedback (agent loop, `rss test`). |
+| [RSScript_AI_Generation_Feedback_v0.1_Draft.md](RSScript_AI_Generation_Feedback_v0.1_Draft.md) | Agent-facing generation oracle plus fast interpreter feedback loop for AI-generated RSScript. |
 
 ## Conventions
 
