@@ -1267,7 +1267,8 @@ fn check_call_args(
         }
     }
 
-    let type_param_substitutions = call_type_param_substitutions(analyzer, callee, args, signature);
+    let type_param_substitutions =
+        call_type_param_substitutions(analyzer, Some(function), callee, args, signature);
     check_generic_call_bounds(
         analyzer,
         function,
@@ -1799,6 +1800,7 @@ fn check_receiver_call_self_effect(
 
 fn call_type_param_substitutions(
     analyzer: &Analyzer<'_>,
+    function: Option<&FunctionDecl>,
     callee: &Callee,
     args: &[HirCallArg],
     signature: &FunctionSig,
@@ -1840,6 +1842,17 @@ fn call_type_param_substitutions(
                 substitutions.insert(param.to_string(), actual.to_string());
             }
         }
+    }
+    if let Callee::ReceiverCall { receiver, .. } = callee
+        && let Some(receiver_param) = signature.params.first()
+        && let Some(actual_type) = infer_receiver_expr_type(analyzer, function, receiver)
+    {
+        collect_type_param_substitutions(
+            &receiver_param.type_name,
+            &actual_type,
+            &generic_params,
+            &mut substitutions,
+        );
     }
     collect_call_arg_type_param_substitutions(args, signature, &generic_params, &mut substitutions);
     substitutions
@@ -1891,6 +1904,42 @@ fn constructor_or_named_shorthand_arg_name(arg: &HirCallArg) -> Option<&str> {
         return None;
     };
     Some(name.as_str())
+}
+
+fn infer_receiver_expr_type(
+    analyzer: &Analyzer<'_>,
+    function: Option<&FunctionDecl>,
+    expr: &Expr,
+) -> Option<String> {
+    match expr {
+        Expr::Effect { value, .. }
+        | Expr::Manage { value, .. }
+        | Expr::Spawn { value, .. }
+        | Expr::Await { value, .. }
+        | Expr::Try { value, .. } => infer_receiver_expr_type(analyzer, function, value),
+        Expr::Ident(name, _) => function
+            .and_then(|function| analyzer.hir.function_body(&function.name))
+            .and_then(|body| {
+                body.bindings
+                    .iter()
+                    .find(|binding| binding.name == *name)
+                    .and_then(|binding| binding.type_name.clone())
+            })
+            .or_else(|| builtin_value_type_name(name).map(str::to_string)),
+        Expr::Call { .. } => None,
+        Expr::Closure { .. }
+        | Expr::Match { .. }
+        | Expr::ObjectLiteral { .. }
+        | Expr::MapLiteral { .. }
+        | Expr::ArrayLiteral { .. }
+        | Expr::Field { .. }
+        | Expr::Index { .. }
+        | Expr::Binary { .. }
+        | Expr::Number(_, _)
+        | Expr::String(_, _)
+        | Expr::MultilineString(_, _)
+        | Expr::Unknown(_) => None,
+    }
 }
 
 fn collect_type_param_substitutions(
@@ -2689,7 +2738,8 @@ fn check_callback_resolved_call_argument_types(
     contract: &CallbackContract<'_>,
 ) {
     let call_name = callee_display(callee);
-    let type_param_substitutions = call_type_param_substitutions(analyzer, callee, args, signature);
+    let type_param_substitutions =
+        call_type_param_substitutions(analyzer, None, callee, args, signature);
     for arg in args {
         let Some(name) = &arg.name else {
             continue;
@@ -4497,7 +4547,8 @@ fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
 fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str>> {
     match root {
         "List" | "Set" | "Option" | "ResourcePool" | "Channel" | "Sender" | "Receiver"
-        | "Stream" => Some(vec!["T"]),
+        | "Stream" | "Pipeline" => Some(vec!["T"]),
+        "FalliblePipeline" => Some(vec!["T", "E"]),
         "Capability" => Some(vec!["P"]),
         "Map" | "Result" => Some(vec!["K", "V"]),
         _ => None,

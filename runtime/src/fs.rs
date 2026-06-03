@@ -11,6 +11,46 @@ pub struct File {
 
 impl Resource for File {}
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileError {
+    kind: String,
+    message: String,
+}
+
+impl FileError {
+    pub fn new(kind: &str, message: &str) -> Self {
+        Self {
+            kind: kind.to_string(),
+            message: message.to_string(),
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+}
+
+impl std::fmt::Display for FileError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for FileError {}
+
+impl From<std::io::Error> for FileError {
+    fn from(error: std::io::Error) -> Self {
+        Self {
+            kind: format!("{:?}", error.kind()),
+            message: error.to_string(),
+        }
+    }
+}
+
 pub trait RuntimePath {
     fn as_path(&self) -> &std::path::Path;
 }
@@ -174,60 +214,65 @@ impl<T: RuntimeBytes + ?Sized> RuntimeBytes for &T {
     }
 }
 
-pub fn file_error_message(error: &std::io::Error) -> String {
-    error.to_string()
+pub fn file_error_message(error: &FileError) -> String {
+    error.message().to_string()
 }
 
-pub fn file_open<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<File> {
+pub fn file_open<P: RuntimePath + ?Sized>(path: &P) -> Result<File, FileError> {
     file_open_read(path)
 }
 
-pub fn file_open_read<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<File> {
-    std::fs::File::open(path.as_path()).map(|inner| File { inner })
+pub fn file_open_read<P: RuntimePath + ?Sized>(path: &P) -> Result<File, FileError> {
+    std::fs::File::open(path.as_path())
+        .map(|inner| File { inner })
+        .map_err(FileError::from)
 }
 
-pub fn file_open_write<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<File> {
-    std::fs::File::create(path.as_path()).map(|inner| File { inner })
+pub fn file_open_write<P: RuntimePath + ?Sized>(path: &P) -> Result<File, FileError> {
+    std::fs::File::create(path.as_path())
+        .map(|inner| File { inner })
+        .map_err(FileError::from)
 }
 
 pub fn file_exists<P: RuntimePath + ?Sized>(path: &P) -> bool {
     path.as_path().exists()
 }
 
-pub fn file_read_bytes<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<Vec<u8>> {
-    std::fs::read(path.as_path())
+pub fn file_read_bytes<P: RuntimePath + ?Sized>(path: &P) -> Result<Vec<u8>, FileError> {
+    std::fs::read(path.as_path()).map_err(FileError::from)
 }
 
-pub fn file_read_string<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<String> {
-    std::fs::read_to_string(path.as_path())
+pub fn file_read_string<P: RuntimePath + ?Sized>(path: &P) -> Result<String, FileError> {
+    std::fs::read_to_string(path.as_path()).map_err(FileError::from)
 }
 
 pub fn file_write_bytes<P: RuntimePath + ?Sized, B: RuntimeBytes + ?Sized>(
     path: &P,
     data: &B,
-) -> std::io::Result<()> {
-    std::fs::write(path.as_path(), data.as_bytes_slice())
+) -> Result<(), FileError> {
+    std::fs::write(path.as_path(), data.as_bytes_slice()).map_err(FileError::from)
 }
 
 pub fn file_append_bytes<P: RuntimePath + ?Sized, B: RuntimeBytes + ?Sized>(
     path: &P,
     data: &B,
-) -> std::io::Result<()> {
+) -> Result<(), FileError> {
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path.as_path())?;
     file.write_all(data.as_bytes_slice())
+        .map_err(FileError::from)
 }
 
 pub fn file_write_string_to_path<P: RuntimePath + ?Sized>(
     path: &P,
     text: &str,
-) -> std::io::Result<()> {
-    std::fs::write(path.as_path(), text.as_bytes())
+) -> Result<(), FileError> {
+    std::fs::write(path.as_path(), text.as_bytes()).map_err(FileError::from)
 }
 
-pub fn file_write_atomic<P: RuntimePath + ?Sized>(path: &P, text: &str) -> std::io::Result<()> {
+pub fn file_write_atomic<P: RuntimePath + ?Sized>(path: &P, text: &str) -> Result<(), FileError> {
     let path = path.as_path();
     let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
     std::fs::create_dir_all(parent)?;
@@ -255,36 +300,36 @@ pub fn file_write_atomic<P: RuntimePath + ?Sized>(path: &P, text: &str) -> std::
         Ok(()) => Ok(()),
         Err(error) => {
             let _ = std::fs::remove_file(&temp_path);
-            Err(error)
+            Err(error.into())
         }
     }
 }
 
-pub fn file_append_string<P: RuntimePath + ?Sized>(path: &P, text: &str) -> std::io::Result<()> {
+pub fn file_append_string<P: RuntimePath + ?Sized>(path: &P, text: &str) -> Result<(), FileError> {
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path.as_path())?;
-    file.write_all(text.as_bytes())
+    file.write_all(text.as_bytes()).map_err(FileError::from)
 }
 
-pub fn file_remove<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<()> {
-    std::fs::remove_file(path.as_path())
+pub fn file_remove<P: RuntimePath + ?Sized>(path: &P) -> Result<(), FileError> {
+    std::fs::remove_file(path.as_path()).map_err(FileError::from)
 }
 
-pub fn file_read_all(file: &mut File) -> std::io::Result<Vec<u8>> {
+pub fn file_read_all(file: &mut File) -> Result<Vec<u8>, FileError> {
     let mut bytes = Vec::new();
     file.inner.read_to_end(&mut bytes)?;
     Ok(bytes)
 }
 
-pub fn file_read_all_string(file: &mut File) -> std::io::Result<String> {
+pub fn file_read_all_string(file: &mut File) -> Result<String, FileError> {
     let mut text = String::new();
     file.inner.read_to_string(&mut text)?;
     Ok(text)
 }
 
-pub fn file_read_into(file: &mut File, buffer: &mut Vec<u8>) -> std::io::Result<bool> {
+pub fn file_read_into(file: &mut File, buffer: &mut Vec<u8>) -> Result<bool, FileError> {
     buffer.clear();
     let bytes_read = file.inner.read_to_end(buffer)?;
     Ok(bytes_read > 0)
@@ -337,51 +382,59 @@ impl Iterator for FileBytesIterator {
     }
 }
 
-pub fn file_write<B: RuntimeBytes + ?Sized>(file: &mut File, data: &B) -> std::io::Result<()> {
-    file.inner.write_all(data.as_bytes_slice())
+pub fn file_write<B: RuntimeBytes + ?Sized>(file: &mut File, data: &B) -> Result<(), FileError> {
+    file.inner
+        .write_all(data.as_bytes_slice())
+        .map_err(FileError::from)
 }
 
-pub fn file_write_string(file: &mut File, text: &str) -> std::io::Result<()> {
-    file.inner.write_all(text.as_bytes())
+pub fn file_write_string(file: &mut File, text: &str) -> Result<(), FileError> {
+    file.inner
+        .write_all(text.as_bytes())
+        .map_err(FileError::from)
 }
 
-pub fn file_write_buffer(file: &mut File, buffer: &[u8]) -> std::io::Result<()> {
-    file.inner.write_all(buffer)
+pub fn file_write_buffer(file: &mut File, buffer: &[u8]) -> Result<(), FileError> {
+    file.inner.write_all(buffer).map_err(FileError::from)
 }
 
 pub fn file_read_all_async<P: RuntimePath + ?Sized>(
     path: &P,
-) -> NativeAsyncPending<std::io::Result<Vec<u8>>> {
+) -> NativeAsyncPending<Result<Vec<u8>, FileError>> {
     let path = path.as_path().to_path_buf();
-    spawn_tokio_native(async move { tokio::fs::read(path).await })
+    spawn_tokio_native(async move { tokio::fs::read(path).await.map_err(FileError::from) })
 }
 
 pub fn file_read_all_string_async<P: RuntimePath + ?Sized>(
     path: &P,
-) -> NativeAsyncPending<std::io::Result<String>> {
+) -> NativeAsyncPending<Result<String, FileError>> {
     let path = path.as_path().to_path_buf();
-    spawn_tokio_native(async move { tokio::fs::read_to_string(path).await })
+    spawn_tokio_native(async move {
+        tokio::fs::read_to_string(path)
+            .await
+            .map_err(FileError::from)
+    })
 }
 
 pub fn file_write_async<P: RuntimePath + ?Sized, B: RuntimeBytes + ?Sized>(
     path: &P,
     data: &B,
-) -> NativeAsyncPending<std::io::Result<()>> {
+) -> NativeAsyncPending<Result<(), FileError>> {
     let path = path.as_path().to_path_buf();
     let bytes = data.as_bytes_slice().to_vec();
-    spawn_tokio_native(async move { tokio::fs::write(path, bytes).await })
+    spawn_tokio_native(async move { tokio::fs::write(path, bytes).await.map_err(FileError::from) })
 }
 
 pub fn file_write_string_async<P: RuntimePath + ?Sized>(
     path: &P,
     text: &str,
-) -> NativeAsyncPending<std::io::Result<()>> {
+) -> NativeAsyncPending<Result<(), FileError>> {
     let path = path.as_path().to_path_buf();
     let text = text.to_string();
-    spawn_tokio_native(async move { tokio::fs::write(path, text).await })
+    spawn_tokio_native(async move { tokio::fs::write(path, text).await.map_err(FileError::from) })
 }
 
-pub fn directory_list_files<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<Vec<String>> {
+pub fn directory_list_files<P: RuntimePath + ?Sized>(path: &P) -> Result<Vec<String>, FileError> {
     let root = path.as_path();
     let mut files = Vec::new();
     collect_directory_files(root, root, &mut files)?;
@@ -389,7 +442,7 @@ pub fn directory_list_files<P: RuntimePath + ?Sized>(path: &P) -> std::io::Resul
     Ok(files)
 }
 
-pub fn directory_list_paths<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<Vec<PathBuf>> {
+pub fn directory_list_paths<P: RuntimePath + ?Sized>(path: &P) -> Result<Vec<PathBuf>, FileError> {
     let mut paths = Vec::new();
     for entry in std::fs::read_dir(path.as_path())? {
         paths.push(entry?.path());
@@ -410,19 +463,19 @@ pub fn directory_is_dir<P: RuntimePath + ?Sized>(path: &P) -> bool {
     path.as_path().is_dir()
 }
 
-pub fn directory_create_all<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<()> {
-    std::fs::create_dir_all(path.as_path())
+pub fn directory_create_all<P: RuntimePath + ?Sized>(path: &P) -> Result<(), FileError> {
+    std::fs::create_dir_all(path.as_path()).map_err(FileError::from)
 }
 
-pub fn directory_create<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<()> {
-    std::fs::create_dir(path.as_path())
+pub fn directory_create<P: RuntimePath + ?Sized>(path: &P) -> Result<(), FileError> {
+    std::fs::create_dir(path.as_path()).map_err(FileError::from)
 }
 
 fn collect_directory_files(
     root: &std::path::Path,
     current: &std::path::Path,
     files: &mut Vec<String>,
-) -> std::io::Result<()> {
+) -> Result<(), FileError> {
     if current.is_file() {
         files.push(relative_runtime_path(root, current));
         return Ok(());
@@ -445,18 +498,18 @@ fn relative_runtime_path(root: &std::path::Path, path: &std::path::Path) -> Stri
         .replace('\\', "/")
 }
 
-pub fn directory_remove_file<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<()> {
-    std::fs::remove_file(path.as_path())
+pub fn directory_remove_file<P: RuntimePath + ?Sized>(path: &P) -> Result<(), FileError> {
+    std::fs::remove_file(path.as_path()).map_err(FileError::from)
 }
 
-pub fn directory_remove_dir_all<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<()> {
-    std::fs::remove_dir_all(path.as_path())
+pub fn directory_remove_dir_all<P: RuntimePath + ?Sized>(path: &P) -> Result<(), FileError> {
+    std::fs::remove_dir_all(path.as_path()).map_err(FileError::from)
 }
 
 pub fn directory_copy_file<P: RuntimePath + ?Sized, Q: RuntimePath + ?Sized>(
     from: &P,
     to: &Q,
-) -> std::io::Result<()> {
+) -> Result<(), FileError> {
     std::fs::copy(from.as_path(), to.as_path())?;
     Ok(())
 }
@@ -464,8 +517,8 @@ pub fn directory_copy_file<P: RuntimePath + ?Sized, Q: RuntimePath + ?Sized>(
 pub fn directory_rename<P: RuntimePath + ?Sized, Q: RuntimePath + ?Sized>(
     from: &P,
     to: &Q,
-) -> std::io::Result<()> {
-    std::fs::rename(from.as_path(), to.as_path())
+) -> Result<(), FileError> {
+    std::fs::rename(from.as_path(), to.as_path()).map_err(FileError::from)
 }
 
 pub struct FileMetadata {
@@ -474,7 +527,7 @@ pub struct FileMetadata {
     pub len: i64,
 }
 
-pub fn directory_metadata<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<FileMetadata> {
+pub fn directory_metadata<P: RuntimePath + ?Sized>(path: &P) -> Result<FileMetadata, FileError> {
     let meta = std::fs::metadata(path.as_path())?;
     Ok(FileMetadata {
         is_file: meta.is_file(),
@@ -483,15 +536,15 @@ pub fn directory_metadata<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<
     })
 }
 
-pub fn directory_read_string<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<String> {
-    std::fs::read_to_string(path.as_path())
+pub fn directory_read_string<P: RuntimePath + ?Sized>(path: &P) -> Result<String, FileError> {
+    std::fs::read_to_string(path.as_path()).map_err(FileError::from)
 }
 
 pub fn directory_write_string<P: RuntimePath + ?Sized>(
     path: &P,
     content: &str,
-) -> std::io::Result<()> {
-    std::fs::write(path.as_path(), content.as_bytes())
+) -> Result<(), FileError> {
+    std::fs::write(path.as_path(), content.as_bytes()).map_err(FileError::from)
 }
 
 #[cfg(test)]

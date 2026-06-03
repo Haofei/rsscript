@@ -175,6 +175,28 @@
       ]
     },
     {
+      "path": "core/collections/pipeline.rssi",
+      "module": "collections.pipeline",
+      "functions": [
+        "FalliblePipeline.collect",
+        "FalliblePipeline.each",
+        "FalliblePipeline.filter",
+        "FalliblePipeline.map",
+        "FalliblePipeline.try_map",
+        "List.pipeline",
+        "Pipeline.collect",
+        "Pipeline.each",
+        "Pipeline.filter",
+        "Pipeline.from_list",
+        "Pipeline.map",
+        "Pipeline.try_map"
+      ],
+      "types": [
+        "FalliblePipeline",
+        "Pipeline"
+      ]
+    },
+    {
       "path": "core/collections/set.rssi",
       "module": "collections.set",
       "functions": [

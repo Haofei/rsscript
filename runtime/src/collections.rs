@@ -1,6 +1,16 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RssPipeline<T> {
+    pub items: Vec<T>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RssFalliblePipeline<T, E> {
+    pub result: Result<Vec<T>, E>,
+}
+
 pub fn ord_compare<T: Ord>(left: &T, right: &T) -> i64 {
     match left.cmp(right) {
         std::cmp::Ordering::Less => -1,
@@ -92,6 +102,139 @@ pub fn list_try_fold<T: Clone, U: Clone, E>(
         state = folder(state, item)?;
     }
     Ok(state)
+}
+
+pub fn pipeline_from_list<T: Clone>(list: &[T]) -> RssPipeline<T> {
+    RssPipeline {
+        items: list.to_vec(),
+    }
+}
+
+pub fn pipeline_map<T: Clone, U>(
+    pipeline: &RssPipeline<T>,
+    mapper: impl FnMut(T) -> U,
+) -> RssPipeline<U> {
+    RssPipeline {
+        items: pipeline.items.iter().cloned().map(mapper).collect(),
+    }
+}
+
+pub fn pipeline_filter<T: Clone>(
+    pipeline: &RssPipeline<T>,
+    mut predicate: impl FnMut(T) -> bool,
+) -> RssPipeline<T> {
+    RssPipeline {
+        items: pipeline
+            .items
+            .iter()
+            .filter(|item| predicate((*item).clone()))
+            .cloned()
+            .collect(),
+    }
+}
+
+pub fn pipeline_each<T: Clone>(
+    pipeline: &RssPipeline<T>,
+    mut action: impl FnMut(T),
+) -> RssPipeline<T> {
+    for item in pipeline.items.iter().cloned() {
+        action(item);
+    }
+    RssPipeline {
+        items: pipeline.items.clone(),
+    }
+}
+
+pub fn pipeline_try_map<T: Clone, U, E>(
+    pipeline: &RssPipeline<T>,
+    mut mapper: impl FnMut(T) -> Result<U, E>,
+) -> RssFalliblePipeline<U, E> {
+    let mut mapped = Vec::new();
+    for item in pipeline.items.iter().cloned() {
+        match mapper(item) {
+            Ok(value) => mapped.push(value),
+            Err(error) => return RssFalliblePipeline { result: Err(error) },
+        }
+    }
+    RssFalliblePipeline { result: Ok(mapped) }
+}
+
+pub fn pipeline_collect<T: Clone>(pipeline: &RssPipeline<T>) -> Vec<T> {
+    pipeline.items.clone()
+}
+
+pub fn fallible_pipeline_map<T: Clone, U, E: Clone>(
+    pipeline: &RssFalliblePipeline<T, E>,
+    mapper: impl FnMut(T) -> U,
+) -> RssFalliblePipeline<U, E> {
+    RssFalliblePipeline {
+        result: pipeline
+            .result
+            .as_ref()
+            .map(|items| items.iter().cloned().map(mapper).collect::<Vec<_>>())
+            .map_err(Clone::clone),
+    }
+}
+
+pub fn fallible_pipeline_filter<T: Clone, E: Clone>(
+    pipeline: &RssFalliblePipeline<T, E>,
+    mut predicate: impl FnMut(T) -> bool,
+) -> RssFalliblePipeline<T, E> {
+    RssFalliblePipeline {
+        result: pipeline
+            .result
+            .as_ref()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|item| predicate((*item).clone()))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .map_err(Clone::clone),
+    }
+}
+
+pub fn fallible_pipeline_each<T: Clone, E: Clone>(
+    pipeline: &RssFalliblePipeline<T, E>,
+    mut action: impl FnMut(T),
+) -> RssFalliblePipeline<T, E> {
+    if let Ok(items) = &pipeline.result {
+        for item in items.iter().cloned() {
+            action(item);
+        }
+    }
+    RssFalliblePipeline {
+        result: pipeline.result.clone(),
+    }
+}
+
+pub fn fallible_pipeline_try_map<T: Clone, U, E: Clone>(
+    pipeline: &RssFalliblePipeline<T, E>,
+    mut mapper: impl FnMut(T) -> Result<U, E>,
+) -> RssFalliblePipeline<U, E> {
+    let items = match &pipeline.result {
+        Ok(items) => items,
+        Err(error) => {
+            return RssFalliblePipeline {
+                result: Err(error.clone()),
+            };
+        }
+    };
+    let mut mapped = Vec::new();
+    for item in items.iter().cloned() {
+        match mapper(item) {
+            Ok(value) => mapped.push(value),
+            Err(error) => return RssFalliblePipeline { result: Err(error) },
+        }
+    }
+    RssFalliblePipeline { result: Ok(mapped) }
+}
+
+pub fn fallible_pipeline_collect<T: Clone, E: Clone>(
+    pipeline: &RssFalliblePipeline<T, E>,
+) -> Result<Vec<T>, E> {
+    pipeline.result.clone()
 }
 
 pub fn list_consume<T>(list: Vec<T>) {

@@ -3898,6 +3898,15 @@ impl<'a> RustLowerer<'a> {
                 "rsscript_runtime::RssStream<{}>",
                 self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
             ),
+            "Pipeline" if ty.args.len() == 1 => format!(
+                "rsscript_runtime::RssPipeline<{}>",
+                self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
+            ),
+            "FalliblePipeline" if ty.args.len() == 2 => format!(
+                "rsscript_runtime::RssFalliblePipeline<{}, {}>",
+                self.lower_type_ref(&ty.args[0], ManagedPosition::Nested),
+                self.lower_type_ref(&ty.args[1], ManagedPosition::Nested)
+            ),
             "ChannelError" => "rsscript_runtime::ChannelError".to_string(),
             "TcpStream" => "rsscript_runtime::RssTcpStream".to_string(),
             "TcpError" => "rsscript_runtime::TcpError".to_string(),
@@ -3910,7 +3919,8 @@ impl<'a> RustLowerer<'a> {
             "TempDir" => "rsscript_runtime::TempDir".to_string(),
             "File" => "rsscript_runtime::File".to_string(),
             "FileMetadata" => "rsscript_runtime::FileMetadata".to_string(),
-            "FileError" | "IOError" => "std::io::Error".to_string(),
+            "FileError" => "rsscript_runtime::FileError".to_string(),
+            "IOError" => "std::io::Error".to_string(),
             "ProcessEnv" => "rsscript_runtime::ProcessEnv".to_string(),
             "ProcessEvent" => "rsscript_runtime::ProcessEvent".to_string(),
             "ProcessOutput" => "rsscript_runtime::ProcessOutput".to_string(),

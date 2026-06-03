@@ -133,7 +133,11 @@ Each param is `name: <effect> Type`. Return may be `fresh T` (newly created, see
 
 ```rust
 fn resize_all(image: mut Image, width: Int) -> Unit { ... }
+```
 
+Called as:
+
+```rust
 resize_all(image: mut image, width: 800)   // `mut` arg matches `mut` param; Int bare
 ```
 
@@ -308,6 +312,11 @@ trait resolution).
 
 ```rust
 let cfg = Config(name: "default", rules: read rules, workspace: take workspace)
+```
+
+Type aliases and constants are top-level declarations:
+
+```rust
 type WorkspacePath = Path        // type alias
 const MAX: Int = 16              // const
 ```

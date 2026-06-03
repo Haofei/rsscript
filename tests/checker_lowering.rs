@@ -3,7 +3,9 @@ mod common;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 
+use common::unique_temp_dir;
 use rsscript::syntax::ast::{Expr, Item};
 use rsscript::syntax::parse_source;
 use rsscript::{
@@ -12,7 +14,7 @@ use rsscript::{
     format_review_map_json, lower_source_to_rust, lower_source_to_rust_package,
     lower_source_to_rust_with_map, lower_sources_to_rust_package_with_options,
     parse_runtime_diagnostics, remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines,
-    review_map_sources, review_sources,
+    review_map_sources, review_sources, write_generated_rust_package,
 };
 use serde_json::Value;
 
@@ -487,6 +489,124 @@ fn main() -> Result<Unit, JsonError> {
 }
 
 #[test]
+fn rust_lowering_maps_pipeline_core_calls_to_runtime_hooks() {
+    let source = r#"
+features: local
+
+struct CountBox {
+    value: Int
+}
+
+fn parse_positive(value: Int) -> Result<fresh CountBox, String> {
+    if value < 0 {
+        return Err("negative")
+    }
+    return Ok(CountBox(value: value))
+}
+
+fn main() -> Result<Unit, String> {
+    let xs: List<Int> = [1, 2, 3]
+    let ys = xs.pipeline().filter(|item| {
+        return item > 1
+    }).map(|item| {
+        return item + 10
+    }).collect()
+    let pipeline = Pipeline.from_list<Int>(list: read xs)
+    let parsed: FalliblePipeline<CountBox, String> = Pipeline.try_map<Int, CountBox, String>(
+        pipeline: read pipeline,
+        mapper: |item| {
+            return parse_positive(value: item)
+        },
+    )
+    let zs: List<Int> = parsed.filter(|item| {
+        return item.value > 1
+    }).map(|item| {
+        return item.value + 1
+    }).collect()?
+
+    Assert.equal_int(left: List.get(list: read ys, index: 0), right: 12)
+    Assert.equal_int(left: List.get(list: read zs, index: 0), right: 3)
+    return Ok(Unit)
+}
+"#;
+    let rust = lower_source_to_rust("pipeline.rss", source).expect("source should lower");
+
+    assert!(rust.contains("rsscript_runtime::pipeline_from_list(&xs)"));
+    assert!(rust.contains("rsscript_runtime::pipeline_filter("));
+    assert!(rust.contains("rsscript_runtime::pipeline_map("));
+    assert!(rust.contains("rsscript_runtime::pipeline_collect("));
+    assert!(rust.contains("let pipeline = rsscript_runtime::pipeline_from_list(&xs);"));
+    assert!(rust.contains("let parsed = rsscript_runtime::pipeline_try_map(&pipeline, |item| {"));
+    assert!(rust.contains("rsscript_runtime::fallible_pipeline_filter("));
+    assert!(rust.contains("rsscript_runtime::fallible_pipeline_map("));
+    assert!(rust.contains("rsscript_runtime::fallible_pipeline_collect("));
+}
+
+#[test]
+fn rust_lowered_pipeline_package_compiles() {
+    let source = r#"
+features: local
+
+fn parse_positive(value: Int) -> Result<fresh Int, String> {
+    if value < 0 {
+        return Err("negative")
+    }
+    return Ok(value)
+}
+
+fn main() -> Result<Unit, String> {
+    let xs: List<Int> = [1, 2, 3]
+    let ys = xs.pipeline().filter(|item| {
+        return item > 1
+    }).map(|item| {
+        return item + 10
+    }).collect()
+    let zs: List<Int> = Pipeline.try_map<Int, Int, String>(
+        pipeline: read Pipeline.from_list<Int>(list: read xs),
+        mapper: |item| {
+            return parse_positive(value: item)
+        },
+    ).filter(|item| {
+        return item > 1
+    }).collect()?
+    Assert.equal_int(left: List.get(list: read ys, index: 0), right: 12)
+    Assert.equal_int(left: List.get(list: read zs, index: 0), right: 2)
+    return Ok(Unit)
+}
+"#;
+    let package = lower_source_to_rust_package(
+        "pipeline-main.rss",
+        source,
+        "Pipeline Compile",
+        &std::env::current_dir()
+            .expect("workspace dir should resolve")
+            .join("runtime")
+            .display()
+            .to_string(),
+    )
+    .expect("source should lower");
+    let package_dir = unique_temp_dir("rsscript-pipeline-compile");
+    write_generated_rust_package(&package_dir, &package).expect("package should write");
+
+    let output = Command::new("cargo")
+        .arg("check")
+        .arg("--quiet")
+        .arg("--manifest-path")
+        .arg(package_dir.join("Cargo.toml"))
+        .env_remove("CARGO_TARGET_DIR")
+        .output()
+        .expect("cargo check should run");
+
+    assert!(
+        output.status.success(),
+        "cargo check failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fs::remove_dir_all(&package_dir).expect("temp package should be removed");
+}
+
+#[test]
 fn rust_lowering_maps_map_and_set_core_calls_to_runtime_hooks() {
     let source = r#"
 fn main() -> Unit {
@@ -587,7 +707,7 @@ fn copy_file(input: read Path, output: read Path) -> Result<Unit, FileError> {
 "#;
     let rust = lower_source_to_rust("file.rss", source).expect("source should lower");
 
-    assert!(rust.contains("-> Result<(), std::io::Error>"));
+    assert!(rust.contains("-> Result<(), rsscript_runtime::FileError>"));
     assert!(rust.contains("let mut reader = rsscript_runtime::file_open_read(&input)?;"));
     assert!(rust.contains("let mut writer = rsscript_runtime::file_open_write(&output)?;"));
     assert!(rust.contains("let bytes = rsscript_runtime::file_read_all(&mut reader)?;"));

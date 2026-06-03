@@ -1,0 +1,61 @@
+features: local
+
+struct Pipeline<T>
+
+struct FalliblePipeline<T, E>
+
+pub fn List.pipeline<T>(
+    list: read List<T>,
+) -> fresh Pipeline<T>
+
+pub fn Pipeline.from_list<T>(
+    list: read List<T>,
+) -> fresh Pipeline<T>
+
+pub fn Pipeline.map<T, U>(
+    pipeline: read Pipeline<T>,
+    mapper: noescape Fn(T) -> U,
+) -> fresh Pipeline<U>
+
+pub fn Pipeline.filter<T>(
+    pipeline: read Pipeline<T>,
+    predicate: noescape Fn(T) -> Bool,
+) -> fresh Pipeline<T>
+
+pub fn Pipeline.each<T>(
+    pipeline: read Pipeline<T>,
+    action: noescape Fn(T) -> Unit,
+) -> fresh Pipeline<T>
+
+pub fn Pipeline.try_map<T, U, E>(
+    pipeline: read Pipeline<T>,
+    mapper: noescape Fn(T) -> Result<fresh U, E>,
+) -> fresh FalliblePipeline<U, E>
+
+pub fn Pipeline.collect<T>(
+    pipeline: read Pipeline<T>,
+) -> fresh List<T>
+
+pub fn FalliblePipeline.map<T, U, E>(
+    pipeline: read FalliblePipeline<T, E>,
+    mapper: noescape Fn(T) -> U,
+) -> fresh FalliblePipeline<U, E>
+
+pub fn FalliblePipeline.filter<T, E>(
+    pipeline: read FalliblePipeline<T, E>,
+    predicate: noescape Fn(T) -> Bool,
+) -> fresh FalliblePipeline<T, E>
+
+pub fn FalliblePipeline.each<T, E>(
+    pipeline: read FalliblePipeline<T, E>,
+    action: noescape Fn(T) -> Unit,
+) -> fresh FalliblePipeline<T, E>
+
+pub fn FalliblePipeline.try_map<T, U, E>(
+    pipeline: read FalliblePipeline<T, E>,
+    mapper: noescape Fn(T) -> Result<fresh U, E>,
+) -> fresh FalliblePipeline<U, E>
+
+pub fn FalliblePipeline.collect<T, E>(
+    pipeline: read FalliblePipeline<T, E>,
+) -> Result<fresh List<T>, E>

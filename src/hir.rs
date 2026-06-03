@@ -2146,6 +2146,14 @@ fn infer_signature_return_type(
     let mut substitutions = HashMap::new();
     collect_callee_type_substitutions(signature, callee, &generic_params, &mut substitutions);
     collect_namespace_type_substitutions(hir, callee, &generic_params, &mut substitutions);
+    collect_receiver_type_substitutions(
+        hir,
+        signature,
+        callee,
+        value_types,
+        &generic_params,
+        &mut substitutions,
+    );
     collect_arg_type_substitutions(
         hir,
         signature,
@@ -2215,6 +2223,31 @@ fn collect_namespace_type_substitutions(
                 .or_insert_with(|| actual.to_string());
         }
     }
+}
+
+fn collect_receiver_type_substitutions(
+    hir: &Hir,
+    signature: &FunctionSig,
+    callee: &Callee,
+    value_types: &HashMap<String, String>,
+    generic_params: &HashSet<&str>,
+    substitutions: &mut HashMap<String, String>,
+) {
+    let Callee::ReceiverCall { receiver, .. } = callee else {
+        return;
+    };
+    let Some(receiver_param) = signature.params.first() else {
+        return;
+    };
+    let Some(actual_type) = infer_hir_expr_type(hir, receiver, value_types) else {
+        return;
+    };
+    collect_type_substitutions(
+        &receiver_param.type_name,
+        &actual_type,
+        generic_params,
+        substitutions,
+    );
 }
 
 fn collect_arg_type_substitutions(
@@ -2408,7 +2441,8 @@ fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
 fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str>> {
     match root {
         "List" | "Set" | "Option" | "ResourcePool" | "Channel" | "Sender" | "Receiver"
-        | "Stream" => Some(vec!["T"]),
+        | "Stream" | "Pipeline" => Some(vec!["T"]),
+        "FalliblePipeline" => Some(vec!["T", "E"]),
         "Capability" => Some(vec!["P"]),
         "Map" | "Result" => Some(vec!["K", "V"]),
         _ => None,

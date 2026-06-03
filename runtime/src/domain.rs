@@ -362,6 +362,12 @@ impl From<std::io::Error> for CsvError {
     }
 }
 
+impl From<crate::fs::FileError> for CsvError {
+    fn from(error: crate::fs::FileError) -> Self {
+        Self::new(error.to_string())
+    }
+}
+
 impl From<Utf8Error> for CsvError {
     fn from(error: Utf8Error) -> Self {
         Self::new(error.to_string())
