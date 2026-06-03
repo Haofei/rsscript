@@ -69,6 +69,15 @@ async fn main() -> Result<Unit, String> {
                                 event: read "turn.budget_exhausted",
                                 message: read state.failure_reason,
                             )
+                        } else if usage_total.total_tokens >= config.max_total_tokens {
+                            state.finished = true
+                            state.failed = true
+                            state.failure_reason = "stopped before completion: token budget exhausted"
+                            StructuredLogger.event(
+                                logger: read logger,
+                                event: read "turn.token_budget_exhausted",
+                                message: read state.failure_reason,
+                            )
                         }
                     }
                 }

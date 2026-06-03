@@ -71,8 +71,10 @@ A tool is `fn execute_<name>(arguments: read String, config: read AgentConfig)
   these checks; do not widen scope.
 - **No capability creep.** Do not add `features: native` or `features: local` to
   the agent source — this loop is plain managed code on purpose.
-- **Bounded loop.** Respect `max_steps` / `max_tool_calls`; surface exhaustion as
-  a `turn.budget_exhausted` event rather than looping unbounded.
+- **Bounded loop.** Respect `max_steps` / `max_tool_calls`, and the cumulative
+  token budget `max_total_tokens` (checked against the accumulated `usage_total`).
+  Surface exhaustion as a `turn.budget_exhausted` / `turn.token_budget_exhausted`
+  event and exit through `state.failed`, rather than looping unbounded.
 
 ## Verify changes
 

@@ -32,6 +32,7 @@ network behavior are not hard-coded:
 | `AGENT_API_KEY` | `test_key` | Bearer token. |
 | `AGENT_MAX_STEPS` | `8` | Maximum model turns before the loop stops. |
 | `AGENT_MAX_TOOL_CALLS` | `8` | Maximum tool calls consumed per model turn. |
+| `AGENT_MAX_TOTAL_TOKENS` | `1000000` | Cumulative token budget across the run; once `usage_total` reaches it the loop stops with an error instead of continuing. |
 | `AGENT_MAX_READ_BYTES` | `200000` | Maximum file size the `read` tool will load. |
 | `AGENT_MAX_WRITE_BYTES` | `200000` | Maximum new file content size for write/edit/patch tools. |
 | `AGENT_TIMEOUT_MS` | `60000` | Per-request timeout. |
@@ -66,8 +67,13 @@ network behavior are not hard-coded:
   status/stdout/stderr.
 - **HTTP errors**: a non-success response is logged as a `turn.failed` event and
   fails the run instead of being parsed as if it were a successful turn.
-- **Budget**: when the step budget is exhausted before the task finishes, the
-  agent emits a `turn.budget_exhausted` event and returns an error.
+- **Budget**: the loop is bounded by two budgets. When the step budget
+  (`AGENT_MAX_STEPS`) is exhausted before the task finishes, the agent emits a
+  `turn.budget_exhausted` event and returns an error. The accumulated token usage
+  is also tracked: once `usage_total` reaches `AGENT_MAX_TOTAL_TOKENS`, the agent
+  emits a `turn.token_budget_exhausted` event and returns an error rather than
+  letting a long run grow without bound. Both stops flow through the same
+  `state.failed` exit, so `main` returns `Err` with the reason.
 
 The agent should not guess RSScript APIs. It reads the repository root
 `AGENT.md` first, then `examples/packages/code-agent/AGENTS.md`, uses `rss_ide`
