@@ -4517,10 +4517,22 @@ fn standard_library_export_capabilities(export: &RsScriptPackageExport) -> Vec<C
         "Http.get" | "Http.post_json" | "Http.post_form" => {
             categories.push(CapabilityCategory::NetworkClient);
         }
-        "Process.run_stdout"
+        "Process.run"
+        | "Process.run_timeout"
+        | "Process.run_request"
+        | "Process.run_async"
+        | "Process.run_timeout_async"
+        | "Process.run_request_async"
+        | "Process.run_request_cancellable_async"
+        | "Process.stream"
+        | "Process.run_stdout"
         | "Process.run_stdout_timeout"
+        | "Process.run_stdout_async"
+        | "Process.run_stdout_timeout_async"
         | "Process.run_many_stdout"
-        | "Process.run_many_stdout_timeout" => {
+        | "Process.run_many_stdout_timeout"
+        | "Process.run_many_stdout_async"
+        | "Process.run_many_stdout_timeout_async" => {
             categories.push(CapabilityCategory::ProcessSpawn);
         }
         "Args.count" | "Args.get_or_default" => {
@@ -5263,7 +5275,35 @@ mod tests {
                 normalized_effects: vec!["native".to_owned()],
             },
             RsScriptPackageExport {
+                name: "Process.run".to_owned(),
+                kind: "function".to_owned(),
+                classification: "review_if_changed".to_owned(),
+                reasons: vec!["public function".to_owned()],
+                normalized_effects: vec!["native".to_owned()],
+            },
+            RsScriptPackageExport {
+                name: "Process.run_request".to_owned(),
+                kind: "function".to_owned(),
+                classification: "review_if_changed".to_owned(),
+                reasons: vec!["public function".to_owned()],
+                normalized_effects: vec!["native".to_owned()],
+            },
+            RsScriptPackageExport {
                 name: "Process.run_stdout".to_owned(),
+                kind: "function".to_owned(),
+                classification: "review_if_changed".to_owned(),
+                reasons: vec!["public function".to_owned()],
+                normalized_effects: vec!["native".to_owned()],
+            },
+            RsScriptPackageExport {
+                name: "Process.run_async".to_owned(),
+                kind: "function".to_owned(),
+                classification: "review_if_changed".to_owned(),
+                reasons: vec!["public function".to_owned()],
+                normalized_effects: vec!["native".to_owned(), "async".to_owned()],
+            },
+            RsScriptPackageExport {
+                name: "Process.stream".to_owned(),
                 kind: "function".to_owned(),
                 classification: "review_if_changed".to_owned(),
                 reasons: vec!["public function".to_owned()],
@@ -5397,6 +5437,27 @@ mod tests {
         assert!(categories.contains(&CapabilityCategory::NetworkClient));
         assert!(categories.contains(&CapabilityCategory::ProcessArgs));
         assert!(categories.contains(&CapabilityCategory::ProcessSpawn));
+        assert!(bundle.facts.iter().any(|fact| {
+            fact.kind == FactKind::Capability
+                && fact.subject.id == "demo_pkg::public::function::Process.run"
+                && fact.capability.as_ref().is_some_and(|capability| {
+                    capability.category == CapabilityCategory::ProcessSpawn
+                })
+        }));
+        assert!(bundle.facts.iter().any(|fact| {
+            fact.kind == FactKind::Capability
+                && fact.subject.id == "demo_pkg::public::function::Process.run_async"
+                && fact.capability.as_ref().is_some_and(|capability| {
+                    capability.category == CapabilityCategory::ProcessSpawn
+                })
+        }));
+        assert!(bundle.facts.iter().any(|fact| {
+            fact.kind == FactKind::Capability
+                && fact.subject.id == "demo_pkg::public::function::Process.stream"
+                && fact.capability.as_ref().is_some_and(|capability| {
+                    capability.category == CapabilityCategory::ProcessSpawn
+                })
+        }));
         assert!(categories.contains(&CapabilityCategory::ComputeHash));
         assert!(categories.contains(&CapabilityCategory::RandomRead));
         assert!(categories.contains(&CapabilityCategory::DatabaseRead));

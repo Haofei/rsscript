@@ -1,0 +1,27 @@
+name: RSScript Review Action
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run review action smoke
+        uses: ./.github/actions/rsscript-review
+        with:
+          head: examples/packages/code-agent
+          grants: demos/s3-iam-reir/expected/prod-grants.reir.json
+          target: prod
+          post-comment: false
+          fail-on-missing: false

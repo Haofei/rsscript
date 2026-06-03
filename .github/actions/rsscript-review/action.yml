@@ -40,7 +40,7 @@ runs:
     - name: Install RSScript toolchain
       shell: bash
       run: |
-        if ! command -v rss &> /dev/null; then
+        if ! command -v rss &> /dev/null || ! command -v reir &> /dev/null; then
           echo "::group::Building RSScript from source"
           RSSCRIPT_ACTION_ROOT="$(cd "$GITHUB_ACTION_PATH/../../.." && pwd)"
           cargo build --quiet --release --manifest-path "$RSSCRIPT_ACTION_ROOT/Cargo.toml" --bin rss -p rsscript

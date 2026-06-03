@@ -43,6 +43,12 @@ Block this PR before deploy.
 RSScript owns language and package-manager checks. REIR owns system evidence,
 deployment grants, reconciliation, PR reporting, and CI gate decisions.
 
+RSScript and REIR produce review evidence; they are not an execution sandbox.
+Core APIs such as `File`, `Env`, `HTTP`, and `Process` can touch the host when a
+program runs. Their role in the review pipeline is to emit explicit capability
+facts like filesystem access, environment access, network client access, and
+process spawn so CI policy can see and gate the boundary.
+
 ## GitHub Action
 
 ```yaml
@@ -56,6 +62,26 @@ deployment grants, reconciliation, PR reporting, and CI gate decisions.
 The action posts a PR comment with the review decision and exits non-zero on missing capabilities.
 For production use, pin this action to a commit SHA. The toolchain and artifact
 schemas are still `0.1.x` prototype surfaces.
+
+## Install
+
+From this repository:
+
+```sh
+cargo build --release -p rsscript --bin rss
+cargo build --release -p reir --bin reir
+```
+
+From GitHub while the toolchain is still prototype-grade:
+
+```sh
+cargo install --git https://github.com/Haofei/rsscript rsscript --bin rss
+cargo install --git https://github.com/Haofei/rsscript reir --bin reir
+```
+
+The GitHub Action builds `rss` and `reir` from the checked-out source when they
+are not already available on `PATH`. For production CI, pin the action to an
+immutable commit SHA rather than a moving branch.
 
 ---
 
