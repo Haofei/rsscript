@@ -192,6 +192,9 @@ fn collect_rsscript_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<
         let entry = entry
             .map_err(|error| format!("failed to read entry in {}: {error}", directory.display()))?;
         let path = entry.path();
+        if should_skip_review_map_path(&path) {
+            continue;
+        }
         if path.is_dir() {
             collect_rsscript_files(&path, files)?;
         } else if is_rsscript_source_path(&path) {
@@ -199,6 +202,17 @@ fn collect_rsscript_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<
         }
     }
     Ok(())
+}
+
+fn should_skip_review_map_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            matches!(
+                name,
+                ".git" | "target" | "vendor" | ".DS_Store" | "rsscript-run-cache"
+            )
+        })
 }
 
 fn is_rsscript_source_path(path: &Path) -> bool {
@@ -313,6 +327,34 @@ pub fn Api.run(message: read String) -> String {
         let error = super::parse_review_args(&values).expect_err("unknown flag should fail");
 
         assert_eq!(error, "unknown argument `--wat`.");
+    }
+
+    #[test]
+    fn review_map_sources_skip_generated_and_vendored_dirs() {
+        let root = unique_temp_dir("review-map-skip");
+        fs::create_dir_all(root.join("src")).expect("src should create");
+        fs::create_dir_all(root.join("target")).expect("target should create");
+        fs::create_dir_all(root.join("vendor")).expect("vendor should create");
+        fs::create_dir_all(root.join(".git")).expect(".git should create");
+        fs::write(root.join("src/main.rss"), "fn main() -> Unit {}\n").expect("source");
+        fs::write(
+            root.join("target/generated.rss"),
+            "fn generated() -> Unit {}\n",
+        )
+        .expect("generated");
+        fs::write(
+            root.join("vendor/dependency.rssi"),
+            "pub fn dependency() -> Unit\n",
+        )
+        .expect("vendor");
+        fs::write(root.join(".git/ignored.rss"), "fn ignored() -> Unit {}\n").expect("git");
+
+        let sources =
+            super::read_review_map_sources(root.to_str().expect("utf-8 path")).expect("sources");
+        fs::remove_dir_all(root).expect("temp directory should clean up");
+
+        assert_eq!(sources.len(), 1);
+        assert!(sources[0].path.ends_with("src/main.rss"));
     }
 
     fn unique_temp_dir(name: &str) -> PathBuf {

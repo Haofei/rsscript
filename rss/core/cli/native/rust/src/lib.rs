@@ -31,12 +31,18 @@ pub fn option(args: &[String], name: &str) -> Option<String> {
 pub fn positionals(args: &[String]) -> Vec<String> {
     let mut values = Vec::new();
     let mut skip_next = false;
+    let mut after_separator = false;
     for arg in args {
+        if after_separator {
+            values.push(arg.clone());
+            continue;
+        }
         if skip_next {
             skip_next = false;
             continue;
         }
         if arg == "--" {
+            after_separator = true;
             continue;
         }
         if arg.starts_with("--") {
@@ -75,5 +81,26 @@ mod tests {
             Some("fast".to_string())
         );
         assert_eq!(super::positionals(&args), vec!["input.txt".to_string()]);
+    }
+
+    #[test]
+    fn positionals_treats_everything_after_double_dash_as_value() {
+        let args = vec![
+            "--mode".to_string(),
+            "fast".to_string(),
+            "input.txt".to_string(),
+            "--".to_string(),
+            "-x".to_string(),
+            "--literal".to_string(),
+        ];
+
+        assert_eq!(
+            super::positionals(&args),
+            vec![
+                "input.txt".to_string(),
+                "-x".to_string(),
+                "--literal".to_string()
+            ]
+        );
     }
 }

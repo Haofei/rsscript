@@ -218,7 +218,7 @@ impl Context<'_> {
     }
 
     pub fn sleep_for(&mut self, duration: Duration) {
-        std::thread::sleep(duration);
+        self.wake_after(duration);
     }
 
     pub fn wake_at(&mut self, deadline: Instant) {

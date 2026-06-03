@@ -271,7 +271,7 @@ pub(crate) fn print_usage() {
         "  rss dev [--lint] [--run] [--release] [--json] [--once] [--core|--no-core] [--interface <file.rssi> ...] <file-or-package-directory>"
     );
     eprintln!("  rss eval <file.rss>");
-    eprintln!("  rss fmt <file.rss>");
+    eprintln!("  rss fmt <file.rss>  # writes formatted source to stdout");
     eprintln!("  rss new <package-name>");
     eprintln!(
         "  rss ide --json <diagnostics|symbols|outline|hover|definition|references|generate> <file-or-package-directory> [--line <n>] [--column <n>] [--query <text>] [--max <n>]"

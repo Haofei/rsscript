@@ -125,10 +125,17 @@ runs:
         else
           REVIEW_STATUS="pass"
         fi
+        if [ $PACKAGE_CHECK_EXIT_CODE -ne 0 ]; then
+          REVIEW_STATUS="fail"
+        fi
         echo "status=$REVIEW_STATUS" >> "$GITHUB_OUTPUT"
+        if [ $PACKAGE_CHECK_EXIT_CODE -ne 0 ]; then
+          echo "::error::rss pkg ci reported package check failures"
+          exit $PACKAGE_CHECK_EXIT_CODE
+        fi
 
     - name: Post PR comment
-      if: inputs.post-comment == 'true' && github.event_name == 'pull_request'
+      if: ${{ always() && inputs.post-comment == 'true' && github.event_name == 'pull_request' }}
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}

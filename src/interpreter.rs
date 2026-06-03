@@ -364,7 +364,7 @@ impl<'a> Interpreter<'a> {
     ) -> Result<Value, EvalError> {
         match (receiver, method) {
             (Value::Int(value), "to_string") => Ok(Value::String(value.to_string())),
-            (Value::String(value), "len") => Ok(Value::Int(value.chars().count() as i64)),
+            (Value::String(value), "len") => Ok(Value::Int(value.len() as i64)),
             (Value::String(value), "is_empty") => Ok(Value::Bool(value.is_empty())),
             (Value::String(value), "concat") => {
                 let right = self.eval_named_or_positional_arg(args, "right", 0)?;

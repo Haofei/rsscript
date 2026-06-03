@@ -603,9 +603,13 @@ fn try_run_show(args: &[String]) -> Result<ExitCode, CliError> {
 
 fn take_value(args: &[String], index: &mut usize, flag: &str) -> Result<String, CliError> {
     *index += 1;
-    args.get(*index)
-        .cloned()
-        .ok_or_else(|| CliError::usage(format!("missing value for {flag}")))
+    let Some(value) = args.get(*index) else {
+        return Err(CliError::usage(format!("missing value for {flag}")));
+    };
+    if value.starts_with("--") {
+        return Err(CliError::usage(format!("missing value for {flag}")));
+    }
+    Ok(value.clone())
 }
 
 fn wants_help(args: &[String]) -> bool {
@@ -1332,6 +1336,16 @@ mod tests {
         path.push(format!("reir-{name}-{}-{nonce}", std::process::id()));
         std::fs::create_dir_all(&path).expect("temp dir should be created");
         path
+    }
+
+    #[test]
+    fn take_value_rejects_next_flag_as_missing_value() {
+        let args = vec!["--out".to_string(), "--json".to_string()];
+        let mut index = 0;
+
+        let error = take_value(&args, &mut index, "--out").expect_err("flag value should fail");
+
+        assert!(matches!(error, CliError::Usage(message) if message == "missing value for --out"));
     }
 
     #[test]

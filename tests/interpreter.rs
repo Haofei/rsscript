@@ -121,6 +121,56 @@ fn eval_matches_lowered_rust_for_pure_core_example() {
 }
 
 #[test]
+fn eval_string_len_matches_lowered_rust_for_utf8_bytes() {
+    let source = r#"
+fn main() -> Unit {
+    let len = String.len(value: read "é")
+    Log.write(message: read String.from_int(value: len))
+}
+"#;
+    let eval = eval_source_main("eval-string-len-utf8.rss", source).expect("eval should succeed");
+    assert_eq!(eval.value, "Unit");
+    assert_eq!(eval.stdout, "2\n");
+
+    let runtime_path = format!("{}/runtime", env!("CARGO_MANIFEST_DIR"));
+    let package = lower_source_to_rust_package(
+        "eval-string-len-utf8.rss",
+        source,
+        "rsscript_eval_string_len_utf8",
+        &runtime_path,
+    )
+    .expect("utf8 length fixture should lower");
+    let package_dir = common::unique_temp_dir("rsscript-eval-string-len-utf8");
+    write_generated_rust_package(&package_dir, &package).expect("generated package should write");
+
+    let output = Command::new("cargo")
+        .arg("run")
+        .arg("--quiet")
+        .arg("--manifest-path")
+        .arg(package_dir.join("Cargo.toml"))
+        .env(
+            "CARGO_TARGET_DIR",
+            format!(
+                "{}/target/rsscript-generated-test",
+                env!("CARGO_MANIFEST_DIR")
+            ),
+        )
+        .output()
+        .expect("generated Rust package should run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
+    let stderr = String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n");
+    let _ = fs::remove_dir_all(&package_dir);
+
+    assert!(
+        output.status.success(),
+        "generated Rust package failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert_eq!(stdout, "2\n");
+    assert_eq!(stderr, "");
+}
+
+#[test]
 fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
     let source_path = "examples/scripts/core/interpreter_host_boundary.rss";
     let source = fs::read_to_string(source_path).expect("host boundary fixture should be readable");

@@ -130,41 +130,17 @@ pub fn process_run_stdout_timeout(
         return process_run_stdout(command, args);
     }
 
-    let timeout_ms = u64::try_from(timeout_ms).unwrap_or(0);
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-    let mut child = std::process::Command::new(command);
-    child
-        .args(args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    apply_default_ramdisk_env(&mut child);
-    let mut child = child
-        .spawn()
-        .map_err(|error| format!("failed to run `{command}`: {error}"))?;
-    loop {
-        if child
-            .try_wait()
-            .map_err(|error| format!("failed to poll `{command}`: {error}"))?
-            .is_some()
-        {
-            let output = child
-                .wait_with_output()
-                .map_err(|error| format!("failed to collect `{command}` output: {error}"))?;
-            return process_output_result(command, output);
+    process_run_timeout(command, args, timeout_ms).and_then(|output| {
+        if output.status == 0 {
+            Ok(output.stdout)
+        } else {
+            Err(format!(
+                "`{command}` exited with {}: {}",
+                output.status,
+                process_output_details_from_strings(&output.stdout, &output.stderr)
+            ))
         }
-        let now = Instant::now();
-        if now >= deadline {
-            let _ = child.kill();
-            let output = child
-                .wait_with_output()
-                .map_err(|error| format!("failed to collect `{command}` output: {error}"))?;
-            return Err(format!(
-                "`{command}` timed out after {timeout_ms}ms: {}",
-                process_output_details(&output)
-            ));
-        }
-        std::thread::sleep((deadline - now).min(Duration::from_millis(10)));
-    }
+    })
 }
 
 pub fn process_run_stdout_timeout_async(
@@ -190,41 +166,21 @@ pub fn process_run_timeout(
         return process_run(command, args);
     }
 
-    let timeout_ms = u64::try_from(timeout_ms).unwrap_or(0);
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-    let mut child = std::process::Command::new(command);
-    child
-        .args(args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    apply_default_ramdisk_env(&mut child);
-    let mut child = child
-        .spawn()
-        .map_err(|error| format!("failed to run `{command}`: {error}"))?;
-    loop {
-        if child
-            .try_wait()
-            .map_err(|error| format!("failed to poll `{command}`: {error}"))?
-            .is_some()
-        {
-            let output = child
-                .wait_with_output()
-                .map_err(|error| format!("failed to collect `{command}` output: {error}"))?;
-            return Ok(process_output(command, output));
-        }
-        let now = Instant::now();
-        if now >= deadline {
-            let _ = child.kill();
-            let output = child
-                .wait_with_output()
-                .map_err(|error| format!("failed to collect `{command}` output: {error}"))?;
-            return Err(format!(
-                "`{command}` timed out after {timeout_ms}ms: {}",
-                process_output_details(&output)
-            ));
-        }
-        std::thread::sleep((deadline - now).min(Duration::from_millis(10)));
+    let request = ProcessRequest {
+        command: command.to_string(),
+        args: args.to_vec(),
+        cwd: None,
+        stdin: None,
+        env: Vec::new(),
+        timeout_ms,
+        merge_stderr: false,
+        output_cap_bytes: 0,
+    };
+    let output = process_run_request(&request)?;
+    if output.status == -1 && output.merged.contains("timed out") {
+        return Err(output.merged);
     }
+    Ok(output)
 }
 
 pub fn process_run_timeout_async(
@@ -1001,6 +957,38 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
+    fn process_run_timeout_drains_large_stdout_while_waiting() {
+        let args = vec![
+            "-c".to_string(),
+            "i=0; while [ $i -lt 20000 ]; do printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n'; i=$((i + 1)); done"
+                .to_string(),
+        ];
+
+        let output =
+            super::process_run_timeout("sh", &args, 10_000).expect("large stdout should drain");
+
+        assert_eq!(output.status, 0);
+        assert!(output.stdout.len() > 500_000);
+        assert!(output.stderr.is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn process_run_stdout_timeout_drains_large_stdout_while_waiting() {
+        let args = vec![
+            "-c".to_string(),
+            "i=0; while [ $i -lt 20000 ]; do printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n'; i=$((i + 1)); done"
+                .to_string(),
+        ];
+
+        let stdout = super::process_run_stdout_timeout("sh", &args, 10_000)
+            .expect("large stdout should drain");
+
+        assert!(stdout.len() > 500_000);
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn process_run_request_cancellable_async_kills_child() {
         let request = super::ProcessRequest {
             command: "sh".to_string(),
@@ -1082,11 +1070,19 @@ mod tests {
 }
 
 fn apply_default_ramdisk_env(command: &mut std::process::Command) {
-    if std::env::var_os("RSSCRIPT_RAMDISK_PATH").is_none()
+    if ramdisk_auto_env_enabled()
+        && std::env::var_os("RSSCRIPT_RAMDISK_PATH").is_none()
         && let Some(path) = default_ramdisk_root_dir()
     {
         command.env("RSSCRIPT_RAMDISK_PATH", path);
     }
+}
+
+fn ramdisk_auto_env_enabled() -> bool {
+    matches!(
+        std::env::var("RSSCRIPT_ENABLE_RAMDISK").as_deref(),
+        Ok("1" | "true" | "TRUE" | "yes" | "YES")
+    )
 }
 
 #[cfg(target_os = "macos")]
