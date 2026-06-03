@@ -33,6 +33,13 @@ fn process_request(command: read String, args: read List<String>, config: read A
 }
 
 fn execute_shell(arguments: read String, config: read AgentConfig) -> fresh ToolAction {
+    match shell_args_error(arguments) {
+        Some(error) => {
+            return tool_arg_error(error)
+        }
+        None => {
+        }
+    }
     let decoded = shell_args(arguments)
     let cmd = string_or(decoded.cmd, "")
     if cmd == "" {
@@ -66,8 +73,18 @@ fn shell_command_policy_error(cmd: read String) -> Option<String> {
 }
 
 fn execute_rss_check(arguments: read String, config: read AgentConfig) -> fresh ToolAction {
+    match rss_check_args_error(arguments) {
+        Some(error) => {
+            return tool_arg_error(error)
+        }
+        None => {
+        }
+    }
     let decoded = rss_check_args(arguments)
-    let path_text = string_or(decoded.path, "examples/packages/code-agent")
+    let path_text = string_or(decoded.path, "")
+    if path_text == "" {
+        return ToolAction.error(content: read "error: rss_check requires arguments.path")
+    }
     let timeout_ms = bounded_limit(int_or(decoded.timeout_ms, 120000), 120000, 300000)
     match resolve_repo_path(config.repo_root, path_text) {
         Ok(path) => {
@@ -89,6 +106,13 @@ fn execute_rss_check(arguments: read String, config: read AgentConfig) -> fresh 
 }
 
 fn execute_rss_cmd(arguments: read String, config: read AgentConfig) -> fresh ToolAction {
+    match rss_cmd_args_error(arguments) {
+        Some(error) => {
+            return tool_arg_error(error)
+        }
+        None => {
+        }
+    }
     let decoded = rss_cmd_args(arguments)
     let command = string_or(decoded.command, "")
     if command == "" {
@@ -134,6 +158,13 @@ fn rss_command_allowed(command: read String) -> Bool {
 }
 
 fn execute_rss_ide(arguments: read String, config: read AgentConfig) -> fresh ToolAction {
+    match rss_ide_args_error(arguments) {
+        Some(error) => {
+            return tool_arg_error(error)
+        }
+        None => {
+        }
+    }
     let decoded = rss_ide_args(arguments)
     let action = string_or(decoded.action, "")
     let path_text = string_or(decoded.path, "")
@@ -193,7 +224,17 @@ fn rss_ide_action_allowed(action: read String) -> Bool {
 }
 
 fn execute_finish(arguments: read String) -> fresh ToolAction {
+    match finish_args_error(arguments) {
+        Some(error) => {
+            return tool_arg_error(error)
+        }
+        None => {
+        }
+    }
     let decoded = finish_args(arguments)
     let answer = string_or(decoded.answer, "")
+    if answer == "" {
+        return ToolAction.error(content: read "error: finish requires arguments.answer")
+    }
     return ToolAction.finish(answer: read answer)
 }

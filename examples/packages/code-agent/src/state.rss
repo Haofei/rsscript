@@ -2,13 +2,17 @@ struct AgentState {
     messages: List<ChatMessage>
     step: Int
     finished: Bool
+    failed: Bool
+    failure_reason: String
 }
 
 struct ToolLoopResult {
     called_tool: Bool
     messages: List<ChatMessage>
     finished: Bool
+    failed: Bool
     final_answer: String
+    failure_reason: String
 }
 
 fn AgentState.new(task: read String, prompt: read Prompt) -> fresh AgentState {
@@ -16,9 +20,11 @@ fn AgentState.new(task: read String, prompt: read Prompt) -> fresh AgentState {
         messages: [ChatMessage.system(prompt.render()), ChatMessage.user(task)],
         step: 0,
         finished: false,
+        failed: false,
+        failure_reason: "",
     )
 }
 
 fn AgentState.can_continue(state: read AgentState, max_steps: Int) -> Bool {
-    return state.finished == false && state.step < max_steps
+    return state.finished == false && state.failed == false && state.step < max_steps
 }

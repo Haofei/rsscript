@@ -76,9 +76,31 @@ fn bool_or(value: read Option<Bool>, fallback: Bool) -> Bool {
     return Option.unwrap_or(value: read value, default: read fallback)
 }
 
+fn read_args_error(arguments: read String) -> Option<String> {
+    match Json.decode_text<ReadArgs>(text: read arguments) {
+        Ok => {
+            return None
+        }
+        Err(error) => {
+            return Some(["read arguments must be a JSON object: ", error.message()].join(""))
+        }
+    }
+}
+
 fn read_args(arguments: read String) -> ReadArgs {
     let fallback = ReadArgs(path: None, start_line: None, max_lines: None, max_output_chars: None)
     return Result.unwrap_or(value: read Json.decode_text<ReadArgs>(text: read arguments), default: read fallback)
+}
+
+fn write_args_error(arguments: read String) -> Option<String> {
+    match Json.decode_text<WriteArgs>(text: read arguments) {
+        Ok => {
+            return None
+        }
+        Err(error) => {
+            return Some(["write arguments must be a JSON object: ", error.message()].join(""))
+        }
+    }
 }
 
 fn write_args(arguments: read String) -> WriteArgs {
@@ -86,9 +108,31 @@ fn write_args(arguments: read String) -> WriteArgs {
     return Result.unwrap_or(value: read Json.decode_text<WriteArgs>(text: read arguments), default: read fallback)
 }
 
+fn edit_args_error(arguments: read String) -> Option<String> {
+    match Json.decode_text<EditArgs>(text: read arguments) {
+        Ok => {
+            return None
+        }
+        Err(error) => {
+            return Some(["edit arguments must be a JSON object: ", error.message()].join(""))
+        }
+    }
+}
+
 fn edit_args(arguments: read String) -> EditArgs {
     let fallback = EditArgs(path: None, old_string: None, new_string: None, replace_all: None)
     return Result.unwrap_or(value: read Json.decode_text<EditArgs>(text: read arguments), default: read fallback)
+}
+
+fn apply_patch_args_error(arguments: read String) -> Option<String> {
+    match Json.decode_text<ApplyPatchArgs>(text: read arguments) {
+        Ok => {
+            return None
+        }
+        Err(error) => {
+            return Some(["apply_patch arguments must be a JSON object: ", error.message()].join(""))
+        }
+    }
 }
 
 fn apply_patch_args(arguments: read String) -> ApplyPatchArgs {
@@ -96,9 +140,31 @@ fn apply_patch_args(arguments: read String) -> ApplyPatchArgs {
     return Result.unwrap_or(value: read Json.decode_text<ApplyPatchArgs>(text: read arguments), default: read fallback)
 }
 
+fn shell_args_error(arguments: read String) -> Option<String> {
+    match Json.decode_text<ShellArgs>(text: read arguments) {
+        Ok => {
+            return None
+        }
+        Err(error) => {
+            return Some(["shell arguments must be a JSON object: ", error.message()].join(""))
+        }
+    }
+}
+
 fn shell_args(arguments: read String) -> ShellArgs {
     let fallback = ShellArgs(cmd: None, timeout_ms: None, max_output_chars: None)
     return Result.unwrap_or(value: read Json.decode_text<ShellArgs>(text: read arguments), default: read fallback)
+}
+
+fn rss_check_args_error(arguments: read String) -> Option<String> {
+    match Json.decode_text<RssCheckArgs>(text: read arguments) {
+        Ok => {
+            return None
+        }
+        Err(error) => {
+            return Some(["rss_check arguments must be a JSON object: ", error.message()].join(""))
+        }
+    }
 }
 
 fn rss_check_args(arguments: read String) -> RssCheckArgs {
@@ -106,9 +172,31 @@ fn rss_check_args(arguments: read String) -> RssCheckArgs {
     return Result.unwrap_or(value: read Json.decode_text<RssCheckArgs>(text: read arguments), default: read fallback)
 }
 
+fn rss_cmd_args_error(arguments: read String) -> Option<String> {
+    match Json.decode_text<RssCmdArgs>(text: read arguments) {
+        Ok => {
+            return None
+        }
+        Err(error) => {
+            return Some(["rss_cmd arguments must be a JSON object: ", error.message()].join(""))
+        }
+    }
+}
+
 fn rss_cmd_args(arguments: read String) -> RssCmdArgs {
     let fallback = RssCmdArgs(command: None, args: None, path: None, timeout_ms: None, max_output_chars: None)
     return Result.unwrap_or(value: read Json.decode_text<RssCmdArgs>(text: read arguments), default: read fallback)
+}
+
+fn rss_ide_args_error(arguments: read String) -> Option<String> {
+    match Json.decode_text<RssIdeArgs>(text: read arguments) {
+        Ok => {
+            return None
+        }
+        Err(error) => {
+            return Some(["rss_ide arguments must be a JSON object: ", error.message()].join(""))
+        }
+    }
 }
 
 fn rss_ide_args(arguments: read String) -> RssIdeArgs {
@@ -122,6 +210,17 @@ fn rss_ide_args(arguments: read String) -> RssIdeArgs {
         include_declaration: None,
     )
     return Result.unwrap_or(value: read Json.decode_text<RssIdeArgs>(text: read arguments), default: read fallback)
+}
+
+fn finish_args_error(arguments: read String) -> Option<String> {
+    match Json.decode_text<FinishArgs>(text: read arguments) {
+        Ok => {
+            return None
+        }
+        Err(error) => {
+            return Some(["finish arguments must be a JSON object: ", error.message()].join(""))
+        }
+    }
 }
 
 fn finish_args(arguments: read String) -> FinishArgs {
@@ -141,6 +240,11 @@ fn resolve_repo_path(repo_root: read Path, path_text: read String) -> Result<fre
 
 fn tool_path_error(path_text: read String, reason: read String) -> fresh ToolAction {
     let body = {"ok": false, "path": path_text, "error": reason}
+    return ToolAction.error(content: read Json.encode(value: read body))
+}
+
+fn tool_arg_error(reason: read String) -> fresh ToolAction {
+    let body = {"ok": false, "error": reason}
     return ToolAction.error(content: read Json.encode(value: read body))
 }
 

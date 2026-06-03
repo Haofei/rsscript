@@ -2,6 +2,8 @@ struct AgentConfig {
     model: ModelConfig
     max_steps: Int
     max_tool_calls: Int
+    max_read_bytes: Int
+    max_write_bytes: Int
     repo_root: Path
     workspace_root: String
 }
@@ -50,6 +52,8 @@ fn agent_config_from_env() -> fresh AgentConfig {
         model: ModelConfig.from_env(env: read ModelEnv.agent(), defaults: read ModelDefaults.openai_compatible()),
         max_steps: env_min_int("AGENT_MAX_STEPS", 8, 1),
         max_tool_calls: env_min_int("AGENT_MAX_TOOL_CALLS", 8, 1),
+        max_read_bytes: env_min_int("AGENT_MAX_READ_BYTES", 200000, 1),
+        max_write_bytes: env_min_int("AGENT_MAX_WRITE_BYTES", 200000, 1),
         repo_root: repo_root_from_env(),
         workspace_root: workspace_root_from_env(),
     )
