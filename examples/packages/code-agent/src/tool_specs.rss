@@ -130,14 +130,22 @@ fn rss_cmd_tool_spec() -> fresh JsonValue {
 fn rss_ide_tool_spec() -> fresh JsonValue {
     return function_tool(
         "rss_ide",
-        "Read-only RSScript semantic lookup helper over the core/package index.",
+        "Read-only RSScript semantic IDE helper. Supports diagnostics, symbols, outline, hover, definition, and references.",
         {
             "type": "object",
             "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["diagnostics", "symbols", "outline", "hover", "definition", "references"],
+                },
+                "path": {"type": "string"},
                 "query": {"type": "string"},
+                "line": {"type": "integer"},
+                "column": {"type": "integer"},
                 "max_results": {"type": "integer"},
+                "include_declaration": {"type": "boolean"},
             },
-            "required": ["query"],
+            "required": ["action", "path"],
             "additionalProperties": false,
         },
     )

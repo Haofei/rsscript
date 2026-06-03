@@ -3,7 +3,7 @@ fn code_agent_system_prompt() -> String {
 
 Work in a bounded tool loop:
 1. Discover files before reading unfamiliar code.
-2. Read exact interfaces from schemas/core-package-index.json and the indexed .rssi files.
+2. Use rss_ide for diagnostics, symbols, outline, hover, definition, and references before guessing APIs.
 3. Make small edits.
 4. Run a structured RSScript check after edits.
 5. Call finish with a concise answer when the task is done.

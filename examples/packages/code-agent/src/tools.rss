@@ -37,7 +37,7 @@ fn execute_core_tool(request: read ToolRequest, config: read AgentConfig) -> fre
             return execute_finish(request.arguments)
         }
         _ => {
-            return ToolAction.error(["error: unknown tool ", request.name].join(""))
+            return ToolAction.error(["error: unknown tool ", String.copy(value: read request.name)].join(""))
         }
     }
 }
@@ -48,7 +48,7 @@ fn push_tool_response(messages: mut List<AgentMessage>, request: read ToolReques
         "is_error": output.is_error,
         "content": output.content,
     }
-    mut messages.push(AgentMessage.tool(request.id, envelope.to_string()))
+    mut messages.push(AgentMessage.tool(String.copy(value: read request.id), Json.encode(value: read envelope)))
 }
 
 fn execute_tool_calls(

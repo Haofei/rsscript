@@ -67,7 +67,7 @@ fn write_guard_error(path_text: read String, config: read AgentConfig) -> Option
     if path_in_workspace(config.workspace_root, path_text) == false {
         let reason = [
             "writes are confined to `",
-            config.workspace_root,
+            String.copy(value: read config.workspace_root),
             "` and must be safe relative paths",
         ].join("")
         return Some(reason)
@@ -110,11 +110,11 @@ fn execute_write(arguments: read String, config: read AgentConfig) -> fresh Tool
                         "old_bytes": old_content.len(),
                         "new_bytes": content.len(),
                     }
-                    return ToolAction.respond(body.to_string())
+                    return ToolAction.respond(Json.encode(value: read body))
                 }
                 Err(error) => {
                     let body = {"ok": false, "path": path_text, "error": error.message()}
-                    return ToolAction.error(body.to_string())
+                    return ToolAction.error(Json.encode(value: read body))
                 }
             }
         }
@@ -171,7 +171,7 @@ fn execute_edit(arguments: read String, config: read AgentConfig) -> fresh ToolA
                                 "replacements": replacement_count,
                                 "new_bytes": new_content.len(),
                             }
-                            return ToolAction.respond(body.to_string())
+                            return ToolAction.respond(Json.encode(value: read body))
                         }
                         Err(error) => {
                             return ToolAction.error(["error editing ", path_text, ": ", error.message()].join(""))

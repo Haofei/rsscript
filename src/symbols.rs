@@ -86,6 +86,7 @@ pub struct SymbolIndex {
 pub fn symbol_index(file: &str, source: &str) -> SymbolIndex {
     let program = parse_source(file, source);
     let mut builder = Builder {
+        source,
         definitions: Vec::new(),
         references: Vec::new(),
         scopes: vec![HashMap::new()],
@@ -444,6 +445,28 @@ fn span_contains(span: &Span, line: usize, column: usize) -> bool {
     span.line == line && column >= span.column && column < span.column + span.length.max(1)
 }
 
+fn name_span_after(source: &str, span: &Span, name: &str) -> Span {
+    let Some(line) = source.lines().nth(span.line.saturating_sub(1)) else {
+        return span.clone();
+    };
+    let start_char = span.column.saturating_sub(1);
+    let start_byte = line
+        .char_indices()
+        .nth(start_char)
+        .map(|(index, _)| index)
+        .unwrap_or(line.len());
+    let Some(relative_byte) = line[start_byte..].find(name) else {
+        return span.clone();
+    };
+    let before_name = &line[..start_byte + relative_byte];
+    Span {
+        file: span.file.clone(),
+        line: span.line,
+        column: before_name.chars().count() + 1,
+        length: name.chars().count(),
+    }
+}
+
 /// A span with the same start as `span` but a fixed length — used to carve the
 /// precise callee/receiver out of a call expression's full span.
 fn sub_span(span: &Span, length: usize) -> Span {
@@ -455,13 +478,14 @@ fn sub_span(span: &Span, length: usize) -> Span {
     }
 }
 
-struct Builder {
+struct Builder<'a> {
+    source: &'a str,
     definitions: Vec<Definition>,
     references: Vec<Reference>,
     scopes: Vec<HashMap<String, usize>>,
 }
 
-impl Builder {
+impl Builder<'_> {
     fn define(
         &mut self,
         name: &str,
@@ -472,11 +496,12 @@ impl Builder {
         if name.is_empty() {
             return None;
         }
+        let span = name_span_after(self.source, span, name);
         let index = self.definitions.len();
         self.definitions.push(Definition {
             name: name.to_string(),
             kind,
-            span: span.clone(),
+            span,
             detail,
         });
         self.scopes

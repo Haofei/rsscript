@@ -12,6 +12,7 @@ use rsscript::{
 mod check;
 mod dev;
 mod fmt;
+mod ide;
 mod lint;
 mod package;
 mod review;
@@ -28,6 +29,7 @@ pub fn run() -> ExitCode {
     match command {
         "check" => check::run_check(&args[2..]),
         "dev" => dev::run_dev(&args[2..]),
+        "ide" => ide::run_ide(&args[2..]),
         "lint" => lint::run_lint(&args[2..]),
         "fmt" => fmt::run_fmt(&args[2..]),
         "review" => review::run_review(&args[2..]),
@@ -230,6 +232,9 @@ pub(crate) fn print_usage() {
         "  rss dev [--lint] [--run] [--release] [--json] [--once] [--core|--no-core] [--interface <file.rssi> ...] <file-or-package-directory>"
     );
     eprintln!("  rss fmt <file.rss>");
+    eprintln!(
+        "  rss ide --json <diagnostics|symbols|outline|hover|definition|references> <file-or-package-directory> [--line <n>] [--column <n>] [--query <text>] [--max <n>]"
+    );
     eprintln!("  rss run [--json] [--release] <file-or-package-directory> [-- <args>...]");
     eprintln!(
         "  rss run [--json] [--release] <file-or-package-directory> --out-dir <directory> [-- <args>...]"

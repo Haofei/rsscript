@@ -56,7 +56,7 @@ fn resolve_repo_path(repo_root: read Path, path_text: read String) -> Result<fre
 
 fn tool_path_error(path_text: read String, reason: read String) -> fresh ToolAction {
     let body = {"ok": false, "path": path_text, "error": reason}
-    return ToolAction.error(body.to_string())
+    return ToolAction.error(Json.encode(value: read body))
 }
 
 fn bounded_limit(value: Int, fallback: Int, max: Int) -> Int {
