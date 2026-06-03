@@ -54,10 +54,11 @@ not safer; ceremony that states nothing buries the one marker that matters. So:
 Do not add a marker "to be safe": writing `mut` when you only read, or `local`
 when managed is fine, is wrong (often a checker error) and adds review noise.
 Before emitting any keyword, ask: *is there a real choice here, and would a
-reviewer judge wrong if it were absent?* If not, leave it out. (`read` at call
-sites is the one default RSS still writes — required by the checker, RS0202;
-write it, but treat it as the exception, not the pattern. Spec: Constitution
-Article VIII and §2A.)
+reviewer judge wrong if it were absent?* If not, leave it out. (`read` is the one
+marker that is **default in meaning but mandatory in syntax**: it is the
+least-privilege baseline effect, yet you must still write it at call sites — an
+omitted effect is the error RS0202, never an inferred `read`. Write it, but treat
+it as the lone exception, not the pattern. Spec: Constitution Article VIII, §2A.)
 
 ---
 

@@ -418,42 +418,67 @@ which is exactly the property review wants.
 
 ### 2A.3 Worked example: the call-site `read` effect
 
-There is one place RSScript spells out a default rather than a departure, and it
-is the cleanest illustration of the tension this chapter governs. Every
-by-reference or managed argument carries a data-effect keyword at the call site,
-including the common `read` case (an omitted effect is the error RS0202, not an
-inferred `read`); only Copy scalars are passed bare:
+"Is `read` explicit or a default?" is the sharpest question this chapter raises,
+and the boundary feels blurry only because the two words answer different
+questions. Separate the axes and the blur disappears:
+
+```text
+meaning axis     Among {read, mut, take}, read is the least-privilege baseline —
+(default?)       the effect you have when you intend nothing special.
+                 -> read IS the semantic default.
+
+surface axis     Is the token written, or omitted/inferred? read is mandatory at
+(explicit?)      the call site; an omitted effect is the error RS0202, never an
+                 inferred read.
+                 -> read IS syntactically explicit.
+```
+
+So `read` is a **default-valued effect that the language requires you to write**.
+"Default" places it in the meaning lattice; "explicit" places it on the surface.
+The two never conflict because they are different axes. Plot every marker on both
+and `read` is the lone anomaly:
+
+```text
+                      surface: silent             surface: written
+meaning: default      managed, sync, safe,        read   <- the only default
+(baseline)            non-fresh, non-retaining            that is written out
+meaning: departure    (impossible: a hidden       mut, take, local, manage,
+                       departure would be hidden    fresh, retains, native,
+                       behavior — Article III)      unsafe, async
+```
+
+Every other default is silent; every departure is written; the one off-pattern
+cell is the call-site `read`:
 
 ```rust
 cache_put(cache: mut cache, key: read key, value: read value)
-//                          ^^^^        ^^^^   the default, written out at every use
+//                          ^^^^        ^^^^   the default, written at every use
 ```
 
-When a call has several `read` arguments and one `mut`, the load-bearing `mut`
-is diluted by the repeated `read`. By §2A.2 the default should be silent, so
-this is the design's most visible ceremony tax.
-
-RSScript nonetheless **keeps** the call-site `read` as a deliberate, recorded
-exception under Article VIII, for two reasons that are themselves review
-properties:
+By §2A.2's rule — mark the departure, hide the norm — `read` *should* be silent,
+and spelling it out dilutes the load-bearing `mut`. RSScript overrides the rule
+here deliberately, under Article VIII, because at this site it values one property
+above signal density:
 
 ```text
-1. Mutation and consumption must be legible at the call without resolving the
-   callee's signature, which may live in another file or a package interface.
-   A visible baseline `read` makes a `mut`/`take` departure unambiguous and
-   makes an omitted effect a detectable error rather than a silent "assume read".
-2. It keeps the call site a complete review artifact: the effect of every
-   argument is present where the call is read, not inferred from elsewhere.
+absence must be an error, never an inferred read.
 ```
+
+If `read` were omittable, a bare `f(x: value)` would be ambiguous between "I
+confirmed this is read-only" and "I forgot to annotate," and an un-annotated
+argument could pass review as if it had been reviewed. Making the default a
+required token keeps the effect a positive, present claim, lets the checker demand
+it (RS0202), and keeps mutation and consumption legible at the call without
+resolving a callee signature that may live in another file or a package interface.
 
 The cost is acknowledged, not denied: uniform `read` is partly wallpaper. The
 alternative is therefore preserved, not excluded (Article VI). A future form may
-make `read` the omittable default so that only `mut`/`take` are written — if
+make `read` the omittable default so that only `mut`/`take` are written, if
 call-site self-description is judged to buy less than the gain in signal density.
-The binding constraint any such form must satisfy: **an omitted effect must
-remain a hard error, never an inferred `read`**, so that absence can never quietly
-mean "unreviewed." Until then, the spec spends this ceremony knowingly, with its
-justification on the record — which is precisely what Article VIII requires of any
+The binding constraint any such form must satisfy is unchanged: **an omitted
+effect must remain a hard error, never an inferred `read`**, so absence can never
+quietly mean "unreviewed." Until then the spec spends this ceremony knowingly,
+with its justification on the record — which is what Article VIII requires of any
 spelled-out default.
 
 ### 2A.4 Consequence for feature admission
