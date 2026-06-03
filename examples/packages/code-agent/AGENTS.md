@@ -24,7 +24,7 @@ does not exist.
 | File | Owns |
 | --- | --- |
 | `src/config.rss` | Env-derived config: model, endpoint, key, budgets, retry, sandbox roots. |
-| `src/protocol.rss` | Request JSON, response/usage extraction, tool-call parsing. |
+| `src/protocol.rss` | Builds the model request JSON (response/usage/tool-call parsing live in the `rss-chat-completions` dependency). |
 | `src/state.rss` | Structured chat-message history. |
 | `src/tool_types.rss` | `ToolRequest` / `ToolOutput` / `ToolAction` types and shared helpers. |
 | `src/tool_specs.rss` | JSON tool schemas advertised to the model. |

@@ -1,6 +1,6 @@
 features: async
 
-async fn main() -> Result<Unit, HttpError> {
+async fn main() -> Result<Unit, String> {
     let config = agent_config_from_env()
     let task = agent_task_from_env()
     let logger = StructuredLogger.named(name: read "rss-code-agent")
@@ -31,7 +31,6 @@ async fn main() -> Result<Unit, HttpError> {
                     state.finished = true
                     state.failed = true
                     state.failure_reason = status_message.copy()
-                    Assert.equal(left: read "agent completed", right: read status_message)
                 } else {
                     let turn_span = TraceSpan.start(name: read "agent.turn")
                     StructuredLogger.event(logger: read logger, event: read "agent.response", message: read response)
@@ -46,7 +45,6 @@ async fn main() -> Result<Unit, HttpError> {
                         state.finished = true
                         state.failed = true
                         state.failure_reason = tool_result.failure_reason.copy()
-                        Assert.equal(left: read "agent completed", right: read tool_result.failure_reason)
                     } else if tool_result.finished {
                         StructuredLogger.event(logger: read logger, event: read "turn.completed", message: read tool_result.final_answer)
                         Log.write(message: read tool_result.final_answer)
@@ -71,7 +69,6 @@ async fn main() -> Result<Unit, HttpError> {
                                 event: read "turn.budget_exhausted",
                                 message: read state.failure_reason,
                             )
-                            Assert.equal(left: read "agent completed", right: read state.failure_reason)
                         }
                     }
                 }
@@ -82,9 +79,11 @@ async fn main() -> Result<Unit, HttpError> {
                 state.finished = true
                 state.failed = true
                 state.failure_reason = reason.copy()
-                Assert.equal(left: read "agent completed", right: read reason)
             }
         }
+    }
+    if state.failed {
+        return Err(state.failure_reason.copy())
     }
     return Ok(Unit)
 }

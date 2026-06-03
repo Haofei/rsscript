@@ -11,7 +11,7 @@ AGENT_API_KEY=test_key cargo run -- run examples/packages/code-agent
 The example is intentionally structured like a simplified Codex loop:
 
 - `src/config.rss`: environment-derived model, endpoint, API key, loop budget, retry policy, and the write sandbox root.
-- `src/protocol.rss`: request JSON, response extraction, usage extraction, and tool-call parsing.
+- `src/protocol.rss`: builds the model request JSON. (Response, usage, and tool-call parsing come from the `rss-chat-completions` dependency via `ChatResponse`.)
 - `src/state.rss`: structured chat message history.
 - `src/tool_types.rss`: tool request/output/action types and shared helpers.
 - `src/tool_specs.rss`: JSON schemas sent to the model.
