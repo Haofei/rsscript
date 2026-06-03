@@ -133,6 +133,11 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "create_all",
         "rsscript_runtime::directory_create_all",
     ),
+    runtime_intrinsic(
+        "Directory",
+        "create_dir_all",
+        "rsscript_runtime::directory_create_all",
+    ),
     runtime_intrinsic("Directory", "create", "rsscript_runtime::directory_create"),
     runtime_intrinsic(
         "Directory",
@@ -182,6 +187,7 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "write_string",
         "rsscript_runtime::directory_write_string",
     ),
+    runtime_intrinsic("Diff", "unified", "rsscript_runtime::diff_unified"),
     runtime_intrinsic("Duration", "add", "rsscript_runtime::duration_add"),
     runtime_intrinsic("Duration", "as_ms", "rsscript_runtime::duration_as_ms"),
     runtime_intrinsic(
@@ -421,6 +427,11 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "write_string_to_path",
         "rsscript_runtime::file_write_string_to_path",
     ),
+    runtime_intrinsic(
+        "File",
+        "write_atomic",
+        "rsscript_runtime::file_write_atomic",
+    ),
     runtime_intrinsic("File", "read_all", "rsscript_runtime::file_read_all"),
     runtime_intrinsic(
         "File",
@@ -641,6 +652,22 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Json", "at_bool_or", "rsscript_runtime::json_at_bool_or"),
     runtime_intrinsic("Json", "at_int", "rsscript_runtime::json_at_int"),
     runtime_intrinsic("Json", "at_int_or", "rsscript_runtime::json_at_int_or"),
+    runtime_intrinsic("Json", "at_optional", "rsscript_runtime::json_at_optional"),
+    runtime_intrinsic(
+        "Json",
+        "at_optional_bool",
+        "rsscript_runtime::json_at_optional_bool",
+    ),
+    runtime_intrinsic(
+        "Json",
+        "at_optional_int",
+        "rsscript_runtime::json_at_optional_int",
+    ),
+    runtime_intrinsic(
+        "Json",
+        "at_optional_string",
+        "rsscript_runtime::json_at_optional_string",
+    ),
     runtime_intrinsic("Json", "at_string", "rsscript_runtime::json_at_string"),
     runtime_intrinsic(
         "Json",
@@ -669,6 +696,26 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Json", "field", "rsscript_runtime::json_field"),
     runtime_intrinsic("Json", "field_bool", "rsscript_runtime::json_field_bool"),
     runtime_intrinsic("Json", "field_int", "rsscript_runtime::json_field_int"),
+    runtime_intrinsic(
+        "Json",
+        "field_optional",
+        "rsscript_runtime::json_field_optional",
+    ),
+    runtime_intrinsic(
+        "Json",
+        "field_optional_bool",
+        "rsscript_runtime::json_field_optional_bool",
+    ),
+    runtime_intrinsic(
+        "Json",
+        "field_optional_int",
+        "rsscript_runtime::json_field_optional_int",
+    ),
+    runtime_intrinsic(
+        "Json",
+        "field_optional_string",
+        "rsscript_runtime::json_field_optional_string",
+    ),
     runtime_intrinsic("Json", "value_at", "rsscript_runtime::json_value_at"),
     runtime_intrinsic("Json", "value", "rsscript_runtime::json_value"),
     runtime_intrinsic("Json", "values", "rsscript_runtime::json_values"),
@@ -708,6 +755,7 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Json", "is_array", "rsscript_runtime::json_is_array"),
     runtime_intrinsic("Json", "is_null", "rsscript_runtime::json_is_null"),
     runtime_intrinsic("Json", "is_object", "rsscript_runtime::json_is_object"),
+    runtime_intrinsic("Json", "kind", "rsscript_runtime::json_kind"),
     runtime_intrinsic("Json", "object", "rsscript_runtime::json_object"),
     runtime_intrinsic("Json", "object_keys", "rsscript_runtime::json_object_keys"),
     runtime_intrinsic("Json", "object_len", "rsscript_runtime::json_object_len"),
@@ -868,6 +916,7 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "write_string",
         "rsscript_runtime::file_write_string_to_path",
     ),
+    runtime_intrinsic("Patch", "apply_text", "rsscript_runtime::patch_apply_text"),
     runtime_intrinsic("Process", "run", "rsscript_runtime::process_run"),
     runtime_intrinsic(
         "Process",
@@ -1114,6 +1163,11 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     ),
     runtime_intrinsic("Url", "from_string", "rsscript_runtime::url_from_string"),
     runtime_intrinsic("Url", "to_string", "rsscript_runtime::string_copy"),
+    runtime_intrinsic(
+        "Workspace",
+        "resolve",
+        "rsscript_runtime::path_resolve_relative",
+    ),
     runtime_intrinsic("Yaml", "parse", "rsscript_runtime::yaml_parse"),
     runtime_intrinsic("Yaml", "parse_file", "rsscript_runtime::yaml_parse_file"),
 ];

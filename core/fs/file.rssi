@@ -26,6 +26,9 @@ pub fn File.append_bytes(path: read Path, data: read Bytes) -> Result<Unit, File
 pub fn File.write_string_to_path(path: read Path, text: read String) -> Result<Unit, FileError>
     effects(native)
 
+pub fn File.write_atomic(path: read Path, text: read String) -> Result<Unit, FileError>
+    effects(native)
+
 pub fn File.append_string(path: read Path, text: read String) -> Result<Unit, FileError>
     effects(native)
 

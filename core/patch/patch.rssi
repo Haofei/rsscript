@@ -1,0 +1,7 @@
+features: native
+
+pub fn Patch.apply_text(
+    original: read String,
+    patch: read String,
+) -> Result<fresh String, String>
+    effects(native)

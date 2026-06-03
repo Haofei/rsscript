@@ -12,6 +12,9 @@ pub native fn Directory.is_dir(path: read Path) -> Bool
 pub native fn Directory.create_all(path: read Path) -> Result<Unit, FileError>
     effects(native)
 
+pub native fn Directory.create_dir_all(path: read Path) -> Result<Unit, FileError>
+    effects(native)
+
 pub native fn Directory.list_files(path: read Path) -> Result<fresh List<String>, FileError>
     effects(native)
 

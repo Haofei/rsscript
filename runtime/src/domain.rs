@@ -1063,6 +1063,20 @@ pub fn json_clone(value: &JsonValue) -> JsonValue {
     value.clone()
 }
 
+pub fn json_decode_value<T>(value: &JsonValue) -> Result<T, JsonError>
+where
+    T: serde::de::DeserializeOwned,
+{
+    serde_json::from_value(value.inner.clone()).map_err(JsonError::from)
+}
+
+pub fn json_decode_text<T>(text: &str) -> Result<T, JsonError>
+where
+    T: serde::de::DeserializeOwned,
+{
+    serde_json::from_str(text).map_err(JsonError::from)
+}
+
 pub fn json_parse_file<P: RuntimePath + ?Sized>(path: &P) -> Result<JsonValue, JsonError> {
     let text = std::fs::read_to_string(path.as_path())?;
     json_parse(&text)
@@ -1185,6 +1199,64 @@ pub fn json_field_bool(value: &JsonValue, name: &str) -> Result<bool, JsonError>
     Ok(flag)
 }
 
+pub fn json_field_optional(value: &JsonValue, name: &str) -> Result<Option<JsonValue>, JsonError> {
+    match value.inner.get(name) {
+        Some(field) if field.is_null() => Ok(None),
+        Some(field) => Ok(Some(JsonValue {
+            inner: field.clone(),
+        })),
+        None => Ok(None),
+    }
+}
+
+pub fn json_field_optional_string(
+    value: &JsonValue,
+    name: &str,
+) -> Result<Option<String>, JsonError> {
+    let Some(field) = value.inner.get(name) else {
+        return Ok(None);
+    };
+    if field.is_null() {
+        return Ok(None);
+    }
+    let Some(text) = field.as_str() else {
+        return Err(JsonError::new(format!(
+            "JSON field `{name}` is not a string"
+        )));
+    };
+    Ok(Some(text.to_string()))
+}
+
+pub fn json_field_optional_int(value: &JsonValue, name: &str) -> Result<Option<i64>, JsonError> {
+    let Some(field) = value.inner.get(name) else {
+        return Ok(None);
+    };
+    if field.is_null() {
+        return Ok(None);
+    }
+    let Some(number) = field.as_i64() else {
+        return Err(JsonError::new(format!(
+            "JSON field `{name}` is not an integer"
+        )));
+    };
+    Ok(Some(number))
+}
+
+pub fn json_field_optional_bool(value: &JsonValue, name: &str) -> Result<Option<bool>, JsonError> {
+    let Some(field) = value.inner.get(name) else {
+        return Ok(None);
+    };
+    if field.is_null() {
+        return Ok(None);
+    }
+    let Some(flag) = field.as_bool() else {
+        return Err(JsonError::new(format!(
+            "JSON field `{name}` is not a boolean"
+        )));
+    };
+    Ok(Some(flag))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum JsonPathPart {
     Field(String),
@@ -1300,6 +1372,38 @@ pub fn json_at_bool(value: &JsonValue, path: &str) -> Result<bool, JsonError> {
     json_as_bool(&item)
 }
 
+pub fn json_at_optional(value: &JsonValue, path: &str) -> Result<Option<JsonValue>, JsonError> {
+    match json_value_at(value, path) {
+        Ok(item) if item.inner.is_null() => Ok(None),
+        Ok(item) => Ok(Some(item)),
+        Err(_) => Ok(None),
+    }
+}
+
+pub fn json_at_optional_string(value: &JsonValue, path: &str) -> Result<Option<String>, JsonError> {
+    match json_value_at(value, path) {
+        Ok(item) if item.inner.is_null() => Ok(None),
+        Ok(item) => json_as_string(&item).map(Some),
+        Err(_) => Ok(None),
+    }
+}
+
+pub fn json_at_optional_int(value: &JsonValue, path: &str) -> Result<Option<i64>, JsonError> {
+    match json_value_at(value, path) {
+        Ok(item) if item.inner.is_null() => Ok(None),
+        Ok(item) => json_as_int(&item).map(Some),
+        Err(_) => Ok(None),
+    }
+}
+
+pub fn json_at_optional_bool(value: &JsonValue, path: &str) -> Result<Option<bool>, JsonError> {
+    match json_value_at(value, path) {
+        Ok(item) if item.inner.is_null() => Ok(None),
+        Ok(item) => json_as_bool(&item).map(Some),
+        Err(_) => Ok(None),
+    }
+}
+
 pub fn json_at_string_or(value: &JsonValue, path: &str, fallback: &str) -> String {
     json_at_string(value, path).unwrap_or_else(|_| fallback.to_string())
 }
@@ -1392,6 +1496,19 @@ pub fn json_is_array(value: &JsonValue) -> bool {
 
 pub fn json_is_object(value: &JsonValue) -> bool {
     value.inner.is_object()
+}
+
+pub fn json_kind(value: &JsonValue) -> String {
+    match &value.inner {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "bool",
+        serde_json::Value::Number(number) if number.is_i64() || number.is_u64() => "int",
+        serde_json::Value::Number(_) => "float",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+    .to_string()
 }
 
 pub fn json_object_len(value: &JsonValue) -> Result<i64, JsonError> {

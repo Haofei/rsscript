@@ -20,6 +20,7 @@ mod resource_pool;
 mod socket;
 mod string_helpers;
 mod tempdir;
+mod text_edit;
 mod websocket;
 
 pub use self::regex::*;
@@ -42,4 +43,5 @@ pub use resource_pool::*;
 pub use socket::*;
 pub use string_helpers::*;
 pub use tempdir::*;
+pub use text_edit::*;
 pub use websocket::*;

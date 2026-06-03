@@ -227,6 +227,39 @@ pub fn file_write_string_to_path<P: RuntimePath + ?Sized>(
     std::fs::write(path.as_path(), text.as_bytes())
 }
 
+pub fn file_write_atomic<P: RuntimePath + ?Sized>(path: &P, text: &str) -> std::io::Result<()> {
+    let path = path.as_path();
+    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "rsscript-atomic-write".to_string());
+    let temp_path = parent.join(format!(
+        ".{file_name}.tmp-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0)
+    ));
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temp_path)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+    }
+    match std::fs::rename(&temp_path, path) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = std::fs::remove_file(&temp_path);
+            Err(error)
+        }
+    }
+}
+
 pub fn file_append_string<P: RuntimePath + ?Sized>(path: &P, text: &str) -> std::io::Result<()> {
     let mut file = std::fs::OpenOptions::new()
         .create(true)

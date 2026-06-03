@@ -34,13 +34,14 @@ fn read_header(
 }
 
 fn execute_read(arguments: read String, config: read AgentConfig) -> fresh ToolAction {
-    let path_text = argument_field(arguments, "path", "")
+    let decoded = read_args(arguments)
+    let path_text = string_or(decoded.path, "")
     if path_text == "" {
         return ToolAction.error("error: read requires arguments.path")
     }
-    let start_line = bounded_limit(argument_int(arguments, "start_line", 1), 1, 1000000)
-    let max_lines = bounded_limit(argument_int(arguments, "max_lines", 200), 200, 5000)
-    let max_chars = bounded_limit(argument_int(arguments, "max_output_chars", 12000), 12000, 50000)
+    let start_line = bounded_limit(int_or(decoded.start_line, 1), 1, 1000000)
+    let max_lines = bounded_limit(int_or(decoded.max_lines, 200), 200, 5000)
+    let max_chars = bounded_limit(int_or(decoded.max_output_chars, 12000), 12000, 50000)
     match resolve_repo_path(config.repo_root, path_text) {
         Ok(path) => {
             match path.read_string() {
@@ -76,8 +77,9 @@ fn write_guard_error(path_text: read String, config: read AgentConfig) -> Option
 }
 
 fn execute_write(arguments: read String, config: read AgentConfig) -> fresh ToolAction {
-    let path_text = argument_field(arguments, "path", "")
-    let content = argument_field(arguments, "content", "")
+    let decoded = write_args(arguments)
+    let path_text = string_or(decoded.path, "")
+    let content = string_or(decoded.content, "")
     if path_text == "" {
         return ToolAction.error("error: write requires arguments.path")
     }
@@ -100,8 +102,16 @@ fn execute_write(arguments: read String, config: read AgentConfig) -> fresh Tool
                 Err => {
                 }
             }
-            match path.write_string(content) {
+            match create_parent_dirs(path) {
                 Ok => {
+                }
+                Err(error) => {
+                    return ToolAction.error(["error creating parent directory for ", path_text, ": ", error.message()].join(""))
+                }
+            }
+            match File.write_atomic(path: read path, text: read content) {
+                Ok => {
+                    let diff = Diff.unified(old: read old_content, new: read content)
                     let body = {
                         "ok": true,
                         "path": path_text,
@@ -109,6 +119,7 @@ fn execute_write(arguments: read String, config: read AgentConfig) -> fresh Tool
                         "changed": old_content != content,
                         "old_bytes": old_content.len(),
                         "new_bytes": content.len(),
+                        "diff": diff,
                     }
                     return ToolAction.respond(Json.encode(value: read body))
                 }
@@ -124,11 +135,61 @@ fn execute_write(arguments: read String, config: read AgentConfig) -> fresh Tool
     }
 }
 
+fn create_parent_dirs(path: read Path) -> Result<Unit, FileError> {
+    match path.parent() {
+        Some(parent) => {
+            return Directory.create_dir_all(path: read parent)
+        }
+        None => {
+            return Ok(Unit)
+        }
+    }
+}
+
+fn first_match_line(content: read String, needle: read String) -> Int {
+    let before_parts = content.split(needle)
+    if before_parts.len() <= 1 {
+        return 0
+    }
+    let prefix_text = before_parts.get(0)
+    return String.lines(value: read prefix_text).len()
+}
+
+fn edit_preview_json(
+    old_content: read String,
+    new_content: read String,
+    old_string: read String,
+    new_string: read String,
+    replace_all: Bool,
+    occurrences: Int,
+) -> fresh JsonValue {
+    let diff = Diff.unified(old: read old_content, new: read new_content)
+    let mut old_start = first_match_line(old_content, old_string)
+    let mut old_end = old_start + old_string.lines().len() - 1
+    let mut new_start = old_start
+    let mut new_end = new_start + new_string.lines().len() - 1
+    if replace_all {
+        old_start = 1
+        old_end = old_content.lines().len()
+        new_start = 1
+        new_end = new_content.lines().len()
+    }
+    return {
+        "old_start_line": old_start,
+        "old_end_line": old_end,
+        "new_start_line": new_start,
+        "new_end_line": new_end,
+        "occurrences": occurrences,
+        "diff": diff,
+    }
+}
+
 fn execute_edit(arguments: read String, config: read AgentConfig) -> fresh ToolAction {
-    let path_text = argument_field(arguments, "path", "")
-    let old_string = argument_field(arguments, "old_string", "")
-    let new_string = argument_field(arguments, "new_string", "")
-    let replace_all = argument_bool(arguments, "replace_all", false)
+    let decoded = edit_args(arguments)
+    let path_text = string_or(decoded.path, "")
+    let old_string = string_or(decoded.old_string, "")
+    let new_string = string_or(decoded.new_string, "")
+    let replace_all = bool_or(decoded.replace_all, false)
     if path_text == "" {
         return ToolAction.error("error: edit requires arguments.path")
     }
@@ -152,10 +213,22 @@ fn execute_edit(arguments: read String, config: read AgentConfig) -> fresh ToolA
                     let parts = content.split(old_string)
                     let occurrences = parts.len() - 1
                     if occurrences == 0 {
-                        return ToolAction.error("error: edit old_string not found")
+                        let body = {
+                            "ok": false,
+                            "path": path_text,
+                            "error": "edit old_string not found",
+                            "old_string_len": old_string.len(),
+                        }
+                        return ToolAction.error(Json.encode(value: read body))
                     }
                     if occurrences > 1 && replace_all == false {
-                        return ToolAction.error("error: edit old_string matched more than once; set replace_all=true")
+                        let body = {
+                            "ok": false,
+                            "path": path_text,
+                            "error": "edit old_string matched more than once; set replace_all=true",
+                            "occurrences": occurrences,
+                        }
+                        return ToolAction.error(Json.encode(value: read body))
                     }
                     let mut replacement_count = 1
                     let mut new_content = content.replace(old_string, new_string)
@@ -163,18 +236,77 @@ fn execute_edit(arguments: read String, config: read AgentConfig) -> fresh ToolA
                         replacement_count = occurrences
                         new_content = parts.join(new_string)
                     }
-                    match path.write_string(new_content) {
+                    match File.write_atomic(path: read path, text: read new_content) {
                         Ok => {
+                            let preview = edit_preview_json(content, new_content, old_string, new_string, replace_all, replacement_count)
                             let body = {
                                 "ok": true,
                                 "path": path_text,
                                 "replacements": replacement_count,
                                 "new_bytes": new_content.len(),
+                                "preview": preview,
                             }
                             return ToolAction.respond(Json.encode(value: read body))
                         }
                         Err(error) => {
                             return ToolAction.error(["error editing ", path_text, ": ", error.message()].join(""))
+                        }
+                    }
+                }
+                Err(error) => {
+                    return ToolAction.error(["error reading ", path_text, ": ", error.message()].join(""))
+                }
+            }
+        }
+        Err(error) => {
+            return tool_path_error(path_text, error)
+        }
+    }
+}
+
+fn execute_apply_patch(arguments: read String, config: read AgentConfig) -> fresh ToolAction {
+    let decoded = apply_patch_args(arguments)
+    let path_text = string_or(decoded.path, "")
+    let patch = string_or(decoded.patch, "")
+    if path_text == "" {
+        return ToolAction.error("error: apply_patch requires arguments.path")
+    }
+    if patch == "" {
+        return ToolAction.error("error: apply_patch requires non-empty arguments.patch")
+    }
+    match write_guard_error(path_text, config) {
+        Some(reason) => {
+            return tool_path_error(path_text, reason)
+        }
+        None => {
+        }
+    }
+    match resolve_repo_path(config.repo_root, path_text) {
+        Ok(path) => {
+            match path.read_string() {
+                Ok(content) => {
+                    match Patch.apply_text(original: read content, patch: read patch) {
+                        Ok(next) => {
+                            match File.write_atomic(path: read path, text: read next) {
+                                Ok => {
+                                    let diff = Diff.unified(old: read content, new: read next)
+                                    let body = {
+                                        "ok": true,
+                                        "path": path_text,
+                                        "old_bytes": content.len(),
+                                        "new_bytes": next.len(),
+                                        "diff": diff,
+                                    }
+                                    return ToolAction.respond(Json.encode(value: read body))
+                                }
+                                Err(error) => {
+                                    return ToolAction.error(["error writing patched file ", path_text, ": ", error.message()].join(""))
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            let body = {"ok": false, "path": path_text, "error": error}
+                            return ToolAction.error(Json.encode(value: read body))
                         }
                     }
                 }

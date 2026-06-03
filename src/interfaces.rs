@@ -105,6 +105,10 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
     ("core/csv/csv.rssi", include_str!("../core/csv/csv.rssi")),
     ("core/db/db.rssi", include_str!("../core/db/db.rssi")),
     (
+        "core/diff/diff.rssi",
+        include_str!("../core/diff/diff.rssi"),
+    ),
+    (
         "core/encoding/encoding.rssi",
         include_str!("../core/encoding/encoding.rssi"),
     ),
@@ -149,6 +153,10 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../core/path/path.rssi"),
     ),
     (
+        "core/patch/patch.rssi",
+        include_str!("../core/patch/patch.rssi"),
+    ),
+    (
         "core/process/process.rssi",
         include_str!("../core/process/process.rssi"),
     ),
@@ -188,6 +196,10 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
     (
         "core/weak/weak.rssi",
         include_str!("../core/weak/weak.rssi"),
+    ),
+    (
+        "core/workspace/workspace.rssi",
+        include_str!("../core/workspace/workspace.rssi"),
     ),
     (
         "core/yaml/yaml.rssi",

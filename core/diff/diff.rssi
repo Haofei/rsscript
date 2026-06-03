@@ -1,0 +1,4 @@
+features: native
+
+pub fn Diff.unified(old: read String, new: read String) -> fresh String
+    effects(native)

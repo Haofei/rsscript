@@ -2155,6 +2155,9 @@ impl<'a> RustLowerer<'a> {
                 format!("{}[{}]", self.lower_expr(base), self.lower_expr(index))
             }
             Expr::Call { callee, args, span } => {
+                if is_json_decode_callee(callee) {
+                    return self.lower_json_decode_call(callee, args, span);
+                }
                 if is_json_encode_callee(callee)
                     && let Some(value_arg) = args
                         .iter()
@@ -2732,6 +2735,53 @@ impl<'a> RustLowerer<'a> {
                 .fn_return
                 .as_deref()
                 .is_none_or(|return_ty| self.type_ref_is_concrete_for_annotation(return_ty))
+    }
+
+    fn lower_json_decode_call(&mut self, callee: &Callee, args: &[CallArg], span: &Span) -> String {
+        let Some(arg) = args
+            .iter()
+            .find(|arg| {
+                arg.name
+                    .as_deref()
+                    .is_some_and(|name| name == "value" || name == "text")
+                    || arg.name.is_none()
+            })
+            .or_else(|| args.first())
+        else {
+            unreachable_lowering("Json.decode call argument", span)
+        };
+        let type_suffix = json_decode_type_arg(callee)
+            .map(|name| {
+                let ty = type_ref_from_display(name, span);
+                format!("::<{}>", self.lower_type_ref(&ty, ManagedPosition::Nested))
+            })
+            .unwrap_or_default();
+        if is_json_decode_text_callee(callee) {
+            let text = self.lower_decode_read_arg(&arg.value);
+            format!("rsscript_runtime::json_decode_text{type_suffix}(&{text})")
+        } else {
+            let json_ty = simple_type_ref("JsonValue", span);
+            let value = match &arg.value {
+                Expr::Effect {
+                    effect: DataEffect::Read,
+                    value,
+                    ..
+                } => self.lower_expr_for_expected_type(value, &json_ty),
+                _ => self.lower_expr_for_expected_type(&arg.value, &json_ty),
+            };
+            format!("rsscript_runtime::json_decode_value{type_suffix}(&{value})")
+        }
+    }
+
+    fn lower_decode_read_arg(&mut self, expr: &Expr) -> String {
+        match expr {
+            Expr::Effect {
+                effect: DataEffect::Read,
+                value,
+                ..
+            } => self.lower_expr(value),
+            _ => self.lower_expr(expr),
+        }
     }
 
     fn lower_await_expr(&mut self, expr: &Expr) -> String {
@@ -4335,6 +4385,35 @@ fn is_json_encode_callee(callee: &Callee) -> bool {
         Callee::Qualified { namespace, name }
             if type_root_name(namespace) == "Json" && type_root_name(name) == "encode"
     )
+}
+
+fn is_json_decode_callee(callee: &Callee) -> bool {
+    matches!(
+        callee,
+        Callee::Qualified { namespace, name }
+            if type_root_name(namespace) == "Json"
+                && matches!(type_root_name(name), "decode" | "decode_text")
+    )
+}
+
+fn is_json_decode_text_callee(callee: &Callee) -> bool {
+    matches!(
+        callee,
+        Callee::Qualified { namespace, name }
+            if type_root_name(namespace) == "Json" && type_root_name(name) == "decode_text"
+    )
+}
+
+fn json_decode_type_arg(callee: &Callee) -> Option<&str> {
+    match callee {
+        Callee::Qualified { name, .. } => {
+            type_arg_names(name).and_then(|args| args.first().copied())
+        }
+        Callee::Name(name) => type_arg_names(name).and_then(|args| args.first().copied()),
+        Callee::ReceiverCall { method, .. } => {
+            type_arg_names(method).and_then(|args| args.first().copied())
+        }
+    }
 }
 
 fn expr_is_json_literal(expr: &Expr) -> bool {

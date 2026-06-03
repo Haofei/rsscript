@@ -21,6 +21,9 @@ fn execute_core_tool(request: read ToolRequest, config: read AgentConfig) -> fre
         "edit" => {
             return execute_edit(request.arguments, config)
         }
+        "apply_patch" => {
+            return execute_apply_patch(request.arguments, config)
+        }
         "shell" => {
             return execute_shell(request.arguments, config)
         }

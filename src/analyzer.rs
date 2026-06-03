@@ -152,18 +152,14 @@ fn analyze_program(
     hir: Hir,
     interface_programs: Vec<crate::syntax::ast::Program>,
 ) -> Vec<Diagnostic> {
-    use crate::syntax::ast::Item;
-    let type_aliases = syntax_program
-        .items
+    let mut type_aliases = std::collections::BTreeMap::new();
+    for interface in builtin_interface_programs()
         .iter()
-        .filter_map(|item| {
-            if let Item::TypeAlias(alias) = item {
-                Some((alias.name.clone(), type_ref_display_name(&alias.target)))
-            } else {
-                None
-            }
-        })
-        .collect();
+        .chain(interface_programs.iter())
+    {
+        type_aliases.extend(type_aliases_from_program(interface));
+    }
+    type_aliases.extend(type_aliases_from_program(&syntax_program));
     let mut analyzer = Analyzer {
         tokens: &tokens,
         syntax_program,
@@ -176,6 +172,19 @@ fn analyze_program(
     };
     analyzer.run();
     analyzer.diagnostics
+}
+
+fn type_aliases_from_program(
+    program: &crate::syntax::ast::Program,
+) -> impl Iterator<Item = (String, String)> + '_ {
+    use crate::syntax::ast::Item;
+    program.items.iter().filter_map(|item| {
+        if let Item::TypeAlias(alias) = item {
+            Some((alias.name.clone(), type_ref_display_name(&alias.target)))
+        } else {
+            None
+        }
+    })
 }
 
 fn analyze_syntax_program(

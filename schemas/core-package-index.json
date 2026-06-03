@@ -269,6 +269,14 @@
       ]
     },
     {
+      "path": "core/diff/diff.rssi",
+      "module": "diff.diff",
+      "functions": [
+        "Diff.unified"
+      ],
+      "types": []
+    },
+    {
       "path": "core/encoding/encoding.rssi",
       "module": "encoding.encoding",
       "functions": [
@@ -309,6 +317,7 @@
         "Directory.copy_file",
         "Directory.create",
         "Directory.create_all",
+        "Directory.create_dir_all",
         "Directory.exists",
         "Directory.is_dir",
         "Directory.is_file",
@@ -342,6 +351,7 @@
         "File.read_string",
         "File.remove",
         "File.write",
+        "File.write_atomic",
         "File.write_buffer",
         "File.write_buffer_view",
         "File.write_bytes",
@@ -457,6 +467,10 @@
         "Json.at_bool_or",
         "Json.at_int",
         "Json.at_int_or",
+        "Json.at_optional",
+        "Json.at_optional_bool",
+        "Json.at_optional_int",
+        "Json.at_optional_string",
         "Json.at_or",
         "Json.at_string",
         "Json.at_string_or",
@@ -466,10 +480,16 @@
         "Json.bool_at_or",
         "Json.bool_field",
         "Json.clone",
+        "Json.decode",
+        "Json.decode_text",
         "Json.encode",
         "Json.field",
         "Json.field_bool",
         "Json.field_int",
+        "Json.field_optional",
+        "Json.field_optional_bool",
+        "Json.field_optional_int",
+        "Json.field_optional_string",
         "Json.field_string",
         "Json.int_at",
         "Json.int_at_or",
@@ -481,6 +501,7 @@
         "Json.json_int_at_or",
         "Json.json_parse",
         "Json.json_string_at_or",
+        "Json.kind",
         "Json.object",
         "Json.object_keys",
         "Json.object_len",
@@ -543,6 +564,14 @@
         "Args.get",
         "Args.get_or_default",
         "OS.close"
+      ],
+      "types": []
+    },
+    {
+      "path": "core/patch/patch.rssi",
+      "module": "patch.patch",
+      "functions": [
+        "Patch.apply_text"
       ],
       "types": []
     },
@@ -761,6 +790,14 @@
         "Weak.downgrade",
         "Weak.from",
         "Weak.upgrade"
+      ],
+      "types": []
+    },
+    {
+      "path": "core/workspace/workspace.rssi",
+      "module": "workspace.workspace",
+      "functions": [
+        "Workspace.resolve"
       ],
       "types": []
     },

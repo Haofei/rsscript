@@ -29,7 +29,21 @@ fn model_messages(messages: read List<AgentMessage>) -> fresh JsonValue {
 }
 
 fn response_content(response: read String) -> String {
-    return response.json_string_at_or("choices[0].message.content", response)
+    match response.json_parse() {
+        Ok(root) => {
+            match root.at_optional_string("choices[0].message.content") {
+                Ok(content) => {
+                    return content.unwrap_or(response)
+                }
+                Err => {
+                    return response.copy()
+                }
+            }
+        }
+        Err => {
+            return response.copy()
+        }
+    }
 }
 
 fn response_usage(response: read String) -> fresh JsonValue {
@@ -96,16 +110,4 @@ fn tool_requests_from_message(message: read JsonValue) -> List<ToolRequest> {
         index = index + 1
     }
     return requests
-}
-
-fn argument_field(arguments: read String, name: read String, fallback: read String) -> String {
-    return arguments.json_string_at_or(name, fallback)
-}
-
-fn argument_int(arguments: read String, name: read String, fallback: Int) -> Int {
-    return arguments.json_int_at_or(name, fallback)
-}
-
-fn argument_bool(arguments: read String, name: read String, fallback: Bool) -> Bool {
-    return arguments.json_bool_at_or(name, fallback)
 }

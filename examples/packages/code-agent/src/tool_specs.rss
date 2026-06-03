@@ -3,6 +3,7 @@ fn tool_specs() -> fresh JsonValue {
         read_tool_spec(),
         write_tool_spec(),
         edit_tool_spec(),
+        apply_patch_tool_spec(),
         shell_tool_spec(),
         rss_check_tool_spec(),
         rss_cmd_tool_spec(),
@@ -70,6 +71,22 @@ fn edit_tool_spec() -> fresh JsonValue {
                 "replace_all": {"type": "boolean"},
             },
             "required": ["path", "old_string", "new_string"],
+            "additionalProperties": false,
+        },
+    )
+}
+
+fn apply_patch_tool_spec() -> fresh JsonValue {
+    return function_tool(
+        "apply_patch",
+        "Apply a unified diff patch to one UTF-8 file under the configured workspace root and return a preview diff.",
+        {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "patch": {"type": "string"},
+            },
+            "required": ["path", "patch"],
             "additionalProperties": false,
         },
     )

@@ -1,0 +1,35 @@
+fn write_workspace_file(root: read Path, relative: read String, text: read String) -> Result<Unit, String> {
+    match Workspace.resolve(root: read root, relative: read relative) {
+        Ok(path) => {
+            match path.parent() {
+                Some(parent) => {
+                    match Directory.create_dir_all(path: read parent) {
+                        Ok(unit) => {
+                        }
+                        Err(error) => {
+                            return Err(error.message())
+                        }
+                    }
+                }
+                None => {
+                }
+            }
+            match File.write_atomic(path: read path, text: read text) {
+                Ok(unit) => {
+                    return Ok(Unit)
+                }
+                Err(error) => {
+                    return Err(error.message())
+                }
+            }
+        }
+        Err(error) => {
+            return Err(error)
+        }
+    }
+}
+
+fn preview_and_apply(original: read String, changed: read String) -> Result<fresh String, String> {
+    let patch = Diff.unified(old: read original, new: read changed)
+    return Patch.apply_text(original: read original, patch: read patch)
+}

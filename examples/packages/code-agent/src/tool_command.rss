@@ -33,15 +33,16 @@ fn process_request(command: read String, args: read List<String>, config: read A
 }
 
 fn execute_shell(arguments: read String, config: read AgentConfig) -> fresh ToolAction {
-    let cmd = argument_field(arguments, "cmd", "")
+    let decoded = shell_args(arguments)
+    let cmd = string_or(decoded.cmd, "")
     if cmd == "" {
         return ToolAction.error("error: shell requires arguments.cmd")
     }
     if shell_command_policy_error(cmd).is_some() {
         return ToolAction.error("error: use rss_check/rss_cmd instead of shell for RSScript commands")
     }
-    let timeout_ms = bounded_limit(argument_int(arguments, "timeout_ms", config.request_timeout_ms), config.request_timeout_ms, 300000)
-    let max_chars = bounded_limit(argument_int(arguments, "max_output_chars", 12000), 12000, 50000)
+    let timeout_ms = bounded_limit(int_or(decoded.timeout_ms, config.request_timeout_ms), config.request_timeout_ms, 300000)
+    let max_chars = bounded_limit(int_or(decoded.max_output_chars, 12000), 12000, 50000)
     let args: List<String> = ["-c", cmd]
     let request = process_request("sh", args, config, timeout_ms, max_chars)
     match Process.run_request(request: read request) {
@@ -65,8 +66,9 @@ fn shell_command_policy_error(cmd: read String) -> Option<String> {
 }
 
 fn execute_rss_check(arguments: read String, config: read AgentConfig) -> fresh ToolAction {
-    let path_text = argument_field(arguments, "path", "examples/packages/code-agent")
-    let timeout_ms = bounded_limit(argument_int(arguments, "timeout_ms", 120000), 120000, 300000)
+    let decoded = rss_check_args(arguments)
+    let path_text = string_or(decoded.path, "examples/packages/code-agent")
+    let timeout_ms = bounded_limit(int_or(decoded.timeout_ms, 120000), 120000, 300000)
     match resolve_repo_path(config.repo_root, path_text) {
         Ok(path) => {
             let args: List<String> = ["run", "--quiet", "--", "check", path.to_string()]
@@ -86,41 +88,26 @@ fn execute_rss_check(arguments: read String, config: read AgentConfig) -> fresh 
     }
 }
 
-fn append_json_string_array_argument(args: mut List<String>, arguments: read String, path: read String) -> Unit {
-    match arguments.json_parse() {
-        Ok(root) => {
-            match root.at(path) {
-                Ok(value) => {
-                    match value.array_strings() {
-                        Ok(items) => {
-                            mut args.append(items)
-                        }
-                        Err => {
-                        }
-                    }
-                }
-                Err => {
-                }
-            }
-        }
-        Err => {
-        }
-    }
-}
-
 fn execute_rss_cmd(arguments: read String, config: read AgentConfig) -> fresh ToolAction {
-    let command = argument_field(arguments, "command", "")
+    let decoded = rss_cmd_args(arguments)
+    let command = string_or(decoded.command, "")
     if command == "" {
         return ToolAction.error("error: rss_cmd requires arguments.command")
     }
     if rss_command_allowed(command) == false {
         return ToolAction.error("error: rss_cmd command must be check, lint, fmt, test, or pkg")
     }
-    let timeout_ms = bounded_limit(argument_int(arguments, "timeout_ms", 120000), 120000, 300000)
-    let max_chars = bounded_limit(argument_int(arguments, "max_output_chars", 20000), 20000, 50000)
+    let timeout_ms = bounded_limit(int_or(decoded.timeout_ms, 120000), 120000, 300000)
+    let max_chars = bounded_limit(int_or(decoded.max_output_chars, 20000), 20000, 50000)
     let mut args: List<String> = ["run", "--quiet", "--", command]
-    append_json_string_array_argument(mut args, arguments, "args")
-    let path_text = argument_field(arguments, "path", "")
+    match decoded.args {
+        Some(extra_args) => {
+            mut args.append(extra_args)
+        }
+        None => {
+        }
+    }
+    let path_text = string_or(decoded.path, "")
     if path_text != "" {
         match resolve_repo_path(config.repo_root, path_text) {
             Ok(path) => {
@@ -147,10 +134,11 @@ fn rss_command_allowed(command: read String) -> Bool {
 }
 
 fn execute_rss_ide(arguments: read String, config: read AgentConfig) -> fresh ToolAction {
-    let action = argument_field(arguments, "action", "")
-    let path_text = argument_field(arguments, "path", "")
-    let query = argument_field(arguments, "query", "")
-    let max_results = bounded_limit(argument_int(arguments, "max_results", 20), 20, 100)
+    let decoded = rss_ide_args(arguments)
+    let action = string_or(decoded.action, "")
+    let path_text = string_or(decoded.path, "")
+    let query = string_or(decoded.query, "")
+    let max_results = bounded_limit(int_or(decoded.max_results, 20), 20, 100)
     if action == "" {
         return ToolAction.error("error: rss_ide requires arguments.action")
     }
@@ -171,8 +159,8 @@ fn execute_rss_ide(arguments: read String, config: read AgentConfig) -> fresh To
                 mut args.push("--max")
                 mut args.push(max_results.to_string())
             }
-            let line = argument_int(arguments, "line", 0)
-            let column = argument_int(arguments, "column", 0)
+            let line = int_or(decoded.line, 0)
+            let column = int_or(decoded.column, 0)
             if line > 0 {
                 mut args.push("--line")
                 mut args.push(line.to_string())
@@ -181,7 +169,7 @@ fn execute_rss_ide(arguments: read String, config: read AgentConfig) -> fresh To
                 mut args.push("--column")
                 mut args.push(column.to_string())
             }
-            if argument_bool(arguments, "include_declaration", false) {
+            if bool_or(decoded.include_declaration, false) {
                 mut args.push("--include-declaration")
             }
             let request = process_request("cargo", args, config, config.request_timeout_ms, 50000)
@@ -205,6 +193,7 @@ fn rss_ide_action_allowed(action: read String) -> Bool {
 }
 
 fn execute_finish(arguments: read String) -> fresh ToolAction {
-    let answer = argument_field(arguments, "answer", "")
+    let decoded = finish_args(arguments)
+    let answer = string_or(decoded.answer, "")
     return ToolAction.finish(answer)
 }

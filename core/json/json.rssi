@@ -13,6 +13,12 @@ pub fn Json.value(value: read JsonLiteral) -> fresh JsonValue
 pub fn Json.clone(value: read JsonValue) -> fresh JsonValue
     effects(pure)
 
+pub fn Json.decode<T: Struct>(value: read JsonValue) -> Result<fresh T, JsonError>
+    effects(pure)
+
+pub fn Json.decode_text<T: Struct>(text: read String) -> Result<fresh T, JsonError>
+    effects(pure)
+
 pub fn Json.encode(value: read JsonLiteral) -> fresh String
     effects(pure)
 
@@ -69,6 +75,26 @@ pub fn Json.field_bool(
     name: read String,
 ) -> Result<Bool, JsonError>
 
+pub fn Json.field_optional(
+    value: read JsonValue,
+    name: read String,
+) -> Result<Option<JsonValue>, JsonError>
+
+pub fn Json.field_optional_string(
+    value: read JsonValue,
+    name: read String,
+) -> Result<Option<String>, JsonError>
+
+pub fn Json.field_optional_int(
+    value: read JsonValue,
+    name: read String,
+) -> Result<Option<Int>, JsonError>
+
+pub fn Json.field_optional_bool(
+    value: read JsonValue,
+    name: read String,
+) -> Result<Option<Bool>, JsonError>
+
 pub fn Json.value_at(
     value: read JsonValue,
     path: read String,
@@ -100,6 +126,26 @@ pub fn Json.at_bool(
     value: read JsonValue,
     path: read String,
 ) -> Result<Bool, JsonError>
+
+pub fn Json.at_optional(
+    value: read JsonValue,
+    path: read String,
+) -> Result<Option<JsonValue>, JsonError>
+
+pub fn Json.at_optional_string(
+    value: read JsonValue,
+    path: read String,
+) -> Result<Option<String>, JsonError>
+
+pub fn Json.at_optional_int(
+    value: read JsonValue,
+    path: read String,
+) -> Result<Option<Int>, JsonError>
+
+pub fn Json.at_optional_bool(
+    value: read JsonValue,
+    path: read String,
+) -> Result<Option<Bool>, JsonError>
 
 pub fn Json.at_string_or(
     value: read JsonValue,
@@ -216,6 +262,9 @@ pub fn Json.is_array(value: read JsonValue) -> Bool
     effects(pure)
 
 pub fn Json.is_object(value: read JsonValue) -> Bool
+    effects(pure)
+
+pub fn Json.kind(value: read JsonValue) -> String
     effects(pure)
 
 pub fn Json.object_len(value: read JsonValue) -> Result<Int, JsonError>

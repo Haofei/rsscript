@@ -1,0 +1,41 @@
+struct AgentToolArgs derives(Clone, JsonDecode) {
+    path: Option<String>
+    max_results: Option<Int>
+    include_hidden: Option<Bool>
+}
+
+fn decode_args(text: read String) -> Result<fresh AgentToolArgs, JsonError> {
+    return Json.decode_text<AgentToolArgs>(text: read text)
+}
+
+fn decode_value(value: read JsonValue) -> Result<fresh AgentToolArgs, JsonError> {
+    return Json.decode<AgentToolArgs>(value: read value)
+}
+
+fn optional_fields(value: read JsonValue) -> Result<String, JsonError> {
+    let name = value.field_optional_string("name")?.unwrap_or("missing")
+    let nested = value.at_optional_string("nested.value")?.unwrap_or("missing")
+    return [name, ":", nested].join("")
+}
+
+fn describe_json(value: read JsonValue) -> String {
+    match value.kind() {
+        "null" => { return "null" }
+        "bool" => { return "bool" }
+        "int" => { return "int" }
+        "float" => { return "float" }
+        "string" => { return "string" }
+        "array" => { return "array" }
+        "object" => { return "object" }
+        _ => { return "unknown" }
+    }
+}
+
+fn main() -> Result<Unit, JsonError> {
+    let args = decode_args("""{"path":"src","max_results":20}""")?
+    let root: JsonValue = {"name": "tool", "nested": {"value": "read"}}
+    let same = decode_value(root)?
+    let text = optional_fields(root)?
+    let kind = describe_json(root)
+    return Ok(Unit)
+}

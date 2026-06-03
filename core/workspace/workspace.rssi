@@ -1,0 +1,10 @@
+features: native
+
+type WorkspacePath = Path
+type PathError = String
+
+pub fn Workspace.resolve(
+    root: read Path,
+    relative: read String,
+) -> Result<fresh Path, String>
+    effects(pure)

@@ -20,6 +20,63 @@ struct ToolAction {
     final_answer: String
 }
 
+struct ReadArgs derives(Clone, JsonDecode) {
+    path: Option<String>
+    start_line: Option<Int>
+    max_lines: Option<Int>
+    max_output_chars: Option<Int>
+}
+
+struct WriteArgs derives(Clone, JsonDecode) {
+    path: Option<String>
+    content: Option<String>
+}
+
+struct EditArgs derives(Clone, JsonDecode) {
+    path: Option<String>
+    old_string: Option<String>
+    new_string: Option<String>
+    replace_all: Option<Bool>
+}
+
+struct ApplyPatchArgs derives(Clone, JsonDecode) {
+    path: Option<String>
+    patch: Option<String>
+}
+
+struct ShellArgs derives(Clone, JsonDecode) {
+    cmd: Option<String>
+    timeout_ms: Option<Int>
+    max_output_chars: Option<Int>
+}
+
+struct RssCheckArgs derives(Clone, JsonDecode) {
+    path: Option<String>
+    timeout_ms: Option<Int>
+}
+
+struct RssCmdArgs derives(Clone, JsonDecode) {
+    command: Option<String>
+    args: Option<List<String>>
+    path: Option<String>
+    timeout_ms: Option<Int>
+    max_output_chars: Option<Int>
+}
+
+struct RssIdeArgs derives(Clone, JsonDecode) {
+    action: Option<String>
+    path: Option<String>
+    query: Option<String>
+    max_results: Option<Int>
+    line: Option<Int>
+    column: Option<Int>
+    include_declaration: Option<Bool>
+}
+
+struct FinishArgs derives(Clone, JsonDecode) {
+    answer: Option<String>
+}
+
 fn ToolRequest.new(id: read String, name: read String, arguments: read String) -> fresh ToolRequest {
     return ToolRequest(id, name, arguments)
 }
@@ -44,6 +101,76 @@ fn ToolAction.finish(answer: read String) -> fresh ToolAction {
     return ToolAction(response: None, finish: true, abort: false, final_answer: answer)
 }
 
+fn decode_args_error(tool: read String, error: read JsonError) -> fresh ToolAction {
+    let body = ["error: ", tool, " arguments must be a JSON object: ", error.message()].join("")
+    return ToolAction.error(body)
+}
+
+fn string_or(value: read Option<String>, fallback: read String) -> String {
+    return Option.unwrap_or(value: read value, default: read fallback)
+}
+
+fn int_or(value: read Option<Int>, fallback: Int) -> Int {
+    return Option.unwrap_or(value: read value, default: read fallback)
+}
+
+fn bool_or(value: read Option<Bool>, fallback: Bool) -> Bool {
+    return Option.unwrap_or(value: read value, default: read fallback)
+}
+
+fn read_args(arguments: read String) -> ReadArgs {
+    let fallback = ReadArgs(path: None, start_line: None, max_lines: None, max_output_chars: None)
+    return Result.unwrap_or(value: read Json.decode_text<ReadArgs>(text: read arguments), default: read fallback)
+}
+
+fn write_args(arguments: read String) -> WriteArgs {
+    let fallback = WriteArgs(path: None, content: None)
+    return Result.unwrap_or(value: read Json.decode_text<WriteArgs>(text: read arguments), default: read fallback)
+}
+
+fn edit_args(arguments: read String) -> EditArgs {
+    let fallback = EditArgs(path: None, old_string: None, new_string: None, replace_all: None)
+    return Result.unwrap_or(value: read Json.decode_text<EditArgs>(text: read arguments), default: read fallback)
+}
+
+fn apply_patch_args(arguments: read String) -> ApplyPatchArgs {
+    let fallback = ApplyPatchArgs(path: None, patch: None)
+    return Result.unwrap_or(value: read Json.decode_text<ApplyPatchArgs>(text: read arguments), default: read fallback)
+}
+
+fn shell_args(arguments: read String) -> ShellArgs {
+    let fallback = ShellArgs(cmd: None, timeout_ms: None, max_output_chars: None)
+    return Result.unwrap_or(value: read Json.decode_text<ShellArgs>(text: read arguments), default: read fallback)
+}
+
+fn rss_check_args(arguments: read String) -> RssCheckArgs {
+    let fallback = RssCheckArgs(path: None, timeout_ms: None)
+    return Result.unwrap_or(value: read Json.decode_text<RssCheckArgs>(text: read arguments), default: read fallback)
+}
+
+fn rss_cmd_args(arguments: read String) -> RssCmdArgs {
+    let fallback = RssCmdArgs(command: None, args: None, path: None, timeout_ms: None, max_output_chars: None)
+    return Result.unwrap_or(value: read Json.decode_text<RssCmdArgs>(text: read arguments), default: read fallback)
+}
+
+fn rss_ide_args(arguments: read String) -> RssIdeArgs {
+    let fallback = RssIdeArgs(
+        action: None,
+        path: None,
+        query: None,
+        max_results: None,
+        line: None,
+        column: None,
+        include_declaration: None,
+    )
+    return Result.unwrap_or(value: read Json.decode_text<RssIdeArgs>(text: read arguments), default: read fallback)
+}
+
+fn finish_args(arguments: read String) -> FinishArgs {
+    let fallback = FinishArgs(answer: None)
+    return Result.unwrap_or(value: read Json.decode_text<FinishArgs>(text: read arguments), default: read fallback)
+}
+
 fn path_in_workspace(workspace_root: read String, path_text: read String) -> Bool {
     let safe = path_text.safe_relative().is_ok()
     let under_root = path_text.starts_with(workspace_root)
@@ -51,7 +178,7 @@ fn path_in_workspace(workspace_root: read String, path_text: read String) -> Boo
 }
 
 fn resolve_repo_path(repo_root: read Path, path_text: read String) -> Result<fresh Path, String> {
-    return repo_root.resolve_relative(path_text)
+    return Workspace.resolve(root: read repo_root, relative: read path_text)
 }
 
 fn tool_path_error(path_text: read String, reason: read String) -> fresh ToolAction {
