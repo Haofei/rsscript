@@ -25,18 +25,22 @@ pub fn lock_package_dir(package_dir: &Path) -> Result<PackageLock, String> {
     let root_features = selected_root_package_features(&package.manifest);
     let mut packages = vec![lock_package_entry(package_dir, &package, root_features)?];
     let mut visiting = BTreeSet::new();
+    let mut seen = BTreeSet::new();
     let root_key = super::canonical_path_label(package_dir);
     visiting.insert(root_key.clone());
+    seen.insert(root_key.clone());
     collect_lock_dependency_packages(
         package_dir,
         &package.manifest.dependencies,
         &mut visiting,
+        &mut seen,
         &mut packages,
     )?;
     collect_lock_dependency_packages(
         package_dir,
         &package.manifest.dev_dependencies,
         &mut visiting,
+        &mut seen,
         &mut packages,
     )?;
     visiting.remove(&root_key);
@@ -67,7 +71,7 @@ pub(super) fn lock_package_entry(
     Ok(PackageLockPackage {
         name: package.manifest.package.name.clone(),
         version: package.manifest.package.version.clone(),
-        source: format!("path+{}", package_dir.display()),
+        source: super::package_path_source(package_dir),
         checksum: package_checksum(package, native_hash.as_deref()),
         interface_hash: effective_interface_hash(&package.sources, &features),
         review_hash: package_review_hash(&review),
@@ -80,6 +84,7 @@ fn collect_lock_dependency_packages(
     package_dir: &Path,
     dependencies: &BTreeMap<String, toml::Value>,
     visiting: &mut BTreeSet<String>,
+    seen: &mut BTreeSet<String>,
     packages: &mut Vec<PackageLockPackage>,
 ) -> Result<(), String> {
     for (name, value) in dependencies {
@@ -92,9 +97,13 @@ fn collect_lock_dependency_packages(
             continue;
         }
         let canonical = super::canonical_path_label(&dependency_dir);
+        if seen.contains(&canonical) {
+            continue;
+        }
         if !visiting.insert(canonical.clone()) {
             continue;
         }
+        seen.insert(canonical.clone());
         let dependency_manifest = load_package_manifest(&dependency_dir)?;
         let selected_features = resolve_package_features(&dependency_manifest, &spec.features);
         let dependency_package =
@@ -108,12 +117,14 @@ fn collect_lock_dependency_packages(
             &dependency_dir,
             &dependency_package.manifest.dependencies,
             visiting,
+            seen,
             packages,
         )?;
         collect_lock_dependency_packages(
             &dependency_dir,
             &dependency_package.manifest.dev_dependencies,
             visiting,
+            seen,
             packages,
         )?;
         visiting.remove(&canonical);

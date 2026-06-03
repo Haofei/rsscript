@@ -40,57 +40,51 @@ fn execute_core_tool(request: read ToolRequest, config: read AgentConfig) -> fre
             return execute_finish(request.arguments)
         }
         _ => {
-            return ToolAction.error(["error: unknown tool ", String.copy(value: read request.name)].join(""))
+            return ToolAction.error(content: read ["error: unknown tool ", String.copy(value: read request.name)].join(""))
         }
     }
 }
 
-fn push_tool_response(messages: mut List<AgentMessage>, request: read ToolRequest, output: read ToolOutput) -> Unit {
+fn push_tool_response(messages: mut List<ChatMessage>, request: read ToolRequest, output: read ToolOutput) -> Unit {
     let envelope = {
         "tool": request.name,
         "is_error": output.is_error,
         "content": output.content,
     }
-    mut messages.push(AgentMessage.tool(String.copy(value: read request.id), Json.encode(value: read envelope)))
+    let tool_output = ToolOutput.respond(content: read Json.encode(value: read envelope))
+    mut messages.push(ChatMessage.tool(request: read request, output: read tool_output))
 }
 
 fn execute_tool_calls(
     response: read String,
-    messages: read List<AgentMessage>,
+    messages: read List<ChatMessage>,
     config: read AgentConfig,
+    logger: read StructuredLogger,
 ) -> fresh ToolLoopResult {
     let runtime = CoreToolRuntime
     let mut called_tool = false
     let mut finished = false
     let mut final_answer = ""
-    let mut next_messages = List<AgentMessage>.new()
+    let mut next_messages = List<ChatMessage>.new()
     mut next_messages.append(messages)
-    match response.json_parse() {
-        Ok(root) => {
-            let assistant_message = assistant_message_value(root, response_content(response))
-            mut next_messages.push(AgentMessage.from_value(assistant_message))
-            let requests = tool_requests_from_message(assistant_message).take(config.max_tool_calls)
-            for request in requests {
-                if finished == false {
-                    Log.trace(event: read "tool.requested", message: read request.name)
-                    let action = runtime.execute(request, config)
-                    called_tool = true
-                    match action.response {
-                        Some(output) => {
-                            Log.write(message: read output.content)
-                            push_tool_response(mut next_messages, request, output)
-                        }
-                        None => {
-                            final_answer = action.final_answer
-                            finished = true
-                        }
-                    }
+    let assistant_message = ChatResponse.assistant_message(response: read response)
+    mut next_messages.push(assistant_message)
+    let requests = ChatResponse.tool_requests(message: read assistant_message).take(config.max_tool_calls)
+    for request in requests {
+        if finished == false {
+            StructuredLogger.event(logger: read logger, event: read "tool.requested", message: read request.name)
+            let action = runtime.execute(request, config)
+            called_tool = true
+            match action.response {
+                Some(output) => {
+                    Log.write(message: read output.content)
+                    push_tool_response(mut next_messages, request, output)
+                }
+                None => {
+                    final_answer = action.final_answer
+                    finished = true
                 }
             }
-        }
-        Err => {
-            mut next_messages.push(AgentMessage.from_value(assistant_fallback_message(response)))
-            return ToolLoopResult(called_tool: false, messages: next_messages, finished: false, final_answer: "")
         }
     }
     return ToolLoopResult(

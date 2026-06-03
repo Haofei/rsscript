@@ -2,24 +2,6 @@ sum ToolRuntime {
     CoreToolRuntime
 }
 
-struct ToolRequest {
-    id: String
-    name: String
-    arguments: String
-}
-
-struct ToolOutput {
-    content: String
-    is_error: Bool
-}
-
-struct ToolAction {
-    response: Option<ToolOutput>
-    finish: Bool
-    abort: Bool
-    final_answer: String
-}
-
 struct ReadArgs derives(Clone, JsonDecode) {
     path: Option<String>
     start_line: Option<Int>
@@ -77,33 +59,9 @@ struct FinishArgs derives(Clone, JsonDecode) {
     answer: Option<String>
 }
 
-fn ToolRequest.new(id: read String, name: read String, arguments: read String) -> fresh ToolRequest {
-    return ToolRequest(id, name, arguments)
-}
-
-fn ToolOutput.respond(content: read String) -> fresh ToolOutput {
-    return ToolOutput(content, is_error: false)
-}
-
-fn ToolOutput.error(content: read String) -> fresh ToolOutput {
-    return ToolOutput(content, is_error: true)
-}
-
-fn ToolAction.respond(content: read String) -> fresh ToolAction {
-    return ToolAction(response: Some(ToolOutput.respond(content)), finish: false, abort: false, final_answer: "")
-}
-
-fn ToolAction.error(content: read String) -> fresh ToolAction {
-    return ToolAction(response: Some(ToolOutput.error(content)), finish: false, abort: false, final_answer: "")
-}
-
-fn ToolAction.finish(answer: read String) -> fresh ToolAction {
-    return ToolAction(response: None, finish: true, abort: false, final_answer: answer)
-}
-
 fn decode_args_error(tool: read String, error: read JsonError) -> fresh ToolAction {
     let body = ["error: ", tool, " arguments must be a JSON object: ", error.message()].join("")
-    return ToolAction.error(body)
+    return ToolAction.error(content: read body)
 }
 
 fn string_or(value: read Option<String>, fallback: read String) -> String {
@@ -183,7 +141,7 @@ fn resolve_repo_path(repo_root: read Path, path_text: read String) -> Result<fre
 
 fn tool_path_error(path_text: read String, reason: read String) -> fresh ToolAction {
     let body = {"ok": false, "path": path_text, "error": reason}
-    return ToolAction.error(Json.encode(value: read body))
+    return ToolAction.error(content: read Json.encode(value: read body))
 }
 
 fn bounded_limit(value: Int, fallback: Int, max: Int) -> Int {
@@ -222,7 +180,7 @@ fn output_with_cap(content: read String, max_chars: Int) -> fresh ToolOutput {
     let prefix = truncation_header(content, max_chars)
     let text = [prefix, capped].join("")
     if content.len() > max_chars {
-        return ToolOutput.error(text)
+        return ToolOutput.error(content: read text)
     }
-    return ToolOutput.respond(text)
+    return ToolOutput.respond(content: read text)
 }

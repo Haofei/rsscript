@@ -1,0 +1,23 @@
+version = 1
+
+[[package]]
+name = "rss-agent-observability-smoke"
+version = "0.1.0"
+source = "path+examples/packages/agent-observability-smoke"
+checksum = "sha256:24c128a85e4caf1a06271d54c11de8a96cc8d19c6958779f5db3dea977def5a2"
+interface_hash = "sha256:36e6897d97ac40f70744171504605f1905c435cb09b5957a6dbd3b3f47852a13"
+review_hash = "sha256:ed784f9517b80d2177fda7017e6d0d106935e1f4477431f4bd66757c49f21085"
+features = []
+
+[[package]]
+name = "rss-agent"
+version = "0.1.0"
+source = "path+rss/agent"
+checksum = "sha256:403bcdb1b470e20773b1ef9a81759bbfe619b9343c2f1d055ef6f039aee497e6"
+interface_hash = "sha256:7cda33905aaa0464b192f6ab1db1bf295a9463877efa88d2370c80e40e559d16"
+review_hash = "sha256:11e8f031906e747a1d003b9d5a0586e0648dda0af8148eae7b1ff6a1a90dcd0a"
+features = []
+
+[metadata]
+rss_version = "0.1.0"
+created_by = "rsscript pkg"

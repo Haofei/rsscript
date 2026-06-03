@@ -26,11 +26,13 @@ pub(super) fn collect_dependency_interface_sources(
     manifest: &Manifest,
 ) -> Result<Vec<PackageSource>, String> {
     let mut visiting = BTreeSet::new();
+    let mut seen = BTreeSet::new();
     let mut sources = Vec::new();
     collect_dependency_interface_sources_from_map(
         package_dir,
         &manifest.dependencies,
         &mut visiting,
+        &mut seen,
         &mut sources,
     )?;
     sources.sort_by(|left, right| left.path.cmp(&right.path));
@@ -42,11 +44,13 @@ pub(super) fn collect_dependency_lowering_sources(
     manifest: &Manifest,
 ) -> Result<Vec<PackageSource>, String> {
     let mut visiting = BTreeSet::new();
+    let mut seen = BTreeSet::new();
     let mut sources = Vec::new();
     collect_dependency_lowering_sources_from_map(
         package_dir,
         &manifest.dependencies,
         &mut visiting,
+        &mut seen,
         &mut sources,
     )?;
     sources.sort_by(|left, right| left.path.cmp(&right.path));
@@ -268,6 +272,7 @@ fn collect_dependency_interface_sources_from_map(
     package_dir: &Path,
     dependencies: &BTreeMap<String, toml::Value>,
     visiting: &mut BTreeSet<String>,
+    seen: &mut BTreeSet<String>,
     sources: &mut Vec<PackageSource>,
 ) -> Result<(), String> {
     for (name, value) in dependencies {
@@ -280,9 +285,13 @@ fn collect_dependency_interface_sources_from_map(
             continue;
         }
         let canonical = canonical_path_label(&dependency_dir);
+        if seen.contains(&canonical) {
+            continue;
+        }
         if !visiting.insert(canonical.clone()) {
             continue;
         }
+        seen.insert(canonical.clone());
         let dependency_manifest = load_package_manifest(&dependency_dir)?;
         let selected_features = resolve_package_features(&dependency_manifest, &spec.features);
         let dependency_package =
@@ -298,6 +307,7 @@ fn collect_dependency_interface_sources_from_map(
             &dependency_dir,
             &dependency_package.manifest.dependencies,
             visiting,
+            seen,
             sources,
         )?;
         visiting.remove(&canonical);
@@ -309,6 +319,7 @@ fn collect_dependency_lowering_sources_from_map(
     package_dir: &Path,
     dependencies: &BTreeMap<String, toml::Value>,
     visiting: &mut BTreeSet<String>,
+    seen: &mut BTreeSet<String>,
     sources: &mut Vec<PackageSource>,
 ) -> Result<(), String> {
     for (name, value) in dependencies {
@@ -324,9 +335,13 @@ fn collect_dependency_lowering_sources_from_map(
             continue;
         }
         let canonical = canonical_path_label(&dependency_dir);
+        if seen.contains(&canonical) {
+            continue;
+        }
         if !visiting.insert(canonical.clone()) {
             continue;
         }
+        seen.insert(canonical.clone());
         let dependency_manifest = load_package_manifest(&dependency_dir)?;
         let selected_features = resolve_package_features(&dependency_manifest, &spec.features);
         let dependency_package =
@@ -335,6 +350,7 @@ fn collect_dependency_lowering_sources_from_map(
             &dependency_dir,
             &dependency_package.manifest.dependencies,
             visiting,
+            seen,
             sources,
         )?;
         sources.extend(

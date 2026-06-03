@@ -11,7 +11,7 @@ fn output_from_process(label: read String, args: read List<String>, output: read
     ].join("")
     let tool_output = output_with_cap(body, max_chars)
     if output.status != 0 {
-        return ToolAction(response: Some(ToolOutput.error(tool_output.content)), finish: false, abort: false, final_answer: "")
+        return ToolAction(response: Some(ToolOutput.error(content: read tool_output.content)), finish: false, abort: false, final_answer: "")
     }
     return ToolAction(response: Some(tool_output), finish: false, abort: false, final_answer: "")
 }
@@ -36,12 +36,12 @@ fn execute_shell(arguments: read String, config: read AgentConfig) -> fresh Tool
     let decoded = shell_args(arguments)
     let cmd = string_or(decoded.cmd, "")
     if cmd == "" {
-        return ToolAction.error("error: shell requires arguments.cmd")
+        return ToolAction.error(content: read "error: shell requires arguments.cmd")
     }
     if shell_command_policy_error(cmd).is_some() {
-        return ToolAction.error("error: use rss_check/rss_cmd instead of shell for RSScript commands")
+        return ToolAction.error(content: read "error: use rss_check/rss_cmd instead of shell for RSScript commands")
     }
-    let timeout_ms = bounded_limit(int_or(decoded.timeout_ms, config.request_timeout_ms), config.request_timeout_ms, 300000)
+    let timeout_ms = bounded_limit(int_or(decoded.timeout_ms, config.model.timeout_ms), config.model.timeout_ms, 300000)
     let max_chars = bounded_limit(int_or(decoded.max_output_chars, 12000), 12000, 50000)
     let args: List<String> = ["-c", cmd]
     let request = process_request("sh", args, config, timeout_ms, max_chars)
@@ -50,7 +50,7 @@ fn execute_shell(arguments: read String, config: read AgentConfig) -> fresh Tool
             return output_from_process("sh", args, output, max_chars)
         }
         Err(error) => {
-            return ToolAction.error(["error running shell: ", error].join(""))
+            return ToolAction.error(content: read ["error running shell: ", error].join(""))
         }
     }
 }
@@ -78,7 +78,7 @@ fn execute_rss_check(arguments: read String, config: read AgentConfig) -> fresh 
                     return output_from_process("cargo", args, output, 50000)
                 }
                 Err(error) => {
-                    return ToolAction.error(["error running rss_check: ", error].join(""))
+                    return ToolAction.error(content: read ["error running rss_check: ", error].join(""))
                 }
             }
         }
@@ -92,10 +92,10 @@ fn execute_rss_cmd(arguments: read String, config: read AgentConfig) -> fresh To
     let decoded = rss_cmd_args(arguments)
     let command = string_or(decoded.command, "")
     if command == "" {
-        return ToolAction.error("error: rss_cmd requires arguments.command")
+        return ToolAction.error(content: read "error: rss_cmd requires arguments.command")
     }
     if rss_command_allowed(command) == false {
-        return ToolAction.error("error: rss_cmd command must be check, lint, fmt, test, or pkg")
+        return ToolAction.error(content: read "error: rss_cmd command must be check, lint, fmt, test, or pkg")
     }
     let timeout_ms = bounded_limit(int_or(decoded.timeout_ms, 120000), 120000, 300000)
     let max_chars = bounded_limit(int_or(decoded.max_output_chars, 20000), 20000, 50000)
@@ -124,7 +124,7 @@ fn execute_rss_cmd(arguments: read String, config: read AgentConfig) -> fresh To
             return output_from_process("cargo", args, output, max_chars)
         }
         Err(error) => {
-            return ToolAction.error(["error running rss_cmd: ", error].join(""))
+            return ToolAction.error(content: read ["error running rss_cmd: ", error].join(""))
         }
     }
 }
@@ -140,13 +140,13 @@ fn execute_rss_ide(arguments: read String, config: read AgentConfig) -> fresh To
     let query = string_or(decoded.query, "")
     let max_results = bounded_limit(int_or(decoded.max_results, 20), 20, 100)
     if action == "" {
-        return ToolAction.error("error: rss_ide requires arguments.action")
+        return ToolAction.error(content: read "error: rss_ide requires arguments.action")
     }
     if rss_ide_action_allowed(action) == false {
-        return ToolAction.error("error: rss_ide action must be diagnostics, symbols, outline, hover, definition, or references")
+        return ToolAction.error(content: read "error: rss_ide action must be diagnostics, symbols, outline, hover, definition, or references")
     }
     if path_text == "" {
-        return ToolAction.error("error: rss_ide requires arguments.path")
+        return ToolAction.error(content: read "error: rss_ide requires arguments.path")
     }
     match resolve_repo_path(config.repo_root, path_text) {
         Ok(path) => {
@@ -172,13 +172,13 @@ fn execute_rss_ide(arguments: read String, config: read AgentConfig) -> fresh To
             if bool_or(decoded.include_declaration, false) {
                 mut args.push("--include-declaration")
             }
-            let request = process_request("cargo", args, config, config.request_timeout_ms, 50000)
+            let request = process_request("cargo", args, config, config.model.timeout_ms, 50000)
             match Process.run_request(request: read request) {
                 Ok(output) => {
                     return output_from_process("cargo", args, output, 50000)
                 }
                 Err(error) => {
-                    return ToolAction.error(["error running rss_ide: ", error].join(""))
+                    return ToolAction.error(content: read ["error running rss_ide: ", error].join(""))
                 }
             }
         }
@@ -195,5 +195,5 @@ fn rss_ide_action_allowed(action: read String) -> Bool {
 fn execute_finish(arguments: read String) -> fresh ToolAction {
     let decoded = finish_args(arguments)
     let answer = string_or(decoded.answer, "")
-    return ToolAction.finish(answer)
+    return ToolAction.finish(answer: read answer)
 }

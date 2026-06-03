@@ -1,0 +1,37 @@
+fn agent_observability_smoke(response: read String) -> Result<fresh JsonValue, JsonError> {
+    let env = ModelEnv(
+        model: "TEST_AGENT_MODEL",
+        endpoint: "TEST_AGENT_ENDPOINT",
+        api_key: "TEST_AGENT_API_KEY",
+        timeout_ms: "TEST_AGENT_TIMEOUT_MS",
+        max_attempts: "TEST_AGENT_MAX_ATTEMPTS",
+        backoff_ms: "TEST_AGENT_BACKOFF_MS",
+    )
+    let defaults = ModelDefaults(
+        model: "test-model",
+        endpoint: "http://localhost:8080/v1/chat/completions",
+        api_key: "test_key",
+        timeout_ms: 1000,
+        max_attempts: 1,
+        backoff_ms: 0,
+    )
+    let model = ModelConfig.from_env(env: read env, defaults: read defaults)
+    let prompt = Prompt.code_agent(model: read model)
+    let rendered = Prompt.render(prompt: read prompt)
+    let usage = TokenUsage.from_response_text(text: read response)
+    let doubled = TokenUsage.add(left: read usage, right: read usage)
+    let logger = StructuredLogger.named(name: read "test-agent")
+    StructuredLogger.event(logger: read logger, event: read "prompt.rendered", message: read rendered)
+    StructuredLogger.json(logger: read logger, event: read "usage", value: read TokenUsage.to_json(usage: read doubled))
+    let span = TraceSpan.start(name: read "test.span")
+    TraceSpan.finish(span: read span, logger: read logger, status: read "ok")
+    return Ok(TokenUsage.to_json(usage: read doubled))
+}
+
+fn main() -> Result<Unit, JsonError> {
+    let response = """{"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}"""
+    let usage = agent_observability_smoke(response: read response)?
+    let total = usage.field_int("total_tokens")?
+    Assert.equal_int(left: total, right: 10)
+    return Ok(Unit)
+}

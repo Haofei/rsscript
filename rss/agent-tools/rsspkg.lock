@@ -1,0 +1,14 @@
+version = 1
+
+[[package]]
+name = "rss-agent-tools"
+version = "0.1.0"
+source = "path+rss/agent-tools"
+checksum = "sha256:1cafd9610651b4780b2d45f1b0c8bd777cb96d04fd44b0f563df3b7057122321"
+interface_hash = "sha256:65d23c1a9eb41214a475c5fec5c608655259ce504812c3950b5c1059374d46fb"
+review_hash = "sha256:1617a0c69cad7cf7548ed49562d25b4abb18056a5c882307eb08e02ccae29cfd"
+features = []
+
+[metadata]
+rss_version = "0.1.0"
+created_by = "rsscript pkg"

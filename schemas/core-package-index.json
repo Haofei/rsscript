@@ -831,6 +831,38 @@
     },
     {
       "kind": "package",
+      "name": "rss-agent",
+      "version": "0.1.0",
+      "path": "rss/agent",
+      "interface_files": [
+        "interface/lib.rssi"
+      ],
+      "source_files": [
+        "src/lib.rss"
+      ],
+      "native_rust": null,
+      "virtual_package": null,
+      "dependencies": [],
+      "dev_dependencies": []
+    },
+    {
+      "kind": "package",
+      "name": "rss-agent-tools",
+      "version": "0.1.0",
+      "path": "rss/agent-tools",
+      "interface_files": [
+        "interface/lib.rssi"
+      ],
+      "source_files": [
+        "src/lib.rss"
+      ],
+      "native_rust": null,
+      "virtual_package": null,
+      "dependencies": [],
+      "dev_dependencies": []
+    },
+    {
+      "kind": "package",
       "name": "rss-async",
       "version": "0.1.0",
       "path": "rss/async",
@@ -869,6 +901,25 @@
       "native_rust": null,
       "virtual_package": null,
       "dependencies": [],
+      "dev_dependencies": []
+    },
+    {
+      "kind": "package",
+      "name": "rss-chat-completions",
+      "version": "0.1.0",
+      "path": "rss/chat-completions",
+      "interface_files": [
+        "interface/lib.rssi"
+      ],
+      "source_files": [
+        "src/lib.rss"
+      ],
+      "native_rust": null,
+      "virtual_package": null,
+      "dependencies": [
+        "rss-agent",
+        "rss-agent-tools"
+      ],
       "dev_dependencies": []
     },
     {

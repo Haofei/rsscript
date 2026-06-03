@@ -1,39 +1,19 @@
-struct AgentMessage {
-    value: JsonValue
-}
-
 struct AgentState {
-    messages: List<AgentMessage>
+    messages: List<ChatMessage>
     step: Int
     finished: Bool
 }
 
 struct ToolLoopResult {
     called_tool: Bool
-    messages: List<AgentMessage>
+    messages: List<ChatMessage>
     finished: Bool
     final_answer: String
 }
 
-fn AgentMessage.from_value(value: read JsonValue) -> fresh AgentMessage {
-    return AgentMessage(value: value.clone())
-}
-
-fn AgentMessage.system(content: read String) -> fresh AgentMessage {
-    return AgentMessage.from_value({"role": "system", "content": content})
-}
-
-fn AgentMessage.user(content: read String) -> fresh AgentMessage {
-    return AgentMessage.from_value({"role": "user", "content": content})
-}
-
-fn AgentMessage.tool(call_id: read String, content: read String) -> fresh AgentMessage {
-    return AgentMessage.from_value({"role": "tool", "tool_call_id": call_id, "content": content})
-}
-
-fn AgentState.new(task: read String) -> fresh AgentState {
+fn AgentState.new(task: read String, prompt: read Prompt) -> fresh AgentState {
     return AgentState(
-        messages: [AgentMessage.system(code_agent_system_prompt()), AgentMessage.user(task)],
+        messages: [ChatMessage.system(prompt.render()), ChatMessage.user(task)],
         step: 0,
         finished: false,
     )

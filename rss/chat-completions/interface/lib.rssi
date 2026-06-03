@@ -1,0 +1,27 @@
+struct ChatMessage {
+    value: JsonValue
+}
+
+pub fn ChatMessage.system(content: read String) -> fresh ChatMessage
+
+pub fn ChatMessage.user(content: read String) -> fresh ChatMessage
+
+pub fn ChatMessage.assistant(content: read String) -> fresh ChatMessage
+
+pub fn ChatMessage.tool(request: read ToolRequest, output: read ToolOutput) -> fresh ChatMessage
+
+pub fn ChatMessage.value(message: read ChatMessage) -> fresh JsonValue
+
+pub fn ChatRequest.openai_compatible(
+    model: read String,
+    messages: read List<ChatMessage>,
+    tools: read JsonValue,
+) -> fresh JsonValue
+
+pub fn ChatResponse.content(response: read String) -> fresh String
+
+pub fn ChatResponse.usage(response: read String) -> fresh TokenUsage
+
+pub fn ChatResponse.assistant_message(response: read String) -> fresh ChatMessage
+
+pub fn ChatResponse.tool_requests(message: read ChatMessage) -> List<ToolRequest>

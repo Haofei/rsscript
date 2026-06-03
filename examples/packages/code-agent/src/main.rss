@@ -3,43 +3,56 @@ features: async
 async fn main() -> Result<Unit, HttpError> {
     let config = agent_config_from_env()
     let task = agent_task_from_env()
-    let mut state = AgentState.new(task)
-    Log.trace(event: read "turn.started", message: read "code agent turn")
+    let logger = StructuredLogger.named(name: read "rss-code-agent")
+    let prompt = Prompt.code_agent(model: read config.model)
+    let mut usage_total = TokenUsage.zero()
+    let mut state = AgentState.new(task, prompt)
+    StructuredLogger.event(logger: read logger, event: read "agent.started", message: read config.model.model)
     while state.can_continue(config.max_steps) {
         let request_body = build_model_request(config, state).to_string()
         let http = await Http.post_json_bearer_retry_async(
-            url: read config.endpoint,
+            url: read config.model.endpoint,
             body: read request_body,
-            token: read config.api_key,
-            timeout_ms: config.request_timeout_ms,
-            attempts: config.max_attempts,
-            backoff_ms: config.backoff_ms,
+            token: read config.model.api_key,
+            timeout_ms: config.model.timeout_ms,
+            attempts: config.model.max_attempts,
+            backoff_ms: config.model.backoff_ms,
         )?
         let response = http.text()
         if http.is_success() == false {
+            let turn_span = TraceSpan.start(name: read "agent.turn")
             let status = http.status().to_string()
             let status_message = ["agent HTTP status ", status].join("")
-            Log.error(message: read status_message)
-            Log.trace(event: read "turn.failed", message: read response)
+            StructuredLogger.error(logger: read logger, event: read "turn.failed", message: read status_message)
+            StructuredLogger.event(logger: read logger, event: read "agent.response", message: read response)
+            TraceSpan.finish(span: read turn_span, logger: read logger, status: read "http_error")
             state.finished = true
         } else {
-            Log.trace(event: read "agent.response", message: read response)
-            Log.write_json(value: read response_usage(response))
-            let tool_result = execute_tool_calls(response, state.messages, config)
+            let turn_span = TraceSpan.start(name: read "agent.turn")
+            StructuredLogger.event(logger: read logger, event: read "agent.response", message: read response)
+            let usage = ChatResponse.usage(response: read response)
+            usage_total = TokenUsage.add(left: read usage_total, right: read usage)
+            StructuredLogger.json(logger: read logger, event: read "usage.turn", value: read TokenUsage.to_json(usage: read usage))
+            StructuredLogger.json(logger: read logger, event: read "usage.total", value: read TokenUsage.to_json(usage: read usage_total))
+            let tool_result = execute_tool_calls(response, state.messages, config, logger)
             if tool_result.finished {
-                Log.trace(event: read "turn.completed", message: read tool_result.final_answer)
+                StructuredLogger.event(logger: read logger, event: read "turn.completed", message: read tool_result.final_answer)
                 Log.write(message: read tool_result.final_answer)
+                TraceSpan.finish(span: read turn_span, logger: read logger, status: read "finished")
                 state.finished = true
             } else if tool_result.called_tool == false {
-                let content = response_content(response)
-                Log.trace(event: read "turn.completed", message: read content)
+                let content = ChatResponse.content(response: read response)
+                StructuredLogger.event(logger: read logger, event: read "turn.completed", message: read content)
                 Log.write(message: read content)
+                TraceSpan.finish(span: read turn_span, logger: read logger, status: read "no_tool")
                 state.finished = true
             } else {
                 state.messages = tool_result.messages
                 state.step = state.step + 1
+                TraceSpan.finish(span: read turn_span, logger: read logger, status: read "tool_loop")
                 if state.step >= config.max_steps {
-                    Log.trace(
+                    StructuredLogger.event(
+                        logger: read logger,
                         event: read "turn.budget_exhausted",
                         message: read "stopped before completion: step budget exhausted",
                     )

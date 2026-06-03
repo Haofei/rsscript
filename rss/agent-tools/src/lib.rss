@@ -1,0 +1,41 @@
+pub struct ToolRequest {
+    id: String
+    name: String
+    arguments: String
+}
+
+pub struct ToolOutput {
+    content: String
+    is_error: Bool
+}
+
+pub struct ToolAction {
+    response: Option<ToolOutput>
+    finish: Bool
+    abort: Bool
+    final_answer: String
+}
+
+pub fn ToolRequest.new(id: read String, name: read String, arguments: read String) -> fresh ToolRequest {
+    return ToolRequest(id, name, arguments)
+}
+
+pub fn ToolOutput.respond(content: read String) -> fresh ToolOutput {
+    return ToolOutput(content, is_error: false)
+}
+
+pub fn ToolOutput.error(content: read String) -> fresh ToolOutput {
+    return ToolOutput(content, is_error: true)
+}
+
+pub fn ToolAction.respond(content: read String) -> fresh ToolAction {
+    return ToolAction(response: Some(ToolOutput.respond(content: read content)), finish: false, abort: false, final_answer: "")
+}
+
+pub fn ToolAction.error(content: read String) -> fresh ToolAction {
+    return ToolAction(response: Some(ToolOutput.error(content: read content)), finish: false, abort: false, final_answer: "")
+}
+
+pub fn ToolAction.finish(answer: read String) -> fresh ToolAction {
+    return ToolAction(response: None, finish: true, abort: false, final_answer: answer)
+}

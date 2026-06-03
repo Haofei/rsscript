@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::diagnostic::Diagnostic;
 
@@ -239,6 +239,29 @@ fn canonical_path_label(path: &Path) -> String {
         .unwrap_or_else(|_| path.to_path_buf())
         .display()
         .to_string()
+}
+
+fn normalized_path_label(path: &Path) -> String {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(part) => normalized.push(part),
+            Component::RootDir | Component::Prefix(_) => normalized.push(component.as_os_str()),
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        ".".to_string()
+    } else {
+        normalized.display().to_string()
+    }
+}
+
+fn package_path_source(path: &Path) -> String {
+    format!("path+{}", normalized_path_label(path))
 }
 
 fn is_rsscript_source_path(path: &Path) -> bool {

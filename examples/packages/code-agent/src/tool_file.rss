@@ -37,7 +37,7 @@ fn execute_read(arguments: read String, config: read AgentConfig) -> fresh ToolA
     let decoded = read_args(arguments)
     let path_text = string_or(decoded.path, "")
     if path_text == "" {
-        return ToolAction.error("error: read requires arguments.path")
+        return ToolAction.error(content: read "error: read requires arguments.path")
     }
     let start_line = bounded_limit(int_or(decoded.start_line, 1), 1, 1000000)
     let max_lines = bounded_limit(int_or(decoded.max_lines, 200), 200, 5000)
@@ -54,7 +54,7 @@ fn execute_read(arguments: read String, config: read AgentConfig) -> fresh ToolA
                 }
                 Err(error) => {
                     let body = ["error reading ", path_text, ": ", error.message()].join("")
-                    return ToolAction.error(body)
+                    return ToolAction.error(content: read body)
                 }
             }
         }
@@ -81,7 +81,7 @@ fn execute_write(arguments: read String, config: read AgentConfig) -> fresh Tool
     let path_text = string_or(decoded.path, "")
     let content = string_or(decoded.content, "")
     if path_text == "" {
-        return ToolAction.error("error: write requires arguments.path")
+        return ToolAction.error(content: read "error: write requires arguments.path")
     }
     match write_guard_error(path_text, config) {
         Some(reason) => {
@@ -106,7 +106,7 @@ fn execute_write(arguments: read String, config: read AgentConfig) -> fresh Tool
                 Ok => {
                 }
                 Err(error) => {
-                    return ToolAction.error(["error creating parent directory for ", path_text, ": ", error.message()].join(""))
+                    return ToolAction.error(content: read ["error creating parent directory for ", path_text, ": ", error.message()].join(""))
                 }
             }
             match File.write_atomic(path: read path, text: read content) {
@@ -121,11 +121,11 @@ fn execute_write(arguments: read String, config: read AgentConfig) -> fresh Tool
                         "new_bytes": content.len(),
                         "diff": diff,
                     }
-                    return ToolAction.respond(Json.encode(value: read body))
+                    return ToolAction.respond(content: read Json.encode(value: read body))
                 }
                 Err(error) => {
                     let body = {"ok": false, "path": path_text, "error": error.message()}
-                    return ToolAction.error(Json.encode(value: read body))
+                    return ToolAction.error(content: read Json.encode(value: read body))
                 }
             }
         }
@@ -191,13 +191,13 @@ fn execute_edit(arguments: read String, config: read AgentConfig) -> fresh ToolA
     let new_string = string_or(decoded.new_string, "")
     let replace_all = bool_or(decoded.replace_all, false)
     if path_text == "" {
-        return ToolAction.error("error: edit requires arguments.path")
+        return ToolAction.error(content: read "error: edit requires arguments.path")
     }
     if old_string == "" {
-        return ToolAction.error("error: edit requires non-empty arguments.old_string")
+        return ToolAction.error(content: read "error: edit requires non-empty arguments.old_string")
     }
     if old_string == new_string {
-        return ToolAction.error("error: edit old_string and new_string are identical")
+        return ToolAction.error(content: read "error: edit old_string and new_string are identical")
     }
     match write_guard_error(path_text, config) {
         Some(reason) => {
@@ -219,7 +219,7 @@ fn execute_edit(arguments: read String, config: read AgentConfig) -> fresh ToolA
                             "error": "edit old_string not found",
                             "old_string_len": old_string.len(),
                         }
-                        return ToolAction.error(Json.encode(value: read body))
+                        return ToolAction.error(content: read Json.encode(value: read body))
                     }
                     if occurrences > 1 && replace_all == false {
                         let body = {
@@ -228,7 +228,7 @@ fn execute_edit(arguments: read String, config: read AgentConfig) -> fresh ToolA
                             "error": "edit old_string matched more than once; set replace_all=true",
                             "occurrences": occurrences,
                         }
-                        return ToolAction.error(Json.encode(value: read body))
+                        return ToolAction.error(content: read Json.encode(value: read body))
                     }
                     let mut replacement_count = 1
                     let mut new_content = content.replace(old_string, new_string)
@@ -246,15 +246,15 @@ fn execute_edit(arguments: read String, config: read AgentConfig) -> fresh ToolA
                                 "new_bytes": new_content.len(),
                                 "preview": preview,
                             }
-                            return ToolAction.respond(Json.encode(value: read body))
+                            return ToolAction.respond(content: read Json.encode(value: read body))
                         }
                         Err(error) => {
-                            return ToolAction.error(["error editing ", path_text, ": ", error.message()].join(""))
+                            return ToolAction.error(content: read ["error editing ", path_text, ": ", error.message()].join(""))
                         }
                     }
                 }
                 Err(error) => {
-                    return ToolAction.error(["error reading ", path_text, ": ", error.message()].join(""))
+                    return ToolAction.error(content: read ["error reading ", path_text, ": ", error.message()].join(""))
                 }
             }
         }
@@ -269,10 +269,10 @@ fn execute_apply_patch(arguments: read String, config: read AgentConfig) -> fres
     let path_text = string_or(decoded.path, "")
     let patch = string_or(decoded.patch, "")
     if path_text == "" {
-        return ToolAction.error("error: apply_patch requires arguments.path")
+        return ToolAction.error(content: read "error: apply_patch requires arguments.path")
     }
     if patch == "" {
-        return ToolAction.error("error: apply_patch requires non-empty arguments.patch")
+        return ToolAction.error(content: read "error: apply_patch requires non-empty arguments.patch")
     }
     match write_guard_error(path_text, config) {
         Some(reason) => {
@@ -297,21 +297,21 @@ fn execute_apply_patch(arguments: read String, config: read AgentConfig) -> fres
                                         "new_bytes": next.len(),
                                         "diff": diff,
                                     }
-                                    return ToolAction.respond(Json.encode(value: read body))
+                                    return ToolAction.respond(content: read Json.encode(value: read body))
                                 }
                                 Err(error) => {
-                                    return ToolAction.error(["error writing patched file ", path_text, ": ", error.message()].join(""))
+                                    return ToolAction.error(content: read ["error writing patched file ", path_text, ": ", error.message()].join(""))
                                 }
                             }
                         }
                         Err(error) => {
                             let body = {"ok": false, "path": path_text, "error": error}
-                            return ToolAction.error(Json.encode(value: read body))
+                            return ToolAction.error(content: read Json.encode(value: read body))
                         }
                     }
                 }
                 Err(error) => {
-                    return ToolAction.error(["error reading ", path_text, ": ", error.message()].join(""))
+                    return ToolAction.error(content: read ["error reading ", path_text, ": ", error.message()].join(""))
                 }
             }
         }

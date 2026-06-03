@@ -1,0 +1,10 @@
+[package]
+name = "rss-agent-observability-smoke"
+version = "0.1.0"
+edition = "2026"
+
+[sources]
+paths = ["src"]
+
+[dependencies]
+rss-agent = { path = "../../../rss/agent" }

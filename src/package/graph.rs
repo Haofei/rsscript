@@ -246,11 +246,21 @@ fn collect_package_graph_identities(
         packages_by_name
             .entry(node.name.clone())
             .or_default()
-            .insert(format!("{version} {}", node.source));
+            .insert(format!(
+                "{version} {}",
+                canonical_graph_source(&node.source)
+            ));
     }
     for dependency in &node.dependencies {
         collect_package_graph_identities(dependency, packages_by_name);
     }
+}
+
+fn canonical_graph_source(source: &str) -> String {
+    let Some(path) = source.strip_prefix("path+") else {
+        return source.to_string();
+    };
+    format!("path+{}", super::canonical_path_label(Path::new(path)))
 }
 
 fn package_tree_node(
@@ -272,7 +282,7 @@ fn package_tree_node(
             name: identity.name,
             version: Some(identity.version),
             requirement: None,
-            source: format!("path+{}", package_dir.display()),
+            source: super::package_path_source(package_dir),
             risk: PackageRisk::Elevated,
             features,
             native: review.native_rust.is_some(),
@@ -308,7 +318,7 @@ fn package_tree_node(
         name: identity.name,
         version: Some(identity.version),
         requirement: None,
-        source: format!("path+{}", package_dir.display()),
+        source: super::package_path_source(package_dir),
         risk: review.risk,
         features,
         native: review.native_rust.is_some(),
@@ -348,7 +358,7 @@ fn package_tree_dependencies(
                 )?;
                 node.requirement = spec.requirement.clone();
                 node.features = selected_features.selected;
-                node.source = format!("path+{}", dependency_dir.display());
+                node.source = super::package_path_source(&dependency_dir);
                 node.compile_only = spec.compile_only;
                 node.test_only = spec.test_only;
                 node.platform_provided = spec.platform_provided;

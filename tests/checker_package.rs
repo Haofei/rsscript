@@ -5155,6 +5155,91 @@ rss-dep = {{ path = "{}", features = ["fast"] }}
 }
 
 #[test]
+fn package_graph_deduplicates_direct_and_transitive_path_dependencies() {
+    let root_dir = common::unique_temp_dir("rsscript-package-dedup-root");
+    let shared_dir = common::unique_temp_dir("rsscript-package-dedup-shared");
+    let wrapper_dir = common::unique_temp_dir("rsscript-package-dedup-wrapper");
+    common::write_named_package_fixture(
+        &shared_dir,
+        "rss-shared",
+        "0.1.0",
+        "",
+        r#"pub fn Shared.value() -> Int
+"#,
+    );
+    fs::create_dir_all(shared_dir.join("src")).expect("shared source dir should be created");
+    fs::write(
+        shared_dir.join("src/lib.rss"),
+        r#"pub fn Shared.value() -> Int {
+    return 1
+}
+"#,
+    )
+    .expect("shared source should be written");
+    common::write_named_package_fixture(
+        &wrapper_dir,
+        "rss-wrapper",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-shared = {{ path = "{}" }}
+"#,
+            common::toml_path(&shared_dir)
+        ),
+        r#"pub fn Wrapper.value() -> Int
+"#,
+    );
+    fs::create_dir_all(wrapper_dir.join("src")).expect("wrapper source dir should be created");
+    fs::write(
+        wrapper_dir.join("src/lib.rss"),
+        r#"pub fn Wrapper.value() -> Int {
+    return Shared.value()
+}
+"#,
+    )
+    .expect("wrapper source should be written");
+    common::write_named_package_fixture(
+        &root_dir,
+        "rss-root",
+        "0.1.0",
+        &format!(
+            r#"[dependencies]
+rss-shared = {{ path = "{}" }}
+rss-wrapper = {{ path = "{}" }}
+"#,
+            common::toml_path(&shared_dir),
+            common::toml_path(&wrapper_dir)
+        ),
+        r#"pub fn Root.value() -> Int
+"#,
+    );
+    fs::create_dir_all(root_dir.join("src")).expect("root source dir should be created");
+    fs::write(
+        root_dir.join("src/lib.rss"),
+        r#"pub fn Root.value() -> Int {
+    return Shared.value() + Wrapper.value()
+}
+"#,
+    )
+    .expect("root source should be written");
+
+    let check = check_package_dir(&root_dir).expect("package check should deduplicate path deps");
+    let lock = lock_package_dir(&root_dir).expect("package lock should deduplicate path deps");
+    let _ = fs::remove_dir_all(&root_dir);
+    let _ = fs::remove_dir_all(&shared_dir);
+    let _ = fs::remove_dir_all(&wrapper_dir);
+
+    assert!(check.graph.ok, "graph reasons: {:?}", check.graph.reasons);
+    assert_eq!(
+        lock.packages
+            .iter()
+            .filter(|package| package.name == "rss-shared")
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn package_lock_hashes_dependency_effective_interface_for_selected_features() {
     let root_base_dir = common::unique_temp_dir("rsscript-package-lock-feature-root-base");
     let root_fast_dir = common::unique_temp_dir("rsscript-package-lock-feature-root-fast");

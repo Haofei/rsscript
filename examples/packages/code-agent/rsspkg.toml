@@ -9,6 +9,9 @@ paths = ["src"]
 [dependencies]
 rss-async = { path = "../../../rss/async" }
 rss-async-runtime = { path = "../../../rss/async-runtime" }
+rss-agent = { path = "../../../rss/agent" }
+rss-agent-tools = { path = "../../../rss/agent-tools" }
+rss-chat-completions = { path = "../../../rss/chat-completions" }
 
 [providers]
 async = "rss-async-runtime"

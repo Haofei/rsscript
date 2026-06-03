@@ -1,0 +1,284 @@
+features: local
+
+pub struct ModelConfig {
+    model: String
+    endpoint: Url
+    api_key: String
+    timeout_ms: Int
+    max_attempts: Int
+    backoff_ms: Int
+}
+
+pub struct ModelEnv {
+    model: String
+    endpoint: String
+    api_key: String
+    timeout_ms: String
+    max_attempts: String
+    backoff_ms: String
+}
+
+pub struct ModelDefaults {
+    model: String
+    endpoint: String
+    api_key: String
+    timeout_ms: Int
+    max_attempts: Int
+    backoff_ms: Int
+}
+
+pub struct Prompt {
+    system: String
+    instructions: List<String>
+    constraints: List<String>
+}
+
+pub struct TokenUsage derives(Clone, JsonDecode) {
+    prompt_tokens: Int
+    completion_tokens: Int
+    total_tokens: Int
+}
+
+pub struct StructuredLogger {
+    name: String
+}
+
+pub struct TraceSpan {
+    name: String
+    trace_id: String
+    start_ms: Int
+}
+
+fn model_env_int(name: read String, default: Int, min: Int) -> Int {
+    let raw = name.env_or("")
+    let parsed = match raw.parse_int() {
+        Some(value) => {
+            value
+        }
+        None => {
+            default
+        }
+    }
+    if parsed < min {
+        return default
+    }
+    return parsed
+}
+
+pub fn ModelEnv.agent() -> fresh ModelEnv {
+    return ModelEnv(
+        model: "AGENT_MODEL",
+        endpoint: "AGENT_ENDPOINT",
+        api_key: "AGENT_API_KEY",
+        timeout_ms: "AGENT_TIMEOUT_MS",
+        max_attempts: "AGENT_MAX_ATTEMPTS",
+        backoff_ms: "AGENT_BACKOFF_MS",
+    )
+}
+
+pub fn ModelDefaults.openai_compatible() -> fresh ModelDefaults {
+    return ModelDefaults(
+        model: "gpt-5.5:medium",
+        endpoint: "http://localhost:8080/v1/chat/completions",
+        api_key: "test_key",
+        timeout_ms: 60000,
+        max_attempts: 3,
+        backoff_ms: 500,
+    )
+}
+
+pub fn ModelConfig.from_env(env: read ModelEnv, defaults: read ModelDefaults) -> fresh ModelConfig {
+    return ModelConfig(
+        model: env.model.env_or(defaults.model),
+        endpoint: env.endpoint.env_or(defaults.endpoint).to_url(),
+        api_key: env.api_key.env_or(defaults.api_key),
+        timeout_ms: model_env_int(env.timeout_ms, defaults.timeout_ms, 1),
+        max_attempts: model_env_int(env.max_attempts, defaults.max_attempts, 1),
+        backoff_ms: model_env_int(env.backoff_ms, defaults.backoff_ms, 0),
+    )
+}
+
+pub fn Prompt.code_agent(model: read ModelConfig) -> fresh Prompt {
+    let instructions: List<String> = [
+        "Discover files before reading unfamiliar code.",
+        "Use rss_ide for diagnostics, symbols, outline, hover, definition, and references before guessing APIs.",
+        "Make small edits.",
+        "Run a structured RSScript check after edits.",
+        "Call finish with a concise answer when the task is done.",
+    ]
+    let model_line = ["Current model: ", String.copy(value: read model.model)].join("")
+    let constraints: List<String> = [
+        model_line,
+        "Do not guess RSScript function names or parameter names.",
+        "Do not use native/local/take in ordinary RSScript examples unless the task explicitly requires them.",
+        "Prefer the structured rss_check/rss_cmd tools over shell for RSScript commands.",
+        "Keep tool arguments explicit JSON objects.",
+    ]
+    return Prompt(
+        system: "You are a RSScript code agent.",
+        instructions: instructions,
+        constraints: constraints,
+    )
+}
+
+fn numbered_lines(items: read List<String>) -> fresh String {
+    let mut lines = List<String>.new()
+    let mut index = 0
+    while index < items.len() {
+        let number = String.from_int(value: index + 1)
+        let item = items.get(index)
+        mut lines.push([number, ". ", item].join(""))
+        index = index + 1
+    }
+    return lines.join("\n")
+}
+
+fn bullet_lines(items: read List<String>) -> fresh String {
+    let mut lines = List<String>.new()
+    for item in items {
+        mut lines.push(["- ", item].join(""))
+    }
+    return lines.join("\n")
+}
+
+pub fn Prompt.render(prompt: read Prompt) -> fresh String {
+    return [
+        String.copy(value: read prompt.system),
+        "\n\nWork in a bounded tool loop:\n",
+        numbered_lines(prompt.instructions),
+        "\n\nConstraints:\n",
+        bullet_lines(prompt.constraints),
+    ].join("")
+}
+
+pub fn TokenUsage.zero() -> fresh TokenUsage {
+    return TokenUsage(prompt_tokens: 0, completion_tokens: 0, total_tokens: 0)
+}
+
+pub fn TokenUsage.from_json(value: read JsonValue) -> Result<fresh TokenUsage, JsonError> {
+    return Json.decode<TokenUsage>(value: read value)
+}
+
+pub fn TokenUsage.from_response_text(text: read String) -> fresh TokenUsage {
+    match Json.parse(text: read text) {
+        Ok(root) => {
+            match root.at("usage") {
+                Ok(usage) => {
+                    match TokenUsage.from_json(value: read usage) {
+                        Ok(decoded) => {
+                            return decoded
+                        }
+                        Err => {
+                            return TokenUsage.zero()
+                        }
+                    }
+                }
+                Err => {
+                    return TokenUsage.zero()
+                }
+            }
+        }
+        Err => {
+            return TokenUsage.zero()
+        }
+    }
+}
+
+pub fn TokenUsage.add(left: read TokenUsage, right: read TokenUsage) -> fresh TokenUsage {
+    return TokenUsage(
+        prompt_tokens: left.prompt_tokens + right.prompt_tokens,
+        completion_tokens: left.completion_tokens + right.completion_tokens,
+        total_tokens: left.total_tokens + right.total_tokens,
+    )
+}
+
+pub fn TokenUsage.to_json(usage: read TokenUsage) -> fresh JsonValue {
+    return {
+        "prompt_tokens": usage.prompt_tokens,
+        "completion_tokens": usage.completion_tokens,
+        "total_tokens": usage.total_tokens,
+    }
+}
+
+pub fn TokenUsage.summary(usage: read TokenUsage) -> fresh String {
+    return [
+        "prompt_tokens=",
+        usage.prompt_tokens.to_string(),
+        " completion_tokens=",
+        usage.completion_tokens.to_string(),
+        " total_tokens=",
+        usage.total_tokens.to_string(),
+    ].join("")
+}
+
+pub fn StructuredLogger.named(name: read String) -> fresh StructuredLogger {
+    return StructuredLogger(name: String.copy(value: read name))
+}
+
+fn log_payload(logger: read StructuredLogger, level: read String, event: read String, message: read String) -> fresh JsonValue {
+    return {
+        "logger": logger.name,
+        "level": level,
+        "event": event,
+        "message": message,
+    }
+}
+
+pub fn StructuredLogger.event(
+    logger: read StructuredLogger,
+    event: read String,
+    message: read String,
+) -> Unit {
+    Log.write_json(value: read log_payload(logger: read logger, level: read "info", event: read event, message: read message))
+    return Unit
+}
+
+pub fn StructuredLogger.error(
+    logger: read StructuredLogger,
+    event: read String,
+    message: read String,
+) -> Unit {
+    Log.error_json(value: read log_payload(logger: read logger, level: read "error", event: read event, message: read message))
+    return Unit
+}
+
+pub fn StructuredLogger.json(
+    logger: read StructuredLogger,
+    event: read String,
+    value: read JsonValue,
+) -> Unit {
+    let payload = {
+        "logger": logger.name,
+        "level": "info",
+        "event": event,
+        "value": value,
+    }
+    Log.write_json(value: read Json.value(value: read payload))
+    return Unit
+}
+
+pub fn TraceSpan.start(name: read String) -> fresh TraceSpan {
+    let now = Clock.system_unix_ms()
+    let trace_id = [name, "-", now.to_string()].join("")
+    return TraceSpan(name: String.copy(value: read name), trace_id: trace_id, start_ms: now)
+}
+
+pub fn TraceSpan.finish(
+    span: read TraceSpan,
+    logger: read StructuredLogger,
+    status: read String,
+) -> Unit {
+    let now = Clock.system_unix_ms()
+    let payload = {
+        "trace_id": span.trace_id,
+        "span": span.name,
+        "status": status,
+        "duration_ms": now - span.start_ms,
+    }
+    StructuredLogger.json(
+        logger: read logger,
+        event: read "span.finished",
+        value: read Json.value(value: read payload),
+    )
+    return Unit
+}
