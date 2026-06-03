@@ -71,7 +71,7 @@ fn execute_rss_check(arguments: read String, config: read AgentConfig) -> fresh 
     let timeout_ms = bounded_limit(int_or(decoded.timeout_ms, 120000), 120000, 300000)
     match resolve_repo_path(config.repo_root, path_text) {
         Ok(path) => {
-            let args: List<String> = ["run", "--quiet", "--", "check", path.to_string()]
+            let args: List<String> = ["run", "--quiet", "--bin", "rss", "--", "check", path.to_string()]
             let request = process_request("cargo", args, config, timeout_ms, 50000)
             match Process.run_request(request: read request) {
                 Ok(output) => {
@@ -99,7 +99,7 @@ fn execute_rss_cmd(arguments: read String, config: read AgentConfig) -> fresh To
     }
     let timeout_ms = bounded_limit(int_or(decoded.timeout_ms, 120000), 120000, 300000)
     let max_chars = bounded_limit(int_or(decoded.max_output_chars, 20000), 20000, 50000)
-    let mut args: List<String> = ["run", "--quiet", "--", command]
+    let mut args: List<String> = ["run", "--quiet", "--bin", "rss", "--", command]
     match decoded.args {
         Some(extra_args) => {
             mut args.append(extra_args)
@@ -150,7 +150,7 @@ fn execute_rss_ide(arguments: read String, config: read AgentConfig) -> fresh To
     }
     match resolve_repo_path(config.repo_root, path_text) {
         Ok(path) => {
-            let mut args: List<String> = ["run", "--quiet", "--", "ide", "--json", action, path.to_string()]
+            let mut args: List<String> = ["run", "--quiet", "--bin", "rss", "--", "ide", "--json", action, path.to_string()]
             if query != "" {
                 mut args.push("--query")
                 mut args.push(query)
