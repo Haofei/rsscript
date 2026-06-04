@@ -148,6 +148,15 @@ enum InterpreterEvalKind {
     CharIsWhitespace,
     CharToCode,
     CharToString,
+    DequeClear,
+    DequeIsEmpty,
+    DequeLen,
+    DequeNew,
+    DequePopBack,
+    DequePopFront,
+    DequePushBack,
+    DequePushFront,
+    DequeToList,
     DiffUnified,
     DurationAdd,
     DurationAsMs,
@@ -233,6 +242,9 @@ enum InterpreterEvalKind {
     StringStripPrefix,
     StringBefore,
     StringAfter,
+    StringBuilderFinish,
+    StringBuilderNew,
+    StringBuilderPush,
     LogError,
     LogErrorJson,
     LogTrace,
@@ -474,6 +486,60 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "to_string",
         variant: "CharToString",
         eval_kind: InterpreterEvalKind::CharToString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Deque",
+        name: "clear",
+        variant: "DequeClear",
+        eval_kind: InterpreterEvalKind::DequeClear,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Deque",
+        name: "is_empty",
+        variant: "DequeIsEmpty",
+        eval_kind: InterpreterEvalKind::DequeIsEmpty,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Deque",
+        name: "len",
+        variant: "DequeLen",
+        eval_kind: InterpreterEvalKind::DequeLen,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Deque",
+        name: "new",
+        variant: "DequeNew",
+        eval_kind: InterpreterEvalKind::DequeNew,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Deque",
+        name: "pop_back",
+        variant: "DequePopBack",
+        eval_kind: InterpreterEvalKind::DequePopBack,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Deque",
+        name: "pop_front",
+        variant: "DequePopFront",
+        eval_kind: InterpreterEvalKind::DequePopFront,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Deque",
+        name: "push_back",
+        variant: "DequePushBack",
+        eval_kind: InterpreterEvalKind::DequePushBack,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Deque",
+        name: "push_front",
+        variant: "DequePushFront",
+        eval_kind: InterpreterEvalKind::DequePushFront,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Deque",
+        name: "to_list",
+        variant: "DequeToList",
+        eval_kind: InterpreterEvalKind::DequeToList,
     },
     InterpreterIntrinsicSpec {
         namespace: "Diff",
@@ -992,6 +1058,24 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::StringAfter,
     },
     InterpreterIntrinsicSpec {
+        namespace: "StringBuilder",
+        name: "finish",
+        variant: "StringBuilderFinish",
+        eval_kind: InterpreterEvalKind::StringBuilderFinish,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "StringBuilder",
+        name: "new",
+        variant: "StringBuilderNew",
+        eval_kind: InterpreterEvalKind::StringBuilderNew,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "StringBuilder",
+        name: "push",
+        variant: "StringBuilderPush",
+        eval_kind: InterpreterEvalKind::StringBuilderPush,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "Log",
         name: "error",
         variant: "LogError",
@@ -1252,6 +1336,33 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::CharToString => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(expect_char(value)?.to_string()))\n        }"
         }
+        InterpreterEvalKind::DequeClear => {
+            "{\n            let deque_name = interpreter.mut_arg_local_name(args, \"deque\", 0)?;\n            interpreter.assign(deque_name, Value::List(Vec::new()))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::DequeIsEmpty => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(expect_list(value)?.is_empty()))\n        }"
+        }
+        InterpreterEvalKind::DequeLen => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Int(expect_list(value)?.len() as i64))\n        }"
+        }
+        InterpreterEvalKind::DequeNew => {
+            "{\n            Ok(Value::List(Vec::new()))\n        }"
+        }
+        InterpreterEvalKind::DequePopBack => {
+            "{\n            let deque_name = interpreter.mut_arg_local_name(args, \"deque\", 0)?;\n            let mut deque = expect_list(interpreter.lookup(deque_name)?)?;\n            let value = deque.pop();\n            interpreter.assign(deque_name, Value::List(deque))?;\n            Ok(value_option(value, |value| value))\n        }"
+        }
+        InterpreterEvalKind::DequePopFront => {
+            "{\n            let deque_name = interpreter.mut_arg_local_name(args, \"deque\", 0)?;\n            let mut deque = expect_list(interpreter.lookup(deque_name)?)?;\n            let value = if deque.is_empty() {\n                None\n            } else {\n                Some(deque.remove(0))\n            };\n            interpreter.assign(deque_name, Value::List(deque))?;\n            Ok(value_option(value, |value| value))\n        }"
+        }
+        InterpreterEvalKind::DequePushBack => {
+            "{\n            let deque_name = interpreter.mut_arg_local_name(args, \"deque\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            let mut deque = expect_list(interpreter.lookup(deque_name)?)?;\n            deque.push(value);\n            interpreter.assign(deque_name, Value::List(deque))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::DequePushFront => {
+            "{\n            let deque_name = interpreter.mut_arg_local_name(args, \"deque\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            let mut deque = expect_list(interpreter.lookup(deque_name)?)?;\n            deque.insert(0, value);\n            interpreter.assign(deque_name, Value::List(deque))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::DequeToList => {
+            "{\n            interpreter.eval_first_arg(args)\n        }"
+        }
         InterpreterEvalKind::DiffUnified => {
             "{\n            let old = interpreter.eval_named_or_positional_arg(args, \"old\", 0)?;\n            let new = interpreter.eval_named_or_positional_arg(args, \"new\", 1)?;\n            Ok(Value::String(diff_unified_string(\n                &expect_string(old)?,\n                &expect_string(new)?,\n            )))\n        }"
         }
@@ -1500,6 +1611,15 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::StringAfter => {
             "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let delimiter = interpreter.eval_named_or_positional_arg(args, \"delimiter\", 1)?;\n            let value = expect_string(value)?;\n            Ok(value_option(value.split_once(&expect_string(delimiter)?).map(|(_, right)| right.to_string()), Value::String))\n        }"
+        }
+        InterpreterEvalKind::StringBuilderFinish => {
+            "{\n            interpreter.eval_first_arg(args)\n        }"
+        }
+        InterpreterEvalKind::StringBuilderNew => {
+            "{\n            Ok(Value::String(String::new()))\n        }"
+        }
+        InterpreterEvalKind::StringBuilderPush => {
+            "{\n            let builder_name = interpreter.mut_arg_local_name(args, \"builder\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            let mut builder = expect_string(interpreter.lookup(builder_name)?)?;\n            builder.push_str(&expect_string(value)?);\n            interpreter.assign(builder_name, Value::String(builder))?;\n            Ok(Value::Unit)\n        }"
         }
         InterpreterEvalKind::LogError => {
             "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"message\", 0)?;\n            interpreter.stderr.push_str(&expect_string(value)?);\n            interpreter.stderr.push('\\n');\n            Ok(Value::Unit)\n        }"

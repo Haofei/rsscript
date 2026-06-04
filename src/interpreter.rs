@@ -2664,55 +2664,6 @@ impl<'a> Interpreter<'a> {
         args: &[HirCallArg],
     ) -> Result<Value, EvalError> {
         match (namespace, name) {
-            ("Deque", "new") => Ok(Value::List(Vec::new())),
-            ("Deque", "push_back") => {
-                let deque_name = self.mut_arg_local_name(args, "deque", 0)?;
-                let value = self.eval_named_or_positional_arg(args, "value", 1)?;
-                let mut deque = expect_list(self.lookup(deque_name)?)?;
-                deque.push(value);
-                self.assign(deque_name, Value::List(deque))?;
-                Ok(Value::Unit)
-            }
-            ("Deque", "push_front") => {
-                let deque_name = self.mut_arg_local_name(args, "deque", 0)?;
-                let value = self.eval_named_or_positional_arg(args, "value", 1)?;
-                let mut deque = expect_list(self.lookup(deque_name)?)?;
-                deque.insert(0, value);
-                self.assign(deque_name, Value::List(deque))?;
-                Ok(Value::Unit)
-            }
-            ("Deque", "pop_back") => {
-                let deque_name = self.mut_arg_local_name(args, "deque", 0)?;
-                let mut deque = expect_list(self.lookup(deque_name)?)?;
-                let value = deque.pop();
-                self.assign(deque_name, Value::List(deque))?;
-                Ok(value_option(value, |value| value))
-            }
-            ("Deque", "pop_front") => {
-                let deque_name = self.mut_arg_local_name(args, "deque", 0)?;
-                let mut deque = expect_list(self.lookup(deque_name)?)?;
-                let value = if deque.is_empty() {
-                    None
-                } else {
-                    Some(deque.remove(0))
-                };
-                self.assign(deque_name, Value::List(deque))?;
-                Ok(value_option(value, |value| value))
-            }
-            ("Deque", "clear") => {
-                let deque_name = self.mut_arg_local_name(args, "deque", 0)?;
-                self.assign(deque_name, Value::List(Vec::new()))?;
-                Ok(Value::Unit)
-            }
-            ("Deque", "len") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::Int(expect_list(value)?.len() as i64))
-            }
-            ("Deque", "is_empty") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::Bool(expect_list(value)?.is_empty()))
-            }
-            ("Deque", "to_list") => self.eval_first_arg(args),
             ("Db", "close") => {
                 let fd = self.eval_named_or_positional_arg(args, "fd", 0)?;
                 let _ = expect_int(fd)?;
@@ -3765,16 +3716,6 @@ impl<'a> Interpreter<'a> {
                     Value::List(unmatched),
                 ]))
             }
-            ("StringBuilder", "new") => Ok(Value::String(String::new())),
-            ("StringBuilder", "push") => {
-                let builder_name = self.mut_arg_local_name(args, "builder", 0)?;
-                let value = self.eval_named_or_positional_arg(args, "value", 1)?;
-                let mut builder = expect_string(self.lookup(builder_name)?)?;
-                builder.push_str(&expect_string(value)?);
-                self.assign(builder_name, Value::String(builder))?;
-                Ok(Value::Unit)
-            }
-            ("StringBuilder", "finish") => self.eval_first_arg(args),
             ("Stream", "from_list") => {
                 let items = self.eval_named_or_positional_arg(args, "items", 0)?;
                 Ok(self.stream_from_list(expect_list(items)?))
