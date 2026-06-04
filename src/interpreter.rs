@@ -444,6 +444,7 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Receiver", "into_stream"),
     ("Receiver", "recv"),
     ("Receiver", "recv_cancellable"),
+    ("ResourcePool", "stats"),
     ("Request", "new"),
     ("Request", "path"),
     ("Response", "body"),
@@ -508,6 +509,10 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Row", "field_string"),
     ("RowBuffer", "new"),
     ("RuleLoader", "load_rules"),
+    ("PoolStats", "available"),
+    ("PoolStats", "capacity"),
+    ("PoolStats", "created"),
+    ("PoolStats", "in_use"),
     ("Set", "clear"),
     ("Set", "contains"),
     ("Set", "difference"),
@@ -932,6 +937,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Receiver.into_stream",
     "runtime:Receiver.recv",
     "runtime:Receiver.recv_cancellable",
+    "runtime:ResourcePool.stats",
     "runtime:Request.new",
     "runtime:Request.path",
     "runtime:Response.body",
@@ -1001,6 +1007,10 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Row.field_string",
     "runtime:RowBuffer.new",
     "runtime:RuleLoader.load_rules",
+    "runtime:PoolStats.available",
+    "runtime:PoolStats.capacity",
+    "runtime:PoolStats.created",
+    "runtime:PoolStats.in_use",
     "runtime:Set.clear",
     "runtime:Set.contains",
     "runtime:Set.difference",
@@ -1349,6 +1359,8 @@ struct Interpreter<'a> {
     cancellation_flags: HashMap<i64, bool>,
     next_channel_id: i64,
     channels: HashMap<i64, InterpreterChannel>,
+    next_pool_id: i64,
+    pools: HashMap<i64, InterpreterResourcePool>,
 }
 
 impl<'a> Interpreter<'a> {
@@ -1365,6 +1377,8 @@ impl<'a> Interpreter<'a> {
             cancellation_flags: HashMap::new(),
             next_channel_id: 0,
             channels: HashMap::new(),
+            next_pool_id: 0,
+            pools: HashMap::new(),
         }
     }
 
@@ -1584,6 +1598,28 @@ impl<'a> Interpreter<'a> {
                 other.display()
             ))),
         }
+    }
+
+    fn eval_resource_pool_new(&mut self, args: &[HirCallArg]) -> Result<Value, EvalError> {
+        let create = self.eval_named_or_positional_arg(args, "create", 0)?;
+        let max_size = self.eval_named_or_positional_arg(args, "max_size", 1)?;
+        let capacity = expect_int(max_size)?.max(0);
+        let mut idle = Vec::with_capacity(capacity as usize);
+        for _ in 0..capacity {
+            idle.push(self.call_closure(create.clone(), Vec::new())?);
+        }
+        let id = self.next_pool_id;
+        self.next_pool_id = self.next_pool_id.saturating_add(1);
+        self.pools.insert(
+            id,
+            InterpreterResourcePool {
+                capacity,
+                created: idle.len() as i64,
+                idle,
+                in_use: 0,
+            },
+        );
+        Ok(resource_pool_value(id))
     }
 
     fn eval_block(&mut self, block: &HirBlock) -> Result<Control, EvalError> {
@@ -1858,6 +1894,9 @@ impl<'a> Interpreter<'a> {
             Callee::Qualified { namespace, name } => {
                 let namespace = strip_generic_args(namespace);
                 let name = strip_generic_args(name);
+                if namespace == "ResourcePool" && name == "new" {
+                    return self.eval_resource_pool_new(args);
+                }
                 if let Some(intrinsic) = runtime_abi::lookup_runtime_intrinsic(namespace, name) {
                     return self.eval_runtime_intrinsic(
                         namespace,
@@ -2690,6 +2729,26 @@ impl<'a> Interpreter<'a> {
                     return Ok(stream_collect_error_value("channel receiver closed"));
                 }
                 Ok(stream_channel_value(receiver.channel_id))
+            }
+            ("ResourcePool", "stats") => {
+                let pool_name = self.mut_arg_local_name(args, "pool", 0)?;
+                let pool = expect_resource_pool(self.lookup(pool_name)?)?;
+                let state = self.pools.get(&pool.id).ok_or_else(|| {
+                    EvalError::Runtime(format!("unknown ResourcePool id `{}`.", pool.id))
+                })?;
+                Ok(pool_stats_value(
+                    state.capacity,
+                    state.created,
+                    state.idle.len() as i64,
+                    state.in_use,
+                ))
+            }
+            ("PoolStats", "capacity")
+            | ("PoolStats", "created")
+            | ("PoolStats", "available")
+            | ("PoolStats", "in_use") => {
+                let stats = self.eval_named_or_positional_arg(args, "stats", 0)?;
+                read_field(&stats, name)
             }
             ("Cache", "insert") => {
                 let cache_name = self.mut_arg_local_name(args, "cache", 0)?;
@@ -6758,6 +6817,17 @@ struct ReceiverState {
     closed: bool,
 }
 
+struct InterpreterResourcePool {
+    capacity: i64,
+    created: i64,
+    idle: Vec<Value>,
+    in_use: i64,
+}
+
+struct ResourcePoolState {
+    id: i64,
+}
+
 fn channel_value(id: i64, capacity: i64, receiver_taken: bool) -> Value {
     Value::Struct {
         name: "Channel".to_string(),
@@ -6785,6 +6855,25 @@ fn receiver_value(channel_id: i64, closed: bool) -> Value {
         fields: BTreeMap::from([
             ("channel_id".to_string(), Value::Int(channel_id)),
             ("closed".to_string(), Value::Bool(closed)),
+        ]),
+    }
+}
+
+fn resource_pool_value(id: i64) -> Value {
+    Value::Struct {
+        name: "ResourcePool".to_string(),
+        fields: BTreeMap::from([("id".to_string(), Value::Int(id))]),
+    }
+}
+
+fn pool_stats_value(capacity: i64, created: i64, available: i64, in_use: i64) -> Value {
+    Value::Struct {
+        name: "PoolStats".to_string(),
+        fields: BTreeMap::from([
+            ("available".to_string(), Value::Int(available)),
+            ("capacity".to_string(), Value::Int(capacity)),
+            ("created".to_string(), Value::Int(created)),
+            ("in_use".to_string(), Value::Int(in_use)),
         ]),
     }
 }
@@ -7083,6 +7172,23 @@ fn expect_receiver(value: Value) -> Result<ReceiverState, EvalError> {
         }
         other => Err(EvalError::Runtime(format!(
             "expected Receiver, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn expect_resource_pool(value: Value) -> Result<ResourcePoolState, EvalError> {
+    match value {
+        Value::Struct { name, mut fields } if name == "ResourcePool" => {
+            let id = fields.remove("id").ok_or_else(|| {
+                EvalError::Runtime("ResourcePool value is missing id.".to_string())
+            })?;
+            Ok(ResourcePoolState {
+                id: expect_int(id)?,
+            })
+        }
+        other => Err(EvalError::Runtime(format!(
+            "expected ResourcePool, got `{}`.",
             other.display()
         ))),
     }
