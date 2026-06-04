@@ -411,7 +411,11 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Json.value runtime:Json.value_at runtime:Json.values runtime:JsonError.message
 // parity: runtime:Instant.elapsed
 // parity: runtime:Hash.sha256_bytes runtime:Hash.sha256_file runtime:Hash.sha256_string
-// parity: runtime:Http.get runtime:Http.post_form runtime:Http.post_json runtime:HttpError.message
+// parity: runtime:Http.get runtime:Http.get_async runtime:Http.get_retry_async
+// parity: runtime:Http.get_timeout_async runtime:Http.post_form runtime:Http.post_form_async
+// parity: runtime:Http.post_json runtime:Http.post_json_async runtime:Http.post_json_bearer_retry_async
+// parity: runtime:Http.post_json_retry_async runtime:Http.post_json_timeout_async
+// parity: runtime:Http.send_async runtime:HttpError.message
 // parity: runtime:HttpRequest.json runtime:HttpRequest.with_header
 // parity: runtime:HttpRequest.with_retry runtime:HttpRequest.with_timeout
 // parity: runtime:Image.inspect runtime:Image.load runtime:Image.normalize runtime:Image.resize
@@ -505,8 +509,10 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:GlobalConfig.new runtime:GlobalConfig.replace runtime:GlobalConfig.rule_count
 // parity: runtime:TempDir.new runtime:TempDir.new_in runtime:TempDir.path
 // parity: runtime:Timer.sleep runtime:Timer.sleep_cancellable runtime:Timer.sleep_until
+// parity: runtime:Tcp.connect runtime:TcpError.message
 // parity: runtime:Toml.parse_file
 // parity: runtime:Url.from_string runtime:Url.to_string
+// parity: runtime:WebSocket.connect runtime:WebSocketError.message
 // parity: runtime:Yaml.parse runtime:Yaml.parse_file
 fn assert_interpreter_matches_backend(name: &str, package: &str, source: &str) {
     assert_interpreter_matches_backend_with_args(name, package, source, &[]);
@@ -1824,6 +1830,120 @@ fn main() -> Unit {
 }
 
 #[test]
+fn parity_async_http_error_intrinsics() {
+    let source = r#"
+features: async, native, local
+
+fn log_http_error(error: read HttpError, label: read String) -> Unit {
+    let message = HttpError.message(error: read error)
+    if String.contains(value: read message, needle: read "") {
+        Log.write(message: read label)
+    }
+    return Unit
+}
+
+async fn main() -> Unit {
+    match await Http.get_async(url: read Url.from_string(value: read "https://example.test/api")) {
+        Ok(_) => {}
+        Err(error) => {
+            log_http_error(error: read error, label: read "get-async-error")
+        }
+    }
+    match await Http.get_timeout_async(url: read Url.from_string(value: read "https://example.test/api"), timeout_ms: 1000) {
+        Ok(_) => {}
+        Err(error) => {
+            log_http_error(error: read error, label: read "get-timeout-error")
+        }
+    }
+    match await Http.get_retry_async(url: read Url.from_string(value: read "https://example.test/api"), timeout_ms: 1000, attempts: 2, backoff_ms: 1) {
+        Ok(_) => {}
+        Err(error) => {
+            log_http_error(error: read error, label: read "get-retry-error")
+        }
+    }
+    match await Http.post_json_async(url: read Url.from_string(value: read "https://example.test/api"), body: read "{\"ok\":true}") {
+        Ok(_) => {}
+        Err(error) => {
+            log_http_error(error: read error, label: read "post-json-async-error")
+        }
+    }
+    match await Http.post_json_timeout_async(url: read Url.from_string(value: read "https://example.test/api"), body: read "{\"ok\":true}", timeout_ms: 1000) {
+        Ok(_) => {}
+        Err(error) => {
+            log_http_error(error: read error, label: read "post-json-timeout-error")
+        }
+    }
+    match await Http.post_json_retry_async(url: read Url.from_string(value: read "https://example.test/api"), body: read "{\"ok\":true}", timeout_ms: 1000, attempts: 2, backoff_ms: 1) {
+        Ok(_) => {}
+        Err(error) => {
+            log_http_error(error: read error, label: read "post-json-retry-error")
+        }
+    }
+    match await Http.post_json_bearer_retry_async(url: read Url.from_string(value: read "https://example.test/api"), body: read "{\"ok\":true}", token: read "token", timeout_ms: 1000, attempts: 2, backoff_ms: 1) {
+        Ok(_) => {}
+        Err(error) => {
+            log_http_error(error: read error, label: read "post-json-bearer-error")
+        }
+    }
+    match await Http.post_form_async(url: read Url.from_string(value: read "https://example.test/api"), body: read "a=1") {
+        Ok(_) => {}
+        Err(error) => {
+            log_http_error(error: read error, label: read "post-form-async-error")
+        }
+    }
+    local request = HttpRequest.json(url: read Url.from_string(value: read "https://example.test/api"), body: read "{\"ok\":true}")
+    match await Http.send_async(request: take request) {
+        Ok(_) => {}
+        Err(error) => {
+            log_http_error(error: read error, label: read "send-async-error")
+        }
+    }
+    return Unit
+}
+"#;
+    assert_interpreter_matches_backend(
+        "parity-http-async.rss",
+        "rsscript_parity_http_async",
+        source,
+    );
+}
+
+#[test]
+fn parity_async_socket_error_intrinsics() {
+    let source = r#"
+features: async, native, local
+
+async fn main() -> Unit {
+    match await Tcp.connect(host: read "127.0.0.1", port: 9) {
+        Ok(_) => {}
+        Err(error) => {
+            let message = TcpError.message(error: read error)
+            if String.contains(value: read message, needle: read "") {
+                Log.write(message: read "tcp-error")
+            }
+        }
+    }
+    let url = Url.from_string(value: read "ws://127.0.0.1:9/socket")
+    match await WebSocket.connect(url: read url) {
+        Ok(_) => {}
+        Err(error) => {
+            let message = WebSocketError.message(error: read error)
+            if String.contains(value: read message, needle: read "") {
+                Log.write(message: read "websocket-error")
+            }
+        }
+    }
+    return Unit
+}
+"#;
+    assert_interpreter_matches_backend(
+        "parity-async-socket.rss",
+        "rsscript_parity_async_socket",
+        source,
+    );
+}
+
+#[test]
 fn parity_http_request_builder_intrinsics() {
     let source = r#"
 features: native, local
@@ -1848,11 +1968,12 @@ fn main() -> Unit {
 
 #[test]
 fn parity_path_file_directory_intrinsics() {
-    let interpreter_root = common::unique_temp_dir("rsscript-parity-fs-interpreter");
-    let backend_root = common::unique_temp_dir("rsscript-parity-fs-backend");
-    let interpreter_root_arg = interpreter_root.display().to_string();
-    let backend_root_arg = backend_root.display().to_string();
-    let source = r#"
+    run_with_large_stack(|| {
+        let interpreter_root = common::unique_temp_dir("rsscript-parity-fs-interpreter");
+        let backend_root = common::unique_temp_dir("rsscript-parity-fs-backend");
+        let interpreter_root_arg = interpreter_root.display().to_string();
+        let backend_root_arg = backend_root.display().to_string();
+        let source = r#"
 features: native, local
 
 fn main() -> Result<Unit, FileError> {
@@ -2000,15 +2121,16 @@ fn main() -> Result<Unit, FileError> {
     return Ok(Unit)
 }
 "#;
-    assert_interpreter_matches_backend_with_distinct_args(
-        "parity-fs.rss",
-        "rsscript_parity_fs",
-        source,
-        &[interpreter_root_arg.as_str()],
-        &[backend_root_arg.as_str()],
-    );
-    let _ = fs::remove_dir_all(&interpreter_root);
-    let _ = fs::remove_dir_all(&backend_root);
+        assert_interpreter_matches_backend_with_distinct_args(
+            "parity-fs.rss",
+            "rsscript_parity_fs",
+            source,
+            &[interpreter_root_arg.as_str()],
+            &[backend_root_arg.as_str()],
+        );
+        let _ = fs::remove_dir_all(&interpreter_root);
+        let _ = fs::remove_dir_all(&backend_root);
+    });
 }
 
 #[test]
@@ -3000,7 +3122,8 @@ fn main() -> Unit {
 
 #[test]
 fn parity_json_builder_and_array_intrinsics() {
-    let source = r#"
+    run_with_large_stack(|| {
+        let source = r#"
 fn main() -> Result<Unit, JsonError> {
     let mut fields = List<String>.new()
     List.push<String>(list: mut fields, value: read Json.string_field(name: read "name", value: read "rss"))
@@ -3048,11 +3171,12 @@ fn main() -> Result<Unit, JsonError> {
     return Ok(Unit)
 }
 "#;
-    assert_interpreter_matches_backend(
-        "parity-json-builder-array.rss",
-        "rsscript_parity_json_builder_array",
-        source,
-    );
+        assert_interpreter_matches_backend(
+            "parity-json-builder-array.rss",
+            "rsscript_parity_json_builder_array",
+            source,
+        );
+    });
 }
 
 #[test]

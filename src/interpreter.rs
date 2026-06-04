@@ -330,8 +330,17 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Hash", "sha256_file"),
     ("Hash", "sha256_string"),
     ("Http", "get"),
+    ("Http", "get_async"),
+    ("Http", "get_retry_async"),
+    ("Http", "get_timeout_async"),
     ("Http", "post_form"),
+    ("Http", "post_form_async"),
     ("Http", "post_json"),
+    ("Http", "post_json_async"),
+    ("Http", "post_json_bearer_retry_async"),
+    ("Http", "post_json_retry_async"),
+    ("Http", "post_json_timeout_async"),
+    ("Http", "send_async"),
     ("HttpError", "message"),
     ("HttpRequest", "json"),
     ("HttpRequest", "with_header"),
@@ -517,8 +526,12 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Timer", "sleep"),
     ("Timer", "sleep_cancellable"),
     ("Timer", "sleep_until"),
+    ("Tcp", "connect"),
+    ("TcpError", "message"),
     ("Url", "from_string"),
     ("Url", "to_string"),
+    ("WebSocket", "connect"),
+    ("WebSocketError", "message"),
     ("Workspace", "resolve"),
     ("GlobalConfig", "new"),
     ("GlobalConfig", "replace"),
@@ -773,8 +786,17 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Hash.sha256_file",
     "runtime:Hash.sha256_string",
     "runtime:Http.get",
+    "runtime:Http.get_async",
+    "runtime:Http.get_retry_async",
+    "runtime:Http.get_timeout_async",
     "runtime:Http.post_form",
+    "runtime:Http.post_form_async",
     "runtime:Http.post_json",
+    "runtime:Http.post_json_async",
+    "runtime:Http.post_json_bearer_retry_async",
+    "runtime:Http.post_json_retry_async",
+    "runtime:Http.post_json_timeout_async",
+    "runtime:Http.send_async",
     "runtime:HttpError.message",
     "runtime:HttpRequest.json",
     "runtime:HttpRequest.with_header",
@@ -1000,9 +1022,13 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Timer.sleep",
     "runtime:Timer.sleep_cancellable",
     "runtime:Timer.sleep_until",
+    "runtime:Tcp.connect",
+    "runtime:TcpError.message",
     "runtime:Toml.parse_file",
     "runtime:Url.from_string",
     "runtime:Url.to_string",
+    "runtime:WebSocket.connect",
+    "runtime:WebSocketError.message",
     "runtime:Workspace.resolve",
     "runtime:Yaml.parse",
     "runtime:Yaml.parse_file",
@@ -3079,6 +3105,35 @@ impl<'a> Interpreter<'a> {
                     expect_string(url)?
                 ))))
             }
+            ("Http", "get_async") => {
+                let url = self.eval_named_or_positional_arg(args, "url", 0)?;
+                Ok(value_err(http_error(format!(
+                    "HTTP async provider is not configured for GET {}",
+                    expect_string(url)?
+                ))))
+            }
+            ("Http", "get_timeout_async") => {
+                let url = self.eval_named_or_positional_arg(args, "url", 0)?;
+                let timeout = self.eval_named_or_positional_arg(args, "timeout_ms", 1)?;
+                Ok(value_err(http_error(format!(
+                    "HTTP async provider is not configured for GET {} with timeout {}ms",
+                    expect_string(url)?,
+                    expect_int(timeout)?
+                ))))
+            }
+            ("Http", "get_retry_async") => {
+                let url = self.eval_named_or_positional_arg(args, "url", 0)?;
+                let timeout = self.eval_named_or_positional_arg(args, "timeout_ms", 1)?;
+                let attempts = self.eval_named_or_positional_arg(args, "attempts", 2)?;
+                let backoff = self.eval_named_or_positional_arg(args, "backoff_ms", 3)?;
+                Ok(value_err(http_error(format!(
+                    "HTTP async provider is not configured for GET {} with timeout {}ms attempts {} backoff {}ms",
+                    expect_string(url)?,
+                    expect_int(timeout)?,
+                    expect_int(attempts)?,
+                    expect_int(backoff)?
+                ))))
+            }
             ("Http", "post_json") => {
                 let url = self.eval_named_or_positional_arg(args, "url", 0)?;
                 let _body = self.eval_named_or_positional_arg(args, "body", 1)?;
@@ -3087,12 +3142,75 @@ impl<'a> Interpreter<'a> {
                     expect_string(url)?
                 ))))
             }
+            ("Http", "post_json_async") => {
+                let url = self.eval_named_or_positional_arg(args, "url", 0)?;
+                let _body = self.eval_named_or_positional_arg(args, "body", 1)?;
+                Ok(value_err(http_error(format!(
+                    "HTTP async provider is not configured for POST JSON {}",
+                    expect_string(url)?
+                ))))
+            }
+            ("Http", "post_json_timeout_async") => {
+                let url = self.eval_named_or_positional_arg(args, "url", 0)?;
+                let _body = self.eval_named_or_positional_arg(args, "body", 1)?;
+                let timeout = self.eval_named_or_positional_arg(args, "timeout_ms", 2)?;
+                Ok(value_err(http_error(format!(
+                    "HTTP async provider is not configured for POST JSON {} with timeout {}ms",
+                    expect_string(url)?,
+                    expect_int(timeout)?
+                ))))
+            }
+            ("Http", "post_json_retry_async") => {
+                let url = self.eval_named_or_positional_arg(args, "url", 0)?;
+                let _body = self.eval_named_or_positional_arg(args, "body", 1)?;
+                let timeout = self.eval_named_or_positional_arg(args, "timeout_ms", 2)?;
+                let attempts = self.eval_named_or_positional_arg(args, "attempts", 3)?;
+                let backoff = self.eval_named_or_positional_arg(args, "backoff_ms", 4)?;
+                Ok(value_err(http_error(format!(
+                    "HTTP async provider is not configured for POST JSON {} with timeout {}ms attempts {} backoff {}ms",
+                    expect_string(url)?,
+                    expect_int(timeout)?,
+                    expect_int(attempts)?,
+                    expect_int(backoff)?
+                ))))
+            }
+            ("Http", "post_json_bearer_retry_async") => {
+                let url = self.eval_named_or_positional_arg(args, "url", 0)?;
+                let _body = self.eval_named_or_positional_arg(args, "body", 1)?;
+                let _token = self.eval_named_or_positional_arg(args, "token", 2)?;
+                let timeout = self.eval_named_or_positional_arg(args, "timeout_ms", 3)?;
+                let attempts = self.eval_named_or_positional_arg(args, "attempts", 4)?;
+                let backoff = self.eval_named_or_positional_arg(args, "backoff_ms", 5)?;
+                Ok(value_err(http_error(format!(
+                    "HTTP async provider is not configured for bearer POST JSON {} with timeout {}ms attempts {} backoff {}ms",
+                    expect_string(url)?,
+                    expect_int(timeout)?,
+                    expect_int(attempts)?,
+                    expect_int(backoff)?
+                ))))
+            }
             ("Http", "post_form") => {
                 let url = self.eval_named_or_positional_arg(args, "url", 0)?;
                 let _body = self.eval_named_or_positional_arg(args, "body", 1)?;
                 Ok(value_err(http_error(format!(
                     "HTTP client runtime is not configured for POST form {}",
                     expect_string(url)?
+                ))))
+            }
+            ("Http", "post_form_async") => {
+                let url = self.eval_named_or_positional_arg(args, "url", 0)?;
+                let _body = self.eval_named_or_positional_arg(args, "body", 1)?;
+                Ok(value_err(http_error(format!(
+                    "HTTP async provider is not configured for POST form {}",
+                    expect_string(url)?
+                ))))
+            }
+            ("Http", "send_async") => {
+                let request = self.eval_named_or_positional_arg(args, "request", 0)?;
+                let request = expect_http_request(request)?;
+                Ok(value_err(http_error(format!(
+                    "HTTP async provider is not configured for {} {}",
+                    request.method, request.url
                 ))))
             }
             ("HttpError", "message") => {
@@ -3256,12 +3374,109 @@ impl<'a> Interpreter<'a> {
                 let _ = expect_cancellation_id(token, "CancellationToken")?;
                 Ok(value_ok(Value::Unit))
             }
+            ("Tcp", "connect") => {
+                let host = self.eval_named_or_positional_arg(args, "host", 0)?;
+                let port = self.eval_named_or_positional_arg(args, "port", 1)?;
+                Ok(value_err(tcp_error(format!(
+                    "TCP async provider is not configured for {}:{}",
+                    expect_string(host)?,
+                    expect_int(port)?
+                ))))
+            }
+            ("TcpStream", "read") => {
+                let stream = self.eval_named_or_positional_arg(args, "stream", 0)?;
+                let max_bytes = self.eval_named_or_positional_arg(args, "max_bytes", 1)?;
+                let _ = stream.display();
+                Ok(value_err(tcp_error(format!(
+                    "TCP async provider is not configured for read {} bytes",
+                    expect_int(max_bytes)?
+                ))))
+            }
+            ("TcpStream", "write") => {
+                let stream = self.eval_named_or_positional_arg(args, "stream", 0)?;
+                let data = self.eval_named_or_positional_arg(args, "data", 1)?;
+                let _ = stream.display();
+                Ok(value_err(tcp_error(format!(
+                    "TCP async provider is not configured for write {} bytes",
+                    expect_bytes(data)?.len()
+                ))))
+            }
+            ("TcpStream", "write_all") => {
+                let stream = self.eval_named_or_positional_arg(args, "stream", 0)?;
+                let data = self.eval_named_or_positional_arg(args, "data", 1)?;
+                let _ = stream.display();
+                Ok(value_err(tcp_error(format!(
+                    "TCP async provider is not configured for write_all {} bytes",
+                    expect_bytes(data)?.len()
+                ))))
+            }
+            ("TcpStream", "shutdown") => {
+                let stream = self.eval_named_or_positional_arg(args, "stream", 0)?;
+                let _ = stream.display();
+                Ok(value_err(tcp_error(
+                    "TCP async provider is not configured for shutdown",
+                )))
+            }
+            ("TcpError", "message") => {
+                let error = self.eval_named_or_positional_arg(args, "error", 0)?;
+                read_field(&error, "message")
+            }
             ("Path", "from_string")
             | ("Path", "to_string")
             | ("String", "to_path")
             | ("String", "to_url")
             | ("Url", "from_string")
             | ("Url", "to_string") => self.eval_first_arg(args),
+            ("WebSocket", "connect") => {
+                let url = self.eval_named_or_positional_arg(args, "url", 0)?;
+                Ok(value_err(websocket_error(format!(
+                    "WebSocket async provider is not configured for {}",
+                    expect_string(url)?
+                ))))
+            }
+            ("WebSocket", "send_text") => {
+                let socket = self.eval_named_or_positional_arg(args, "socket", 0)?;
+                let text = self.eval_named_or_positional_arg(args, "text", 1)?;
+                let _ = socket.display();
+                Ok(value_err(websocket_error(format!(
+                    "WebSocket async provider is not configured for send_text {} bytes",
+                    expect_string(text)?.len()
+                ))))
+            }
+            ("WebSocket", "send_bytes") => {
+                let socket = self.eval_named_or_positional_arg(args, "socket", 0)?;
+                let bytes = self.eval_named_or_positional_arg(args, "bytes", 1)?;
+                let _ = socket.display();
+                Ok(value_err(websocket_error(format!(
+                    "WebSocket async provider is not configured for send_bytes {} bytes",
+                    expect_bytes(bytes)?.len()
+                ))))
+            }
+            ("WebSocket", "recv_text") => {
+                let socket = self.eval_named_or_positional_arg(args, "socket", 0)?;
+                let _ = socket.display();
+                Ok(value_err(websocket_error(
+                    "WebSocket async provider is not configured for recv_text",
+                )))
+            }
+            ("WebSocket", "recv_bytes") => {
+                let socket = self.eval_named_or_positional_arg(args, "socket", 0)?;
+                let _ = socket.display();
+                Ok(value_err(websocket_error(
+                    "WebSocket async provider is not configured for recv_bytes",
+                )))
+            }
+            ("WebSocket", "close") => {
+                let socket = self.eval_named_or_positional_arg(args, "socket", 0)?;
+                let _ = socket.display();
+                Ok(value_err(websocket_error(
+                    "WebSocket async provider is not configured for close",
+                )))
+            }
+            ("WebSocketError", "message") => {
+                let error = self.eval_named_or_positional_arg(args, "error", 0)?;
+                read_field(&error, "message")
+            }
             ("Path", "join") => {
                 let base = self.eval_named_or_positional_arg(args, "base", 0)?;
                 let child = self.eval_named_or_positional_arg(args, "child", 1)?;
@@ -5722,6 +5937,20 @@ fn regex_error(message: impl Into<String>) -> Value {
 fn http_error(message: impl Into<String>) -> Value {
     Value::Struct {
         name: "HttpError".to_string(),
+        fields: BTreeMap::from([("message".to_string(), Value::String(message.into()))]),
+    }
+}
+
+fn tcp_error(message: impl Into<String>) -> Value {
+    Value::Struct {
+        name: "TcpError".to_string(),
+        fields: BTreeMap::from([("message".to_string(), Value::String(message.into()))]),
+    }
+}
+
+fn websocket_error(message: impl Into<String>) -> Value {
+    Value::Struct {
+        name: "WebSocketError".to_string(),
         fields: BTreeMap::from([("message".to_string(), Value::String(message.into()))]),
     }
 }
