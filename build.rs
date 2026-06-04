@@ -250,7 +250,23 @@ enum InterpreterEvalKind {
     JsonAsBool,
     JsonAsInt,
     JsonAsString,
+    JsonAt,
+    JsonAtBool,
+    JsonAtBoolOr,
+    JsonAtInt,
+    JsonAtIntOr,
+    JsonAtOptional,
+    JsonAtOptionalBool,
+    JsonAtOptionalInt,
+    JsonAtOptionalString,
+    JsonAtOr,
+    JsonAtString,
+    JsonAtStringOr,
+    JsonAtToString,
+    JsonAtToStringOr,
     JsonBoolField,
+    JsonBoolAt,
+    JsonBoolAtOr,
     JsonClone,
     JsonField,
     JsonFieldBool,
@@ -264,6 +280,8 @@ enum InterpreterEvalKind {
     JsonIsNull,
     JsonIsObject,
     JsonIntField,
+    JsonIntAt,
+    JsonIntAtOr,
     JsonKind,
     JsonObject,
     JsonObjectKeys,
@@ -272,9 +290,13 @@ enum InterpreterEvalKind {
     JsonQuoteString,
     JsonRawField,
     JsonStringArray,
+    JsonStringAt,
+    JsonStringAtOr,
     JsonStringField,
     JsonStrings,
     JsonToString,
+    JsonToStringAt,
+    JsonToStringAtOr,
     JsonValue,
     JsonValues,
     JsonErrorMessage,
@@ -1250,9 +1272,105 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
     },
     InterpreterIntrinsicSpec {
         namespace: "Json",
+        name: "at",
+        variant: "JsonAt",
+        eval_kind: InterpreterEvalKind::JsonAt,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "at_bool",
+        variant: "JsonAtBool",
+        eval_kind: InterpreterEvalKind::JsonAtBool,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "at_bool_or",
+        variant: "JsonAtBoolOr",
+        eval_kind: InterpreterEvalKind::JsonAtBoolOr,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "at_int",
+        variant: "JsonAtInt",
+        eval_kind: InterpreterEvalKind::JsonAtInt,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "at_int_or",
+        variant: "JsonAtIntOr",
+        eval_kind: InterpreterEvalKind::JsonAtIntOr,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "at_optional",
+        variant: "JsonAtOptional",
+        eval_kind: InterpreterEvalKind::JsonAtOptional,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "at_optional_bool",
+        variant: "JsonAtOptionalBool",
+        eval_kind: InterpreterEvalKind::JsonAtOptionalBool,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "at_optional_int",
+        variant: "JsonAtOptionalInt",
+        eval_kind: InterpreterEvalKind::JsonAtOptionalInt,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "at_optional_string",
+        variant: "JsonAtOptionalString",
+        eval_kind: InterpreterEvalKind::JsonAtOptionalString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "at_or",
+        variant: "JsonAtOr",
+        eval_kind: InterpreterEvalKind::JsonAtOr,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "at_string",
+        variant: "JsonAtString",
+        eval_kind: InterpreterEvalKind::JsonAtString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "at_string_or",
+        variant: "JsonAtStringOr",
+        eval_kind: InterpreterEvalKind::JsonAtStringOr,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "at_to_string",
+        variant: "JsonAtToString",
+        eval_kind: InterpreterEvalKind::JsonAtToString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "at_to_string_or",
+        variant: "JsonAtToStringOr",
+        eval_kind: InterpreterEvalKind::JsonAtToStringOr,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
         name: "bool_field",
         variant: "JsonBoolField",
         eval_kind: InterpreterEvalKind::JsonBoolField,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "bool_at",
+        variant: "JsonBoolAt",
+        eval_kind: InterpreterEvalKind::JsonBoolAt,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "bool_at_or",
+        variant: "JsonBoolAtOr",
+        eval_kind: InterpreterEvalKind::JsonBoolAtOr,
     },
     InterpreterIntrinsicSpec {
         namespace: "Json",
@@ -1316,6 +1434,18 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
     },
     InterpreterIntrinsicSpec {
         namespace: "Json",
+        name: "int_at",
+        variant: "JsonIntAt",
+        eval_kind: InterpreterEvalKind::JsonIntAt,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "int_at_or",
+        variant: "JsonIntAtOr",
+        eval_kind: InterpreterEvalKind::JsonIntAtOr,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
         name: "is_array",
         variant: "JsonIsArray",
         eval_kind: InterpreterEvalKind::JsonIsArray,
@@ -1337,6 +1467,24 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "json_parse",
         variant: "JsonJsonParse",
         eval_kind: InterpreterEvalKind::JsonParse,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "json_bool_at_or",
+        variant: "JsonJsonBoolAtOr",
+        eval_kind: InterpreterEvalKind::JsonBoolAtOr,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "json_int_at_or",
+        variant: "JsonJsonIntAtOr",
+        eval_kind: InterpreterEvalKind::JsonIntAtOr,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "json_string_at_or",
+        variant: "JsonJsonStringAtOr",
+        eval_kind: InterpreterEvalKind::JsonStringAtOr,
     },
     InterpreterIntrinsicSpec {
         namespace: "Json",
@@ -1388,6 +1536,18 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
     },
     InterpreterIntrinsicSpec {
         namespace: "Json",
+        name: "string_at",
+        variant: "JsonStringAt",
+        eval_kind: InterpreterEvalKind::JsonStringAt,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "string_at_or",
+        variant: "JsonStringAtOr",
+        eval_kind: InterpreterEvalKind::JsonStringAtOr,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
         name: "string_field",
         variant: "JsonStringField",
         eval_kind: InterpreterEvalKind::JsonStringField,
@@ -1406,9 +1566,27 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
     },
     InterpreterIntrinsicSpec {
         namespace: "Json",
+        name: "to_string_at",
+        variant: "JsonToStringAt",
+        eval_kind: InterpreterEvalKind::JsonToStringAt,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "to_string_at_or",
+        variant: "JsonToStringAtOr",
+        eval_kind: InterpreterEvalKind::JsonToStringAtOr,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
         name: "value",
         variant: "JsonValue",
         eval_kind: InterpreterEvalKind::JsonValue,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "value_at",
+        variant: "JsonValueAt",
+        eval_kind: InterpreterEvalKind::JsonAt,
     },
     InterpreterIntrinsicSpec {
         namespace: "Json",
@@ -2690,8 +2868,56 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::JsonAsString => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(result_value(json_as_string_value(expect_json(value)?)))\n        }"
         }
+        InterpreterEvalKind::JsonAt => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 1)?;\n            Ok(result_value(json_value_at(\n                expect_json(value)?,\n                &expect_string(path)?,\n            )))\n        }"
+        }
+        InterpreterEvalKind::JsonAtBool => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 1)?;\n            Ok(result_value(\n                json_value_at(expect_json(value)?, &expect_string(path)?)\n                    .and_then(value_json)\n                    .and_then(json_as_bool_value),\n            ))\n        }"
+        }
+        InterpreterEvalKind::JsonAtBoolOr => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 1)?;\n            let fallback = interpreter.eval_named_or_positional_arg(args, \"fallback\", 2)?;\n            let found = json_value_at(expect_json(value)?, &expect_string(path)?)\n                .and_then(value_json)\n                .and_then(json_as_bool_value);\n            Ok(found.unwrap_or(Value::Bool(expect_bool(fallback)?)))\n        }"
+        }
+        InterpreterEvalKind::JsonAtInt => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 1)?;\n            Ok(result_value(\n                json_value_at(expect_json(value)?, &expect_string(path)?)\n                    .and_then(value_json)\n                    .and_then(json_as_int_value),\n            ))\n        }"
+        }
+        InterpreterEvalKind::JsonAtIntOr => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 1)?;\n            let fallback = interpreter.eval_named_or_positional_arg(args, \"fallback\", 2)?;\n            let found = json_value_at(expect_json(value)?, &expect_string(path)?)\n                .and_then(value_json)\n                .and_then(json_as_int_value);\n            Ok(found.unwrap_or(Value::Int(expect_int(fallback)?)))\n        }"
+        }
+        InterpreterEvalKind::JsonAtOptional => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 1)?;\n            Ok(result_value(Ok(json_optional_path(\n                expect_json(value)?,\n                &expect_string(path)?,\n                Value::Json,\n            ))))\n        }"
+        }
+        InterpreterEvalKind::JsonAtOptionalBool => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 1)?;\n            Ok(result_value(json_optional_typed_path(\n                expect_json(value)?,\n                &expect_string(path)?,\n                json_as_bool_value,\n            )))\n        }"
+        }
+        InterpreterEvalKind::JsonAtOptionalInt => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 1)?;\n            Ok(result_value(json_optional_typed_path(\n                expect_json(value)?,\n                &expect_string(path)?,\n                json_as_int_value,\n            )))\n        }"
+        }
+        InterpreterEvalKind::JsonAtOptionalString => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 1)?;\n            Ok(result_value(json_optional_typed_path(\n                expect_json(value)?,\n                &expect_string(path)?,\n                json_as_string_value,\n            )))\n        }"
+        }
+        InterpreterEvalKind::JsonAtOr => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 1)?;\n            let fallback = interpreter.eval_named_or_positional_arg(args, \"fallback\", 2)?;\n            Ok(json_value_at(expect_json(value)?, &expect_string(path)?)\n                .unwrap_or(Value::Json(expect_json(fallback)?)))\n        }"
+        }
+        InterpreterEvalKind::JsonAtString => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 1)?;\n            Ok(result_value(\n                json_value_at(expect_json(value)?, &expect_string(path)?)\n                    .and_then(value_json)\n                    .and_then(json_as_string_value),\n            ))\n        }"
+        }
+        InterpreterEvalKind::JsonAtStringOr => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 1)?;\n            let fallback = interpreter.eval_named_or_positional_arg(args, \"fallback\", 2)?;\n            let fallback = expect_string(fallback)?;\n            let found = json_value_at(expect_json(value)?, &expect_string(path)?)\n                .and_then(value_json)\n                .and_then(json_as_string_value);\n            Ok(found.unwrap_or(Value::String(fallback)))\n        }"
+        }
+        InterpreterEvalKind::JsonAtToString => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 1)?;\n            Ok(result_value(\n                json_value_at(expect_json(value)?, &expect_string(path)?)\n                    .and_then(value_json)\n                    .map(|json| Value::String(json.to_string())),\n            ))\n        }"
+        }
+        InterpreterEvalKind::JsonAtToStringOr => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 1)?;\n            let fallback = interpreter.eval_named_or_positional_arg(args, \"fallback\", 2)?;\n            let fallback = expect_string(fallback)?;\n            let found = json_value_at(expect_json(value)?, &expect_string(path)?)\n                .and_then(value_json)\n                .map(|json| Value::String(json.to_string()));\n            Ok(found.unwrap_or(Value::String(fallback)))\n        }"
+        }
         InterpreterEvalKind::JsonBoolField => {
             "{\n            let name = interpreter.eval_named_or_positional_arg(args, \"name\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            Ok(Value::String(format!(\n                \"{}:{}\",\n                json_quote_string(&expect_string(name)?)?,\n                expect_bool(value)?\n            )))\n        }"
+        }
+        InterpreterEvalKind::JsonBoolAt => {
+            "{\n            let text = interpreter.eval_named_or_positional_arg(args, \"text\", 0)?;\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 1)?;\n            let text = expect_string(text)?;\n            let path = expect_string(path)?;\n            Ok(result_value(\n                parse_json_value(&text)\n                    .and_then(|json| json_value_at(json, &path))\n                    .and_then(value_json)\n                    .and_then(json_as_bool_value),\n            ))\n        }"
+        }
+        InterpreterEvalKind::JsonBoolAtOr => {
+            "{\n            let text = interpreter.eval_named_or_positional_arg(args, \"text\", 0)?;\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 1)?;\n            let fallback = interpreter.eval_named_or_positional_arg(args, \"fallback\", 2)?;\n            let text = expect_string(text)?;\n            let path = expect_string(path)?;\n            let found = parse_json_value(&text)\n                .and_then(|json| json_value_at(json, &path))\n                .and_then(value_json)\n                .and_then(json_as_bool_value);\n            Ok(found.unwrap_or(Value::Bool(expect_bool(fallback)?)))\n        }"
         }
         InterpreterEvalKind::JsonClone => {
             "{\n            interpreter.eval_first_arg(args)\n        }"
@@ -2722,6 +2948,12 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::JsonIntField => {
             "{\n            let name = interpreter.eval_named_or_positional_arg(args, \"name\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            Ok(Value::String(format!(\n                \"{}:{}\",\n                json_quote_string(&expect_string(name)?)?,\n                expect_int(value)?\n            )))\n        }"
+        }
+        InterpreterEvalKind::JsonIntAt => {
+            "{\n            let text = interpreter.eval_named_or_positional_arg(args, \"text\", 0)?;\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 1)?;\n            let text = expect_string(text)?;\n            let path = expect_string(path)?;\n            Ok(result_value(\n                parse_json_value(&text)\n                    .and_then(|json| json_value_at(json, &path))\n                    .and_then(value_json)\n                    .and_then(json_as_int_value),\n            ))\n        }"
+        }
+        InterpreterEvalKind::JsonIntAtOr => {
+            "{\n            let text = interpreter.eval_named_or_positional_arg(args, \"text\", 0)?;\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 1)?;\n            let fallback = interpreter.eval_named_or_positional_arg(args, \"fallback\", 2)?;\n            let text = expect_string(text)?;\n            let path = expect_string(path)?;\n            let found = parse_json_value(&text)\n                .and_then(|json| json_value_at(json, &path))\n                .and_then(value_json)\n                .and_then(json_as_int_value);\n            Ok(found.unwrap_or(Value::Int(expect_int(fallback)?)))\n        }"
         }
         InterpreterEvalKind::JsonIsArray => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(expect_json(value)?.is_array()))\n        }"
@@ -2756,6 +2988,12 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::JsonStringArray => {
             "{\n            let items = interpreter.eval_first_arg(args)?;\n            let quoted = expect_string_list(items)?\n                .into_iter()\n                .map(|item| json_quote_string(&item))\n                .collect::<Result<Vec<_>, _>>()?;\n            Ok(Value::String(format!(\"[{}]\", quoted.join(\",\"))))\n        }"
         }
+        InterpreterEvalKind::JsonStringAt => {
+            "{\n            let text = interpreter.eval_named_or_positional_arg(args, \"text\", 0)?;\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 1)?;\n            let text = expect_string(text)?;\n            let path = expect_string(path)?;\n            Ok(result_value(\n                parse_json_value(&text)\n                    .and_then(|json| json_value_at(json, &path))\n                    .and_then(value_json)\n                    .and_then(json_as_string_value),\n            ))\n        }"
+        }
+        InterpreterEvalKind::JsonStringAtOr => {
+            "{\n            let text = interpreter.eval_named_or_positional_arg(args, \"text\", 0)?;\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 1)?;\n            let fallback = interpreter.eval_named_or_positional_arg(args, \"fallback\", 2)?;\n            let text = expect_string(text)?;\n            let path = expect_string(path)?;\n            let fallback = expect_string(fallback)?;\n            let found = parse_json_value(&text)\n                .and_then(|json| json_value_at(json, &path))\n                .and_then(value_json)\n                .and_then(json_as_string_value);\n            Ok(found.unwrap_or(Value::String(fallback)))\n        }"
+        }
         InterpreterEvalKind::JsonStringField => {
             "{\n            let name = interpreter.eval_named_or_positional_arg(args, \"name\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            Ok(Value::String(format!(\n                \"{}:{}\",\n                json_quote_string(&expect_string(name)?)?,\n                json_quote_string(&expect_string(value)?)?\n            )))\n        }"
         }
@@ -2764,6 +3002,12 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::JsonToString => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(expect_json(value)?.to_string()))\n        }"
+        }
+        InterpreterEvalKind::JsonToStringAt => {
+            "{\n            let text = interpreter.eval_named_or_positional_arg(args, \"text\", 0)?;\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 1)?;\n            let text = expect_string(text)?;\n            let path = expect_string(path)?;\n            Ok(result_value(\n                parse_json_value(&text)\n                    .and_then(|json| json_value_at(json, &path))\n                    .and_then(value_json)\n                    .map(|json| Value::String(json.to_string())),\n            ))\n        }"
+        }
+        InterpreterEvalKind::JsonToStringAtOr => {
+            "{\n            let text = interpreter.eval_named_or_positional_arg(args, \"text\", 0)?;\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 1)?;\n            let fallback = interpreter.eval_named_or_positional_arg(args, \"fallback\", 2)?;\n            let text = expect_string(text)?;\n            let path = expect_string(path)?;\n            let fallback = expect_string(fallback)?;\n            let found = parse_json_value(&text)\n                .and_then(|json| json_value_at(json, &path))\n                .and_then(value_json)\n                .map(|json| Value::String(json.to_string()));\n            Ok(found.unwrap_or(Value::String(fallback)))\n        }"
         }
         InterpreterEvalKind::JsonValue => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Json(value_to_json_literal(value)?))\n        }"
