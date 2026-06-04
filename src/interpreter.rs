@@ -185,6 +185,7 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Deque", "push_back"),
     ("Deque", "push_front"),
     ("Deque", "to_list"),
+    ("Db", "close"),
     ("DbConnection", "open"),
     ("DbConnection", "query"),
     ("DbConnection", "try_open"),
@@ -468,6 +469,7 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Option", "unwrap_or"),
     ("Option", "unwrap_or_else"),
     ("Ord", "compare"),
+    ("OS", "close"),
     ("Path", "extension"),
     ("Path", "file_name"),
     ("Path", "from_string"),
@@ -694,6 +696,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Deque.push_back",
     "runtime:Deque.push_front",
     "runtime:Deque.to_list",
+    "runtime:Db.close",
     "runtime:DbConnection.open",
     "runtime:DbConnection.query",
     "runtime:DbConnection.try_open",
@@ -978,6 +981,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Option.unwrap_or",
     "runtime:Option.unwrap_or_else",
     "runtime:Ord.compare",
+    "runtime:OS.close",
     "runtime:Path.extension",
     "runtime:Path.file_name",
     "runtime:Path.from_string",
@@ -1340,6 +1344,7 @@ impl Value {
     }
 }
 
+#[derive(Debug)]
 enum Control {
     Continue,
     Return(Value),
@@ -1963,9 +1968,9 @@ impl<'a> Interpreter<'a> {
         mark_pool_lease(value, pool_id).map_err(pool_error)
     }
 
-    fn finish_resource_pool_lease(&mut self, value: Value) -> Result<(), EvalError> {
+    fn finish_resource_pool_lease(&mut self, value: Value) -> Result<bool, EvalError> {
         let Some(lease) = split_pool_lease(value)? else {
-            return Ok(());
+            return Ok(false);
         };
         let state = self.pools.get_mut(&lease.pool_id).ok_or_else(|| {
             EvalError::Runtime(format!("unknown ResourcePool id `{}`.", lease.pool_id))
@@ -1976,7 +1981,25 @@ impl<'a> Interpreter<'a> {
         } else {
             state.idle.push(lease.value);
         }
-        Ok(())
+        Ok(true)
+    }
+
+    fn eval_resource_drop(&mut self, value: Value) -> Result<(), EvalError> {
+        let Value::Struct { name, fields } = value else {
+            return Ok(());
+        };
+        let Some(drop_body) = self.hir.resource_drop_body(&name).cloned() else {
+            return Ok(());
+        };
+        self.scopes.push(fields.into_iter().collect());
+        let control = self.eval_block(&drop_body);
+        self.scopes.pop();
+        match control? {
+            Control::Continue => Ok(()),
+            other => Err(EvalError::Runtime(format!(
+                "resource drop for `{name}` ended with unsupported control flow: {other:?}."
+            ))),
+        }
     }
 
     fn eval_block(&mut self, block: &HirBlock) -> Result<Control, EvalError> {
@@ -2058,7 +2081,9 @@ impl<'a> Interpreter<'a> {
                     .push(HashMap::from([(binding.clone(), resource)]));
                 let control = self.eval_block(body)?;
                 let leased = self.lookup(binding)?;
-                self.finish_resource_pool_lease(leased)?;
+                if !self.finish_resource_pool_lease(leased.clone())? {
+                    self.eval_resource_drop(leased)?;
+                }
                 self.scopes.pop();
                 Ok(control)
             }
@@ -2419,6 +2444,11 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Bool(expect_list(value)?.is_empty()))
             }
             ("Deque", "to_list") => self.eval_first_arg(args),
+            ("Db", "close") => {
+                let fd = self.eval_named_or_positional_arg(args, "fd", 0)?;
+                let _ = expect_int(fd)?;
+                Ok(Value::Unit)
+            }
             ("DbConnection", "open") => {
                 let url = self.eval_named_or_positional_arg(args, "url", 0)?;
                 Ok(db_connection_value(expect_string(url)?, Vec::new()))
@@ -2888,6 +2918,11 @@ impl<'a> Interpreter<'a> {
                     Ordering::Equal => 0,
                     Ordering::Greater => 1,
                 }))
+            }
+            ("OS", "close") => {
+                let fd = self.eval_named_or_positional_arg(args, "fd", 0)?;
+                let _ = expect_int(fd)?;
+                Ok(Value::Unit)
             }
             ("Deadline", "after_ms") => {
                 let ms = self.eval_named_or_positional_arg(args, "ms", 0)?;

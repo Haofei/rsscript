@@ -449,6 +449,7 @@ pub struct Hir {
     returns: Vec<HirReturn>,
     feature_uses: Vec<HirFeatureUse>,
     function_bodies: HashMap<String, HirFunctionBody>,
+    resource_drop_bodies: HashMap<String, HirBlock>,
     protocol_impls: Vec<HirProtocolImpl>,
 }
 
@@ -501,6 +502,7 @@ impl Hir {
         hir.extend_protocol_impls(&program.protocol_impls, true);
         hir.collect_item_signatures(program, &mut type_symbols, &mut callable_symbols);
         hir.normalize_class_typed_handle_fields();
+        hir.collect_resource_drop_bodies(program);
         hir.collect_body_facts(program);
         hir
     }
@@ -618,6 +620,33 @@ impl Hir {
         }
     }
 
+    fn collect_resource_drop_bodies(&mut self, program: &SyntaxProgram) {
+        for item in &program.items {
+            let Item::Type(type_decl) = item else {
+                continue;
+            };
+            if type_decl.kind != TypeKind::Resource {
+                continue;
+            }
+            let Some(drop_body) = &type_decl.drop_body else {
+                continue;
+            };
+            let mut value_types = type_decl
+                .fields
+                .iter()
+                .map(|field| (field.name.clone(), type_ref_name(&field.ty)))
+                .collect::<HashMap<_, _>>();
+            let body = lower_hir_block(
+                self,
+                &format!("{}.drop", type_decl.name),
+                drop_body,
+                &mut value_types,
+            );
+            self.resource_drop_bodies
+                .insert(type_decl.name.clone(), body);
+        }
+    }
+
     pub fn resolve_function(&self, namespace: Option<&str>, name: &str) -> Option<&FunctionSig> {
         if let Some(namespace) = namespace
             && let Some(signature) = self.signatures.get(&qualified_key(namespace, name))
@@ -672,6 +701,10 @@ impl Hir {
 
     pub fn function_body(&self, function_name: &str) -> Option<&HirFunctionBody> {
         self.function_bodies.get(function_name)
+    }
+
+    pub fn resource_drop_body(&self, type_name: &str) -> Option<&HirBlock> {
+        self.resource_drop_bodies.get(type_root_name(type_name))
     }
 
     pub fn feature_uses(&self) -> &[HirFeatureUse] {

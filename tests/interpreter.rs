@@ -361,7 +361,8 @@ fn eval_matches_backend_for_declared_host_boundary() {
 // parity: runtime:Deque.clear runtime:Deque.is_empty runtime:Deque.len runtime:Deque.new
 // parity: runtime:Deque.pop_back runtime:Deque.pop_front runtime:Deque.push_back
 // parity: runtime:Deque.push_front runtime:Deque.to_list
-// parity: runtime:DbConnection.open runtime:DbConnection.query runtime:DbConnection.try_open
+// parity: runtime:Db.close runtime:DbConnection.open runtime:DbConnection.query
+// parity: runtime:DbConnection.try_open
 // parity: runtime:Directory.create runtime:Directory.create_all runtime:Directory.create_dir_all
 // parity: runtime:Directory.exists runtime:Directory.is_dir runtime:Directory.is_file
 // parity: runtime:Directory.list_files runtime:Directory.list_paths runtime:Directory.metadata
@@ -491,7 +492,7 @@ fn eval_matches_backend_for_declared_host_boundary() {
 // parity: runtime:Option.is_some runtime:Option.map runtime:Option.ok_or
 // parity: runtime:Option.or runtime:Option.unwrap_or runtime:Option.unwrap_or_else
 // parity: runtime:Result.and_then runtime:Result.map runtime:Result.map_error
-// parity: runtime:Ord.compare
+// parity: runtime:Ord.compare runtime:OS.close
 // parity: runtime:Request.new runtime:Request.path
 // parity: runtime:Response.body runtime:Response.ok runtime:Response.status
 // parity: runtime:ResourcePool.discard runtime:ResourcePool.stats
@@ -1306,6 +1307,50 @@ fn main() -> Result<Unit, DbError> {
         "parity-db-connection.rss",
         "rsscript_parity_db_connection",
         source,
+    );
+}
+
+#[test]
+fn parity_resource_drop_cleanup_intrinsics() {
+    let source = r#"
+features: local
+
+resource FileHandle {
+    fd: Int
+
+    drop {
+        Log.write(message: read "file-drop")
+        OS.close(fd: fd)
+    }
+}
+
+resource DbHandle {
+    fd: Int
+
+    drop {
+        Log.write(message: read "db-drop")
+        Db.close(fd: fd)
+    }
+}
+
+fn main() -> Unit {
+    with FileHandle(fd: 0) as file {
+        Log.write(message: read "file-body")
+        Log.write(message: read String.from_int(value: file.fd))
+    }
+    with DbHandle(fd: 0) as db {
+        Log.write(message: read "db-body")
+        Log.write(message: read String.from_int(value: db.fd))
+    }
+    return Unit
+}
+"#;
+    assert_interpreter_matches_backend_with_distinct_args_allowing_unused_mut_warning(
+        "parity-resource-drop-cleanup.rss",
+        "rsscript_parity_resource_drop_cleanup",
+        source,
+        &[],
+        &[],
     );
 }
 
