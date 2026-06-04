@@ -133,6 +133,7 @@ const INTERPRETER_SUPPORTED_HIR_EXPR_VARIANTS: &[&str] = &[
     "Call",
     "Effect",
     "Manage",
+    "Spawn",
     "Await",
     "Try",
     "Closure",
@@ -645,6 +646,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "hir_expr:Match",
     "hir_expr:Number",
     "hir_expr:ObjectLiteral",
+    "hir_expr:Spawn",
     "hir_expr:String",
     "hir_expr:Try",
     "hir_stmt:Assign",
@@ -2311,6 +2313,7 @@ impl<'a> Interpreter<'a> {
             HirExpr::Manage { value, .. } => Ok(Value::Managed(Rc::new(RefCell::new(
                 self.eval_expr(value)?,
             )))),
+            HirExpr::Spawn { value, .. } => self.eval_expr(value),
             HirExpr::Await { value, .. } => self.eval_expr(value),
             HirExpr::Closure { params, body, .. } => Ok(Value::Closure {
                 params: params.clone(),

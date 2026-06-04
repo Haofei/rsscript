@@ -145,6 +145,39 @@ fn main() -> Result<Unit, TimerError> {
 }
 
 #[test]
+fn parity_task_group_async_let_runs_spawn_handles() {
+    let source = r#"
+features: async
+
+async fn fetch_user() -> Result<String, String> {
+    return Ok("user")
+}
+
+async fn fetch_profile() -> Result<String, String> {
+    return Ok("profile")
+}
+
+fn main() -> Result<Unit, String> {
+    task_group {
+        async let user = fetch_user()
+        async let profile = fetch_profile()
+
+        let u = await user?
+        let p = await profile?
+        Log.write(message: read u)
+        Log.write(message: read p)
+    }
+    return Ok(Unit)
+}
+"#;
+    assert_interpreter_matches_backend(
+        "parity-task-group.rss",
+        "rsscript_parity_task_group",
+        source,
+    );
+}
+
+#[test]
 fn parity_async_file_intrinsics() {
     let source = r#"
 features: async, native, local
@@ -550,7 +583,7 @@ path = "src/lib.rs"
 // parity: hir_stmt:If hir_stmt:Let hir_stmt:Loop hir_stmt:Match hir_stmt:Return hir_stmt:Select hir_stmt:With
 // parity: hir_expr:ArrayLiteral hir_expr:Await hir_expr:Binary hir_expr:Call hir_expr:Effect hir_expr:Field
 // parity: hir_expr:Closure hir_expr:Ident hir_expr:Index hir_expr:Manage hir_expr:MapLiteral hir_expr:Match
-// parity: hir_expr:Number hir_expr:ObjectLiteral hir_expr:String hir_expr:Try
+// parity: hir_expr:Number hir_expr:ObjectLiteral hir_expr:Spawn hir_expr:String hir_expr:Try
 // parity: value:Bool value:Bytes value:Int value:Json value:List value:Managed
 // parity: value:Char value:Closure value:Map value:String value:Struct value:Unit value:Variant
 // parity: runtime:Args.all runtime:Args.count runtime:Args.get runtime:Args.get_or_default
