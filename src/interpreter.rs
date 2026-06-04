@@ -4137,42 +4137,6 @@ impl<'a> Interpreter<'a> {
                 }
                 Ok(Value::Unit)
             }
-            ("Json", "parse_file") => {
-                let path = self.eval_named_or_positional_arg(args, "path", 0)?;
-                Ok(json_result(
-                    std::fs::read_to_string(expect_string(path)?)
-                        .map_err(|error| error.to_string())
-                        .and_then(|text| {
-                            serde_json::from_str(&text).map_err(|error| error.to_string())
-                        }),
-                ))
-            }
-            ("Toml", "parse_file") => {
-                let path = self.eval_named_or_positional_arg(args, "path", 0)?;
-                Ok(json_result(
-                    std::fs::read_to_string(expect_string(path)?)
-                        .map_err(|error| error.to_string())
-                        .and_then(|text| {
-                            text.parse::<toml::Value>()
-                                .map_err(|error| error.to_string())
-                        })
-                        .and_then(|value| {
-                            serde_json::to_value(value).map_err(|error| error.to_string())
-                        }),
-                ))
-            }
-            ("Yaml", "parse") => {
-                let text = self.eval_named_or_positional_arg(args, "text", 0)?;
-                Ok(yaml_parse_result(&expect_string(text)?))
-            }
-            ("Yaml", "parse_file") => {
-                let path = self.eval_named_or_positional_arg(args, "path", 0)?;
-                Ok(json_result(
-                    std::fs::read_to_string(expect_string(path)?)
-                        .map_err(|error| error.to_string())
-                    .and_then(|text| yaml_parse_json(&text)),
-                ))
-            }
             ("Json", "array_count_where") => {
                 let value = self.eval_named_or_positional_arg(args, "value", 0)?;
                 let predicate = self.eval_named_or_positional_arg(args, "predicate", 1)?;

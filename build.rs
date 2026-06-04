@@ -287,6 +287,7 @@ enum InterpreterEvalKind {
     JsonObjectKeys,
     JsonObjectLen,
     JsonParse,
+    JsonParseFile,
     JsonQuoteString,
     JsonRawField,
     JsonStringArray,
@@ -412,10 +413,13 @@ enum InterpreterEvalKind {
     StringToPath,
     StringToUrl,
     TcpErrorMessage,
+    TomlParseFile,
     UrlFromString,
     UrlToString,
     WebSocketErrorMessage,
     WorkspaceResolve,
+    YamlParse,
+    YamlParseFile,
     LogError,
     LogErrorJson,
     LogTrace,
@@ -1518,6 +1522,12 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
     },
     InterpreterIntrinsicSpec {
         namespace: "Json",
+        name: "parse_file",
+        variant: "JsonParseFile",
+        eval_kind: InterpreterEvalKind::JsonParseFile,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
         name: "quote_string",
         variant: "JsonQuoteString",
         eval_kind: InterpreterEvalKind::JsonQuoteString,
@@ -2279,6 +2289,12 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::TcpErrorMessage,
     },
     InterpreterIntrinsicSpec {
+        namespace: "Toml",
+        name: "parse_file",
+        variant: "TomlParseFile",
+        eval_kind: InterpreterEvalKind::TomlParseFile,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "Url",
         name: "from_string",
         variant: "UrlFromString",
@@ -2301,6 +2317,18 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "resolve",
         variant: "WorkspaceResolve",
         eval_kind: InterpreterEvalKind::WorkspaceResolve,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Yaml",
+        name: "parse",
+        variant: "YamlParse",
+        eval_kind: InterpreterEvalKind::YamlParse,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Yaml",
+        name: "parse_file",
+        variant: "YamlParseFile",
+        eval_kind: InterpreterEvalKind::YamlParseFile,
     },
     InterpreterIntrinsicSpec {
         namespace: "Log",
@@ -2979,6 +3007,9 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::JsonParse => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(result_value(\n                serde_json::from_str(&expect_string(value)?)\n                    .map(Value::Json)\n                    .map_err(|error| json_error(error.to_string())),\n            ))\n        }"
         }
+        InterpreterEvalKind::JsonParseFile => {
+            "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            Ok(json_result(\n                std::fs::read_to_string(expect_string(path)?)\n                    .map_err(|error| error.to_string())\n                    .and_then(|text| {\n                        serde_json::from_str(&text).map_err(|error| error.to_string())\n                    }),\n            ))\n        }"
+        }
         InterpreterEvalKind::JsonQuoteString => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            serde_json::to_string(&expect_string(value)?)\n                .map(Value::String)\n                .map_err(|error| EvalError::Runtime(error.to_string()))\n        }"
         }
@@ -3341,6 +3372,15 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::TcpErrorMessage | InterpreterEvalKind::WebSocketErrorMessage => {
             "{\n            let error = interpreter.eval_named_or_positional_arg(args, \"error\", 0)?;\n            read_field(&error, \"message\")\n        }"
+        }
+        InterpreterEvalKind::TomlParseFile => {
+            "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            Ok(json_result(\n                std::fs::read_to_string(expect_string(path)?)\n                    .map_err(|error| error.to_string())\n                    .and_then(|text| {\n                        text.parse::<toml::Value>()\n                            .map_err(|error| error.to_string())\n                    })\n                    .and_then(|value| {\n                        serde_json::to_value(value).map_err(|error| error.to_string())\n                    }),\n            ))\n        }"
+        }
+        InterpreterEvalKind::YamlParse => {
+            "{\n            let text = interpreter.eval_named_or_positional_arg(args, \"text\", 0)?;\n            Ok(yaml_parse_result(&expect_string(text)?))\n        }"
+        }
+        InterpreterEvalKind::YamlParseFile => {
+            "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            Ok(json_result(\n                std::fs::read_to_string(expect_string(path)?)\n                    .map_err(|error| error.to_string())\n                    .and_then(|text| yaml_parse_json(&text)),\n            ))\n        }"
         }
         InterpreterEvalKind::LogError => {
             "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"message\", 0)?;\n            interpreter.stderr.push_str(&expect_string(value)?);\n            interpreter.stderr.push('\\n');\n            Ok(Value::Unit)\n        }"
