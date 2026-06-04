@@ -326,6 +326,7 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Regex.captures runtime:Regex.compile runtime:Regex.find
 // parity: runtime:Regex.is_match runtime:Regex.replace_all runtime:Regex.split
 // parity: runtime:RegexError.message
+// parity: runtime:Receiver.close
 // parity: runtime:Path.extension runtime:Path.file_name runtime:Path.from_string
 // parity: runtime:Path.exists runtime:Path.is_absolute runtime:Path.is_dir runtime:Path.is_file
 // parity: runtime:Path.join runtime:Path.list_files runtime:Path.list_paths
@@ -353,6 +354,7 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Set.clear runtime:Set.contains runtime:Set.difference runtime:Set.insert
 // parity: runtime:Set.intersection runtime:Set.is_empty runtime:Set.is_subset runtime:Set.len
 // parity: runtime:Set.new runtime:Set.remove runtime:Set.to_list runtime:Set.union
+// parity: runtime:Sender.close
 // parity: runtime:SortedSet.clear runtime:SortedSet.contains runtime:SortedSet.insert
 // parity: runtime:SortedSet.is_empty runtime:SortedSet.len runtime:SortedSet.new
 // parity: runtime:SortedSet.remove runtime:SortedSet.to_list
@@ -374,6 +376,7 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:StringView.contains runtime:StringView.is_empty runtime:StringView.len
 // parity: runtime:StringView.slice runtime:StringView.starts_with runtime:StringView.to_string
 // parity: runtime:StringBuilder.finish runtime:StringBuilder.new runtime:StringBuilder.push
+// parity: runtime:Stream.collect_list runtime:Stream.from_list
 // parity: runtime:GlobalConfig.new runtime:GlobalConfig.replace runtime:GlobalConfig.rule_count
 // parity: runtime:TempDir.new runtime:TempDir.new_in runtime:TempDir.path
 // parity: runtime:Toml.parse_file
@@ -2504,10 +2507,12 @@ fn main() -> Result<Unit, ChannelError> {
     }
 
     let mut channel: Channel<Int> = Channel.bounded<Int>(capacity: 1)?
-    let sender: Sender<Int> = Channel.sender<Int>(channel: read channel)
-    let _ = sender
-    let receiver: Receiver<Int> = Channel.receiver<Int>(channel: mut channel)?
-    let _ = receiver
+    let mut sender: Sender<Int> = Channel.sender<Int>(channel: read channel)
+    Sender.close<Int>(sender: mut sender)
+    Log.write(message: read "sender-closed")
+    let mut receiver: Receiver<Int> = Channel.receiver<Int>(channel: mut channel)?
+    Receiver.close<Int>(receiver: mut receiver)
+    Log.write(message: read "receiver-closed")
     match Channel.receiver<Int>(channel: mut channel) {
         Ok(receiver) => {
             let _ = receiver
@@ -2517,13 +2522,22 @@ fn main() -> Result<Unit, ChannelError> {
             Log.write(message: read ChannelError.message(error: read error))
         }
     }
+
+    local items = List<String>.new()
+    List.push<String>(list: mut items, value: read "one")
+    List.push<String>(list: mut items, value: read "two")
+    let stream: Stream<String> = Stream.from_list<String>(items: take items)
+    let collected = Stream.collect_list<String>(stream: read stream)?
+    Log.write(message: read List.join<String>(list: read collected, separator: read ","))
     return Ok(Unit)
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_interpreter_matches_backend_with_distinct_args_allowing_unused_mut_warning(
         "parity-channel-sync.rss",
         "rsscript_parity_channel_sync",
         source,
+        &[],
+        &[],
     );
 }
 

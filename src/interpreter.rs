@@ -389,6 +389,7 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Regex", "replace_all"),
     ("Regex", "split"),
     ("RegexError", "message"),
+    ("Receiver", "close"),
     ("Request", "new"),
     ("Request", "path"),
     ("Response", "body"),
@@ -447,6 +448,7 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Set", "remove"),
     ("Set", "to_list"),
     ("Set", "union"),
+    ("Sender", "close"),
     ("SortedSet", "clear"),
     ("SortedSet", "contains"),
     ("SortedSet", "insert"),
@@ -474,6 +476,8 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("StringBuilder", "finish"),
     ("StringBuilder", "new"),
     ("StringBuilder", "push"),
+    ("Stream", "collect_list"),
+    ("Stream", "from_list"),
     ("TempDir", "new"),
     ("TempDir", "new_in"),
     ("TempDir", "path"),
@@ -796,6 +800,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Regex.replace_all",
     "runtime:Regex.split",
     "runtime:RegexError.message",
+    "runtime:Receiver.close",
     "runtime:Request.new",
     "runtime:Request.path",
     "runtime:Response.body",
@@ -854,6 +859,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Set.remove",
     "runtime:Set.to_list",
     "runtime:Set.union",
+    "runtime:Sender.close",
     "runtime:SortedSet.clear",
     "runtime:SortedSet.contains",
     "runtime:SortedSet.insert",
@@ -914,6 +920,8 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:StringBuilder.finish",
     "runtime:StringBuilder.new",
     "runtime:StringBuilder.push",
+    "runtime:Stream.collect_list",
+    "runtime:Stream.from_list",
     "runtime:GlobalConfig.new",
     "runtime:GlobalConfig.replace",
     "runtime:GlobalConfig.rule_count",
@@ -2213,7 +2221,7 @@ impl<'a> Interpreter<'a> {
             ("Channel", "sender") => {
                 let channel = self.eval_named_or_positional_arg(args, "channel", 0)?;
                 let _ = expect_channel(channel)?;
-                Ok(sender_value())
+                Ok(sender_value(false))
             }
             ("Channel", "receiver") => {
                 let channel_name = self.mut_arg_local_name(args, "channel", 0)?;
@@ -2223,12 +2231,24 @@ impl<'a> Interpreter<'a> {
                 } else {
                     channel.receiver_taken = true;
                     self.assign(channel_name, channel.to_value())?;
-                    Ok(receiver_value())
+                    Ok(receiver_value(false))
                 }))
             }
             ("ChannelError", "message") => {
                 let value = self.eval_first_arg(args)?;
                 read_field(&value, "message")
+            }
+            ("Sender", "close") => {
+                let sender_name = self.mut_arg_local_name(args, "sender", 0)?;
+                let _ = expect_sender(self.lookup(sender_name)?)?;
+                self.assign(sender_name, sender_value(true))?;
+                Ok(Value::Unit)
+            }
+            ("Receiver", "close") => {
+                let receiver_name = self.mut_arg_local_name(args, "receiver", 0)?;
+                let _ = expect_receiver(self.lookup(receiver_name)?)?;
+                self.assign(receiver_name, receiver_value(true))?;
+                Ok(Value::Unit)
             }
             ("Cache", "insert") => {
                 let cache_name = self.mut_arg_local_name(args, "cache", 0)?;
@@ -2590,6 +2610,14 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Unit)
             }
             ("StringBuilder", "finish") => self.eval_first_arg(args),
+            ("Stream", "from_list") => {
+                let items = self.eval_named_or_positional_arg(args, "items", 0)?;
+                Ok(stream_value(expect_list(items)?))
+            }
+            ("Stream", "collect_list") => {
+                let stream = self.eval_named_or_positional_arg(args, "stream", 0)?;
+                Ok(result_value(Ok(Value::List(expect_stream_items(stream)?))))
+            }
             ("Map", "new") => Ok(Value::Map(Vec::new())),
             ("Map", "insert") => {
                 let map_name = self.mut_arg_local_name(args, "map", 0)?;
@@ -5305,17 +5333,24 @@ fn channel_value(capacity: i64, receiver_taken: bool) -> Value {
     }
 }
 
-fn sender_value() -> Value {
+fn sender_value(closed: bool) -> Value {
     Value::Struct {
         name: "Sender".to_string(),
-        fields: BTreeMap::new(),
+        fields: BTreeMap::from([("closed".to_string(), Value::Bool(closed))]),
     }
 }
 
-fn receiver_value() -> Value {
+fn receiver_value(closed: bool) -> Value {
     Value::Struct {
         name: "Receiver".to_string(),
-        fields: BTreeMap::new(),
+        fields: BTreeMap::from([("closed".to_string(), Value::Bool(closed))]),
+    }
+}
+
+fn stream_value(items: Vec<Value>) -> Value {
+    Value::Struct {
+        name: "Stream".to_string(),
+        fields: BTreeMap::from([("items".to_string(), Value::List(items))]),
     }
 }
 
@@ -5531,6 +5566,45 @@ fn expect_channel(value: Value) -> Result<ChannelState, EvalError> {
         }
         other => Err(EvalError::Runtime(format!(
             "expected Channel, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn expect_sender(value: Value) -> Result<bool, EvalError> {
+    match value {
+        Value::Struct { name, mut fields } if name == "Sender" => fields
+            .remove("closed")
+            .ok_or_else(|| EvalError::Runtime("Sender value is missing closed.".to_string()))
+            .and_then(expect_bool),
+        other => Err(EvalError::Runtime(format!(
+            "expected Sender, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn expect_receiver(value: Value) -> Result<bool, EvalError> {
+    match value {
+        Value::Struct { name, mut fields } if name == "Receiver" => fields
+            .remove("closed")
+            .ok_or_else(|| EvalError::Runtime("Receiver value is missing closed.".to_string()))
+            .and_then(expect_bool),
+        other => Err(EvalError::Runtime(format!(
+            "expected Receiver, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn expect_stream_items(value: Value) -> Result<Vec<Value>, EvalError> {
+    match value {
+        Value::Struct { name, mut fields } if name == "Stream" => fields
+            .remove("items")
+            .ok_or_else(|| EvalError::Runtime("Stream value is missing items.".to_string()))
+            .and_then(expect_list),
+        other => Err(EvalError::Runtime(format!(
+            "expected Stream, got `{}`.",
             other.display()
         ))),
     }
