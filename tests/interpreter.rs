@@ -423,6 +423,8 @@ fn eval_matches_backend_for_declared_host_boundary() {
 // parity: runtime:Http.send_async runtime:HttpError.message
 // parity: runtime:HttpRequest.json runtime:HttpRequest.with_header
 // parity: runtime:HttpRequest.with_retry runtime:HttpRequest.with_timeout
+// parity: runtime:HttpResponse.is_success runtime:HttpResponse.lines
+// parity: runtime:HttpResponse.status runtime:HttpResponse.text
 // parity: runtime:Image.inspect runtime:Image.load runtime:Image.normalize runtime:Image.resize
 // parity: runtime:Image.save runtime:Image.sharpen runtime:ImageCache.len runtime:ImageCache.new
 // parity: runtime:ImageCache.store
@@ -562,6 +564,28 @@ fn spawn_tcp_echo_server() -> (String, thread::JoinHandle<()>) {
             .expect("server should read ping");
         assert_eq!(&buffer, b"ping");
         socket.write_all(b"pong").expect("server should write pong");
+    });
+    (port, handle)
+}
+
+fn spawn_http_response_server() -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
+    let port = listener
+        .local_addr()
+        .expect("test listener should have an address")
+        .port()
+        .to_string();
+    let handle = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().expect("client should connect");
+        let mut request = [0; 1024];
+        let read = socket
+            .read(&mut request)
+            .expect("server should read request");
+        let request = String::from_utf8_lossy(&request[..read]);
+        assert!(request.starts_with("GET /health HTTP/1.1"), "{request}");
+        socket
+            .write_all(b"HTTP/1.1 201 Created\r\nContent-Length: 11\r\n\r\nalpha\nbeta\n")
+            .expect("server should write response");
     });
     (port, handle)
 }
@@ -2023,6 +2047,48 @@ async fn main() -> Unit {
         "rsscript_parity_http_async",
         source,
     );
+}
+
+#[test]
+fn parity_http_response_intrinsics() {
+    run_with_large_stack(|| {
+        let (interpreter_port, interpreter_server) = spawn_http_response_server();
+        let (backend_port, backend_server) = spawn_http_response_server();
+        let interpreter_url = format!("http://127.0.0.1:{interpreter_port}/health");
+        let backend_url = format!("http://127.0.0.1:{backend_port}/health");
+        let source = r#"
+features: async, native, local
+
+fn url_arg() -> Url {
+    return Url.from_string(value: read Args.get_or_default(index: 0, default: read "http://127.0.0.1:1/health"))
+}
+
+async fn main() -> Result<Unit, HttpError> {
+    let response = await Http.get_async(url: read url_arg())?
+    Log.write(message: read String.from_int(value: HttpResponse.status(response: read response)))
+    Log.write(message: read HttpResponse.text(response: read response))
+    let lines = HttpResponse.lines(response: read response)
+    Log.write(message: read String.from_int(value: List.len<String>(list: read lines)))
+    if HttpResponse.is_success(response: read response) {
+        Log.write(message: read "success")
+    }
+    return Ok(Unit)
+}
+"#;
+        assert_interpreter_matches_backend_with_distinct_args_allowing_unused_mut_warning(
+            "parity-http-response.rss",
+            "rsscript_parity_http_response",
+            source,
+            &[interpreter_url.as_str()],
+            &[backend_url.as_str()],
+        );
+        interpreter_server
+            .join()
+            .expect("interpreter http server should finish");
+        backend_server
+            .join()
+            .expect("backend http server should finish");
+    });
 }
 
 #[test]

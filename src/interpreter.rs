@@ -358,6 +358,10 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("HttpRequest", "with_header"),
     ("HttpRequest", "with_retry"),
     ("HttpRequest", "with_timeout"),
+    ("HttpResponse", "is_success"),
+    ("HttpResponse", "lines"),
+    ("HttpResponse", "status"),
+    ("HttpResponse", "text"),
     ("Image", "inspect"),
     ("Image", "load"),
     ("Image", "normalize"),
@@ -860,6 +864,10 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:HttpRequest.with_header",
     "runtime:HttpRequest.with_retry",
     "runtime:HttpRequest.with_timeout",
+    "runtime:HttpResponse.is_success",
+    "runtime:HttpResponse.lines",
+    "runtime:HttpResponse.status",
+    "runtime:HttpResponse.text",
     "runtime:Image.inspect",
     "runtime:Image.load",
     "runtime:Image.normalize",
@@ -1700,6 +1708,36 @@ impl<'a> Interpreter<'a> {
         self.tcp_stream_mut(id)?
             .shutdown(Shutdown::Both)
             .map_err(|error| format!("TCP shutdown failed: {error}"))
+    }
+
+    fn http_get_local(&self, url: &str) -> Result<Value, String> {
+        let Some(rest) = url.strip_prefix("http://") else {
+            return Err(format!(
+                "HTTP interpreter only supports local http URLs, got `{url}`"
+            ));
+        };
+        let (host_port, path) = match rest.split_once('/') {
+            Some((host_port, path)) => (host_port, format!("/{path}")),
+            None => (rest, "/".to_string()),
+        };
+        if host_port.is_empty() {
+            return Err(format!("HTTP URL is missing a host: `{url}`"));
+        }
+        let mut stream = TcpStream::connect(host_port)
+            .map_err(|error| format!("HTTP connect to `{host_port}` failed: {error}"))?;
+        let timeout = Some(std::time::Duration::from_secs(5));
+        let _ = stream.set_read_timeout(timeout);
+        let _ = stream.set_write_timeout(timeout);
+        let request =
+            format!("GET {path} HTTP/1.1\r\nHost: {host_port}\r\nConnection: close\r\n\r\n");
+        stream
+            .write_all(request.as_bytes())
+            .map_err(|error| format!("HTTP request write failed for `{url}`: {error}"))?;
+        let mut response = Vec::new();
+        stream
+            .read_to_end(&mut response)
+            .map_err(|error| format!("HTTP response read failed for `{url}`: {error}"))?;
+        parse_http_response(&response)
     }
 
     fn eval_resource_pool_new(
@@ -3881,10 +3919,8 @@ impl<'a> Interpreter<'a> {
             }
             ("Http", "get_async") => {
                 let url = self.eval_named_or_positional_arg(args, "url", 0)?;
-                Ok(value_err(http_error(format!(
-                    "HTTP async provider is not configured for GET {}",
-                    expect_string(url)?
-                ))))
+                let url = expect_string(url)?;
+                Ok(result_value(self.http_get_local(&url).map_err(http_error)))
             }
             ("Http", "get_timeout_async") => {
                 let url = self.eval_named_or_positional_arg(args, "url", 0)?;
@@ -3990,6 +4026,30 @@ impl<'a> Interpreter<'a> {
             ("HttpError", "message") => {
                 let error = self.eval_named_or_positional_arg(args, "error", 0)?;
                 read_field(&error, "message")
+            }
+            ("HttpResponse", "status") => {
+                let response = self.eval_named_or_positional_arg(args, "response", 0)?;
+                let (status, _) = expect_http_response(response)?;
+                Ok(Value::Int(status))
+            }
+            ("HttpResponse", "text") => {
+                let response = self.eval_named_or_positional_arg(args, "response", 0)?;
+                let (_, body) = expect_http_response(response)?;
+                Ok(Value::String(body))
+            }
+            ("HttpResponse", "lines") => {
+                let response = self.eval_named_or_positional_arg(args, "response", 0)?;
+                let (_, body) = expect_http_response(response)?;
+                Ok(Value::List(
+                    body.lines()
+                        .map(|line| Value::String(line.to_string()))
+                        .collect(),
+                ))
+            }
+            ("HttpResponse", "is_success") => {
+                let response = self.eval_named_or_positional_arg(args, "response", 0)?;
+                let (status, _) = expect_http_response(response)?;
+                Ok(Value::Bool((200..300).contains(&status)))
             }
             ("HttpRequest", "json") => {
                 let url = self.eval_named_or_positional_arg(args, "url", 0)?;
@@ -6786,6 +6846,36 @@ fn http_error(message: impl Into<String>) -> Value {
     }
 }
 
+fn http_response_value(status: i64, body: impl Into<String>) -> Value {
+    Value::Struct {
+        name: "HttpResponse".to_string(),
+        fields: BTreeMap::from([
+            ("status".to_string(), Value::Int(status)),
+            ("body".to_string(), Value::String(body.into())),
+        ]),
+    }
+}
+
+fn parse_http_response(response: &[u8]) -> Result<Value, String> {
+    let header_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or_else(|| "HTTP response is missing header terminator".to_string())?;
+    let headers = String::from_utf8_lossy(&response[..header_end]);
+    let status_line = headers
+        .lines()
+        .next()
+        .ok_or_else(|| "HTTP response is missing status line".to_string())?;
+    let status = status_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or_else(|| format!("HTTP response status line is invalid: `{status_line}`"))?
+        .parse::<i64>()
+        .map_err(|error| format!("HTTP response status is invalid: {error}"))?;
+    let body = String::from_utf8_lossy(&response[header_end + 4..]).to_string();
+    Ok(http_response_value(status, body))
+}
+
 fn tcp_error(message: impl Into<String>) -> Value {
     Value::Struct {
         name: "TcpError".to_string(),
@@ -7729,6 +7819,24 @@ fn expect_http_request(value: Value) -> Result<HttpRequestState, EvalError> {
         }),
         other => Err(EvalError::Runtime(format!(
             "expected HttpRequest, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn expect_http_response(value: Value) -> Result<(i64, String), EvalError> {
+    match value {
+        Value::Struct { name, mut fields } if name == "HttpResponse" => {
+            let status = fields.remove("status").ok_or_else(|| {
+                EvalError::Runtime("HttpResponse value is missing status.".to_string())
+            })?;
+            let body = fields.remove("body").ok_or_else(|| {
+                EvalError::Runtime("HttpResponse value is missing body.".to_string())
+            })?;
+            Ok((expect_int(status)?, expect_string(body)?))
+        }
+        other => Err(EvalError::Runtime(format!(
+            "expected HttpResponse, got `{}`.",
             other.display()
         ))),
     }
