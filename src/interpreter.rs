@@ -1,5 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::io::{Read, Write};
+use std::net::{Shutdown, TcpStream};
 use std::path::{Component, Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -570,6 +572,10 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Timer", "sleep_until"),
     ("Tcp", "connect"),
     ("TcpError", "message"),
+    ("TcpStream", "read"),
+    ("TcpStream", "shutdown"),
+    ("TcpStream", "write"),
+    ("TcpStream", "write_all"),
     ("Url", "from_string"),
     ("Url", "to_string"),
     ("WebSocket", "connect"),
@@ -1108,6 +1114,10 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Timer.sleep_until",
     "runtime:Tcp.connect",
     "runtime:TcpError.message",
+    "runtime:TcpStream.read",
+    "runtime:TcpStream.shutdown",
+    "runtime:TcpStream.write",
+    "runtime:TcpStream.write_all",
     "runtime:Toml.parse_file",
     "runtime:Url.from_string",
     "runtime:Url.to_string",
@@ -1369,6 +1379,8 @@ struct Interpreter<'a> {
     channels: HashMap<i64, InterpreterChannel>,
     next_stream_id: i64,
     streams: HashMap<i64, InterpreterStream>,
+    next_tcp_stream_id: i64,
+    tcp_streams: HashMap<i64, TcpStream>,
     next_pool_id: i64,
     pools: HashMap<i64, InterpreterResourcePool>,
 }
@@ -1389,6 +1401,8 @@ impl<'a> Interpreter<'a> {
             channels: HashMap::new(),
             next_stream_id: 0,
             streams: HashMap::new(),
+            next_tcp_stream_id: 0,
+            tcp_streams: HashMap::new(),
             next_pool_id: 0,
             pools: HashMap::new(),
         }
@@ -1633,6 +1647,59 @@ impl<'a> Interpreter<'a> {
             return Ok(Ok(state.items.drain(..).collect()));
         }
         Ok(Ok(stream.items))
+    }
+
+    fn tcp_connect(&mut self, host: &str, port: i64) -> Result<Value, String> {
+        if port <= 0 || port > u16::MAX as i64 {
+            return Err("TCP port must be between 1 and 65535".to_string());
+        }
+        let stream = TcpStream::connect(format!("{host}:{port}"))
+            .map_err(|error| format!("TCP connect to `{host}:{port}` failed: {error}"))?;
+        let timeout = Some(std::time::Duration::from_secs(5));
+        let _ = stream.set_read_timeout(timeout);
+        let _ = stream.set_write_timeout(timeout);
+        let id = self.next_tcp_stream_id;
+        self.next_tcp_stream_id = self.next_tcp_stream_id.saturating_add(1);
+        self.tcp_streams.insert(id, stream);
+        Ok(tcp_stream_value(id))
+    }
+
+    fn tcp_stream_mut(&mut self, id: i64) -> Result<&mut TcpStream, String> {
+        self.tcp_streams
+            .get_mut(&id)
+            .ok_or_else(|| format!("unknown TcpStream id `{id}`"))
+    }
+
+    fn tcp_stream_read(&mut self, id: i64, max_bytes: i64) -> Result<Vec<u8>, String> {
+        if max_bytes <= 0 {
+            return Err("TCP read max_bytes must be positive".to_string());
+        }
+        let mut buffer = vec![0; max_bytes as usize];
+        let read = self
+            .tcp_stream_mut(id)?
+            .read(&mut buffer)
+            .map_err(|error| format!("TCP read failed: {error}"))?;
+        buffer.truncate(read);
+        Ok(buffer)
+    }
+
+    fn tcp_stream_write(&mut self, id: i64, data: &[u8]) -> Result<i64, String> {
+        self.tcp_stream_mut(id)?
+            .write(data)
+            .map(|written| written as i64)
+            .map_err(|error| format!("TCP write failed: {error}"))
+    }
+
+    fn tcp_stream_write_all(&mut self, id: i64, data: &[u8]) -> Result<(), String> {
+        self.tcp_stream_mut(id)?
+            .write_all(data)
+            .map_err(|error| format!("TCP write_all failed: {error}"))
+    }
+
+    fn tcp_stream_shutdown(&mut self, id: i64) -> Result<(), String> {
+        self.tcp_stream_mut(id)?
+            .shutdown(Shutdown::Both)
+            .map_err(|error| format!("TCP shutdown failed: {error}"))
     }
 
     fn eval_resource_pool_new(
@@ -4092,45 +4159,50 @@ impl<'a> Interpreter<'a> {
             ("Tcp", "connect") => {
                 let host = self.eval_named_or_positional_arg(args, "host", 0)?;
                 let port = self.eval_named_or_positional_arg(args, "port", 1)?;
-                Ok(value_err(tcp_error(format!(
-                    "TCP async provider is not configured for {}:{}",
-                    expect_string(host)?,
-                    expect_int(port)?
-                ))))
+                let host = expect_string(host)?;
+                let port = expect_int(port)?;
+                Ok(result_value(
+                    self.tcp_connect(&host, port).map_err(tcp_error),
+                ))
             }
             ("TcpStream", "read") => {
                 let stream = self.eval_named_or_positional_arg(args, "stream", 0)?;
                 let max_bytes = self.eval_named_or_positional_arg(args, "max_bytes", 1)?;
-                let _ = stream.display();
-                Ok(value_err(tcp_error(format!(
-                    "TCP async provider is not configured for read {} bytes",
-                    expect_int(max_bytes)?
-                ))))
+                let id = expect_tcp_stream_id(stream)?;
+                Ok(result_value(
+                    self.tcp_stream_read(id, expect_int(max_bytes)?)
+                        .map(Value::Bytes)
+                        .map_err(tcp_error),
+                ))
             }
             ("TcpStream", "write") => {
                 let stream = self.eval_named_or_positional_arg(args, "stream", 0)?;
                 let data = self.eval_named_or_positional_arg(args, "data", 1)?;
-                let _ = stream.display();
-                Ok(value_err(tcp_error(format!(
-                    "TCP async provider is not configured for write {} bytes",
-                    expect_bytes(data)?.len()
-                ))))
+                let id = expect_tcp_stream_id(stream)?;
+                Ok(result_value(
+                    self.tcp_stream_write(id, &expect_bytes(data)?)
+                        .map(Value::Int)
+                        .map_err(tcp_error),
+                ))
             }
             ("TcpStream", "write_all") => {
                 let stream = self.eval_named_or_positional_arg(args, "stream", 0)?;
                 let data = self.eval_named_or_positional_arg(args, "data", 1)?;
-                let _ = stream.display();
-                Ok(value_err(tcp_error(format!(
-                    "TCP async provider is not configured for write_all {} bytes",
-                    expect_bytes(data)?.len()
-                ))))
+                let id = expect_tcp_stream_id(stream)?;
+                Ok(result_value(
+                    self.tcp_stream_write_all(id, &expect_bytes(data)?)
+                        .map(|_| Value::Unit)
+                        .map_err(tcp_error),
+                ))
             }
             ("TcpStream", "shutdown") => {
                 let stream = self.eval_named_or_positional_arg(args, "stream", 0)?;
-                let _ = stream.display();
-                Ok(value_err(tcp_error(
-                    "TCP async provider is not configured for shutdown",
-                )))
+                let id = expect_tcp_stream_id(stream)?;
+                Ok(result_value(
+                    self.tcp_stream_shutdown(id)
+                        .map(|_| Value::Unit)
+                        .map_err(tcp_error),
+                ))
             }
             ("TcpError", "message") => {
                 let error = self.eval_named_or_positional_arg(args, "error", 0)?;
@@ -7167,6 +7239,13 @@ fn stream_collect_error_value(message: impl Into<String>) -> Value {
     }
 }
 
+fn tcp_stream_value(id: i64) -> Value {
+    Value::Struct {
+        name: "TcpStream".to_string(),
+        fields: BTreeMap::from([("id".to_string(), Value::Int(id))]),
+    }
+}
+
 fn channel_error(message: impl Into<String>) -> Value {
     Value::Struct {
         name: "ChannelError".to_string(),
@@ -7483,6 +7562,19 @@ fn expect_stream(value: Value) -> Result<StreamState, EvalError> {
         }
         other => Err(EvalError::Runtime(format!(
             "expected Stream, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn expect_tcp_stream_id(value: Value) -> Result<i64, EvalError> {
+    match value {
+        Value::Struct { name, mut fields } if name == "TcpStream" => fields
+            .remove("id")
+            .ok_or_else(|| EvalError::Runtime("TcpStream value is missing id.".to_string()))
+            .and_then(expect_int),
+        other => Err(EvalError::Runtime(format!(
+            "expected TcpStream, got `{}`.",
             other.display()
         ))),
     }

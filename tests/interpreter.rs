@@ -1,7 +1,10 @@
 mod common;
 
 use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::process::Command;
+use std::thread;
 
 use rsscript::{
     EvalError, eval_source_main, eval_source_main_with_args, lower_source_to_rust_package,
@@ -525,6 +528,8 @@ fn eval_matches_backend_for_declared_host_boundary() {
 // parity: runtime:TempDir.new runtime:TempDir.new_in runtime:TempDir.path
 // parity: runtime:Timer.sleep runtime:Timer.sleep_cancellable runtime:Timer.sleep_until
 // parity: runtime:Tcp.connect runtime:TcpError.message
+// parity: runtime:TcpStream.read runtime:TcpStream.shutdown
+// parity: runtime:TcpStream.write runtime:TcpStream.write_all
 // parity: runtime:Toml.parse_file
 // parity: runtime:Url.from_string runtime:Url.to_string
 // parity: runtime:WebSocket.connect runtime:WebSocketError.message
@@ -534,12 +539,31 @@ fn assert_interpreter_matches_backend(name: &str, package: &str, source: &str) {
 }
 
 fn run_with_large_stack(test: impl FnOnce() + Send + 'static) {
-    std::thread::Builder::new()
+    thread::Builder::new()
         .stack_size(16 * 1024 * 1024)
         .spawn(test)
         .expect("large-stack test thread should spawn")
         .join()
         .expect("large-stack test thread should pass");
+}
+
+fn spawn_tcp_echo_server() -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
+    let port = listener
+        .local_addr()
+        .expect("test listener should have an address")
+        .port()
+        .to_string();
+    let handle = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().expect("client should connect");
+        let mut buffer = [0; 4];
+        socket
+            .read_exact(&mut buffer)
+            .expect("server should read ping");
+        assert_eq!(&buffer, b"ping");
+        socket.write_all(b"pong").expect("server should write pong");
+    });
+    (port, handle)
 }
 
 fn assert_interpreter_matches_backend_with_args(
@@ -2034,6 +2058,51 @@ async fn main() -> Unit {
         "rsscript_parity_async_socket",
         source,
     );
+}
+
+#[test]
+fn parity_tcp_stream_intrinsics() {
+    let (interpreter_port, interpreter_server) = spawn_tcp_echo_server();
+    let (backend_port, backend_server) = spawn_tcp_echo_server();
+    let source = r#"
+features: async, native, local
+
+fn port_arg() -> Int {
+    match String.parse_int(value: read Args.get_or_default(index: 0, default: read "0")) {
+        Some(port) => {
+            return port
+        }
+        None => {
+            return 0
+        }
+    }
+}
+
+async fn main() -> Result<Unit, TcpError> {
+    let port = port_arg()
+    let stream = await Tcp.connect(host: read "127.0.0.1", port: port)?
+    let written = await TcpStream.write(stream: read stream, data: read String.to_bytes(value: read ""))?
+    Log.write(message: read String.from_int(value: written))
+    await TcpStream.write_all(stream: read stream, data: read String.to_bytes(value: read "ping"))?
+    let response = await TcpStream.read(stream: read stream, max_bytes: 4)?
+    Log.write(message: read String.from_int(value: Bytes.len(value: read response)))
+    await TcpStream.shutdown(stream: read stream)?
+    return Ok(Unit)
+}
+"#;
+    assert_interpreter_matches_backend_with_distinct_args_allowing_unused_mut_warning(
+        "parity-tcp-stream.rss",
+        "rsscript_parity_tcp_stream",
+        source,
+        &[interpreter_port.as_str()],
+        &[backend_port.as_str()],
+    );
+    interpreter_server
+        .join()
+        .expect("interpreter tcp server should finish");
+    backend_server
+        .join()
+        .expect("backend tcp server should finish");
 }
 
 #[test]
