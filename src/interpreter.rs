@@ -70,7 +70,8 @@ const HIR_STMT_VARIANTS: &[&str] = &[
 ];
 
 const INTERPRETER_SUPPORTED_HIR_STMT_VARIANTS: &[&str] = &[
-    "Let", "Return", "With", "If", "Loop", "For", "Match", "Assign", "Break", "Continue", "Expr",
+    "Let", "Return", "With", "If", "Loop", "For", "Match", "Select", "Assign", "Break", "Continue",
+    "Expr",
 ];
 
 const HIR_EXPR_VARIANTS: &[&str] = &[
@@ -630,6 +631,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "hir_stmt:Loop",
     "hir_stmt:Match",
     "hir_stmt:Return",
+    "hir_stmt:Select",
     "hir_stmt:With",
     "runtime:Args.all",
     "runtime:Args.count",
@@ -2152,6 +2154,25 @@ impl<'a> Interpreter<'a> {
             HirStmt::Match { value, arms, .. } => {
                 let value = self.eval_expr(value)?;
                 self.eval_match(value, arms)
+            }
+            HirStmt::Select { arms, .. } => {
+                for arm in arms {
+                    let value = self.eval_expr(&arm.operation)?;
+                    if let Some(value) = self.pending_return.take() {
+                        return Ok(Control::Return(value));
+                    }
+
+                    if arm.binding == "_" {
+                        return self.eval_block(&arm.body);
+                    }
+
+                    self.scopes
+                        .push(HashMap::from([(arm.binding.clone(), value)]));
+                    let control = self.eval_block(&arm.body);
+                    self.scopes.pop();
+                    return control;
+                }
+                Ok(Control::Continue)
             }
             HirStmt::Break(_) => Ok(Control::Break),
             HirStmt::Continue(_) => Ok(Control::LoopContinue),

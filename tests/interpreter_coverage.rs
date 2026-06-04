@@ -38,17 +38,17 @@ fn interpreter_coverage_baseline_is_explicit() {
     let report = interpreter_coverage_report();
 
     assert_bucket_counts(&report.runtime_intrinsics, 519, 519, 0);
-    assert_bucket_counts(&report.hir_statements, 13, 11, 2);
+    assert_bucket_counts(&report.hir_statements, 13, 12, 1);
     assert_bucket_counts(&report.hir_expressions, 18, 16, 2);
     assert_bucket_counts(&report.value_types, 14, 12, 2);
     assert_bucket_counts(&report.function_kinds, 3, 2, 1);
-    assert_bucket_counts(&report.parity_features, 560, 560, 0);
+    assert_bucket_counts(&report.parity_features, 561, 561, 0);
 
     assert!(
         report
             .hir_statements
             .missing
-            .contains(&"Select".to_string()),
+            .contains(&"Unknown".to_string()),
         "known statement gap should stay visible"
     );
     assert!(

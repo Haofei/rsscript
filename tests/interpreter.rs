@@ -117,6 +117,31 @@ async fn main() -> Result<Unit, TimerError> {
 }
 
 #[test]
+fn parity_select_runs_first_ready_arm() {
+    let source = r#"
+features: async, native
+
+async fn after(value: Int, ms: Int) -> Result<Int, TimerError> {
+    await Timer.sleep(ms: ms)?
+    return Ok(value)
+}
+
+fn main() -> Result<Unit, TimerError> {
+    select {
+        value = await after(value: 7, ms: 1)? => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        other = await after(value: 9, ms: 100)? => {
+            Log.write(message: read String.from_int(value: other))
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    assert_interpreter_matches_backend("parity-select.rss", "rsscript_parity_select", source);
+}
+
+#[test]
 fn parity_async_file_intrinsics() {
     let source = r#"
 features: async, native, local
@@ -347,7 +372,7 @@ fn eval_matches_backend_for_declared_host_boundary() {
 /// from the authoritative backend — one fixture per supported construct.
 // parity: function:async function:sync
 // parity: hir_stmt:Assign hir_stmt:Break hir_stmt:Continue hir_stmt:Expr hir_stmt:For
-// parity: hir_stmt:If hir_stmt:Let hir_stmt:Loop hir_stmt:Match hir_stmt:Return hir_stmt:With
+// parity: hir_stmt:If hir_stmt:Let hir_stmt:Loop hir_stmt:Match hir_stmt:Return hir_stmt:Select hir_stmt:With
 // parity: hir_expr:ArrayLiteral hir_expr:Await hir_expr:Binary hir_expr:Call hir_expr:Effect hir_expr:Field
 // parity: hir_expr:Closure hir_expr:Ident hir_expr:Index hir_expr:Manage hir_expr:MapLiteral hir_expr:Match
 // parity: hir_expr:Number hir_expr:ObjectLiteral hir_expr:String hir_expr:Try
