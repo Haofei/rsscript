@@ -496,6 +496,11 @@ fn write_interpreter_intrinsics() -> Result<(), String> {
         generated_interpreter_intrinsic_dispatch(),
     )
     .map_err(|error| format!("interpreter intrinsic dispatcher should be written: {error}"))?;
+    fs::write(
+        out_dir.join("rss-interpreter-intrinsics-lookup.rs"),
+        generated_interpreter_intrinsic_lookup(),
+    )
+    .map_err(|error| format!("interpreter intrinsic lookup should be written: {error}"))?;
     Ok(())
 }
 
@@ -546,6 +551,35 @@ fn generated_interpreter_intrinsic_dispatch() -> String {
         out.push_str(",\n");
     }
     out.push_str("    }\n}\n");
+    out
+}
+
+fn generated_interpreter_intrinsic_lookup() -> String {
+    let mut out = String::new();
+    out.push_str(
+        "pub(crate) fn generated_interpreter_intrinsic(\n    namespace: &str,\n    name: &str,\n) -> Option<InterpreterIntrinsic> {\n    match (namespace, name) {\n",
+    );
+    for intrinsic in INTERPRETER_INTRINSICS {
+        out.push_str("        (\"");
+        out.push_str(intrinsic.namespace);
+        out.push_str("\", \"");
+        out.push_str(intrinsic.name);
+        out.push_str("\") => Some(InterpreterIntrinsic::");
+        out.push_str(intrinsic.variant);
+        out.push_str("),\n");
+    }
+    out.push_str("        _ => None,\n    }\n}\n\n");
+    out.push_str(
+        "pub(crate) fn generated_interpreter_intrinsic_signatures() -> Vec<String> {\n    vec![\n",
+    );
+    for intrinsic in INTERPRETER_INTRINSICS {
+        out.push_str("        \"");
+        out.push_str(intrinsic.namespace);
+        out.push('.');
+        out.push_str(intrinsic.name);
+        out.push_str("\".to_string(),\n");
+    }
+    out.push_str("    ]\n}\n");
     out
 }
 

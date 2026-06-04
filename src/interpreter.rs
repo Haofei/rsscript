@@ -2555,7 +2555,7 @@ impl<'a> Interpreter<'a> {
                     return self.eval_runtime_intrinsic(
                         namespace,
                         name,
-                        intrinsic.interpreter,
+                        intrinsic.interpreter(),
                         args,
                     );
                 }

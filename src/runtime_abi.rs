@@ -1,7 +1,6 @@
 pub(crate) struct RuntimeIntrinsic {
     pub(crate) rust_target: &'static str,
     pub(crate) managed_handle_args: &'static [&'static str],
-    pub(crate) interpreter: Option<InterpreterIntrinsic>,
     namespace: &'static str,
     name: &'static str,
 }
@@ -9,6 +8,10 @@ pub(crate) struct RuntimeIntrinsic {
 include!(concat!(
     env!("OUT_DIR"),
     "/rss-interpreter-intrinsics-enum.rs"
+));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/rss-interpreter-intrinsics-lookup.rs"
 ));
 
 const fn runtime_intrinsic(
@@ -21,7 +24,6 @@ const fn runtime_intrinsic(
         name,
         rust_target,
         managed_handle_args: &[],
-        interpreter: None,
     }
 }
 
@@ -36,22 +38,6 @@ const fn runtime_intrinsic_with_handles(
         name,
         rust_target,
         managed_handle_args,
-        interpreter: None,
-    }
-}
-
-const fn runtime_intrinsic_with_interpreter(
-    namespace: &'static str,
-    name: &'static str,
-    rust_target: &'static str,
-    interpreter: InterpreterIntrinsic,
-) -> RuntimeIntrinsic {
-    RuntimeIntrinsic {
-        namespace,
-        name,
-        rust_target,
-        managed_handle_args: &[],
-        interpreter: Some(interpreter),
     }
 }
 
@@ -64,6 +50,12 @@ pub(crate) fn lookup_runtime_intrinsic(
         .find(|intrinsic| intrinsic.namespace == namespace && intrinsic.name == name)
 }
 
+impl RuntimeIntrinsic {
+    pub(crate) fn interpreter(&self) -> Option<InterpreterIntrinsic> {
+        generated_interpreter_intrinsic(self.namespace, self.name)
+    }
+}
+
 pub(crate) fn runtime_intrinsic_signatures() -> Vec<String> {
     RUNTIME_INTRINSICS
         .iter()
@@ -72,11 +64,7 @@ pub(crate) fn runtime_intrinsic_signatures() -> Vec<String> {
 }
 
 pub(crate) fn runtime_intrinsic_signatures_with_interpreter() -> Vec<String> {
-    RUNTIME_INTRINSICS
-        .iter()
-        .filter(|intrinsic| intrinsic.interpreter.is_some())
-        .map(|intrinsic| format!("{}.{}", intrinsic.namespace, intrinsic.name))
-        .collect()
+    generated_interpreter_intrinsic_signatures()
 }
 
 const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
@@ -872,36 +860,11 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("List", "to_json_strings", "rsscript_runtime::json_strings"),
     runtime_intrinsic("List", "to_json_values", "rsscript_runtime::json_values"),
     runtime_intrinsic("List", "try_fold", "rsscript_runtime::list_try_fold"),
-    runtime_intrinsic_with_interpreter(
-        "Log",
-        "error",
-        "rsscript_runtime::log_error",
-        InterpreterIntrinsic::LogError,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "Log",
-        "error_json",
-        "rsscript_runtime::log_error_json",
-        InterpreterIntrinsic::LogErrorJson,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "Log",
-        "trace",
-        "rsscript_runtime::log_trace",
-        InterpreterIntrinsic::LogTrace,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "Log",
-        "write",
-        "rsscript_runtime::log_write",
-        InterpreterIntrinsic::LogWrite,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "Log",
-        "write_json",
-        "rsscript_runtime::log_write_json",
-        InterpreterIntrinsic::LogWriteJson,
-    ),
+    runtime_intrinsic("Log", "error", "rsscript_runtime::log_error"),
+    runtime_intrinsic("Log", "error_json", "rsscript_runtime::log_error_json"),
+    runtime_intrinsic("Log", "trace", "rsscript_runtime::log_trace"),
+    runtime_intrinsic("Log", "write", "rsscript_runtime::log_write"),
+    runtime_intrinsic("Log", "write_json", "rsscript_runtime::log_write_json"),
     runtime_intrinsic("Map", "clear", "rsscript_runtime::map_clear"),
     runtime_intrinsic("Map", "contains_key", "rsscript_runtime::map_contains_key"),
     runtime_intrinsic("Map", "filter", "rsscript_runtime::map_filter"),
@@ -1228,267 +1191,101 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "to_list",
         "rsscript_runtime::sorted_set_to_list",
     ),
-    runtime_intrinsic_with_interpreter(
-        "Char",
-        "compare",
-        "rsscript_runtime::char_compare",
-        InterpreterIntrinsic::CharCompare,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "Char",
-        "from_code",
-        "rsscript_runtime::char_from_code",
-        InterpreterIntrinsic::CharFromCode,
-    ),
-    runtime_intrinsic_with_interpreter(
+    runtime_intrinsic("Char", "compare", "rsscript_runtime::char_compare"),
+    runtime_intrinsic("Char", "from_code", "rsscript_runtime::char_from_code"),
+    runtime_intrinsic(
         "Char",
         "is_alphanumeric",
         "rsscript_runtime::char_is_alphanumeric",
-        InterpreterIntrinsic::CharIsAlphanumeric,
     ),
-    runtime_intrinsic_with_interpreter(
-        "Char",
-        "is_alpha",
-        "rsscript_runtime::char_is_alpha",
-        InterpreterIntrinsic::CharIsAlpha,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "Char",
-        "is_digit",
-        "rsscript_runtime::char_is_digit",
-        InterpreterIntrinsic::CharIsDigit,
-    ),
-    runtime_intrinsic_with_interpreter(
+    runtime_intrinsic("Char", "is_alpha", "rsscript_runtime::char_is_alpha"),
+    runtime_intrinsic("Char", "is_digit", "rsscript_runtime::char_is_digit"),
+    runtime_intrinsic(
         "Char",
         "is_whitespace",
         "rsscript_runtime::char_is_whitespace",
-        InterpreterIntrinsic::CharIsWhitespace,
     ),
-    runtime_intrinsic_with_interpreter(
-        "Char",
-        "to_code",
-        "rsscript_runtime::char_to_code",
-        InterpreterIntrinsic::CharToCode,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "Char",
-        "to_string",
-        "rsscript_runtime::char_to_string",
-        InterpreterIntrinsic::CharToString,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "Int",
-        "to_string",
-        "rsscript_runtime::string_from_int",
-        InterpreterIntrinsic::IntToString,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "String",
-        "after",
-        "rsscript_runtime::string_after",
-        InterpreterIntrinsic::StringAfter,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "String",
-        "contains",
-        "rsscript_runtime::string_contains",
-        InterpreterIntrinsic::StringContains,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "String",
-        "before",
-        "rsscript_runtime::string_before",
-        InterpreterIntrinsic::StringBefore,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "String",
-        "concat",
-        "rsscript_runtime::string_concat",
-        InterpreterIntrinsic::StringConcat,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "String",
-        "copy",
-        "rsscript_runtime::string_copy",
-        InterpreterIntrinsic::StringCopy,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "String",
-        "ends_with",
-        "rsscript_runtime::string_ends_with",
-        InterpreterIntrinsic::StringEndsWith,
-    ),
+    runtime_intrinsic("Char", "to_code", "rsscript_runtime::char_to_code"),
+    runtime_intrinsic("Char", "to_string", "rsscript_runtime::char_to_string"),
+    runtime_intrinsic("Int", "to_string", "rsscript_runtime::string_from_int"),
+    runtime_intrinsic("String", "after", "rsscript_runtime::string_after"),
+    runtime_intrinsic("String", "contains", "rsscript_runtime::string_contains"),
+    runtime_intrinsic("String", "before", "rsscript_runtime::string_before"),
+    runtime_intrinsic("String", "concat", "rsscript_runtime::string_concat"),
+    runtime_intrinsic("String", "copy", "rsscript_runtime::string_copy"),
+    runtime_intrinsic("String", "ends_with", "rsscript_runtime::string_ends_with"),
     runtime_intrinsic("String", "env", "rsscript_runtime::env_get"),
     runtime_intrinsic("String", "env_or", "rsscript_runtime::env_get_or_default"),
-    runtime_intrinsic_with_interpreter(
-        "String",
-        "from_bool",
-        "rsscript_runtime::string_from_bool",
-        InterpreterIntrinsic::StringFromBool,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "String",
-        "from_int",
-        "rsscript_runtime::string_from_int",
-        InterpreterIntrinsic::StringFromInt,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "String",
-        "is_empty",
-        "rsscript_runtime::string_is_empty",
-        InterpreterIntrinsic::StringIsEmpty,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "String",
-        "index_of",
-        "rsscript_runtime::string_index_of",
-        InterpreterIntrinsic::StringIndexOf,
-    ),
+    runtime_intrinsic("String", "from_bool", "rsscript_runtime::string_from_bool"),
+    runtime_intrinsic("String", "from_int", "rsscript_runtime::string_from_int"),
+    runtime_intrinsic("String", "is_empty", "rsscript_runtime::string_is_empty"),
+    runtime_intrinsic("String", "index_of", "rsscript_runtime::string_index_of"),
     runtime_intrinsic("String", "join", "rsscript_runtime::string_join"),
-    runtime_intrinsic_with_interpreter(
-        "String",
-        "chars",
-        "rsscript_runtime::string_chars",
-        InterpreterIntrinsic::StringChars,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "String",
-        "len",
-        "rsscript_runtime::string_len",
-        InterpreterIntrinsic::StringLen,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "String",
-        "lines",
-        "rsscript_runtime::string_lines",
-        InterpreterIntrinsic::StringLines,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "String",
-        "replace",
-        "rsscript_runtime::string_replace",
-        InterpreterIntrinsic::StringReplace,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "String",
-        "repeat",
-        "rsscript_runtime::string_repeat",
-        InterpreterIntrinsic::StringRepeat,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "String",
-        "parse_int",
-        "rsscript_runtime::string_parse_int",
-        InterpreterIntrinsic::StringParseInt,
-    ),
+    runtime_intrinsic("String", "chars", "rsscript_runtime::string_chars"),
+    runtime_intrinsic("String", "len", "rsscript_runtime::string_len"),
+    runtime_intrinsic("String", "lines", "rsscript_runtime::string_lines"),
+    runtime_intrinsic("String", "replace", "rsscript_runtime::string_replace"),
+    runtime_intrinsic("String", "repeat", "rsscript_runtime::string_repeat"),
+    runtime_intrinsic("String", "parse_int", "rsscript_runtime::string_parse_int"),
     runtime_intrinsic(
         "String",
         "safe_relative",
         "rsscript_runtime::path_safe_relative",
     ),
-    runtime_intrinsic_with_interpreter(
-        "String",
-        "slice",
-        "rsscript_runtime::string_slice",
-        InterpreterIntrinsic::StringSlice,
-    ),
-    runtime_intrinsic_with_interpreter(
+    runtime_intrinsic("String", "slice", "rsscript_runtime::string_slice"),
+    runtime_intrinsic(
         "String",
         "strip_prefix",
         "rsscript_runtime::string_strip_prefix",
-        InterpreterIntrinsic::StringStripPrefix,
     ),
-    runtime_intrinsic_with_interpreter(
+    runtime_intrinsic(
         "String",
         "starts_with",
         "rsscript_runtime::string_starts_with",
-        InterpreterIntrinsic::StringStartsWith,
     ),
-    runtime_intrinsic_with_interpreter(
-        "String",
-        "split",
-        "rsscript_runtime::string_split",
-        InterpreterIntrinsic::StringSplit,
-    ),
-    runtime_intrinsic_with_interpreter(
+    runtime_intrinsic("String", "split", "rsscript_runtime::string_split"),
+    runtime_intrinsic(
         "String",
         "to_lowercase",
         "rsscript_runtime::string_to_lowercase",
-        InterpreterIntrinsic::StringToLowercase,
     ),
     runtime_intrinsic("String", "to_path", "rsscript_runtime::path_from_string"),
     runtime_intrinsic("String", "to_url", "rsscript_runtime::url_from_string"),
-    runtime_intrinsic_with_interpreter(
-        "String",
-        "to_bytes",
-        "rsscript_runtime::bytes_from_string",
-        InterpreterIntrinsic::StringToBytes,
-    ),
-    runtime_intrinsic_with_interpreter(
+    runtime_intrinsic("String", "to_bytes", "rsscript_runtime::bytes_from_string"),
+    runtime_intrinsic(
         "String",
         "to_uppercase",
         "rsscript_runtime::string_to_uppercase",
-        InterpreterIntrinsic::StringToUppercase,
     ),
-    runtime_intrinsic_with_interpreter(
-        "String",
-        "trim",
-        "rsscript_runtime::string_trim",
-        InterpreterIntrinsic::StringTrim,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "String",
-        "view",
-        "rsscript_runtime::string_view",
-        InterpreterIntrinsic::StringView,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "StringView",
-        "after",
-        "rsscript_runtime::string_view_after",
-        InterpreterIntrinsic::StringViewAfter,
-    ),
-    runtime_intrinsic_with_interpreter(
+    runtime_intrinsic("String", "trim", "rsscript_runtime::string_trim"),
+    runtime_intrinsic("String", "view", "rsscript_runtime::string_view"),
+    runtime_intrinsic("StringView", "after", "rsscript_runtime::string_view_after"),
+    runtime_intrinsic(
         "StringView",
         "before",
         "rsscript_runtime::string_view_before",
-        InterpreterIntrinsic::StringViewBefore,
     ),
-    runtime_intrinsic_with_interpreter(
+    runtime_intrinsic(
         "StringView",
         "contains",
         "rsscript_runtime::string_view_contains",
-        InterpreterIntrinsic::StringViewContains,
     ),
-    runtime_intrinsic_with_interpreter(
+    runtime_intrinsic(
         "StringView",
         "is_empty",
         "rsscript_runtime::string_view_is_empty",
-        InterpreterIntrinsic::StringViewIsEmpty,
     ),
-    runtime_intrinsic_with_interpreter(
-        "StringView",
-        "len",
-        "rsscript_runtime::string_view_len",
-        InterpreterIntrinsic::StringViewLen,
-    ),
-    runtime_intrinsic_with_interpreter(
-        "StringView",
-        "slice",
-        "rsscript_runtime::string_view_slice",
-        InterpreterIntrinsic::StringViewSlice,
-    ),
-    runtime_intrinsic_with_interpreter(
+    runtime_intrinsic("StringView", "len", "rsscript_runtime::string_view_len"),
+    runtime_intrinsic("StringView", "slice", "rsscript_runtime::string_view_slice"),
+    runtime_intrinsic(
         "StringView",
         "starts_with",
         "rsscript_runtime::string_view_starts_with",
-        InterpreterIntrinsic::StringViewStartsWith,
     ),
-    runtime_intrinsic_with_interpreter(
+    runtime_intrinsic(
         "StringView",
         "to_string",
         "rsscript_runtime::string_view_to_string",
-        InterpreterIntrinsic::StringViewToString,
     ),
     runtime_intrinsic(
         "StringBuilder",
@@ -1544,7 +1341,9 @@ mod tests {
     use crate::syntax::ast::Item;
     use crate::syntax::parse_source;
 
-    use super::RUNTIME_INTRINSICS;
+    use super::{
+        RUNTIME_INTRINSICS, generated_interpreter_intrinsic_signatures, lookup_runtime_intrinsic,
+    };
 
     #[test]
     fn runtime_intrinsic_keys_are_unique() {
@@ -1563,7 +1362,7 @@ mod tests {
     fn interpreter_intrinsics_have_lowering_targets() {
         let interpreter_intrinsics = RUNTIME_INTRINSICS
             .iter()
-            .filter(|intrinsic| intrinsic.interpreter.is_some())
+            .filter(|intrinsic| intrinsic.interpreter().is_some())
             .collect::<Vec<_>>();
 
         assert!(
@@ -1577,6 +1376,30 @@ mod tests {
                 intrinsic.namespace,
                 intrinsic.name,
                 intrinsic.rust_target
+            );
+        }
+    }
+
+    #[test]
+    fn generated_interpreter_intrinsics_are_declared_in_runtime_abi() {
+        let runtime_intrinsics = RUNTIME_INTRINSICS
+            .iter()
+            .map(|intrinsic| format!("{}.{}", intrinsic.namespace, intrinsic.name))
+            .collect::<HashSet<_>>();
+
+        for signature in generated_interpreter_intrinsic_signatures() {
+            assert!(
+                runtime_intrinsics.contains(&signature),
+                "generated interpreter intrinsic `{signature}` is missing from runtime ABI"
+            );
+            let (namespace, name) = signature
+                .split_once('.')
+                .expect("generated intrinsic signature should be qualified");
+            let intrinsic = lookup_runtime_intrinsic(namespace, name)
+                .expect("generated interpreter intrinsic should be declared");
+            assert!(
+                intrinsic.interpreter().is_some(),
+                "runtime ABI intrinsic `{signature}` did not resolve generated interpreter support"
             );
         }
     }
@@ -1597,7 +1420,7 @@ mod tests {
 
         for intrinsic in RUNTIME_INTRINSICS
             .iter()
-            .filter(|intrinsic| intrinsic.interpreter.is_some())
+            .filter(|intrinsic| intrinsic.interpreter().is_some())
         {
             let signature = format!("{}.{}", intrinsic.namespace, intrinsic.name);
             assert!(
