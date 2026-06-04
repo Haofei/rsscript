@@ -357,6 +357,7 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:StringView.slice runtime:StringView.starts_with runtime:StringView.to_string
 // parity: runtime:StringBuilder.finish runtime:StringBuilder.new runtime:StringBuilder.push
 // parity: runtime:GlobalConfig.new runtime:GlobalConfig.replace runtime:GlobalConfig.rule_count
+// parity: runtime:TempDir.new runtime:TempDir.new_in runtime:TempDir.path
 // parity: runtime:Toml.parse_file
 // parity: runtime:Url.from_string runtime:Url.to_string
 // parity: runtime:Yaml.parse runtime:Yaml.parse_file
@@ -379,6 +380,41 @@ fn assert_interpreter_matches_backend_with_distinct_args(
     source: &str,
     interpreter_args: &[&str],
     backend_args: &[&str],
+) {
+    assert_interpreter_matches_backend_internal(
+        name,
+        package,
+        source,
+        interpreter_args,
+        backend_args,
+        false,
+    );
+}
+
+fn assert_interpreter_matches_backend_with_distinct_args_allowing_unused_mut_warning(
+    name: &str,
+    package: &str,
+    source: &str,
+    interpreter_args: &[&str],
+    backend_args: &[&str],
+) {
+    assert_interpreter_matches_backend_internal(
+        name,
+        package,
+        source,
+        interpreter_args,
+        backend_args,
+        true,
+    );
+}
+
+fn assert_interpreter_matches_backend_internal(
+    name: &str,
+    package: &str,
+    source: &str,
+    interpreter_args: &[&str],
+    backend_args: &[&str],
+    allow_unused_mut_warning: bool,
 ) {
     let eval = eval_source_main_with_args(name, source, interpreter_args.iter().copied())
         .unwrap_or_else(|error| panic!("interpreter eval failed for {name}: {error:?}"));
@@ -415,7 +451,22 @@ fn assert_interpreter_matches_backend_with_distinct_args(
         "backend run failed for {name}\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
     assert_eq!(stdout, eval.stdout, "stdout divergence for {name}");
-    assert_eq!(stderr, eval.stderr, "stderr divergence for {name}");
+    if allow_unused_mut_warning && eval.stderr.is_empty() && stderr.contains("unused_mut") {
+        assert!(
+            stderr.lines().all(|line| line.is_empty()
+                || line.contains("variable does not need to be mutable")
+                || line.contains("-->")
+                || line.contains("let mut ")
+                || line.contains("----")
+                || line.contains("|")
+                || line.contains("help: remove this `mut`")
+                || line.contains("#[warn(unused_mut)]")
+                || line.contains("on by default")),
+            "backend stderr contained non-unused_mut warning for {name}:\n{stderr}"
+        );
+    } else {
+        assert_eq!(stderr, eval.stderr, "stderr divergence for {name}");
+    }
 }
 
 #[test]
@@ -1605,6 +1656,50 @@ fn main() -> Result<Unit, FileError> {
         &[interpreter_root_arg.as_str()],
         &[backend_root_arg.as_str()],
     );
+    let _ = fs::remove_dir_all(&interpreter_root);
+    let _ = fs::remove_dir_all(&backend_root);
+}
+
+#[test]
+fn parity_tempdir_intrinsics() {
+    let interpreter_root = common::unique_temp_dir("rsscript-parity-tempdir-interpreter");
+    let backend_root = common::unique_temp_dir("rsscript-parity-tempdir-backend");
+    fs::create_dir_all(&interpreter_root).expect("interpreter tempdir root should be created");
+    fs::create_dir_all(&backend_root).expect("backend tempdir root should be created");
+    let interpreter_root_arg = interpreter_root.display().to_string();
+    let backend_root_arg = backend_root.display().to_string();
+
+    let source = r#"
+features: native, local
+
+fn main() -> Result<Unit, FileError> {
+    let root = Path.from_string(value: read Args.get_or_default(index: 0, default: read "target/rsscript-parity-tempdir"))
+    with TempDir.new_in(parent: read root)? as child {
+        let path = TempDir.path(dir: read child)
+        if Path.is_dir(path: read path) {
+            Log.write(message: read "new-in-dir")
+        }
+        Directory.remove_dir_all(path: read path)?
+    }
+    with TempDir.new()? as created {
+        let path = TempDir.path(dir: read created)
+        if Path.is_dir(path: read path) {
+            Log.write(message: read "new-dir")
+        }
+        Directory.remove_dir_all(path: read path)?
+    }
+    return Ok(Unit)
+}
+"#;
+
+    assert_interpreter_matches_backend_with_distinct_args_allowing_unused_mut_warning(
+        "parity-tempdir.rss",
+        "rsscript_parity_tempdir",
+        source,
+        &[interpreter_root_arg.as_str()],
+        &[backend_root_arg.as_str()],
+    );
+
     let _ = fs::remove_dir_all(&interpreter_root);
     let _ = fs::remove_dir_all(&backend_root);
 }

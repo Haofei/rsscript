@@ -433,6 +433,9 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("StringBuilder", "finish"),
     ("StringBuilder", "new"),
     ("StringBuilder", "push"),
+    ("TempDir", "new"),
+    ("TempDir", "new_in"),
+    ("TempDir", "path"),
     ("Url", "from_string"),
     ("Url", "to_string"),
     ("Workspace", "resolve"),
@@ -830,6 +833,9 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:GlobalConfig.new",
     "runtime:GlobalConfig.replace",
     "runtime:GlobalConfig.rule_count",
+    "runtime:TempDir.new",
+    "runtime:TempDir.new_in",
+    "runtime:TempDir.path",
     "runtime:Toml.parse_file",
     "runtime:Url.from_string",
     "runtime:Url.to_string",
@@ -2554,6 +2560,19 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::String(
                     std::env::var(expect_string(name)?).unwrap_or(expect_string(default)?),
                 ))
+            }
+            ("TempDir", "new") => Ok(result_value(tempdir_new_value(std::env::temp_dir()))),
+            ("TempDir", "new_in") => {
+                let parent = self.eval_named_or_positional_arg(args, "parent", 0)?;
+                Ok(result_value(tempdir_new_value(PathBuf::from(
+                    expect_string(parent)?,
+                ))))
+            }
+            ("TempDir", "path") => {
+                let dir = self
+                    .eval_named_or_positional_arg(args, "dir", 0)
+                    .or_else(|_| self.eval_first_arg(args))?;
+                Ok(Value::String(expect_tempdir_path(dir)?))
             }
             ("Path", "from_string")
             | ("Path", "to_string")
@@ -4501,6 +4520,29 @@ fn image_cache_value(capacity: i64, len: i64) -> Value {
     }
 }
 
+fn tempdir_value(path: impl Into<String>) -> Value {
+    Value::Struct {
+        name: "TempDir".to_string(),
+        fields: BTreeMap::from([("path".to_string(), Value::String(path.into()))]),
+    }
+}
+
+fn tempdir_new_value(parent: PathBuf) -> Result<Value, Value> {
+    let seed = clock_system_unix_ms();
+    for attempt in 0..100 {
+        let path = parent.join(format!("rsscript-{}-{seed}-{attempt}", std::process::id()));
+        match std::fs::create_dir_all(&path) {
+            Ok(()) => return Ok(tempdir_value(path_to_string(&path))),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(file_error(error)),
+        }
+    }
+    Err(file_error(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not allocate unique TempDir path",
+    )))
+}
+
 fn config_rules_value(name: impl Into<String>, rule_count: i64) -> Value {
     Value::Struct {
         name: "Config".to_string(),
@@ -4623,6 +4665,19 @@ fn expect_image_cache_len(value: Value) -> Result<i64, EvalError> {
             .and_then(expect_int),
         other => Err(EvalError::Runtime(format!(
             "expected ImageCache, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn expect_tempdir_path(value: Value) -> Result<String, EvalError> {
+    match value {
+        Value::Struct { name, mut fields } if name == "TempDir" => fields
+            .remove("path")
+            .ok_or_else(|| EvalError::Runtime("TempDir path is missing.".to_string()))
+            .and_then(expect_string),
+        other => Err(EvalError::Runtime(format!(
+            "expected TempDir, got `{}`.",
             other.display()
         ))),
     }
