@@ -1,8 +1,10 @@
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::path::{Component, Path, PathBuf};
+use std::rc::Rc;
 
 use sha2::{Digest, Sha256};
 
@@ -121,7 +123,7 @@ const VALUE_TYPES: &[&str] = &[
 
 const INTERPRETER_SUPPORTED_VALUE_TYPES: &[&str] = &[
     "Unit", "Int", "Bool", "String", "Char", "Bytes", "List", "Map", "Json", "Struct", "Variant",
-    "Closure",
+    "Managed", "Closure",
 ];
 
 const FUNCTION_KINDS: &[&str] = &["sync", "async", "native"];
@@ -1159,6 +1161,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "value:Int",
     "value:Json",
     "value:List",
+    "value:Managed",
     "value:Map",
     "value:String",
     "value:Struct",
@@ -1297,6 +1300,7 @@ enum Value {
         name: String,
         fields: BTreeMap<String, Value>,
     },
+    Managed(Rc<RefCell<Value>>),
     Closure {
         params: Vec<String>,
         body: HirBlock,
@@ -1343,6 +1347,7 @@ impl Value {
                     .join(", ");
                 format!("{name} {{ {fields} }}")
             }
+            Self::Managed(value) => value.borrow().display(),
             Self::Closure { .. } => "<closure>".to_string(),
         }
     }
@@ -2237,7 +2242,10 @@ impl<'a> Interpreter<'a> {
                 eval_index(base, index)
             }
             HirExpr::Call { callee, args, .. } => self.eval_call(callee, args),
-            HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => self.eval_expr(value),
+            HirExpr::Effect { value, .. } => self.eval_expr(value),
+            HirExpr::Manage { value, .. } => Ok(Value::Managed(Rc::new(RefCell::new(
+                self.eval_expr(value)?,
+            )))),
             HirExpr::Await { value, .. } => self.eval_expr(value),
             HirExpr::Closure { params, body, .. } => Ok(Value::Closure {
                 params: params.clone(),
@@ -5821,8 +5829,12 @@ impl<'a> Interpreter<'a> {
 
     fn assign(&mut self, name: &str, value: Value) -> Result<(), EvalError> {
         for scope in self.scopes.iter_mut().rev() {
-            if scope.contains_key(name) {
-                scope.insert(name.to_string(), value);
+            if let Some(slot) = scope.get_mut(name) {
+                if let Value::Managed(managed) = slot {
+                    *managed.borrow_mut() = value;
+                } else {
+                    *slot = value;
+                }
                 return Ok(());
             }
         }
@@ -5886,14 +5898,22 @@ fn read_field(base: &Value, name: &str) -> Result<Value, EvalError> {
             .get(name)
             .cloned()
             .ok_or_else(|| EvalError::Runtime(format!("unknown field `{name}`."))),
+        Value::Managed(value) => read_field(&value.borrow(), name),
         _ => Err(EvalError::Runtime(format!(
             "cannot read field `{name}` from scalar value."
         ))),
     }
 }
 
+fn unmanage_value(value: Value) -> Value {
+    match value {
+        Value::Managed(value) => value.borrow().clone(),
+        other => other,
+    }
+}
+
 fn eval_index(base: Value, index: Value) -> Result<Value, EvalError> {
-    match base {
+    match unmanage_value(base) {
         Value::List(items) => list_get(items, expect_int(index)?),
         Value::Json(json) => json_array_get(json, expect_int(index)?),
         _ => Err(EvalError::Runtime(
@@ -5974,7 +5994,7 @@ struct ProcessRequestState {
 }
 
 fn expect_process_request(value: Value) -> Result<ProcessRequestState, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "ProcessRequest" => {
             let command = fields.remove("command").ok_or_else(|| {
                 EvalError::Runtime("ProcessRequest value is missing command.".to_string())
@@ -7324,7 +7344,7 @@ fn image_value(
 }
 
 fn expect_image(value: Value) -> Result<ImageState, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "Image" => {
             let bytes = fields
                 .remove("bytes")
@@ -7499,7 +7519,7 @@ fn pool_error(message: impl Into<String>) -> Value {
 }
 
 fn pool_error_message(value: &Value) -> Option<String> {
-    match value {
+    match unmanage_value(value.clone()) {
         Value::Struct { name, fields } if name == "PoolError" => {
             fields.get("message").and_then(|value| match value {
                 Value::String(message) => Some(message.clone()),
@@ -7538,7 +7558,7 @@ fn mark_pool_lease_discarded(mut value: Value) -> Result<Value, EvalError> {
 }
 
 fn split_pool_lease(value: Value) -> Result<Option<ResourcePoolLeaseState>, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } => {
             let Some(pool_id) = fields.remove(POOL_LEASE_ID_FIELD) else {
                 return Ok(None);
@@ -7716,7 +7736,7 @@ fn cancellation_handle_value(name: impl Into<String>, id: i64) -> Value {
 }
 
 fn expect_cancellation_id(value: Value, expected_name: &str) -> Result<i64, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == expected_name => fields
             .remove("id")
             .ok_or_else(|| EvalError::Runtime(format!("{expected_name} value is missing id.")))
@@ -7729,7 +7749,7 @@ fn expect_cancellation_id(value: Value, expected_name: &str) -> Result<i64, Eval
 }
 
 fn expect_counter_value(value: Value) -> Result<i64, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "Counter" => fields
             .remove("value")
             .ok_or_else(|| EvalError::Runtime("Counter value is missing.".to_string()))
@@ -7742,7 +7762,7 @@ fn expect_counter_value(value: Value) -> Result<i64, EvalError> {
 }
 
 fn expect_instant_unix_ms(value: Value) -> Result<i64, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "Instant" => fields
             .remove("unix_ms")
             .ok_or_else(|| EvalError::Runtime("Instant value is missing unix_ms.".to_string()))
@@ -7755,7 +7775,7 @@ fn expect_instant_unix_ms(value: Value) -> Result<i64, EvalError> {
 }
 
 fn expect_deadline_unix_ms(value: Value) -> Result<i64, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "Deadline" => fields
             .remove("unix_ms")
             .ok_or_else(|| EvalError::Runtime("Deadline value is missing unix_ms.".to_string()))
@@ -7778,7 +7798,7 @@ fn environment_value(has_parent: bool, has_function: bool) -> Value {
 }
 
 fn expect_environment_state(value: Value) -> Result<(bool, bool), EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "Environment" => {
             let has_parent = fields.remove("has_parent").ok_or_else(|| {
                 EvalError::Runtime("Environment value is missing has_parent.".to_string())
@@ -7803,7 +7823,7 @@ fn function_object_value(has_closure: bool) -> Value {
 }
 
 fn expect_function_has_closure(value: Value) -> Result<bool, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "FunctionObject" => fields
             .remove("has_closure")
             .ok_or_else(|| {
@@ -7818,7 +7838,7 @@ fn expect_function_has_closure(value: Value) -> Result<bool, EvalError> {
 }
 
 fn expect_channel(value: Value) -> Result<ChannelState, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "Channel" => {
             let id = fields
                 .remove("id")
@@ -7843,7 +7863,7 @@ fn expect_channel(value: Value) -> Result<ChannelState, EvalError> {
 }
 
 fn expect_sender(value: Value) -> Result<SenderState, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "Sender" => {
             let channel_id = fields.remove("channel_id").ok_or_else(|| {
                 EvalError::Runtime("Sender value is missing channel_id.".to_string())
@@ -7864,7 +7884,7 @@ fn expect_sender(value: Value) -> Result<SenderState, EvalError> {
 }
 
 fn expect_receiver(value: Value) -> Result<ReceiverState, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "Receiver" => {
             let channel_id = fields.remove("channel_id").ok_or_else(|| {
                 EvalError::Runtime("Receiver value is missing channel_id.".to_string())
@@ -7885,7 +7905,7 @@ fn expect_receiver(value: Value) -> Result<ReceiverState, EvalError> {
 }
 
 fn expect_resource_pool(value: Value) -> Result<ResourcePoolState, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "ResourcePool" => {
             let id = fields.remove("id").ok_or_else(|| {
                 EvalError::Runtime("ResourcePool value is missing id.".to_string())
@@ -7902,7 +7922,7 @@ fn expect_resource_pool(value: Value) -> Result<ResourcePoolState, EvalError> {
 }
 
 fn expect_stream(value: Value) -> Result<StreamState, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "Stream" => {
             let collect_error = fields.remove("collect_error").ok_or_else(|| {
                 EvalError::Runtime("Stream value is missing collect_error.".to_string())
@@ -7943,7 +7963,7 @@ fn expect_stream(value: Value) -> Result<StreamState, EvalError> {
 }
 
 fn expect_tcp_stream_id(value: Value) -> Result<i64, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "TcpStream" => fields
             .remove("id")
             .ok_or_else(|| EvalError::Runtime("TcpStream value is missing id.".to_string()))
@@ -7956,7 +7976,7 @@ fn expect_tcp_stream_id(value: Value) -> Result<i64, EvalError> {
 }
 
 fn expect_websocket_id(value: Value) -> Result<i64, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "WebSocket" => fields
             .remove("id")
             .ok_or_else(|| EvalError::Runtime("WebSocket value is missing id.".to_string()))
@@ -7993,7 +8013,7 @@ fn db_connection_value(url: impl Into<String>, queries: Vec<String>) -> Value {
 }
 
 fn expect_db_connection(value: Value) -> Result<DbConnectionState, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "DbConnection" => {
             let url = fields.remove("url").ok_or_else(|| {
                 EvalError::Runtime("DbConnection value is missing url.".to_string())
@@ -8021,7 +8041,7 @@ fn db_error(message: impl Into<String>) -> Value {
 }
 
 fn expect_config_value_name(value: Value) -> Result<String, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "ConfigValue" => fields
             .remove("name")
             .ok_or_else(|| EvalError::Runtime("ConfigValue name is missing.".to_string()))
@@ -8034,7 +8054,7 @@ fn expect_config_value_name(value: Value) -> Result<String, EvalError> {
 }
 
 fn expect_config_store_name(value: Value) -> Result<String, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "ConfigStore" => fields
             .remove("name")
             .ok_or_else(|| EvalError::Runtime("ConfigStore name is missing.".to_string()))
@@ -8051,7 +8071,7 @@ fn expect_image_cache_len(value: Value) -> Result<i64, EvalError> {
 }
 
 fn expect_image_cache_state(value: Value) -> Result<(i64, i64), EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "ImageCache" => {
             let capacity = fields
                 .remove("capacity")
@@ -8069,7 +8089,7 @@ fn expect_image_cache_state(value: Value) -> Result<(i64, i64), EvalError> {
 }
 
 fn expect_tempdir_path(value: Value) -> Result<String, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "TempDir" => fields
             .remove("path")
             .ok_or_else(|| EvalError::Runtime("TempDir path is missing.".to_string()))
@@ -8082,7 +8102,7 @@ fn expect_tempdir_path(value: Value) -> Result<String, EvalError> {
 }
 
 fn expect_http_request(value: Value) -> Result<HttpRequestState, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "HttpRequest" => Ok(HttpRequestState {
             method: fields
                 .remove("method")
@@ -8123,7 +8143,7 @@ fn expect_http_request(value: Value) -> Result<HttpRequestState, EvalError> {
 }
 
 fn expect_http_response(value: Value) -> Result<(i64, String), EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "HttpResponse" => {
             let status = fields.remove("status").ok_or_else(|| {
                 EvalError::Runtime("HttpResponse value is missing status.".to_string())
@@ -8141,7 +8161,7 @@ fn expect_http_response(value: Value) -> Result<(i64, String), EvalError> {
 }
 
 fn expect_config_rule_count(value: Value) -> Result<i64, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "Config" => fields
             .remove("rule_count")
             .ok_or_else(|| EvalError::Runtime("Config rule_count is missing.".to_string()))
@@ -8154,7 +8174,7 @@ fn expect_config_rule_count(value: Value) -> Result<i64, EvalError> {
 }
 
 fn expect_global_config_rule_count(value: Value) -> Result<i64, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "GlobalConfig" => fields
             .remove("rule_count")
             .ok_or_else(|| EvalError::Runtime("GlobalConfig rule_count is missing.".to_string()))
@@ -8198,7 +8218,7 @@ fn row_buffer_value(bytes: Vec<u8>) -> Value {
 }
 
 fn expect_row_buffer_bytes(value: Value) -> Result<Vec<u8>, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "RowBuffer" => fields
             .remove("bytes")
             .ok_or_else(|| EvalError::Runtime("RowBuffer value is missing bytes.".to_string()))
@@ -8221,7 +8241,7 @@ fn row_value(fields: Vec<String>) -> Value {
 }
 
 fn expect_row_fields(value: Value) -> Result<Vec<String>, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "Row" => fields
             .remove("fields")
             .ok_or_else(|| EvalError::Runtime("Row value is missing fields.".to_string()))
@@ -8315,7 +8335,7 @@ fn file_value(path: impl Into<String>, mode: impl Into<String>, cursor: u64) -> 
 }
 
 fn expect_file(value: Value) -> Result<FileState, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "File" => {
             let path = fields
                 .remove("path")
@@ -8479,7 +8499,7 @@ fn result_value(value: Result<Value, Value>) -> Value {
 }
 
 fn result_payload(value: Value) -> Result<Result<Value, Value>, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Variant { name, mut fields } if name == "Ok" => fields
             .remove("value")
             .map(Ok)
@@ -8526,7 +8546,7 @@ fn value_none() -> Value {
 }
 
 fn option_payload(value: Value) -> Result<Option<Value>, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Variant { name, mut fields } if name == "Some" => fields
             .remove("value")
             .map(Some)
@@ -8553,6 +8573,9 @@ fn pattern_matches(
     value: &Value,
     bindings: &mut HashMap<String, Value>,
 ) -> bool {
+    if let Value::Managed(value) = value {
+        return pattern_matches(pattern, &value.borrow(), bindings);
+    }
     match pattern {
         MatchPattern::Binding { name, .. } => {
             bindings.insert(name.clone(), value.clone());
@@ -8618,6 +8641,8 @@ fn pattern_matches(
 }
 
 fn eval_binary(op: BinaryOp, left: Value, right: Value) -> Result<Value, EvalError> {
+    let left = unmanage_value(left);
+    let right = unmanage_value(right);
     match op {
         BinaryOp::Add => match (left, right) {
             (Value::Int(left), Value::Int(right)) => Ok(Value::Int(left + right)),
@@ -8643,7 +8668,7 @@ fn eval_binary(op: BinaryOp, left: Value, right: Value) -> Result<Value, EvalErr
 }
 
 fn expect_int(value: Value) -> Result<i64, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Int(value) => Ok(value),
         other => Err(EvalError::Runtime(format!(
             "expected Int, got `{}`.",
@@ -8653,7 +8678,7 @@ fn expect_int(value: Value) -> Result<i64, EvalError> {
 }
 
 fn expect_bool(value: Value) -> Result<bool, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Bool(value) => Ok(value),
         other => Err(EvalError::Runtime(format!(
             "expected Bool, got `{}`.",
@@ -8663,7 +8688,7 @@ fn expect_bool(value: Value) -> Result<bool, EvalError> {
 }
 
 fn expect_string(value: Value) -> Result<String, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::String(value) => Ok(value),
         other => Err(EvalError::Runtime(format!(
             "expected String, got `{}`.",
@@ -8673,7 +8698,7 @@ fn expect_string(value: Value) -> Result<String, EvalError> {
 }
 
 fn expect_char(value: Value) -> Result<char, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Char(value) => Ok(value),
         other => Err(EvalError::Runtime(format!(
             "expected Char, got `{}`.",
@@ -8683,7 +8708,7 @@ fn expect_char(value: Value) -> Result<char, EvalError> {
 }
 
 fn expect_bytes(value: Value) -> Result<Vec<u8>, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Bytes(value) => Ok(value),
         other => Err(EvalError::Runtime(format!(
             "expected Bytes, got `{}`.",
@@ -8693,7 +8718,7 @@ fn expect_bytes(value: Value) -> Result<Vec<u8>, EvalError> {
 }
 
 fn expect_list(value: Value) -> Result<Vec<Value>, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::List(value) => Ok(value),
         other => Err(EvalError::Runtime(format!(
             "expected List, got `{}`.",
@@ -8727,7 +8752,7 @@ fn expect_json_list(value: Value) -> Result<Vec<serde_json::Value>, EvalError> {
 }
 
 fn expect_map(value: Value) -> Result<Vec<(Value, Value)>, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Map(value) => Ok(value),
         other => Err(EvalError::Runtime(format!(
             "expected Map, got `{}`.",
@@ -8737,7 +8762,7 @@ fn expect_map(value: Value) -> Result<Vec<(Value, Value)>, EvalError> {
 }
 
 fn expect_json(value: Value) -> Result<serde_json::Value, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Json(value) => Ok(value),
         other => Err(EvalError::Runtime(format!(
             "expected JsonValue, got `{}`.",
@@ -8747,7 +8772,7 @@ fn expect_json(value: Value) -> Result<serde_json::Value, EvalError> {
 }
 
 fn expect_regex(value: Value) -> Result<regex::Regex, EvalError> {
-    match value {
+    match unmanage_value(value) {
         Value::Struct { name, mut fields } if name == "Regex" => {
             let pattern = fields
                 .remove("pattern")

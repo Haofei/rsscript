@@ -376,7 +376,7 @@ fn eval_matches_backend_for_declared_host_boundary() {
 // parity: hir_expr:ArrayLiteral hir_expr:Await hir_expr:Binary hir_expr:Call hir_expr:Effect hir_expr:Field
 // parity: hir_expr:Closure hir_expr:Ident hir_expr:Index hir_expr:Manage hir_expr:MapLiteral hir_expr:Match
 // parity: hir_expr:Number hir_expr:ObjectLiteral hir_expr:String hir_expr:Try
-// parity: value:Bool value:Bytes value:Int value:Json value:List
+// parity: value:Bool value:Bytes value:Int value:Json value:List value:Managed
 // parity: value:Char value:Closure value:Map value:String value:Struct value:Unit value:Variant
 // parity: runtime:Args.all runtime:Args.count runtime:Args.get runtime:Args.get_or_default
 // parity: runtime:Assert.equal runtime:Assert.equal_bool runtime:Assert.equal_int

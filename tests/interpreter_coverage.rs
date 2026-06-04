@@ -40,9 +40,9 @@ fn interpreter_coverage_baseline_is_explicit() {
     assert_bucket_counts(&report.runtime_intrinsics, 519, 519, 0);
     assert_bucket_counts(&report.hir_statements, 13, 12, 1);
     assert_bucket_counts(&report.hir_expressions, 18, 16, 2);
-    assert_bucket_counts(&report.value_types, 14, 12, 2);
+    assert_bucket_counts(&report.value_types, 14, 13, 1);
     assert_bucket_counts(&report.function_kinds, 3, 2, 1);
-    assert_bucket_counts(&report.parity_features, 561, 561, 0);
+    assert_bucket_counts(&report.parity_features, 562, 562, 0);
 
     assert!(
         report
@@ -57,6 +57,10 @@ fn interpreter_coverage_baseline_is_explicit() {
             .missing
             .contains(&"Spawn".to_string()),
         "known expression gap should stay visible"
+    );
+    assert!(
+        report.value_types.missing.contains(&"Native".to_string()),
+        "known value-type gap should stay visible"
     );
     assert!(
         report
