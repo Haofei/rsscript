@@ -465,24 +465,24 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Process.run_stdout runtime:Process.run_stdout_async runtime:Process.run_stdout_timeout
 // parity: runtime:Process.run_stdout_timeout_async runtime:Process.run_timeout runtime:Process.run_timeout_async
 // parity: runtime:Process.stream
-// parity: runtime:Map.clear runtime:Map.contains_key runtime:Map.get
-// parity: runtime:Map.get_or_default runtime:Map.insert runtime:Map.insert_old
-// parity: runtime:Map.is_empty runtime:Map.keys runtime:Map.len runtime:Map.new
-// parity: runtime:Map.remove runtime:Map.values
+// parity: runtime:Map.clear runtime:Map.contains_key runtime:Map.filter runtime:Map.for_each
+// parity: runtime:Map.get runtime:Map.get_or_default runtime:Map.insert runtime:Map.insert_old
+// parity: runtime:Map.is_empty runtime:Map.keys runtime:Map.len runtime:Map.map_values
+// parity: runtime:Map.merge runtime:Map.new runtime:Map.remove runtime:Map.values
 // parity: runtime:Option.and_then runtime:Option.filter runtime:Option.is_none
 // parity: runtime:Option.is_some runtime:Option.map runtime:Option.ok_or
-// parity: runtime:Option.or runtime:Option.unwrap_or
+// parity: runtime:Option.or runtime:Option.unwrap_or runtime:Option.unwrap_or_else
 // parity: runtime:Result.and_then runtime:Result.map runtime:Result.map_error
 // parity: runtime:Ord.compare
 // parity: runtime:Request.new runtime:Request.path
 // parity: runtime:Response.body runtime:Response.ok runtime:Response.status
 // parity: runtime:Result.err runtime:Result.err_message runtime:Result.is_err
-// parity: runtime:Result.is_ok runtime:Result.ok runtime:Result.unwrap_or
+// parity: runtime:Result.is_ok runtime:Result.ok runtime:Result.unwrap_or runtime:Result.unwrap_or_else
 // parity: runtime:Row.field_string runtime:RowBuffer.new
 // parity: runtime:RuleLoader.load_rules
-// parity: runtime:Set.clear runtime:Set.contains runtime:Set.difference runtime:Set.insert
-// parity: runtime:Set.intersection runtime:Set.is_empty runtime:Set.is_subset runtime:Set.len
-// parity: runtime:Set.new runtime:Set.remove runtime:Set.to_list runtime:Set.union
+// parity: runtime:Set.clear runtime:Set.contains runtime:Set.difference runtime:Set.for_each
+// parity: runtime:Set.insert runtime:Set.intersection runtime:Set.is_empty runtime:Set.is_subset
+// parity: runtime:Set.len runtime:Set.new runtime:Set.remove runtime:Set.to_list runtime:Set.union
 // parity: runtime:Sender.close
 // parity: runtime:SortedSet.clear runtime:SortedSet.contains runtime:SortedSet.insert
 // parity: runtime:SortedSet.is_empty runtime:SortedSet.len runtime:SortedSet.new
@@ -803,6 +803,12 @@ fn main() -> Unit {
         Log.write(message: read "none")
     }
     Log.write(message: read String.from_int(value: Option.unwrap_or<Int>(value: read maybe(found: false), default: read 9)))
+    Log.write(message: read String.from_int(value: Option.unwrap_or_else<Int>(value: read maybe(found: true), default: || {
+        return 14
+    })))
+    Log.write(message: read String.from_int(value: Option.unwrap_or_else<Int>(value: read maybe(found: false), default: || {
+        return 15
+    })))
     match Option.ok_or<Int, String>(value: read maybe(found: true), error: read "missing") {
         Ok(value) => {
             Log.write(message: read String.from_int(value: value))
@@ -869,6 +875,12 @@ fn main() -> Unit {
         Log.write(message: read "err")
     }
     Log.write(message: read String.from_int(value: Result.unwrap_or<Int, String>(value: read checked(ok: false), default: read 12)))
+    Log.write(message: read String.from_int(value: Result.unwrap_or_else<Int, String>(result: read checked(ok: true), fallback: |error| {
+        return String.len(value: read error)
+    })))
+    Log.write(message: read String.from_int(value: Result.unwrap_or_else<Int, String>(result: read checked(ok: false), fallback: |error| {
+        return String.len(value: read error)
+    })))
     match Result.ok<Int, String>(value: read checked(ok: true)) {
         Some(value) => {
             Log.write(message: read String.from_int(value: value))
@@ -2649,6 +2661,79 @@ fn main() -> Unit {
 }
 
 #[test]
+fn parity_map_closure_intrinsics() {
+    let source = r#"
+fn main() -> Unit {
+    let mut left = Map<String, Int>.new()
+    Map.insert<String, Int>(map: mut left, key: read "a", value: read 1)
+    Map.insert<String, Int>(map: mut left, key: read "b", value: read 2)
+
+    let mapped = Map.map_values<String, Int, Int>(map: read left, mapper: |value| {
+        return value + 10
+    })
+    match Map.get<String, Int>(map: read mapped, key: read "a") {
+        Some(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        None => {
+            Log.write(message: read "mapped-missing")
+        }
+    }
+
+    let filtered = Map.filter<String, Int>(map: read mapped, predicate: |key, value| {
+        return key == "b" && value > 10
+    })
+    Log.write(message: read String.from_int(value: Map.len<String, Int>(map: read filtered)))
+    match Map.get<String, Int>(map: read filtered, key: read "b") {
+        Some(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        None => {
+            Log.write(message: read "filtered-missing")
+        }
+    }
+
+    let mut single = Map<String, Int>.new()
+    Map.insert<String, Int>(map: mut single, key: read "only", value: read 8)
+    Map.for_each<String, Int>(map: read single, callback: |key, value| {
+        Log.write(message: read key)
+        Log.write(message: read String.from_int(value: value))
+        return Unit
+    })
+
+    let mut right = Map<String, Int>.new()
+    Map.insert<String, Int>(map: mut right, key: read "b", value: read 20)
+    Map.insert<String, Int>(map: mut right, key: read "c", value: read 30)
+    let merged = Map.merge<String, Int>(left: read left, right: read right, resolver: |left_value, right_value| {
+        return left_value + right_value
+    })
+    match Map.get<String, Int>(map: read merged, key: read "b") {
+        Some(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        None => {
+            Log.write(message: read "merge-b-missing")
+        }
+    }
+    match Map.get<String, Int>(map: read merged, key: read "c") {
+        Some(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        None => {
+            Log.write(message: read "merge-c-missing")
+        }
+    }
+    return Unit
+}
+"#;
+    assert_interpreter_matches_backend(
+        "parity-map-closure.rss",
+        "rsscript_parity_map_closure",
+        source,
+    );
+}
+
+#[test]
 fn parity_set_intrinsics() {
     let source = r#"
 fn main() -> Unit {
@@ -2679,6 +2764,10 @@ fn main() -> Unit {
     } else {
         Log.write(message: read "removed-z-no")
     }
+    Set.for_each<String>(set: read set, callback: |value| {
+        Log.write(message: read value)
+        return Unit
+    })
 
     let mut right = Set<String>.new()
     Set.insert<String>(set: mut right, value: read "b")

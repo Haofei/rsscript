@@ -389,6 +389,8 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("List", "to_json_values"),
     ("Map", "clear"),
     ("Map", "contains_key"),
+    ("Map", "filter"),
+    ("Map", "for_each"),
     ("Map", "get"),
     ("Map", "get_or_default"),
     ("Map", "insert"),
@@ -396,6 +398,8 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Map", "is_empty"),
     ("Map", "keys"),
     ("Map", "len"),
+    ("Map", "map_values"),
+    ("Map", "merge"),
     ("Map", "new"),
     ("Map", "remove"),
     ("Map", "values"),
@@ -429,6 +433,7 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Option", "ok_or"),
     ("Option", "or"),
     ("Option", "unwrap_or"),
+    ("Option", "unwrap_or_else"),
     ("Ord", "compare"),
     ("Path", "extension"),
     ("Path", "file_name"),
@@ -475,12 +480,14 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Result", "map_error"),
     ("Result", "ok"),
     ("Result", "unwrap_or"),
+    ("Result", "unwrap_or_else"),
     ("Row", "field_string"),
     ("RowBuffer", "new"),
     ("RuleLoader", "load_rules"),
     ("Set", "clear"),
     ("Set", "contains"),
     ("Set", "difference"),
+    ("Set", "for_each"),
     ("Set", "insert"),
     ("Set", "intersection"),
     ("Set", "is_empty"),
@@ -849,6 +856,8 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Log.write_json",
     "runtime:Map.clear",
     "runtime:Map.contains_key",
+    "runtime:Map.filter",
+    "runtime:Map.for_each",
     "runtime:Map.get",
     "runtime:Map.get_or_default",
     "runtime:Map.insert",
@@ -856,6 +865,8 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Map.is_empty",
     "runtime:Map.keys",
     "runtime:Map.len",
+    "runtime:Map.map_values",
+    "runtime:Map.merge",
     "runtime:Map.new",
     "runtime:Map.remove",
     "runtime:Map.values",
@@ -889,6 +900,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Option.ok_or",
     "runtime:Option.or",
     "runtime:Option.unwrap_or",
+    "runtime:Option.unwrap_or_else",
     "runtime:Ord.compare",
     "runtime:Path.extension",
     "runtime:Path.file_name",
@@ -935,12 +947,14 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Result.map_error",
     "runtime:Result.ok",
     "runtime:Result.unwrap_or",
+    "runtime:Result.unwrap_or_else",
     "runtime:Row.field_string",
     "runtime:RowBuffer.new",
     "runtime:RuleLoader.load_rules",
     "runtime:Set.clear",
     "runtime:Set.contains",
     "runtime:Set.difference",
+    "runtime:Set.for_each",
     "runtime:Set.insert",
     "runtime:Set.intersection",
     "runtime:Set.is_empty",
@@ -2944,6 +2958,55 @@ impl<'a> Interpreter<'a> {
                 let default = self.eval_named_or_positional_arg(args, "default", 2)?;
                 Ok(map_get(&expect_map(map)?, &key).unwrap_or(default))
             }
+            ("Map", "filter") => {
+                let map = self.eval_named_or_positional_arg(args, "map", 0)?;
+                let predicate = self.eval_named_or_positional_arg(args, "predicate", 1)?;
+                let mut filtered = Vec::new();
+                for (key, value) in expect_map(map)? {
+                    if expect_bool(
+                        self.call_closure(predicate.clone(), vec![key.clone(), value.clone()])?,
+                    )? {
+                        filtered.push((key, value));
+                    }
+                }
+                Ok(Value::Map(filtered))
+            }
+            ("Map", "for_each") => {
+                let map = self.eval_named_or_positional_arg(args, "map", 0)?;
+                let callback = self.eval_named_or_positional_arg(args, "callback", 1)?;
+                for (key, value) in expect_map(map)? {
+                    let _ = self.call_closure(callback.clone(), vec![key, value])?;
+                }
+                Ok(Value::Unit)
+            }
+            ("Map", "map_values") => {
+                let map = self.eval_named_or_positional_arg(args, "map", 0)?;
+                let mapper = self.eval_named_or_positional_arg(args, "mapper", 1)?;
+                let mut mapped = Vec::new();
+                for (key, value) in expect_map(map)? {
+                    mapped.push((key, self.call_closure(mapper.clone(), vec![value])?));
+                }
+                Ok(Value::Map(mapped))
+            }
+            ("Map", "merge") => {
+                let left = self.eval_named_or_positional_arg(args, "left", 0)?;
+                let right = self.eval_named_or_positional_arg(args, "right", 1)?;
+                let resolver = self.eval_named_or_positional_arg(args, "resolver", 2)?;
+                let mut merged = expect_map(left)?;
+                for (key, right_value) in expect_map(right)? {
+                    if let Some((_, left_value)) =
+                        merged.iter_mut().find(|(entry_key, _)| entry_key == &key)
+                    {
+                        *left_value = self.call_closure(
+                            resolver.clone(),
+                            vec![left_value.clone(), right_value],
+                        )?;
+                    } else {
+                        merged.push((key, right_value));
+                    }
+                }
+                Ok(Value::Map(merged))
+            }
             ("Map", "keys") => {
                 let map = self.eval_first_arg(args)?;
                 Ok(Value::List(
@@ -3272,6 +3335,14 @@ impl<'a> Interpreter<'a> {
                 let value = self.eval_named_or_positional_arg(args, "value", 0)?;
                 let default = self.eval_named_or_positional_arg(args, "default", 1)?;
                 Ok(option_payload(value)?.unwrap_or(default))
+            }
+            ("Option", "unwrap_or_else") => {
+                let value = self.eval_named_or_positional_arg(args, "value", 0)?;
+                let default = self.eval_named_or_positional_arg(args, "default", 1)?;
+                Ok(match option_payload(value)? {
+                    Some(value) => value,
+                    None => self.call_closure(default, Vec::new())?,
+                })
             }
             ("Option", "map") => {
                 let value = self.eval_named_or_positional_arg(args, "value", 0)?;
@@ -3691,6 +3762,14 @@ impl<'a> Interpreter<'a> {
                 let default = self.eval_named_or_positional_arg(args, "default", 1)?;
                 Ok(result_payload(value)?.map_or(default, |value| value))
             }
+            ("Result", "unwrap_or_else") => {
+                let value = self.eval_named_or_positional_arg(args, "result", 0)?;
+                let fallback = self.eval_named_or_positional_arg(args, "fallback", 1)?;
+                Ok(match result_payload(value)? {
+                    Ok(value) => value,
+                    Err(error) => self.call_closure(fallback, vec![error])?,
+                })
+            }
             ("Result", "map") => {
                 let value = self.eval_named_or_positional_arg(args, "result", 0)?;
                 let mapper = self.eval_named_or_positional_arg(args, "mapper", 1)?;
@@ -3778,6 +3857,14 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Unit)
             }
             ("Set", "to_list") => self.eval_first_arg(args),
+            ("Set", "for_each") => {
+                let set = self.eval_named_or_positional_arg(args, "set", 0)?;
+                let callback = self.eval_named_or_positional_arg(args, "callback", 1)?;
+                for value in expect_list(set)? {
+                    let _ = self.call_closure(callback.clone(), vec![value])?;
+                }
+                Ok(Value::Unit)
+            }
             ("Set", "union") => {
                 let left = self.eval_named_or_positional_arg(args, "left", 0)?;
                 let right = self.eval_named_or_positional_arg(args, "right", 1)?;
