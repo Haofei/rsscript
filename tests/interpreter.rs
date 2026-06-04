@@ -2,6 +2,7 @@ mod common;
 
 use base64::Engine;
 use sha1::{Digest, Sha1};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -9,7 +10,9 @@ use std::process::Command;
 use std::thread;
 
 use rsscript::{
-    EvalError, eval_source_main, eval_source_main_with_args, lower_source_to_rust_package,
+    EvalError, NativeInterpreterFn, NativeRustDependency, NativeValue, eval_source_main,
+    eval_source_main_with_args, eval_source_main_with_args_and_native_bindings,
+    lower_source_to_rust_package, lower_sources_to_rust_package_with_options,
     write_generated_rust_package,
 };
 
@@ -366,11 +369,183 @@ fn eval_matches_backend_for_declared_host_boundary() {
     assert_eq!(stderr, "");
 }
 
+#[test]
+fn eval_dispatches_native_host_bindings() {
+    fn host_echo(args: Vec<NativeValue>) -> Result<NativeValue, String> {
+        let [NativeValue::String(message)] = args.as_slice() else {
+            return Err(format!("unexpected args: {args:?}"));
+        };
+        Ok(NativeValue::String(format!("host:{message}")))
+    }
+
+    fn host_tag(args: Vec<NativeValue>) -> Result<NativeValue, String> {
+        let [NativeValue::Int(value)] = args.as_slice() else {
+            return Err(format!("unexpected args: {args:?}"));
+        };
+        Ok(NativeValue::String(format!("tag:{value}")))
+    }
+
+    let source = r#"
+features: native
+
+native fn Host.echo(message: read String) -> String
+    effects(native)
+
+native fn Host.tag(value: Int) -> String
+    effects(native)
+
+fn main() -> Unit {
+    Log.write(message: read Host.echo(message: read "hello"))
+    Log.write(message: read Host.tag(value: 7))
+    return Unit
+}
+"#;
+
+    let eval = eval_source_main_with_args_and_native_bindings(
+        "eval-native-host.rss",
+        source,
+        std::iter::empty::<&str>(),
+        [
+            ("Host.echo", host_echo as NativeInterpreterFn),
+            ("Host.tag", host_tag as NativeInterpreterFn),
+        ],
+    )
+    .expect("native host binding eval should succeed");
+
+    assert_eq!(eval.value, "Unit");
+    assert_eq!(eval.stdout, "host:hello\ntag:7\n");
+    assert_eq!(eval.stderr, "");
+}
+
+#[test]
+fn eval_reports_unbound_native_declarations() {
+    let source = r#"
+features: native
+
+native fn Host.echo(message: read String) -> String
+    effects(native)
+
+fn main() -> Unit {
+    Log.write(message: read Host.echo(message: read "hello"))
+    return Unit
+}
+"#;
+
+    let error = eval_source_main("eval-unbound-native.rss", source)
+        .expect_err("unbound native declaration should fail");
+
+    assert!(
+        matches!(error, EvalError::Runtime(ref message) if message.contains("Host.echo") && message.contains("no host binding")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn parity_native_host_bindings_match_lowered_backend() {
+    fn host_echo(args: Vec<NativeValue>) -> Result<NativeValue, String> {
+        let [NativeValue::String(message)] = args.as_slice() else {
+            return Err(format!("unexpected args: {args:?}"));
+        };
+        Ok(NativeValue::String(format!("host:{message}")))
+    }
+
+    let source = r#"
+features: native
+
+native fn Host.echo(message: read String) -> String
+    effects(native)
+
+fn main() -> Unit {
+    Log.write(message: read Host.echo(message: read "native"))
+    return Unit
+}
+"#;
+
+    let eval = eval_source_main_with_args_and_native_bindings(
+        "parity-native-host.rss",
+        source,
+        std::iter::empty::<&str>(),
+        [("Host.echo", host_echo as NativeInterpreterFn)],
+    )
+    .expect("interpreter should run native host binding");
+
+    let package = "rsscript_parity_native_host";
+    let native_dir = common::unique_temp_dir("rsscript-parity-native-crate");
+    fs::create_dir_all(native_dir.join("src")).expect("native crate src dir should create");
+    fs::write(
+        native_dir.join("Cargo.toml"),
+        r#"[package]
+name = "rsscript_test_native"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+"#,
+    )
+    .expect("native Cargo.toml should write");
+    fs::write(
+        native_dir.join("src/lib.rs"),
+        r#"pub fn echo(message: &String) -> String {
+    format!("host:{message}")
+}
+"#,
+    )
+    .expect("native lib should write");
+
+    let runtime_path = format!("{}/runtime", env!("CARGO_MANIFEST_DIR"));
+    let lowered = lower_sources_to_rust_package_with_options(
+        &[("parity-native-host.rss".to_string(), source.to_string())],
+        package,
+        &runtime_path,
+        &[],
+        &[NativeRustDependency {
+            crate_name: "rsscript_test_native".to_string(),
+            path: native_dir.to_string_lossy().to_string(),
+            cargo_features: Vec::new(),
+            bindings: BTreeMap::from([(
+                "Host.echo".to_string(),
+                "rsscript_test_native::echo".to_string(),
+            )]),
+        }],
+    )
+    .expect("source should lower with native binding");
+    let package_dir = common::unique_temp_dir(package);
+    write_generated_rust_package(&package_dir, &lowered).expect("generated package should write");
+
+    let output = Command::new("cargo")
+        .arg("run")
+        .arg("--quiet")
+        .arg("--manifest-path")
+        .arg(package_dir.join("Cargo.toml"))
+        .env(
+            "CARGO_TARGET_DIR",
+            format!(
+                "{}/target/rsscript-generated-test",
+                env!("CARGO_MANIFEST_DIR")
+            ),
+        )
+        .output()
+        .expect("generated Rust package should run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
+    let stderr = String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n");
+    let _ = fs::remove_dir_all(&package_dir);
+    let _ = fs::remove_dir_all(&native_dir);
+
+    assert!(
+        output.status.success(),
+        "generated Rust failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert_eq!(eval.stdout, stdout);
+    assert_eq!(eval.stderr, stderr);
+}
+
 /// Differential parity harness: run the same source through the interpreter and
 /// through the lowered-Rust backend, then assert their observable output agrees.
 /// This is the mechanism (not docs) that keeps the interpreter from diverging
 /// from the authoritative backend — one fixture per supported construct.
-// parity: function:async function:sync
+// parity: function:async function:native function:sync
 // parity: hir_stmt:Assign hir_stmt:Break hir_stmt:Continue hir_stmt:Expr hir_stmt:For
 // parity: hir_stmt:If hir_stmt:Let hir_stmt:Loop hir_stmt:Match hir_stmt:Return hir_stmt:Select hir_stmt:With
 // parity: hir_expr:ArrayLiteral hir_expr:Await hir_expr:Binary hir_expr:Call hir_expr:Effect hir_expr:Field

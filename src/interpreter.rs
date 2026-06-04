@@ -35,6 +35,29 @@ pub enum EvalError {
     Runtime(String),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum NativeValue {
+    Unit,
+    Int(i64),
+    Bool(bool),
+    String(String),
+    Char(char),
+    Bytes(Vec<u8>),
+    List(Vec<NativeValue>),
+    Map(Vec<(NativeValue, NativeValue)>),
+    Json(serde_json::Value),
+    Struct {
+        name: String,
+        fields: BTreeMap<String, NativeValue>,
+    },
+    Variant {
+        name: String,
+        fields: BTreeMap<String, NativeValue>,
+    },
+}
+
+pub type NativeInterpreterFn = fn(Vec<NativeValue>) -> Result<NativeValue, String>;
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct InterpreterCoverageReport {
     pub runtime_intrinsics: CoverageBucket,
@@ -127,7 +150,7 @@ const INTERPRETER_SUPPORTED_VALUE_TYPES: &[&str] = &[
 ];
 
 const FUNCTION_KINDS: &[&str] = &["sync", "async", "native"];
-const INTERPRETER_SUPPORTED_FUNCTION_KINDS: &[&str] = &["sync", "async"];
+const INTERPRETER_SUPPORTED_FUNCTION_KINDS: &[&str] = &["sync", "async", "native"];
 
 const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Args", "all"),
@@ -606,6 +629,7 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
 
 const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "function:async",
+    "function:native",
     "function:sync",
     "hir_expr:ArrayLiteral",
     "hir_expr:Await",
@@ -1371,6 +1395,20 @@ pub fn eval_source_main_with_args(
     source: &str,
     args: impl IntoIterator<Item = impl Into<String>>,
 ) -> Result<EvalOutput, EvalError> {
+    eval_source_main_with_args_and_native_bindings(
+        file,
+        source,
+        args,
+        std::iter::empty::<(String, NativeInterpreterFn)>(),
+    )
+}
+
+pub fn eval_source_main_with_args_and_native_bindings(
+    file: &str,
+    source: &str,
+    args: impl IntoIterator<Item = impl Into<String>>,
+    native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
+) -> Result<EvalOutput, EvalError> {
     let interfaces = standard_package_interfaces().collect::<Vec<_>>();
     let diagnostics = analyze_source_with_interfaces(file, source, &interfaces);
     let errors = diagnostics
@@ -1387,8 +1425,16 @@ pub fn eval_source_main_with_args(
     // field declaration order and receiver-call receiver expressions.
     let program = parse_source(file, source);
     let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
-    let mut interpreter =
-        Interpreter::new(&hir, &program, args.into_iter().map(Into::into).collect());
+    let native_bindings = native_bindings
+        .into_iter()
+        .map(|(key, function)| (key.into(), function))
+        .collect();
+    let mut interpreter = Interpreter::new(
+        &hir,
+        &program,
+        args.into_iter().map(Into::into).collect(),
+        native_bindings,
+    );
     let value = interpreter.call_function("main", Vec::new())?;
     Ok(EvalOutput {
         value: value.display(),
@@ -1405,6 +1451,7 @@ struct Interpreter<'a> {
     stdout: String,
     stderr: String,
     args: Vec<String>,
+    native_bindings: HashMap<String, NativeInterpreterFn>,
     next_cancellation_id: i64,
     cancellation_flags: HashMap<i64, bool>,
     next_channel_id: i64,
@@ -1420,7 +1467,12 @@ struct Interpreter<'a> {
 }
 
 impl<'a> Interpreter<'a> {
-    fn new(hir: &'a Hir, program: &'a Program, args: Vec<String>) -> Self {
+    fn new(
+        hir: &'a Hir,
+        program: &'a Program,
+        args: Vec<String>,
+        native_bindings: HashMap<String, NativeInterpreterFn>,
+    ) -> Self {
         Self {
             hir,
             program,
@@ -1429,6 +1481,7 @@ impl<'a> Interpreter<'a> {
             stdout: String::new(),
             stderr: String::new(),
             args,
+            native_bindings,
             next_cancellation_id: 0,
             cancellation_flags: HashMap::new(),
             next_channel_id: 0,
@@ -1451,6 +1504,18 @@ impl<'a> Interpreter<'a> {
                 "interpreter cannot call unsupported function `{name}`."
             )));
         };
+        if signature.is_native && !signature.is_builtin {
+            if let Some(function) = self
+                .native_bindings
+                .get(&native_function_key(name))
+                .copied()
+            {
+                return call_native_function(function, args);
+            }
+            return Err(EvalError::Runtime(format!(
+                "interpreter native function `{name}` has no host binding."
+            )));
+        }
         let Some(body) = hir.function_body(name).and_then(|body| body.block.as_ref()) else {
             return Err(EvalError::Runtime(format!(
                 "interpreter does not execute native function `{name}`."
@@ -2292,6 +2357,21 @@ impl<'a> Interpreter<'a> {
     fn eval_call(&mut self, callee: &Callee, args: &[HirCallArg]) -> Result<Value, EvalError> {
         match callee {
             Callee::Name(name) => {
+                if self
+                    .native_bindings
+                    .contains_key(&native_callee_key(callee))
+                {
+                    let values = self.eval_call_arg_values(args)?;
+                    return self.call_native_callee(callee, values);
+                }
+                if let Some(signature) = self.hir.resolve_function(None, name)
+                    && signature.is_native
+                    && !signature.is_builtin
+                {
+                    return Err(EvalError::Runtime(format!(
+                        "interpreter native function `{name}` has no host binding."
+                    )));
+                }
                 if self.hir.function_body(name).is_some() {
                     let values = args
                         .iter()
@@ -2329,6 +2409,21 @@ impl<'a> Interpreter<'a> {
                         args,
                     );
                 }
+                if self
+                    .native_bindings
+                    .contains_key(&native_callee_key(callee))
+                {
+                    let values = self.eval_call_arg_values(args)?;
+                    return self.call_native_callee(callee, values);
+                }
+                if let Some(signature) = self.hir.resolve_function(Some(namespace), name)
+                    && signature.is_native
+                    && !signature.is_builtin
+                {
+                    return Err(EvalError::Runtime(format!(
+                        "interpreter native function `{namespace}.{name}` has no host binding."
+                    )));
+                }
                 Err(EvalError::Runtime(format!(
                     "interpreter P0 does not support qualified call `{namespace}.{name}`."
                 )))
@@ -2336,6 +2431,15 @@ impl<'a> Interpreter<'a> {
             Callee::ReceiverCall {
                 receiver, method, ..
             } => {
+                if self
+                    .native_bindings
+                    .contains_key(&native_callee_key(callee))
+                {
+                    let mut values = Vec::with_capacity(args.len() + 1);
+                    values.push(self.eval_ast_expr(receiver)?);
+                    values.extend(self.eval_call_arg_values(args)?);
+                    return self.call_native_callee(callee, values);
+                }
                 // HIR reuses the AST `Callee`, so the receiver is still an AST
                 // expression (only the call arguments are lowered). Evaluate it
                 // through the small AST bridge below.
@@ -2343,6 +2447,22 @@ impl<'a> Interpreter<'a> {
                 self.eval_receiver_call(receiver, method, args)
             }
         }
+    }
+
+    fn eval_call_arg_values(&mut self, args: &[HirCallArg]) -> Result<Vec<Value>, EvalError> {
+        args.iter()
+            .map(|arg| self.eval_expr(&arg.value))
+            .collect::<Result<Vec<_>, _>>()
+    }
+
+    fn call_native_callee(&self, callee: &Callee, args: Vec<Value>) -> Result<Value, EvalError> {
+        let key = native_callee_key(callee);
+        let Some(function) = self.native_bindings.get(&key).copied() else {
+            return Err(EvalError::Runtime(format!(
+                "interpreter native function `{key}` has no host binding."
+            )));
+        };
+        call_native_function(function, args)
     }
 
     fn eval_runtime_intrinsic(
@@ -5907,8 +6027,125 @@ fn read_field(base: &Value, name: &str) -> Result<Value, EvalError> {
 
 fn unmanage_value(value: Value) -> Value {
     match value {
-        Value::Managed(value) => value.borrow().clone(),
+        Value::Managed(value) => unmanage_value(value.borrow().clone()),
         other => other,
+    }
+}
+
+fn native_function_key(name: &str) -> String {
+    if let Some((namespace, name)) = name.rsplit_once('.') {
+        format!(
+            "{}.{}",
+            strip_generic_args(namespace),
+            strip_generic_args(name)
+        )
+    } else {
+        strip_generic_args(name).to_string()
+    }
+}
+
+fn native_callee_key(callee: &Callee) -> String {
+    match callee {
+        Callee::Name(name) => strip_generic_args(name).to_string(),
+        Callee::Qualified { namespace, name } => {
+            format!(
+                "{}.{}",
+                strip_generic_args(namespace),
+                strip_generic_args(name)
+            )
+        }
+        Callee::ReceiverCall { method, .. } => strip_generic_args(method).to_string(),
+    }
+}
+
+fn call_native_function(
+    function: NativeInterpreterFn,
+    args: Vec<Value>,
+) -> Result<Value, EvalError> {
+    let args = args
+        .into_iter()
+        .map(native_value_from_value)
+        .collect::<Result<Vec<_>, _>>()?;
+    function(args)
+        .map(value_from_native_value)
+        .map_err(|error| EvalError::Runtime(format!("native host binding failed: {error}")))
+}
+
+fn native_value_from_value(value: Value) -> Result<NativeValue, EvalError> {
+    match unmanage_value(value) {
+        Value::Unit => Ok(NativeValue::Unit),
+        Value::Int(value) => Ok(NativeValue::Int(value)),
+        Value::Bool(value) => Ok(NativeValue::Bool(value)),
+        Value::String(value) => Ok(NativeValue::String(value)),
+        Value::Char(value) => Ok(NativeValue::Char(value)),
+        Value::Bytes(value) => Ok(NativeValue::Bytes(value)),
+        Value::List(items) => items
+            .into_iter()
+            .map(native_value_from_value)
+            .collect::<Result<Vec<_>, _>>()
+            .map(NativeValue::List),
+        Value::Map(entries) => entries
+            .into_iter()
+            .map(|(key, value)| {
+                Ok((
+                    native_value_from_value(key)?,
+                    native_value_from_value(value)?,
+                ))
+            })
+            .collect::<Result<Vec<_>, EvalError>>()
+            .map(NativeValue::Map),
+        Value::Json(value) => Ok(NativeValue::Json(value)),
+        Value::Struct { name, fields } => fields
+            .into_iter()
+            .map(|(field, value)| Ok((field, native_value_from_value(value)?)))
+            .collect::<Result<BTreeMap<_, _>, EvalError>>()
+            .map(|fields| NativeValue::Struct { name, fields }),
+        Value::Variant { name, fields } => fields
+            .into_iter()
+            .map(|(field, value)| Ok((field, native_value_from_value(value)?)))
+            .collect::<Result<BTreeMap<_, _>, EvalError>>()
+            .map(|fields| NativeValue::Variant { name, fields }),
+        Value::Managed(_) => Err(EvalError::Runtime(
+            "native host binding argument stayed managed after unwrapping.".to_string(),
+        )),
+        Value::Closure { .. } => Err(EvalError::Runtime(
+            "native host bindings cannot receive interpreter closures.".to_string(),
+        )),
+    }
+}
+
+fn value_from_native_value(value: NativeValue) -> Value {
+    match value {
+        NativeValue::Unit => Value::Unit,
+        NativeValue::Int(value) => Value::Int(value),
+        NativeValue::Bool(value) => Value::Bool(value),
+        NativeValue::String(value) => Value::String(value),
+        NativeValue::Char(value) => Value::Char(value),
+        NativeValue::Bytes(value) => Value::Bytes(value),
+        NativeValue::List(items) => {
+            Value::List(items.into_iter().map(value_from_native_value).collect())
+        }
+        NativeValue::Map(entries) => Value::Map(
+            entries
+                .into_iter()
+                .map(|(key, value)| (value_from_native_value(key), value_from_native_value(value)))
+                .collect(),
+        ),
+        NativeValue::Json(value) => Value::Json(value),
+        NativeValue::Struct { name, fields } => Value::Struct {
+            name,
+            fields: fields
+                .into_iter()
+                .map(|(field, value)| (field, value_from_native_value(value)))
+                .collect(),
+        },
+        NativeValue::Variant { name, fields } => Value::Variant {
+            name,
+            fields: fields
+                .into_iter()
+                .map(|(field, value)| (field, value_from_native_value(value)))
+                .collect(),
+        },
     }
 }
 

@@ -47,8 +47,9 @@ pub use generate::{
     TypeRef, prefix_status, valid_continuations,
 };
 pub use interpreter::{
-    CoverageBucket, EvalError, EvalOutput, InterpreterCoverageReport, eval_source_main,
-    eval_source_main_with_args, interpreter_coverage_report,
+    CoverageBucket, EvalError, EvalOutput, InterpreterCoverageReport, NativeInterpreterFn,
+    NativeValue, eval_source_main, eval_source_main_with_args,
+    eval_source_main_with_args_and_native_bindings, interpreter_coverage_report,
 };
 pub use lint::lint_source;
 pub use package::{

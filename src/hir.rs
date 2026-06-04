@@ -46,6 +46,7 @@ pub struct FunctionSig {
     pub name: String,
     pub is_public: bool,
     pub is_async: bool,
+    pub is_native: bool,
     pub type_params: Box<[String]>,
     pub type_param_bounds: Vec<Option<GenericBound>>,
     pub params: Vec<ParamSig>,
@@ -2953,6 +2954,7 @@ fn function_sig_from_decl(function: &FunctionDecl, is_builtin: bool) -> Function
         name,
         is_public: function.is_public,
         is_async: function.is_async,
+        is_native: function.is_native,
         type_params: function
             .type_params
             .iter()
@@ -3154,6 +3156,7 @@ fn constructor_sig_from_type(type_info: &TypeInfo, is_builtin: bool) -> Function
         name: type_info.name.clone(),
         is_public: is_builtin,
         is_async: false,
+        is_native: false,
         type_params: type_info.type_params.clone(),
         type_param_bounds: vec![None; type_info.type_params.len()],
         params: fields
