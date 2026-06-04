@@ -140,6 +140,7 @@ enum InterpreterEvalKind {
     BytesViewStartsWith,
     BytesViewToBytes,
     CacheNew,
+    ChannelErrorMessage,
     CharCompare,
     CharFromCode,
     CharIsAlphanumeric,
@@ -158,6 +159,9 @@ enum InterpreterEvalKind {
     DequePushFront,
     DequeToList,
     DiffUnified,
+    CounterAdd,
+    CounterNew,
+    CounterValue,
     DurationAdd,
     DurationAsMs,
     DurationAsSeconds,
@@ -199,6 +203,11 @@ enum InterpreterEvalKind {
     MapNew,
     MapRemove,
     MapValues,
+    HttpErrorMessage,
+    HttpResponseIsSuccess,
+    HttpResponseLines,
+    HttpResponseStatus,
+    HttpResponseText,
     OptionIsNone,
     OptionIsSome,
     OptionOkOr,
@@ -213,6 +222,11 @@ enum InterpreterEvalKind {
     PersistentMapLen,
     PersistentMapNew,
     PersistentMapRemove,
+    PoolErrorMessage,
+    PoolStatsAvailable,
+    PoolStatsCapacity,
+    PoolStatsCreated,
+    PoolStatsInUse,
     RowBufferNew,
     RowFieldString,
     RegexCaptures,
@@ -457,6 +471,12 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::CacheNew,
     },
     InterpreterIntrinsicSpec {
+        namespace: "ChannelError",
+        name: "message",
+        variant: "ChannelErrorMessage",
+        eval_kind: InterpreterEvalKind::ChannelErrorMessage,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "Char",
         name: "compare",
         variant: "CharCompare",
@@ -557,6 +577,24 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "to_list",
         variant: "DequeToList",
         eval_kind: InterpreterEvalKind::DequeToList,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Counter",
+        name: "add",
+        variant: "CounterAdd",
+        eval_kind: InterpreterEvalKind::CounterAdd,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Counter",
+        name: "new",
+        variant: "CounterNew",
+        eval_kind: InterpreterEvalKind::CounterNew,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Counter",
+        name: "value",
+        variant: "CounterValue",
+        eval_kind: InterpreterEvalKind::CounterValue,
     },
     InterpreterIntrinsicSpec {
         namespace: "Diff",
@@ -811,6 +849,36 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::MapValues,
     },
     InterpreterIntrinsicSpec {
+        namespace: "HttpError",
+        name: "message",
+        variant: "HttpErrorMessage",
+        eval_kind: InterpreterEvalKind::HttpErrorMessage,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "HttpResponse",
+        name: "is_success",
+        variant: "HttpResponseIsSuccess",
+        eval_kind: InterpreterEvalKind::HttpResponseIsSuccess,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "HttpResponse",
+        name: "lines",
+        variant: "HttpResponseLines",
+        eval_kind: InterpreterEvalKind::HttpResponseLines,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "HttpResponse",
+        name: "status",
+        variant: "HttpResponseStatus",
+        eval_kind: InterpreterEvalKind::HttpResponseStatus,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "HttpResponse",
+        name: "text",
+        variant: "HttpResponseText",
+        eval_kind: InterpreterEvalKind::HttpResponseText,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "Option",
         name: "is_none",
         variant: "OptionIsNone",
@@ -893,6 +961,36 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "remove",
         variant: "PersistentMapRemove",
         eval_kind: InterpreterEvalKind::PersistentMapRemove,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "PoolError",
+        name: "message",
+        variant: "PoolErrorMessage",
+        eval_kind: InterpreterEvalKind::PoolErrorMessage,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "PoolStats",
+        name: "available",
+        variant: "PoolStatsAvailable",
+        eval_kind: InterpreterEvalKind::PoolStatsAvailable,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "PoolStats",
+        name: "capacity",
+        variant: "PoolStatsCapacity",
+        eval_kind: InterpreterEvalKind::PoolStatsCapacity,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "PoolStats",
+        name: "created",
+        variant: "PoolStatsCreated",
+        eval_kind: InterpreterEvalKind::PoolStatsCreated,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "PoolStats",
+        name: "in_use",
+        variant: "PoolStatsInUse",
+        eval_kind: InterpreterEvalKind::PoolStatsInUse,
     },
     InterpreterIntrinsicSpec {
         namespace: "RowBuffer",
@@ -1431,6 +1529,9 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::CacheNew => {
             "{\n            Ok(Value::Map(Vec::new()))\n        }"
         }
+        InterpreterEvalKind::ChannelErrorMessage => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            read_field(&value, \"message\")\n        }"
+        }
         InterpreterEvalKind::CharCompare => {
             "{\n            let left = interpreter.eval_named_or_positional_arg(args, \"left\", 0)?;\n            let right = interpreter.eval_named_or_positional_arg(args, \"right\", 1)?;\n            let value = match expect_char(left)?.cmp(&expect_char(right)?) {\n                std::cmp::Ordering::Less => -1,\n                std::cmp::Ordering::Equal => 0,\n                std::cmp::Ordering::Greater => 1,\n            };\n            Ok(Value::Int(value))\n        }"
         }
@@ -1481,6 +1582,15 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::DequeToList => {
             "{\n            interpreter.eval_first_arg(args)\n        }"
+        }
+        InterpreterEvalKind::CounterAdd => {
+            "{\n            let counter_name = interpreter.mut_arg_local_name(args, \"counter\", 0)?;\n            let amount = interpreter.eval_named_or_positional_arg(args, \"amount\", 1)?;\n            let value = expect_counter_value(interpreter.lookup(counter_name)?)? + expect_int(amount)?;\n            interpreter.assign(counter_name, counter_value(value))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::CounterNew => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            Ok(counter_value(expect_int(value)?))\n        }"
+        }
+        InterpreterEvalKind::CounterValue => {
+            "{\n            let counter = interpreter.eval_named_or_positional_arg(args, \"counter\", 0)?;\n            Ok(Value::Int(expect_counter_value(counter)?))\n        }"
         }
         InterpreterEvalKind::DiffUnified => {
             "{\n            let old = interpreter.eval_named_or_positional_arg(args, \"old\", 0)?;\n            let new = interpreter.eval_named_or_positional_arg(args, \"new\", 1)?;\n            Ok(Value::String(diff_unified_string(\n                &expect_string(old)?,\n                &expect_string(new)?,\n            )))\n        }"
@@ -1605,6 +1715,21 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::MapValues => {
             "{\n            let map = interpreter.eval_first_arg(args)?;\n            Ok(Value::List(\n                expect_map(map)?\n                    .into_iter()\n                    .map(|(_, value)| value)\n                    .collect(),\n            ))\n        }"
         }
+        InterpreterEvalKind::HttpErrorMessage => {
+            "{\n            let error = interpreter.eval_named_or_positional_arg(args, \"error\", 0)?;\n            read_field(&error, \"message\")\n        }"
+        }
+        InterpreterEvalKind::HttpResponseIsSuccess => {
+            "{\n            let response = interpreter.eval_named_or_positional_arg(args, \"response\", 0)?;\n            let (status, _) = expect_http_response(response)?;\n            Ok(Value::Bool((200..300).contains(&status)))\n        }"
+        }
+        InterpreterEvalKind::HttpResponseLines => {
+            "{\n            let response = interpreter.eval_named_or_positional_arg(args, \"response\", 0)?;\n            let (_, body) = expect_http_response(response)?;\n            Ok(Value::List(\n                body.lines()\n                    .map(|line| Value::String(line.to_string()))\n                    .collect(),\n            ))\n        }"
+        }
+        InterpreterEvalKind::HttpResponseStatus => {
+            "{\n            let response = interpreter.eval_named_or_positional_arg(args, \"response\", 0)?;\n            let (status, _) = expect_http_response(response)?;\n            Ok(Value::Int(status))\n        }"
+        }
+        InterpreterEvalKind::HttpResponseText => {
+            "{\n            let response = interpreter.eval_named_or_positional_arg(args, \"response\", 0)?;\n            let (_, body) = expect_http_response(response)?;\n            Ok(Value::String(body))\n        }"
+        }
         InterpreterEvalKind::OptionIsNone => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(matches!(\n                value,\n                Value::Variant { name, .. } if name == \"None\"\n            )))\n        }"
         }
@@ -1646,6 +1771,21 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::PersistentMapRemove => {
             "{\n            let map = interpreter.eval_named_or_positional_arg(args, \"map\", 0)?;\n            let key = interpreter.eval_named_or_positional_arg(args, \"key\", 1)?;\n            let mut map = expect_map(map)?;\n            map_remove(&mut map, &key);\n            Ok(Value::Map(map))\n        }"
+        }
+        InterpreterEvalKind::PoolErrorMessage => {
+            "{\n            let error = interpreter.eval_named_or_positional_arg(args, \"error\", 0)?;\n            read_field(&error, \"message\")\n        }"
+        }
+        InterpreterEvalKind::PoolStatsAvailable => {
+            "{\n            let stats = interpreter.eval_named_or_positional_arg(args, \"stats\", 0)?;\n            read_field(&stats, \"available\")\n        }"
+        }
+        InterpreterEvalKind::PoolStatsCapacity => {
+            "{\n            let stats = interpreter.eval_named_or_positional_arg(args, \"stats\", 0)?;\n            read_field(&stats, \"capacity\")\n        }"
+        }
+        InterpreterEvalKind::PoolStatsCreated => {
+            "{\n            let stats = interpreter.eval_named_or_positional_arg(args, \"stats\", 0)?;\n            read_field(&stats, \"created\")\n        }"
+        }
+        InterpreterEvalKind::PoolStatsInUse => {
+            "{\n            let stats = interpreter.eval_named_or_positional_arg(args, \"stats\", 0)?;\n            read_field(&stats, \"in_use\")\n        }"
         }
         InterpreterEvalKind::RowBufferNew => {
             "{\n            let size = interpreter.eval_named_or_positional_arg(args, \"size\", 0)?;\n            let capacity = expect_int(size)?.max(0) as usize;\n            Ok(row_buffer_value(Vec::with_capacity(capacity)))\n        }"

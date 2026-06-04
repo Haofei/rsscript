@@ -3129,21 +3129,6 @@ impl<'a> Interpreter<'a> {
                         .max(0),
                 ))
             }
-            ("Counter", "new") => {
-                let value = self.eval_named_or_positional_arg(args, "value", 0)?;
-                Ok(counter_value(expect_int(value)?))
-            }
-            ("Counter", "add") => {
-                let counter_name = self.mut_arg_local_name(args, "counter", 0)?;
-                let amount = self.eval_named_or_positional_arg(args, "amount", 1)?;
-                let value = expect_counter_value(self.lookup(counter_name)?)? + expect_int(amount)?;
-                self.assign(counter_name, counter_value(value))?;
-                Ok(Value::Unit)
-            }
-            ("Counter", "value") => {
-                let counter = self.eval_named_or_positional_arg(args, "counter", 0)?;
-                Ok(Value::Int(expect_counter_value(counter)?))
-            }
             ("Env", "current_dir") => Ok(result_value(
                 std::env::current_dir()
                     .map(|path| Value::String(path_to_string(&path)))
@@ -3223,10 +3208,6 @@ impl<'a> Interpreter<'a> {
                     Ok(receiver_value(channel.id, false))
                 }))
             }
-            ("ChannelError", "message") => {
-                let value = self.eval_first_arg(args)?;
-                read_field(&value, "message")
-            }
             ("Sender", "close") => {
                 let sender_name = self.mut_arg_local_name(args, "sender", 0)?;
                 let sender = expect_sender(self.lookup(sender_name)?)?;
@@ -3298,17 +3279,6 @@ impl<'a> Interpreter<'a> {
                 let lease = self.lookup(lease_name)?;
                 self.assign(lease_name, mark_pool_lease_discarded(lease)?)?;
                 Ok(Value::Unit)
-            }
-            ("PoolStats", "capacity")
-            | ("PoolStats", "created")
-            | ("PoolStats", "available")
-            | ("PoolStats", "in_use") => {
-                let stats = self.eval_named_or_positional_arg(args, "stats", 0)?;
-                read_field(&stats, name)
-            }
-            ("PoolError", "message") => {
-                let error = self.eval_named_or_positional_arg(args, "error", 0)?;
-                read_field(&error, "message")
             }
             ("Cache", "insert") => {
                 let cache_name = self.mut_arg_local_name(args, "cache", 0)?;
@@ -3914,34 +3884,6 @@ impl<'a> Interpreter<'a> {
                     "HTTP async provider is not configured for {} {}",
                     request.method, request.url
                 ))))
-            }
-            ("HttpError", "message") => {
-                let error = self.eval_named_or_positional_arg(args, "error", 0)?;
-                read_field(&error, "message")
-            }
-            ("HttpResponse", "status") => {
-                let response = self.eval_named_or_positional_arg(args, "response", 0)?;
-                let (status, _) = expect_http_response(response)?;
-                Ok(Value::Int(status))
-            }
-            ("HttpResponse", "text") => {
-                let response = self.eval_named_or_positional_arg(args, "response", 0)?;
-                let (_, body) = expect_http_response(response)?;
-                Ok(Value::String(body))
-            }
-            ("HttpResponse", "lines") => {
-                let response = self.eval_named_or_positional_arg(args, "response", 0)?;
-                let (_, body) = expect_http_response(response)?;
-                Ok(Value::List(
-                    body.lines()
-                        .map(|line| Value::String(line.to_string()))
-                        .collect(),
-                ))
-            }
-            ("HttpResponse", "is_success") => {
-                let response = self.eval_named_or_positional_arg(args, "response", 0)?;
-                let (status, _) = expect_http_response(response)?;
-                Ok(Value::Bool((200..300).contains(&status)))
             }
             ("HttpRequest", "json") => {
                 let url = self.eval_named_or_positional_arg(args, "url", 0)?;
