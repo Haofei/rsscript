@@ -257,6 +257,8 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Buffer.new runtime:Buffer.view runtime:BufferView.is_empty
 // parity: runtime:BufferView.len runtime:BufferView.slice runtime:BufferView.to_bytes
 // parity: runtime:Cache.insert runtime:Cache.lookup runtime:Cache.new
+// parity: runtime:CancellationSource.cancel runtime:CancellationSource.new
+// parity: runtime:CancellationSource.token runtime:CancellationToken.is_cancelled
 // parity: runtime:Clock.now runtime:Clock.system_unix_ms
 // parity: runtime:Config.load runtime:Config.name runtime:Config.new runtime:Config.rule_count
 // parity: runtime:ConfigStore.name runtime:ConfigStore.new runtime:ConfigStore.replace
@@ -824,6 +826,37 @@ fn main() -> Unit {
     assert_interpreter_matches_backend(
         "parity-environment-function.rss",
         "rsscript_parity_environment_function",
+        source,
+    );
+}
+
+#[test]
+fn parity_cancellation_intrinsics() {
+    let source = r#"
+features: native, local
+
+fn main() -> Unit {
+    local source = CancellationSource.new()
+    let token = CancellationSource.token(source: read source)
+    if !CancellationToken.is_cancelled(token: read token) {
+        Log.write(message: read "not-cancelled")
+    }
+
+    CancellationSource.cancel(source: mut source)
+    if CancellationToken.is_cancelled(token: read token) {
+        Log.write(message: read "cancelled")
+    }
+
+    let second = CancellationSource.token(source: read source)
+    if CancellationToken.is_cancelled(token: read second) {
+        Log.write(message: read "second-cancelled")
+    }
+    return Unit
+}
+"#;
+    assert_interpreter_matches_backend(
+        "parity-cancellation.rss",
+        "rsscript_parity_cancellation",
         source,
     );
 }

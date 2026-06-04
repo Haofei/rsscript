@@ -142,6 +142,10 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Cache", "insert"),
     ("Cache", "lookup"),
     ("Cache", "new"),
+    ("CancellationSource", "cancel"),
+    ("CancellationSource", "new"),
+    ("CancellationSource", "token"),
+    ("CancellationToken", "is_cancelled"),
     ("Clock", "now"),
     ("Clock", "system_unix_ms"),
     ("Config", "load"),
@@ -518,6 +522,10 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Cache.insert",
     "runtime:Cache.lookup",
     "runtime:Cache.new",
+    "runtime:CancellationSource.cancel",
+    "runtime:CancellationSource.new",
+    "runtime:CancellationSource.token",
+    "runtime:CancellationToken.is_cancelled",
     "runtime:Clock.now",
     "runtime:Clock.system_unix_ms",
     "runtime:Config.load",
@@ -1116,6 +1124,8 @@ struct Interpreter<'a> {
     stdout: String,
     stderr: String,
     args: Vec<String>,
+    next_cancellation_id: i64,
+    cancellation_flags: HashMap<i64, bool>,
 }
 
 impl<'a> Interpreter<'a> {
@@ -1128,6 +1138,8 @@ impl<'a> Interpreter<'a> {
             stdout: String::new(),
             stderr: String::new(),
             args,
+            next_cancellation_id: 0,
+            cancellation_flags: HashMap::new(),
         }
     }
 
@@ -2135,6 +2147,33 @@ impl<'a> Interpreter<'a> {
                     Some(value) => value,
                     None => Value::String(String::new()),
                 })
+            }
+            ("CancellationSource", "new") => {
+                let id = self.next_cancellation_id;
+                self.next_cancellation_id = self.next_cancellation_id.saturating_add(1);
+                self.cancellation_flags.insert(id, false);
+                Ok(cancellation_source_value(id))
+            }
+            ("CancellationSource", "token") => {
+                let source = self.eval_named_or_positional_arg(args, "source", 0)?;
+                Ok(cancellation_token_value(expect_cancellation_id(
+                    source,
+                    "CancellationSource",
+                )?))
+            }
+            ("CancellationSource", "cancel") => {
+                let source_name = self.mut_arg_local_name(args, "source", 0)?;
+                let id = expect_cancellation_id(self.lookup(source_name)?, "CancellationSource")?;
+                self.cancellation_flags.insert(id, true);
+                self.assign(source_name, cancellation_source_value(id))?;
+                Ok(Value::Unit)
+            }
+            ("CancellationToken", "is_cancelled") => {
+                let token = self.eval_named_or_positional_arg(args, "token", 0)?;
+                let id = expect_cancellation_id(token, "CancellationToken")?;
+                Ok(Value::Bool(
+                    self.cancellation_flags.get(&id).copied().unwrap_or(false),
+                ))
             }
             ("Clock", "now") => Ok(instant_value(clock_system_unix_ms())),
             ("Clock", "system_unix_ms") => Ok(Value::Int(clock_system_unix_ms())),
@@ -4782,6 +4821,34 @@ fn counter_value(value: i64) -> Value {
     Value::Struct {
         name: "Counter".to_string(),
         fields: BTreeMap::from([("value".to_string(), Value::Int(value))]),
+    }
+}
+
+fn cancellation_source_value(id: i64) -> Value {
+    cancellation_handle_value("CancellationSource", id)
+}
+
+fn cancellation_token_value(id: i64) -> Value {
+    cancellation_handle_value("CancellationToken", id)
+}
+
+fn cancellation_handle_value(name: impl Into<String>, id: i64) -> Value {
+    Value::Struct {
+        name: name.into(),
+        fields: BTreeMap::from([("id".to_string(), Value::Int(id))]),
+    }
+}
+
+fn expect_cancellation_id(value: Value, expected_name: &str) -> Result<i64, EvalError> {
+    match value {
+        Value::Struct { name, mut fields } if name == expected_name => fields
+            .remove("id")
+            .ok_or_else(|| EvalError::Runtime(format!("{expected_name} value is missing id.")))
+            .and_then(expect_int),
+        other => Err(EvalError::Runtime(format!(
+            "expected {expected_name}, got `{}`.",
+            other.display()
+        ))),
     }
 }
 
