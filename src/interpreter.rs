@@ -3280,37 +3280,6 @@ impl<'a> Interpreter<'a> {
                 self.assign(lease_name, mark_pool_lease_discarded(lease)?)?;
                 Ok(Value::Unit)
             }
-            ("Cache", "insert") => {
-                let cache_name = self.mut_arg_local_name(args, "cache", 0)?;
-                let key = self.eval_named_or_positional_arg(args, "key", 1)?;
-                let value = self.eval_named_or_positional_arg(args, "value", 2)?;
-                let mut cache = expect_map(self.lookup(cache_name)?)?;
-                map_insert(&mut cache, key, value);
-                self.assign(cache_name, Value::Map(cache))?;
-                Ok(Value::Unit)
-            }
-            ("Cache", "lookup") => {
-                let cache = self.eval_named_or_positional_arg(args, "cache", 0)?;
-                let key = self.eval_named_or_positional_arg(args, "key", 1)?;
-                Ok(match map_get(&expect_map(cache)?, &key) {
-                    Some(value) => value,
-                    None => Value::String(String::new()),
-                })
-            }
-            ("Cache", "get") => {
-                let cache = self.eval_named_or_positional_arg(args, "cache", 0)?;
-                let bytes = expect_map(cache)?
-                    .into_iter()
-                    .find_map(|(_, value)| expect_string(value).ok())
-                    .map(String::into_bytes)
-                    .unwrap_or_default();
-                Ok(image_value(
-                    bytes,
-                    None,
-                    None,
-                    vec!["cache-get".to_string()],
-                ))
-            }
             ("CancellationSource", "new") => {
                 let id = self.next_cancellation_id;
                 self.next_cancellation_id = self.next_cancellation_id.saturating_add(1);
@@ -3412,27 +3381,6 @@ impl<'a> Interpreter<'a> {
                 let image = expect_image(image)?;
                 self.stdout.push_str(&image.inspect_line());
                 self.stdout.push('\n');
-                Ok(Value::Unit)
-            }
-            ("ImageCache", "new") => {
-                let capacity = self.eval_named_or_positional_arg(args, "capacity", 0)?;
-                Ok(image_cache_value(expect_int(capacity)?.max(0), 0))
-            }
-            ("ImageCache", "len") => {
-                let cache = self.eval_named_or_positional_arg(args, "cache", 0)?;
-                Ok(Value::Int(expect_image_cache_len(cache)?))
-            }
-            ("ImageCache", "store") => {
-                let cache_name = self.mut_arg_local_name(args, "cache", 0)?;
-                let image = self.eval_named_or_positional_arg(args, "image", 1)?;
-                let _ = expect_image(image)?;
-                let (capacity, len) = expect_image_cache_state(self.lookup(cache_name)?)?;
-                let len = if capacity == 0 {
-                    0
-                } else {
-                    (len + 1).min(capacity)
-                };
-                self.assign(cache_name, image_cache_value(capacity, len))?;
                 Ok(Value::Unit)
             }
             ("List", "count_where") => {
@@ -3953,27 +3901,6 @@ impl<'a> Interpreter<'a> {
                     }
                     None => value_none(),
                 })
-            }
-            ("String", "join") => {
-                let parts = self.eval_named_or_positional_arg(args, "parts", 0)?;
-                let separator = self.eval_named_or_positional_arg(args, "separator", 1)?;
-                Ok(Value::String(
-                    expect_string_list(parts)?.join(&expect_string(separator)?),
-                ))
-            }
-            ("String", "env") => {
-                let name = self.eval_first_arg(args)?;
-                Ok(value_option(
-                    std::env::var(expect_string(name)?).ok(),
-                    |value| Value::String(value),
-                ))
-            }
-            ("String", "env_or") => {
-                let name = self.eval_named_or_positional_arg(args, "value", 0)?;
-                let default = self.eval_named_or_positional_arg(args, "default", 1)?;
-                Ok(Value::String(
-                    std::env::var(expect_string(name)?).unwrap_or(expect_string(default)?),
-                ))
             }
             ("TempDir", "new") => Ok(result_value(tempdir_new_value(std::env::temp_dir()))),
             ("TempDir", "new_in") => {

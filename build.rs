@@ -139,6 +139,9 @@ enum InterpreterEvalKind {
     BytesSlice,
     BytesViewStartsWith,
     BytesViewToBytes,
+    CacheGet,
+    CacheInsert,
+    CacheLookup,
     CacheNew,
     ChannelErrorMessage,
     CharCompare,
@@ -222,6 +225,9 @@ enum InterpreterEvalKind {
     HttpResponseLines,
     HttpResponseStatus,
     HttpResponseText,
+    ImageCacheLen,
+    ImageCacheNew,
+    ImageCacheStore,
     OptionIsNone,
     OptionIsSome,
     OptionOkOr,
@@ -290,6 +296,9 @@ enum InterpreterEvalKind {
     StringBuilderFinish,
     StringBuilderNew,
     StringBuilderPush,
+    StringEnv,
+    StringEnvOr,
+    StringJoin,
     StringSafeRelative,
     StringToPath,
     StringToUrl,
@@ -491,6 +500,24 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "new",
         variant: "CacheNew",
         eval_kind: InterpreterEvalKind::CacheNew,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Cache",
+        name: "get",
+        variant: "CacheGet",
+        eval_kind: InterpreterEvalKind::CacheGet,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Cache",
+        name: "insert",
+        variant: "CacheInsert",
+        eval_kind: InterpreterEvalKind::CacheInsert,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Cache",
+        name: "lookup",
+        variant: "CacheLookup",
+        eval_kind: InterpreterEvalKind::CacheLookup,
     },
     InterpreterIntrinsicSpec {
         namespace: "ChannelError",
@@ -985,6 +1012,24 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::HttpResponseText,
     },
     InterpreterIntrinsicSpec {
+        namespace: "ImageCache",
+        name: "len",
+        variant: "ImageCacheLen",
+        eval_kind: InterpreterEvalKind::ImageCacheLen,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "ImageCache",
+        name: "new",
+        variant: "ImageCacheNew",
+        eval_kind: InterpreterEvalKind::ImageCacheNew,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "ImageCache",
+        name: "store",
+        variant: "ImageCacheStore",
+        eval_kind: InterpreterEvalKind::ImageCacheStore,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "Option",
         name: "is_none",
         variant: "OptionIsNone",
@@ -1400,6 +1445,24 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
     },
     InterpreterIntrinsicSpec {
         namespace: "String",
+        name: "env",
+        variant: "StringEnv",
+        eval_kind: InterpreterEvalKind::StringEnv,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "env_or",
+        variant: "StringEnvOr",
+        eval_kind: InterpreterEvalKind::StringEnvOr,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "join",
+        variant: "StringJoin",
+        eval_kind: InterpreterEvalKind::StringJoin,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
         name: "safe_relative",
         variant: "StringSafeRelative",
         eval_kind: InterpreterEvalKind::StringSafeRelative,
@@ -1683,6 +1746,15 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::CacheNew => {
             "{\n            Ok(Value::Map(Vec::new()))\n        }"
         }
+        InterpreterEvalKind::CacheGet => {
+            "{\n            let cache = interpreter.eval_named_or_positional_arg(args, \"cache\", 0)?;\n            let bytes = expect_map(cache)?\n                .into_iter()\n                .find_map(|(_, value)| expect_string(value).ok())\n                .map(String::into_bytes)\n                .unwrap_or_default();\n            Ok(image_value(\n                bytes,\n                None,\n                None,\n                vec![\"cache-get\".to_string()],\n            ))\n        }"
+        }
+        InterpreterEvalKind::CacheInsert => {
+            "{\n            let cache_name = interpreter.mut_arg_local_name(args, \"cache\", 0)?;\n            let key = interpreter.eval_named_or_positional_arg(args, \"key\", 1)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 2)?;\n            let mut cache = expect_map(interpreter.lookup(cache_name)?)?;\n            map_insert(&mut cache, key, value);\n            interpreter.assign(cache_name, Value::Map(cache))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::CacheLookup => {
+            "{\n            let cache = interpreter.eval_named_or_positional_arg(args, \"cache\", 0)?;\n            let key = interpreter.eval_named_or_positional_arg(args, \"key\", 1)?;\n            Ok(match map_get(&expect_map(cache)?, &key) {\n                Some(value) => value,\n                None => Value::String(String::new()),\n            })\n        }"
+        }
         InterpreterEvalKind::ChannelErrorMessage => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            read_field(&value, \"message\")\n        }"
         }
@@ -1928,6 +2000,15 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::HttpResponseText => {
             "{\n            let response = interpreter.eval_named_or_positional_arg(args, \"response\", 0)?;\n            let (_, body) = expect_http_response(response)?;\n            Ok(Value::String(body))\n        }"
         }
+        InterpreterEvalKind::ImageCacheLen => {
+            "{\n            let cache = interpreter.eval_named_or_positional_arg(args, \"cache\", 0)?;\n            Ok(Value::Int(expect_image_cache_len(cache)?))\n        }"
+        }
+        InterpreterEvalKind::ImageCacheNew => {
+            "{\n            let capacity = interpreter.eval_named_or_positional_arg(args, \"capacity\", 0)?;\n            Ok(image_cache_value(expect_int(capacity)?.max(0), 0))\n        }"
+        }
+        InterpreterEvalKind::ImageCacheStore => {
+            "{\n            let cache_name = interpreter.mut_arg_local_name(args, \"cache\", 0)?;\n            let image = interpreter.eval_named_or_positional_arg(args, \"image\", 1)?;\n            let _ = expect_image(image)?;\n            let (capacity, len) = expect_image_cache_state(interpreter.lookup(cache_name)?)?;\n            let len = if capacity == 0 {\n                0\n            } else {\n                (len + 1).min(capacity)\n            };\n            interpreter.assign(cache_name, image_cache_value(capacity, len))?;\n            Ok(Value::Unit)\n        }"
+        }
         InterpreterEvalKind::OptionIsNone => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(matches!(\n                value,\n                Value::Variant { name, .. } if name == \"None\"\n            )))\n        }"
         }
@@ -2128,6 +2209,15 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::StringBuilderPush => {
             "{\n            let builder_name = interpreter.mut_arg_local_name(args, \"builder\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            let mut builder = expect_string(interpreter.lookup(builder_name)?)?;\n            builder.push_str(&expect_string(value)?);\n            interpreter.assign(builder_name, Value::String(builder))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::StringEnv => {
+            "{\n            let name = interpreter.eval_first_arg(args)?;\n            Ok(value_option(\n                std::env::var(expect_string(name)?).ok(),\n                Value::String,\n            ))\n        }"
+        }
+        InterpreterEvalKind::StringEnvOr => {
+            "{\n            let name = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let default = interpreter.eval_named_or_positional_arg(args, \"default\", 1)?;\n            Ok(Value::String(\n                std::env::var(expect_string(name)?).unwrap_or(expect_string(default)?),\n            ))\n        }"
+        }
+        InterpreterEvalKind::StringJoin => {
+            "{\n            let parts = interpreter.eval_named_or_positional_arg(args, \"parts\", 0)?;\n            let separator = interpreter.eval_named_or_positional_arg(args, \"separator\", 1)?;\n            Ok(Value::String(\n                expect_string_list(parts)?.join(&expect_string(separator)?),\n            ))\n        }"
         }
         InterpreterEvalKind::TcpErrorMessage | InterpreterEvalKind::WebSocketErrorMessage => {
             "{\n            let error = interpreter.eval_named_or_positional_arg(args, \"error\", 0)?;\n            read_field(&error, \"message\")\n        }"
