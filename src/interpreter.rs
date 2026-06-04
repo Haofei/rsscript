@@ -174,6 +174,9 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Deque", "push_back"),
     ("Deque", "push_front"),
     ("Deque", "to_list"),
+    ("DbConnection", "open"),
+    ("DbConnection", "query"),
+    ("DbConnection", "try_open"),
     ("Directory", "create"),
     ("Directory", "create_all"),
     ("Directory", "create_dir_all"),
@@ -554,6 +557,9 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Deque.push_back",
     "runtime:Deque.push_front",
     "runtime:Deque.to_list",
+    "runtime:DbConnection.open",
+    "runtime:DbConnection.query",
+    "runtime:DbConnection.try_open",
     "runtime:Directory.create",
     "runtime:Directory.create_all",
     "runtime:Directory.create_dir_all",
@@ -1605,6 +1611,34 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Bool(expect_list(value)?.is_empty()))
             }
             ("Deque", "to_list") => self.eval_first_arg(args),
+            ("DbConnection", "open") => {
+                let url = self.eval_named_or_positional_arg(args, "url", 0)?;
+                Ok(db_connection_value(expect_string(url)?, Vec::new()))
+            }
+            ("DbConnection", "try_open") => {
+                let url = self.eval_named_or_positional_arg(args, "url", 0)?;
+                let url = expect_string(url)?;
+                Ok(result_value(if url.trim().is_empty() {
+                    Err(db_error("database URL is empty"))
+                } else {
+                    Ok(db_connection_value(url, Vec::new()))
+                }))
+            }
+            ("DbConnection", "query") => {
+                let conn_name = self.mut_arg_local_name(args, "conn", 0)?;
+                let sql = self.eval_named_or_positional_arg(args, "sql", 1)?;
+                let sql = expect_string(sql)?;
+                let mut conn = expect_db_connection(self.lookup(conn_name)?)?;
+                Ok(result_value(if sql.trim().is_empty() {
+                    Err(db_error("SQL query is empty"))
+                } else {
+                    self.stdout
+                        .push_str(&format!("db query on {}: {sql}\n", conn.url));
+                    conn.queries.push(sql);
+                    self.assign(conn_name, conn.to_value())?;
+                    Ok(Value::Unit)
+                }))
+            }
             ("Directory", "exists") | ("Path", "exists") | ("File", "exists") => {
                 let path = self.eval_first_arg(args)?;
                 Ok(Value::Bool(Path::new(&expect_string(path)?).exists()))
@@ -4938,6 +4972,58 @@ fn expect_function_has_closure(value: Value) -> Result<bool, EvalError> {
             "expected FunctionObject, got `{}`.",
             other.display()
         ))),
+    }
+}
+
+struct DbConnectionState {
+    url: String,
+    queries: Vec<String>,
+}
+
+impl DbConnectionState {
+    fn to_value(&self) -> Value {
+        db_connection_value(self.url.clone(), self.queries.clone())
+    }
+}
+
+fn db_connection_value(url: impl Into<String>, queries: Vec<String>) -> Value {
+    Value::Struct {
+        name: "DbConnection".to_string(),
+        fields: BTreeMap::from([
+            ("url".to_string(), Value::String(url.into())),
+            (
+                "queries".to_string(),
+                Value::List(queries.into_iter().map(Value::String).collect()),
+            ),
+        ]),
+    }
+}
+
+fn expect_db_connection(value: Value) -> Result<DbConnectionState, EvalError> {
+    match value {
+        Value::Struct { name, mut fields } if name == "DbConnection" => {
+            let url = fields.remove("url").ok_or_else(|| {
+                EvalError::Runtime("DbConnection value is missing url.".to_string())
+            })?;
+            let queries = fields.remove("queries").ok_or_else(|| {
+                EvalError::Runtime("DbConnection value is missing queries.".to_string())
+            })?;
+            Ok(DbConnectionState {
+                url: expect_string(url)?,
+                queries: expect_string_list(queries)?,
+            })
+        }
+        other => Err(EvalError::Runtime(format!(
+            "expected DbConnection, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn db_error(message: impl Into<String>) -> Value {
+    Value::Struct {
+        name: "DbError".to_string(),
+        fields: BTreeMap::from([("message".to_string(), Value::String(message.into()))]),
     }
 }
 

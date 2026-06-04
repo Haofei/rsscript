@@ -239,6 +239,7 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Deque.clear runtime:Deque.is_empty runtime:Deque.len runtime:Deque.new
 // parity: runtime:Deque.pop_back runtime:Deque.pop_front runtime:Deque.push_back
 // parity: runtime:Deque.push_front runtime:Deque.to_list
+// parity: runtime:DbConnection.open runtime:DbConnection.query runtime:DbConnection.try_open
 // parity: runtime:Directory.create runtime:Directory.create_all runtime:Directory.create_dir_all
 // parity: runtime:Directory.exists runtime:Directory.is_dir runtime:Directory.is_file
 // parity: runtime:Directory.list_files runtime:Directory.list_paths runtime:Directory.metadata
@@ -857,6 +858,29 @@ fn main() -> Unit {
     assert_interpreter_matches_backend(
         "parity-cancellation.rss",
         "rsscript_parity_cancellation",
+        source,
+    );
+}
+
+#[test]
+fn parity_db_connection_intrinsics() {
+    let source = r#"
+features: native
+
+fn main() -> Result<Unit, DbError> {
+    let url = Url.from_string(value: read "db://parity")
+    with DbConnection.open(url: read url) as conn {
+        DbConnection.query(conn: mut conn, sql: read "select 1")?
+    }
+    with DbConnection.try_open(url: read url)? as conn {
+        DbConnection.query(conn: mut conn, sql: read "select 2")?
+    }
+    return Ok(Unit)
+}
+"#;
+    assert_interpreter_matches_backend(
+        "parity-db-connection.rss",
+        "rsscript_parity_db_connection",
         source,
     );
 }
