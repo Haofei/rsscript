@@ -139,6 +139,7 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("BufferView", "len"),
     ("BufferView", "slice"),
     ("BufferView", "to_bytes"),
+    ("Cache", "get"),
     ("Cache", "insert"),
     ("Cache", "lookup"),
     ("Cache", "new"),
@@ -325,8 +326,15 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("HttpRequest", "with_header"),
     ("HttpRequest", "with_retry"),
     ("HttpRequest", "with_timeout"),
+    ("Image", "inspect"),
+    ("Image", "load"),
+    ("Image", "normalize"),
+    ("Image", "resize"),
+    ("Image", "save"),
+    ("Image", "sharpen"),
     ("ImageCache", "len"),
     ("ImageCache", "new"),
+    ("ImageCache", "store"),
     ("Instant", "elapsed"),
     ("List", "append"),
     ("List", "clear"),
@@ -522,6 +530,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:BufferView.len",
     "runtime:BufferView.slice",
     "runtime:BufferView.to_bytes",
+    "runtime:Cache.get",
     "runtime:Cache.insert",
     "runtime:Cache.lookup",
     "runtime:Cache.new",
@@ -710,8 +719,15 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:HttpRequest.with_header",
     "runtime:HttpRequest.with_retry",
     "runtime:HttpRequest.with_timeout",
+    "runtime:Image.inspect",
+    "runtime:Image.load",
+    "runtime:Image.normalize",
+    "runtime:Image.resize",
+    "runtime:Image.save",
+    "runtime:Image.sharpen",
     "runtime:ImageCache.len",
     "runtime:ImageCache.new",
+    "runtime:ImageCache.store",
     "runtime:List.append",
     "runtime:List.clear",
     "runtime:List.contains_value",
@@ -2182,6 +2198,20 @@ impl<'a> Interpreter<'a> {
                     None => Value::String(String::new()),
                 })
             }
+            ("Cache", "get") => {
+                let cache = self.eval_named_or_positional_arg(args, "cache", 0)?;
+                let bytes = expect_map(cache)?
+                    .into_iter()
+                    .find_map(|(_, value)| expect_string(value).ok())
+                    .map(String::into_bytes)
+                    .unwrap_or_default();
+                Ok(image_value(
+                    bytes,
+                    None,
+                    None,
+                    vec!["cache-get".to_string()],
+                ))
+            }
             ("CancellationSource", "new") => {
                 let id = self.next_cancellation_id;
                 self.next_cancellation_id = self.next_cancellation_id.saturating_add(1);
@@ -2337,6 +2367,56 @@ impl<'a> Interpreter<'a> {
                         .map_err(file_error),
                 ))
             }
+            ("Image", "load") => {
+                let path = self.eval_named_or_positional_arg(args, "path", 0)?;
+                Ok(result_value(
+                    std::fs::read(expect_string(path)?)
+                        .map(|bytes| image_value(bytes, None, None, vec!["load".to_string()]))
+                        .map_err(image_error_from_io),
+                ))
+            }
+            ("Image", "resize") => {
+                let image_name = self.mut_arg_local_name(args, "image", 0)?;
+                let width = self.eval_named_or_positional_arg(args, "width", 1)?;
+                let height = self.eval_named_or_positional_arg(args, "height", 2)?;
+                let mut image = expect_image(self.lookup(image_name)?)?;
+                image.width = Some(expect_int(width)?);
+                image.height = Some(expect_int(height)?);
+                image.operations.push("resize".to_string());
+                self.assign(image_name, image.to_value())?;
+                Ok(Value::Unit)
+            }
+            ("Image", "normalize") => {
+                let image_name = self.mut_arg_local_name(args, "image", 0)?;
+                let mut image = expect_image(self.lookup(image_name)?)?;
+                image.operations.push("normalize".to_string());
+                self.assign(image_name, image.to_value())?;
+                Ok(Value::Unit)
+            }
+            ("Image", "sharpen") => {
+                let image_name = self.mut_arg_local_name(args, "image", 0)?;
+                let mut image = expect_image(self.lookup(image_name)?)?;
+                image.operations.push("sharpen".to_string());
+                self.assign(image_name, image.to_value())?;
+                Ok(Value::Unit)
+            }
+            ("Image", "save") => {
+                let image = self.eval_named_or_positional_arg(args, "image", 0)?;
+                let path = self.eval_named_or_positional_arg(args, "path", 1)?;
+                let image = expect_image(image)?;
+                Ok(result_value(
+                    std::fs::write(expect_string(path)?, image.saved_bytes())
+                        .map(|_| Value::Unit)
+                        .map_err(image_error_from_io),
+                ))
+            }
+            ("Image", "inspect") => {
+                let image = self.eval_named_or_positional_arg(args, "image", 0)?;
+                let image = expect_image(image)?;
+                self.stdout.push_str(&image.inspect_line());
+                self.stdout.push('\n');
+                Ok(Value::Unit)
+            }
             ("ImageCache", "new") => {
                 let capacity = self.eval_named_or_positional_arg(args, "capacity", 0)?;
                 Ok(image_cache_value(expect_int(capacity)?.max(0), 0))
@@ -2344,6 +2424,19 @@ impl<'a> Interpreter<'a> {
             ("ImageCache", "len") => {
                 let cache = self.eval_named_or_positional_arg(args, "cache", 0)?;
                 Ok(Value::Int(expect_image_cache_len(cache)?))
+            }
+            ("ImageCache", "store") => {
+                let cache_name = self.mut_arg_local_name(args, "cache", 0)?;
+                let image = self.eval_named_or_positional_arg(args, "image", 1)?;
+                let _ = expect_image(image)?;
+                let (capacity, len) = expect_image_cache_state(self.lookup(cache_name)?)?;
+                let len = if capacity == 0 {
+                    0
+                } else {
+                    (len + 1).min(capacity)
+                };
+                self.assign(cache_name, image_cache_value(capacity, len))?;
+                Ok(Value::Unit)
             }
             ("List", "new") => Ok(Value::List(Vec::new())),
             ("List", "len") => {
@@ -4786,6 +4879,108 @@ fn image_cache_value(capacity: i64, len: i64) -> Value {
     }
 }
 
+struct ImageState {
+    bytes: Vec<u8>,
+    width: Option<i64>,
+    height: Option<i64>,
+    operations: Vec<String>,
+}
+
+impl ImageState {
+    fn to_value(&self) -> Value {
+        image_value(
+            self.bytes.clone(),
+            self.width,
+            self.height,
+            self.operations.clone(),
+        )
+    }
+
+    fn saved_bytes(&self) -> Vec<u8> {
+        let mut bytes = self.bytes.clone();
+        bytes.extend_from_slice(b"\n# rsscript-image-ops:");
+        bytes.extend_from_slice(self.operations.join(",").as_bytes());
+        if let (Some(width), Some(height)) = (self.width, self.height) {
+            bytes.extend_from_slice(format!(";size={width}x{height}").as_bytes());
+        }
+        bytes
+    }
+
+    fn inspect_line(&self) -> String {
+        let size = self
+            .width
+            .zip(self.height)
+            .map(|(width, height)| format!("{width}x{height}"))
+            .unwrap_or_else(|| "unknown".to_string());
+        format!(
+            "image bytes={} size={} ops={}",
+            self.bytes.len(),
+            size,
+            self.operations.join(",")
+        )
+    }
+}
+
+fn image_value(
+    bytes: Vec<u8>,
+    width: Option<i64>,
+    height: Option<i64>,
+    operations: Vec<String>,
+) -> Value {
+    Value::Struct {
+        name: "Image".to_string(),
+        fields: BTreeMap::from([
+            ("bytes".to_string(), Value::Bytes(bytes)),
+            ("width".to_string(), value_option(width, Value::Int)),
+            ("height".to_string(), value_option(height, Value::Int)),
+            (
+                "operations".to_string(),
+                Value::List(operations.into_iter().map(Value::String).collect()),
+            ),
+        ]),
+    }
+}
+
+fn expect_image(value: Value) -> Result<ImageState, EvalError> {
+    match value {
+        Value::Struct { name, mut fields } if name == "Image" => {
+            let bytes = fields
+                .remove("bytes")
+                .ok_or_else(|| EvalError::Runtime("Image value is missing bytes.".to_string()))?;
+            let width = fields
+                .remove("width")
+                .ok_or_else(|| EvalError::Runtime("Image value is missing width.".to_string()))?;
+            let height = fields
+                .remove("height")
+                .ok_or_else(|| EvalError::Runtime("Image value is missing height.".to_string()))?;
+            let operations = fields.remove("operations").ok_or_else(|| {
+                EvalError::Runtime("Image value is missing operations.".to_string())
+            })?;
+            Ok(ImageState {
+                bytes: expect_bytes(bytes)?,
+                width: option_payload(width)?.map(expect_int).transpose()?,
+                height: option_payload(height)?.map(expect_int).transpose()?,
+                operations: expect_string_list(operations)?,
+            })
+        }
+        other => Err(EvalError::Runtime(format!(
+            "expected Image, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn image_error(message: impl Into<String>) -> Value {
+    Value::Struct {
+        name: "ImageError".to_string(),
+        fields: BTreeMap::from([("message".to_string(), Value::String(message.into()))]),
+    }
+}
+
+fn image_error_from_io(error: std::io::Error) -> Value {
+    image_error(error.to_string())
+}
+
 fn tempdir_value(path: impl Into<String>) -> Value {
     Value::Struct {
         name: "TempDir".to_string(),
@@ -5054,11 +5249,20 @@ fn expect_config_store_name(value: Value) -> Result<String, EvalError> {
 }
 
 fn expect_image_cache_len(value: Value) -> Result<i64, EvalError> {
+    expect_image_cache_state(value).map(|(_, len)| len)
+}
+
+fn expect_image_cache_state(value: Value) -> Result<(i64, i64), EvalError> {
     match value {
-        Value::Struct { name, mut fields } if name == "ImageCache" => fields
-            .remove("len")
-            .ok_or_else(|| EvalError::Runtime("ImageCache len is missing.".to_string()))
-            .and_then(expect_int),
+        Value::Struct { name, mut fields } if name == "ImageCache" => {
+            let capacity = fields
+                .remove("capacity")
+                .ok_or_else(|| EvalError::Runtime("ImageCache capacity is missing.".to_string()))?;
+            let len = fields
+                .remove("len")
+                .ok_or_else(|| EvalError::Runtime("ImageCache len is missing.".to_string()))?;
+            Ok((expect_int(capacity)?, expect_int(len)?))
+        }
         other => Err(EvalError::Runtime(format!(
             "expected ImageCache, got `{}`.",
             other.display()

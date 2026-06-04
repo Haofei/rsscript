@@ -257,7 +257,7 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Buffer.clear runtime:Buffer.consume runtime:Buffer.is_empty runtime:Buffer.len
 // parity: runtime:Buffer.new runtime:Buffer.view runtime:BufferView.is_empty
 // parity: runtime:BufferView.len runtime:BufferView.slice runtime:BufferView.to_bytes
-// parity: runtime:Cache.insert runtime:Cache.lookup runtime:Cache.new
+// parity: runtime:Cache.get runtime:Cache.insert runtime:Cache.lookup runtime:Cache.new
 // parity: runtime:CancellationSource.cancel runtime:CancellationSource.new
 // parity: runtime:CancellationSource.token runtime:CancellationToken.is_cancelled
 // parity: runtime:Clock.now runtime:Clock.system_unix_ms
@@ -296,7 +296,9 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Http.get runtime:Http.post_form runtime:Http.post_json runtime:HttpError.message
 // parity: runtime:HttpRequest.json runtime:HttpRequest.with_header
 // parity: runtime:HttpRequest.with_retry runtime:HttpRequest.with_timeout
-// parity: runtime:ImageCache.len runtime:ImageCache.new
+// parity: runtime:Image.inspect runtime:Image.load runtime:Image.normalize runtime:Image.resize
+// parity: runtime:Image.save runtime:Image.sharpen runtime:ImageCache.len runtime:ImageCache.new
+// parity: runtime:ImageCache.store
 // parity: runtime:List.append runtime:List.clear runtime:List.contains_value
 // parity: runtime:List.consume runtime:List.first runtime:List.get runtime:List.is_empty runtime:List.join
 // parity: runtime:List.last runtime:List.len runtime:List.new runtime:List.pop
@@ -2447,6 +2449,68 @@ fn main() -> Unit {
         "rsscript_parity_image_cache",
         source,
     );
+}
+
+#[test]
+fn parity_image_intrinsics() {
+    let interpreter_root = common::unique_temp_dir("rsscript-parity-image-interpreter");
+    let backend_root = common::unique_temp_dir("rsscript-parity-image-backend");
+    fs::create_dir_all(&interpreter_root).expect("interpreter image dir should be created");
+    fs::create_dir_all(&backend_root).expect("backend image dir should be created");
+
+    for root in [&interpreter_root, &backend_root] {
+        fs::write(root.join("input.img"), b"pixels").expect("image fixture should write");
+    }
+
+    let interpreter_input = interpreter_root.join("input.img").display().to_string();
+    let interpreter_output = interpreter_root.join("output.img").display().to_string();
+    let backend_input = backend_root.join("input.img").display().to_string();
+    let backend_output = backend_root.join("output.img").display().to_string();
+    let interpreter_args = [interpreter_input.as_str(), interpreter_output.as_str()];
+    let backend_args = [backend_input.as_str(), backend_output.as_str()];
+
+    let source = r#"
+features: native, local
+
+fn main() -> Result<Unit, ImageError> {
+    let input = Path.from_string(value: read Args.get_or_default(index: 0, default: read "input.img"))
+    let output = Path.from_string(value: read Args.get_or_default(index: 1, default: read "output.img"))
+    local image = Image.load(path: read input)?
+    Image.inspect(image: read image)
+    Image.resize(image: mut image, width: 10, height: 20)
+    Image.normalize(image: mut image)
+    Image.sharpen(image: mut image)
+    Image.inspect(image: read image)
+
+    local image_cache = ImageCache.new(capacity: 1)
+    let shared = manage image
+    ImageCache.store(cache: mut image_cache, image: read shared)
+    Log.write(message: read String.from_int(value: ImageCache.len(cache: read image_cache)))
+    Image.save(image: read shared, path: read output)?
+
+    local text_cache = Cache.new()
+    Cache.insert(cache: mut text_cache, key: read "image", value: read "cached-image")
+    let cached = Cache.get(cache: read text_cache)
+    Image.inspect(image: read cached)
+    return Ok(Unit)
+}
+"#;
+    assert_interpreter_matches_backend_with_distinct_args(
+        "parity-image.rss",
+        "rsscript_parity_image",
+        source,
+        &interpreter_args,
+        &backend_args,
+    );
+
+    let interpreter_bytes =
+        fs::read(interpreter_root.join("output.img")).expect("interpreter image output exists");
+    let backend_bytes =
+        fs::read(backend_root.join("output.img")).expect("backend image output exists");
+    assert_eq!(interpreter_bytes, backend_bytes);
+
+    let _ = fs::remove_dir_all(&interpreter_root);
+    let _ = fs::remove_dir_all(&backend_root);
 }
 
 #[test]
