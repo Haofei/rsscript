@@ -152,6 +152,13 @@ enum InterpreterEvalKind {
     CharIsWhitespace,
     CharToCode,
     CharToString,
+    ConfigLoad,
+    ConfigName,
+    ConfigNew,
+    ConfigRuleCount,
+    ConfigStoreName,
+    ConfigStoreNew,
+    ConfigStoreReplace,
     DequeClear,
     DequeIsEmpty,
     DequeLen,
@@ -171,6 +178,9 @@ enum InterpreterEvalKind {
     DurationMs,
     DurationSeconds,
     FileErrorMessage,
+    GlobalConfigNew,
+    GlobalConfigReplace,
+    GlobalConfigRuleCount,
     HashSha256Bytes,
     HashSha256String,
     PathExtension,
@@ -261,6 +271,7 @@ enum InterpreterEvalKind {
     ResponseBody,
     ResponseOk,
     ResponseStatus,
+    RuleLoaderLoadRules,
     StringConcat,
     StringCopy,
     StringFromBool,
@@ -574,6 +585,48 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::CharToString,
     },
     InterpreterIntrinsicSpec {
+        namespace: "Config",
+        name: "load",
+        variant: "ConfigLoad",
+        eval_kind: InterpreterEvalKind::ConfigLoad,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Config",
+        name: "name",
+        variant: "ConfigName",
+        eval_kind: InterpreterEvalKind::ConfigName,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Config",
+        name: "new",
+        variant: "ConfigNew",
+        eval_kind: InterpreterEvalKind::ConfigNew,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Config",
+        name: "rule_count",
+        variant: "ConfigRuleCount",
+        eval_kind: InterpreterEvalKind::ConfigRuleCount,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "ConfigStore",
+        name: "name",
+        variant: "ConfigStoreName",
+        eval_kind: InterpreterEvalKind::ConfigStoreName,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "ConfigStore",
+        name: "new",
+        variant: "ConfigStoreNew",
+        eval_kind: InterpreterEvalKind::ConfigStoreNew,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "ConfigStore",
+        name: "replace",
+        variant: "ConfigStoreReplace",
+        eval_kind: InterpreterEvalKind::ConfigStoreReplace,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "Deque",
         name: "clear",
         variant: "DequeClear",
@@ -686,6 +739,24 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "message",
         variant: "FileErrorMessage",
         eval_kind: InterpreterEvalKind::FileErrorMessage,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "GlobalConfig",
+        name: "new",
+        variant: "GlobalConfigNew",
+        eval_kind: InterpreterEvalKind::GlobalConfigNew,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "GlobalConfig",
+        name: "replace",
+        variant: "GlobalConfigReplace",
+        eval_kind: InterpreterEvalKind::GlobalConfigReplace,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "GlobalConfig",
+        name: "rule_count",
+        variant: "GlobalConfigRuleCount",
+        eval_kind: InterpreterEvalKind::GlobalConfigRuleCount,
     },
     InterpreterIntrinsicSpec {
         namespace: "Hash",
@@ -1226,6 +1297,12 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "status",
         variant: "ResponseStatus",
         eval_kind: InterpreterEvalKind::ResponseStatus,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "RuleLoader",
+        name: "load_rules",
+        variant: "RuleLoaderLoadRules",
+        eval_kind: InterpreterEvalKind::RuleLoaderLoadRules,
     },
     InterpreterIntrinsicSpec {
         namespace: "String",
@@ -1782,6 +1859,27 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::CharToString => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(expect_char(value)?.to_string()))\n        }"
         }
+        InterpreterEvalKind::ConfigLoad => {
+            "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            Ok(result_value(\n                std::fs::read_to_string(expect_string(path)?)\n                    .map(|text| config_value(config_name_from_text(&text)))\n                    .map_err(config_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::ConfigName => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            Ok(Value::String(expect_config_value_name(value)?))\n        }"
+        }
+        InterpreterEvalKind::ConfigNew => {
+            "{\n            let name = interpreter.eval_named_or_positional_arg(args, \"name\", 0)?;\n            let rules = interpreter.eval_named_or_positional_arg(args, \"rules\", 1)?;\n            Ok(config_rules_value(\n                expect_string(name)?,\n                expect_list(rules)?.len() as i64,\n            ))\n        }"
+        }
+        InterpreterEvalKind::ConfigRuleCount => {
+            "{\n            let config = interpreter.eval_named_or_positional_arg(args, \"config\", 0)?;\n            Ok(Value::Int(expect_config_rule_count(config)?))\n        }"
+        }
+        InterpreterEvalKind::ConfigStoreName => {
+            "{\n            let store = interpreter.eval_named_or_positional_arg(args, \"store\", 0)?;\n            Ok(Value::String(expect_config_store_name(store)?))\n        }"
+        }
+        InterpreterEvalKind::ConfigStoreNew => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            Ok(config_store_value(expect_config_value_name(value)?))\n        }"
+        }
+        InterpreterEvalKind::ConfigStoreReplace => {
+            "{\n            let store_name = interpreter.mut_arg_local_name(args, \"store\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            interpreter.assign(\n                store_name,\n                config_store_value(expect_config_value_name(value)?),\n            )?;\n            Ok(Value::Unit)\n        }"
+        }
         InterpreterEvalKind::DequeClear => {
             "{\n            let deque_name = interpreter.mut_arg_local_name(args, \"deque\", 0)?;\n            interpreter.assign(deque_name, Value::List(Vec::new()))?;\n            Ok(Value::Unit)\n        }"
         }
@@ -1835,6 +1933,15 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::FileErrorMessage => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            read_field(&value, \"message\")\n        }"
+        }
+        InterpreterEvalKind::GlobalConfigNew => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            Ok(global_config_value(expect_config_rule_count(value)?))\n        }"
+        }
+        InterpreterEvalKind::GlobalConfigReplace => {
+            "{\n            let global_name = interpreter.mut_arg_local_name(args, \"global\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            interpreter.assign(\n                global_name,\n                global_config_value(expect_config_rule_count(value)?),\n            )?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::GlobalConfigRuleCount => {
+            "{\n            let global = interpreter.eval_named_or_positional_arg(args, \"global\", 0)?;\n            Ok(Value::Int(expect_global_config_rule_count(global)?))\n        }"
         }
         InterpreterEvalKind::HashSha256Bytes => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(sha256_digest(&expect_bytes(value)?)))\n        }"
@@ -2107,6 +2214,9 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::ResponseStatus => {
             "{\n            let response = interpreter.eval_first_arg(args)?;\n            read_field(&response, \"status\")\n        }"
+        }
+        InterpreterEvalKind::RuleLoaderLoadRules => {
+            "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            Ok(result_value(\n                std::fs::read_to_string(expect_string(path)?)\n                    .map(|text| Value::List(rules_from_text(&text)))\n                    .map_err(config_error),\n            ))\n        }"
         }
         InterpreterEvalKind::StringChars => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::List(expect_string(value)?.chars().map(Value::Char).collect()))\n        }"
