@@ -227,10 +227,10 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: hir_stmt:Assign hir_stmt:Break hir_stmt:Continue hir_stmt:Expr hir_stmt:For
 // parity: hir_stmt:If hir_stmt:Let hir_stmt:Loop hir_stmt:Match hir_stmt:Return hir_stmt:With
 // parity: hir_expr:ArrayLiteral hir_expr:Binary hir_expr:Call hir_expr:Effect hir_expr:Field
-// parity: hir_expr:Ident hir_expr:Index hir_expr:Manage hir_expr:MapLiteral hir_expr:Match
+// parity: hir_expr:Closure hir_expr:Ident hir_expr:Index hir_expr:Manage hir_expr:MapLiteral hir_expr:Match
 // parity: hir_expr:Number hir_expr:ObjectLiteral hir_expr:String hir_expr:Try
 // parity: value:Bool value:Bytes value:Int value:Json value:List
-// parity: value:Char value:Map value:String value:Struct value:Unit value:Variant
+// parity: value:Char value:Closure value:Map value:String value:Struct value:Unit value:Variant
 // parity: runtime:Args.all runtime:Args.count runtime:Args.get runtime:Args.get_or_default
 // parity: runtime:Assert.equal runtime:Assert.equal_bool runtime:Assert.equal_int
 // parity: runtime:Char.compare runtime:Char.from_code runtime:Char.is_alpha
@@ -342,8 +342,10 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Map.get_or_default runtime:Map.insert runtime:Map.insert_old
 // parity: runtime:Map.is_empty runtime:Map.keys runtime:Map.len runtime:Map.new
 // parity: runtime:Map.remove runtime:Map.values
-// parity: runtime:Option.is_none runtime:Option.is_some runtime:Option.ok_or
+// parity: runtime:Option.and_then runtime:Option.filter runtime:Option.is_none
+// parity: runtime:Option.is_some runtime:Option.map runtime:Option.ok_or
 // parity: runtime:Option.or runtime:Option.unwrap_or
+// parity: runtime:Result.and_then runtime:Result.map runtime:Result.map_error
 // parity: runtime:Ord.compare
 // parity: runtime:Request.new runtime:Request.path
 // parity: runtime:Response.body runtime:Response.ok runtime:Response.status
@@ -679,6 +681,47 @@ fn main() -> Unit {
         }
     }
     Log.write(message: read String.from_int(value: Option.unwrap_or<Int>(value: read Option.or<Int>(value: read maybe(found: false), fallback: read Some(11)), default: read 0)))
+    let offset = 2
+    match Option.map<Int, Int>(value: read maybe(found: true), mapper: |item| {
+        return item + offset
+    }) {
+        Some(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        None => {
+            Log.write(message: read "map-none")
+        }
+    }
+    match Option.and_then<Int, Int>(value: read maybe(found: true), mapper: |item| {
+        return Some(item + 5)
+    }) {
+        Some(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        None => {
+            Log.write(message: read "and-then-none")
+        }
+    }
+    match Option.filter<Int>(value: read maybe(found: true), predicate: |item| {
+        return item > 3
+    }) {
+        Some(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        None => {
+            Log.write(message: read "filter-none")
+        }
+    }
+    match Option.filter<Int>(value: read maybe(found: true), predicate: |item| {
+        return item > 10
+    }) {
+        Some(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        None => {
+            Log.write(message: read "filter-none")
+        }
+    }
 
     if Result.is_ok<Int, String>(value: read checked(ok: true)) {
         Log.write(message: read "ok")
@@ -709,6 +752,36 @@ fn main() -> Unit {
         }
         None => {
             Log.write(message: read "message-none")
+        }
+    }
+    match Result.map<Int, String, Int>(result: read checked(ok: true), mapper: |item| {
+        return item + 4
+    }) {
+        Ok(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        Err(error) => {
+            Log.write(message: read error)
+        }
+    }
+    match Result.and_then<Int, String, Int>(result: read checked(ok: true), mapper: |item| {
+        return Ok(item + 6)
+    }) {
+        Ok(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        Err(error) => {
+            Log.write(message: read error)
+        }
+    }
+    match Result.map_error<Int, String, String>(result: read checked(ok: false), mapper: |error| {
+        return String.concat(left: read error, right: read "!")
+    }) {
+        Ok(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        Err(error) => {
+            Log.write(message: read error)
         }
     }
     return Unit

@@ -106,6 +106,7 @@ const INTERPRETER_SUPPORTED_HIR_EXPR_VARIANTS: &[&str] = &[
     "Effect",
     "Manage",
     "Try",
+    "Closure",
     "Match",
 ];
 
@@ -116,6 +117,7 @@ const VALUE_TYPES: &[&str] = &[
 
 const INTERPRETER_SUPPORTED_VALUE_TYPES: &[&str] = &[
     "Unit", "Int", "Bool", "String", "Char", "Bytes", "List", "Map", "Json", "Struct", "Variant",
+    "Closure",
 ];
 
 const FUNCTION_KINDS: &[&str] = &["sync", "async", "native"];
@@ -398,6 +400,9 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Response", "status"),
     ("Option", "is_none"),
     ("Option", "is_some"),
+    ("Option", "and_then"),
+    ("Option", "filter"),
+    ("Option", "map"),
     ("Option", "ok_or"),
     ("Option", "or"),
     ("Option", "unwrap_or"),
@@ -432,8 +437,11 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Process", "stream"),
     ("Result", "err"),
     ("Result", "err_message"),
+    ("Result", "and_then"),
     ("Result", "is_err"),
     ("Result", "is_ok"),
+    ("Result", "map"),
+    ("Result", "map_error"),
     ("Result", "ok"),
     ("Result", "unwrap_or"),
     ("Row", "field_string"),
@@ -500,6 +508,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "hir_expr:ArrayLiteral",
     "hir_expr:Binary",
     "hir_expr:Call",
+    "hir_expr:Closure",
     "hir_expr:Effect",
     "hir_expr:Field",
     "hir_expr:Ident",
@@ -812,6 +821,9 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Response.status",
     "runtime:Option.is_none",
     "runtime:Option.is_some",
+    "runtime:Option.and_then",
+    "runtime:Option.filter",
+    "runtime:Option.map",
     "runtime:Option.ok_or",
     "runtime:Option.or",
     "runtime:Option.unwrap_or",
@@ -846,8 +858,11 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Process.stream",
     "runtime:Result.err",
     "runtime:Result.err_message",
+    "runtime:Result.and_then",
     "runtime:Result.is_err",
     "runtime:Result.is_ok",
+    "runtime:Result.map",
+    "runtime:Result.map_error",
     "runtime:Result.ok",
     "runtime:Result.unwrap_or",
     "runtime:Row.field_string",
@@ -943,6 +958,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "value:Bool",
     "value:Bytes",
     "value:Char",
+    "value:Closure",
     "value:Int",
     "value:Json",
     "value:List",
@@ -1084,6 +1100,11 @@ enum Value {
         name: String,
         fields: BTreeMap<String, Value>,
     },
+    Closure {
+        params: Vec<String>,
+        body: HirBlock,
+        captures: HashMap<String, Value>,
+    },
 }
 
 impl Value {
@@ -1125,6 +1146,7 @@ impl Value {
                     .join(", ");
                 format!("{name} {{ {fields} }}")
             }
+            Self::Closure { .. } => "<closure>".to_string(),
         }
     }
 }
@@ -1237,6 +1259,56 @@ impl<'a> Interpreter<'a> {
                 )));
             }
         };
+        self.scopes.pop();
+        Ok(result)
+    }
+
+    fn visible_bindings(&self) -> HashMap<String, Value> {
+        let mut bindings = HashMap::new();
+        for scope in &self.scopes {
+            for (name, value) in scope {
+                bindings.insert(name.clone(), value.clone());
+            }
+        }
+        bindings
+    }
+
+    fn call_closure(&mut self, closure: Value, args: Vec<Value>) -> Result<Value, EvalError> {
+        let Value::Closure {
+            params,
+            body,
+            captures,
+        } = closure
+        else {
+            return Err(EvalError::Runtime(format!(
+                "expected closure, got `{}`.",
+                closure.display()
+            )));
+        };
+        if params.len() != args.len() {
+            return Err(EvalError::Runtime(format!(
+                "closure expected {} arguments, got {}.",
+                params.len(),
+                args.len()
+            )));
+        }
+        self.scopes.push(captures);
+        self.scopes.push(HashMap::new());
+        for (param, value) in params.into_iter().zip(args) {
+            self.bind(param, value);
+        }
+        let result = match self.eval_block(&body)? {
+            Control::Return(value) => value,
+            Control::Continue => Value::Unit,
+            Control::Break | Control::LoopContinue => {
+                self.scopes.pop();
+                self.scopes.pop();
+                return Err(EvalError::Runtime(
+                    "closure ended with a loop control statement.".to_string(),
+                ));
+            }
+        };
+        self.scopes.pop();
         self.scopes.pop();
         Ok(result)
     }
@@ -1450,6 +1522,11 @@ impl<'a> Interpreter<'a> {
             }
             HirExpr::Call { callee, args, .. } => self.eval_call(callee, args),
             HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => self.eval_expr(value),
+            HirExpr::Closure { params, body, .. } => Ok(Value::Closure {
+                params: params.clone(),
+                body: body.clone(),
+                captures: self.visible_bindings(),
+            }),
             HirExpr::Try { value, .. } => {
                 let value = self.eval_expr(value)?;
                 match value {
@@ -2926,6 +3003,40 @@ impl<'a> Interpreter<'a> {
                 let default = self.eval_named_or_positional_arg(args, "default", 1)?;
                 Ok(option_payload(value)?.unwrap_or(default))
             }
+            ("Option", "map") => {
+                let value = self.eval_named_or_positional_arg(args, "value", 0)?;
+                let mapper = self.eval_named_or_positional_arg(args, "mapper", 1)?;
+                Ok(match option_payload(value)? {
+                    Some(value) => value_some(self.call_closure(mapper, vec![value])?),
+                    None => value_none(),
+                })
+            }
+            ("Option", "and_then") => {
+                let value = self.eval_named_or_positional_arg(args, "value", 0)?;
+                let mapper = self.eval_named_or_positional_arg(args, "mapper", 1)?;
+                match option_payload(value)? {
+                    Some(value) => {
+                        let mapped = self.call_closure(mapper, vec![value])?;
+                        let _ = option_payload(mapped.clone())?;
+                        Ok(mapped)
+                    }
+                    None => Ok(value_none()),
+                }
+            }
+            ("Option", "filter") => {
+                let value = self.eval_named_or_positional_arg(args, "value", 0)?;
+                let predicate = self.eval_named_or_positional_arg(args, "predicate", 1)?;
+                Ok(match option_payload(value)? {
+                    Some(value) => {
+                        if expect_bool(self.call_closure(predicate, vec![value.clone()])?)? {
+                            value_some(value)
+                        } else {
+                            value_none()
+                        }
+                    }
+                    None => value_none(),
+                })
+            }
             ("Option", "ok_or") => {
                 let value = self.eval_named_or_positional_arg(args, "value", 0)?;
                 let error = self.eval_named_or_positional_arg(args, "error", 1)?;
@@ -3184,6 +3295,34 @@ impl<'a> Interpreter<'a> {
                 let value = self.eval_named_or_positional_arg(args, "value", 0)?;
                 let default = self.eval_named_or_positional_arg(args, "default", 1)?;
                 Ok(result_payload(value)?.map_or(default, |value| value))
+            }
+            ("Result", "map") => {
+                let value = self.eval_named_or_positional_arg(args, "result", 0)?;
+                let mapper = self.eval_named_or_positional_arg(args, "mapper", 1)?;
+                Ok(match result_payload(value)? {
+                    Ok(value) => value_ok(self.call_closure(mapper, vec![value])?),
+                    Err(error) => value_err(error),
+                })
+            }
+            ("Result", "map_error") => {
+                let value = self.eval_named_or_positional_arg(args, "result", 0)?;
+                let mapper = self.eval_named_or_positional_arg(args, "mapper", 1)?;
+                Ok(match result_payload(value)? {
+                    Ok(value) => value_ok(value),
+                    Err(error) => value_err(self.call_closure(mapper, vec![error])?),
+                })
+            }
+            ("Result", "and_then") => {
+                let value = self.eval_named_or_positional_arg(args, "result", 0)?;
+                let mapper = self.eval_named_or_positional_arg(args, "mapper", 1)?;
+                match result_payload(value)? {
+                    Ok(value) => {
+                        let mapped = self.call_closure(mapper, vec![value])?;
+                        let _ = result_payload(mapped.clone())?;
+                        Ok(mapped)
+                    }
+                    Err(error) => Ok(value_err(error)),
+                }
             }
             ("Result", "ok") => {
                 let value = self.eval_first_arg(args)?;
