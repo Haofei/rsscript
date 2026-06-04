@@ -168,6 +168,20 @@ enum InterpreterEvalKind {
     DurationMs,
     DurationSeconds,
     FileErrorMessage,
+    HashSha256Bytes,
+    HashSha256String,
+    PathExtension,
+    PathFileName,
+    PathFromString,
+    PathIsAbsolute,
+    PathJoin,
+    PathNormalize,
+    PathParent,
+    PathResolveRelative,
+    PathSafeRelative,
+    PathStartsWith,
+    PathToString,
+    PathWithExtension,
     IntToString,
     ListAppend,
     ListClear,
@@ -276,6 +290,14 @@ enum InterpreterEvalKind {
     StringBuilderFinish,
     StringBuilderNew,
     StringBuilderPush,
+    StringSafeRelative,
+    StringToPath,
+    StringToUrl,
+    TcpErrorMessage,
+    UrlFromString,
+    UrlToString,
+    WebSocketErrorMessage,
+    WorkspaceResolve,
     LogError,
     LogErrorJson,
     LogTrace,
@@ -639,10 +661,94 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::FileErrorMessage,
     },
     InterpreterIntrinsicSpec {
+        namespace: "Hash",
+        name: "sha256_bytes",
+        variant: "HashSha256Bytes",
+        eval_kind: InterpreterEvalKind::HashSha256Bytes,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Hash",
+        name: "sha256_string",
+        variant: "HashSha256String",
+        eval_kind: InterpreterEvalKind::HashSha256String,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "Int",
         name: "to_string",
         variant: "IntToString",
         eval_kind: InterpreterEvalKind::IntToString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Path",
+        name: "extension",
+        variant: "PathExtension",
+        eval_kind: InterpreterEvalKind::PathExtension,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Path",
+        name: "file_name",
+        variant: "PathFileName",
+        eval_kind: InterpreterEvalKind::PathFileName,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Path",
+        name: "from_string",
+        variant: "PathFromString",
+        eval_kind: InterpreterEvalKind::PathFromString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Path",
+        name: "is_absolute",
+        variant: "PathIsAbsolute",
+        eval_kind: InterpreterEvalKind::PathIsAbsolute,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Path",
+        name: "join",
+        variant: "PathJoin",
+        eval_kind: InterpreterEvalKind::PathJoin,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Path",
+        name: "normalize",
+        variant: "PathNormalize",
+        eval_kind: InterpreterEvalKind::PathNormalize,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Path",
+        name: "parent",
+        variant: "PathParent",
+        eval_kind: InterpreterEvalKind::PathParent,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Path",
+        name: "resolve_relative",
+        variant: "PathResolveRelative",
+        eval_kind: InterpreterEvalKind::PathResolveRelative,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Path",
+        name: "safe_relative",
+        variant: "PathSafeRelative",
+        eval_kind: InterpreterEvalKind::PathSafeRelative,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Path",
+        name: "starts_with",
+        variant: "PathStartsWith",
+        eval_kind: InterpreterEvalKind::PathStartsWith,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Path",
+        name: "to_string",
+        variant: "PathToString",
+        eval_kind: InterpreterEvalKind::PathToString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Path",
+        name: "with_extension",
+        variant: "PathWithExtension",
+        eval_kind: InterpreterEvalKind::PathWithExtension,
     },
     InterpreterIntrinsicSpec {
         namespace: "List",
@@ -1293,6 +1399,54 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::StringBuilderPush,
     },
     InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "safe_relative",
+        variant: "StringSafeRelative",
+        eval_kind: InterpreterEvalKind::StringSafeRelative,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "to_path",
+        variant: "StringToPath",
+        eval_kind: InterpreterEvalKind::StringToPath,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "to_url",
+        variant: "StringToUrl",
+        eval_kind: InterpreterEvalKind::StringToUrl,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "TcpError",
+        name: "message",
+        variant: "TcpErrorMessage",
+        eval_kind: InterpreterEvalKind::TcpErrorMessage,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Url",
+        name: "from_string",
+        variant: "UrlFromString",
+        eval_kind: InterpreterEvalKind::UrlFromString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Url",
+        name: "to_string",
+        variant: "UrlToString",
+        eval_kind: InterpreterEvalKind::UrlToString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "WebSocketError",
+        name: "message",
+        variant: "WebSocketErrorMessage",
+        eval_kind: InterpreterEvalKind::WebSocketErrorMessage,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Workspace",
+        name: "resolve",
+        variant: "WorkspaceResolve",
+        eval_kind: InterpreterEvalKind::WorkspaceResolve,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "Log",
         name: "error",
         variant: "LogError",
@@ -1610,8 +1764,52 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::FileErrorMessage => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            read_field(&value, \"message\")\n        }"
         }
+        InterpreterEvalKind::HashSha256Bytes => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(sha256_digest(&expect_bytes(value)?)))\n        }"
+        }
+        InterpreterEvalKind::HashSha256String => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(sha256_digest(\n                expect_string(value)?.as_bytes(),\n            )))\n        }"
+        }
         InterpreterEvalKind::IntToString => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(expect_int(value)?.to_string()))\n        }"
+        }
+        InterpreterEvalKind::PathExtension => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(value_option(\n                Path::new(&expect_string(path)?)\n                    .extension()\n                    .map(|extension| Value::String(extension.to_string_lossy().to_string())),\n                |value| value,\n            ))\n        }"
+        }
+        InterpreterEvalKind::PathFileName => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(value_option(\n                Path::new(&expect_string(path)?)\n                    .file_name()\n                    .map(|name| Value::String(name.to_string_lossy().to_string())),\n                |value| value,\n            ))\n        }"
+        }
+        InterpreterEvalKind::PathFromString
+        | InterpreterEvalKind::PathToString
+        | InterpreterEvalKind::StringToPath
+        | InterpreterEvalKind::StringToUrl
+        | InterpreterEvalKind::UrlFromString
+        | InterpreterEvalKind::UrlToString => {
+            "{\n            interpreter.eval_first_arg(args)\n        }"
+        }
+        InterpreterEvalKind::PathIsAbsolute => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(Path::new(&expect_string(path)?).is_absolute()))\n        }"
+        }
+        InterpreterEvalKind::PathJoin => {
+            "{\n            let base = interpreter.eval_named_or_positional_arg(args, \"base\", 0)?;\n            let child = interpreter.eval_named_or_positional_arg(args, \"child\", 1)?;\n            Ok(Value::String(path_join_string(\n                &expect_string(base)?,\n                &expect_string(child)?,\n            )))\n        }"
+        }
+        InterpreterEvalKind::PathNormalize => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(path_normalize_string(&expect_string(path)?)))\n        }"
+        }
+        InterpreterEvalKind::PathParent => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(value_option(\n                Path::new(&expect_string(path)?)\n                    .parent()\n                    .map(|parent| Value::String(parent.to_string_lossy().to_string())),\n                |value| value,\n            ))\n        }"
+        }
+        InterpreterEvalKind::PathResolveRelative | InterpreterEvalKind::WorkspaceResolve => {
+            "{\n            let root = interpreter.eval_named_or_positional_arg(args, \"root\", 0)?;\n            let relative = interpreter.eval_named_or_positional_arg(args, \"relative\", 1)?;\n            Ok(result_value(\n                path_resolve_relative_string(&expect_string(root)?, &expect_string(relative)?)\n                    .map(Value::String)\n                    .map_err(Value::String),\n            ))\n        }"
+        }
+        InterpreterEvalKind::PathSafeRelative | InterpreterEvalKind::StringSafeRelative => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(result_value(\n                path_safe_relative_string(&expect_string(value)?)\n                    .map(Value::String)\n                    .map_err(Value::String),\n            ))\n        }"
+        }
+        InterpreterEvalKind::PathStartsWith => {
+            "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            let base = interpreter.eval_named_or_positional_arg(args, \"base\", 1)?;\n            Ok(Value::Bool(\n                Path::new(&expect_string(path)?).starts_with(Path::new(&expect_string(base)?)),\n            ))\n        }"
+        }
+        InterpreterEvalKind::PathWithExtension => {
+            "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            let extension = interpreter.eval_named_or_positional_arg(args, \"extension\", 1)?;\n            let mut path = PathBuf::from(expect_string(path)?);\n            path.set_extension(expect_string(extension)?);\n            Ok(Value::String(path.to_string_lossy().to_string()))\n        }"
         }
         InterpreterEvalKind::ListAppend => {
             "{\n            let list_name = interpreter.mut_arg_local_name(args, \"list\", 0)?;\n            let values = interpreter.eval_named_or_positional_arg(args, \"values\", 1)?;\n            let mut list = expect_list(interpreter.lookup(list_name)?)?;\n            list.extend(expect_list(values)?);\n            interpreter.assign(list_name, Value::List(list))?;\n            Ok(Value::Unit)\n        }"
@@ -1930,6 +2128,9 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::StringBuilderPush => {
             "{\n            let builder_name = interpreter.mut_arg_local_name(args, \"builder\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            let mut builder = expect_string(interpreter.lookup(builder_name)?)?;\n            builder.push_str(&expect_string(value)?);\n            interpreter.assign(builder_name, Value::String(builder))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::TcpErrorMessage | InterpreterEvalKind::WebSocketErrorMessage => {
+            "{\n            let error = interpreter.eval_named_or_positional_arg(args, \"error\", 0)?;\n            read_field(&error, \"message\")\n        }"
         }
         InterpreterEvalKind::LogError => {
             "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"message\", 0)?;\n            interpreter.stderr.push_str(&expect_string(value)?);\n            interpreter.stderr.push('\\n');\n            Ok(Value::Unit)\n        }"

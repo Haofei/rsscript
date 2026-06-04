@@ -3356,16 +3356,6 @@ impl<'a> Interpreter<'a> {
                 self.assign(list_name, Value::List(list))?;
                 Ok(Value::Unit)
             }
-            ("Hash", "sha256_string") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::String(sha256_digest(
-                    expect_string(value)?.as_bytes(),
-                )))
-            }
-            ("Hash", "sha256_bytes") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::String(sha256_digest(&expect_bytes(value)?)))
-            }
             ("Hash", "sha256_file") => {
                 let path = self.eval_named_or_positional_arg(args, "path", 0)?;
                 Ok(result_value(
@@ -4067,16 +4057,6 @@ impl<'a> Interpreter<'a> {
                         .map_err(tcp_error),
                 ))
             }
-            ("TcpError", "message") => {
-                let error = self.eval_named_or_positional_arg(args, "error", 0)?;
-                read_field(&error, "message")
-            }
-            ("Path", "from_string")
-            | ("Path", "to_string")
-            | ("String", "to_path")
-            | ("String", "to_url")
-            | ("Url", "from_string")
-            | ("Url", "to_string") => self.eval_first_arg(args),
             ("WebSocket", "connect") => {
                 let url = self.eval_named_or_positional_arg(args, "url", 0)?;
                 let url = expect_string(url)?;
@@ -4129,84 +4109,6 @@ impl<'a> Interpreter<'a> {
                     self.websocket_close(id)
                         .map(|_| Value::Unit)
                         .map_err(websocket_error),
-                ))
-            }
-            ("WebSocketError", "message") => {
-                let error = self.eval_named_or_positional_arg(args, "error", 0)?;
-                read_field(&error, "message")
-            }
-            ("Path", "join") => {
-                let base = self.eval_named_or_positional_arg(args, "base", 0)?;
-                let child = self.eval_named_or_positional_arg(args, "child", 1)?;
-                Ok(Value::String(path_join_string(
-                    &expect_string(base)?,
-                    &expect_string(child)?,
-                )))
-            }
-            ("Path", "normalize") => {
-                let path = self.eval_first_arg(args)?;
-                Ok(Value::String(path_normalize_string(&expect_string(path)?)))
-            }
-            ("Path", "parent") => {
-                let path = self.eval_first_arg(args)?;
-                Ok(value_option(
-                    Path::new(&expect_string(path)?)
-                        .parent()
-                        .map(|parent| Value::String(parent.to_string_lossy().to_string())),
-                    |value| value,
-                ))
-            }
-            ("Path", "file_name") => {
-                let path = self.eval_first_arg(args)?;
-                Ok(value_option(
-                    Path::new(&expect_string(path)?)
-                        .file_name()
-                        .map(|name| Value::String(name.to_string_lossy().to_string())),
-                    |value| value,
-                ))
-            }
-            ("Path", "extension") => {
-                let path = self.eval_first_arg(args)?;
-                Ok(value_option(
-                    Path::new(&expect_string(path)?)
-                        .extension()
-                        .map(|extension| Value::String(extension.to_string_lossy().to_string())),
-                    |value| value,
-                ))
-            }
-            ("Path", "is_absolute") => {
-                let path = self.eval_first_arg(args)?;
-                Ok(Value::Bool(Path::new(&expect_string(path)?).is_absolute()))
-            }
-            ("Path", "with_extension") => {
-                let path = self.eval_named_or_positional_arg(args, "path", 0)?;
-                let extension = self.eval_named_or_positional_arg(args, "extension", 1)?;
-                let mut path = PathBuf::from(expect_string(path)?);
-                path.set_extension(expect_string(extension)?);
-                Ok(Value::String(path.to_string_lossy().to_string()))
-            }
-            ("Path", "starts_with") => {
-                let path = self.eval_named_or_positional_arg(args, "path", 0)?;
-                let base = self.eval_named_or_positional_arg(args, "base", 1)?;
-                Ok(Value::Bool(
-                    Path::new(&expect_string(path)?).starts_with(Path::new(&expect_string(base)?)),
-                ))
-            }
-            ("Path", "safe_relative") | ("String", "safe_relative") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(result_value(
-                    path_safe_relative_string(&expect_string(value)?)
-                        .map(Value::String)
-                        .map_err(Value::String),
-                ))
-            }
-            ("Path", "resolve_relative") | ("Workspace", "resolve") => {
-                let root = self.eval_named_or_positional_arg(args, "root", 0)?;
-                let relative = self.eval_named_or_positional_arg(args, "relative", 1)?;
-                Ok(result_value(
-                    path_resolve_relative_string(&expect_string(root)?, &expect_string(relative)?)
-                        .map(Value::String)
-                        .map_err(Value::String),
                 ))
             }
             ("Patch", "apply_text") => {
