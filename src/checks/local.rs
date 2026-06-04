@@ -3572,6 +3572,7 @@ mod tests {
                     },
                     HirStmt::Expr(HirExpr::Call {
                         callee: Callee::Name("store".to_string()),
+                        receiver: None,
                         args: Vec::new(),
                         resolution: CallResolution::Unknown,
                         events: vec![retain_event.clone()],
@@ -3615,6 +3616,7 @@ mod tests {
                     HirStmt::Return {
                         value: Some(HirExpr::Call {
                             callee: Callee::Name("Image.load".to_string()),
+                            receiver: None,
                             args: Vec::new(),
                             resolution: CallResolution::Unknown,
                             events: Vec::new(),
@@ -3685,6 +3687,7 @@ mod tests {
                         name: "image".to_string(),
                         value: Some(HirExpr::Call {
                             callee: Callee::Name("Image.load".to_string()),
+                            receiver: None,
                             args: Vec::new(),
                             resolution: CallResolution::Unknown,
                             events: Vec::new(),
@@ -3698,6 +3701,7 @@ mod tests {
                     },
                     HirStmt::Expr(HirExpr::Call {
                         callee: Callee::Name("ImageCache.store".to_string()),
+                        receiver: None,
                         args: Vec::new(),
                         resolution: CallResolution::Unknown,
                         events: vec![retain_event],
@@ -3912,6 +3916,7 @@ mod tests {
                     HirStmt::With {
                         resource: HirExpr::Call {
                             callee: Callee::Name("File.open".to_string()),
+                            receiver: None,
                             args: Vec::new(),
                             resolution: CallResolution::Unknown,
                             events: Vec::new(),
@@ -3990,6 +3995,7 @@ mod tests {
                 statements: vec![HirStmt::With {
                     resource: HirExpr::Call {
                         callee: Callee::Name("File.open".to_string()),
+                        receiver: None,
                         args: Vec::new(),
                         resolution: CallResolution::Unknown,
                         events: Vec::new(),
@@ -4001,6 +4007,7 @@ mod tests {
                         statements: vec![
                             HirStmt::Expr(HirExpr::Call {
                                 callee: Callee::Name("register".to_string()),
+                                receiver: None,
                                 args: Vec::new(),
                                 resolution: CallResolution::Unknown,
                                 events: vec![retain_event],
@@ -4095,6 +4102,7 @@ mod tests {
                         then_body: HirBlock {
                             statements: vec![HirStmt::Expr(HirExpr::Call {
                                 callee: Callee::Name("Cache.store".to_string()),
+                                receiver: None,
                                 args: Vec::new(),
                                 resolution: CallResolution::Unknown,
                                 events: vec![retain_event],

@@ -86,6 +86,7 @@ pub struct TypeInfo {
     pub name: String,
     pub kind: HirTypeKind,
     pub type_params: Box<[String]>,
+    pub fields_ordered: Vec<FieldInfo>,
     pub fields: HashMap<String, FieldInfo>,
 }
 
@@ -303,6 +304,14 @@ pub struct HirSelectArm {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirCallReceiver {
+    pub value: Box<HirExpr>,
+    pub effect: ParamEffect,
+    pub type_name: Option<String>,
+    pub resolved_namespace: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HirExpr {
     Ident {
         name: String,
@@ -351,6 +360,7 @@ pub enum HirExpr {
     },
     Call {
         callee: Callee,
+        receiver: Option<HirCallReceiver>,
         args: Vec<HirCallArg>,
         resolution: CallResolution,
         events: Vec<HirEffectEvent>,
@@ -539,6 +549,14 @@ impl Hir {
                     field.is_handle = true;
                 }
             }
+            for field in &mut info.fields_ordered {
+                if !field.is_handle
+                    && !field.is_weak
+                    && class_types.contains(type_root_name(&field.type_name))
+                {
+                    field.is_handle = true;
+                }
+            }
         }
         self.fields_by_name.clear();
         for info in self.types.values() {
@@ -604,6 +622,7 @@ impl Hir {
                             .map(|p| p.name.clone())
                             .collect::<Vec<_>>()
                             .into_boxed_slice(),
+                        fields_ordered: Vec::new(),
                         fields: HashMap::new(),
                     };
                     self.insert_type(type_info);
@@ -1450,19 +1469,21 @@ fn lower_hir_expr(
             span: span.clone(),
         },
         Expr::Call { callee, args, span } => {
-            let resolution = match callee {
-                Callee::ReceiverCall {
-                    receiver, method, ..
-                } => {
-                    if let Some(receiver_type) = infer_hir_expr_type(hir, receiver, value_types) {
-                        let (res, _) =
-                            hir.resolve_receiver_call(&receiver_type, method, value_types);
-                        res
+            let receiver_type = match callee {
+                Callee::ReceiverCall { receiver, .. } => {
+                    infer_hir_expr_type(hir, receiver, value_types)
+                }
+                _ => None,
+            };
+            let (resolution, resolved_namespace) = match callee {
+                Callee::ReceiverCall { method, .. } => {
+                    if let Some(receiver_type) = receiver_type.as_deref() {
+                        hir.resolve_receiver_call(receiver_type, method, value_types)
                     } else {
-                        CallResolution::Unknown
+                        (CallResolution::Unknown, None)
                     }
                 }
-                _ => hir.resolve_call(callee),
+                _ => (hir.resolve_call(callee), None),
             };
             let events = retain_events_for_call(
                 function_name,
@@ -1476,6 +1497,17 @@ fn lower_hir_expr(
             let type_name = infer_hir_expr_type(hir, expr, value_types);
             HirExpr::Call {
                 callee: callee.clone(),
+                receiver: match callee {
+                    Callee::ReceiverCall {
+                        receiver, effect, ..
+                    } => Some(HirCallReceiver {
+                        value: Box::new(lower_hir_expr(hir, function_name, receiver, value_types)),
+                        effect: param_effect_from_data_effect(*effect),
+                        type_name: receiver_type,
+                        resolved_namespace,
+                    }),
+                    _ => None,
+                },
                 args: args
                     .iter()
                     .map(|arg| HirCallArg {
@@ -3113,6 +3145,11 @@ fn param_effect_from_data_effect(effect: DataEffect) -> ParamEffect {
 }
 
 fn type_info_from_decl(type_decl: &TypeDecl) -> TypeInfo {
+    let fields_ordered = type_decl
+        .fields
+        .iter()
+        .map(field_info_from_decl)
+        .collect::<Vec<_>>();
     TypeInfo {
         name: type_decl.name.clone(),
         kind: type_kind_from_decl(type_decl.kind),
@@ -3122,11 +3159,11 @@ fn type_info_from_decl(type_decl: &TypeDecl) -> TypeInfo {
             .map(|param| param.name.clone())
             .collect::<Vec<_>>()
             .into_boxed_slice(),
-        fields: type_decl
-            .fields
+        fields: fields_ordered
             .iter()
-            .map(|field| (field.name.clone(), field_info_from_decl(field)))
+            .map(|field| (field.name.clone(), field.clone()))
             .collect(),
+        fields_ordered,
     }
 }
 
@@ -3148,9 +3185,6 @@ fn field_info_from_decl(field: &FieldDecl) -> FieldInfo {
 }
 
 fn constructor_sig_from_type(type_info: &TypeInfo, is_builtin: bool) -> FunctionSig {
-    let mut fields: Vec<&FieldInfo> = type_info.fields.values().collect();
-    fields.sort_by(|left, right| left.name.cmp(&right.name));
-
     FunctionSig {
         namespace: None,
         name: type_info.name.clone(),
@@ -3159,8 +3193,9 @@ fn constructor_sig_from_type(type_info: &TypeInfo, is_builtin: bool) -> Function
         is_native: false,
         type_params: type_info.type_params.clone(),
         type_param_bounds: vec![None; type_info.type_params.len()],
-        params: fields
-            .into_iter()
+        params: type_info
+            .fields_ordered
+            .iter()
             .map(|field| ParamSig {
                 name: field.name.clone(),
                 effect: None,
@@ -3233,6 +3268,39 @@ struct Session {
         assert!(hir.is_handle_field_name("user"));
         assert!(hir.is_handle_field_name("parent"));
         assert!(!hir.is_handle_field_name("file_name"));
+    }
+
+    #[test]
+    fn preserves_declared_field_order_in_type_info_and_constructor_sig() {
+        let source = r#"
+struct Pair {
+    z: Int
+    a: String
+}
+"#;
+
+        let program = parse_source("test.rss", source);
+        let hir = Hir::from_syntax(&program);
+        let pair = hir.type_info("Pair").expect("pair type exists");
+
+        assert_eq!(
+            pair.fields_ordered
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["z", "a"]
+        );
+        let constructor = hir
+            .resolve_function(None, "Pair")
+            .expect("constructor exists");
+        assert_eq!(
+            constructor
+                .params
+                .iter()
+                .map(|param| param.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["z", "a"]
+        );
     }
 
     #[test]

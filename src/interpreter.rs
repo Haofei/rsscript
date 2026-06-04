@@ -11,14 +11,12 @@ use sha2::{Digest, Sha256};
 use crate::analyze_source_with_interfaces;
 use crate::analyze_sources_with_interfaces_without_core;
 use crate::diagnostic::Diagnostic;
-use crate::hir::{Hir, HirBlock, HirCallArg, HirExpr, HirMatchArm, HirStmt};
+use crate::hir::{FieldInfo, Hir, HirBlock, HirCallArg, HirExpr, HirMatchArm, HirStmt};
 use crate::interfaces::{builtin_interfaces, standard_package_interfaces};
 use crate::package::package_lowering_input;
 use crate::runtime_abi;
 use crate::runtime_abi::InterpreterIntrinsic;
-use crate::syntax::ast::{
-    BinaryOp, Callee, Expr, Item, MatchLiteral, MatchPattern, Program, merge_programs,
-};
+use crate::syntax::ast::{BinaryOp, Callee, MatchLiteral, MatchPattern, merge_programs};
 use crate::syntax::parse_source;
 
 include!(concat!(
@@ -1422,12 +1420,10 @@ pub fn eval_source_main_with_args_and_native_bindings(
     }
 
     // The interpreter executes the same checked HIR the Rust backend lowers, so
-    // both stay aligned on one semantic representation. The parsed AST is kept
-    // only for the two places HIR does not retain what execution needs: struct
-    // field declaration order and receiver-call receiver expressions.
+    // both stay aligned on one semantic representation.
     let program = parse_source(file, source);
     let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
-    eval_program_main_with_args_and_native_bindings(program, hir, args, native_bindings)
+    eval_program_main_with_args_and_native_bindings(hir, args, native_bindings)
 }
 
 pub fn eval_package_main_with_args(
@@ -1481,11 +1477,10 @@ pub fn eval_package_main_with_args_and_native_bindings(
         .map(|(path, source)| parse_source(path, source))
         .collect::<Vec<_>>();
     let hir = Hir::from_syntax_with_interfaces(&program, &interface_programs);
-    eval_program_main_with_args_and_native_bindings(program, hir, args, native_bindings)
+    eval_program_main_with_args_and_native_bindings(hir, args, native_bindings)
 }
 
 fn eval_program_main_with_args_and_native_bindings(
-    program: Program,
     hir: Hir,
     args: impl IntoIterator<Item = impl Into<String>>,
     native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
@@ -1496,7 +1491,6 @@ fn eval_program_main_with_args_and_native_bindings(
         .collect();
     let mut interpreter = Interpreter::new(
         &hir,
-        &program,
         args.into_iter().map(Into::into).collect(),
         native_bindings,
     );
@@ -1514,7 +1508,6 @@ fn eval_program_main_with_args_and_native_bindings(
 
 struct Interpreter<'a> {
     hir: &'a Hir,
-    program: &'a Program,
     scopes: Vec<HashMap<String, Value>>,
     pending_return: Option<Value>,
     stdout: String,
@@ -1538,13 +1531,11 @@ struct Interpreter<'a> {
 impl<'a> Interpreter<'a> {
     fn new(
         hir: &'a Hir,
-        program: &'a Program,
         args: Vec<String>,
         native_bindings: HashMap<String, NativeInterpreterFn>,
     ) -> Self {
         Self {
             hir,
-            program,
             scopes: Vec::new(),
             pending_return: None,
             stdout: String::new(),
@@ -2441,7 +2432,12 @@ impl<'a> Interpreter<'a> {
                 }
                 eval_index(base, index)
             }
-            HirExpr::Call { callee, args, .. } => self.eval_call(callee, args),
+            HirExpr::Call {
+                callee,
+                receiver,
+                args,
+                ..
+            } => self.eval_call(callee, receiver.as_ref(), args),
             HirExpr::Effect { value, .. } => self.eval_expr(value),
             HirExpr::Manage { value, .. } => {
                 let value = self.eval_expr(value)?;
@@ -2500,7 +2496,12 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn eval_call(&mut self, callee: &Callee, args: &[HirCallArg]) -> Result<Value, EvalError> {
+    fn eval_call(
+        &mut self,
+        callee: &Callee,
+        receiver: Option<&crate::hir::HirCallReceiver>,
+        args: &[HirCallArg],
+    ) -> Result<Value, EvalError> {
         match callee {
             Callee::Name(name) => {
                 if self
@@ -2580,15 +2581,17 @@ impl<'a> Interpreter<'a> {
                     "interpreter P0 does not support qualified call `{namespace}.{name}`."
                 )))
             }
-            Callee::ReceiverCall {
-                receiver, method, ..
-            } => {
-                if self
-                    .native_bindings
-                    .contains_key(&native_callee_key(callee))
+            Callee::ReceiverCall { method, .. } => {
+                let receiver = receiver.ok_or_else(|| {
+                    EvalError::Runtime(format!(
+                        "receiver call `{method}` is missing HIR receiver metadata."
+                    ))
+                })?;
+                if let Some(key) = native_receiver_callee_key(receiver, method)
+                    && self.native_bindings.contains_key(&key)
                 {
                     let mut values = Vec::with_capacity(args.len() + 1);
-                    values.push(self.eval_ast_expr(receiver)?);
+                    values.push(self.eval_expr(&receiver.value)?);
                     if self.pending_return.is_some() {
                         return Ok(Value::Unit);
                     }
@@ -2596,12 +2599,18 @@ impl<'a> Interpreter<'a> {
                     if self.pending_return.is_some() {
                         return Ok(Value::Unit);
                     }
-                    return self.call_native_callee(callee, values);
+                    return self.call_native_key(&key, values);
                 }
-                // HIR reuses the AST `Callee`, so the receiver is still an AST
-                // expression (only the call arguments are lowered). Evaluate it
-                // through the small AST bridge below.
-                let receiver = self.eval_ast_expr(receiver)?;
+                if let Some(namespace) = receiver.resolved_namespace.as_deref()
+                    && let Some(signature) = self.hir.resolve_function(Some(namespace), method)
+                    && signature.is_native
+                    && !signature.is_builtin
+                {
+                    return Err(EvalError::Runtime(format!(
+                        "interpreter native function `{namespace}.{method}` has no host binding."
+                    )));
+                }
+                let receiver = self.eval_expr(&receiver.value)?;
                 if self.pending_return.is_some() {
                     return Ok(Value::Unit);
                 }
@@ -2623,7 +2632,11 @@ impl<'a> Interpreter<'a> {
 
     fn call_native_callee(&self, callee: &Callee, args: Vec<Value>) -> Result<Value, EvalError> {
         let key = native_callee_key(callee);
-        let Some(function) = self.native_bindings.get(&key).copied() else {
+        self.call_native_key(&key, args)
+    }
+
+    fn call_native_key(&self, key: &str, args: Vec<Value>) -> Result<Value, EvalError> {
+        let Some(function) = self.native_bindings.get(key).copied() else {
             return Err(EvalError::Runtime(format!(
                 "interpreter native function `{key}` has no host binding."
             )));
@@ -5902,47 +5915,6 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    /// Minimal evaluator for the AST receiver expression of a receiver call.
-    /// HIR does not lower the receiver (it lives inside the reused AST
-    /// `Callee::ReceiverCall`), so this bridges the pure subset of receivers
-    /// that appear in checked programs and fails closed on anything else.
-    fn eval_ast_expr(&mut self, expr: &Expr) -> Result<Value, EvalError> {
-        match expr {
-            Expr::Ident(name, _) if name == "Unit" => Ok(Value::Unit),
-            Expr::Ident(name, _) if name == "true" => Ok(Value::Bool(true)),
-            Expr::Ident(name, _) if name == "false" => Ok(Value::Bool(false)),
-            Expr::Ident(name, _) => self.lookup(name),
-            Expr::Number(value, _) => value
-                .parse::<i64>()
-                .map(Value::Int)
-                .map_err(|error| EvalError::Runtime(format!("invalid integer `{value}`: {error}"))),
-            Expr::String(value, _) => Ok(Value::String(decode_string_token(value))),
-            Expr::MultilineString(value, _) => Ok(Value::String(value.clone())),
-            Expr::ArrayLiteral { items, .. } => {
-                let items = items
-                    .iter()
-                    .map(|item| self.eval_ast_expr(item))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(Value::List(items))
-            }
-            Expr::Effect { value, .. } | Expr::Manage { value, .. } => self.eval_ast_expr(value),
-            Expr::Field { base, name, .. } => {
-                let base = self.eval_ast_expr(base)?;
-                read_field(&base, name)
-            }
-            Expr::Binary {
-                op, left, right, ..
-            } => {
-                let left = self.eval_ast_expr(left)?;
-                let right = self.eval_ast_expr(right)?;
-                eval_binary(*op, left, right)
-            }
-            _ => Err(EvalError::Runtime(
-                "interpreter P0 does not support this receiver expression.".to_string(),
-            )),
-        }
-    }
-
     fn eval_first_arg(&mut self, args: &[HirCallArg]) -> Result<Value, EvalError> {
         self.eval_named_or_positional_arg(args, "value", 0)
     }
@@ -6018,35 +5990,31 @@ impl<'a> Interpreter<'a> {
                 fields,
             }));
         }
-        // Struct field declaration order is not retained by HIR, so the ordered
-        // field list comes from the parsed AST declarations.
-        for item in &self.program.items {
-            match item {
-                Item::Type(type_decl) if type_decl.name == name => {
-                    let fields = self.eval_constructor_fields(&type_decl.fields, args)?;
-                    if self.pending_return.is_some() {
-                        return Ok(Some(Value::Unit));
-                    }
-                    return Ok(Some(Value::Struct {
-                        name: name.to_string(),
-                        fields,
-                    }));
-                }
-                Item::SumType(sum) => {
-                    if let Some(variant) = sum.variants.iter().find(|variant| variant.name == name)
-                    {
-                        let fields = self.eval_constructor_fields(&variant.fields, args)?;
-                        if self.pending_return.is_some() {
-                            return Ok(Some(Value::Unit));
-                        }
-                        return Ok(Some(Value::Variant {
-                            name: name.to_string(),
-                            fields,
-                        }));
-                    }
-                }
-                _ => {}
+        if let Some(type_info) = self.hir.type_info(name)
+            && type_info.kind != crate::hir::HirTypeKind::Sum
+        {
+            let fields = self.eval_constructor_fields(&type_info.fields_ordered, args)?;
+            if self.pending_return.is_some() {
+                return Ok(Some(Value::Unit));
             }
+            return Ok(Some(Value::Struct {
+                name: name.to_string(),
+                fields,
+            }));
+        }
+        if let Some(fields_ordered) = self
+            .hir
+            .sum_variant_fields(name)
+            .map(|fields| fields.to_vec())
+        {
+            let fields = self.eval_constructor_fields(&fields_ordered, args)?;
+            if self.pending_return.is_some() {
+                return Ok(Some(Value::Unit));
+            }
+            return Ok(Some(Value::Variant {
+                name: name.to_string(),
+                fields,
+            }));
         }
         Ok(None)
     }
@@ -6083,7 +6051,7 @@ impl<'a> Interpreter<'a> {
 
     fn eval_constructor_fields(
         &mut self,
-        fields: &[crate::syntax::ast::FieldDecl],
+        fields: &[FieldInfo],
         args: &[HirCallArg],
     ) -> Result<BTreeMap<String, Value>, EvalError> {
         let mut values = BTreeMap::new();
@@ -6247,6 +6215,23 @@ fn native_callee_key(callee: &Callee) -> String {
         }
         Callee::ReceiverCall { method, .. } => strip_generic_args(method).to_string(),
     }
+}
+
+fn native_receiver_callee_key(
+    receiver: &crate::hir::HirCallReceiver,
+    method: &str,
+) -> Option<String> {
+    receiver
+        .resolved_namespace
+        .as_deref()
+        .or(receiver.type_name.as_deref())
+        .map(|namespace| {
+            format!(
+                "{}.{}",
+                strip_generic_args(namespace),
+                strip_generic_args(method)
+            )
+        })
 }
 
 fn call_native_function(

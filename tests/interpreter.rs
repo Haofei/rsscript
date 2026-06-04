@@ -522,6 +522,85 @@ fn main() -> Unit {
 }
 
 #[test]
+fn eval_receiver_native_bindings_use_resolved_receiver_namespace() {
+    fn alpha_open(args: Vec<NativeValue>) -> Result<NativeValue, String> {
+        let [] = args.as_slice() else {
+            return Err(format!("unexpected args: {args:?}"));
+        };
+        Ok(NativeValue::Native {
+            type_name: "Alpha".to_string(),
+            id: 1,
+        })
+    }
+
+    fn beta_open(args: Vec<NativeValue>) -> Result<NativeValue, String> {
+        let [] = args.as_slice() else {
+            return Err(format!("unexpected args: {args:?}"));
+        };
+        Ok(NativeValue::Native {
+            type_name: "Beta".to_string(),
+            id: 2,
+        })
+    }
+
+    fn alpha_describe(args: Vec<NativeValue>) -> Result<NativeValue, String> {
+        let [NativeValue::Native { type_name, id }] = args.as_slice() else {
+            return Err(format!("unexpected args: {args:?}"));
+        };
+        Ok(NativeValue::String(format!("alpha:{type_name}:{id}")))
+    }
+
+    fn beta_describe(args: Vec<NativeValue>) -> Result<NativeValue, String> {
+        let [NativeValue::Native { type_name, id }] = args.as_slice() else {
+            return Err(format!("unexpected args: {args:?}"));
+        };
+        Ok(NativeValue::String(format!("beta:{type_name}:{id}")))
+    }
+
+    let source = r#"
+features: native
+
+opaque struct Alpha
+opaque struct Beta
+
+native fn Alpha.open() -> Alpha
+    effects(native)
+
+native fn Alpha.describe(self: read Alpha) -> String
+    effects(native)
+
+native fn Beta.open() -> Beta
+    effects(native)
+
+native fn Beta.describe(self: read Beta) -> String
+    effects(native)
+
+fn main() -> Unit {
+    let alpha = Alpha.open()
+    let beta = Beta.open()
+    Log.write(message: read alpha.describe())
+    Log.write(message: read beta.describe())
+    return Unit
+}
+"#;
+
+    let output = eval_source_main_with_args_and_native_bindings(
+        "receiver-native-bindings.rss",
+        source,
+        std::iter::empty::<&str>(),
+        [
+            ("Alpha.open", alpha_open as NativeInterpreterFn),
+            ("Alpha.describe", alpha_describe as NativeInterpreterFn),
+            ("Beta.open", beta_open as NativeInterpreterFn),
+            ("Beta.describe", beta_describe as NativeInterpreterFn),
+        ],
+    )
+    .expect("receiver native host binding eval should succeed");
+
+    assert_eq!(output.stdout, "alpha:Alpha:1\nbeta:Beta:2\n");
+}
+
+#[test]
 fn parity_native_host_bindings_match_lowered_backend() {
     fn host_open(args: Vec<NativeValue>) -> Result<NativeValue, String> {
         let [] = args.as_slice() else {
