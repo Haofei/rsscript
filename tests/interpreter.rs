@@ -288,6 +288,8 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Instant.elapsed
 // parity: runtime:Hash.sha256_bytes runtime:Hash.sha256_file runtime:Hash.sha256_string
 // parity: runtime:Http.get runtime:Http.post_form runtime:Http.post_json runtime:HttpError.message
+// parity: runtime:HttpRequest.json runtime:HttpRequest.with_header
+// parity: runtime:HttpRequest.with_retry runtime:HttpRequest.with_timeout
 // parity: runtime:ImageCache.len runtime:ImageCache.new
 // parity: runtime:List.append runtime:List.clear runtime:List.contains_value
 // parity: runtime:List.consume runtime:List.first runtime:List.get runtime:List.is_empty runtime:List.join
@@ -1493,6 +1495,29 @@ fn main() -> Unit {
 }
 "#;
     assert_interpreter_matches_backend("parity-http-sync.rss", "rsscript_parity_http_sync", source);
+}
+
+#[test]
+fn parity_http_request_builder_intrinsics() {
+    let source = r#"
+features: native, local
+
+fn main() -> Unit {
+    let url = Url.from_string(value: read "https://example.test/api")
+    local base = HttpRequest.json(url: read url, body: read "{\"ok\":true}")
+    local timed = HttpRequest.with_timeout(request: take base, timeout_ms: 250)
+    local retry = HttpRequest.with_retry(request: take timed, attempts: 3, backoff_ms: 50)
+    local with_header = HttpRequest.with_header(request: take retry, name: read "X-Test", value: read "rss")
+    HttpRequest.with_header(request: take with_header, name: read "X-Trace", value: read "1")
+    Log.write(message: read "http-request-built")
+    return Unit
+}
+"#;
+    assert_interpreter_matches_backend(
+        "parity-http-request.rss",
+        "rsscript_parity_http_request",
+        source,
+    );
 }
 
 #[test]

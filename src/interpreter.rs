@@ -304,6 +304,10 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Http", "post_form"),
     ("Http", "post_json"),
     ("HttpError", "message"),
+    ("HttpRequest", "json"),
+    ("HttpRequest", "with_header"),
+    ("HttpRequest", "with_retry"),
+    ("HttpRequest", "with_timeout"),
     ("ImageCache", "len"),
     ("ImageCache", "new"),
     ("Instant", "elapsed"),
@@ -666,6 +670,10 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Http.post_form",
     "runtime:Http.post_json",
     "runtime:HttpError.message",
+    "runtime:HttpRequest.json",
+    "runtime:HttpRequest.with_header",
+    "runtime:HttpRequest.with_retry",
+    "runtime:HttpRequest.with_timeout",
     "runtime:ImageCache.len",
     "runtime:ImageCache.new",
     "runtime:List.append",
@@ -2504,6 +2512,43 @@ impl<'a> Interpreter<'a> {
             ("HttpError", "message") => {
                 let error = self.eval_named_or_positional_arg(args, "error", 0)?;
                 read_field(&error, "message")
+            }
+            ("HttpRequest", "json") => {
+                let url = self.eval_named_or_positional_arg(args, "url", 0)?;
+                let body = self.eval_named_or_positional_arg(args, "body", 1)?;
+                Ok(http_request_value(
+                    "POST",
+                    expect_string(url)?,
+                    expect_string(body)?,
+                    0,
+                    1,
+                    0,
+                    0,
+                ))
+            }
+            ("HttpRequest", "with_timeout") => {
+                let request = self.eval_named_or_positional_arg(args, "request", 0)?;
+                let timeout_ms = self.eval_named_or_positional_arg(args, "timeout_ms", 1)?;
+                let mut request = expect_http_request(request)?;
+                request.timeout_ms = expect_int(timeout_ms)?;
+                Ok(request.to_value())
+            }
+            ("HttpRequest", "with_retry") => {
+                let request = self.eval_named_or_positional_arg(args, "request", 0)?;
+                let attempts = self.eval_named_or_positional_arg(args, "attempts", 1)?;
+                let backoff_ms = self.eval_named_or_positional_arg(args, "backoff_ms", 2)?;
+                let mut request = expect_http_request(request)?;
+                request.attempts = expect_int(attempts)?;
+                request.backoff_ms = expect_int(backoff_ms)?;
+                Ok(request.to_value())
+            }
+            ("HttpRequest", "with_header") => {
+                let request = self.eval_named_or_positional_arg(args, "request", 0)?;
+                let _name = self.eval_named_or_positional_arg(args, "name", 1)?;
+                let _value = self.eval_named_or_positional_arg(args, "value", 2)?;
+                let mut request = expect_http_request(request)?;
+                request.header_count += 1;
+                Ok(request.to_value())
             }
             ("Option", "is_some") => {
                 let value = self.eval_first_arg(args)?;
@@ -4470,6 +4515,53 @@ fn http_error(message: impl Into<String>) -> Value {
     }
 }
 
+struct HttpRequestState {
+    method: String,
+    url: String,
+    body: String,
+    timeout_ms: i64,
+    attempts: i64,
+    backoff_ms: i64,
+    header_count: i64,
+}
+
+impl HttpRequestState {
+    fn to_value(&self) -> Value {
+        http_request_value(
+            self.method.clone(),
+            self.url.clone(),
+            self.body.clone(),
+            self.timeout_ms,
+            self.attempts,
+            self.backoff_ms,
+            self.header_count,
+        )
+    }
+}
+
+fn http_request_value(
+    method: impl Into<String>,
+    url: impl Into<String>,
+    body: impl Into<String>,
+    timeout_ms: i64,
+    attempts: i64,
+    backoff_ms: i64,
+    header_count: i64,
+) -> Value {
+    Value::Struct {
+        name: "HttpRequest".to_string(),
+        fields: BTreeMap::from([
+            ("method".to_string(), Value::String(method.into())),
+            ("url".to_string(), Value::String(url.into())),
+            ("body".to_string(), Value::String(body.into())),
+            ("timeout_ms".to_string(), Value::Int(timeout_ms)),
+            ("attempts".to_string(), Value::Int(attempts)),
+            ("backoff_ms".to_string(), Value::Int(backoff_ms)),
+            ("header_count".to_string(), Value::Int(header_count)),
+        ]),
+    }
+}
+
 fn config_error(error: std::io::Error) -> Value {
     Value::Struct {
         name: "ConfigError".to_string(),
@@ -4678,6 +4770,47 @@ fn expect_tempdir_path(value: Value) -> Result<String, EvalError> {
             .and_then(expect_string),
         other => Err(EvalError::Runtime(format!(
             "expected TempDir, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn expect_http_request(value: Value) -> Result<HttpRequestState, EvalError> {
+    match value {
+        Value::Struct { name, mut fields } if name == "HttpRequest" => Ok(HttpRequestState {
+            method: fields
+                .remove("method")
+                .ok_or_else(|| EvalError::Runtime("HttpRequest method is missing.".to_string()))
+                .and_then(expect_string)?,
+            url: fields
+                .remove("url")
+                .ok_or_else(|| EvalError::Runtime("HttpRequest url is missing.".to_string()))
+                .and_then(expect_string)?,
+            body: fields
+                .remove("body")
+                .ok_or_else(|| EvalError::Runtime("HttpRequest body is missing.".to_string()))
+                .and_then(expect_string)?,
+            timeout_ms: fields
+                .remove("timeout_ms")
+                .ok_or_else(|| EvalError::Runtime("HttpRequest timeout_ms is missing.".to_string()))
+                .and_then(expect_int)?,
+            attempts: fields
+                .remove("attempts")
+                .ok_or_else(|| EvalError::Runtime("HttpRequest attempts is missing.".to_string()))
+                .and_then(expect_int)?,
+            backoff_ms: fields
+                .remove("backoff_ms")
+                .ok_or_else(|| EvalError::Runtime("HttpRequest backoff_ms is missing.".to_string()))
+                .and_then(expect_int)?,
+            header_count: fields
+                .remove("header_count")
+                .ok_or_else(|| {
+                    EvalError::Runtime("HttpRequest header_count is missing.".to_string())
+                })
+                .and_then(expect_int)?,
+        }),
+        other => Err(EvalError::Runtime(format!(
+            "expected HttpRequest, got `{}`.",
             other.display()
         ))),
     }
