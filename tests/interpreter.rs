@@ -520,7 +520,7 @@ fn eval_matches_backend_for_declared_host_boundary() {
 // parity: runtime:StringView.contains runtime:StringView.is_empty runtime:StringView.len
 // parity: runtime:StringView.slice runtime:StringView.starts_with runtime:StringView.to_string
 // parity: runtime:StringBuilder.finish runtime:StringBuilder.new runtime:StringBuilder.push
-// parity: runtime:Stream.collect_list runtime:Stream.from_list
+// parity: runtime:Stream.collect_list runtime:Stream.from_list runtime:Stream.next
 // parity: runtime:GlobalConfig.new runtime:GlobalConfig.replace runtime:GlobalConfig.rule_count
 // parity: runtime:TempDir.new runtime:TempDir.new_in runtime:TempDir.path
 // parity: runtime:Timer.sleep runtime:Timer.sleep_cancellable runtime:Timer.sleep_until
@@ -3436,6 +3436,13 @@ async fn main() -> Result<Unit, ChannelError> {
     let cancelled_recv_token = CancellationSource.token(source: read cancelled_recv_source)
     CancellationSource.cancel(source: mut cancelled_recv_source)
 
+    local next_items = List<Int>.new()
+    List.push<Int>(list: mut next_items, value: read 41)
+    let next_stream: Stream<Int> = Stream.from_list<Int>(items: take next_items)
+
+    local empty_next_items = List<Int>.new()
+    let empty_next_stream: Stream<Int> = Stream.from_list<Int>(items: take empty_next_items)
+
     await Sender.send<Int>(sender: read data_sender, value: take first)?
     Sender.close<Int>(sender: mut data_sender)
     match await Receiver.recv<Int>(receiver: read data_receiver)? {
@@ -3469,6 +3476,22 @@ async fn main() -> Result<Unit, ChannelError> {
         }
         Err(error) => {
             Log.write(message: read ChannelError.message(error: read error))
+        }
+    }
+    match await Stream.next<Int>(stream: read next_stream)? {
+        Some(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        None => {
+            Log.write(message: read "stream-none")
+        }
+    }
+    match await Stream.next<Int>(stream: read empty_next_stream)? {
+        Some(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        None => {
+            Log.write(message: read "stream-none")
         }
     }
     return Ok(Unit)

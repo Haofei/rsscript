@@ -561,6 +561,7 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("StringBuilder", "push"),
     ("Stream", "collect_list"),
     ("Stream", "from_list"),
+    ("Stream", "next"),
     ("TempDir", "new"),
     ("TempDir", "new_in"),
     ("TempDir", "path"),
@@ -1095,6 +1096,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:StringBuilder.push",
     "runtime:Stream.collect_list",
     "runtime:Stream.from_list",
+    "runtime:Stream.next",
     "runtime:GlobalConfig.new",
     "runtime:GlobalConfig.replace",
     "runtime:GlobalConfig.rule_count",
@@ -1365,6 +1367,8 @@ struct Interpreter<'a> {
     cancellation_flags: HashMap<i64, bool>,
     next_channel_id: i64,
     channels: HashMap<i64, InterpreterChannel>,
+    next_stream_id: i64,
+    streams: HashMap<i64, InterpreterStream>,
     next_pool_id: i64,
     pools: HashMap<i64, InterpreterResourcePool>,
 }
@@ -1383,6 +1387,8 @@ impl<'a> Interpreter<'a> {
             cancellation_flags: HashMap::new(),
             next_channel_id: 0,
             channels: HashMap::new(),
+            next_stream_id: 0,
+            streams: HashMap::new(),
             next_pool_id: 0,
             pools: HashMap::new(),
         }
@@ -1562,48 +1568,71 @@ impl<'a> Interpreter<'a> {
         ))
     }
 
+    fn stream_from_list(&mut self, items: Vec<Value>) -> Value {
+        let id = self.next_stream_id;
+        self.next_stream_id = self.next_stream_id.saturating_add(1);
+        self.streams.insert(
+            id,
+            InterpreterStream {
+                items: VecDeque::from(items),
+            },
+        );
+        stream_value_with_id(id)
+    }
+
+    fn stream_next(&mut self, value: Value) -> Result<Result<Value, Value>, EvalError> {
+        let stream = expect_stream(value)?;
+        if let Some(message) = stream.collect_error {
+            return Ok(Err(channel_error(message)));
+        }
+        if let Some(channel_id) = stream.channel_id {
+            return Ok(self.channel_recv(channel_id));
+        }
+        if let Some(stream_id) = stream.stream_id {
+            let state = self
+                .streams
+                .get_mut(&stream_id)
+                .ok_or_else(|| EvalError::Runtime(format!("unknown Stream id `{stream_id}`.")))?;
+            return Ok(Ok(match state.items.pop_front() {
+                Some(value) => value_some(value),
+                None => value_none(),
+            }));
+        }
+        Ok(Ok(match stream.items.into_iter().next() {
+            Some(value) => value_some(value),
+            None => value_none(),
+        }))
+    }
+
     fn expect_stream_collect_items(
         &mut self,
         value: Value,
     ) -> Result<Result<Vec<Value>, Value>, EvalError> {
-        match value {
-            Value::Struct { name, mut fields } if name == "Stream" => {
-                let collect_error = fields.remove("collect_error").ok_or_else(|| {
-                    EvalError::Runtime("Stream value is missing collect_error.".to_string())
-                })?;
-                if let Some(message) = option_payload(collect_error)? {
-                    return Ok(Err(channel_error(expect_string(message)?)));
-                }
-                if let Some(channel_id) = fields
-                    .remove("channel_id")
-                    .map(option_payload)
-                    .transpose()?
-                    .flatten()
-                {
-                    let channel_id = expect_int(channel_id)?;
-                    let state = self.channel_state_mut(channel_id)?;
-                    let mut values = Vec::new();
-                    while let Some(value) = state.queue.pop_front() {
-                        values.push(value);
-                    }
-                    if state.senders == 0 {
-                        return Ok(Ok(values));
-                    }
-                    return Ok(Err(channel_error(
-                        "stream collect_list would block on an open channel stream",
-                    )));
-                }
-                fields
-                    .remove("items")
-                    .ok_or_else(|| EvalError::Runtime("Stream value is missing items.".to_string()))
-                    .and_then(expect_list)
-                    .map(Ok)
-            }
-            other => Err(EvalError::Runtime(format!(
-                "expected Stream, got `{}`.",
-                other.display()
-            ))),
+        let stream = expect_stream(value)?;
+        if let Some(message) = stream.collect_error {
+            return Ok(Err(channel_error(message)));
         }
+        if let Some(channel_id) = stream.channel_id {
+            let state = self.channel_state_mut(channel_id)?;
+            let mut values = Vec::new();
+            while let Some(value) = state.queue.pop_front() {
+                values.push(value);
+            }
+            if state.senders == 0 {
+                return Ok(Ok(values));
+            }
+            return Ok(Err(channel_error(
+                "stream collect_list would block on an open channel stream",
+            )));
+        }
+        if let Some(stream_id) = stream.stream_id {
+            let state = self
+                .streams
+                .get_mut(&stream_id)
+                .ok_or_else(|| EvalError::Runtime(format!("unknown Stream id `{stream_id}`.")))?;
+            return Ok(Ok(state.items.drain(..).collect()));
+        }
+        Ok(Ok(stream.items))
     }
 
     fn eval_resource_pool_new(
@@ -3480,13 +3509,17 @@ impl<'a> Interpreter<'a> {
             ("StringBuilder", "finish") => self.eval_first_arg(args),
             ("Stream", "from_list") => {
                 let items = self.eval_named_or_positional_arg(args, "items", 0)?;
-                Ok(stream_value(expect_list(items)?))
+                Ok(self.stream_from_list(expect_list(items)?))
             }
             ("Stream", "collect_list") => {
                 let stream = self.eval_named_or_positional_arg(args, "stream", 0)?;
                 Ok(result_value(
                     self.expect_stream_collect_items(stream)?.map(Value::List),
                 ))
+            }
+            ("Stream", "next") => {
+                let stream = self.eval_named_or_positional_arg(args, "stream", 0)?;
+                Ok(result_value(self.stream_next(stream)?))
             }
             ("Map", "new") => Ok(Value::Map(Vec::new())),
             ("Map", "insert") => {
@@ -6914,6 +6947,10 @@ impl InterpreterChannel {
     }
 }
 
+struct InterpreterStream {
+    items: VecDeque<Value>,
+}
+
 struct ChannelState {
     id: i64,
     capacity: i64,
@@ -6952,6 +6989,13 @@ struct ResourcePoolLeaseState {
     pool_id: i64,
     discarded: bool,
     value: Value,
+}
+
+struct StreamState {
+    items: Vec<Value>,
+    collect_error: Option<String>,
+    channel_id: Option<i64>,
+    stream_id: Option<i64>,
 }
 
 const POOL_LEASE_ID_FIELD: &str = "__rsscript_interpreter_pool_id";
@@ -7079,6 +7123,19 @@ fn stream_value(items: Vec<Value>) -> Value {
             ("items".to_string(), Value::List(items)),
             ("collect_error".to_string(), value_none()),
             ("channel_id".to_string(), value_none()),
+            ("stream_id".to_string(), value_none()),
+        ]),
+    }
+}
+
+fn stream_value_with_id(stream_id: i64) -> Value {
+    Value::Struct {
+        name: "Stream".to_string(),
+        fields: BTreeMap::from([
+            ("items".to_string(), Value::List(Vec::new())),
+            ("collect_error".to_string(), value_none()),
+            ("channel_id".to_string(), value_none()),
+            ("stream_id".to_string(), value_some(Value::Int(stream_id))),
         ]),
     }
 }
@@ -7090,6 +7147,7 @@ fn stream_channel_value(channel_id: i64) -> Value {
             ("items".to_string(), Value::List(Vec::new())),
             ("collect_error".to_string(), value_none()),
             ("channel_id".to_string(), value_some(Value::Int(channel_id))),
+            ("stream_id".to_string(), value_none()),
         ]),
     }
 }
@@ -7104,6 +7162,7 @@ fn stream_collect_error_value(message: impl Into<String>) -> Value {
                 value_some(Value::String(message.into())),
             ),
             ("channel_id".to_string(), value_none()),
+            ("stream_id".to_string(), value_none()),
         ]),
     }
 }
@@ -7383,6 +7442,47 @@ fn expect_resource_pool(value: Value) -> Result<ResourcePoolState, EvalError> {
         }
         other => Err(EvalError::Runtime(format!(
             "expected ResourcePool, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn expect_stream(value: Value) -> Result<StreamState, EvalError> {
+    match value {
+        Value::Struct { name, mut fields } if name == "Stream" => {
+            let collect_error = fields.remove("collect_error").ok_or_else(|| {
+                EvalError::Runtime("Stream value is missing collect_error.".to_string())
+            })?;
+            let collect_error = option_payload(collect_error)?
+                .map(expect_string)
+                .transpose()?;
+            let channel_id = fields
+                .remove("channel_id")
+                .map(option_payload)
+                .transpose()?
+                .flatten()
+                .map(expect_int)
+                .transpose()?;
+            let stream_id = fields
+                .remove("stream_id")
+                .map(option_payload)
+                .transpose()?
+                .flatten()
+                .map(expect_int)
+                .transpose()?;
+            let items = fields
+                .remove("items")
+                .ok_or_else(|| EvalError::Runtime("Stream value is missing items.".to_string()))
+                .and_then(expect_list)?;
+            Ok(StreamState {
+                items,
+                collect_error,
+                channel_id,
+                stream_id,
+            })
+        }
+        other => Err(EvalError::Runtime(format!(
+            "expected Stream, got `{}`.",
             other.display()
         ))),
     }
