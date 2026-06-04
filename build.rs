@@ -123,6 +123,15 @@ enum InterpreterEvalKind {
     AssertEqual,
     AssertEqualBool,
     AssertEqualInt,
+    BufferClear,
+    BufferConsume,
+    BufferIsEmpty,
+    BufferLen,
+    BufferNew,
+    BufferView,
+    BufferViewToBytes,
+    BytesFromBuffer,
+    CacheNew,
     CharCompare,
     CharFromCode,
     CharIsAlphanumeric,
@@ -131,7 +140,17 @@ enum InterpreterEvalKind {
     CharIsWhitespace,
     CharToCode,
     CharToString,
+    DiffUnified,
+    DurationAdd,
+    DurationAsMs,
+    DurationAsSeconds,
+    DurationMs,
+    DurationSeconds,
+    FileErrorMessage,
     IntToString,
+    OsClose,
+    RowBufferNew,
+    RowFieldString,
     StringConcat,
     StringCopy,
     StringFromBool,
@@ -215,6 +234,78 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::AssertEqualInt,
     },
     InterpreterIntrinsicSpec {
+        namespace: "Buffer",
+        name: "clear",
+        variant: "BufferClear",
+        eval_kind: InterpreterEvalKind::BufferClear,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Buffer",
+        name: "consume",
+        variant: "BufferConsume",
+        eval_kind: InterpreterEvalKind::BufferConsume,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Buffer",
+        name: "is_empty",
+        variant: "BufferIsEmpty",
+        eval_kind: InterpreterEvalKind::BufferIsEmpty,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Buffer",
+        name: "len",
+        variant: "BufferLen",
+        eval_kind: InterpreterEvalKind::BufferLen,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Buffer",
+        name: "new",
+        variant: "BufferNew",
+        eval_kind: InterpreterEvalKind::BufferNew,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Buffer",
+        name: "view",
+        variant: "BufferView",
+        eval_kind: InterpreterEvalKind::BufferView,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "BufferView",
+        name: "is_empty",
+        variant: "BufferViewIsEmpty",
+        eval_kind: InterpreterEvalKind::BufferIsEmpty,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "BufferView",
+        name: "len",
+        variant: "BufferViewLen",
+        eval_kind: InterpreterEvalKind::BufferLen,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "BufferView",
+        name: "slice",
+        variant: "BufferViewSlice",
+        eval_kind: InterpreterEvalKind::BufferView,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "BufferView",
+        name: "to_bytes",
+        variant: "BufferViewToBytes",
+        eval_kind: InterpreterEvalKind::BufferViewToBytes,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Bytes",
+        name: "from_buffer",
+        variant: "BytesFromBuffer",
+        eval_kind: InterpreterEvalKind::BytesFromBuffer,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Cache",
+        name: "new",
+        variant: "CacheNew",
+        eval_kind: InterpreterEvalKind::CacheNew,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "Char",
         name: "compare",
         variant: "CharCompare",
@@ -263,10 +354,70 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::CharToString,
     },
     InterpreterIntrinsicSpec {
+        namespace: "Diff",
+        name: "unified",
+        variant: "DiffUnified",
+        eval_kind: InterpreterEvalKind::DiffUnified,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Duration",
+        name: "add",
+        variant: "DurationAdd",
+        eval_kind: InterpreterEvalKind::DurationAdd,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Duration",
+        name: "as_ms",
+        variant: "DurationAsMs",
+        eval_kind: InterpreterEvalKind::DurationAsMs,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Duration",
+        name: "as_seconds",
+        variant: "DurationAsSeconds",
+        eval_kind: InterpreterEvalKind::DurationAsSeconds,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Duration",
+        name: "ms",
+        variant: "DurationMs",
+        eval_kind: InterpreterEvalKind::DurationMs,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Duration",
+        name: "seconds",
+        variant: "DurationSeconds",
+        eval_kind: InterpreterEvalKind::DurationSeconds,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "FileError",
+        name: "message",
+        variant: "FileErrorMessage",
+        eval_kind: InterpreterEvalKind::FileErrorMessage,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "Int",
         name: "to_string",
         variant: "IntToString",
         eval_kind: InterpreterEvalKind::IntToString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "OS",
+        name: "close",
+        variant: "OsClose",
+        eval_kind: InterpreterEvalKind::OsClose,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "RowBuffer",
+        name: "new",
+        variant: "RowBufferNew",
+        eval_kind: InterpreterEvalKind::RowBufferNew,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Row",
+        name: "field_string",
+        variant: "RowFieldString",
+        eval_kind: InterpreterEvalKind::RowFieldString,
     },
     InterpreterIntrinsicSpec {
         namespace: "String",
@@ -655,6 +806,30 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::AssertEqualInt => {
             "{\n            let left = interpreter.eval_named_or_positional_arg(args, \"left\", 0)?;\n            let right = interpreter.eval_named_or_positional_arg(args, \"right\", 1)?;\n            let left = expect_int(left)?;\n            let right = expect_int(right)?;\n            if left != right {\n                return Err(EvalError::Runtime(format!(\"assertion failed: left `{left}` did not equal right `{right}`\")));\n            }\n            Ok(Value::Unit)\n        }"
         }
+        InterpreterEvalKind::BufferClear => {
+            "{\n            let buffer_name = interpreter.mut_arg_local_name(args, \"buffer\", 0)?;\n            interpreter.assign(buffer_name, Value::Bytes(Vec::new()))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::BufferConsume => {
+            "{\n            interpreter.eval_first_arg(args)?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::BufferIsEmpty => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(expect_bytes(value)?.is_empty()))\n        }"
+        }
+        InterpreterEvalKind::BufferLen => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Int(expect_bytes(value)?.len() as i64))\n        }"
+        }
+        InterpreterEvalKind::BufferNew => {
+            "{\n            let size = interpreter.eval_first_arg(args)?;\n            let capacity = expect_int(size)?.max(0) as usize;\n            Ok(Value::Bytes(Vec::with_capacity(capacity)))\n        }"
+        }
+        InterpreterEvalKind::BufferView => {
+            "{\n            let value = interpreter\n                .eval_named_or_positional_arg(args, \"value\", 0)\n                .or_else(|_| interpreter.eval_named_or_positional_arg(args, \"buffer\", 0))?;\n            let start = interpreter.eval_named_or_positional_arg(args, \"start\", 1)?;\n            let len = interpreter.eval_named_or_positional_arg(args, \"len\", 2)?;\n            Ok(Value::Bytes(bytes_slice(\n                expect_bytes(value)?,\n                expect_int(start)?,\n                expect_int(len)?,\n            )))\n        }"
+        }
+        InterpreterEvalKind::BufferViewToBytes | InterpreterEvalKind::BytesFromBuffer => {
+            "{\n            interpreter.eval_first_arg(args)\n        }"
+        }
+        InterpreterEvalKind::CacheNew => {
+            "{\n            Ok(Value::Map(Vec::new()))\n        }"
+        }
         InterpreterEvalKind::CharCompare => {
             "{\n            let left = interpreter.eval_named_or_positional_arg(args, \"left\", 0)?;\n            let right = interpreter.eval_named_or_positional_arg(args, \"right\", 1)?;\n            let value = match expect_char(left)?.cmp(&expect_char(right)?) {\n                std::cmp::Ordering::Less => -1,\n                std::cmp::Ordering::Equal => 0,\n                std::cmp::Ordering::Greater => 1,\n            };\n            Ok(Value::Int(value))\n        }"
         }
@@ -679,8 +854,35 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::CharToString => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(expect_char(value)?.to_string()))\n        }"
         }
+        InterpreterEvalKind::DiffUnified => {
+            "{\n            let old = interpreter.eval_named_or_positional_arg(args, \"old\", 0)?;\n            let new = interpreter.eval_named_or_positional_arg(args, \"new\", 1)?;\n            Ok(Value::String(diff_unified_string(\n                &expect_string(old)?,\n                &expect_string(new)?,\n            )))\n        }"
+        }
+        InterpreterEvalKind::DurationAdd => {
+            "{\n            let left = interpreter.eval_named_or_positional_arg(args, \"left\", 0)?;\n            let right = interpreter.eval_named_or_positional_arg(args, \"right\", 1)?;\n            Ok(Value::Int(expect_int(left)? + expect_int(right)?))\n        }"
+        }
+        InterpreterEvalKind::DurationAsMs | InterpreterEvalKind::DurationMs => {
+            "{\n            interpreter.eval_first_arg(args)\n        }"
+        }
+        InterpreterEvalKind::DurationAsSeconds => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Int(expect_int(value)? / 1000))\n        }"
+        }
+        InterpreterEvalKind::DurationSeconds => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Int(expect_int(value)? * 1000))\n        }"
+        }
+        InterpreterEvalKind::FileErrorMessage => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            read_field(&value, \"message\")\n        }"
+        }
         InterpreterEvalKind::IntToString => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(expect_int(value)?.to_string()))\n        }"
+        }
+        InterpreterEvalKind::OsClose => {
+            "{\n            let fd = interpreter.eval_named_or_positional_arg(args, \"fd\", 0)?;\n            let _ = expect_int(fd)?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::RowBufferNew => {
+            "{\n            let size = interpreter.eval_named_or_positional_arg(args, \"size\", 0)?;\n            let capacity = expect_int(size)?.max(0) as usize;\n            Ok(row_buffer_value(Vec::with_capacity(capacity)))\n        }"
+        }
+        InterpreterEvalKind::RowFieldString => {
+            "{\n            let row = interpreter.eval_named_or_positional_arg(args, \"row\", 0)?;\n            let index = interpreter.eval_named_or_positional_arg(args, \"index\", 1)?;\n            Ok(result_value(row_field_string_value(\n                expect_row_fields(row)?,\n                expect_int(index)?,\n            )))\n        }"
         }
         InterpreterEvalKind::StringChars => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::List(expect_string(value)?.chars().map(Value::Char).collect()))\n        }"

@@ -3012,15 +3012,6 @@ impl<'a> Interpreter<'a> {
                     &expect_string(text)?,
                 ))
             }
-            ("FileError", "message") => {
-                let value = self.eval_first_arg(args)?;
-                read_field(&value, "message")
-            }
-            ("RowBuffer", "new") => {
-                let size = self.eval_named_or_positional_arg(args, "size", 0)?;
-                let capacity = expect_int(size)?.max(0) as usize;
-                Ok(row_buffer_value(Vec::with_capacity(capacity)))
-            }
             ("Csv", "open_read") => {
                 let path = self.eval_named_or_positional_arg(args, "path", 0)?;
                 let path = expect_string(path)?;
@@ -3056,29 +3047,6 @@ impl<'a> Interpreter<'a> {
                 Ok(result_value(
                     csv_rows_stream_value(&expect_string(path)?).map_err(channel_error),
                 ))
-            }
-            ("Row", "field_string") => {
-                let row = self.eval_named_or_positional_arg(args, "row", 0)?;
-                let index = self.eval_named_or_positional_arg(args, "index", 1)?;
-                Ok(result_value(row_field_string_value(
-                    expect_row_fields(row)?,
-                    expect_int(index)?,
-                )))
-            }
-            ("Duration", "ms") => self.eval_first_arg(args),
-            ("Duration", "seconds") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::Int(expect_int(value)? * 1000))
-            }
-            ("Duration", "as_ms") => self.eval_first_arg(args),
-            ("Duration", "as_seconds") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::Int(expect_int(value)? / 1000))
-            }
-            ("Duration", "add") => {
-                let left = self.eval_named_or_positional_arg(args, "left", 0)?;
-                let right = self.eval_named_or_positional_arg(args, "right", 1)?;
-                Ok(Value::Int(expect_int(left)? + expect_int(right)?))
             }
             ("Environment", "root") => Ok(environment_value(false, false)),
             ("Environment", "child") => {
@@ -3188,11 +3156,6 @@ impl<'a> Interpreter<'a> {
                     Ordering::Greater => 1,
                 }))
             }
-            ("OS", "close") => {
-                let fd = self.eval_named_or_positional_arg(args, "fd", 0)?;
-                let _ = expect_int(fd)?;
-                Ok(Value::Unit)
-            }
             ("Deadline", "after_ms") => {
                 let ms = self.eval_named_or_positional_arg(args, "ms", 0)?;
                 Ok(deadline_value(deadline_after_ms(expect_int(ms)?)))
@@ -3272,50 +3235,6 @@ impl<'a> Interpreter<'a> {
                 ))
             }
             ("Env", "temp_dir") => Ok(Value::String(path_to_string(&std::env::temp_dir()))),
-            ("Diff", "unified") => {
-                let old = self.eval_named_or_positional_arg(args, "old", 0)?;
-                let new = self.eval_named_or_positional_arg(args, "new", 1)?;
-                Ok(Value::String(diff_unified_string(
-                    &expect_string(old)?,
-                    &expect_string(new)?,
-                )))
-            }
-            ("Buffer", "new") => {
-                let size = self.eval_first_arg(args)?;
-                let capacity = expect_int(size)?.max(0) as usize;
-                Ok(Value::Bytes(Vec::with_capacity(capacity)))
-            }
-            ("Buffer", "len") | ("BufferView", "len") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::Int(expect_bytes(value)?.len() as i64))
-            }
-            ("Buffer", "is_empty") | ("BufferView", "is_empty") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::Bool(expect_bytes(value)?.is_empty()))
-            }
-            ("Buffer", "clear") => {
-                let buffer_name = self.mut_arg_local_name(args, "buffer", 0)?;
-                self.assign(buffer_name, Value::Bytes(Vec::new()))?;
-                Ok(Value::Unit)
-            }
-            ("Buffer", "view") | ("BufferView", "slice") => {
-                let value = self
-                    .eval_named_or_positional_arg(args, "value", 0)
-                    .or_else(|_| self.eval_named_or_positional_arg(args, "buffer", 0))?;
-                let start = self.eval_named_or_positional_arg(args, "start", 1)?;
-                let len = self.eval_named_or_positional_arg(args, "len", 2)?;
-                Ok(Value::Bytes(bytes_slice(
-                    expect_bytes(value)?,
-                    expect_int(start)?,
-                    expect_int(len)?,
-                )))
-            }
-            ("Buffer", "consume") => {
-                self.eval_first_arg(args)?;
-                Ok(Value::Unit)
-            }
-            ("BufferView", "to_bytes") | ("Bytes", "from_buffer") => self.eval_first_arg(args),
-            ("Cache", "new") => Ok(Value::Map(Vec::new())),
             ("Channel", "bounded") => {
                 let capacity = self.eval_named_or_positional_arg(args, "capacity", 0)?;
                 let capacity = expect_int(capacity)?;
