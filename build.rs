@@ -116,6 +116,13 @@ struct InterpreterIntrinsicSpec {
 
 #[derive(Debug, Clone, Copy)]
 enum InterpreterEvalKind {
+    ArgsAll,
+    ArgsCount,
+    ArgsGet,
+    ArgsGetOrDefault,
+    AssertEqual,
+    AssertEqualBool,
+    AssertEqualInt,
     CharCompare,
     CharFromCode,
     CharIsAlphanumeric,
@@ -165,6 +172,48 @@ enum InterpreterEvalKind {
 }
 
 const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
+    InterpreterIntrinsicSpec {
+        namespace: "Args",
+        name: "all",
+        variant: "ArgsAll",
+        eval_kind: InterpreterEvalKind::ArgsAll,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Args",
+        name: "count",
+        variant: "ArgsCount",
+        eval_kind: InterpreterEvalKind::ArgsCount,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Args",
+        name: "get",
+        variant: "ArgsGet",
+        eval_kind: InterpreterEvalKind::ArgsGet,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Args",
+        name: "get_or_default",
+        variant: "ArgsGetOrDefault",
+        eval_kind: InterpreterEvalKind::ArgsGetOrDefault,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Assert",
+        name: "equal",
+        variant: "AssertEqual",
+        eval_kind: InterpreterEvalKind::AssertEqual,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Assert",
+        name: "equal_bool",
+        variant: "AssertEqualBool",
+        eval_kind: InterpreterEvalKind::AssertEqualBool,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Assert",
+        name: "equal_int",
+        variant: "AssertEqualInt",
+        eval_kind: InterpreterEvalKind::AssertEqualInt,
+    },
     InterpreterIntrinsicSpec {
         namespace: "Char",
         name: "compare",
@@ -585,6 +634,27 @@ fn generated_interpreter_intrinsic_lookup() -> String {
 
 fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
     match kind {
+        InterpreterEvalKind::ArgsAll => {
+            "{\n            Ok(Value::List(interpreter.args.iter().cloned().map(Value::String).collect()))\n        }"
+        }
+        InterpreterEvalKind::ArgsCount => {
+            "{\n            Ok(Value::Int(interpreter.args.len() as i64))\n        }"
+        }
+        InterpreterEvalKind::ArgsGet => {
+            "{\n            let index = interpreter.eval_first_arg(args)?;\n            let index = expect_int(index)?;\n            let value = if index < 0 { None } else { interpreter.args.get(index as usize).cloned() };\n            Ok(value_option(value, Value::String))\n        }"
+        }
+        InterpreterEvalKind::ArgsGetOrDefault => {
+            "{\n            let index = interpreter.eval_named_or_positional_arg(args, \"index\", 0)?;\n            let default = interpreter.eval_named_or_positional_arg(args, \"default\", 1)?;\n            let index = expect_int(index)?;\n            let default = expect_string(default)?;\n            Ok(Value::String(if index < 0 { default } else { interpreter.args.get(index as usize).cloned().unwrap_or(default) }))\n        }"
+        }
+        InterpreterEvalKind::AssertEqual => {
+            "{\n            let left = interpreter.eval_named_or_positional_arg(args, \"left\", 0)?;\n            let right = interpreter.eval_named_or_positional_arg(args, \"right\", 1)?;\n            let left = expect_string(left)?;\n            let right = expect_string(right)?;\n            if left != right {\n                return Err(EvalError::Runtime(format!(\"assertion failed: left `{left}` did not equal right `{right}`\")));\n            }\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::AssertEqualBool => {
+            "{\n            let left = interpreter.eval_named_or_positional_arg(args, \"left\", 0)?;\n            let right = interpreter.eval_named_or_positional_arg(args, \"right\", 1)?;\n            let left = expect_bool(left)?;\n            let right = expect_bool(right)?;\n            if left != right {\n                return Err(EvalError::Runtime(format!(\"assertion failed: left `{left}` did not equal right `{right}`\")));\n            }\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::AssertEqualInt => {
+            "{\n            let left = interpreter.eval_named_or_positional_arg(args, \"left\", 0)?;\n            let right = interpreter.eval_named_or_positional_arg(args, \"right\", 1)?;\n            let left = expect_int(left)?;\n            let right = expect_int(right)?;\n            if left != right {\n                return Err(EvalError::Runtime(format!(\"assertion failed: left `{left}` did not equal right `{right}`\")));\n            }\n            Ok(Value::Unit)\n        }"
+        }
         InterpreterEvalKind::CharCompare => {
             "{\n            let left = interpreter.eval_named_or_positional_arg(args, \"left\", 0)?;\n            let right = interpreter.eval_named_or_positional_arg(args, \"right\", 1)?;\n            let value = match expect_char(left)?.cmp(&expect_char(right)?) {\n                std::cmp::Ordering::Less => -1,\n                std::cmp::Ordering::Equal => 0,\n                std::cmp::Ordering::Greater => 1,\n            };\n            Ok(Value::Int(value))\n        }"
         }

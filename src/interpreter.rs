@@ -2664,67 +2664,6 @@ impl<'a> Interpreter<'a> {
         args: &[HirCallArg],
     ) -> Result<Value, EvalError> {
         match (namespace, name) {
-            ("Args", "all") => Ok(Value::List(
-                self.args.iter().cloned().map(Value::String).collect(),
-            )),
-            ("Args", "count") => Ok(Value::Int(self.args.len() as i64)),
-            ("Args", "get") => {
-                let index = self.eval_first_arg(args)?;
-                let index = expect_int(index)?;
-                let value = if index < 0 {
-                    None
-                } else {
-                    self.args.get(index as usize).cloned()
-                };
-                Ok(value_option(value, Value::String))
-            }
-            ("Args", "get_or_default") => {
-                let index = self.eval_named_or_positional_arg(args, "index", 0)?;
-                let default = self.eval_named_or_positional_arg(args, "default", 1)?;
-                let index = expect_int(index)?;
-                let default = expect_string(default)?;
-                Ok(Value::String(if index < 0 {
-                    default
-                } else {
-                    self.args.get(index as usize).cloned().unwrap_or(default)
-                }))
-            }
-            ("Assert", "equal") => {
-                let left = self.eval_named_or_positional_arg(args, "left", 0)?;
-                let right = self.eval_named_or_positional_arg(args, "right", 1)?;
-                let left = expect_string(left)?;
-                let right = expect_string(right)?;
-                if left != right {
-                    return Err(EvalError::Runtime(format!(
-                        "assertion failed: left `{left}` did not equal right `{right}`"
-                    )));
-                }
-                Ok(Value::Unit)
-            }
-            ("Assert", "equal_int") => {
-                let left = self.eval_named_or_positional_arg(args, "left", 0)?;
-                let right = self.eval_named_or_positional_arg(args, "right", 1)?;
-                let left = expect_int(left)?;
-                let right = expect_int(right)?;
-                if left != right {
-                    return Err(EvalError::Runtime(format!(
-                        "assertion failed: left `{left}` did not equal right `{right}`"
-                    )));
-                }
-                Ok(Value::Unit)
-            }
-            ("Assert", "equal_bool") => {
-                let left = self.eval_named_or_positional_arg(args, "left", 0)?;
-                let right = self.eval_named_or_positional_arg(args, "right", 1)?;
-                let left = expect_bool(left)?;
-                let right = expect_bool(right)?;
-                if left != right {
-                    return Err(EvalError::Runtime(format!(
-                        "assertion failed: left `{left}` did not equal right `{right}`"
-                    )));
-                }
-                Ok(Value::Unit)
-            }
             ("Deque", "new") => Ok(Value::List(Vec::new())),
             ("Deque", "push_back") => {
                 let deque_name = self.mut_arg_local_name(args, "deque", 0)?;
