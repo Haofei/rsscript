@@ -67,6 +67,8 @@ pub struct InterpreterCoverageReport {
     pub runtime_intrinsics: CoverageBucket,
     pub hir_statements: CoverageBucket,
     pub hir_expressions: CoverageBucket,
+    pub hir_statement_recovery: CoverageBucket,
+    pub hir_expression_recovery: CoverageBucket,
     pub value_types: CoverageBucket,
     pub function_kinds: CoverageBucket,
     pub parity_features: CoverageBucket,
@@ -93,17 +95,14 @@ impl CoverageBucket {
     }
 }
 
-const HIR_STMT_VARIANTS: &[&str] = &[
-    "Let", "Return", "With", "If", "Loop", "For", "Match", "Select", "Assign", "Break", "Continue",
-    "Expr", "Unknown",
-];
-
-const INTERPRETER_SUPPORTED_HIR_STMT_VARIANTS: &[&str] = &[
+const HIR_STMT_EXECUTABLE_VARIANTS: &[&str] = &[
     "Let", "Return", "With", "If", "Loop", "For", "Match", "Select", "Assign", "Break", "Continue",
     "Expr",
 ];
 
-const HIR_EXPR_VARIANTS: &[&str] = &[
+const HIR_STMT_RECOVERY_VARIANTS: &[&str] = &["Unknown"];
+
+const HIR_EXPR_EXECUTABLE_VARIANTS: &[&str] = &[
     "Ident",
     "Number",
     "String",
@@ -121,28 +120,9 @@ const HIR_EXPR_VARIANTS: &[&str] = &[
     "Try",
     "Closure",
     "Match",
-    "Unknown",
 ];
 
-const INTERPRETER_SUPPORTED_HIR_EXPR_VARIANTS: &[&str] = &[
-    "Ident",
-    "Number",
-    "String",
-    "ObjectLiteral",
-    "MapLiteral",
-    "ArrayLiteral",
-    "Binary",
-    "Field",
-    "Index",
-    "Call",
-    "Effect",
-    "Manage",
-    "Spawn",
-    "Await",
-    "Try",
-    "Closure",
-    "Match",
-];
+const HIR_EXPR_RECOVERY_VARIANTS: &[&str] = &["Unknown"];
 
 const VALUE_TYPES: &[&str] = &[
     "Unit", "Int", "Bool", "String", "Char", "Bytes", "List", "Map", "Json", "Struct", "Variant",
@@ -1213,9 +1193,11 @@ pub fn interpreter_coverage_report() -> InterpreterCoverageReport {
 
     let runtime_intrinsics = coverage_bucket_from_owned(runtime_all, runtime_supported);
     let hir_statements =
-        coverage_bucket(HIR_STMT_VARIANTS, INTERPRETER_SUPPORTED_HIR_STMT_VARIANTS);
+        coverage_bucket(HIR_STMT_EXECUTABLE_VARIANTS, HIR_STMT_EXECUTABLE_VARIANTS);
     let hir_expressions =
-        coverage_bucket(HIR_EXPR_VARIANTS, INTERPRETER_SUPPORTED_HIR_EXPR_VARIANTS);
+        coverage_bucket(HIR_EXPR_EXECUTABLE_VARIANTS, HIR_EXPR_EXECUTABLE_VARIANTS);
+    let hir_statement_recovery = coverage_bucket(HIR_STMT_RECOVERY_VARIANTS, &[]);
+    let hir_expression_recovery = coverage_bucket(HIR_EXPR_RECOVERY_VARIANTS, &[]);
     let value_types = coverage_bucket(VALUE_TYPES, INTERPRETER_SUPPORTED_VALUE_TYPES);
     let function_kinds = coverage_bucket(FUNCTION_KINDS, INTERPRETER_SUPPORTED_FUNCTION_KINDS);
     let required_parity_features = required_parity_features(
@@ -1237,6 +1219,8 @@ pub fn interpreter_coverage_report() -> InterpreterCoverageReport {
         runtime_intrinsics,
         hir_statements,
         hir_expressions,
+        hir_statement_recovery,
+        hir_expression_recovery,
         value_types,
         function_kinds,
     }

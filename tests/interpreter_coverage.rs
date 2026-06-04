@@ -13,12 +13,12 @@ fn interpreter_coverage_report_tracks_hir_surface() {
 
     assert_eq!(
         enum_variants(&hir_source, "HirStmt"),
-        report.hir_statements.all,
+        combined_bucket_all(&report.hir_statements, &report.hir_statement_recovery),
         "update interpreter_coverage_report() when HirStmt changes"
     );
     assert_eq!(
         enum_variants(&hir_source, "HirExpr"),
-        report.hir_expressions.all,
+        combined_bucket_all(&report.hir_expressions, &report.hir_expression_recovery),
         "update interpreter_coverage_report() when HirExpr changes"
     );
     assert_eq!(
@@ -38,25 +38,27 @@ fn interpreter_coverage_baseline_is_explicit() {
     let report = interpreter_coverage_report();
 
     assert_bucket_counts(&report.runtime_intrinsics, 519, 519, 0);
-    assert_bucket_counts(&report.hir_statements, 13, 12, 1);
-    assert_bucket_counts(&report.hir_expressions, 18, 17, 1);
+    assert_bucket_counts(&report.hir_statements, 12, 12, 0);
+    assert_bucket_counts(&report.hir_expressions, 17, 17, 0);
+    assert_bucket_counts(&report.hir_statement_recovery, 1, 0, 1);
+    assert_bucket_counts(&report.hir_expression_recovery, 1, 0, 1);
     assert_bucket_counts(&report.value_types, 14, 14, 0);
     assert_bucket_counts(&report.function_kinds, 3, 3, 0);
     assert_bucket_counts(&report.parity_features, 565, 565, 0);
 
     assert!(
         report
-            .hir_statements
+            .hir_statement_recovery
             .missing
             .contains(&"Unknown".to_string()),
-        "known statement gap should stay visible"
+        "statement recovery node should stay visible"
     );
     assert!(
         report
-            .hir_expressions
+            .hir_expression_recovery
             .missing
             .contains(&"Unknown".to_string()),
-        "known expression gap should stay visible"
+        "expression recovery node should stay visible"
     );
     assert!(
         report.parity_features.missing.is_empty(),
@@ -148,6 +150,19 @@ fn assert_bucket_counts(
         missing,
         "missing count changed for bucket: {bucket:?}"
     );
+}
+
+fn combined_bucket_all(
+    left: &rsscript::CoverageBucket,
+    right: &rsscript::CoverageBucket,
+) -> Vec<String> {
+    left.all
+        .iter()
+        .chain(right.all.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn enum_variants(source: &str, enum_name: &str) -> Vec<String> {
