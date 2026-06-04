@@ -390,6 +390,7 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Regex", "split"),
     ("RegexError", "message"),
     ("Receiver", "close"),
+    ("Receiver", "into_stream"),
     ("Request", "new"),
     ("Request", "path"),
     ("Response", "body"),
@@ -801,6 +802,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Regex.split",
     "runtime:RegexError.message",
     "runtime:Receiver.close",
+    "runtime:Receiver.into_stream",
     "runtime:Request.new",
     "runtime:Request.path",
     "runtime:Response.body",
@@ -2249,6 +2251,11 @@ impl<'a> Interpreter<'a> {
                 let _ = expect_receiver(self.lookup(receiver_name)?)?;
                 self.assign(receiver_name, receiver_value(true))?;
                 Ok(Value::Unit)
+            }
+            ("Receiver", "into_stream") => {
+                let receiver = self.eval_named_or_positional_arg(args, "receiver", 0)?;
+                let _ = expect_receiver(receiver)?;
+                Ok(stream_value(Vec::new()))
             }
             ("Cache", "insert") => {
                 let cache_name = self.mut_arg_local_name(args, "cache", 0)?;

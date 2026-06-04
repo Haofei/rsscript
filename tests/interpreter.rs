@@ -326,7 +326,7 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Regex.captures runtime:Regex.compile runtime:Regex.find
 // parity: runtime:Regex.is_match runtime:Regex.replace_all runtime:Regex.split
 // parity: runtime:RegexError.message
-// parity: runtime:Receiver.close
+// parity: runtime:Receiver.close runtime:Receiver.into_stream
 // parity: runtime:Path.extension runtime:Path.file_name runtime:Path.from_string
 // parity: runtime:Path.exists runtime:Path.is_absolute runtime:Path.is_dir runtime:Path.is_file
 // parity: runtime:Path.join runtime:Path.list_files runtime:Path.list_paths
@@ -2529,6 +2529,14 @@ fn main() -> Result<Unit, ChannelError> {
     let stream: Stream<String> = Stream.from_list<String>(items: take items)
     let collected = Stream.collect_list<String>(stream: read stream)?
     Log.write(message: read List.join<String>(list: read collected, separator: read ","))
+
+    let mut empty_channel: Channel<Int> = Channel.bounded<Int>(capacity: 1)?
+    let mut empty_sender: Sender<Int> = Channel.sender<Int>(channel: read empty_channel)
+    Sender.close<Int>(sender: mut empty_sender)
+    local empty_receiver: Receiver<Int> = Channel.receiver<Int>(channel: mut empty_channel)?
+    let empty_stream: Stream<Int> = Receiver.into_stream<Int>(receiver: take empty_receiver)
+    let empty_items = Stream.collect_list<Int>(stream: read empty_stream)?
+    Log.write(message: read String.from_int(value: List.len<Int>(list: read empty_items)))
     return Ok(Unit)
 }
 "#;
