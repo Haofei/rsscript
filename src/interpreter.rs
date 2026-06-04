@@ -3802,38 +3802,6 @@ impl<'a> Interpreter<'a> {
                 }
                 Ok(Value::Map(merged))
             }
-            ("Request", "new") => {
-                let path = self.eval_first_arg(args)?;
-                Ok(Value::Struct {
-                    name: "Request".to_string(),
-                    fields: BTreeMap::from([(
-                        "path".to_string(),
-                        Value::String(expect_string(path)?),
-                    )]),
-                })
-            }
-            ("Request", "path") => {
-                let request = self.eval_first_arg(args)?;
-                read_field(&request, "path")
-            }
-            ("Response", "ok") => {
-                let body = self.eval_first_arg(args)?;
-                Ok(value_ok(Value::Struct {
-                    name: "Response".to_string(),
-                    fields: BTreeMap::from([
-                        ("status".to_string(), Value::Int(200)),
-                        ("body".to_string(), Value::String(expect_string(body)?)),
-                    ]),
-                }))
-            }
-            ("Response", "status") => {
-                let response = self.eval_first_arg(args)?;
-                read_field(&response, "status")
-            }
-            ("Response", "body") => {
-                let response = self.eval_first_arg(args)?;
-                read_field(&response, "body")
-            }
             ("Http", "get") => {
                 let url = self.eval_named_or_positional_arg(args, "url", 0)?;
                 Ok(value_err(http_error(format!(

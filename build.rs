@@ -222,6 +222,11 @@ enum InterpreterEvalKind {
     RegexIsMatch,
     RegexReplaceAll,
     RegexSplit,
+    RequestNew,
+    RequestPath,
+    ResponseBody,
+    ResponseOk,
+    ResponseStatus,
     StringConcat,
     StringCopy,
     StringFromBool,
@@ -944,6 +949,36 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::RegexErrorMessage,
     },
     InterpreterIntrinsicSpec {
+        namespace: "Request",
+        name: "new",
+        variant: "RequestNew",
+        eval_kind: InterpreterEvalKind::RequestNew,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Request",
+        name: "path",
+        variant: "RequestPath",
+        eval_kind: InterpreterEvalKind::RequestPath,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Response",
+        name: "body",
+        variant: "ResponseBody",
+        eval_kind: InterpreterEvalKind::ResponseBody,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Response",
+        name: "ok",
+        variant: "ResponseOk",
+        eval_kind: InterpreterEvalKind::ResponseOk,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Response",
+        name: "status",
+        variant: "ResponseStatus",
+        eval_kind: InterpreterEvalKind::ResponseStatus,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "String",
         name: "chars",
         variant: "StringChars",
@@ -1638,6 +1673,21 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::RegexSplit => {
             "{\n            let regex = interpreter.eval_named_or_positional_arg(args, \"regex\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            let regex = expect_regex(regex)?;\n            let parts = regex\n                .split(&expect_string(value)?)\n                .map(|part| Value::String(part.to_string()))\n                .collect();\n            Ok(Value::List(parts))\n        }"
+        }
+        InterpreterEvalKind::RequestNew => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(Value::Struct {\n                name: \"Request\".to_string(),\n                fields: BTreeMap::from([(\n                    \"path\".to_string(),\n                    Value::String(expect_string(path)?),\n                )]),\n            })\n        }"
+        }
+        InterpreterEvalKind::RequestPath => {
+            "{\n            let request = interpreter.eval_first_arg(args)?;\n            read_field(&request, \"path\")\n        }"
+        }
+        InterpreterEvalKind::ResponseBody => {
+            "{\n            let response = interpreter.eval_first_arg(args)?;\n            read_field(&response, \"body\")\n        }"
+        }
+        InterpreterEvalKind::ResponseOk => {
+            "{\n            let body = interpreter.eval_first_arg(args)?;\n            Ok(value_ok(Value::Struct {\n                name: \"Response\".to_string(),\n                fields: BTreeMap::from([\n                    (\"status\".to_string(), Value::Int(200)),\n                    (\"body\".to_string(), Value::String(expect_string(body)?)),\n                ]),\n            }))\n        }"
+        }
+        InterpreterEvalKind::ResponseStatus => {
+            "{\n            let response = interpreter.eval_first_arg(args)?;\n            read_field(&response, \"status\")\n        }"
         }
         InterpreterEvalKind::StringChars => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::List(expect_string(value)?.chars().map(Value::Char).collect()))\n        }"
