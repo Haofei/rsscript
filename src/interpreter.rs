@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::{Component, Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -442,6 +442,8 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("RegexError", "message"),
     ("Receiver", "close"),
     ("Receiver", "into_stream"),
+    ("Receiver", "recv"),
+    ("Receiver", "recv_cancellable"),
     ("Request", "new"),
     ("Request", "path"),
     ("Response", "body"),
@@ -520,6 +522,8 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Set", "to_list"),
     ("Set", "union"),
     ("Sender", "close"),
+    ("Sender", "send"),
+    ("Sender", "send_cancellable"),
     ("SortedSet", "clear"),
     ("SortedSet", "contains"),
     ("SortedSet", "insert"),
@@ -926,6 +930,8 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:RegexError.message",
     "runtime:Receiver.close",
     "runtime:Receiver.into_stream",
+    "runtime:Receiver.recv",
+    "runtime:Receiver.recv_cancellable",
     "runtime:Request.new",
     "runtime:Request.path",
     "runtime:Response.body",
@@ -1009,6 +1015,8 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Set.to_list",
     "runtime:Set.union",
     "runtime:Sender.close",
+    "runtime:Sender.send",
+    "runtime:Sender.send_cancellable",
     "runtime:SortedSet.clear",
     "runtime:SortedSet.contains",
     "runtime:SortedSet.insert",
@@ -1339,6 +1347,8 @@ struct Interpreter<'a> {
     args: Vec<String>,
     next_cancellation_id: i64,
     cancellation_flags: HashMap<i64, bool>,
+    next_channel_id: i64,
+    channels: HashMap<i64, InterpreterChannel>,
 }
 
 impl<'a> Interpreter<'a> {
@@ -1353,6 +1363,8 @@ impl<'a> Interpreter<'a> {
             args,
             next_cancellation_id: 0,
             cancellation_flags: HashMap::new(),
+            next_channel_id: 0,
+            channels: HashMap::new(),
         }
     }
 
@@ -1486,6 +1498,92 @@ impl<'a> Interpreter<'a> {
             }
         }
         Ok(())
+    }
+
+    fn channel_state_mut(&mut self, id: i64) -> Result<&mut InterpreterChannel, EvalError> {
+        self.channels
+            .get_mut(&id)
+            .ok_or_else(|| EvalError::Runtime(format!("unknown channel id `{id}`.")))
+    }
+
+    fn channel_send(&mut self, sender: SenderState, value: Value) -> Result<Value, Value> {
+        if sender.closed {
+            return Err(channel_error("channel sender closed"));
+        }
+        let state = self
+            .channels
+            .get_mut(&sender.channel_id)
+            .ok_or_else(|| channel_error(format!("unknown channel id `{}`", sender.channel_id)))?;
+        if state.receiver_closed {
+            return Err(channel_error("channel closed"));
+        }
+        if state.queue.len() >= state.capacity {
+            return Err(channel_error(
+                "channel send would block on a full channel in the interpreter",
+            ));
+        }
+        state.queue.push_back(value);
+        Ok(Value::Unit)
+    }
+
+    fn channel_recv(&mut self, channel_id: i64) -> Result<Value, Value> {
+        let state = self
+            .channels
+            .get_mut(&channel_id)
+            .ok_or_else(|| channel_error(format!("unknown channel id `{channel_id}`")))?;
+        if let Some(value) = state.queue.pop_front() {
+            return Ok(value_some(value));
+        }
+        if state.senders == 0 {
+            return Ok(value_none());
+        }
+        Err(channel_error(
+            "channel recv would block on an open empty channel in the interpreter",
+        ))
+    }
+
+    fn expect_stream_collect_items(
+        &mut self,
+        value: Value,
+    ) -> Result<Result<Vec<Value>, Value>, EvalError> {
+        match value {
+            Value::Struct { name, mut fields } if name == "Stream" => {
+                let collect_error = fields.remove("collect_error").ok_or_else(|| {
+                    EvalError::Runtime("Stream value is missing collect_error.".to_string())
+                })?;
+                if let Some(message) = option_payload(collect_error)? {
+                    return Ok(Err(channel_error(expect_string(message)?)));
+                }
+                if let Some(channel_id) = fields
+                    .remove("channel_id")
+                    .map(option_payload)
+                    .transpose()?
+                    .flatten()
+                {
+                    let channel_id = expect_int(channel_id)?;
+                    let state = self.channel_state_mut(channel_id)?;
+                    let mut values = Vec::new();
+                    while let Some(value) = state.queue.pop_front() {
+                        values.push(value);
+                    }
+                    if state.senders == 0 {
+                        return Ok(Ok(values));
+                    }
+                    return Ok(Err(channel_error(
+                        "stream collect_list would block on an open channel stream",
+                    )));
+                }
+                fields
+                    .remove("items")
+                    .ok_or_else(|| EvalError::Runtime("Stream value is missing items.".to_string()))
+                    .and_then(expect_list)
+                    .map(Ok)
+            }
+            other => Err(EvalError::Runtime(format!(
+                "expected Stream, got `{}`.",
+                other.display()
+            ))),
+        }
     }
 
     fn eval_block(&mut self, block: &HirBlock) -> Result<Control, EvalError> {
@@ -2505,23 +2603,35 @@ impl<'a> Interpreter<'a> {
                 Ok(result_value(if capacity <= 0 {
                     Err(channel_error("channel capacity must be positive"))
                 } else {
-                    Ok(channel_value(capacity, false))
+                    let id = self.next_channel_id;
+                    self.next_channel_id = self.next_channel_id.saturating_add(1);
+                    self.channels
+                        .insert(id, InterpreterChannel::new(capacity as usize));
+                    Ok(channel_value(id, capacity, false))
                 }))
             }
             ("Channel", "sender") => {
                 let channel = self.eval_named_or_positional_arg(args, "channel", 0)?;
-                let _ = expect_channel(channel)?;
-                Ok(sender_value(false))
+                let channel = expect_channel(channel)?;
+                let state = self.channel_state_mut(channel.id)?;
+                state.senders = state.senders.saturating_add(1);
+                Ok(sender_value(channel.id, false))
             }
             ("Channel", "receiver") => {
                 let channel_name = self.mut_arg_local_name(args, "channel", 0)?;
                 let mut channel = expect_channel(self.lookup(channel_name)?)?;
-                Ok(result_value(if channel.receiver_taken {
+                let already_taken = self
+                    .channels
+                    .get(&channel.id)
+                    .map(|state| state.receiver_taken)
+                    .unwrap_or(channel.receiver_taken);
+                Ok(result_value(if already_taken {
                     Err(channel_error("channel receiver already taken"))
                 } else {
                     channel.receiver_taken = true;
+                    self.channel_state_mut(channel.id)?.receiver_taken = true;
                     self.assign(channel_name, channel.to_value())?;
-                    Ok(receiver_value(false))
+                    Ok(receiver_value(channel.id, false))
                 }))
             }
             ("ChannelError", "message") => {
@@ -2530,20 +2640,56 @@ impl<'a> Interpreter<'a> {
             }
             ("Sender", "close") => {
                 let sender_name = self.mut_arg_local_name(args, "sender", 0)?;
-                let _ = expect_sender(self.lookup(sender_name)?)?;
-                self.assign(sender_name, sender_value(true))?;
+                let sender = expect_sender(self.lookup(sender_name)?)?;
+                if !sender.closed {
+                    let state = self.channel_state_mut(sender.channel_id)?;
+                    state.senders = state.senders.saturating_sub(1);
+                }
+                self.assign(sender_name, sender_value(sender.channel_id, true))?;
                 Ok(Value::Unit)
+            }
+            ("Sender", "send") | ("Sender", "send_cancellable") => {
+                let sender = self.eval_named_or_positional_arg(args, "sender", 0)?;
+                let value = self.eval_named_or_positional_arg(args, "value", 1)?;
+                let sender = expect_sender(sender)?;
+                if namespace == "Sender" && name == "send_cancellable" {
+                    let token = self.eval_named_or_positional_arg(args, "token", 2)?;
+                    let id = expect_cancellation_id(token, "CancellationToken")?;
+                    if self.cancellation_flags.get(&id).copied().unwrap_or(false) {
+                        return Ok(value_err(channel_error("channel send cancelled")));
+                    }
+                }
+                Ok(result_value(self.channel_send(sender, value)))
             }
             ("Receiver", "close") => {
                 let receiver_name = self.mut_arg_local_name(args, "receiver", 0)?;
-                let _ = expect_receiver(self.lookup(receiver_name)?)?;
-                self.assign(receiver_name, receiver_value(true))?;
+                let receiver = expect_receiver(self.lookup(receiver_name)?)?;
+                self.channel_state_mut(receiver.channel_id)?.receiver_closed = true;
+                self.assign(receiver_name, receiver_value(receiver.channel_id, true))?;
                 Ok(Value::Unit)
+            }
+            ("Receiver", "recv") | ("Receiver", "recv_cancellable") => {
+                let receiver = self.eval_named_or_positional_arg(args, "receiver", 0)?;
+                let receiver = expect_receiver(receiver)?;
+                if receiver.closed {
+                    return Ok(value_err(channel_error("channel receiver closed")));
+                }
+                if namespace == "Receiver" && name == "recv_cancellable" {
+                    let token = self.eval_named_or_positional_arg(args, "token", 1)?;
+                    let id = expect_cancellation_id(token, "CancellationToken")?;
+                    if self.cancellation_flags.get(&id).copied().unwrap_or(false) {
+                        return Ok(value_err(channel_error("channel recv cancelled")));
+                    }
+                }
+                Ok(result_value(self.channel_recv(receiver.channel_id)))
             }
             ("Receiver", "into_stream") => {
                 let receiver = self.eval_named_or_positional_arg(args, "receiver", 0)?;
-                let _ = expect_receiver(receiver)?;
-                Ok(stream_value(Vec::new()))
+                let receiver = expect_receiver(receiver)?;
+                if receiver.closed {
+                    return Ok(stream_collect_error_value("channel receiver closed"));
+                }
+                Ok(stream_channel_value(receiver.channel_id))
             }
             ("Cache", "insert") => {
                 let cache_name = self.mut_arg_local_name(args, "cache", 0)?;
@@ -3161,7 +3307,7 @@ impl<'a> Interpreter<'a> {
             ("Stream", "collect_list") => {
                 let stream = self.eval_named_or_positional_arg(args, "stream", 0)?;
                 Ok(result_value(
-                    expect_stream_collect_items(stream)?.map(Value::List),
+                    self.expect_stream_collect_items(stream)?.map(Value::List),
                 ))
             }
             ("Map", "new") => Ok(Value::Map(Vec::new())),
@@ -6570,38 +6716,76 @@ fn image_error_from_io(error: std::io::Error) -> Value {
     image_error(error.to_string())
 }
 
+struct InterpreterChannel {
+    capacity: usize,
+    queue: VecDeque<Value>,
+    senders: i64,
+    receiver_taken: bool,
+    receiver_closed: bool,
+}
+
+impl InterpreterChannel {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            queue: VecDeque::new(),
+            senders: 0,
+            receiver_taken: false,
+            receiver_closed: false,
+        }
+    }
+}
+
 struct ChannelState {
+    id: i64,
     capacity: i64,
     receiver_taken: bool,
 }
 
 impl ChannelState {
     fn to_value(&self) -> Value {
-        channel_value(self.capacity, self.receiver_taken)
+        channel_value(self.id, self.capacity, self.receiver_taken)
     }
 }
 
-fn channel_value(capacity: i64, receiver_taken: bool) -> Value {
+struct SenderState {
+    channel_id: i64,
+    closed: bool,
+}
+
+struct ReceiverState {
+    channel_id: i64,
+    closed: bool,
+}
+
+fn channel_value(id: i64, capacity: i64, receiver_taken: bool) -> Value {
     Value::Struct {
         name: "Channel".to_string(),
         fields: BTreeMap::from([
+            ("id".to_string(), Value::Int(id)),
             ("capacity".to_string(), Value::Int(capacity)),
             ("receiver_taken".to_string(), Value::Bool(receiver_taken)),
         ]),
     }
 }
 
-fn sender_value(closed: bool) -> Value {
+fn sender_value(channel_id: i64, closed: bool) -> Value {
     Value::Struct {
         name: "Sender".to_string(),
-        fields: BTreeMap::from([("closed".to_string(), Value::Bool(closed))]),
+        fields: BTreeMap::from([
+            ("channel_id".to_string(), Value::Int(channel_id)),
+            ("closed".to_string(), Value::Bool(closed)),
+        ]),
     }
 }
 
-fn receiver_value(closed: bool) -> Value {
+fn receiver_value(channel_id: i64, closed: bool) -> Value {
     Value::Struct {
         name: "Receiver".to_string(),
-        fields: BTreeMap::from([("closed".to_string(), Value::Bool(closed))]),
+        fields: BTreeMap::from([
+            ("channel_id".to_string(), Value::Int(channel_id)),
+            ("closed".to_string(), Value::Bool(closed)),
+        ]),
     }
 }
 
@@ -6611,6 +6795,18 @@ fn stream_value(items: Vec<Value>) -> Value {
         fields: BTreeMap::from([
             ("items".to_string(), Value::List(items)),
             ("collect_error".to_string(), value_none()),
+            ("channel_id".to_string(), value_none()),
+        ]),
+    }
+}
+
+fn stream_channel_value(channel_id: i64) -> Value {
+    Value::Struct {
+        name: "Stream".to_string(),
+        fields: BTreeMap::from([
+            ("items".to_string(), Value::List(Vec::new())),
+            ("collect_error".to_string(), value_none()),
+            ("channel_id".to_string(), value_some(Value::Int(channel_id))),
         ]),
     }
 }
@@ -6624,6 +6820,7 @@ fn stream_collect_error_value(message: impl Into<String>) -> Value {
                 "collect_error".to_string(),
                 value_some(Value::String(message.into())),
             ),
+            ("channel_id".to_string(), value_none()),
         ]),
     }
 }
@@ -6827,6 +7024,9 @@ fn expect_function_has_closure(value: Value) -> Result<bool, EvalError> {
 fn expect_channel(value: Value) -> Result<ChannelState, EvalError> {
     match value {
         Value::Struct { name, mut fields } if name == "Channel" => {
+            let id = fields
+                .remove("id")
+                .ok_or_else(|| EvalError::Runtime("Channel value is missing id.".to_string()))?;
             let capacity = fields.remove("capacity").ok_or_else(|| {
                 EvalError::Runtime("Channel value is missing capacity.".to_string())
             })?;
@@ -6834,6 +7034,7 @@ fn expect_channel(value: Value) -> Result<ChannelState, EvalError> {
                 EvalError::Runtime("Channel value is missing receiver_taken.".to_string())
             })?;
             Ok(ChannelState {
+                id: expect_int(id)?,
                 capacity: expect_int(capacity)?,
                 receiver_taken: expect_bool(receiver_taken)?,
             })
@@ -6845,12 +7046,20 @@ fn expect_channel(value: Value) -> Result<ChannelState, EvalError> {
     }
 }
 
-fn expect_sender(value: Value) -> Result<bool, EvalError> {
+fn expect_sender(value: Value) -> Result<SenderState, EvalError> {
     match value {
-        Value::Struct { name, mut fields } if name == "Sender" => fields
-            .remove("closed")
-            .ok_or_else(|| EvalError::Runtime("Sender value is missing closed.".to_string()))
-            .and_then(expect_bool),
+        Value::Struct { name, mut fields } if name == "Sender" => {
+            let channel_id = fields.remove("channel_id").ok_or_else(|| {
+                EvalError::Runtime("Sender value is missing channel_id.".to_string())
+            })?;
+            let closed = fields
+                .remove("closed")
+                .ok_or_else(|| EvalError::Runtime("Sender value is missing closed.".to_string()))?;
+            Ok(SenderState {
+                channel_id: expect_int(channel_id)?,
+                closed: expect_bool(closed)?,
+            })
+        }
         other => Err(EvalError::Runtime(format!(
             "expected Sender, got `{}`.",
             other.display()
@@ -6858,36 +7067,22 @@ fn expect_sender(value: Value) -> Result<bool, EvalError> {
     }
 }
 
-fn expect_receiver(value: Value) -> Result<bool, EvalError> {
+fn expect_receiver(value: Value) -> Result<ReceiverState, EvalError> {
     match value {
-        Value::Struct { name, mut fields } if name == "Receiver" => fields
-            .remove("closed")
-            .ok_or_else(|| EvalError::Runtime("Receiver value is missing closed.".to_string()))
-            .and_then(expect_bool),
-        other => Err(EvalError::Runtime(format!(
-            "expected Receiver, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_stream_collect_items(value: Value) -> Result<Result<Vec<Value>, Value>, EvalError> {
-    match value {
-        Value::Struct { name, mut fields } if name == "Stream" => {
-            let collect_error = fields.remove("collect_error").ok_or_else(|| {
-                EvalError::Runtime("Stream value is missing collect_error.".to_string())
+        Value::Struct { name, mut fields } if name == "Receiver" => {
+            let channel_id = fields.remove("channel_id").ok_or_else(|| {
+                EvalError::Runtime("Receiver value is missing channel_id.".to_string())
             })?;
-            if let Some(message) = option_payload(collect_error)? {
-                return Ok(Err(channel_error(expect_string(message)?)));
-            }
-            fields
-                .remove("items")
-                .ok_or_else(|| EvalError::Runtime("Stream value is missing items.".to_string()))
-                .and_then(expect_list)
-                .map(Ok)
+            let closed = fields.remove("closed").ok_or_else(|| {
+                EvalError::Runtime("Receiver value is missing closed.".to_string())
+            })?;
+            Ok(ReceiverState {
+                channel_id: expect_int(channel_id)?,
+                closed: expect_bool(closed)?,
+            })
         }
         other => Err(EvalError::Runtime(format!(
-            "expected Stream, got `{}`.",
+            "expected Receiver, got `{}`.",
             other.display()
         ))),
     }

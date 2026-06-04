@@ -455,7 +455,8 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Regex.captures runtime:Regex.compile runtime:Regex.find
 // parity: runtime:Regex.is_match runtime:Regex.replace_all runtime:Regex.split
 // parity: runtime:RegexError.message
-// parity: runtime:Receiver.close runtime:Receiver.into_stream
+// parity: runtime:Receiver.close runtime:Receiver.into_stream runtime:Receiver.recv
+// parity: runtime:Receiver.recv_cancellable
 // parity: runtime:Path.extension runtime:Path.file_name runtime:Path.from_string
 // parity: runtime:Path.exists runtime:Path.is_absolute runtime:Path.is_dir runtime:Path.is_file
 // parity: runtime:Path.join runtime:Path.list_files runtime:Path.list_paths
@@ -491,7 +492,7 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Set.clear runtime:Set.contains runtime:Set.difference runtime:Set.for_each
 // parity: runtime:Set.insert runtime:Set.intersection runtime:Set.is_empty runtime:Set.is_subset
 // parity: runtime:Set.len runtime:Set.new runtime:Set.remove runtime:Set.to_list runtime:Set.union
-// parity: runtime:Sender.close
+// parity: runtime:Sender.close runtime:Sender.send runtime:Sender.send_cancellable
 // parity: runtime:SortedSet.clear runtime:SortedSet.contains runtime:SortedSet.insert
 // parity: runtime:SortedSet.is_empty runtime:SortedSet.len runtime:SortedSet.new
 // parity: runtime:SortedSet.remove runtime:SortedSet.to_list
@@ -3296,7 +3297,7 @@ fn parity_channel_sync_intrinsics() {
     let source = r#"
 features: async, native, local
 
-fn main() -> Result<Unit, ChannelError> {
+async fn main() -> Result<Unit, ChannelError> {
     match Channel.bounded<Int>(capacity: 0) {
         Ok(channel) => {
             let sender: Sender<Int> = Channel.sender<Int>(channel: read channel)
@@ -3339,6 +3340,65 @@ fn main() -> Result<Unit, ChannelError> {
     let empty_stream: Stream<Int> = Receiver.into_stream<Int>(receiver: take empty_receiver)
     let empty_items = Stream.collect_list<Int>(stream: read empty_stream)?
     Log.write(message: read String.from_int(value: List.len<Int>(list: read empty_items)))
+
+    let mut data_channel: Channel<Int> = Channel.bounded<Int>(capacity: 1)?
+    let mut data_sender: Sender<Int> = Channel.sender<Int>(channel: read data_channel)
+    let data_receiver: Receiver<Int> = Channel.receiver<Int>(channel: mut data_channel)?
+    local first = 10
+
+    let mut none_channel: Channel<Int> = Channel.bounded<Int>(capacity: 1)?
+    let mut none_sender: Sender<Int> = Channel.sender<Int>(channel: read none_channel)
+    let none_receiver: Receiver<Int> = Channel.receiver<Int>(channel: mut none_channel)?
+    Sender.close<Int>(sender: mut none_sender)
+
+    let mut cancelled_send_channel: Channel<Int> = Channel.bounded<Int>(capacity: 1)?
+    let cancelled_send_sender: Sender<Int> = Channel.sender<Int>(channel: read cancelled_send_channel)
+    local cancelled_send_source = CancellationSource.new()
+    let cancelled_send_token = CancellationSource.token(source: read cancelled_send_source)
+    CancellationSource.cancel(source: mut cancelled_send_source)
+    local cancelled_value = 30
+
+    let mut cancelled_recv_channel: Channel<Int> = Channel.bounded<Int>(capacity: 1)?
+    let cancelled_recv_receiver: Receiver<Int> = Channel.receiver<Int>(channel: mut cancelled_recv_channel)?
+    local cancelled_recv_source = CancellationSource.new()
+    let cancelled_recv_token = CancellationSource.token(source: read cancelled_recv_source)
+    CancellationSource.cancel(source: mut cancelled_recv_source)
+
+    await Sender.send<Int>(sender: read data_sender, value: take first)?
+    Sender.close<Int>(sender: mut data_sender)
+    match await Receiver.recv<Int>(receiver: read data_receiver)? {
+        Some(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        None => {
+            Log.write(message: read "recv-none")
+        }
+    }
+    match await Receiver.recv<Int>(receiver: read none_receiver)? {
+        Some(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        None => {
+            Log.write(message: read "recv-none")
+        }
+    }
+
+    match await Sender.send_cancellable<Int>(sender: read cancelled_send_sender, value: take cancelled_value, token: read cancelled_send_token) {
+        Ok(_) => {
+            Log.write(message: read "unexpected-send")
+        }
+        Err(error) => {
+            Log.write(message: read ChannelError.message(error: read error))
+        }
+    }
+    match await Receiver.recv_cancellable<Int>(receiver: read cancelled_recv_receiver, token: read cancelled_recv_token) {
+        Ok(_) => {
+            Log.write(message: read "unexpected-recv")
+        }
+        Err(error) => {
+            Log.write(message: read ChannelError.message(error: read error))
+        }
+    }
     return Ok(Unit)
 }
 "#;
