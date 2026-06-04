@@ -582,7 +582,12 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("TcpStream", "write_all"),
     ("Url", "from_string"),
     ("Url", "to_string"),
+    ("WebSocket", "close"),
     ("WebSocket", "connect"),
+    ("WebSocket", "recv_bytes"),
+    ("WebSocket", "recv_text"),
+    ("WebSocket", "send_bytes"),
+    ("WebSocket", "send_text"),
     ("WebSocketError", "message"),
     ("Workspace", "resolve"),
     ("GlobalConfig", "new"),
@@ -1129,7 +1134,12 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Toml.parse_file",
     "runtime:Url.from_string",
     "runtime:Url.to_string",
+    "runtime:WebSocket.close",
     "runtime:WebSocket.connect",
+    "runtime:WebSocket.recv_bytes",
+    "runtime:WebSocket.recv_text",
+    "runtime:WebSocket.send_bytes",
+    "runtime:WebSocket.send_text",
     "runtime:WebSocketError.message",
     "runtime:Workspace.resolve",
     "runtime:Yaml.parse",
@@ -1389,6 +1399,8 @@ struct Interpreter<'a> {
     streams: HashMap<i64, InterpreterStream>,
     next_tcp_stream_id: i64,
     tcp_streams: HashMap<i64, TcpStream>,
+    next_websocket_id: i64,
+    websockets: HashMap<i64, InterpreterWebSocket>,
     next_pool_id: i64,
     pools: HashMap<i64, InterpreterResourcePool>,
 }
@@ -1411,6 +1423,8 @@ impl<'a> Interpreter<'a> {
             streams: HashMap::new(),
             next_tcp_stream_id: 0,
             tcp_streams: HashMap::new(),
+            next_websocket_id: 0,
+            websockets: HashMap::new(),
             next_pool_id: 0,
             pools: HashMap::new(),
         }
@@ -1738,6 +1752,125 @@ impl<'a> Interpreter<'a> {
             .read_to_end(&mut response)
             .map_err(|error| format!("HTTP response read failed for `{url}`: {error}"))?;
         parse_http_response(&response)
+    }
+
+    fn websocket_connect(&mut self, url: &str) -> Result<Value, String> {
+        let Some(rest) = url.strip_prefix("ws://") else {
+            return Err(format!(
+                "WebSocket interpreter only supports ws URLs, got `{url}`"
+            ));
+        };
+        let (host_port, path) = match rest.split_once('/') {
+            Some((host_port, path)) => (host_port, format!("/{path}")),
+            None => (rest, "/".to_string()),
+        };
+        if host_port.is_empty() {
+            return Err(format!("WebSocket URL is missing a host: `{url}`"));
+        }
+        let mut stream = TcpStream::connect(host_port)
+            .map_err(|error| format!("WebSocket connect to `{host_port}` failed: {error}"))?;
+        let timeout = Some(std::time::Duration::from_secs(5));
+        let _ = stream.set_read_timeout(timeout);
+        let _ = stream.set_write_timeout(timeout);
+        let request = format!(
+            "GET {path} HTTP/1.1\r\nHost: {host_port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: AAAAAAAAAAAAAAAAAAAAAA==\r\n\r\n"
+        );
+        stream
+            .write_all(request.as_bytes())
+            .map_err(|error| format!("WebSocket handshake write failed for `{url}`: {error}"))?;
+        let mut response = Vec::new();
+        loop {
+            let mut byte = [0; 1];
+            let read = stream
+                .read(&mut byte)
+                .map_err(|error| format!("WebSocket handshake read failed for `{url}`: {error}"))?;
+            if read == 0 {
+                return Err(format!("WebSocket handshake closed early for `{url}`"));
+            }
+            response.push(byte[0]);
+            if response.ends_with(b"\r\n\r\n") {
+                break;
+            }
+            if response.len() > 16 * 1024 {
+                return Err(format!(
+                    "WebSocket handshake response too large for `{url}`"
+                ));
+            }
+        }
+        let response = String::from_utf8_lossy(&response);
+        if !response
+            .lines()
+            .next()
+            .is_some_and(|line| line.contains(" 101 "))
+        {
+            return Err(format!(
+                "WebSocket handshake failed for `{url}`: {response}"
+            ));
+        }
+        let id = self.next_websocket_id;
+        self.next_websocket_id = self.next_websocket_id.saturating_add(1);
+        self.websockets.insert(id, InterpreterWebSocket { stream });
+        Ok(websocket_value(id))
+    }
+
+    fn websocket_mut(&mut self, id: i64) -> Result<&mut InterpreterWebSocket, String> {
+        self.websockets
+            .get_mut(&id)
+            .ok_or_else(|| format!("unknown WebSocket id `{id}`"))
+    }
+
+    fn websocket_send_text(&mut self, id: i64, text: &str) -> Result<(), String> {
+        websocket_write_frame(&mut self.websocket_mut(id)?.stream, 0x1, text.as_bytes())
+    }
+
+    fn websocket_send_bytes(&mut self, id: i64, bytes: &[u8]) -> Result<(), String> {
+        websocket_write_frame(&mut self.websocket_mut(id)?.stream, 0x2, bytes)
+    }
+
+    fn websocket_recv_text(&mut self, id: i64) -> Result<Option<String>, String> {
+        loop {
+            let frame = websocket_read_frame(&mut self.websocket_mut(id)?.stream)?;
+            match frame.opcode {
+                0x1 => {
+                    return String::from_utf8(frame.payload)
+                        .map(Some)
+                        .map_err(|error| format!("WebSocket text frame is not UTF-8: {error}"));
+                }
+                0x2 => {
+                    return Err(
+                        "WebSocket received binary frame while waiting for text".to_string()
+                    );
+                }
+                0x8 => return Ok(None),
+                0x9 => {
+                    websocket_write_frame(&mut self.websocket_mut(id)?.stream, 0xA, &frame.payload)?
+                }
+                0xA => {}
+                opcode => return Err(format!("WebSocket received unsupported opcode `{opcode}`")),
+            }
+        }
+    }
+
+    fn websocket_recv_bytes(&mut self, id: i64) -> Result<Option<Vec<u8>>, String> {
+        loop {
+            let frame = websocket_read_frame(&mut self.websocket_mut(id)?.stream)?;
+            match frame.opcode {
+                0x1 => {
+                    return Err("WebSocket received text frame while waiting for bytes".to_string());
+                }
+                0x2 => return Ok(Some(frame.payload)),
+                0x8 => return Ok(None),
+                0x9 => {
+                    websocket_write_frame(&mut self.websocket_mut(id)?.stream, 0xA, &frame.payload)?
+                }
+                0xA => {}
+                opcode => return Err(format!("WebSocket received unsupported opcode `{opcode}`")),
+            }
+        }
+    }
+
+    fn websocket_close(&mut self, id: i64) -> Result<(), String> {
+        websocket_write_frame(&mut self.websocket_mut(id)?.stream, 0x8, &[])
     }
 
     fn eval_resource_pool_new(
@@ -4276,49 +4409,57 @@ impl<'a> Interpreter<'a> {
             | ("Url", "to_string") => self.eval_first_arg(args),
             ("WebSocket", "connect") => {
                 let url = self.eval_named_or_positional_arg(args, "url", 0)?;
-                Ok(value_err(websocket_error(format!(
-                    "WebSocket async provider is not configured for {}",
-                    expect_string(url)?
-                ))))
+                let url = expect_string(url)?;
+                Ok(result_value(
+                    self.websocket_connect(&url).map_err(websocket_error),
+                ))
             }
             ("WebSocket", "send_text") => {
                 let socket = self.eval_named_or_positional_arg(args, "socket", 0)?;
                 let text = self.eval_named_or_positional_arg(args, "text", 1)?;
-                let _ = socket.display();
-                Ok(value_err(websocket_error(format!(
-                    "WebSocket async provider is not configured for send_text {} bytes",
-                    expect_string(text)?.len()
-                ))))
+                let id = expect_websocket_id(socket)?;
+                Ok(result_value(
+                    self.websocket_send_text(id, &expect_string(text)?)
+                        .map(|_| Value::Unit)
+                        .map_err(websocket_error),
+                ))
             }
             ("WebSocket", "send_bytes") => {
                 let socket = self.eval_named_or_positional_arg(args, "socket", 0)?;
                 let bytes = self.eval_named_or_positional_arg(args, "bytes", 1)?;
-                let _ = socket.display();
-                Ok(value_err(websocket_error(format!(
-                    "WebSocket async provider is not configured for send_bytes {} bytes",
-                    expect_bytes(bytes)?.len()
-                ))))
+                let id = expect_websocket_id(socket)?;
+                Ok(result_value(
+                    self.websocket_send_bytes(id, &expect_bytes(bytes)?)
+                        .map(|_| Value::Unit)
+                        .map_err(websocket_error),
+                ))
             }
             ("WebSocket", "recv_text") => {
                 let socket = self.eval_named_or_positional_arg(args, "socket", 0)?;
-                let _ = socket.display();
-                Ok(value_err(websocket_error(
-                    "WebSocket async provider is not configured for recv_text",
-                )))
+                let id = expect_websocket_id(socket)?;
+                Ok(result_value(
+                    self.websocket_recv_text(id)
+                        .map(|value| value.map(Value::String).map_or_else(value_none, value_some))
+                        .map_err(websocket_error),
+                ))
             }
             ("WebSocket", "recv_bytes") => {
                 let socket = self.eval_named_or_positional_arg(args, "socket", 0)?;
-                let _ = socket.display();
-                Ok(value_err(websocket_error(
-                    "WebSocket async provider is not configured for recv_bytes",
-                )))
+                let id = expect_websocket_id(socket)?;
+                Ok(result_value(
+                    self.websocket_recv_bytes(id)
+                        .map(|value| value.map(Value::Bytes).map_or_else(value_none, value_some))
+                        .map_err(websocket_error),
+                ))
             }
             ("WebSocket", "close") => {
                 let socket = self.eval_named_or_positional_arg(args, "socket", 0)?;
-                let _ = socket.display();
-                Ok(value_err(websocket_error(
-                    "WebSocket async provider is not configured for close",
-                )))
+                let id = expect_websocket_id(socket)?;
+                Ok(result_value(
+                    self.websocket_close(id)
+                        .map(|_| Value::Unit)
+                        .map_err(websocket_error),
+                ))
             }
             ("WebSocketError", "message") => {
                 let error = self.eval_named_or_positional_arg(args, "error", 0)?;
@@ -6876,6 +7017,77 @@ fn parse_http_response(response: &[u8]) -> Result<Value, String> {
     Ok(http_response_value(status, body))
 }
 
+struct WebSocketFrame {
+    opcode: u8,
+    payload: Vec<u8>,
+}
+
+fn websocket_write_frame(stream: &mut TcpStream, opcode: u8, payload: &[u8]) -> Result<(), String> {
+    let mut frame = Vec::new();
+    frame.push(0x80 | (opcode & 0x0F));
+    if payload.len() < 126 {
+        frame.push(0x80 | payload.len() as u8);
+    } else if u16::try_from(payload.len()).is_ok() {
+        frame.push(0x80 | 126);
+        frame.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+    } else {
+        frame.push(0x80 | 127);
+        frame.extend_from_slice(&(payload.len() as u64).to_be_bytes());
+    }
+    let mask = [0x12, 0x34, 0x56, 0x78];
+    frame.extend_from_slice(&mask);
+    frame.extend(
+        payload
+            .iter()
+            .enumerate()
+            .map(|(index, byte)| *byte ^ mask[index % mask.len()]),
+    );
+    stream
+        .write_all(&frame)
+        .map_err(|error| format!("WebSocket frame write failed: {error}"))
+}
+
+fn websocket_read_frame(stream: &mut TcpStream) -> Result<WebSocketFrame, String> {
+    let mut header = [0; 2];
+    stream
+        .read_exact(&mut header)
+        .map_err(|error| format!("WebSocket frame header read failed: {error}"))?;
+    let opcode = header[0] & 0x0F;
+    let masked = header[1] & 0x80 != 0;
+    let mut len = u64::from(header[1] & 0x7F);
+    if len == 126 {
+        let mut bytes = [0; 2];
+        stream
+            .read_exact(&mut bytes)
+            .map_err(|error| format!("WebSocket frame length read failed: {error}"))?;
+        len = u64::from(u16::from_be_bytes(bytes));
+    } else if len == 127 {
+        let mut bytes = [0; 8];
+        stream
+            .read_exact(&mut bytes)
+            .map_err(|error| format!("WebSocket frame length read failed: {error}"))?;
+        len = u64::from_be_bytes(bytes);
+    }
+    let mut mask = [0; 4];
+    if masked {
+        stream
+            .read_exact(&mut mask)
+            .map_err(|error| format!("WebSocket frame mask read failed: {error}"))?;
+    }
+    let len =
+        usize::try_from(len).map_err(|_| "WebSocket frame payload is too large".to_string())?;
+    let mut payload = vec![0; len];
+    stream
+        .read_exact(&mut payload)
+        .map_err(|error| format!("WebSocket frame payload read failed: {error}"))?;
+    if masked {
+        for (index, byte) in payload.iter_mut().enumerate() {
+            *byte ^= mask[index % mask.len()];
+        }
+    }
+    Ok(WebSocketFrame { opcode, payload })
+}
+
 fn tcp_error(message: impl Into<String>) -> Value {
     Value::Struct {
         name: "TcpError".to_string(),
@@ -7113,6 +7325,10 @@ struct InterpreterStream {
     items: VecDeque<Value>,
 }
 
+struct InterpreterWebSocket {
+    stream: TcpStream,
+}
+
 struct ChannelState {
     id: i64,
     capacity: i64,
@@ -7332,6 +7548,13 @@ fn stream_collect_error_value(message: impl Into<String>) -> Value {
 fn tcp_stream_value(id: i64) -> Value {
     Value::Struct {
         name: "TcpStream".to_string(),
+        fields: BTreeMap::from([("id".to_string(), Value::Int(id))]),
+    }
+}
+
+fn websocket_value(id: i64) -> Value {
+    Value::Struct {
+        name: "WebSocket".to_string(),
         fields: BTreeMap::from([("id".to_string(), Value::Int(id))]),
     }
 }
@@ -7665,6 +7888,19 @@ fn expect_tcp_stream_id(value: Value) -> Result<i64, EvalError> {
             .and_then(expect_int),
         other => Err(EvalError::Runtime(format!(
             "expected TcpStream, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn expect_websocket_id(value: Value) -> Result<i64, EvalError> {
+    match value {
+        Value::Struct { name, mut fields } if name == "WebSocket" => fields
+            .remove("id")
+            .ok_or_else(|| EvalError::Runtime("WebSocket value is missing id.".to_string()))
+            .and_then(expect_int),
+        other => Err(EvalError::Runtime(format!(
+            "expected WebSocket, got `{}`.",
             other.display()
         ))),
     }

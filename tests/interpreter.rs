@@ -1,5 +1,7 @@
 mod common;
 
+use base64::Engine;
+use sha1::{Digest, Sha1};
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -534,7 +536,9 @@ fn eval_matches_backend_for_declared_host_boundary() {
 // parity: runtime:TcpStream.write runtime:TcpStream.write_all
 // parity: runtime:Toml.parse_file
 // parity: runtime:Url.from_string runtime:Url.to_string
-// parity: runtime:WebSocket.connect runtime:WebSocketError.message
+// parity: runtime:WebSocket.close runtime:WebSocket.connect runtime:WebSocket.recv_bytes
+// parity: runtime:WebSocket.recv_text runtime:WebSocket.send_bytes runtime:WebSocket.send_text
+// parity: runtime:WebSocketError.message
 // parity: runtime:Yaml.parse runtime:Yaml.parse_file
 fn assert_interpreter_matches_backend(name: &str, package: &str, source: &str) {
     assert_interpreter_matches_backend_with_args(name, package, source, &[]);
@@ -588,6 +592,129 @@ fn spawn_http_response_server() -> (String, thread::JoinHandle<()>) {
             .expect("server should write response");
     });
     (port, handle)
+}
+
+struct TestWebSocketFrame {
+    opcode: u8,
+    payload: Vec<u8>,
+}
+
+fn spawn_websocket_echo_server() -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
+    let port = listener
+        .local_addr()
+        .expect("test listener should have an address")
+        .port()
+        .to_string();
+    let handle = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().expect("client should connect");
+        websocket_accept_handshake(&mut socket);
+
+        let text = websocket_read_test_frame(&mut socket);
+        assert_eq!(text.opcode, 0x1);
+        assert_eq!(
+            String::from_utf8(text.payload).expect("text should be UTF-8"),
+            "ping"
+        );
+        websocket_write_test_frame(&mut socket, 0x1, b"pong");
+
+        let bytes = websocket_read_test_frame(&mut socket);
+        assert_eq!(bytes.opcode, 0x2);
+        assert_eq!(bytes.payload, b"bin");
+        websocket_write_test_frame(&mut socket, 0x2, &[1, 2, 3, 4]);
+
+        let close = websocket_read_test_frame(&mut socket);
+        assert_eq!(close.opcode, 0x8);
+        websocket_write_test_frame(&mut socket, 0x8, &[]);
+    });
+    (port, handle)
+}
+
+fn websocket_accept_handshake(socket: &mut std::net::TcpStream) {
+    let mut request = Vec::new();
+    loop {
+        let mut byte = [0; 1];
+        socket
+            .read_exact(&mut byte)
+            .expect("server should read websocket handshake");
+        request.push(byte[0]);
+        if request.ends_with(b"\r\n\r\n") {
+            break;
+        }
+    }
+    let request = String::from_utf8_lossy(&request);
+    let key = request
+        .lines()
+        .find_map(|line| line.strip_prefix("Sec-WebSocket-Key: "))
+        .expect("websocket key should be present")
+        .trim();
+    let mut hasher = Sha1::new();
+    hasher.update(key.as_bytes());
+    hasher.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+    let accept = base64::engine::general_purpose::STANDARD.encode(hasher.finalize());
+    let response = format!(
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+    );
+    socket
+        .write_all(response.as_bytes())
+        .expect("server should write websocket handshake");
+}
+
+fn websocket_read_test_frame(socket: &mut std::net::TcpStream) -> TestWebSocketFrame {
+    let mut header = [0; 2];
+    socket
+        .read_exact(&mut header)
+        .expect("server should read websocket frame header");
+    let opcode = header[0] & 0x0F;
+    let masked = header[1] & 0x80 != 0;
+    let mut len = u64::from(header[1] & 0x7F);
+    if len == 126 {
+        let mut bytes = [0; 2];
+        socket
+            .read_exact(&mut bytes)
+            .expect("server should read websocket frame length");
+        len = u64::from(u16::from_be_bytes(bytes));
+    } else if len == 127 {
+        let mut bytes = [0; 8];
+        socket
+            .read_exact(&mut bytes)
+            .expect("server should read websocket frame length");
+        len = u64::from_be_bytes(bytes);
+    }
+    let mut mask = [0; 4];
+    if masked {
+        socket
+            .read_exact(&mut mask)
+            .expect("server should read websocket frame mask");
+    }
+    let mut payload = vec![0; len as usize];
+    socket
+        .read_exact(&mut payload)
+        .expect("server should read websocket frame payload");
+    if masked {
+        for (index, byte) in payload.iter_mut().enumerate() {
+            *byte ^= mask[index % mask.len()];
+        }
+    }
+    TestWebSocketFrame { opcode, payload }
+}
+
+fn websocket_write_test_frame(socket: &mut std::net::TcpStream, opcode: u8, payload: &[u8]) {
+    let mut frame = Vec::new();
+    frame.push(0x80 | (opcode & 0x0F));
+    if payload.len() < 126 {
+        frame.push(payload.len() as u8);
+    } else if u16::try_from(payload.len()).is_ok() {
+        frame.push(126);
+        frame.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+    } else {
+        frame.push(127);
+        frame.extend_from_slice(&(payload.len() as u64).to_be_bytes());
+    }
+    frame.extend_from_slice(payload);
+    socket
+        .write_all(&frame)
+        .expect("server should write websocket frame");
 }
 
 fn assert_interpreter_matches_backend_with_args(
@@ -2088,6 +2215,50 @@ async fn main() -> Result<Unit, HttpError> {
         backend_server
             .join()
             .expect("backend http server should finish");
+    });
+}
+
+#[test]
+fn parity_websocket_intrinsics() {
+    run_with_large_stack(|| {
+        let (interpreter_port, interpreter_server) = spawn_websocket_echo_server();
+        let (backend_port, backend_server) = spawn_websocket_echo_server();
+        let interpreter_url = format!("ws://127.0.0.1:{interpreter_port}/socket");
+        let backend_url = format!("ws://127.0.0.1:{backend_port}/socket");
+        let source = r#"
+features: async, native, local
+
+fn url_arg() -> Url {
+    return Url.from_string(value: read Args.get_or_default(index: 0, default: read "ws://127.0.0.1:1/socket"))
+}
+
+async fn main() -> Result<Unit, WebSocketError> {
+    let socket = await WebSocket.connect(url: read url_arg())?
+    await WebSocket.send_text(socket: read socket, text: read "ping")?
+    let text = await WebSocket.recv_text(socket: read socket)?
+    Log.write(message: read Option.unwrap_or<String>(value: read text, default: read "text-none"))
+    await WebSocket.send_bytes(socket: read socket, bytes: read String.to_bytes(value: read "bin"))?
+    let bytes = await WebSocket.recv_bytes(socket: read socket)?
+    let bytes = Option.unwrap_or<Bytes>(value: read bytes, default: read String.to_bytes(value: read ""))
+    Log.write(message: read String.from_int(value: Bytes.len(value: read bytes)))
+    await WebSocket.close(socket: read socket)?
+    Log.write(message: read "closed")
+    return Ok(Unit)
+}
+"#;
+        assert_interpreter_matches_backend_with_distinct_args_allowing_unused_mut_warning(
+            "parity-websocket.rss",
+            "rsscript_parity_websocket",
+            source,
+            &[interpreter_url.as_str()],
+            &[backend_url.as_str()],
+        );
+        interpreter_server
+            .join()
+            .expect("interpreter websocket server should finish");
+        backend_server
+            .join()
+            .expect("backend websocket server should finish");
     });
 }
 
