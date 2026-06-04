@@ -416,6 +416,8 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Path", "with_extension"),
     ("Path", "write_string"),
     ("Patch", "apply_text"),
+    ("Process", "run_many_stdout"),
+    ("Process", "run_many_stdout_timeout"),
     ("Process", "run"),
     ("Process", "run_stdout"),
     ("Process", "run_stdout_timeout"),
@@ -817,6 +819,8 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Path.with_extension",
     "runtime:Path.write_string",
     "runtime:Patch.apply_text",
+    "runtime:Process.run_many_stdout",
+    "runtime:Process.run_many_stdout_timeout",
     "runtime:Process.run",
     "runtime:Process.run_stdout",
     "runtime:Process.run_stdout_timeout",
@@ -3035,6 +3039,41 @@ impl<'a> Interpreter<'a> {
                     .map_err(Value::String),
                 ))
             }
+            ("Process", "run_many_stdout") => {
+                let command = self.eval_named_or_positional_arg(args, "command", 0)?;
+                let args_value = self.eval_named_or_positional_arg(args, "args", 1)?;
+                let appended = self.eval_named_or_positional_arg(args, "appended_args", 2)?;
+                let _jobs = self.eval_named_or_positional_arg(args, "jobs", 3)?;
+                let command = expect_string(command)?;
+                Ok(result_value(
+                    process_run_many_stdout(
+                        &command,
+                        &expect_string_list(args_value)?,
+                        &expect_string_list(appended)?,
+                        None,
+                    )
+                    .map(|items| Value::List(items.into_iter().map(Value::String).collect()))
+                    .map_err(Value::String),
+                ))
+            }
+            ("Process", "run_many_stdout_timeout") => {
+                let command = self.eval_named_or_positional_arg(args, "command", 0)?;
+                let args_value = self.eval_named_or_positional_arg(args, "args", 1)?;
+                let appended = self.eval_named_or_positional_arg(args, "appended_args", 2)?;
+                let _jobs = self.eval_named_or_positional_arg(args, "jobs", 3)?;
+                let timeout = self.eval_named_or_positional_arg(args, "timeout_ms", 4)?;
+                let command = expect_string(command)?;
+                Ok(result_value(
+                    process_run_many_stdout(
+                        &command,
+                        &expect_string_list(args_value)?,
+                        &expect_string_list(appended)?,
+                        Some(expect_int(timeout)?),
+                    )
+                    .map(|items| Value::List(items.into_iter().map(Value::String).collect()))
+                    .map_err(Value::String),
+                ))
+            }
             ("Result", "is_ok") => {
                 let value = self.eval_first_arg(args)?;
                 Ok(Value::Bool(matches!(
@@ -4257,6 +4296,35 @@ fn process_stdout_result(command: &str, output: ProcessOutputState) -> Result<St
         output.status,
         process_output_details(&output.stdout, &output.stderr)
     ))
+}
+
+fn process_run_many_stdout(
+    command: &str,
+    args: &[String],
+    appended_args: &[String],
+    timeout_ms: Option<i64>,
+) -> Result<Vec<String>, String> {
+    let mut results = Vec::with_capacity(appended_args.len());
+    let mut errors = Vec::new();
+    for (index, appended_arg) in appended_args.iter().enumerate() {
+        let mut command_args = args.to_vec();
+        command_args.push(appended_arg.clone());
+        let result = match timeout_ms {
+            Some(timeout_ms) => process_run_timeout_output(command, &command_args, timeout_ms)
+                .and_then(|output| process_stdout_result(command, output)),
+            None => process_run_output(command, &command_args)
+                .and_then(|output| process_stdout_result(command, output)),
+        };
+        match result {
+            Ok(stdout) => results.push(stdout),
+            Err(error) => errors.push(format!("command {index}: {error}")),
+        }
+    }
+    if errors.is_empty() {
+        Ok(results)
+    } else {
+        Err(errors.join("\n"))
+    }
 }
 
 fn process_output_details(stdout: &str, stderr: &str) -> String {
