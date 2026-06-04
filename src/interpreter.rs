@@ -139,6 +139,9 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("BufferView", "len"),
     ("BufferView", "slice"),
     ("BufferView", "to_bytes"),
+    ("Cache", "insert"),
+    ("Cache", "lookup"),
+    ("Cache", "new"),
     ("Clock", "now"),
     ("Clock", "system_unix_ms"),
     ("Config", "load"),
@@ -297,6 +300,8 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Hash", "sha256_bytes"),
     ("Hash", "sha256_file"),
     ("Hash", "sha256_string"),
+    ("ImageCache", "len"),
+    ("ImageCache", "new"),
     ("Instant", "elapsed"),
     ("List", "append"),
     ("List", "clear"),
@@ -487,6 +492,9 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:BufferView.len",
     "runtime:BufferView.slice",
     "runtime:BufferView.to_bytes",
+    "runtime:Cache.insert",
+    "runtime:Cache.lookup",
+    "runtime:Cache.new",
     "runtime:Clock.now",
     "runtime:Clock.system_unix_ms",
     "runtime:Config.load",
@@ -647,6 +655,8 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Hash.sha256_bytes",
     "runtime:Hash.sha256_file",
     "runtime:Hash.sha256_string",
+    "runtime:ImageCache.len",
+    "runtime:ImageCache.new",
     "runtime:List.append",
     "runtime:List.clear",
     "runtime:List.contains_value",
@@ -1985,6 +1995,24 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Unit)
             }
             ("BufferView", "to_bytes") | ("Bytes", "from_buffer") => self.eval_first_arg(args),
+            ("Cache", "new") => Ok(Value::Map(Vec::new())),
+            ("Cache", "insert") => {
+                let cache_name = self.mut_arg_local_name(args, "cache", 0)?;
+                let key = self.eval_named_or_positional_arg(args, "key", 1)?;
+                let value = self.eval_named_or_positional_arg(args, "value", 2)?;
+                let mut cache = expect_map(self.lookup(cache_name)?)?;
+                map_insert(&mut cache, key, value);
+                self.assign(cache_name, Value::Map(cache))?;
+                Ok(Value::Unit)
+            }
+            ("Cache", "lookup") => {
+                let cache = self.eval_named_or_positional_arg(args, "cache", 0)?;
+                let key = self.eval_named_or_positional_arg(args, "key", 1)?;
+                Ok(match map_get(&expect_map(cache)?, &key) {
+                    Some(value) => value,
+                    None => Value::String(String::new()),
+                })
+            }
             ("Clock", "now") => Ok(instant_value(clock_system_unix_ms())),
             ("Clock", "system_unix_ms") => Ok(Value::Int(clock_system_unix_ms())),
             ("Instant", "elapsed") => {
@@ -2112,6 +2140,14 @@ impl<'a> Interpreter<'a> {
                         .map(|bytes| Value::String(sha256_digest(&bytes)))
                         .map_err(file_error),
                 ))
+            }
+            ("ImageCache", "new") => {
+                let capacity = self.eval_named_or_positional_arg(args, "capacity", 0)?;
+                Ok(image_cache_value(expect_int(capacity)?.max(0), 0))
+            }
+            ("ImageCache", "len") => {
+                let cache = self.eval_named_or_positional_arg(args, "cache", 0)?;
+                Ok(Value::Int(expect_image_cache_len(cache)?))
             }
             ("List", "new") => Ok(Value::List(Vec::new())),
             ("List", "len") => {
@@ -4413,6 +4449,16 @@ fn config_store_value(name: impl Into<String>) -> Value {
     }
 }
 
+fn image_cache_value(capacity: i64, len: i64) -> Value {
+    Value::Struct {
+        name: "ImageCache".to_string(),
+        fields: BTreeMap::from([
+            ("capacity".to_string(), Value::Int(capacity)),
+            ("len".to_string(), Value::Int(len)),
+        ]),
+    }
+}
+
 fn config_rules_value(name: impl Into<String>, rule_count: i64) -> Value {
     Value::Struct {
         name: "Config".to_string(),
@@ -4522,6 +4568,19 @@ fn expect_config_store_name(value: Value) -> Result<String, EvalError> {
             .and_then(expect_string),
         other => Err(EvalError::Runtime(format!(
             "expected ConfigStore, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn expect_image_cache_len(value: Value) -> Result<i64, EvalError> {
+    match value {
+        Value::Struct { name, mut fields } if name == "ImageCache" => fields
+            .remove("len")
+            .ok_or_else(|| EvalError::Runtime("ImageCache len is missing.".to_string()))
+            .and_then(expect_int),
+        other => Err(EvalError::Runtime(format!(
+            "expected ImageCache, got `{}`.",
             other.display()
         ))),
     }

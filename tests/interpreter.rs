@@ -254,6 +254,7 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Buffer.clear runtime:Buffer.consume runtime:Buffer.is_empty runtime:Buffer.len
 // parity: runtime:Buffer.new runtime:Buffer.view runtime:BufferView.is_empty
 // parity: runtime:BufferView.len runtime:BufferView.slice runtime:BufferView.to_bytes
+// parity: runtime:Cache.insert runtime:Cache.lookup runtime:Cache.new
 // parity: runtime:Clock.now runtime:Clock.system_unix_ms
 // parity: runtime:Config.load runtime:Config.name runtime:Config.new runtime:Config.rule_count
 // parity: runtime:ConfigStore.name runtime:ConfigStore.new runtime:ConfigStore.replace
@@ -286,6 +287,7 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Json.value runtime:Json.value_at runtime:Json.values runtime:JsonError.message
 // parity: runtime:Instant.elapsed
 // parity: runtime:Hash.sha256_bytes runtime:Hash.sha256_file runtime:Hash.sha256_string
+// parity: runtime:ImageCache.len runtime:ImageCache.new
 // parity: runtime:List.append runtime:List.clear runtime:List.contains_value
 // parity: runtime:List.consume runtime:List.first runtime:List.get runtime:List.is_empty runtime:List.join
 // parity: runtime:List.last runtime:List.len runtime:List.new runtime:List.pop
@@ -2087,6 +2089,41 @@ fn main() -> Unit {
 }
 "#;
     assert_interpreter_matches_backend("parity-counter.rss", "rsscript_parity_counter", source);
+}
+
+#[test]
+fn parity_cache_intrinsics() {
+    let source = r#"
+fn main() -> Unit {
+    let mut cache = Cache.new()
+    Log.write(message: read Cache.lookup(cache: read cache, key: read "missing"))
+    Cache.insert(cache: mut cache, key: read "one", value: read "first")
+    Cache.insert(cache: mut cache, key: read "one", value: read "second")
+    Cache.insert(cache: mut cache, key: read "two", value: read "other")
+    Log.write(message: read Cache.lookup(cache: read cache, key: read "one"))
+    Log.write(message: read Cache.lookup(cache: read cache, key: read "two"))
+    return Unit
+}
+"#;
+    assert_interpreter_matches_backend("parity-cache.rss", "rsscript_parity_cache", source);
+}
+
+#[test]
+fn parity_image_cache_intrinsics() {
+    let source = r#"
+fn main() -> Unit {
+    let cache = ImageCache.new(capacity: 2)
+    Log.write(message: read String.from_int(value: ImageCache.len(cache: read cache)))
+    let zero = ImageCache.new(capacity: 0 - 1)
+    Log.write(message: read String.from_int(value: ImageCache.len(cache: read zero)))
+    return Unit
+}
+"#;
+    assert_interpreter_matches_backend(
+        "parity-image-cache.rss",
+        "rsscript_parity_image_cache",
+        source,
+    );
 }
 
 #[test]

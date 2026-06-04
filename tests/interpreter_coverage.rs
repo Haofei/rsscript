@@ -37,12 +37,12 @@ fn interpreter_coverage_report_tracks_hir_surface() {
 fn interpreter_coverage_baseline_is_explicit() {
     let report = interpreter_coverage_report();
 
-    assert_bucket_counts(&report.runtime_intrinsics, 519, 356, 163);
+    assert_bucket_counts(&report.runtime_intrinsics, 519, 361, 158);
     assert_bucket_counts(&report.hir_statements, 13, 11, 2);
     assert_bucket_counts(&report.hir_expressions, 18, 14, 4);
     assert_bucket_counts(&report.value_types, 14, 11, 3);
     assert_bucket_counts(&report.function_kinds, 3, 1, 2);
-    assert_bucket_counts(&report.parity_features, 393, 393, 0);
+    assert_bucket_counts(&report.parity_features, 398, 398, 0);
 
     assert!(
         report
