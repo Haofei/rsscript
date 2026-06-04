@@ -425,10 +425,12 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:List.all runtime:List.any runtime:List.append runtime:List.clear
 // parity: runtime:List.contains runtime:List.contains_value runtime:List.count_where
 // parity: runtime:List.consume runtime:List.filter runtime:List.find runtime:List.first
-// parity: runtime:List.flat_map runtime:List.fold runtime:List.get runtime:List.is_empty runtime:List.join
+// parity: runtime:List.flat_map runtime:List.fold runtime:List.get runtime:List.group_by
+// parity: runtime:List.is_empty runtime:List.join
 // parity: runtime:List.last runtime:List.len runtime:List.map runtime:List.new runtime:List.partition
 // parity: runtime:List.pipeline runtime:List.pop runtime:List.push runtime:List.reverse runtime:List.remove_at runtime:List.set
-// parity: runtime:List.skip runtime:List.slice runtime:List.sort runtime:List.take
+// parity: runtime:List.skip runtime:List.slice runtime:List.sort runtime:List.sort_by
+// parity: runtime:List.sort_with runtime:List.take
 // parity: runtime:List.to_json_strings runtime:List.to_json_values runtime:List.try_fold
 // parity: runtime:Log.error runtime:Log.error_json runtime:Log.trace runtime:Log.write
 // parity: runtime:Log.write_json
@@ -2637,6 +2639,46 @@ fn main() -> Unit {
     })
     Log.write(message: read String.from_int(value: mapped[0]))
     Log.write(message: read String.from_int(value: mapped[4]))
+
+    let mut sorted = [3, 1, 2]
+    List.sort_with<Int>(list: mut sorted, compare: |left, right| {
+        return right - left
+    })
+    Log.write(message: read String.from_int(value: sorted[0]))
+    Log.write(message: read String.from_int(value: sorted[2]))
+
+    let sorted_words = List.sort_by<String, Int>(list: read ["bbb", "a", "cc"], key: |word| {
+        return String.len(value: read word)
+    }, compare: |left, right| {
+        return left - right
+    })
+    Log.write(message: read sorted_words[0])
+    Log.write(message: read sorted_words[2])
+
+    let grouped = List.group_by<Int, String>(list: read numbers, key: |item| {
+        if is_even(value: item) {
+            return String.copy(value: read "even")
+        }
+        return String.copy(value: read "odd")
+    })
+    match Map.get(map: read grouped, key: read "even") {
+        Some(items) => {
+            Log.write(message: read String.from_int(value: List.len(list: read items)))
+            Log.write(message: read String.from_int(value: items[0]))
+        }
+        None => {
+            Log.write(message: read "even-missing")
+        }
+    }
+    match Map.get(map: read grouped, key: read "odd") {
+        Some(items) => {
+            Log.write(message: read String.from_int(value: List.len(list: read items)))
+            Log.write(message: read String.from_int(value: items[2]))
+        }
+        None => {
+            Log.write(message: read "odd-missing")
+        }
+    }
 
     let folded = List.fold<Int, Acc>(list: read numbers, initial: read Acc(total: 0), folder: |state, item| {
         return Acc(total: state.total + item)

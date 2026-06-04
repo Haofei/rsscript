@@ -379,6 +379,7 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("List", "flat_map"),
     ("List", "fold"),
     ("List", "get"),
+    ("List", "group_by"),
     ("List", "is_empty"),
     ("List", "join"),
     ("List", "last"),
@@ -395,6 +396,8 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("List", "skip"),
     ("List", "slice"),
     ("List", "sort"),
+    ("List", "sort_by"),
+    ("List", "sort_with"),
     ("List", "take"),
     ("List", "to_json_strings"),
     ("List", "to_json_values"),
@@ -860,6 +863,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:List.flat_map",
     "runtime:List.fold",
     "runtime:List.get",
+    "runtime:List.group_by",
     "runtime:List.is_empty",
     "runtime:List.join",
     "runtime:List.last",
@@ -876,6 +880,8 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:List.skip",
     "runtime:List.slice",
     "runtime:List.sort",
+    "runtime:List.sort_by",
+    "runtime:List.sort_with",
     "runtime:List.take",
     "runtime:List.to_json_strings",
     "runtime:List.to_json_values",
@@ -1435,6 +1441,51 @@ impl<'a> Interpreter<'a> {
         self.scopes.pop();
         self.scopes.pop();
         Ok(result)
+    }
+
+    fn sort_list_with_closure(
+        &mut self,
+        list: &mut [Value],
+        compare: Value,
+    ) -> Result<(), EvalError> {
+        for right_index in 1..list.len() {
+            let mut index = right_index;
+            while index > 0 {
+                let ordering = expect_int(self.call_closure(
+                    compare.clone(),
+                    vec![list[index - 1].clone(), list[index].clone()],
+                )?)?;
+                if ordering <= 0 {
+                    break;
+                }
+                list.swap(index - 1, index);
+                index -= 1;
+            }
+        }
+        Ok(())
+    }
+
+    fn sort_list_by_closure(
+        &mut self,
+        list: &mut [Value],
+        key: Value,
+        compare: Value,
+    ) -> Result<(), EvalError> {
+        for right_index in 1..list.len() {
+            let mut index = right_index;
+            while index > 0 {
+                let left_key = self.call_closure(key.clone(), vec![list[index - 1].clone()])?;
+                let right_key = self.call_closure(key.clone(), vec![list[index].clone()])?;
+                let ordering =
+                    expect_int(self.call_closure(compare.clone(), vec![left_key, right_key])?)?;
+                if ordering <= 0 {
+                    break;
+                }
+                list.swap(index - 1, index);
+                index -= 1;
+            }
+        }
+        Ok(())
     }
 
     fn eval_block(&mut self, block: &HirBlock) -> Result<Control, EvalError> {
@@ -2617,6 +2668,14 @@ impl<'a> Interpreter<'a> {
                 self.assign(list_name, Value::List(list))?;
                 Ok(Value::Unit)
             }
+            ("List", "sort_with") => {
+                let list_name = self.mut_arg_local_name(args, "list", 0)?;
+                let compare = self.eval_named_or_positional_arg(args, "compare", 1)?;
+                let mut list = expect_list(self.lookup(list_name)?)?;
+                self.sort_list_with_closure(&mut list, compare)?;
+                self.assign(list_name, Value::List(list))?;
+                Ok(Value::Unit)
+            }
             ("List", "consume") => {
                 self.eval_first_arg(args)?;
                 Ok(Value::Unit)
@@ -2867,6 +2926,31 @@ impl<'a> Interpreter<'a> {
                     }
                 }
                 Ok(value_ok(state))
+            }
+            ("List", "group_by") => {
+                let list = self.eval_named_or_positional_arg(args, "list", 0)?;
+                let key = self.eval_named_or_positional_arg(args, "key", 1)?;
+                let mut groups: Vec<(Value, Value)> = Vec::new();
+                for value in expect_list(list)? {
+                    let group_key = self.call_closure(key.clone(), vec![value.clone()])?;
+                    if let Some((_, group)) = groups
+                        .iter_mut()
+                        .find(|(entry_key, _)| entry_key == &group_key)
+                    {
+                        expect_list_mut(group)?.push(value);
+                    } else {
+                        groups.push((group_key, Value::List(vec![value])));
+                    }
+                }
+                Ok(Value::Map(groups))
+            }
+            ("List", "sort_by") => {
+                let list = self.eval_named_or_positional_arg(args, "list", 0)?;
+                let key = self.eval_named_or_positional_arg(args, "key", 1)?;
+                let compare = self.eval_named_or_positional_arg(args, "compare", 2)?;
+                let mut list = expect_list(list)?;
+                self.sort_list_by_closure(&mut list, key, compare)?;
+                Ok(Value::List(list))
             }
             ("List", "pipeline") | ("Pipeline", "collect") => self.eval_first_arg(args),
             ("Pipeline", "map") => {
@@ -7516,6 +7600,16 @@ fn expect_bytes(value: Value) -> Result<Vec<u8>, EvalError> {
 }
 
 fn expect_list(value: Value) -> Result<Vec<Value>, EvalError> {
+    match value {
+        Value::List(value) => Ok(value),
+        other => Err(EvalError::Runtime(format!(
+            "expected List, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn expect_list_mut(value: &mut Value) -> Result<&mut Vec<Value>, EvalError> {
     match value {
         Value::List(value) => Ok(value),
         other => Err(EvalError::Runtime(format!(
