@@ -343,16 +343,25 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("ImageCache", "store"),
     ("Instant", "elapsed"),
     ("List", "append"),
+    ("List", "all"),
+    ("List", "any"),
     ("List", "clear"),
+    ("List", "contains"),
     ("List", "contains_value"),
+    ("List", "count_where"),
     ("List", "consume"),
+    ("List", "filter"),
+    ("List", "find"),
     ("List", "first"),
+    ("List", "flat_map"),
     ("List", "get"),
     ("List", "is_empty"),
     ("List", "join"),
     ("List", "last"),
     ("List", "len"),
+    ("List", "map"),
     ("List", "new"),
+    ("List", "partition"),
     ("List", "pop"),
     ("List", "push"),
     ("List", "reverse"),
@@ -759,16 +768,25 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:ImageCache.new",
     "runtime:ImageCache.store",
     "runtime:List.append",
+    "runtime:List.all",
+    "runtime:List.any",
     "runtime:List.clear",
+    "runtime:List.contains",
     "runtime:List.contains_value",
+    "runtime:List.count_where",
     "runtime:List.consume",
+    "runtime:List.filter",
+    "runtime:List.find",
     "runtime:List.first",
+    "runtime:List.flat_map",
     "runtime:List.get",
     "runtime:List.is_empty",
     "runtime:List.join",
     "runtime:List.last",
     "runtime:List.len",
+    "runtime:List.map",
     "runtime:List.new",
+    "runtime:List.partition",
     "runtime:List.pop",
     "runtime:List.push",
     "runtime:List.reverse",
@@ -2629,6 +2647,95 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Bool(
                     expect_list(list)?.iter().any(|item| item == &value),
                 ))
+            }
+            ("List", "count_where") => {
+                let list = self.eval_named_or_positional_arg(args, "list", 0)?;
+                let predicate = self.eval_named_or_positional_arg(args, "predicate", 1)?;
+                let mut count = 0_i64;
+                for value in expect_list(list)? {
+                    if expect_bool(self.call_closure(predicate.clone(), vec![value])?)? {
+                        count += 1;
+                    }
+                }
+                Ok(Value::Int(count))
+            }
+            ("List", "any") | ("List", "contains") => {
+                let list = self.eval_named_or_positional_arg(args, "list", 0)?;
+                let predicate = self.eval_named_or_positional_arg(args, "predicate", 1)?;
+                for value in expect_list(list)? {
+                    if expect_bool(self.call_closure(predicate.clone(), vec![value])?)? {
+                        return Ok(Value::Bool(true));
+                    }
+                }
+                Ok(Value::Bool(false))
+            }
+            ("List", "all") => {
+                let list = self.eval_named_or_positional_arg(args, "list", 0)?;
+                let predicate = self.eval_named_or_positional_arg(args, "predicate", 1)?;
+                for value in expect_list(list)? {
+                    if !expect_bool(self.call_closure(predicate.clone(), vec![value])?)? {
+                        return Ok(Value::Bool(false));
+                    }
+                }
+                Ok(Value::Bool(true))
+            }
+            ("List", "find") => {
+                let list = self.eval_named_or_positional_arg(args, "list", 0)?;
+                let predicate = self.eval_named_or_positional_arg(args, "predicate", 1)?;
+                for value in expect_list(list)? {
+                    if expect_bool(self.call_closure(predicate.clone(), vec![value.clone()])?)? {
+                        return Ok(value_some(value));
+                    }
+                }
+                Ok(value_none())
+            }
+            ("List", "filter") => {
+                let list = self.eval_named_or_positional_arg(args, "list", 0)?;
+                let predicate = self.eval_named_or_positional_arg(args, "predicate", 1)?;
+                let mut filtered = Vec::new();
+                for value in expect_list(list)? {
+                    if expect_bool(self.call_closure(predicate.clone(), vec![value.clone()])?)? {
+                        filtered.push(value);
+                    }
+                }
+                Ok(Value::List(filtered))
+            }
+            ("List", "map") => {
+                let list = self.eval_named_or_positional_arg(args, "list", 0)?;
+                let mapper = self.eval_named_or_positional_arg(args, "mapper", 1)?;
+                let mut mapped = Vec::new();
+                for value in expect_list(list)? {
+                    mapped.push(self.call_closure(mapper.clone(), vec![value])?);
+                }
+                Ok(Value::List(mapped))
+            }
+            ("List", "flat_map") => {
+                let list = self.eval_named_or_positional_arg(args, "list", 0)?;
+                let mapper = self.eval_named_or_positional_arg(args, "mapper", 1)?;
+                let mut flattened = Vec::new();
+                for value in expect_list(list)? {
+                    flattened.extend(expect_list(
+                        self.call_closure(mapper.clone(), vec![value])?,
+                    )?);
+                }
+                Ok(Value::List(flattened))
+            }
+            ("List", "partition") => {
+                let list = self.eval_named_or_positional_arg(args, "list", 0)?;
+                let predicate = self.eval_named_or_positional_arg(args, "predicate", 1)?;
+                let mut matched = Vec::new();
+                let mut unmatched = Vec::new();
+                for value in expect_list(list)? {
+                    if expect_bool(self.call_closure(predicate.clone(), vec![value.clone()])?)? {
+                        matched.push(value);
+                    } else {
+                        unmatched.push(value);
+                    }
+                }
+                Ok(Value::List(vec![
+                    Value::List(matched),
+                    Value::List(unmatched),
+                ]))
             }
             ("List", "join") => {
                 let list = self.eval_named_or_positional_arg(args, "list", 0)?;

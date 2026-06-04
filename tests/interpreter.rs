@@ -301,9 +301,11 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Image.inspect runtime:Image.load runtime:Image.normalize runtime:Image.resize
 // parity: runtime:Image.save runtime:Image.sharpen runtime:ImageCache.len runtime:ImageCache.new
 // parity: runtime:ImageCache.store
-// parity: runtime:List.append runtime:List.clear runtime:List.contains_value
-// parity: runtime:List.consume runtime:List.first runtime:List.get runtime:List.is_empty runtime:List.join
-// parity: runtime:List.last runtime:List.len runtime:List.new runtime:List.pop
+// parity: runtime:List.all runtime:List.any runtime:List.append runtime:List.clear
+// parity: runtime:List.contains runtime:List.contains_value runtime:List.count_where
+// parity: runtime:List.consume runtime:List.filter runtime:List.find runtime:List.first
+// parity: runtime:List.flat_map runtime:List.get runtime:List.is_empty runtime:List.join
+// parity: runtime:List.last runtime:List.len runtime:List.map runtime:List.new runtime:List.partition runtime:List.pop
 // parity: runtime:List.push runtime:List.reverse runtime:List.remove_at runtime:List.set
 // parity: runtime:List.skip runtime:List.slice runtime:List.sort runtime:List.take
 // parity: runtime:List.to_json_strings runtime:List.to_json_values
@@ -2267,6 +2269,82 @@ fn main() -> Unit {
     assert_interpreter_matches_backend(
         "parity-list-non-closure.rss",
         "rsscript_parity_list_non_closure",
+        source,
+    );
+}
+
+#[test]
+fn parity_list_closure_intrinsics() {
+    let source = r#"
+features: local
+
+fn is_even(value: Int) -> Bool {
+    let half = value / 2
+    return half * 2 == value
+}
+
+fn main() -> Unit {
+    let numbers: List<Int> = [1, 2, 3, 4, 5]
+    let threshold = 3
+
+    Log.write(message: read String.from_int(value: List.count_where<Int>(list: read numbers, predicate: |item| {
+        return item > threshold
+    })))
+    Log.write(message: read String.from_bool(value: List.any<Int>(list: read numbers, predicate: |item| {
+        return item == 5
+    })))
+    Log.write(message: read String.from_bool(value: List.all<Int>(list: read numbers, predicate: |item| {
+        return item > 0
+    })))
+    Log.write(message: read String.from_bool(value: List.contains<Int>(list: read numbers, predicate: |item| {
+        return item == 3
+    })))
+
+    match List.find<Int>(list: read numbers, predicate: |item| {
+        return item > threshold
+    }) {
+        Some(value) => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        None => {
+            Log.write(message: read "find-none")
+        }
+    }
+
+    let filtered = List.filter<Int>(list: read numbers, predicate: |item| {
+        return is_even(value: item)
+    })
+    Log.write(message: read String.from_int(value: List.len<Int>(list: read filtered)))
+    Log.write(message: read String.from_int(value: filtered[0]))
+    Log.write(message: read String.from_int(value: filtered[1]))
+
+    let mapped = List.map<Int, Int>(list: read numbers, mapper: |item| {
+        return item + threshold
+    })
+    Log.write(message: read String.from_int(value: mapped[0]))
+    Log.write(message: read String.from_int(value: mapped[4]))
+
+    let flattened = List.flat_map<Int, Int>(list: read filtered, mapper: |item| {
+        let values: List<Int> = [item, item + 10]
+        return values
+    })
+    Log.write(message: read String.from_int(value: List.len<Int>(list: read flattened)))
+    Log.write(message: read String.from_int(value: flattened[1]))
+    Log.write(message: read String.from_int(value: flattened[3]))
+
+    let parts = List.partition<Int>(list: read numbers, predicate: |item| {
+        return item > threshold
+    })
+    Log.write(message: read String.from_int(value: List.len<Int>(list: read parts[0])))
+    Log.write(message: read String.from_int(value: parts[0][0]))
+    Log.write(message: read String.from_int(value: List.len<Int>(list: read parts[1])))
+    Log.write(message: read String.from_int(value: parts[1][2]))
+    return Unit
+}
+"#;
+    assert_interpreter_matches_backend(
+        "parity-list-closure.rss",
+        "rsscript_parity_list_closure",
         source,
     );
 }
