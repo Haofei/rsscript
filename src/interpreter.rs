@@ -4137,18 +4137,6 @@ impl<'a> Interpreter<'a> {
                 }
                 Ok(Value::Unit)
             }
-            ("Json", "value") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::Json(value_to_json_literal(value)?))
-            }
-            ("Json", "parse") | ("Json", "json_parse") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(result_value(
-                    serde_json::from_str(&expect_string(value)?)
-                        .map(Value::Json)
-                        .map_err(|error| json_error(error.to_string())),
-                ))
-            }
             ("Json", "parse_file") => {
                 let path = self.eval_named_or_positional_arg(args, "path", 0)?;
                 Ok(json_result(
@@ -4182,108 +4170,8 @@ impl<'a> Interpreter<'a> {
                 Ok(json_result(
                     std::fs::read_to_string(expect_string(path)?)
                         .map_err(|error| error.to_string())
-                        .and_then(|text| yaml_parse_json(&text)),
+                    .and_then(|text| yaml_parse_json(&text)),
                 ))
-            }
-            ("Json", "to_string") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::String(expect_json(value)?.to_string()))
-            }
-            ("Json", "quote_string") => {
-                let value = self.eval_first_arg(args)?;
-                serde_json::to_string(&expect_string(value)?)
-                    .map(Value::String)
-                    .map_err(|error| EvalError::Runtime(error.to_string()))
-            }
-            ("Json", "clone") => self.eval_first_arg(args),
-            ("Json", "string_field") => {
-                let name = self.eval_named_or_positional_arg(args, "name", 0)?;
-                let value = self.eval_named_or_positional_arg(args, "value", 1)?;
-                Ok(Value::String(format!(
-                    "{}:{}",
-                    json_quote_string(&expect_string(name)?)?,
-                    json_quote_string(&expect_string(value)?)?
-                )))
-            }
-            ("Json", "int_field") => {
-                let name = self.eval_named_or_positional_arg(args, "name", 0)?;
-                let value = self.eval_named_or_positional_arg(args, "value", 1)?;
-                Ok(Value::String(format!(
-                    "{}:{}",
-                    json_quote_string(&expect_string(name)?)?,
-                    expect_int(value)?
-                )))
-            }
-            ("Json", "bool_field") => {
-                let name = self.eval_named_or_positional_arg(args, "name", 0)?;
-                let value = self.eval_named_or_positional_arg(args, "value", 1)?;
-                Ok(Value::String(format!(
-                    "{}:{}",
-                    json_quote_string(&expect_string(name)?)?,
-                    expect_bool(value)?
-                )))
-            }
-            ("Json", "raw_field") => {
-                let name = self.eval_named_or_positional_arg(args, "name", 0)?;
-                let value = self.eval_named_or_positional_arg(args, "value", 1)?;
-                Ok(Value::String(format!(
-                    "{}:{}",
-                    json_quote_string(&expect_string(name)?)?,
-                    expect_string(value)?
-                )))
-            }
-            ("Json", "object") => {
-                let fields = self.eval_first_arg(args)?;
-                Ok(Value::String(format!(
-                    "{{{}}}",
-                    expect_string_list(fields)?.join(",")
-                )))
-            }
-            ("Json", "array") => {
-                let items = self.eval_first_arg(args)?;
-                Ok(Value::String(format!(
-                    "[{}]",
-                    expect_string_list(items)?.join(",")
-                )))
-            }
-            ("Json", "string_array") => {
-                let items = self.eval_first_arg(args)?;
-                let quoted = expect_string_list(items)?
-                    .into_iter()
-                    .map(|item| json_quote_string(&item))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(Value::String(format!("[{}]", quoted.join(","))))
-            }
-            ("Json", "strings") => {
-                let items = self.eval_first_arg(args)?;
-                Ok(Value::Json(serde_json::Value::Array(
-                    expect_string_list(items)?
-                        .into_iter()
-                        .map(serde_json::Value::String)
-                        .collect(),
-                )))
-            }
-            ("Json", "values") => {
-                let items = self.eval_first_arg(args)?;
-                Ok(Value::Json(serde_json::Value::Array(expect_json_list(
-                    items,
-                )?)))
-            }
-            ("Json", "is_null") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::Bool(expect_json(value)?.is_null()))
-            }
-            ("Json", "is_array") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::Bool(expect_json(value)?.is_array()))
-            }
-            ("Json", "is_object") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::Bool(expect_json(value)?.is_object()))
-            }
-            ("Json", "kind") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::String(json_kind(&expect_json(value)?).to_string()))
             }
             ("Json", "value_at") | ("Json", "at") => {
                 let value = self.eval_named_or_positional_arg(args, "value", 0)?;
@@ -4703,10 +4591,6 @@ impl<'a> Interpreter<'a> {
             ("Json", "as_bool") => {
                 let value = self.eval_first_arg(args)?;
                 Ok(result_value(json_as_bool_value(expect_json(value)?)))
-            }
-            ("JsonError", "message") => {
-                let value = self.eval_first_arg(args)?;
-                read_field(&value, "message")
             }
             _ => Err(EvalError::Runtime(format!(
                 "interpreter P0 does not support runtime intrinsic `{namespace}.{name}`."

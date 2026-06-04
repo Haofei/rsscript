@@ -238,6 +238,25 @@ enum InterpreterEvalKind {
     ImageCacheLen,
     ImageCacheNew,
     ImageCacheStore,
+    JsonArray,
+    JsonBoolField,
+    JsonClone,
+    JsonIsArray,
+    JsonIsNull,
+    JsonIsObject,
+    JsonIntField,
+    JsonKind,
+    JsonObject,
+    JsonParse,
+    JsonQuoteString,
+    JsonRawField,
+    JsonStringArray,
+    JsonStringField,
+    JsonStrings,
+    JsonToString,
+    JsonValue,
+    JsonValues,
+    JsonErrorMessage,
     OptionIsNone,
     OptionIsSome,
     OptionOkOr,
@@ -1135,6 +1154,126 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "store",
         variant: "ImageCacheStore",
         eval_kind: InterpreterEvalKind::ImageCacheStore,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "array",
+        variant: "JsonArray",
+        eval_kind: InterpreterEvalKind::JsonArray,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "bool_field",
+        variant: "JsonBoolField",
+        eval_kind: InterpreterEvalKind::JsonBoolField,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "clone",
+        variant: "JsonClone",
+        eval_kind: InterpreterEvalKind::JsonClone,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "int_field",
+        variant: "JsonIntField",
+        eval_kind: InterpreterEvalKind::JsonIntField,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "is_array",
+        variant: "JsonIsArray",
+        eval_kind: InterpreterEvalKind::JsonIsArray,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "is_null",
+        variant: "JsonIsNull",
+        eval_kind: InterpreterEvalKind::JsonIsNull,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "is_object",
+        variant: "JsonIsObject",
+        eval_kind: InterpreterEvalKind::JsonIsObject,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "json_parse",
+        variant: "JsonJsonParse",
+        eval_kind: InterpreterEvalKind::JsonParse,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "kind",
+        variant: "JsonKind",
+        eval_kind: InterpreterEvalKind::JsonKind,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "object",
+        variant: "JsonObject",
+        eval_kind: InterpreterEvalKind::JsonObject,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "parse",
+        variant: "JsonParse",
+        eval_kind: InterpreterEvalKind::JsonParse,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "quote_string",
+        variant: "JsonQuoteString",
+        eval_kind: InterpreterEvalKind::JsonQuoteString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "raw_field",
+        variant: "JsonRawField",
+        eval_kind: InterpreterEvalKind::JsonRawField,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "string_array",
+        variant: "JsonStringArray",
+        eval_kind: InterpreterEvalKind::JsonStringArray,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "string_field",
+        variant: "JsonStringField",
+        eval_kind: InterpreterEvalKind::JsonStringField,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "strings",
+        variant: "JsonStrings",
+        eval_kind: InterpreterEvalKind::JsonStrings,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "to_string",
+        variant: "JsonToString",
+        eval_kind: InterpreterEvalKind::JsonToString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "value",
+        variant: "JsonValue",
+        eval_kind: InterpreterEvalKind::JsonValue,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "values",
+        variant: "JsonValues",
+        eval_kind: InterpreterEvalKind::JsonValues,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "JsonError",
+        name: "message",
+        variant: "JsonErrorMessage",
+        eval_kind: InterpreterEvalKind::JsonErrorMessage,
     },
     InterpreterIntrinsicSpec {
         namespace: "Option",
@@ -2367,6 +2506,63 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::ImageCacheStore => {
             "{\n            let cache_name = interpreter.mut_arg_local_name(args, \"cache\", 0)?;\n            let image = interpreter.eval_named_or_positional_arg(args, \"image\", 1)?;\n            let _ = expect_image(image)?;\n            let (capacity, len) = expect_image_cache_state(interpreter.lookup(cache_name)?)?;\n            let len = if capacity == 0 {\n                0\n            } else {\n                (len + 1).min(capacity)\n            };\n            interpreter.assign(cache_name, image_cache_value(capacity, len))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::JsonArray => {
+            "{\n            let items = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(format!(\n                \"[{}]\",\n                expect_string_list(items)?.join(\",\")\n            )))\n        }"
+        }
+        InterpreterEvalKind::JsonBoolField => {
+            "{\n            let name = interpreter.eval_named_or_positional_arg(args, \"name\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            Ok(Value::String(format!(\n                \"{}:{}\",\n                json_quote_string(&expect_string(name)?)?,\n                expect_bool(value)?\n            )))\n        }"
+        }
+        InterpreterEvalKind::JsonClone => {
+            "{\n            interpreter.eval_first_arg(args)\n        }"
+        }
+        InterpreterEvalKind::JsonIntField => {
+            "{\n            let name = interpreter.eval_named_or_positional_arg(args, \"name\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            Ok(Value::String(format!(\n                \"{}:{}\",\n                json_quote_string(&expect_string(name)?)?,\n                expect_int(value)?\n            )))\n        }"
+        }
+        InterpreterEvalKind::JsonIsArray => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(expect_json(value)?.is_array()))\n        }"
+        }
+        InterpreterEvalKind::JsonIsNull => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(expect_json(value)?.is_null()))\n        }"
+        }
+        InterpreterEvalKind::JsonIsObject => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(expect_json(value)?.is_object()))\n        }"
+        }
+        InterpreterEvalKind::JsonKind => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(json_kind(&expect_json(value)?).to_string()))\n        }"
+        }
+        InterpreterEvalKind::JsonObject => {
+            "{\n            let fields = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(format!(\n                \"{{{}}}\",\n                expect_string_list(fields)?.join(\",\")\n            )))\n        }"
+        }
+        InterpreterEvalKind::JsonParse => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(result_value(\n                serde_json::from_str(&expect_string(value)?)\n                    .map(Value::Json)\n                    .map_err(|error| json_error(error.to_string())),\n            ))\n        }"
+        }
+        InterpreterEvalKind::JsonQuoteString => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            serde_json::to_string(&expect_string(value)?)\n                .map(Value::String)\n                .map_err(|error| EvalError::Runtime(error.to_string()))\n        }"
+        }
+        InterpreterEvalKind::JsonRawField => {
+            "{\n            let name = interpreter.eval_named_or_positional_arg(args, \"name\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            Ok(Value::String(format!(\n                \"{}:{}\",\n                json_quote_string(&expect_string(name)?)?,\n                expect_string(value)?\n            )))\n        }"
+        }
+        InterpreterEvalKind::JsonStringArray => {
+            "{\n            let items = interpreter.eval_first_arg(args)?;\n            let quoted = expect_string_list(items)?\n                .into_iter()\n                .map(|item| json_quote_string(&item))\n                .collect::<Result<Vec<_>, _>>()?;\n            Ok(Value::String(format!(\"[{}]\", quoted.join(\",\"))))\n        }"
+        }
+        InterpreterEvalKind::JsonStringField => {
+            "{\n            let name = interpreter.eval_named_or_positional_arg(args, \"name\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            Ok(Value::String(format!(\n                \"{}:{}\",\n                json_quote_string(&expect_string(name)?)?,\n                json_quote_string(&expect_string(value)?)?\n            )))\n        }"
+        }
+        InterpreterEvalKind::JsonStrings => {
+            "{\n            let items = interpreter.eval_first_arg(args)?;\n            Ok(Value::Json(serde_json::Value::Array(\n                expect_string_list(items)?\n                    .into_iter()\n                    .map(serde_json::Value::String)\n                    .collect(),\n            )))\n        }"
+        }
+        InterpreterEvalKind::JsonToString => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(expect_json(value)?.to_string()))\n        }"
+        }
+        InterpreterEvalKind::JsonValue => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Json(value_to_json_literal(value)?))\n        }"
+        }
+        InterpreterEvalKind::JsonValues => {
+            "{\n            let items = interpreter.eval_first_arg(args)?;\n            Ok(Value::Json(serde_json::Value::Array(expect_json_list(\n                items,\n            )?)))\n        }"
+        }
+        InterpreterEvalKind::JsonErrorMessage => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            read_field(&value, \"message\")\n        }"
         }
         InterpreterEvalKind::OptionIsNone => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(matches!(\n                value,\n                Value::Variant { name, .. } if name == \"None\"\n            )))\n        }"
