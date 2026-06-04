@@ -190,6 +190,11 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Duration", "as_seconds"),
     ("Duration", "ms"),
     ("Duration", "seconds"),
+    ("Environment", "bind_function"),
+    ("Environment", "child"),
+    ("Environment", "has_function"),
+    ("Environment", "has_parent"),
+    ("Environment", "root"),
     ("Env", "get"),
     ("Env", "get_or_default"),
     ("Env", "current_dir"),
@@ -218,6 +223,8 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("File", "write_string"),
     ("File", "write_string_to_path"),
     ("FileError", "message"),
+    ("FunctionObject", "has_closure"),
+    ("FunctionObject", "new"),
     ("Diff", "unified"),
     ("Bytes", "concat"),
     ("Bytes", "consume"),
@@ -559,6 +566,11 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Duration.as_seconds",
     "runtime:Duration.ms",
     "runtime:Duration.seconds",
+    "runtime:Environment.bind_function",
+    "runtime:Environment.child",
+    "runtime:Environment.has_function",
+    "runtime:Environment.has_parent",
+    "runtime:Environment.root",
     "runtime:Env.current_dir",
     "runtime:Env.get",
     "runtime:Env.get_or_default",
@@ -587,6 +599,8 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:File.write_string",
     "runtime:File.write_string_to_path",
     "runtime:FileError.message",
+    "runtime:FunctionObject.has_closure",
+    "runtime:FunctionObject.new",
     "runtime:Diff.unified",
     "runtime:Bytes.concat",
     "runtime:Bytes.consume",
@@ -1881,6 +1895,39 @@ impl<'a> Interpreter<'a> {
                 let left = self.eval_named_or_positional_arg(args, "left", 0)?;
                 let right = self.eval_named_or_positional_arg(args, "right", 1)?;
                 Ok(Value::Int(expect_int(left)? + expect_int(right)?))
+            }
+            ("Environment", "root") => Ok(environment_value(false, false)),
+            ("Environment", "child") => {
+                let parent = self.eval_named_or_positional_arg(args, "parent", 0)?;
+                let _ = expect_environment_state(parent)?;
+                Ok(environment_value(true, false))
+            }
+            ("Environment", "bind_function") => {
+                let env_name = self.mut_arg_local_name(args, "env", 0)?;
+                let function = self.eval_named_or_positional_arg(args, "function", 1)?;
+                let _ = expect_function_has_closure(function)?;
+                let (has_parent, _) = expect_environment_state(self.lookup(env_name)?)?;
+                self.assign(env_name, environment_value(has_parent, true))?;
+                Ok(Value::Unit)
+            }
+            ("Environment", "has_parent") => {
+                let env = self.eval_named_or_positional_arg(args, "env", 0)?;
+                let (has_parent, _) = expect_environment_state(env)?;
+                Ok(Value::Bool(has_parent))
+            }
+            ("Environment", "has_function") => {
+                let env = self.eval_named_or_positional_arg(args, "env", 0)?;
+                let (_, has_function) = expect_environment_state(env)?;
+                Ok(Value::Bool(has_function))
+            }
+            ("FunctionObject", "new") => {
+                let closure = self.eval_named_or_positional_arg(args, "closure", 0)?;
+                let _ = expect_environment_state(closure)?;
+                Ok(function_object_value(true))
+            }
+            ("FunctionObject", "has_closure") => {
+                let function = self.eval_named_or_positional_arg(args, "function", 0)?;
+                Ok(Value::Bool(expect_function_has_closure(function)?))
             }
             ("Config", "load") => {
                 let path = self.eval_named_or_positional_arg(args, "path", 0)?;
@@ -4772,6 +4819,56 @@ fn expect_deadline_unix_ms(value: Value) -> Result<i64, EvalError> {
             .and_then(expect_int),
         other => Err(EvalError::Runtime(format!(
             "expected Deadline, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn environment_value(has_parent: bool, has_function: bool) -> Value {
+    Value::Struct {
+        name: "Environment".to_string(),
+        fields: BTreeMap::from([
+            ("has_parent".to_string(), Value::Bool(has_parent)),
+            ("has_function".to_string(), Value::Bool(has_function)),
+        ]),
+    }
+}
+
+fn expect_environment_state(value: Value) -> Result<(bool, bool), EvalError> {
+    match value {
+        Value::Struct { name, mut fields } if name == "Environment" => {
+            let has_parent = fields.remove("has_parent").ok_or_else(|| {
+                EvalError::Runtime("Environment value is missing has_parent.".to_string())
+            })?;
+            let has_function = fields.remove("has_function").ok_or_else(|| {
+                EvalError::Runtime("Environment value is missing has_function.".to_string())
+            })?;
+            Ok((expect_bool(has_parent)?, expect_bool(has_function)?))
+        }
+        other => Err(EvalError::Runtime(format!(
+            "expected Environment, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn function_object_value(has_closure: bool) -> Value {
+    Value::Struct {
+        name: "FunctionObject".to_string(),
+        fields: BTreeMap::from([("has_closure".to_string(), Value::Bool(has_closure))]),
+    }
+}
+
+fn expect_function_has_closure(value: Value) -> Result<bool, EvalError> {
+    match value {
+        Value::Struct { name, mut fields } if name == "FunctionObject" => fields
+            .remove("has_closure")
+            .ok_or_else(|| {
+                EvalError::Runtime("FunctionObject value is missing has_closure.".to_string())
+            })
+            .and_then(expect_bool),
+        other => Err(EvalError::Runtime(format!(
+            "expected FunctionObject, got `{}`.",
             other.display()
         ))),
     }

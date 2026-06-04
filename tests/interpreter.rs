@@ -246,6 +246,8 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Directory.remove_dir_all runtime:Directory.read_string runtime:Directory.write_string
 // parity: runtime:Duration.add runtime:Duration.as_ms runtime:Duration.as_seconds
 // parity: runtime:Duration.ms runtime:Duration.seconds
+// parity: runtime:Environment.bind_function runtime:Environment.child
+// parity: runtime:Environment.has_function runtime:Environment.has_parent runtime:Environment.root
 // parity: runtime:Diff.unified runtime:Patch.apply_text
 // parity: runtime:Bytes.concat runtime:Bytes.consume runtime:Bytes.from_string runtime:Bytes.is_empty
 // parity: runtime:Bytes.from_buffer runtime:Bytes.len runtime:Bytes.slice runtime:Bytes.view
@@ -310,6 +312,7 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:File.write_bytes_view runtime:File.write_buffer runtime:File.write_buffer_view
 // parity: runtime:File.write_string runtime:File.write_string_to_path
 // parity: runtime:FileError.message
+// parity: runtime:FunctionObject.has_closure runtime:FunctionObject.new
 // parity: runtime:PersistentMap.clear runtime:PersistentMap.contains_key runtime:PersistentMap.get
 // parity: runtime:PersistentMap.insert runtime:PersistentMap.is_empty runtime:PersistentMap.len
 // parity: runtime:PersistentMap.new runtime:PersistentMap.remove
@@ -780,6 +783,49 @@ fn main() -> Unit {
 }
 "#;
     assert_interpreter_matches_backend("parity-logging.rss", "rsscript_parity_logging", source);
+}
+
+#[test]
+fn parity_environment_function_object_intrinsics() {
+    let source = r#"
+features: local
+
+fn main() -> Unit {
+    local root_value = Environment.root()
+    let root = manage root_value
+    if !Environment.has_parent(env: read root) {
+        Log.write(message: read "root-no-parent")
+    }
+    if !Environment.has_function(env: read root) {
+        Log.write(message: read "root-no-function")
+    }
+
+    local child_value = Environment.child(parent: read root)
+    let child = manage child_value
+    if Environment.has_parent(env: read child) {
+        Log.write(message: read "child-parent")
+    }
+    if !Environment.has_function(env: read child) {
+        Log.write(message: read "child-no-function")
+    }
+
+    local function_value = FunctionObject.new(closure: read child)
+    let function = manage function_value
+    if FunctionObject.has_closure(function: read function) {
+        Log.write(message: read "function-closure")
+    }
+    Environment.bind_function(env: mut child, function: read function)
+    if Environment.has_function(env: read child) {
+        Log.write(message: read "child-function")
+    }
+    return Unit
+}
+"#;
+    assert_interpreter_matches_backend(
+        "parity-environment-function.rss",
+        "rsscript_parity_environment_function",
+        source,
+    );
 }
 
 #[test]
