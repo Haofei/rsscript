@@ -444,6 +444,7 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Receiver", "into_stream"),
     ("Receiver", "recv"),
     ("Receiver", "recv_cancellable"),
+    ("ResourcePool", "discard"),
     ("ResourcePool", "stats"),
     ("Request", "new"),
     ("Request", "path"),
@@ -513,6 +514,7 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("PoolStats", "capacity"),
     ("PoolStats", "created"),
     ("PoolStats", "in_use"),
+    ("PoolError", "message"),
     ("Set", "clear"),
     ("Set", "contains"),
     ("Set", "difference"),
@@ -937,6 +939,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Receiver.into_stream",
     "runtime:Receiver.recv",
     "runtime:Receiver.recv_cancellable",
+    "runtime:ResourcePool.discard",
     "runtime:ResourcePool.stats",
     "runtime:Request.new",
     "runtime:Request.path",
@@ -1011,6 +1014,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:PoolStats.capacity",
     "runtime:PoolStats.created",
     "runtime:PoolStats.in_use",
+    "runtime:PoolError.message",
     "runtime:Set.clear",
     "runtime:Set.contains",
     "runtime:Set.difference",
@@ -1600,13 +1604,20 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn eval_resource_pool_new(&mut self, args: &[HirCallArg]) -> Result<Value, EvalError> {
+    fn eval_resource_pool_new(
+        &mut self,
+        args: &[HirCallArg],
+        lazy: bool,
+    ) -> Result<Value, EvalError> {
         let create = self.eval_named_or_positional_arg(args, "create", 0)?;
         let max_size = self.eval_named_or_positional_arg(args, "max_size", 1)?;
         let capacity = expect_int(max_size)?.max(0);
-        let mut idle = Vec::with_capacity(capacity as usize);
-        for _ in 0..capacity {
-            idle.push(self.call_closure(create.clone(), Vec::new())?);
+        let mut idle = Vec::new();
+        if !lazy {
+            idle.reserve(capacity as usize);
+            for _ in 0..capacity {
+                idle.push(self.call_closure(create.clone(), Vec::new())?);
+            }
         }
         let id = self.next_pool_id;
         self.next_pool_id = self.next_pool_id.saturating_add(1);
@@ -1617,9 +1628,86 @@ impl<'a> Interpreter<'a> {
                 created: idle.len() as i64,
                 idle,
                 in_use: 0,
+                factory: lazy.then_some(create),
             },
         );
         Ok(resource_pool_value(id))
+    }
+
+    fn eval_resource_pool_borrow(
+        &mut self,
+        args: &[HirCallArg],
+        fallible: bool,
+    ) -> Result<Value, EvalError> {
+        let pool_name = self.mut_arg_local_name(args, "pool", 0)?;
+        let pool = expect_resource_pool(self.lookup(pool_name)?)?;
+        let borrowed = self.resource_pool_borrow_value(pool.id);
+        if fallible {
+            return Ok(result_value(borrowed));
+        }
+        borrowed.map_err(|error| {
+            EvalError::Runtime(format!(
+                "ResourcePool.borrow failed: {}",
+                pool_error_message(&error).unwrap_or_else(|| error.display())
+            ))
+        })
+    }
+
+    fn resource_pool_borrow_value(&mut self, pool_id: i64) -> Result<Value, Value> {
+        let idle = self
+            .pools
+            .get_mut(&pool_id)
+            .ok_or_else(|| pool_error(format!("unknown ResourcePool id `{pool_id}`")))?
+            .idle
+            .pop();
+        let value = if let Some(value) = idle {
+            value
+        } else {
+            let factory = {
+                let state = self
+                    .pools
+                    .get(&pool_id)
+                    .ok_or_else(|| pool_error(format!("unknown ResourcePool id `{pool_id}`")))?;
+                if state.created >= state.capacity {
+                    return Err(pool_error("resource pool exhausted"));
+                }
+                let Some(factory) = state.factory.clone() else {
+                    return Err(pool_error("resource pool exhausted"));
+                };
+                factory
+            };
+            let value = self
+                .call_closure(factory, Vec::new())
+                .map_err(|error| pool_error(format!("resource pool factory failed: {error:?}")))?;
+            let state = self
+                .pools
+                .get_mut(&pool_id)
+                .ok_or_else(|| pool_error(format!("unknown ResourcePool id `{pool_id}`")))?;
+            state.created = state.created.saturating_add(1);
+            value
+        };
+        let state = self
+            .pools
+            .get_mut(&pool_id)
+            .ok_or_else(|| pool_error(format!("unknown ResourcePool id `{pool_id}`")))?;
+        state.in_use = state.in_use.saturating_add(1);
+        mark_pool_lease(value, pool_id).map_err(pool_error)
+    }
+
+    fn finish_resource_pool_lease(&mut self, value: Value) -> Result<(), EvalError> {
+        let Some(lease) = split_pool_lease(value)? else {
+            return Ok(());
+        };
+        let state = self.pools.get_mut(&lease.pool_id).ok_or_else(|| {
+            EvalError::Runtime(format!("unknown ResourcePool id `{}`.", lease.pool_id))
+        })?;
+        state.in_use = state.in_use.saturating_sub(1);
+        if lease.discarded {
+            state.created = state.created.saturating_sub(1);
+        } else {
+            state.idle.push(lease.value);
+        }
+        Ok(())
     }
 
     fn eval_block(&mut self, block: &HirBlock) -> Result<Control, EvalError> {
@@ -1700,6 +1788,8 @@ impl<'a> Interpreter<'a> {
                 self.scopes
                     .push(HashMap::from([(binding.clone(), resource)]));
                 let control = self.eval_block(body)?;
+                let leased = self.lookup(binding)?;
+                self.finish_resource_pool_lease(leased)?;
                 self.scopes.pop();
                 Ok(control)
             }
@@ -1895,7 +1985,16 @@ impl<'a> Interpreter<'a> {
                 let namespace = strip_generic_args(namespace);
                 let name = strip_generic_args(name);
                 if namespace == "ResourcePool" && name == "new" {
-                    return self.eval_resource_pool_new(args);
+                    return self.eval_resource_pool_new(args, false);
+                }
+                if namespace == "ResourcePool" && name == "lazy" {
+                    return self.eval_resource_pool_new(args, true);
+                }
+                if namespace == "ResourcePool" && name == "borrow" {
+                    return self.eval_resource_pool_borrow(args, false);
+                }
+                if namespace == "ResourcePool" && name == "try_borrow" {
+                    return self.eval_resource_pool_borrow(args, true);
                 }
                 if let Some(intrinsic) = runtime_abi::lookup_runtime_intrinsic(namespace, name) {
                     return self.eval_runtime_intrinsic(
@@ -2743,12 +2842,22 @@ impl<'a> Interpreter<'a> {
                     state.in_use,
                 ))
             }
+            ("ResourcePool", "discard") => {
+                let lease_name = self.mut_arg_local_name(args, "lease", 0)?;
+                let lease = self.lookup(lease_name)?;
+                self.assign(lease_name, mark_pool_lease_discarded(lease)?)?;
+                Ok(Value::Unit)
+            }
             ("PoolStats", "capacity")
             | ("PoolStats", "created")
             | ("PoolStats", "available")
             | ("PoolStats", "in_use") => {
                 let stats = self.eval_named_or_positional_arg(args, "stats", 0)?;
                 read_field(&stats, name)
+            }
+            ("PoolError", "message") => {
+                let error = self.eval_named_or_positional_arg(args, "error", 0)?;
+                read_field(&error, "message")
             }
             ("Cache", "insert") => {
                 let cache_name = self.mut_arg_local_name(args, "cache", 0)?;
@@ -6822,11 +6931,21 @@ struct InterpreterResourcePool {
     created: i64,
     idle: Vec<Value>,
     in_use: i64,
+    factory: Option<Value>,
 }
 
 struct ResourcePoolState {
     id: i64,
 }
+
+struct ResourcePoolLeaseState {
+    pool_id: i64,
+    discarded: bool,
+    value: Value,
+}
+
+const POOL_LEASE_ID_FIELD: &str = "__rsscript_interpreter_pool_id";
+const POOL_LEASE_DISCARDED_FIELD: &str = "__rsscript_interpreter_pool_discarded";
 
 fn channel_value(id: i64, capacity: i64, receiver_taken: bool) -> Value {
     Value::Struct {
@@ -6875,6 +6994,71 @@ fn pool_stats_value(capacity: i64, created: i64, available: i64, in_use: i64) ->
             ("created".to_string(), Value::Int(created)),
             ("in_use".to_string(), Value::Int(in_use)),
         ]),
+    }
+}
+
+fn pool_error(message: impl Into<String>) -> Value {
+    Value::Struct {
+        name: "PoolError".to_string(),
+        fields: BTreeMap::from([("message".to_string(), Value::String(message.into()))]),
+    }
+}
+
+fn pool_error_message(value: &Value) -> Option<String> {
+    match value {
+        Value::Struct { name, fields } if name == "PoolError" => {
+            fields.get("message").and_then(|value| match value {
+                Value::String(message) => Some(message.clone()),
+                _ => None,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn mark_pool_lease(mut value: Value, pool_id: i64) -> Result<Value, String> {
+    match &mut value {
+        Value::Struct { fields, .. } => {
+            fields.insert(POOL_LEASE_ID_FIELD.to_string(), Value::Int(pool_id));
+            fields.insert(POOL_LEASE_DISCARDED_FIELD.to_string(), Value::Bool(false));
+            Ok(value)
+        }
+        other => Err(format!(
+            "ResourcePool can only lease resource structs in the interpreter, got `{}`",
+            other.display()
+        )),
+    }
+}
+
+fn mark_pool_lease_discarded(mut value: Value) -> Result<Value, EvalError> {
+    match &mut value {
+        Value::Struct { fields, .. } if fields.contains_key(POOL_LEASE_ID_FIELD) => {
+            fields.insert(POOL_LEASE_DISCARDED_FIELD.to_string(), Value::Bool(true));
+            Ok(value)
+        }
+        other => Err(EvalError::Runtime(format!(
+            "ResourcePool.discard expected an active pool lease, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn split_pool_lease(value: Value) -> Result<Option<ResourcePoolLeaseState>, EvalError> {
+    match value {
+        Value::Struct { name, mut fields } => {
+            let Some(pool_id) = fields.remove(POOL_LEASE_ID_FIELD) else {
+                return Ok(None);
+            };
+            let discarded = fields
+                .remove(POOL_LEASE_DISCARDED_FIELD)
+                .unwrap_or(Value::Bool(false));
+            Ok(Some(ResourcePoolLeaseState {
+                pool_id: expect_int(pool_id)?,
+                discarded: expect_bool(discarded)?,
+                value: Value::Struct { name, fields },
+            }))
+        }
+        _ => Ok(None),
     }
 }
 

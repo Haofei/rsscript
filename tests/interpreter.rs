@@ -485,11 +485,12 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Ord.compare
 // parity: runtime:Request.new runtime:Request.path
 // parity: runtime:Response.body runtime:Response.ok runtime:Response.status
-// parity: runtime:ResourcePool.stats
+// parity: runtime:ResourcePool.discard runtime:ResourcePool.stats
 // parity: runtime:Result.err runtime:Result.err_message runtime:Result.is_err
 // parity: runtime:Result.is_ok runtime:Result.ok runtime:Result.unwrap_or runtime:Result.unwrap_or_else
 // parity: runtime:Row.field_string runtime:RowBuffer.new
 // parity: runtime:RuleLoader.load_rules
+// parity: runtime:PoolError.message
 // parity: runtime:PoolStats.available runtime:PoolStats.capacity
 // parity: runtime:PoolStats.created runtime:PoolStats.in_use
 // parity: runtime:Set.clear runtime:Set.contains runtime:Set.difference runtime:Set.for_each
@@ -1140,9 +1141,24 @@ resource Session {
     value: Int
 }
 
+fn borrow_empty() -> Result<Unit, PoolError> {
+    local empty = ResourcePool<Session>.lazy(
+        create: || {
+            return Session(value: 0)
+        },
+        max_size: 0,
+    )
+    with ResourcePool.try_borrow(pool: mut empty)? as session {
+        Log.write(message: read String.from_int(value: session.value))
+    }
+    return Ok(Unit)
+}
+
 fn main() -> Unit {
     local pool = ResourcePool<Session>.new(
-        create: || Session(value: 7),
+        create: || {
+            return Session(value: 7)
+        },
         max_size: 2,
     )
     let snapshot = ResourcePool.stats(pool: mut pool)
@@ -1150,13 +1166,35 @@ fn main() -> Unit {
     Log.write(message: read String.from_int(value: PoolStats.created(stats: read snapshot)))
     Log.write(message: read String.from_int(value: PoolStats.available(stats: read snapshot)))
     Log.write(message: read String.from_int(value: PoolStats.in_use(stats: read snapshot)))
+
+    with ResourcePool.borrow(pool: mut pool) as session {
+        Log.write(message: read String.from_int(value: session.value))
+        ResourcePool.discard(lease: mut session)
+    }
+    let discarded = ResourcePool.stats(pool: mut pool)
+    Log.write(message: read String.from_int(value: PoolStats.created(stats: read discarded)))
+    Log.write(message: read String.from_int(value: PoolStats.available(stats: read discarded)))
+
+    match borrow_empty() {
+        Ok(_) => {
+            Log.write(message: read "unexpected-borrow")
+        }
+        Err(error) => {
+            let message = PoolError.message(error: read error)
+            if String.contains(value: read message, needle: read "") {
+                Log.write(message: read "pool-error")
+            }
+        }
+    }
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend(
+    assert_interpreter_matches_backend_with_distinct_args_allowing_unused_mut_warning(
         "parity-resource-pool-stats.rss",
         "rsscript_parity_resource_pool_stats",
         source,
+        &[],
+        &[],
     );
 }
 
