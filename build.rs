@@ -243,6 +243,8 @@ enum InterpreterEvalKind {
     JsonArrayContainsPrefix,
     JsonArrayContainsString,
     JsonArrayContainsSubstring,
+    JsonArrayCountWhere,
+    JsonArrayFold,
     JsonArrayGet,
     JsonArrayInts,
     JsonArrayLen,
@@ -1231,6 +1233,18 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "array_contains_substring",
         variant: "JsonArrayContainsSubstring",
         eval_kind: InterpreterEvalKind::JsonArrayContainsSubstring,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "array_count_where",
+        variant: "JsonArrayCountWhere",
+        eval_kind: InterpreterEvalKind::JsonArrayCountWhere,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Json",
+        name: "array_fold",
+        variant: "JsonArrayFold",
+        eval_kind: InterpreterEvalKind::JsonArrayFold,
     },
     InterpreterIntrinsicSpec {
         namespace: "Json",
@@ -2874,6 +2888,12 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::JsonArrayContainsSubstring => {
             "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let text = interpreter.eval_named_or_positional_arg(args, \"text\", 1)?;\n            Ok(result_value(json_array_contains_string(\n                expect_json(value)?,\n                &expect_string(text)?,\n                JsonArrayStringMatch::Substring,\n            )))\n        }"
+        }
+        InterpreterEvalKind::JsonArrayCountWhere => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let predicate = interpreter.eval_named_or_positional_arg(args, \"predicate\", 1)?;\n            let json = expect_json(value)?;\n            let items = match json_array(&json) {\n                Ok(items) => items,\n                Err(error) => return Ok(value_err(error)),\n            };\n            let mut count = 0_i64;\n            for item in items {\n                match result_payload(\n                    interpreter.call_closure(predicate.clone(), vec![Value::Json(item.clone())])?,\n                )? {\n                    Ok(value) => {\n                        if expect_bool(value)? {\n                            count += 1;\n                        }\n                    }\n                    Err(error) => return Ok(value_err(error)),\n                }\n            }\n            Ok(value_ok(Value::Int(count)))\n        }"
+        }
+        InterpreterEvalKind::JsonArrayFold => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let mut state = interpreter.eval_named_or_positional_arg(args, \"initial\", 1)?;\n            let folder = interpreter.eval_named_or_positional_arg(args, \"folder\", 2)?;\n            let json = expect_json(value)?;\n            let items = match json_array(&json) {\n                Ok(items) => items,\n                Err(error) => return Ok(value_err(error)),\n            };\n            for item in items {\n                match result_payload(\n                    interpreter.call_closure(folder.clone(), vec![state, Value::Json(item.clone())])?,\n                )? {\n                    Ok(next) => state = next,\n                    Err(error) => return Ok(value_err(error)),\n                }\n            }\n            Ok(value_ok(state))\n        }"
         }
         InterpreterEvalKind::JsonArrayGet => {
             "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let index = interpreter.eval_named_or_positional_arg(args, \"index\", 1)?;\n            Ok(result_value(json_array_get_result(\n                expect_json(value)?,\n                expect_int(index)?,\n            )))\n        }"

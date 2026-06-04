@@ -4137,48 +4137,6 @@ impl<'a> Interpreter<'a> {
                 }
                 Ok(Value::Unit)
             }
-            ("Json", "array_count_where") => {
-                let value = self.eval_named_or_positional_arg(args, "value", 0)?;
-                let predicate = self.eval_named_or_positional_arg(args, "predicate", 1)?;
-                let json = expect_json(value)?;
-                let items = match json_array(&json) {
-                    Ok(items) => items,
-                    Err(error) => return Ok(value_err(error)),
-                };
-                let mut count = 0_i64;
-                for item in items {
-                    match result_payload(
-                        self.call_closure(predicate.clone(), vec![Value::Json(item.clone())])?,
-                    )? {
-                        Ok(value) => {
-                            if expect_bool(value)? {
-                                count += 1;
-                            }
-                        }
-                        Err(error) => return Ok(value_err(error)),
-                    }
-                }
-                Ok(value_ok(Value::Int(count)))
-            }
-            ("Json", "array_fold") => {
-                let value = self.eval_named_or_positional_arg(args, "value", 0)?;
-                let mut state = self.eval_named_or_positional_arg(args, "initial", 1)?;
-                let folder = self.eval_named_or_positional_arg(args, "folder", 2)?;
-                let json = expect_json(value)?;
-                let items = match json_array(&json) {
-                    Ok(items) => items,
-                    Err(error) => return Ok(value_err(error)),
-                };
-                for item in items {
-                    match result_payload(
-                        self.call_closure(folder.clone(), vec![state, Value::Json(item.clone())])?,
-                    )? {
-                        Ok(next) => state = next,
-                        Err(error) => return Ok(value_err(error)),
-                    }
-                }
-                Ok(value_ok(state))
-            }
             _ => Err(EvalError::Runtime(format!(
                 "interpreter P0 does not support runtime intrinsic `{namespace}.{name}`."
             ))),
