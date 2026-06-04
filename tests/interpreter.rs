@@ -259,6 +259,7 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Config.load runtime:Config.name runtime:Config.new runtime:Config.rule_count
 // parity: runtime:ConfigStore.name runtime:ConfigStore.new runtime:ConfigStore.replace
 // parity: runtime:Counter.add runtime:Counter.new runtime:Counter.value
+// parity: runtime:Csv.open_read runtime:Csv.parse_row runtime:Csv.read_into
 // parity: runtime:Deadline.after runtime:Deadline.after_ms
 // parity: runtime:Deadline.is_expired runtime:Deadline.remaining_ms
 // parity: runtime:Json.array runtime:Json.array_bools runtime:Json.array_contains_prefix
@@ -333,6 +334,7 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Response.body runtime:Response.ok runtime:Response.status
 // parity: runtime:Result.err runtime:Result.err_message runtime:Result.is_err
 // parity: runtime:Result.is_ok runtime:Result.ok runtime:Result.unwrap_or
+// parity: runtime:Row.field_string runtime:RowBuffer.new
 // parity: runtime:RuleLoader.load_rules
 // parity: runtime:Set.clear runtime:Set.contains runtime:Set.difference runtime:Set.insert
 // parity: runtime:Set.intersection runtime:Set.is_empty runtime:Set.is_subset runtime:Set.len
@@ -1681,6 +1683,54 @@ fn main() -> Result<Unit, FileError> {
         &[interpreter_root_arg.as_str()],
         &[backend_root_arg.as_str()],
     );
+    let _ = fs::remove_dir_all(&interpreter_root);
+    let _ = fs::remove_dir_all(&backend_root);
+}
+
+#[test]
+fn parity_csv_intrinsics() {
+    let interpreter_root = common::unique_temp_dir("rsscript-parity-csv-interpreter");
+    let backend_root = common::unique_temp_dir("rsscript-parity-csv-backend");
+    fs::create_dir_all(&interpreter_root).expect("interpreter csv dir should be created");
+    fs::create_dir_all(&backend_root).expect("backend csv dir should be created");
+
+    for root in [&interpreter_root, &backend_root] {
+        fs::write(
+            root.join("data.csv"),
+            "name,amount\nRSScript, 42\nOther, 7\n",
+        )
+        .expect("csv fixture should write");
+    }
+
+    let interpreter_path = interpreter_root.join("data.csv").display().to_string();
+    let backend_path = backend_root.join("data.csv").display().to_string();
+    let source = r#"
+features: local
+
+fn main() -> Result<Unit, CsvError> {
+    let path = Path.from_string(value: read Args.get_or_default(index: 0, default: read "data.csv"))
+    local buffer = RowBuffer.new(size: 4096)
+
+    with Csv.open_read(path: read path)? as file {
+        Csv.read_into(file: mut file, buffer: mut buffer)?
+    }
+
+    let row = Csv.parse_row(buffer: read buffer)?
+    let name = Row.field_string(row: read row, index: 0)?
+    let amount = Row.field_string(row: read row, index: 1)?
+    Log.write(message: read name)
+    Log.write(message: read amount)
+    return Ok(Unit)
+}
+"#;
+    assert_interpreter_matches_backend_with_distinct_args(
+        "parity-csv.rss",
+        "rsscript_parity_csv",
+        source,
+        &[interpreter_path.as_str()],
+        &[backend_path.as_str()],
+    );
+
     let _ = fs::remove_dir_all(&interpreter_root);
     let _ = fs::remove_dir_all(&backend_root);
 }

@@ -154,6 +154,9 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Counter", "add"),
     ("Counter", "new"),
     ("Counter", "value"),
+    ("Csv", "open_read"),
+    ("Csv", "parse_row"),
+    ("Csv", "read_into"),
     ("Deadline", "after"),
     ("Deadline", "after_ms"),
     ("Deadline", "is_expired"),
@@ -397,6 +400,8 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Result", "is_ok"),
     ("Result", "ok"),
     ("Result", "unwrap_or"),
+    ("Row", "field_string"),
+    ("RowBuffer", "new"),
     ("RuleLoader", "load_rules"),
     ("Set", "clear"),
     ("Set", "contains"),
@@ -518,6 +523,9 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Counter.add",
     "runtime:Counter.new",
     "runtime:Counter.value",
+    "runtime:Csv.open_read",
+    "runtime:Csv.parse_row",
+    "runtime:Csv.read_into",
     "runtime:Deadline.after",
     "runtime:Deadline.after_ms",
     "runtime:Deadline.is_expired",
@@ -765,6 +773,8 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Result.is_ok",
     "runtime:Result.ok",
     "runtime:Result.unwrap_or",
+    "runtime:Row.field_string",
+    "runtime:RowBuffer.new",
     "runtime:RuleLoader.load_rules",
     "runtime:Set.clear",
     "runtime:Set.contains",
@@ -1812,6 +1822,48 @@ impl<'a> Interpreter<'a> {
             ("FileError", "message") => {
                 let value = self.eval_first_arg(args)?;
                 read_field(&value, "message")
+            }
+            ("RowBuffer", "new") => {
+                let size = self.eval_named_or_positional_arg(args, "size", 0)?;
+                let capacity = expect_int(size)?.max(0) as usize;
+                Ok(row_buffer_value(Vec::with_capacity(capacity)))
+            }
+            ("Csv", "open_read") => {
+                let path = self.eval_named_or_positional_arg(args, "path", 0)?;
+                let path = expect_string(path)?;
+                Ok(result_value(
+                    std::fs::File::open(&path)
+                        .map(|_| file_value(path, "read", 0))
+                        .map_err(csv_error_from_io),
+                ))
+            }
+            ("Csv", "read_into") => {
+                let file_name = self.mut_arg_local_name(args, "file", 0)?;
+                let buffer_name = self.mut_arg_local_name(args, "buffer", 1)?;
+                let mut file = expect_file(self.lookup(file_name)?)?;
+                let result = file_read_remaining(&mut file).map_err(csv_error_from_io);
+                self.assign(file_name, file.to_value())?;
+                Ok(match result {
+                    Ok(bytes) => {
+                        self.assign(buffer_name, row_buffer_value(bytes))?;
+                        value_ok(Value::Unit)
+                    }
+                    Err(error) => value_err(error),
+                })
+            }
+            ("Csv", "parse_row") => {
+                let buffer = self.eval_named_or_positional_arg(args, "buffer", 0)?;
+                Ok(result_value(csv_parse_row_value(&expect_row_buffer_bytes(
+                    buffer,
+                )?)))
+            }
+            ("Row", "field_string") => {
+                let row = self.eval_named_or_positional_arg(args, "row", 0)?;
+                let index = self.eval_named_or_positional_arg(args, "index", 1)?;
+                Ok(result_value(row_field_string_value(
+                    expect_row_fields(row)?,
+                    expect_int(index)?,
+                )))
             }
             ("Duration", "ms") => self.eval_first_arg(args),
             ("Duration", "seconds") => {
@@ -4853,6 +4905,87 @@ fn file_error(error: std::io::Error) -> Value {
             ("message".to_string(), Value::String(error.to_string())),
         ]),
     }
+}
+
+fn csv_error(message: impl Into<String>) -> Value {
+    Value::Struct {
+        name: "CsvError".to_string(),
+        fields: BTreeMap::from([("message".to_string(), Value::String(message.into()))]),
+    }
+}
+
+fn csv_error_from_io(error: std::io::Error) -> Value {
+    csv_error(error.to_string())
+}
+
+fn row_buffer_value(bytes: Vec<u8>) -> Value {
+    Value::Struct {
+        name: "RowBuffer".to_string(),
+        fields: BTreeMap::from([("bytes".to_string(), Value::Bytes(bytes))]),
+    }
+}
+
+fn expect_row_buffer_bytes(value: Value) -> Result<Vec<u8>, EvalError> {
+    match value {
+        Value::Struct { name, mut fields } if name == "RowBuffer" => fields
+            .remove("bytes")
+            .ok_or_else(|| EvalError::Runtime("RowBuffer value is missing bytes.".to_string()))
+            .and_then(expect_bytes),
+        other => Err(EvalError::Runtime(format!(
+            "expected RowBuffer, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn row_value(fields: Vec<String>) -> Value {
+    Value::Struct {
+        name: "Row".to_string(),
+        fields: BTreeMap::from([(
+            "fields".to_string(),
+            Value::List(fields.into_iter().map(Value::String).collect()),
+        )]),
+    }
+}
+
+fn expect_row_fields(value: Value) -> Result<Vec<String>, EvalError> {
+    match value {
+        Value::Struct { name, mut fields } if name == "Row" => fields
+            .remove("fields")
+            .ok_or_else(|| EvalError::Runtime("Row value is missing fields.".to_string()))
+            .and_then(expect_string_list),
+        other => Err(EvalError::Runtime(format!(
+            "expected Row, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn csv_parse_row_value(bytes: &[u8]) -> Result<Value, Value> {
+    let text = std::str::from_utf8(bytes).map_err(|error| csv_error(error.to_string()))?;
+    let Some(line) = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .nth(1)
+        .or_else(|| text.lines().map(str::trim).find(|line| !line.is_empty()))
+    else {
+        return Err(csv_error("CSV buffer is empty"));
+    };
+    Ok(row_value(
+        line.split(',')
+            .map(|field| field.trim().to_string())
+            .collect(),
+    ))
+}
+
+fn row_field_string_value(fields: Vec<String>, index: i64) -> Result<Value, Value> {
+    let index = usize::try_from(index).map_err(|_| csv_error("negative CSV field index"))?;
+    fields
+        .get(index)
+        .cloned()
+        .map(Value::String)
+        .ok_or_else(|| csv_error(format!("CSV field index `{index}` is out of bounds")))
 }
 
 struct FileState {
