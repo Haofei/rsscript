@@ -271,7 +271,43 @@ enum InterpreterEvalKind {
     ResponseBody,
     ResponseOk,
     ResponseStatus,
+    ResultErr,
+    ResultErrMessage,
+    ResultIsErr,
+    ResultIsOk,
+    ResultOk,
+    ResultUnwrapOr,
     RuleLoaderLoadRules,
+    SetClear,
+    SetContains,
+    SetDifference,
+    SetInsert,
+    SetIntersection,
+    SetIsEmpty,
+    SetIsSubset,
+    SetLen,
+    SetNew,
+    SetRemove,
+    SetToList,
+    SetUnion,
+    SortedMapClear,
+    SortedMapContainsKey,
+    SortedMapGet,
+    SortedMapInsert,
+    SortedMapIsEmpty,
+    SortedMapKeys,
+    SortedMapLen,
+    SortedMapNew,
+    SortedMapRemove,
+    SortedMapValues,
+    SortedSetClear,
+    SortedSetContains,
+    SortedSetInsert,
+    SortedSetIsEmpty,
+    SortedSetLen,
+    SortedSetNew,
+    SortedSetRemove,
+    SortedSetToList,
     StringConcat,
     StringCopy,
     StringFromBool,
@@ -1299,10 +1335,226 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::ResponseStatus,
     },
     InterpreterIntrinsicSpec {
+        namespace: "Result",
+        name: "err",
+        variant: "ResultErr",
+        eval_kind: InterpreterEvalKind::ResultErr,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Result",
+        name: "err_message",
+        variant: "ResultErrMessage",
+        eval_kind: InterpreterEvalKind::ResultErrMessage,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Result",
+        name: "is_err",
+        variant: "ResultIsErr",
+        eval_kind: InterpreterEvalKind::ResultIsErr,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Result",
+        name: "is_ok",
+        variant: "ResultIsOk",
+        eval_kind: InterpreterEvalKind::ResultIsOk,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Result",
+        name: "ok",
+        variant: "ResultOk",
+        eval_kind: InterpreterEvalKind::ResultOk,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Result",
+        name: "unwrap_or",
+        variant: "ResultUnwrapOr",
+        eval_kind: InterpreterEvalKind::ResultUnwrapOr,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "RuleLoader",
         name: "load_rules",
         variant: "RuleLoaderLoadRules",
         eval_kind: InterpreterEvalKind::RuleLoaderLoadRules,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Set",
+        name: "clear",
+        variant: "SetClear",
+        eval_kind: InterpreterEvalKind::SetClear,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Set",
+        name: "contains",
+        variant: "SetContains",
+        eval_kind: InterpreterEvalKind::SetContains,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Set",
+        name: "difference",
+        variant: "SetDifference",
+        eval_kind: InterpreterEvalKind::SetDifference,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Set",
+        name: "insert",
+        variant: "SetInsert",
+        eval_kind: InterpreterEvalKind::SetInsert,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Set",
+        name: "intersection",
+        variant: "SetIntersection",
+        eval_kind: InterpreterEvalKind::SetIntersection,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Set",
+        name: "is_empty",
+        variant: "SetIsEmpty",
+        eval_kind: InterpreterEvalKind::SetIsEmpty,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Set",
+        name: "is_subset",
+        variant: "SetIsSubset",
+        eval_kind: InterpreterEvalKind::SetIsSubset,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Set",
+        name: "len",
+        variant: "SetLen",
+        eval_kind: InterpreterEvalKind::SetLen,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Set",
+        name: "new",
+        variant: "SetNew",
+        eval_kind: InterpreterEvalKind::SetNew,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Set",
+        name: "remove",
+        variant: "SetRemove",
+        eval_kind: InterpreterEvalKind::SetRemove,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Set",
+        name: "to_list",
+        variant: "SetToList",
+        eval_kind: InterpreterEvalKind::SetToList,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Set",
+        name: "union",
+        variant: "SetUnion",
+        eval_kind: InterpreterEvalKind::SetUnion,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "SortedMap",
+        name: "clear",
+        variant: "SortedMapClear",
+        eval_kind: InterpreterEvalKind::SortedMapClear,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "SortedMap",
+        name: "contains_key",
+        variant: "SortedMapContainsKey",
+        eval_kind: InterpreterEvalKind::SortedMapContainsKey,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "SortedMap",
+        name: "get",
+        variant: "SortedMapGet",
+        eval_kind: InterpreterEvalKind::SortedMapGet,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "SortedMap",
+        name: "insert",
+        variant: "SortedMapInsert",
+        eval_kind: InterpreterEvalKind::SortedMapInsert,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "SortedMap",
+        name: "is_empty",
+        variant: "SortedMapIsEmpty",
+        eval_kind: InterpreterEvalKind::SortedMapIsEmpty,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "SortedMap",
+        name: "keys",
+        variant: "SortedMapKeys",
+        eval_kind: InterpreterEvalKind::SortedMapKeys,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "SortedMap",
+        name: "len",
+        variant: "SortedMapLen",
+        eval_kind: InterpreterEvalKind::SortedMapLen,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "SortedMap",
+        name: "new",
+        variant: "SortedMapNew",
+        eval_kind: InterpreterEvalKind::SortedMapNew,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "SortedMap",
+        name: "remove",
+        variant: "SortedMapRemove",
+        eval_kind: InterpreterEvalKind::SortedMapRemove,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "SortedMap",
+        name: "values",
+        variant: "SortedMapValues",
+        eval_kind: InterpreterEvalKind::SortedMapValues,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "SortedSet",
+        name: "clear",
+        variant: "SortedSetClear",
+        eval_kind: InterpreterEvalKind::SortedSetClear,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "SortedSet",
+        name: "contains",
+        variant: "SortedSetContains",
+        eval_kind: InterpreterEvalKind::SortedSetContains,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "SortedSet",
+        name: "insert",
+        variant: "SortedSetInsert",
+        eval_kind: InterpreterEvalKind::SortedSetInsert,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "SortedSet",
+        name: "is_empty",
+        variant: "SortedSetIsEmpty",
+        eval_kind: InterpreterEvalKind::SortedSetIsEmpty,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "SortedSet",
+        name: "len",
+        variant: "SortedSetLen",
+        eval_kind: InterpreterEvalKind::SortedSetLen,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "SortedSet",
+        name: "new",
+        variant: "SortedSetNew",
+        eval_kind: InterpreterEvalKind::SortedSetNew,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "SortedSet",
+        name: "remove",
+        variant: "SortedSetRemove",
+        eval_kind: InterpreterEvalKind::SortedSetRemove,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "SortedSet",
+        name: "to_list",
+        variant: "SortedSetToList",
+        eval_kind: InterpreterEvalKind::SortedSetToList,
     },
     InterpreterIntrinsicSpec {
         namespace: "String",
@@ -2215,8 +2467,116 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::ResponseStatus => {
             "{\n            let response = interpreter.eval_first_arg(args)?;\n            read_field(&response, \"status\")\n        }"
         }
+        InterpreterEvalKind::ResultErr => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(match result_payload(value)? {\n                Ok(_) => value_none(),\n                Err(error) => value_some(error),\n            })\n        }"
+        }
+        InterpreterEvalKind::ResultErrMessage => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(match result_payload(value)? {\n                Ok(_) => value_none(),\n                Err(error) => value_some(Value::String(error.display())),\n            })\n        }"
+        }
+        InterpreterEvalKind::ResultIsErr => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(matches!(\n                value,\n                Value::Variant { name, .. } if name == \"Err\"\n            )))\n        }"
+        }
+        InterpreterEvalKind::ResultIsOk => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(matches!(\n                value,\n                Value::Variant { name, .. } if name == \"Ok\"\n            )))\n        }"
+        }
+        InterpreterEvalKind::ResultOk => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(match result_payload(value)? {\n                Ok(value) => value_some(value),\n                Err(_) => value_none(),\n            })\n        }"
+        }
+        InterpreterEvalKind::ResultUnwrapOr => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let default = interpreter.eval_named_or_positional_arg(args, \"default\", 1)?;\n            Ok(result_payload(value)?.map_or(default, |value| value))\n        }"
+        }
         InterpreterEvalKind::RuleLoaderLoadRules => {
             "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            Ok(result_value(\n                std::fs::read_to_string(expect_string(path)?)\n                    .map(|text| Value::List(rules_from_text(&text)))\n                    .map_err(config_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::SetClear => {
+            "{\n            let set_name = interpreter.mut_arg_local_name(args, \"set\", 0)?;\n            interpreter.assign(set_name, Value::List(Vec::new()))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::SetContains => {
+            "{\n            let set = interpreter.eval_named_or_positional_arg(args, \"set\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            Ok(Value::Bool(\n                expect_list(set)?.iter().any(|item| item == &value),\n            ))\n        }"
+        }
+        InterpreterEvalKind::SetDifference => {
+            "{\n            let left = interpreter.eval_named_or_positional_arg(args, \"left\", 0)?;\n            let right = interpreter.eval_named_or_positional_arg(args, \"right\", 1)?;\n            let right = expect_list(right)?;\n            Ok(Value::List(\n                expect_list(left)?\n                    .into_iter()\n                    .filter(|value| !right.iter().any(|item| item == value))\n                    .collect(),\n            ))\n        }"
+        }
+        InterpreterEvalKind::SetInsert => {
+            "{\n            let set_name = interpreter.mut_arg_local_name(args, \"set\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            let mut set = expect_list(interpreter.lookup(set_name)?)?;\n            let inserted = set_insert(&mut set, value);\n            interpreter.assign(set_name, Value::List(set))?;\n            Ok(Value::Bool(inserted))\n        }"
+        }
+        InterpreterEvalKind::SetIntersection => {
+            "{\n            let left = interpreter.eval_named_or_positional_arg(args, \"left\", 0)?;\n            let right = interpreter.eval_named_or_positional_arg(args, \"right\", 1)?;\n            let right = expect_list(right)?;\n            Ok(Value::List(\n                expect_list(left)?\n                    .into_iter()\n                    .filter(|value| right.iter().any(|item| item == value))\n                    .collect(),\n            ))\n        }"
+        }
+        InterpreterEvalKind::SetIsEmpty => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(expect_list(value)?.is_empty()))\n        }"
+        }
+        InterpreterEvalKind::SetIsSubset => {
+            "{\n            let left = interpreter.eval_named_or_positional_arg(args, \"left\", 0)?;\n            let right = interpreter.eval_named_or_positional_arg(args, \"right\", 1)?;\n            let right = expect_list(right)?;\n            Ok(Value::Bool(\n                expect_list(left)?\n                    .iter()\n                    .all(|value| right.iter().any(|item| item == value)),\n            ))\n        }"
+        }
+        InterpreterEvalKind::SetLen => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Int(expect_list(value)?.len() as i64))\n        }"
+        }
+        InterpreterEvalKind::SetNew => {
+            "{\n            Ok(Value::List(Vec::new()))\n        }"
+        }
+        InterpreterEvalKind::SetRemove => {
+            "{\n            let set_name = interpreter.mut_arg_local_name(args, \"set\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            let mut set = expect_list(interpreter.lookup(set_name)?)?;\n            let removed = set_remove(&mut set, &value);\n            interpreter.assign(set_name, Value::List(set))?;\n            Ok(Value::Bool(removed))\n        }"
+        }
+        InterpreterEvalKind::SetToList => {
+            "{\n            interpreter.eval_first_arg(args)\n        }"
+        }
+        InterpreterEvalKind::SetUnion => {
+            "{\n            let left = interpreter.eval_named_or_positional_arg(args, \"left\", 0)?;\n            let right = interpreter.eval_named_or_positional_arg(args, \"right\", 1)?;\n            let mut set = expect_list(left)?;\n            for value in expect_list(right)? {\n                set_insert(&mut set, value);\n            }\n            Ok(Value::List(set))\n        }"
+        }
+        InterpreterEvalKind::SortedMapClear => {
+            "{\n            let map_name = interpreter.mut_arg_local_name(args, \"map\", 0)?;\n            interpreter.assign(map_name, Value::Map(Vec::new()))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::SortedMapContainsKey => {
+            "{\n            let map = interpreter.eval_named_or_positional_arg(args, \"map\", 0)?;\n            let key = interpreter.eval_named_or_positional_arg(args, \"key\", 1)?;\n            Ok(Value::Bool(map_get(&expect_map(map)?, &key).is_some()))\n        }"
+        }
+        InterpreterEvalKind::SortedMapGet => {
+            "{\n            let map = interpreter.eval_named_or_positional_arg(args, \"map\", 0)?;\n            let key = interpreter.eval_named_or_positional_arg(args, \"key\", 1)?;\n            Ok(value_option(map_get(&expect_map(map)?, &key), |value| {\n                value\n            }))\n        }"
+        }
+        InterpreterEvalKind::SortedMapInsert => {
+            "{\n            let map_name = interpreter.mut_arg_local_name(args, \"map\", 0)?;\n            let key = interpreter.eval_named_or_positional_arg(args, \"key\", 1)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 2)?;\n            let mut map = expect_map(interpreter.lookup(map_name)?)?;\n            map_insert(&mut map, key, value);\n            sort_map_entries(&mut map)?;\n            interpreter.assign(map_name, Value::Map(map))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::SortedMapIsEmpty => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(expect_map(value)?.is_empty()))\n        }"
+        }
+        InterpreterEvalKind::SortedMapKeys => {
+            "{\n            let map = interpreter.eval_first_arg(args)?;\n            Ok(Value::List(\n                expect_map(map)?.into_iter().map(|(key, _)| key).collect(),\n            ))\n        }"
+        }
+        InterpreterEvalKind::SortedMapLen => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Int(expect_map(value)?.len() as i64))\n        }"
+        }
+        InterpreterEvalKind::SortedMapNew => {
+            "{\n            Ok(Value::Map(Vec::new()))\n        }"
+        }
+        InterpreterEvalKind::SortedMapRemove => {
+            "{\n            let map_name = interpreter.mut_arg_local_name(args, \"map\", 0)?;\n            let key = interpreter.eval_named_or_positional_arg(args, \"key\", 1)?;\n            let mut map = expect_map(interpreter.lookup(map_name)?)?;\n            let old = map_remove(&mut map, &key);\n            interpreter.assign(map_name, Value::Map(map))?;\n            Ok(value_option(old, |value| value))\n        }"
+        }
+        InterpreterEvalKind::SortedMapValues => {
+            "{\n            let map = interpreter.eval_first_arg(args)?;\n            Ok(Value::List(\n                expect_map(map)?\n                    .into_iter()\n                    .map(|(_, value)| value)\n                    .collect(),\n            ))\n        }"
+        }
+        InterpreterEvalKind::SortedSetClear => {
+            "{\n            let set_name = interpreter.mut_arg_local_name(args, \"set\", 0)?;\n            interpreter.assign(set_name, Value::List(Vec::new()))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::SortedSetContains => {
+            "{\n            let set = interpreter.eval_named_or_positional_arg(args, \"set\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            Ok(Value::Bool(\n                expect_list(set)?.iter().any(|item| item == &value),\n            ))\n        }"
+        }
+        InterpreterEvalKind::SortedSetInsert => {
+            "{\n            let set_name = interpreter.mut_arg_local_name(args, \"set\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            let mut set = expect_list(interpreter.lookup(set_name)?)?;\n            let inserted = set_insert(&mut set, value);\n            sort_values(&mut set)?;\n            interpreter.assign(set_name, Value::List(set))?;\n            Ok(Value::Bool(inserted))\n        }"
+        }
+        InterpreterEvalKind::SortedSetIsEmpty => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(expect_list(value)?.is_empty()))\n        }"
+        }
+        InterpreterEvalKind::SortedSetLen => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Int(expect_list(value)?.len() as i64))\n        }"
+        }
+        InterpreterEvalKind::SortedSetNew => {
+            "{\n            Ok(Value::List(Vec::new()))\n        }"
+        }
+        InterpreterEvalKind::SortedSetRemove => {
+            "{\n            let set_name = interpreter.mut_arg_local_name(args, \"set\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            let mut set = expect_list(interpreter.lookup(set_name)?)?;\n            let removed = set_remove(&mut set, &value);\n            interpreter.assign(set_name, Value::List(set))?;\n            Ok(Value::Bool(removed))\n        }"
+        }
+        InterpreterEvalKind::SortedSetToList => {
+            "{\n            interpreter.eval_first_arg(args)\n        }"
         }
         InterpreterEvalKind::StringChars => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::List(expect_string(value)?.chars().map(Value::Char).collect()))\n        }"
