@@ -332,6 +332,7 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Path.starts_with runtime:Path.to_string runtime:Path.with_extension
 // parity: runtime:Path.write_string
 // parity: runtime:String.safe_relative runtime:String.to_path runtime:Workspace.resolve
+// parity: runtime:Process.run runtime:Process.run_stdout
 // parity: runtime:Map.clear runtime:Map.contains_key runtime:Map.get
 // parity: runtime:Map.get_or_default runtime:Map.insert runtime:Map.insert_old
 // parity: runtime:Map.is_empty runtime:Map.keys runtime:Map.len runtime:Map.new
@@ -1979,6 +1980,33 @@ fn main() -> Unit {
         "rsscript_parity_diff_patch",
         source,
     );
+}
+
+#[test]
+fn parity_process_run_intrinsics() {
+    let source = r#"
+features: native
+
+fn main() -> Result<Unit, String> {
+    let mut args = List<String>.new()
+    List.push<String>(list: mut args, value: read "hello")
+    let stdout = Process.run_stdout(command: read "printf", args: read args)?
+    Log.write(message: read stdout)
+
+    let mut run_args = List<String>.new()
+    List.push<String>(list: mut run_args, value: read "world")
+    let output = Process.run(command: read "printf", args: read run_args)?
+    Log.write(message: read String.from_int(value: output.status))
+    Log.write(message: read output.stdout)
+    Log.write(message: read output.stderr)
+    Log.write(message: read output.merged)
+    if output.truncated == false {
+        Log.write(message: read "not-truncated")
+    }
+    return Ok(Unit)
+}
+"#;
+    assert_interpreter_matches_backend("parity-process.rss", "rsscript_parity_process", source);
 }
 
 #[test]

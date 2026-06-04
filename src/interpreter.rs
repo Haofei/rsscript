@@ -416,6 +416,8 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Path", "with_extension"),
     ("Path", "write_string"),
     ("Patch", "apply_text"),
+    ("Process", "run"),
+    ("Process", "run_stdout"),
     ("Result", "err"),
     ("Result", "err_message"),
     ("Result", "is_err"),
@@ -813,6 +815,8 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Path.with_extension",
     "runtime:Path.write_string",
     "runtime:Patch.apply_text",
+    "runtime:Process.run",
+    "runtime:Process.run_stdout",
     "runtime:Result.err",
     "runtime:Result.err_message",
     "runtime:Result.is_err",
@@ -2975,6 +2979,27 @@ impl<'a> Interpreter<'a> {
                         .map_err(Value::String),
                 ))
             }
+            ("Process", "run") => {
+                let command = self.eval_named_or_positional_arg(args, "command", 0)?;
+                let args_value = self.eval_named_or_positional_arg(args, "args", 1)?;
+                let command = expect_string(command)?;
+                Ok(result_value(
+                    process_run_output(&command, &expect_string_list(args_value)?)
+                        .map(|output| process_output_value(output))
+                        .map_err(Value::String),
+                ))
+            }
+            ("Process", "run_stdout") => {
+                let command = self.eval_named_or_positional_arg(args, "command", 0)?;
+                let args_value = self.eval_named_or_positional_arg(args, "args", 1)?;
+                let command = expect_string(command)?;
+                Ok(result_value(
+                    process_run_output(&command, &expect_string_list(args_value)?)
+                        .and_then(|output| process_stdout_result(&command, output))
+                        .map(Value::String)
+                        .map_err(Value::String),
+                ))
+            }
             ("Result", "is_ok") => {
                 let value = self.eval_first_arg(args)?;
                 Ok(Value::Bool(matches!(
@@ -4084,6 +4109,73 @@ fn diff_unified_string(old: &str, new: &str) -> String {
     let mut text = out.join("\n");
     text.push('\n');
     text
+}
+
+struct ProcessOutputState {
+    status: i64,
+    stdout: String,
+    stderr: String,
+    merged: String,
+    truncated: bool,
+}
+
+fn process_run_output(command: &str, args: &[String]) -> Result<ProcessOutputState, String> {
+    let mut child = std::process::Command::new(command);
+    child.args(args);
+    child
+        .output()
+        .map(process_output_state)
+        .map_err(|error| format!("failed to run `{command}`: {error}"))
+}
+
+fn process_output_state(output: std::process::Output) -> ProcessOutputState {
+    let status = output.status.code().map(i64::from).unwrap_or(-1);
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let merged = process_output_details(&stdout, &stderr);
+    ProcessOutputState {
+        status,
+        stdout,
+        stderr,
+        merged,
+        truncated: false,
+    }
+}
+
+fn process_stdout_result(command: &str, output: ProcessOutputState) -> Result<String, String> {
+    if output.status == 0 {
+        return Ok(output.stdout);
+    }
+    Err(format!(
+        "`{command}` exited with {}: {}",
+        output.status,
+        process_output_details(&output.stdout, &output.stderr)
+    ))
+}
+
+fn process_output_details(stdout: &str, stderr: &str) -> String {
+    let stdout = stdout.trim();
+    let stderr = stderr.trim();
+    if stdout.is_empty() {
+        stderr.to_string()
+    } else if stderr.is_empty() {
+        stdout.to_string()
+    } else {
+        format!("{stdout}\n{stderr}")
+    }
+}
+
+fn process_output_value(output: ProcessOutputState) -> Value {
+    Value::Struct {
+        name: "ProcessOutput".to_string(),
+        fields: BTreeMap::from([
+            ("status".to_string(), Value::Int(output.status)),
+            ("stdout".to_string(), Value::String(output.stdout)),
+            ("stderr".to_string(), Value::String(output.stderr)),
+            ("merged".to_string(), Value::String(output.merged)),
+            ("truncated".to_string(), Value::Bool(output.truncated)),
+        ]),
+    }
 }
 
 fn patch_apply_text_string(original: &str, patch: &str) -> Result<String, String> {
