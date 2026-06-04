@@ -337,7 +337,7 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:String.safe_relative runtime:String.to_path runtime:Workspace.resolve
 // parity: runtime:Process.run runtime:Process.run_many_stdout
 // parity: runtime:Process.run_many_stdout_timeout runtime:Process.run_request runtime:Process.run_stdout
-// parity: runtime:Process.run_stdout_timeout runtime:Process.run_timeout
+// parity: runtime:Process.run_stdout_timeout runtime:Process.run_timeout runtime:Process.stream
 // parity: runtime:Map.clear runtime:Map.contains_key runtime:Map.get
 // parity: runtime:Map.get_or_default runtime:Map.insert runtime:Map.insert_old
 // parity: runtime:Map.is_empty runtime:Map.keys runtime:Map.len runtime:Map.new
@@ -2061,6 +2061,26 @@ fn main() -> Result<Unit, String> {
     Log.write(message: read capped.stdout)
     if capped.truncated {
         Log.write(message: read "request-truncated")
+    }
+
+    let stream_request = ProcessRequest(
+        command: "true",
+        args: List<String>.new(),
+        cwd: None,
+        stdin: None,
+        env: List<ProcessEnv>.new(),
+        timeout_ms: 1000,
+        merge_stderr: false,
+        output_cap_bytes: 0,
+    )
+    let events = Process.stream(request: read stream_request)?
+    match Stream.collect_list<ProcessEvent>(stream: read events) {
+        Ok(collected_events) => {
+            Log.write(message: read String.from_int(value: List.len<ProcessEvent>(list: read collected_events)))
+        }
+        Err(error) => {
+            Log.write(message: read ChannelError.message(error: read error))
+        }
     }
     return Ok(Unit)
 }

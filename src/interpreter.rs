@@ -429,6 +429,7 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Process", "run_stdout"),
     ("Process", "run_stdout_timeout"),
     ("Process", "run_timeout"),
+    ("Process", "stream"),
     ("Result", "err"),
     ("Result", "err_message"),
     ("Result", "is_err"),
@@ -842,6 +843,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Process.run_stdout",
     "runtime:Process.run_stdout_timeout",
     "runtime:Process.run_timeout",
+    "runtime:Process.stream",
     "runtime:Result.err",
     "runtime:Result.err_message",
     "runtime:Result.is_err",
@@ -2625,7 +2627,9 @@ impl<'a> Interpreter<'a> {
             }
             ("Stream", "collect_list") => {
                 let stream = self.eval_named_or_positional_arg(args, "stream", 0)?;
-                Ok(result_value(Ok(Value::List(expect_stream_items(stream)?))))
+                Ok(result_value(
+                    expect_stream_collect_items(stream)?.map(Value::List),
+                ))
             }
             ("Map", "new") => Ok(Value::Map(Vec::new())),
             ("Map", "insert") => {
@@ -3103,6 +3107,12 @@ impl<'a> Interpreter<'a> {
                     process_run_request_output(&expect_process_request(request)?)
                         .map(process_output_value)
                         .map_err(Value::String),
+                ))
+            }
+            ("Process", "stream") => {
+                let request = self.eval_named_or_positional_arg(args, "request", 0)?;
+                Ok(result_value(
+                    process_stream_value(&expect_process_request(request)?).map_err(Value::String),
                 ))
             }
             ("Process", "run_stdout_timeout") => {
@@ -4604,6 +4614,15 @@ fn cap_bytes<'a>(
     }
 }
 
+fn process_stream_value(request: &ProcessRequestState) -> Result<Value, String> {
+    if request.command.trim().is_empty() {
+        return Err("process command must not be empty".to_string());
+    }
+    Ok(stream_collect_error_value(
+        "stream collect_list would block on an open external stream",
+    ))
+}
+
 fn process_output_state(output: std::process::Output) -> ProcessOutputState {
     process_output_state_from_parts(output.status, output.stdout, output.stderr, false)
 }
@@ -5625,7 +5644,23 @@ fn receiver_value(closed: bool) -> Value {
 fn stream_value(items: Vec<Value>) -> Value {
     Value::Struct {
         name: "Stream".to_string(),
-        fields: BTreeMap::from([("items".to_string(), Value::List(items))]),
+        fields: BTreeMap::from([
+            ("items".to_string(), Value::List(items)),
+            ("collect_error".to_string(), value_none()),
+        ]),
+    }
+}
+
+fn stream_collect_error_value(message: impl Into<String>) -> Value {
+    Value::Struct {
+        name: "Stream".to_string(),
+        fields: BTreeMap::from([
+            ("items".to_string(), Value::List(Vec::new())),
+            (
+                "collect_error".to_string(),
+                value_some(Value::String(message.into())),
+            ),
+        ]),
     }
 }
 
@@ -5872,12 +5907,21 @@ fn expect_receiver(value: Value) -> Result<bool, EvalError> {
     }
 }
 
-fn expect_stream_items(value: Value) -> Result<Vec<Value>, EvalError> {
+fn expect_stream_collect_items(value: Value) -> Result<Result<Vec<Value>, Value>, EvalError> {
     match value {
-        Value::Struct { name, mut fields } if name == "Stream" => fields
-            .remove("items")
-            .ok_or_else(|| EvalError::Runtime("Stream value is missing items.".to_string()))
-            .and_then(expect_list),
+        Value::Struct { name, mut fields } if name == "Stream" => {
+            let collect_error = fields.remove("collect_error").ok_or_else(|| {
+                EvalError::Runtime("Stream value is missing collect_error.".to_string())
+            })?;
+            if let Some(message) = option_payload(collect_error)? {
+                return Ok(Err(channel_error(expect_string(message)?)));
+            }
+            fields
+                .remove("items")
+                .ok_or_else(|| EvalError::Runtime("Stream value is missing items.".to_string()))
+                .and_then(expect_list)
+                .map(Ok)
+        }
         other => Err(EvalError::Runtime(format!(
             "expected Stream, got `{}`.",
             other.display()
