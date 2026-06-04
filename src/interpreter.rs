@@ -224,18 +224,22 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("File", "open_read"),
     ("File", "open_write"),
     ("File", "read_all"),
+    ("File", "read_all_async"),
     ("File", "read_all_string"),
+    ("File", "read_all_string_async"),
     ("File", "read_bytes"),
     ("File", "read_into"),
     ("File", "read_string"),
     ("File", "remove"),
     ("File", "write"),
+    ("File", "write_async"),
     ("File", "write_atomic"),
     ("File", "write_bytes"),
     ("File", "write_bytes_view"),
     ("File", "write_buffer"),
     ("File", "write_buffer_view"),
     ("File", "write_string"),
+    ("File", "write_string_async"),
     ("File", "write_string_to_path"),
     ("FileError", "message"),
     ("FunctionObject", "has_closure"),
@@ -438,12 +442,20 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Path", "write_string"),
     ("Patch", "apply_text"),
     ("Process", "run_many_stdout"),
+    ("Process", "run_many_stdout_async"),
     ("Process", "run_many_stdout_timeout"),
+    ("Process", "run_many_stdout_timeout_async"),
     ("Process", "run"),
+    ("Process", "run_async"),
     ("Process", "run_request"),
+    ("Process", "run_request_async"),
+    ("Process", "run_request_cancellable_async"),
     ("Process", "run_stdout"),
+    ("Process", "run_stdout_async"),
     ("Process", "run_stdout_timeout"),
+    ("Process", "run_stdout_timeout_async"),
     ("Process", "run_timeout"),
+    ("Process", "run_timeout_async"),
     ("Process", "stream"),
     ("Result", "err"),
     ("Result", "err_message"),
@@ -653,18 +665,22 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:File.open_read",
     "runtime:File.open_write",
     "runtime:File.read_all",
+    "runtime:File.read_all_async",
     "runtime:File.read_all_string",
+    "runtime:File.read_all_string_async",
     "runtime:File.read_bytes",
     "runtime:File.read_into",
     "runtime:File.read_string",
     "runtime:File.remove",
     "runtime:File.write",
+    "runtime:File.write_async",
     "runtime:File.write_atomic",
     "runtime:File.write_bytes",
     "runtime:File.write_bytes_view",
     "runtime:File.write_buffer",
     "runtime:File.write_buffer_view",
     "runtime:File.write_string",
+    "runtime:File.write_string_async",
     "runtime:File.write_string_to_path",
     "runtime:FileError.message",
     "runtime:FunctionObject.has_closure",
@@ -873,12 +889,20 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Path.write_string",
     "runtime:Patch.apply_text",
     "runtime:Process.run_many_stdout",
+    "runtime:Process.run_many_stdout_async",
     "runtime:Process.run_many_stdout_timeout",
+    "runtime:Process.run_many_stdout_timeout_async",
     "runtime:Process.run",
+    "runtime:Process.run_async",
     "runtime:Process.run_request",
+    "runtime:Process.run_request_async",
+    "runtime:Process.run_request_cancellable_async",
     "runtime:Process.run_stdout",
+    "runtime:Process.run_stdout_async",
     "runtime:Process.run_stdout_timeout",
+    "runtime:Process.run_stdout_timeout_async",
     "runtime:Process.run_timeout",
+    "runtime:Process.run_timeout_async",
     "runtime:Process.stream",
     "runtime:Result.err",
     "runtime:Result.err_message",
@@ -1917,7 +1941,7 @@ impl<'a> Interpreter<'a> {
                     Err(error) => value_err(error),
                 })
             }
-            ("File", "read_bytes") => {
+            ("File", "read_bytes") | ("File", "read_all_async") => {
                 let path = self.eval_first_arg(args)?;
                 Ok(result_value(
                     std::fs::read(expect_string(path)?)
@@ -1925,7 +1949,15 @@ impl<'a> Interpreter<'a> {
                         .map_err(file_error),
                 ))
             }
-            ("File", "write_bytes") => {
+            ("File", "read_all_string_async") => {
+                let path = self.eval_first_arg(args)?;
+                Ok(result_value(
+                    std::fs::read_to_string(expect_string(path)?)
+                        .map(Value::String)
+                        .map_err(file_error),
+                ))
+            }
+            ("File", "write_bytes") | ("File", "write_async") => {
                 let path = self.eval_named_or_positional_arg(args, "path", 0)?;
                 let data = self.eval_named_or_positional_arg(args, "data", 1)?;
                 Ok(file_result_unit(std::fs::write(
@@ -1969,6 +2001,14 @@ impl<'a> Interpreter<'a> {
                 let result = file_write_at_cursor(&mut file, expect_string(text)?.as_bytes());
                 self.assign(file_name, file.to_value())?;
                 Ok(file_result_unit(result))
+            }
+            ("File", "write_string_async") => {
+                let path = self.eval_named_or_positional_arg(args, "path", 0)?;
+                let text = self.eval_named_or_positional_arg(args, "text", 1)?;
+                Ok(file_result_unit(std::fs::write(
+                    expect_string(path)?,
+                    expect_string(text)?,
+                )))
             }
             ("Directory", "remove_file") => {
                 let path = self.eval_first_arg(args)?;
@@ -3305,7 +3345,7 @@ impl<'a> Interpreter<'a> {
                         .map_err(Value::String),
                 ))
             }
-            ("Process", "run") => {
+            ("Process", "run") | ("Process", "run_async") => {
                 let command = self.eval_named_or_positional_arg(args, "command", 0)?;
                 let args_value = self.eval_named_or_positional_arg(args, "args", 1)?;
                 let command = expect_string(command)?;
@@ -3315,7 +3355,7 @@ impl<'a> Interpreter<'a> {
                         .map_err(Value::String),
                 ))
             }
-            ("Process", "run_stdout") => {
+            ("Process", "run_stdout") | ("Process", "run_stdout_async") => {
                 let command = self.eval_named_or_positional_arg(args, "command", 0)?;
                 let args_value = self.eval_named_or_positional_arg(args, "args", 1)?;
                 let command = expect_string(command)?;
@@ -3326,7 +3366,7 @@ impl<'a> Interpreter<'a> {
                         .map_err(Value::String),
                 ))
             }
-            ("Process", "run_timeout") => {
+            ("Process", "run_timeout") | ("Process", "run_timeout_async") => {
                 let command = self.eval_named_or_positional_arg(args, "command", 0)?;
                 let args_value = self.eval_named_or_positional_arg(args, "args", 1)?;
                 let timeout = self.eval_named_or_positional_arg(args, "timeout_ms", 2)?;
@@ -3341,8 +3381,18 @@ impl<'a> Interpreter<'a> {
                     .map_err(Value::String),
                 ))
             }
-            ("Process", "run_request") => {
+            ("Process", "run_request") | ("Process", "run_request_async") => {
                 let request = self.eval_named_or_positional_arg(args, "request", 0)?;
+                Ok(result_value(
+                    process_run_request_output(&expect_process_request(request)?)
+                        .map(process_output_value)
+                        .map_err(Value::String),
+                ))
+            }
+            ("Process", "run_request_cancellable_async") => {
+                let request = self.eval_named_or_positional_arg(args, "request", 0)?;
+                let token = self.eval_named_or_positional_arg(args, "token", 1)?;
+                let _ = expect_cancellation_id(token, "CancellationToken")?;
                 Ok(result_value(
                     process_run_request_output(&expect_process_request(request)?)
                         .map(process_output_value)
@@ -3355,7 +3405,7 @@ impl<'a> Interpreter<'a> {
                     process_stream_value(&expect_process_request(request)?).map_err(Value::String),
                 ))
             }
-            ("Process", "run_stdout_timeout") => {
+            ("Process", "run_stdout_timeout") | ("Process", "run_stdout_timeout_async") => {
                 let command = self.eval_named_or_positional_arg(args, "command", 0)?;
                 let args_value = self.eval_named_or_positional_arg(args, "args", 1)?;
                 let timeout = self.eval_named_or_positional_arg(args, "timeout_ms", 2)?;
@@ -3371,7 +3421,7 @@ impl<'a> Interpreter<'a> {
                     .map_err(Value::String),
                 ))
             }
-            ("Process", "run_many_stdout") => {
+            ("Process", "run_many_stdout") | ("Process", "run_many_stdout_async") => {
                 let command = self.eval_named_or_positional_arg(args, "command", 0)?;
                 let args_value = self.eval_named_or_positional_arg(args, "args", 1)?;
                 let appended = self.eval_named_or_positional_arg(args, "appended_args", 2)?;
@@ -3388,7 +3438,8 @@ impl<'a> Interpreter<'a> {
                     .map_err(Value::String),
                 ))
             }
-            ("Process", "run_many_stdout_timeout") => {
+            ("Process", "run_many_stdout_timeout")
+            | ("Process", "run_many_stdout_timeout_async") => {
                 let command = self.eval_named_or_positional_arg(args, "command", 0)?;
                 let args_value = self.eval_named_or_positional_arg(args, "args", 1)?;
                 let appended = self.eval_named_or_positional_arg(args, "appended_args", 2)?;

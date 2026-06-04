@@ -112,6 +112,91 @@ async fn main() -> Result<Unit, TimerError> {
 }
 
 #[test]
+fn parity_async_file_intrinsics() {
+    let source = r#"
+features: async, native, local
+
+async fn main() -> Result<Unit, FileError> {
+    let path = Path.from_string(value: read "async-file.txt")
+    await File.write_string_async(path: read path, text: read "hello async")?
+    let text = await File.read_all_string_async(path: read path)?
+    Log.write(message: read text)
+
+    await File.write_async(path: read path, data: read Bytes.from_string(value: read "bytes"))?
+    let bytes = await File.read_all_async(path: read path)?
+    Log.write(message: read String.from_int(value: Bytes.len(value: read bytes)))
+    return Ok(Unit)
+}
+"#;
+    assert_interpreter_matches_backend(
+        "parity-async-file.rss",
+        "rsscript_parity_async_file",
+        source,
+    );
+}
+
+#[test]
+fn parity_async_process_intrinsics() {
+    let source = r#"
+features: async, native, local
+
+async fn main() -> Result<Unit, String> {
+    let output = await Process.run_async(command: read "printf", args: read ["ok"])?
+    Log.write(message: read String.from_int(value: output.status))
+
+    let stdout = await Process.run_stdout_async(command: read "printf", args: read ["stdout"])?
+    Log.write(message: read stdout)
+
+    let timeout_output = await Process.run_timeout_async(command: read "printf", args: read ["timeout"], timeout_ms: 1000)?
+    Log.write(message: read String.from_int(value: timeout_output.status))
+
+    let timeout_stdout = await Process.run_stdout_timeout_async(command: read "printf", args: read ["timeout-stdout"], timeout_ms: 1000)?
+    Log.write(message: read timeout_stdout)
+
+    let many = await Process.run_many_stdout_async(command: read "printf", args: read [], appended_args: read ["a", "b"], jobs: 2)?
+    Log.write(message: read List.join<String>(list: read many, separator: read "|"))
+
+    let many_timeout = await Process.run_many_stdout_timeout_async(command: read "printf", args: read [], appended_args: read ["c", "d"], jobs: 2, timeout_ms: 1000)?
+    Log.write(message: read List.join<String>(list: read many_timeout, separator: read "|"))
+
+    let request = ProcessRequest(
+        command: "cat",
+        args: List<String>.new(),
+        cwd: None,
+        stdin: Some("request-stdin"),
+        env: List<ProcessEnv>.new(),
+        timeout_ms: 1000,
+        merge_stderr: false,
+        output_cap_bytes: 0,
+    )
+    let request_output = await Process.run_request_async(request: read request)?
+    Log.write(message: read request_output.stdout)
+
+    let cancellable_request = ProcessRequest(
+        command: "printf",
+        args: ["cancellable"],
+        cwd: None,
+        stdin: None,
+        env: List<ProcessEnv>.new(),
+        timeout_ms: 1000,
+        merge_stderr: false,
+        output_cap_bytes: 0,
+    )
+    let source = CancellationSource.new()
+    let token = CancellationSource.token(source: read source)
+    let cancellable_output = await Process.run_request_cancellable_async(request: read cancellable_request, token: read token)?
+    Log.write(message: read cancellable_output.stdout)
+    return Ok(Unit)
+}
+"#;
+    assert_interpreter_matches_backend(
+        "parity-async-process.rss",
+        "rsscript_parity_async_process",
+        source,
+    );
+}
+
+#[test]
 fn eval_matches_lowered_rust_for_pure_core_example() {
     let source_path = "examples/scripts/core/interpreter_pure_parity.rss";
     let source = fs::read_to_string(source_path).expect("parity fixture should be readable");
@@ -346,11 +431,12 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Env.home_dir runtime:Env.run_workspace_root runtime:Env.set runtime:Env.temp_dir
 // parity: runtime:File.append_bytes runtime:File.append_string runtime:File.exists
 // parity: runtime:File.open runtime:File.open_read runtime:File.open_write
-// parity: runtime:File.read_all runtime:File.read_all_string runtime:File.read_into
+// parity: runtime:File.read_all runtime:File.read_all_async
+// parity: runtime:File.read_all_string runtime:File.read_all_string_async runtime:File.read_into
 // parity: runtime:File.read_bytes runtime:File.read_string runtime:File.remove
-// parity: runtime:File.write runtime:File.write_atomic runtime:File.write_bytes
+// parity: runtime:File.write runtime:File.write_async runtime:File.write_atomic runtime:File.write_bytes
 // parity: runtime:File.write_bytes_view runtime:File.write_buffer runtime:File.write_buffer_view
-// parity: runtime:File.write_string runtime:File.write_string_to_path
+// parity: runtime:File.write_string runtime:File.write_string_async runtime:File.write_string_to_path
 // parity: runtime:FileError.message
 // parity: runtime:FunctionObject.has_closure runtime:FunctionObject.new
 // parity: runtime:PersistentMap.clear runtime:PersistentMap.contains_key runtime:PersistentMap.get
@@ -368,9 +454,13 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Path.starts_with runtime:Path.to_string runtime:Path.with_extension
 // parity: runtime:Path.write_string
 // parity: runtime:String.safe_relative runtime:String.to_path runtime:Workspace.resolve
-// parity: runtime:Process.run runtime:Process.run_many_stdout
-// parity: runtime:Process.run_many_stdout_timeout runtime:Process.run_request runtime:Process.run_stdout
-// parity: runtime:Process.run_stdout_timeout runtime:Process.run_timeout runtime:Process.stream
+// parity: runtime:Process.run runtime:Process.run_async runtime:Process.run_many_stdout
+// parity: runtime:Process.run_many_stdout_async runtime:Process.run_many_stdout_timeout
+// parity: runtime:Process.run_many_stdout_timeout_async runtime:Process.run_request
+// parity: runtime:Process.run_request_async runtime:Process.run_request_cancellable_async
+// parity: runtime:Process.run_stdout runtime:Process.run_stdout_async runtime:Process.run_stdout_timeout
+// parity: runtime:Process.run_stdout_timeout_async runtime:Process.run_timeout runtime:Process.run_timeout_async
+// parity: runtime:Process.stream
 // parity: runtime:Map.clear runtime:Map.contains_key runtime:Map.get
 // parity: runtime:Map.get_or_default runtime:Map.insert runtime:Map.insert_old
 // parity: runtime:Map.is_empty runtime:Map.keys runtime:Map.len runtime:Map.new
