@@ -133,6 +133,7 @@ fn statement_may_fall_through(statement: &HirStmt) -> bool {
         HirStmt::With { body, .. } => block_may_fall_through(body),
         HirStmt::Let { .. }
         | HirStmt::Expr(_)
+        | HirStmt::Assign { .. }
         | HirStmt::If {
             else_body: None, ..
         }
@@ -168,7 +169,10 @@ fn collect_closure_bindings(
                 value: Some(HirExpr::Closure { body, .. }),
                 ..
             } => collect_closure_bindings(body, callable_bindings, local_bindings),
-            HirStmt::Let { .. } | HirStmt::Return { .. } | HirStmt::Expr(_) => {}
+            HirStmt::Let { .. }
+            | HirStmt::Return { .. }
+            | HirStmt::Expr(_)
+            | HirStmt::Assign { .. } => {}
             HirStmt::With { body, .. } => {
                 collect_closure_bindings(body, callable_bindings, local_bindings)
             }
@@ -263,7 +267,7 @@ fn check_block(
             } => {
                 check_return_type(analyzer, function, None, span);
             }
-            HirStmt::Expr(value) => {
+            HirStmt::Expr(value) | HirStmt::Assign { value, .. } => {
                 check_noescape_escape(
                     analyzer,
                     value,
@@ -589,7 +593,8 @@ fn check_expr_block_without_return_contract(
             | HirStmt::Return {
                 value: Some(value), ..
             }
-            | HirStmt::Expr(value) => {
+            | HirStmt::Expr(value)
+            | HirStmt::Assign { value, .. } => {
                 check_expr(analyzer, function, value, context);
             }
             HirStmt::With { resource, body, .. } => {
@@ -2220,6 +2225,7 @@ fn collect_closure_binding_sets(
             }
             HirStmt::Return { .. }
             | HirStmt::Expr(_)
+            | HirStmt::Assign { .. }
             | HirStmt::Break(_)
             | HirStmt::Continue(_)
             | HirStmt::Unknown(_) => {}
@@ -2277,6 +2283,7 @@ fn collect_explicit_return_sites<'a>(statement: &'a HirStmt, returns: &mut Vec<C
         }
         HirStmt::Let { .. }
         | HirStmt::Expr(_)
+        | HirStmt::Assign { .. }
         | HirStmt::Break(_)
         | HirStmt::Continue(_)
         | HirStmt::Unknown(_) => {}
@@ -2297,7 +2304,9 @@ fn collect_implicit_closure_return_sites<'a>(
     returns: &mut Vec<ClosureReturn<'a>>,
 ) {
     match statement {
-        HirStmt::Expr(value) => returns.push(ClosureReturn::Expr(value)),
+        HirStmt::Expr(value) | HirStmt::Assign { value, .. } => {
+            returns.push(ClosureReturn::Expr(value))
+        }
         HirStmt::Let { span, .. } => returns.push(ClosureReturn::Unit(span)),
         HirStmt::If {
             then_body,
@@ -2337,7 +2346,10 @@ fn check_callback_body_call_argument_types(
             | HirStmt::Return {
                 value: Some(value), ..
             }
-            | HirStmt::Expr(value) => check_callback_call_argument_types(analyzer, value, contract),
+            | HirStmt::Expr(value)
+            | HirStmt::Assign { value, .. } => {
+                check_callback_call_argument_types(analyzer, value, contract)
+            }
             HirStmt::With { resource, body, .. } => {
                 check_callback_call_argument_types(analyzer, resource, contract);
                 check_callback_body_call_argument_types(analyzer, body, contract);
@@ -2848,7 +2860,8 @@ fn callback_retained_local_use_in_block(
             | HirStmt::Return {
                 value: Some(value), ..
             }
-            | HirStmt::Expr(value) => callback_retained_local_use(value, contract),
+            | HirStmt::Expr(value)
+            | HirStmt::Assign { value, .. } => callback_retained_local_use(value, contract),
             HirStmt::With { resource, body, .. } => callback_retained_local_use(resource, contract)
                 .or_else(|| callback_retained_local_use_in_block(body, contract)),
             HirStmt::If {
@@ -3006,7 +3019,8 @@ fn check_callback_body_operator_operand_types(
             | HirStmt::Return {
                 value: Some(value), ..
             }
-            | HirStmt::Expr(value) => {
+            | HirStmt::Expr(value)
+            | HirStmt::Assign { value, .. } => {
                 check_callback_operator_operand_types(analyzer, value, contract)
             }
             HirStmt::With { resource, body, .. } => {
@@ -3736,7 +3750,8 @@ fn noescape_any_use_in_stmt<'a>(
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value) => noescape_any_use(value, noescape_bindings),
+        | HirStmt::Expr(value)
+        | HirStmt::Assign { value, .. } => noescape_any_use(value, noescape_bindings),
         HirStmt::With { resource, body, .. } => noescape_any_use(resource, noescape_bindings)
             .or_else(|| {
                 body.statements
@@ -3873,7 +3888,8 @@ fn local_closure_any_use_in_stmt<'a>(
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value) => local_closure_any_use(value, local_closure_bindings),
+        | HirStmt::Expr(value)
+        | HirStmt::Assign { value, .. } => local_closure_any_use(value, local_closure_bindings),
         HirStmt::With { resource, body, .. } => {
             local_closure_any_use(resource, local_closure_bindings).or_else(|| {
                 body.statements.iter().find_map(|statement| {

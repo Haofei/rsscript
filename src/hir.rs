@@ -269,6 +269,16 @@ pub enum HirStmt {
         arms: Vec<HirSelectArm>,
         span: Span,
     },
+    /// Controlled reassignment to an existing binding (spec: `x = expr`).
+    /// The checker validates assignment legality at the AST level and only
+    /// needs the RHS for ownership/use analysis, so checker passes treat this
+    /// exactly like `Expr(value)`. The `target` is carried purely so executable
+    /// backends (interpreter) know which binding to store into.
+    Assign {
+        target: HirExpr,
+        value: HirExpr,
+        span: Span,
+    },
     Break(Span),
     Continue(Span),
     Expr(HirExpr),
@@ -1293,10 +1303,13 @@ fn lower_hir_stmt(
         Stmt::TaskGroup(_) => unreachable!("task-group statements are lowered by lower_hir_stmts"),
         Stmt::LetElse(_) => unreachable!("let-else statements are lowered by lower_hir_stmts"),
         // Controlled assignment is checked at the AST level; in HIR it carries
-        // the value expression so the RHS still gets ownership/use analysis.
-        Stmt::Assign(stmt) => {
-            HirStmt::Expr(lower_hir_expr(hir, function_name, &stmt.value, value_types))
-        }
+        // the value expression so the RHS still gets ownership/use analysis, and
+        // the lowered target so executable backends know which binding to store.
+        Stmt::Assign(stmt) => HirStmt::Assign {
+            target: lower_hir_expr(hir, function_name, &stmt.target, value_types),
+            value: lower_hir_expr(hir, function_name, &stmt.value, value_types),
+            span: stmt.span.clone(),
+        },
         Stmt::Expr(expr) => HirStmt::Expr(lower_hir_expr(hir, function_name, expr, value_types)),
         Stmt::Break(span) => HirStmt::Break(span.clone()),
         Stmt::Continue(span) => HirStmt::Continue(span.clone()),

@@ -64,6 +64,21 @@ pub(crate) fn lookup_runtime_intrinsic(
         .find(|intrinsic| intrinsic.namespace == namespace && intrinsic.name == name)
 }
 
+pub(crate) fn runtime_intrinsic_signatures() -> Vec<String> {
+    RUNTIME_INTRINSICS
+        .iter()
+        .map(|intrinsic| format!("{}.{}", intrinsic.namespace, intrinsic.name))
+        .collect()
+}
+
+pub(crate) fn runtime_intrinsic_signatures_with_interpreter() -> Vec<String> {
+    RUNTIME_INTRINSICS
+        .iter()
+        .filter(|intrinsic| intrinsic.interpreter.is_some())
+        .map(|intrinsic| format!("{}.{}", intrinsic.namespace, intrinsic.name))
+        .collect()
+}
+
 const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Assert", "equal", "rsscript_runtime::assert_equal"),
     runtime_intrinsic(
@@ -1203,42 +1218,104 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "to_list",
         "rsscript_runtime::sorted_set_to_list",
     ),
-    runtime_intrinsic("Char", "compare", "rsscript_runtime::char_compare"),
-    runtime_intrinsic("Char", "from_code", "rsscript_runtime::char_from_code"),
-    runtime_intrinsic(
+    runtime_intrinsic_with_interpreter(
+        "Char",
+        "compare",
+        "rsscript_runtime::char_compare",
+        InterpreterIntrinsic::CharCompare,
+    ),
+    runtime_intrinsic_with_interpreter(
+        "Char",
+        "from_code",
+        "rsscript_runtime::char_from_code",
+        InterpreterIntrinsic::CharFromCode,
+    ),
+    runtime_intrinsic_with_interpreter(
         "Char",
         "is_alphanumeric",
         "rsscript_runtime::char_is_alphanumeric",
+        InterpreterIntrinsic::CharIsAlphanumeric,
     ),
-    runtime_intrinsic("Char", "is_alpha", "rsscript_runtime::char_is_alpha"),
-    runtime_intrinsic("Char", "is_digit", "rsscript_runtime::char_is_digit"),
-    runtime_intrinsic(
+    runtime_intrinsic_with_interpreter(
+        "Char",
+        "is_alpha",
+        "rsscript_runtime::char_is_alpha",
+        InterpreterIntrinsic::CharIsAlpha,
+    ),
+    runtime_intrinsic_with_interpreter(
+        "Char",
+        "is_digit",
+        "rsscript_runtime::char_is_digit",
+        InterpreterIntrinsic::CharIsDigit,
+    ),
+    runtime_intrinsic_with_interpreter(
         "Char",
         "is_whitespace",
         "rsscript_runtime::char_is_whitespace",
+        InterpreterIntrinsic::CharIsWhitespace,
     ),
-    runtime_intrinsic("Char", "to_code", "rsscript_runtime::char_to_code"),
-    runtime_intrinsic("Char", "to_string", "rsscript_runtime::char_to_string"),
+    runtime_intrinsic_with_interpreter(
+        "Char",
+        "to_code",
+        "rsscript_runtime::char_to_code",
+        InterpreterIntrinsic::CharToCode,
+    ),
+    runtime_intrinsic_with_interpreter(
+        "Char",
+        "to_string",
+        "rsscript_runtime::char_to_string",
+        InterpreterIntrinsic::CharToString,
+    ),
     runtime_intrinsic_with_interpreter(
         "Int",
         "to_string",
         "rsscript_runtime::string_from_int",
         InterpreterIntrinsic::IntToString,
     ),
-    runtime_intrinsic("String", "after", "rsscript_runtime::string_after"),
-    runtime_intrinsic("String", "contains", "rsscript_runtime::string_contains"),
-    runtime_intrinsic("String", "before", "rsscript_runtime::string_before"),
+    runtime_intrinsic_with_interpreter(
+        "String",
+        "after",
+        "rsscript_runtime::string_after",
+        InterpreterIntrinsic::StringAfter,
+    ),
+    runtime_intrinsic_with_interpreter(
+        "String",
+        "contains",
+        "rsscript_runtime::string_contains",
+        InterpreterIntrinsic::StringContains,
+    ),
+    runtime_intrinsic_with_interpreter(
+        "String",
+        "before",
+        "rsscript_runtime::string_before",
+        InterpreterIntrinsic::StringBefore,
+    ),
     runtime_intrinsic_with_interpreter(
         "String",
         "concat",
         "rsscript_runtime::string_concat",
         InterpreterIntrinsic::StringConcat,
     ),
-    runtime_intrinsic("String", "copy", "rsscript_runtime::string_copy"),
-    runtime_intrinsic("String", "ends_with", "rsscript_runtime::string_ends_with"),
+    runtime_intrinsic_with_interpreter(
+        "String",
+        "copy",
+        "rsscript_runtime::string_copy",
+        InterpreterIntrinsic::StringCopy,
+    ),
+    runtime_intrinsic_with_interpreter(
+        "String",
+        "ends_with",
+        "rsscript_runtime::string_ends_with",
+        InterpreterIntrinsic::StringEndsWith,
+    ),
     runtime_intrinsic("String", "env", "rsscript_runtime::env_get"),
     runtime_intrinsic("String", "env_or", "rsscript_runtime::env_get_or_default"),
-    runtime_intrinsic("String", "from_bool", "rsscript_runtime::string_from_bool"),
+    runtime_intrinsic_with_interpreter(
+        "String",
+        "from_bool",
+        "rsscript_runtime::string_from_bool",
+        InterpreterIntrinsic::StringFromBool,
+    ),
     runtime_intrinsic_with_interpreter(
         "String",
         "from_int",
@@ -1251,78 +1328,157 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "rsscript_runtime::string_is_empty",
         InterpreterIntrinsic::StringIsEmpty,
     ),
-    runtime_intrinsic("String", "index_of", "rsscript_runtime::string_index_of"),
+    runtime_intrinsic_with_interpreter(
+        "String",
+        "index_of",
+        "rsscript_runtime::string_index_of",
+        InterpreterIntrinsic::StringIndexOf,
+    ),
     runtime_intrinsic("String", "join", "rsscript_runtime::string_join"),
-    runtime_intrinsic("String", "chars", "rsscript_runtime::string_chars"),
+    runtime_intrinsic_with_interpreter(
+        "String",
+        "chars",
+        "rsscript_runtime::string_chars",
+        InterpreterIntrinsic::StringChars,
+    ),
     runtime_intrinsic_with_interpreter(
         "String",
         "len",
         "rsscript_runtime::string_len",
         InterpreterIntrinsic::StringLen,
     ),
-    runtime_intrinsic("String", "lines", "rsscript_runtime::string_lines"),
-    runtime_intrinsic("String", "replace", "rsscript_runtime::string_replace"),
-    runtime_intrinsic("String", "repeat", "rsscript_runtime::string_repeat"),
-    runtime_intrinsic("String", "parse_int", "rsscript_runtime::string_parse_int"),
+    runtime_intrinsic_with_interpreter(
+        "String",
+        "lines",
+        "rsscript_runtime::string_lines",
+        InterpreterIntrinsic::StringLines,
+    ),
+    runtime_intrinsic_with_interpreter(
+        "String",
+        "replace",
+        "rsscript_runtime::string_replace",
+        InterpreterIntrinsic::StringReplace,
+    ),
+    runtime_intrinsic_with_interpreter(
+        "String",
+        "repeat",
+        "rsscript_runtime::string_repeat",
+        InterpreterIntrinsic::StringRepeat,
+    ),
+    runtime_intrinsic_with_interpreter(
+        "String",
+        "parse_int",
+        "rsscript_runtime::string_parse_int",
+        InterpreterIntrinsic::StringParseInt,
+    ),
     runtime_intrinsic(
         "String",
         "safe_relative",
         "rsscript_runtime::path_safe_relative",
     ),
-    runtime_intrinsic("String", "slice", "rsscript_runtime::string_slice"),
-    runtime_intrinsic(
+    runtime_intrinsic_with_interpreter(
+        "String",
+        "slice",
+        "rsscript_runtime::string_slice",
+        InterpreterIntrinsic::StringSlice,
+    ),
+    runtime_intrinsic_with_interpreter(
         "String",
         "strip_prefix",
         "rsscript_runtime::string_strip_prefix",
+        InterpreterIntrinsic::StringStripPrefix,
     ),
-    runtime_intrinsic(
+    runtime_intrinsic_with_interpreter(
         "String",
         "starts_with",
         "rsscript_runtime::string_starts_with",
+        InterpreterIntrinsic::StringStartsWith,
     ),
-    runtime_intrinsic("String", "split", "rsscript_runtime::string_split"),
-    runtime_intrinsic(
+    runtime_intrinsic_with_interpreter(
+        "String",
+        "split",
+        "rsscript_runtime::string_split",
+        InterpreterIntrinsic::StringSplit,
+    ),
+    runtime_intrinsic_with_interpreter(
         "String",
         "to_lowercase",
         "rsscript_runtime::string_to_lowercase",
+        InterpreterIntrinsic::StringToLowercase,
     ),
     runtime_intrinsic("String", "to_path", "rsscript_runtime::path_from_string"),
     runtime_intrinsic("String", "to_url", "rsscript_runtime::url_from_string"),
-    runtime_intrinsic("String", "to_bytes", "rsscript_runtime::bytes_from_string"),
-    runtime_intrinsic(
+    runtime_intrinsic_with_interpreter(
+        "String",
+        "to_bytes",
+        "rsscript_runtime::bytes_from_string",
+        InterpreterIntrinsic::StringToBytes,
+    ),
+    runtime_intrinsic_with_interpreter(
         "String",
         "to_uppercase",
         "rsscript_runtime::string_to_uppercase",
+        InterpreterIntrinsic::StringToUppercase,
     ),
-    runtime_intrinsic("String", "trim", "rsscript_runtime::string_trim"),
-    runtime_intrinsic("String", "view", "rsscript_runtime::string_view"),
-    runtime_intrinsic("StringView", "after", "rsscript_runtime::string_view_after"),
-    runtime_intrinsic(
+    runtime_intrinsic_with_interpreter(
+        "String",
+        "trim",
+        "rsscript_runtime::string_trim",
+        InterpreterIntrinsic::StringTrim,
+    ),
+    runtime_intrinsic_with_interpreter(
+        "String",
+        "view",
+        "rsscript_runtime::string_view",
+        InterpreterIntrinsic::StringView,
+    ),
+    runtime_intrinsic_with_interpreter(
+        "StringView",
+        "after",
+        "rsscript_runtime::string_view_after",
+        InterpreterIntrinsic::StringViewAfter,
+    ),
+    runtime_intrinsic_with_interpreter(
         "StringView",
         "before",
         "rsscript_runtime::string_view_before",
+        InterpreterIntrinsic::StringViewBefore,
     ),
-    runtime_intrinsic(
+    runtime_intrinsic_with_interpreter(
         "StringView",
         "contains",
         "rsscript_runtime::string_view_contains",
+        InterpreterIntrinsic::StringViewContains,
     ),
-    runtime_intrinsic(
+    runtime_intrinsic_with_interpreter(
         "StringView",
         "is_empty",
         "rsscript_runtime::string_view_is_empty",
+        InterpreterIntrinsic::StringViewIsEmpty,
     ),
-    runtime_intrinsic("StringView", "len", "rsscript_runtime::string_view_len"),
-    runtime_intrinsic("StringView", "slice", "rsscript_runtime::string_view_slice"),
-    runtime_intrinsic(
+    runtime_intrinsic_with_interpreter(
+        "StringView",
+        "len",
+        "rsscript_runtime::string_view_len",
+        InterpreterIntrinsic::StringViewLen,
+    ),
+    runtime_intrinsic_with_interpreter(
+        "StringView",
+        "slice",
+        "rsscript_runtime::string_view_slice",
+        InterpreterIntrinsic::StringViewSlice,
+    ),
+    runtime_intrinsic_with_interpreter(
         "StringView",
         "starts_with",
         "rsscript_runtime::string_view_starts_with",
+        InterpreterIntrinsic::StringViewStartsWith,
     ),
-    runtime_intrinsic(
+    runtime_intrinsic_with_interpreter(
         "StringView",
         "to_string",
         "rsscript_runtime::string_view_to_string",
+        InterpreterIntrinsic::StringViewToString,
     ),
     runtime_intrinsic(
         "StringBuilder",

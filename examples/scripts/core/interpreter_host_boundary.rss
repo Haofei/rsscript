@@ -1,4 +1,8 @@
-fn main() -> Unit {
-    let value = Env.get_or_default(name: read "RSSCRIPT_EVAL_HOST_BOUNDARY", default: read "missing")
-    Log.write(message: read value)
+features: native
+
+fn main() -> Result<Unit, FileError> {
+    let root = Env.run_workspace_root()
+    Env.set_current_dir(path: read root)?
+    Log.write(message: read "host-ok")
+    return Ok(Unit)
 }

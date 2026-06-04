@@ -116,16 +116,101 @@ struct InterpreterIntrinsicSpec {
 
 #[derive(Debug, Clone, Copy)]
 enum InterpreterEvalKind {
+    CharCompare,
+    CharFromCode,
+    CharIsAlphanumeric,
+    CharIsAlpha,
+    CharIsDigit,
+    CharIsWhitespace,
+    CharToCode,
+    CharToString,
     IntToString,
     StringConcat,
+    StringCopy,
+    StringFromBool,
     StringIsEmpty,
     StringLen,
+    StringLines,
+    StringChars,
+    StringSlice,
+    StringSplit,
+    StringToBytes,
+    StringTrim,
+    StringToLowercase,
+    StringToUppercase,
+    StringView,
+    StringViewAfter,
+    StringViewBefore,
+    StringViewContains,
+    StringViewIsEmpty,
+    StringViewLen,
+    StringViewSlice,
+    StringViewStartsWith,
+    StringViewToString,
+    StringReplace,
+    StringRepeat,
+    StringContains,
+    StringStartsWith,
+    StringEndsWith,
+    StringParseInt,
+    StringIndexOf,
+    StringStripPrefix,
+    StringBefore,
+    StringAfter,
     LogError,
     LogTrace,
     LogWrite,
 }
 
 const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
+    InterpreterIntrinsicSpec {
+        namespace: "Char",
+        name: "compare",
+        variant: "CharCompare",
+        eval_kind: InterpreterEvalKind::CharCompare,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Char",
+        name: "from_code",
+        variant: "CharFromCode",
+        eval_kind: InterpreterEvalKind::CharFromCode,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Char",
+        name: "is_alphanumeric",
+        variant: "CharIsAlphanumeric",
+        eval_kind: InterpreterEvalKind::CharIsAlphanumeric,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Char",
+        name: "is_alpha",
+        variant: "CharIsAlpha",
+        eval_kind: InterpreterEvalKind::CharIsAlpha,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Char",
+        name: "is_digit",
+        variant: "CharIsDigit",
+        eval_kind: InterpreterEvalKind::CharIsDigit,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Char",
+        name: "is_whitespace",
+        variant: "CharIsWhitespace",
+        eval_kind: InterpreterEvalKind::CharIsWhitespace,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Char",
+        name: "to_code",
+        variant: "CharToCode",
+        eval_kind: InterpreterEvalKind::CharToCode,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Char",
+        name: "to_string",
+        variant: "CharToString",
+        eval_kind: InterpreterEvalKind::CharToString,
+    },
     InterpreterIntrinsicSpec {
         namespace: "Int",
         name: "to_string",
@@ -134,9 +219,27 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
     },
     InterpreterIntrinsicSpec {
         namespace: "String",
+        name: "chars",
+        variant: "StringChars",
+        eval_kind: InterpreterEvalKind::StringChars,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
         name: "concat",
         variant: "StringConcat",
         eval_kind: InterpreterEvalKind::StringConcat,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "copy",
+        variant: "StringCopy",
+        eval_kind: InterpreterEvalKind::StringCopy,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "from_bool",
+        variant: "StringFromBool",
+        eval_kind: InterpreterEvalKind::StringFromBool,
     },
     InterpreterIntrinsicSpec {
         namespace: "String",
@@ -155,6 +258,162 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "len",
         variant: "StringLen",
         eval_kind: InterpreterEvalKind::StringLen,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "lines",
+        variant: "StringLines",
+        eval_kind: InterpreterEvalKind::StringLines,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "trim",
+        variant: "StringTrim",
+        eval_kind: InterpreterEvalKind::StringTrim,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "to_lowercase",
+        variant: "StringToLowercase",
+        eval_kind: InterpreterEvalKind::StringToLowercase,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "to_uppercase",
+        variant: "StringToUppercase",
+        eval_kind: InterpreterEvalKind::StringToUppercase,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "replace",
+        variant: "StringReplace",
+        eval_kind: InterpreterEvalKind::StringReplace,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "repeat",
+        variant: "StringRepeat",
+        eval_kind: InterpreterEvalKind::StringRepeat,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "contains",
+        variant: "StringContains",
+        eval_kind: InterpreterEvalKind::StringContains,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "starts_with",
+        variant: "StringStartsWith",
+        eval_kind: InterpreterEvalKind::StringStartsWith,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "ends_with",
+        variant: "StringEndsWith",
+        eval_kind: InterpreterEvalKind::StringEndsWith,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "parse_int",
+        variant: "StringParseInt",
+        eval_kind: InterpreterEvalKind::StringParseInt,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "slice",
+        variant: "StringSlice",
+        eval_kind: InterpreterEvalKind::StringSlice,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "split",
+        variant: "StringSplit",
+        eval_kind: InterpreterEvalKind::StringSplit,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "to_bytes",
+        variant: "StringToBytes",
+        eval_kind: InterpreterEvalKind::StringToBytes,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "view",
+        variant: "StringView",
+        eval_kind: InterpreterEvalKind::StringView,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "StringView",
+        name: "after",
+        variant: "StringViewAfter",
+        eval_kind: InterpreterEvalKind::StringViewAfter,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "StringView",
+        name: "before",
+        variant: "StringViewBefore",
+        eval_kind: InterpreterEvalKind::StringViewBefore,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "StringView",
+        name: "contains",
+        variant: "StringViewContains",
+        eval_kind: InterpreterEvalKind::StringViewContains,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "StringView",
+        name: "is_empty",
+        variant: "StringViewIsEmpty",
+        eval_kind: InterpreterEvalKind::StringViewIsEmpty,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "StringView",
+        name: "len",
+        variant: "StringViewLen",
+        eval_kind: InterpreterEvalKind::StringViewLen,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "StringView",
+        name: "slice",
+        variant: "StringViewSlice",
+        eval_kind: InterpreterEvalKind::StringViewSlice,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "StringView",
+        name: "starts_with",
+        variant: "StringViewStartsWith",
+        eval_kind: InterpreterEvalKind::StringViewStartsWith,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "StringView",
+        name: "to_string",
+        variant: "StringViewToString",
+        eval_kind: InterpreterEvalKind::StringViewToString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "index_of",
+        variant: "StringIndexOf",
+        eval_kind: InterpreterEvalKind::StringIndexOf,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "strip_prefix",
+        variant: "StringStripPrefix",
+        eval_kind: InterpreterEvalKind::StringStripPrefix,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "before",
+        variant: "StringBefore",
+        eval_kind: InterpreterEvalKind::StringBefore,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "String",
+        name: "after",
+        variant: "StringAfter",
+        eval_kind: InterpreterEvalKind::StringAfter,
     },
     InterpreterIntrinsicSpec {
         namespace: "Log",
@@ -263,7 +522,7 @@ fn generated_interpreter_intrinsic_enum() -> String {
 fn generated_interpreter_intrinsic_dispatch() -> String {
     let mut out = String::new();
     out.push_str(
-        "fn eval_generated_runtime_intrinsic(\n    interpreter: &mut Interpreter<'_>,\n    intrinsic: InterpreterIntrinsic,\n    args: &[crate::syntax::ast::CallArg],\n) -> Result<Value, EvalError> {\n    match intrinsic {\n",
+        "fn eval_generated_runtime_intrinsic(\n    interpreter: &mut Interpreter<'_>,\n    intrinsic: InterpreterIntrinsic,\n    args: &[crate::hir::HirCallArg],\n) -> Result<Value, EvalError> {\n    match intrinsic {\n",
     );
     for intrinsic in INTERPRETER_INTRINSICS {
         out.push_str("        InterpreterIntrinsic::");
@@ -278,17 +537,125 @@ fn generated_interpreter_intrinsic_dispatch() -> String {
 
 fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
     match kind {
+        InterpreterEvalKind::CharCompare => {
+            "{\n            let left = interpreter.eval_named_or_positional_arg(args, \"left\", 0)?;\n            let right = interpreter.eval_named_or_positional_arg(args, \"right\", 1)?;\n            let value = match expect_char(left)?.cmp(&expect_char(right)?) {\n                std::cmp::Ordering::Less => -1,\n                std::cmp::Ordering::Equal => 0,\n                std::cmp::Ordering::Greater => 1,\n            };\n            Ok(Value::Int(value))\n        }"
+        }
+        InterpreterEvalKind::CharFromCode => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(value_option(u32::try_from(expect_int(value)?).ok().and_then(char::from_u32), Value::Char))\n        }"
+        }
+        InterpreterEvalKind::CharIsAlphanumeric => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(expect_char(value)?.is_ascii_alphanumeric()))\n        }"
+        }
+        InterpreterEvalKind::CharIsAlpha => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(expect_char(value)?.is_ascii_alphabetic()))\n        }"
+        }
+        InterpreterEvalKind::CharIsDigit => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(expect_char(value)?.is_ascii_digit()))\n        }"
+        }
+        InterpreterEvalKind::CharIsWhitespace => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(expect_char(value)?.is_whitespace()))\n        }"
+        }
+        InterpreterEvalKind::CharToCode => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Int(expect_char(value)? as u32 as i64))\n        }"
+        }
+        InterpreterEvalKind::CharToString => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(expect_char(value)?.to_string()))\n        }"
+        }
         InterpreterEvalKind::IntToString => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(expect_int(value)?.to_string()))\n        }"
         }
+        InterpreterEvalKind::StringChars => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::List(expect_string(value)?.chars().map(Value::Char).collect()))\n        }"
+        }
         InterpreterEvalKind::StringConcat => {
             "{\n            let left = interpreter.eval_named_or_positional_arg(args, \"left\", 0)?;\n            let right = interpreter.eval_named_or_positional_arg(args, \"right\", 1)?;\n            Ok(Value::String(format!(\"{}{}\", expect_string(left)?, expect_string(right)?)))\n        }"
+        }
+        InterpreterEvalKind::StringCopy => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(expect_string(value)?))\n        }"
+        }
+        InterpreterEvalKind::StringFromBool => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(expect_bool(value)?.to_string()))\n        }"
         }
         InterpreterEvalKind::StringIsEmpty => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(expect_string(value)?.is_empty()))\n        }"
         }
         InterpreterEvalKind::StringLen => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Int(expect_string(value)?.len() as i64))\n        }"
+        }
+        InterpreterEvalKind::StringLines => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::List(expect_string(value)?.lines().map(|line| Value::String(line.to_string())).collect()))\n        }"
+        }
+        InterpreterEvalKind::StringTrim => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(expect_string(value)?.trim().to_string()))\n        }"
+        }
+        InterpreterEvalKind::StringToLowercase => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(expect_string(value)?.to_lowercase()))\n        }"
+        }
+        InterpreterEvalKind::StringToUppercase => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(expect_string(value)?.to_uppercase()))\n        }"
+        }
+        InterpreterEvalKind::StringReplace => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let from = interpreter.eval_named_or_positional_arg(args, \"from\", 1)?;\n            let to = interpreter.eval_named_or_positional_arg(args, \"to\", 2)?;\n            Ok(Value::String(expect_string(value)?.replace(&expect_string(from)?, &expect_string(to)?)))\n        }"
+        }
+        InterpreterEvalKind::StringRepeat => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let count = interpreter.eval_named_or_positional_arg(args, \"count\", 1)?;\n            Ok(Value::String(expect_string(value)?.repeat(expect_int(count)?.max(0) as usize)))\n        }"
+        }
+        InterpreterEvalKind::StringContains => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let needle = interpreter.eval_named_or_positional_arg(args, \"needle\", 1)?;\n            Ok(Value::Bool(expect_string(value)?.contains(&expect_string(needle)?)))\n        }"
+        }
+        InterpreterEvalKind::StringStartsWith => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let prefix = interpreter.eval_named_or_positional_arg(args, \"prefix\", 1)?;\n            Ok(Value::Bool(expect_string(value)?.starts_with(&expect_string(prefix)?)))\n        }"
+        }
+        InterpreterEvalKind::StringEndsWith => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let suffix = interpreter.eval_named_or_positional_arg(args, \"suffix\", 1)?;\n            Ok(Value::Bool(expect_string(value)?.ends_with(&expect_string(suffix)?)))\n        }"
+        }
+        InterpreterEvalKind::StringParseInt => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(value_option(expect_string(value)?.parse::<i64>().ok(), Value::Int))\n        }"
+        }
+        InterpreterEvalKind::StringSlice => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let start = interpreter.eval_named_or_positional_arg(args, \"start\", 1)?;\n            let len = interpreter.eval_named_or_positional_arg(args, \"len\", 2)?;\n            Ok(Value::String(string_slice(expect_string(value)?, expect_int(start)?, expect_int(len)?)))\n        }"
+        }
+        InterpreterEvalKind::StringSplit => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let delimiter = interpreter.eval_named_or_positional_arg(args, \"delimiter\", 1)?;\n            Ok(Value::List(expect_string(value)?.split(&expect_string(delimiter)?).map(|part| Value::String(part.to_string())).collect()))\n        }"
+        }
+        InterpreterEvalKind::StringToBytes => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bytes(expect_string(value)?.into_bytes()))\n        }"
+        }
+        InterpreterEvalKind::StringView | InterpreterEvalKind::StringViewSlice => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let start = interpreter.eval_named_or_positional_arg(args, \"start\", 1)?;\n            let len = interpreter.eval_named_or_positional_arg(args, \"len\", 2)?;\n            Ok(Value::String(string_slice(expect_string(value)?, expect_int(start)?, expect_int(len)?)))\n        }"
+        }
+        InterpreterEvalKind::StringViewAfter => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let delimiter = interpreter.eval_named_or_positional_arg(args, \"delimiter\", 1)?;\n            let value = expect_string(value)?;\n            Ok(value_option(value.split_once(&expect_string(delimiter)?).map(|(_, right)| right.to_string()), Value::String))\n        }"
+        }
+        InterpreterEvalKind::StringViewBefore => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let delimiter = interpreter.eval_named_or_positional_arg(args, \"delimiter\", 1)?;\n            let value = expect_string(value)?;\n            let delimiter = expect_string(delimiter)?;\n            Ok(value_option(value.find(&delimiter).map(|index| value[..index].to_string()), Value::String))\n        }"
+        }
+        InterpreterEvalKind::StringViewContains => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let needle = interpreter.eval_named_or_positional_arg(args, \"needle\", 1)?;\n            Ok(Value::Bool(expect_string(value)?.contains(&expect_string(needle)?)))\n        }"
+        }
+        InterpreterEvalKind::StringViewIsEmpty => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(expect_string(value)?.is_empty()))\n        }"
+        }
+        InterpreterEvalKind::StringViewLen => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Int(expect_string(value)?.len() as i64))\n        }"
+        }
+        InterpreterEvalKind::StringViewStartsWith => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let prefix = interpreter.eval_named_or_positional_arg(args, \"prefix\", 1)?;\n            Ok(Value::Bool(expect_string(value)?.starts_with(&expect_string(prefix)?)))\n        }"
+        }
+        InterpreterEvalKind::StringViewToString => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(expect_string(value)?))\n        }"
+        }
+        InterpreterEvalKind::StringIndexOf => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let needle = interpreter.eval_named_or_positional_arg(args, \"needle\", 1)?;\n            let value = expect_string(value)?;\n            Ok(value_option(value.find(&expect_string(needle)?).map(|index| index as i64), Value::Int))\n        }"
+        }
+        InterpreterEvalKind::StringStripPrefix => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let prefix = interpreter.eval_named_or_positional_arg(args, \"prefix\", 1)?;\n            let value = expect_string(value)?;\n            Ok(value_option(value.strip_prefix(&expect_string(prefix)?).map(str::to_string), Value::String))\n        }"
+        }
+        InterpreterEvalKind::StringBefore => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let delimiter = interpreter.eval_named_or_positional_arg(args, \"delimiter\", 1)?;\n            let value = expect_string(value)?;\n            let delimiter = expect_string(delimiter)?;\n            Ok(value_option(value.find(&delimiter).map(|index| value[..index].to_string()), Value::String))\n        }"
+        }
+        InterpreterEvalKind::StringAfter => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let delimiter = interpreter.eval_named_or_positional_arg(args, \"delimiter\", 1)?;\n            let value = expect_string(value)?;\n            Ok(value_option(value.split_once(&expect_string(delimiter)?).map(|(_, right)| right.to_string()), Value::String))\n        }"
         }
         InterpreterEvalKind::LogError => {
             "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"message\", 0)?;\n            interpreter.stderr.push_str(&expect_string(value)?);\n            interpreter.stderr.push('\\n');\n            Ok(Value::Unit)\n        }"

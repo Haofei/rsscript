@@ -1947,7 +1947,9 @@ fn collect_review_map_hir_facts_stmt(
                 collect_review_map_hir_facts_block(&arm.body, local_bindings, facts);
             }
         }
-        HirStmt::Expr(expr) => collect_review_map_hir_facts_expr(expr, local_bindings, facts),
+        HirStmt::Expr(expr) | HirStmt::Assign { value: expr, .. } => {
+            collect_review_map_hir_facts_expr(expr, local_bindings, facts)
+        }
         HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
     }
 }
@@ -2094,7 +2096,8 @@ fn collect_managed_closure_capture_names_block(
             HirStmt::Return {
                 value: Some(value), ..
             }
-            | HirStmt::Expr(value) => {
+            | HirStmt::Expr(value)
+            | HirStmt::Assign { value, .. } => {
                 collect_managed_closure_capture_names_expr(
                     value,
                     local_bindings,

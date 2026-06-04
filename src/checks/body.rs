@@ -147,7 +147,9 @@ fn check_explicit_closure_captures_stmt(
                 check_explicit_closure_captures_block(analyzer, &arm.body, binding_names);
             }
         }
-        HirStmt::Expr(expr) => check_explicit_closure_captures_expr(analyzer, expr, binding_names),
+        HirStmt::Expr(expr) | HirStmt::Assign { value: expr, .. } => {
+            check_explicit_closure_captures_expr(analyzer, expr, binding_names)
+        }
         HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
     }
 }
@@ -1063,7 +1065,7 @@ fn collect_stmt_uses(statement: &HirStmt, uses: &mut HashSet<String>) {
                 collect_block_uses(&arm.body, uses);
             }
         }
-        HirStmt::Expr(expr) => collect_expr_uses(expr, uses),
+        HirStmt::Expr(expr) | HirStmt::Assign { value: expr, .. } => collect_expr_uses(expr, uses),
         HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
     }
 }
@@ -1207,6 +1209,7 @@ fn remove_stmt_bindings(statement: &HirStmt, uses: &mut HashSet<String>) {
         | HirStmt::If { .. }
         | HirStmt::Loop { .. }
         | HirStmt::Expr(_)
+        | HirStmt::Assign { .. }
         | HirStmt::Break(_)
         | HirStmt::Continue(_)
         | HirStmt::Unknown(_) => {}
@@ -1492,7 +1495,7 @@ fn check_stmt_semantics(
                 Flow::Fallthrough
             }
         }
-        HirStmt::Expr(expr) => {
+        HirStmt::Expr(expr) | HirStmt::Assign { value: expr, .. } => {
             check_expr_semantics(analyzer, local_analysis, expr, state, live_after);
             if check_resource_contexts {
                 check_resource_pool_lease_expr(analyzer, expr, false);
@@ -1544,7 +1547,9 @@ fn apply_stmt_effects(statement: &HirStmt, state: &mut BodyState) {
                 apply_expr_effects(&arm.operation, state);
             }
         }
-        HirStmt::Expr(expr) => apply_expr_effects(expr, state),
+        HirStmt::Expr(expr) | HirStmt::Assign { value: expr, .. } => {
+            apply_expr_effects(expr, state)
+        }
         HirStmt::Break(_) | HirStmt::Continue(_) => {}
         HirStmt::Unknown(_) => {}
     }
@@ -2273,7 +2278,7 @@ fn first_mutating_effect_stmt(stmt: &HirStmt) -> Option<(DataEffect, &crate::dia
             first_mutating_effect_expr(&arm.operation)
                 .or_else(|| first_mutating_effect_block(&arm.body))
         }),
-        HirStmt::Expr(value) => first_mutating_effect_expr(value),
+        HirStmt::Expr(value) | HirStmt::Assign { value, .. } => first_mutating_effect_expr(value),
         HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => None,
     }
 }
@@ -2582,7 +2587,8 @@ fn match_arm_value_type(block: &HirBlock) -> Option<&str> {
         HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value) => hir_expr_type_name(value),
+        | HirStmt::Expr(value)
+        | HirStmt::Assign { value, .. } => hir_expr_type_name(value),
         _ => None,
     }
 }
@@ -2655,7 +2661,9 @@ fn check_await_placement_stmt(
                 check_await_placement(analyzer, &arm.body, function_is_async);
             }
         }
-        HirStmt::Expr(value) => check_await_placement_expr(analyzer, value, function_is_async),
+        HirStmt::Expr(value) | HirStmt::Assign { value, .. } => {
+            check_await_placement_expr(analyzer, value, function_is_async)
+        }
         HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
     }
 }
@@ -3089,7 +3097,8 @@ fn weak_field_access_requiring_upgrade_in_stmt(
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value) => weak_field_access_requiring_upgrade(value),
+        | HirStmt::Expr(value)
+        | HirStmt::Assign { value, .. } => weak_field_access_requiring_upgrade(value),
         HirStmt::With { resource, body, .. } => weak_field_access_requiring_upgrade(resource)
             .or_else(|| {
                 body.statements
@@ -3521,7 +3530,8 @@ fn collect_spawn_capture_idents_from_stmt(statement: &HirStmt, captures: &mut Ve
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value) => collect_spawn_capture_idents(value, captures),
+        | HirStmt::Expr(value)
+        | HirStmt::Assign { value, .. } => collect_spawn_capture_idents(value, captures),
         HirStmt::With { resource, body, .. } => {
             collect_spawn_capture_idents(resource, captures);
             for statement in &body.statements {
@@ -3701,6 +3711,7 @@ fn collect_closure_bound_names(block: &HirBlock, bound: &mut HashSet<String>) {
             | HirStmt::Break(_)
             | HirStmt::Continue(_)
             | HirStmt::Expr(_)
+            | HirStmt::Assign { .. }
             | HirStmt::Unknown(_) => {}
         }
     }
@@ -3719,7 +3730,10 @@ fn collect_closure_effect_accesses_block(
             | HirStmt::Return {
                 value: Some(value), ..
             }
-            | HirStmt::Expr(value) => collect_closure_effect_accesses_expr(value, bound, out),
+            | HirStmt::Expr(value)
+            | HirStmt::Assign { value, .. } => {
+                collect_closure_effect_accesses_expr(value, bound, out)
+            }
             HirStmt::With { resource, body, .. } => {
                 collect_closure_effect_accesses_expr(resource, bound, out);
                 collect_closure_effect_accesses_block(body, bound, out);
@@ -3950,7 +3964,10 @@ fn check_try_error_types_stmt(
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value) => check_try_error_types_expr(analyzer, value, function_error_type),
+        | HirStmt::Expr(value)
+        | HirStmt::Assign { value, .. } => {
+            check_try_error_types_expr(analyzer, value, function_error_type)
+        }
         HirStmt::With { resource, body, .. } => {
             check_try_error_types_expr(analyzer, resource, function_error_type);
             check_try_error_types(analyzer, body, function_error_type);
@@ -5180,7 +5197,8 @@ fn check_resource_producer_stmt(analyzer: &mut Analyzer<'_>, statement: &HirStmt
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value) => check_resource_producer_expr(analyzer, value, false),
+        | HirStmt::Expr(value)
+        | HirStmt::Assign { value, .. } => check_resource_producer_expr(analyzer, value, false),
         HirStmt::With { resource, body, .. } => {
             check_resource_producer_expr(analyzer, resource, true);
             for statement in &body.statements {
@@ -5417,7 +5435,8 @@ fn collect_resource_pool_factory_resource_captures_stmt(
         HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value) => {
+        | HirStmt::Expr(value)
+        | HirStmt::Assign { value, .. } => {
             collect_resource_pool_factory_resource_captures_expr(value, state, bound, captures);
         }
         HirStmt::With {
@@ -5649,7 +5668,9 @@ fn check_lazy_factory_captures_stmt(
                 check_lazy_factory_captures_expr(analyzer, value, bindings);
             }
         }
-        HirStmt::Expr(value) => check_lazy_factory_captures_expr(analyzer, value, bindings),
+        HirStmt::Expr(value) | HirStmt::Assign { value, .. } => {
+            check_lazy_factory_captures_expr(analyzer, value, bindings)
+        }
         HirStmt::With { resource, body, .. } => {
             check_lazy_factory_captures_expr(analyzer, resource, bindings);
             check_lazy_factory_captures_block(analyzer, body, bindings);
@@ -5809,7 +5830,10 @@ fn collect_lazy_factory_capture_idents_stmt(
         HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value) => collect_lazy_factory_capture_idents_expr(value, bound, captures),
+        | HirStmt::Expr(value)
+        | HirStmt::Assign { value, .. } => {
+            collect_lazy_factory_capture_idents_expr(value, bound, captures)
+        }
         HirStmt::With {
             resource,
             binding,
@@ -5980,7 +6004,9 @@ fn check_resource_pool_discards_stmt(
                 check_resource_pool_discards_expr(analyzer, value, lease_bindings);
             }
         }
-        HirStmt::Expr(value) => check_resource_pool_discards_expr(analyzer, value, lease_bindings),
+        HirStmt::Expr(value) | HirStmt::Assign { value, .. } => {
+            check_resource_pool_discards_expr(analyzer, value, lease_bindings)
+        }
         HirStmt::With {
             resource,
             binding,
@@ -6167,7 +6193,8 @@ fn resource_pool_fallible_factory_stmt(statement: &HirStmt) -> Option<&HirExpr> 
         HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value) => resource_pool_fallible_factory_expr(value),
+        | HirStmt::Expr(value)
+        | HirStmt::Assign { value, .. } => resource_pool_fallible_factory_expr(value),
         HirStmt::If {
             then_body,
             else_body,
@@ -6200,7 +6227,8 @@ fn check_resource_pool_factory_stmt(analyzer: &mut Analyzer<'_>, statement: &Hir
         HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value) => check_resource_producer_expr(analyzer, value, true),
+        | HirStmt::Expr(value)
+        | HirStmt::Assign { value, .. } => check_resource_producer_expr(analyzer, value, true),
         HirStmt::Let {
             value: Some(value), ..
         } => check_resource_producer_expr(analyzer, value, false),
@@ -6359,7 +6387,8 @@ fn check_resource_pool_lease_stmt(analyzer: &mut Analyzer<'_>, statement: &HirSt
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value) => check_resource_pool_lease_expr(analyzer, value, false),
+        | HirStmt::Expr(value)
+        | HirStmt::Assign { value, .. } => check_resource_pool_lease_expr(analyzer, value, false),
         HirStmt::With { resource, body, .. } => {
             check_resource_pool_lease_expr(analyzer, resource, true);
             for statement in &body.statements {
@@ -6444,7 +6473,8 @@ fn check_resource_pool_active_lease_stmt(
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value) => {
+        | HirStmt::Expr(value)
+        | HirStmt::Assign { value, .. } => {
             check_resource_pool_active_lease_expr(analyzer, active_pool, value)
         }
         HirStmt::With { resource, body, .. } => {

@@ -321,7 +321,8 @@ fn collect_stmt_take_handle_fields(statement: &HirStmt, fields: &mut Vec<TakeHan
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value) => collect_expr_take_handle_fields(value, fields),
+        | HirStmt::Expr(value)
+        | HirStmt::Assign { value, .. } => collect_expr_take_handle_fields(value, fields),
         HirStmt::With { resource, body, .. } => {
             collect_expr_take_handle_fields(resource, fields);
             collect_block_take_handle_fields(body, fields);
@@ -487,6 +488,7 @@ fn collect_fresh_return_issues_from_stmt(
         | HirStmt::Break(_)
         | HirStmt::Continue(_)
         | HirStmt::Expr(_)
+        | HirStmt::Assign { .. }
         | HirStmt::Unknown(_) => {}
     }
 }
@@ -697,7 +699,8 @@ fn collect_ordered_moved_uses_from_stmt(
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value) => {
+        | HirStmt::Expr(value)
+        | HirStmt::Assign { value, .. } => {
             if let Some(mut state) = entry_state {
                 collect_ordered_moved_uses_from_expr(value, &mut state, moved_uses);
             }
@@ -904,7 +907,10 @@ fn collect_closure_local_moved_uses_from_stmt(statement: &HirStmt, moved_uses: &
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value) => collect_closure_local_moved_uses_from_expr(value, moved_uses),
+        | HirStmt::Expr(value)
+        | HirStmt::Assign { value, .. } => {
+            collect_closure_local_moved_uses_from_expr(value, moved_uses)
+        }
         HirStmt::With { resource, body, .. } => {
             collect_closure_local_moved_uses_from_expr(resource, moved_uses);
             collect_closure_local_moved_uses_from_block(body, moved_uses);
@@ -1036,7 +1042,8 @@ fn collect_retained_closure_captures_from_stmt(
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value) => {
+        | HirStmt::Expr(value)
+        | HirStmt::Assign { value, .. } => {
             if let Some(state) = entry_state {
                 collect_retained_closure_captures_from_expr(value, state, captures);
             }
@@ -1321,7 +1328,10 @@ fn collect_block_resource_escapes(
             | HirStmt::Return {
                 value: Some(value), ..
             }
-            | HirStmt::Expr(value) => collect_expr_resource_escapes(value, escapes_by_with_span),
+            | HirStmt::Expr(value)
+            | HirStmt::Assign { value, .. } => {
+                collect_expr_resource_escapes(value, escapes_by_with_span)
+            }
             HirStmt::If {
                 condition,
                 then_body,
@@ -1440,7 +1450,10 @@ fn collect_resource_escapes_in_block(
             | HirStmt::Let {
                 value: Some(value), ..
             }
-            | HirStmt::Expr(value) => collect_resource_escapes_in_expr(binding, value, escapes),
+            | HirStmt::Expr(value)
+            | HirStmt::Assign { value, .. } => {
+                collect_resource_escapes_in_expr(binding, value, escapes)
+            }
             HirStmt::With { body, .. } => collect_resource_escapes_in_block(binding, body, escapes),
             HirStmt::If {
                 condition,
@@ -1653,7 +1666,8 @@ fn collect_stmt_managed_closure_uses(
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value) => collect_expr_managed_closure_uses(value, closures),
+        | HirStmt::Expr(value)
+        | HirStmt::Assign { value, .. } => collect_expr_managed_closure_uses(value, closures),
         HirStmt::With { resource, body, .. } => {
             collect_expr_managed_closure_uses(resource, closures);
             collect_block_managed_closure_uses(body, closures);
@@ -1780,6 +1794,7 @@ fn collect_hir_block_idents(block: &HirBlock, uses: &mut Vec<(String, Span)>) {
             HirStmt::Let { .. }
             | HirStmt::Return { .. }
             | HirStmt::Expr(_)
+            | HirStmt::Assign { .. }
             | HirStmt::Break(_)
             | HirStmt::Continue(_)
             | HirStmt::Unknown(_) => {}
@@ -1795,7 +1810,8 @@ fn collect_hir_stmt_idents(statement: &HirStmt, uses: &mut Vec<(String, Span)>) 
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value) => collect_hir_expr_idents(value, uses),
+        | HirStmt::Expr(value)
+        | HirStmt::Assign { value, .. } => collect_hir_expr_idents(value, uses),
         HirStmt::With { resource, .. } => collect_hir_expr_idents(resource, uses),
         HirStmt::If { condition, .. } => collect_hir_expr_idents(condition, uses),
         HirStmt::Loop {
@@ -1828,7 +1844,8 @@ fn collect_hir_stmt_effect_events(statement: &HirStmt, events: &mut Vec<HirEffec
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value) => collect_hir_expr_effect_events(value, events),
+        | HirStmt::Expr(value)
+        | HirStmt::Assign { value, .. } => collect_hir_expr_effect_events(value, events),
         HirStmt::With { resource, .. } => collect_hir_expr_effect_events(resource, events),
         HirStmt::If { condition, .. } => collect_hir_expr_effect_events(condition, events),
         HirStmt::Loop {
@@ -2024,6 +2041,7 @@ fn collect_hir_block_inline_capture_uses(block: &HirBlock, uses: &mut Vec<(Strin
             HirStmt::Let { .. }
             | HirStmt::Return { .. }
             | HirStmt::Expr(_)
+            | HirStmt::Assign { .. }
             | HirStmt::Break(_)
             | HirStmt::Continue(_)
             | HirStmt::Unknown(_) => {}
@@ -2039,7 +2057,8 @@ fn collect_hir_stmt_inline_capture_uses(statement: &HirStmt, uses: &mut Vec<(Str
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value) => collect_hir_expr_inline_capture_uses(value, uses),
+        | HirStmt::Expr(value)
+        | HirStmt::Assign { value, .. } => collect_hir_expr_inline_capture_uses(value, uses),
         HirStmt::With { resource, .. } => collect_hir_expr_inline_capture_uses(resource, uses),
         HirStmt::If { condition, .. } => collect_hir_expr_inline_capture_uses(condition, uses),
         HirStmt::Loop {
@@ -2226,12 +2245,14 @@ fn collect_stmt_local_flow(
             breaks: Vec::new(),
             continues: vec![LocalFlowExit::new(node)],
         },
-        HirStmt::Let { .. } | HirStmt::Expr(_) | HirStmt::Unknown(_) => LocalFlowFragment {
-            entry: Some(node),
-            exits: vec![LocalFlowExit::new(node)],
-            breaks: Vec::new(),
-            continues: Vec::new(),
-        },
+        HirStmt::Let { .. } | HirStmt::Expr(_) | HirStmt::Assign { .. } | HirStmt::Unknown(_) => {
+            LocalFlowFragment {
+                entry: Some(node),
+                exits: vec![LocalFlowExit::new(node)],
+                breaks: Vec::new(),
+                continues: Vec::new(),
+            }
+        }
     }
 }
 
@@ -2577,7 +2598,10 @@ fn collect_stmt_managed_closure_capture_names(statement: &HirStmt, captures: &mu
         | HirStmt::Return {
             value: Some(value), ..
         }
-        | HirStmt::Expr(value) => collect_expr_managed_closure_capture_names(value, captures),
+        | HirStmt::Expr(value)
+        | HirStmt::Assign { value, .. } => {
+            collect_expr_managed_closure_capture_names(value, captures)
+        }
         HirStmt::With { resource, .. } => {
             collect_expr_managed_closure_capture_names(resource, captures);
         }
@@ -2863,9 +2887,11 @@ fn local_flow_step_kind(statement: &HirStmt) -> LocalFlowStepKind {
         HirStmt::Return { .. } => LocalFlowStepKind::Return,
         HirStmt::Break(_) => LocalFlowStepKind::Break,
         HirStmt::Continue(_) => LocalFlowStepKind::Continue,
-        HirStmt::Let { .. } | HirStmt::With { .. } | HirStmt::Expr(_) | HirStmt::Unknown(_) => {
-            LocalFlowStepKind::Statement
-        }
+        HirStmt::Let { .. }
+        | HirStmt::With { .. }
+        | HirStmt::Expr(_)
+        | HirStmt::Assign { .. }
+        | HirStmt::Unknown(_) => LocalFlowStepKind::Statement,
     }
 }
 
@@ -2896,6 +2922,7 @@ fn local_flow_step_binding(statement: &HirStmt) -> Option<LocalFlowBinding> {
         | HirStmt::Break(_)
         | HirStmt::Continue(_)
         | HirStmt::Expr(_)
+        | HirStmt::Assign { .. }
         | HirStmt::Unknown(_) => None,
     }
 }
@@ -2994,6 +3021,7 @@ fn local_flow_step_resource_binding(statement: &HirStmt) -> Option<LocalFlowReso
         | HirStmt::Break(_)
         | HirStmt::Continue(_)
         | HirStmt::Expr(_)
+        | HirStmt::Assign { .. }
         | HirStmt::Unknown(_) => None,
     }
 }
@@ -3033,7 +3061,7 @@ fn hir_stmt_span(statement: &HirStmt) -> &Span {
         | HirStmt::Break(span)
         | HirStmt::Continue(span)
         | HirStmt::Unknown(span) => span,
-        HirStmt::Expr(expr) => hir_expr_span(expr),
+        HirStmt::Expr(expr) | HirStmt::Assign { value: expr, .. } => hir_expr_span(expr),
     }
 }
 

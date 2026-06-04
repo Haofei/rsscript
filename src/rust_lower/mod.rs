@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -6,6 +6,8 @@ use std::path::Path;
 use crate::analyzer::{analyze_source_with_core, analyze_sources_with_interfaces_without_core};
 use crate::diagnostic::Diagnostic;
 use crate::interfaces::{builtin_interfaces, default_interfaces, standard_package_interfaces};
+use crate::interpreter::CoverageBucket;
+use crate::runtime_abi;
 use crate::syntax::ast::{Program, merge_programs};
 use crate::syntax::parse_source;
 
@@ -30,6 +32,140 @@ use helpers::{
     cargo_package_name, rust_package_main, toml_string, validate_executable_declarations,
 };
 use lowerer::RustLowerer;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct LowerCoverageReport {
+    pub runtime_intrinsics: CoverageBucket,
+    pub ast_statements: CoverageBucket,
+    pub ast_expressions: CoverageBucket,
+    pub function_kinds: CoverageBucket,
+}
+
+const AST_STMT_VARIANTS: &[&str] = &[
+    "Let",
+    "Return",
+    "With",
+    "MalformedWith",
+    "If",
+    "MalformedIf",
+    "Loop",
+    "MalformedLoop",
+    "For",
+    "MalformedFor",
+    "Match",
+    "MalformedMatch",
+    "TaskGroup",
+    "Select",
+    "Break",
+    "Continue",
+    "LetElse",
+    "Assign",
+    "Expr",
+    "Unknown",
+];
+
+const RUST_LOWER_SUPPORTED_AST_STMT_VARIANTS: &[&str] = &[
+    "Let",
+    "Return",
+    "With",
+    "If",
+    "Loop",
+    "For",
+    "Match",
+    "TaskGroup",
+    "Select",
+    "Break",
+    "Continue",
+    "LetElse",
+    "Assign",
+    "Expr",
+];
+
+const AST_EXPR_VARIANTS: &[&str] = &[
+    "Ident",
+    "Number",
+    "String",
+    "MultilineString",
+    "ObjectLiteral",
+    "MapLiteral",
+    "ArrayLiteral",
+    "Binary",
+    "Field",
+    "Index",
+    "Call",
+    "Effect",
+    "Manage",
+    "Spawn",
+    "Await",
+    "Try",
+    "Closure",
+    "Match",
+    "Unknown",
+];
+
+const RUST_LOWER_SUPPORTED_AST_EXPR_VARIANTS: &[&str] = &[
+    "Ident",
+    "Number",
+    "String",
+    "MultilineString",
+    "ObjectLiteral",
+    "MapLiteral",
+    "ArrayLiteral",
+    "Binary",
+    "Field",
+    "Index",
+    "Call",
+    "Effect",
+    "Manage",
+    "Await",
+    "Try",
+    "Closure",
+    "Match",
+];
+
+const FUNCTION_KINDS: &[&str] = &["sync", "async", "native"];
+const RUST_LOWER_SUPPORTED_FUNCTION_KINDS: &[&str] = &["sync", "async", "native"];
+
+pub fn lower_coverage_report() -> LowerCoverageReport {
+    let runtime_all = runtime_abi::runtime_intrinsic_signatures();
+    let runtime_supported = runtime_all.iter().cloned().collect::<BTreeSet<_>>();
+
+    LowerCoverageReport {
+        runtime_intrinsics: coverage_bucket_from_owned(runtime_all, runtime_supported),
+        ast_statements: coverage_bucket(AST_STMT_VARIANTS, RUST_LOWER_SUPPORTED_AST_STMT_VARIANTS),
+        ast_expressions: coverage_bucket(AST_EXPR_VARIANTS, RUST_LOWER_SUPPORTED_AST_EXPR_VARIANTS),
+        function_kinds: coverage_bucket(FUNCTION_KINDS, RUST_LOWER_SUPPORTED_FUNCTION_KINDS),
+    }
+}
+
+fn coverage_bucket(all: &[&str], supported: &[&str]) -> CoverageBucket {
+    coverage_bucket_from_owned(
+        all.iter().map(|item| (*item).to_string()).collect(),
+        supported.iter().map(|item| (*item).to_string()).collect(),
+    )
+}
+
+fn coverage_bucket_from_owned(mut all: Vec<String>, supported: BTreeSet<String>) -> CoverageBucket {
+    all.sort();
+    all.dedup();
+    let all_set = all.iter().cloned().collect::<BTreeSet<_>>();
+    let mut supported = supported
+        .into_iter()
+        .filter(|item| all_set.contains(item))
+        .collect::<Vec<_>>();
+    supported.sort();
+    let supported_set = supported.iter().cloned().collect::<BTreeSet<_>>();
+    let missing = all
+        .iter()
+        .filter(|item| !supported_set.contains(*item))
+        .cloned()
+        .collect();
+    CoverageBucket {
+        all,
+        supported,
+        missing,
+    }
+}
 
 pub fn lower_source_to_rust(file: &str, source: &str) -> Result<String, Vec<Diagnostic>> {
     lower_source_to_rust_with_map(file, source).map(|lowered| lowered.rust_source)
