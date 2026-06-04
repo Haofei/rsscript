@@ -3427,71 +3427,12 @@ impl<'a> Interpreter<'a> {
                         .max(0),
                 ))
             }
-            ("List", "push") => {
-                let list_name = self.mut_arg_local_name(args, "list", 0)?;
-                let value = self.eval_named_or_positional_arg(args, "value", 1)?;
-                let mut list = expect_list(self.lookup(list_name)?)?;
-                list.push(value);
-                self.assign(list_name, Value::List(list))?;
-                Ok(Value::Unit)
-            }
-            ("List", "set") => {
-                let list_name = self.mut_arg_local_name(args, "list", 0)?;
-                let index = self.eval_named_or_positional_arg(args, "index", 1)?;
-                let value = self.eval_named_or_positional_arg(args, "value", 2)?;
-                self.assign_list_index(list_name, expect_int(index)?, value)?;
-                Ok(Value::Unit)
-            }
-            ("List", "pop") => {
-                let list_name = self.mut_arg_local_name(args, "list", 0)?;
-                let mut list = expect_list(self.lookup(list_name)?)?;
-                let value = list.pop();
-                self.assign(list_name, Value::List(list))?;
-                Ok(value_option(value, |value| value))
-            }
-            ("List", "clear") => {
-                let list_name = self.mut_arg_local_name(args, "list", 0)?;
-                self.assign(list_name, Value::List(Vec::new()))?;
-                Ok(Value::Unit)
-            }
-            ("List", "append") => {
-                let list_name = self.mut_arg_local_name(args, "list", 0)?;
-                let values = self.eval_named_or_positional_arg(args, "values", 1)?;
-                let mut list = expect_list(self.lookup(list_name)?)?;
-                list.extend(expect_list(values)?);
-                self.assign(list_name, Value::List(list))?;
-                Ok(Value::Unit)
-            }
-            ("List", "remove_at") => {
-                let list_name = self.mut_arg_local_name(args, "list", 0)?;
-                let index = self.eval_named_or_positional_arg(args, "index", 1)?;
-                let mut list = expect_list(self.lookup(list_name)?)?;
-                let index = expect_int(index)?;
-                let value = if index < 0 || index as usize >= list.len() {
-                    None
-                } else {
-                    Some(list.remove(index as usize))
-                };
-                self.assign(list_name, Value::List(list))?;
-                Ok(value_option(value, |value| value))
-            }
-            ("List", "sort") => {
-                let list_name = self.mut_arg_local_name(args, "list", 0)?;
-                let mut list = expect_list(self.lookup(list_name)?)?;
-                sort_values(&mut list)?;
-                self.assign(list_name, Value::List(list))?;
-                Ok(Value::Unit)
-            }
             ("List", "sort_with") => {
                 let list_name = self.mut_arg_local_name(args, "list", 0)?;
                 let compare = self.eval_named_or_positional_arg(args, "compare", 1)?;
                 let mut list = expect_list(self.lookup(list_name)?)?;
                 self.sort_list_with_closure(&mut list, compare)?;
                 self.assign(list_name, Value::List(list))?;
-                Ok(Value::Unit)
-            }
-            ("List", "consume") => {
-                self.eval_first_arg(args)?;
                 Ok(Value::Unit)
             }
             ("Hash", "sha256_string") => {
@@ -3582,41 +3523,6 @@ impl<'a> Interpreter<'a> {
                 };
                 self.assign(cache_name, image_cache_value(capacity, len))?;
                 Ok(Value::Unit)
-            }
-            ("List", "new") => Ok(Value::List(Vec::new())),
-            ("List", "len") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::Int(expect_list(value)?.len() as i64))
-            }
-            ("List", "is_empty") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::Bool(expect_list(value)?.is_empty()))
-            }
-            ("List", "get") => {
-                let list = self.eval_named_or_positional_arg(args, "list", 0)?;
-                let index = self.eval_named_or_positional_arg(args, "index", 1)?;
-                list_get(expect_list(list)?, expect_int(index)?)
-            }
-            ("List", "first") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(value_option(
-                    expect_list(value)?.into_iter().next(),
-                    |value| value,
-                ))
-            }
-            ("List", "last") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(value_option(
-                    expect_list(value)?.into_iter().last(),
-                    |value| value,
-                ))
-            }
-            ("List", "contains_value") => {
-                let list = self.eval_named_or_positional_arg(args, "list", 0)?;
-                let value = self.eval_named_or_positional_arg(args, "value", 1)?;
-                Ok(Value::Bool(
-                    expect_list(list)?.iter().any(|item| item == &value),
-                ))
             }
             ("List", "count_where") => {
                 let list = self.eval_named_or_positional_arg(args, "list", 0)?;
@@ -3859,64 +3765,6 @@ impl<'a> Interpreter<'a> {
                     Value::List(unmatched),
                 ]))
             }
-            ("List", "join") => {
-                let list = self.eval_named_or_positional_arg(args, "list", 0)?;
-                let separator = self.eval_named_or_positional_arg(args, "separator", 1)?;
-                let strings = expect_list(list)?
-                    .into_iter()
-                    .map(expect_string)
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(Value::String(strings.join(&expect_string(separator)?)))
-            }
-            ("List", "reverse") => {
-                let list = self.eval_first_arg(args)?;
-                let mut list = expect_list(list)?;
-                list.reverse();
-                Ok(Value::List(list))
-            }
-            ("List", "skip") => {
-                let list = self.eval_named_or_positional_arg(args, "list", 0)?;
-                let count = self.eval_named_or_positional_arg(args, "count", 1)?;
-                let count = expect_int(count)?.max(0) as usize;
-                Ok(Value::List(
-                    expect_list(list)?.into_iter().skip(count).collect(),
-                ))
-            }
-            ("List", "take") => {
-                let list = self.eval_named_or_positional_arg(args, "list", 0)?;
-                let count = self.eval_named_or_positional_arg(args, "count", 1)?;
-                let count = expect_int(count)?.max(0) as usize;
-                Ok(Value::List(
-                    expect_list(list)?.into_iter().take(count).collect(),
-                ))
-            }
-            ("List", "slice") => {
-                let list = self.eval_named_or_positional_arg(args, "list", 0)?;
-                let start = self.eval_named_or_positional_arg(args, "start", 1)?;
-                let len = self.eval_named_or_positional_arg(args, "len", 2)?;
-                Ok(Value::List(list_slice(
-                    expect_list(list)?,
-                    expect_int(start)?,
-                    expect_int(len)?,
-                )))
-            }
-            ("List", "to_json_strings") => {
-                let list = self.eval_first_arg(args)?;
-                let strings = expect_list(list)?
-                    .into_iter()
-                    .map(expect_string)
-                    .map(|value| value.map(serde_json::Value::String))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(Value::Json(serde_json::Value::Array(strings)))
-            }
-            ("List", "to_json_values") => {
-                let list = self.eval_first_arg(args)?;
-                let values = expect_list(list)?
-                    .into_iter()
-                    .map(expect_json)
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(Value::Json(serde_json::Value::Array(values)))
-            }
             ("StringBuilder", "new") => Ok(Value::String(String::new())),
             ("StringBuilder", "push") => {
                 let builder_name = self.mut_arg_local_name(args, "builder", 0)?;
@@ -3940,64 +3788,6 @@ impl<'a> Interpreter<'a> {
             ("Stream", "next") => {
                 let stream = self.eval_named_or_positional_arg(args, "stream", 0)?;
                 Ok(result_value(self.stream_next(stream)?))
-            }
-            ("Map", "new") => Ok(Value::Map(Vec::new())),
-            ("Map", "insert") => {
-                let map_name = self.mut_arg_local_name(args, "map", 0)?;
-                let key = self.eval_named_or_positional_arg(args, "key", 1)?;
-                let value = self.eval_named_or_positional_arg(args, "value", 2)?;
-                let mut map = expect_map(self.lookup(map_name)?)?;
-                map_insert(&mut map, key, value);
-                self.assign(map_name, Value::Map(map))?;
-                Ok(Value::Unit)
-            }
-            ("Map", "insert_old") => {
-                let map_name = self.mut_arg_local_name(args, "map", 0)?;
-                let key = self.eval_named_or_positional_arg(args, "key", 1)?;
-                let value = self.eval_named_or_positional_arg(args, "value", 2)?;
-                let mut map = expect_map(self.lookup(map_name)?)?;
-                let old = map_insert(&mut map, key, value);
-                self.assign(map_name, Value::Map(map))?;
-                Ok(value_option(old, |value| value))
-            }
-            ("Map", "remove") => {
-                let map_name = self.mut_arg_local_name(args, "map", 0)?;
-                let key = self.eval_named_or_positional_arg(args, "key", 1)?;
-                let mut map = expect_map(self.lookup(map_name)?)?;
-                let old = map_remove(&mut map, &key);
-                self.assign(map_name, Value::Map(map))?;
-                Ok(value_option(old, |value| value))
-            }
-            ("Map", "clear") => {
-                let map_name = self.mut_arg_local_name(args, "map", 0)?;
-                self.assign(map_name, Value::Map(Vec::new()))?;
-                Ok(Value::Unit)
-            }
-            ("Map", "len") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::Int(expect_map(value)?.len() as i64))
-            }
-            ("Map", "is_empty") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::Bool(expect_map(value)?.is_empty()))
-            }
-            ("Map", "contains_key") => {
-                let map = self.eval_named_or_positional_arg(args, "map", 0)?;
-                let key = self.eval_named_or_positional_arg(args, "key", 1)?;
-                Ok(Value::Bool(map_get(&expect_map(map)?, &key).is_some()))
-            }
-            ("Map", "get") => {
-                let map = self.eval_named_or_positional_arg(args, "map", 0)?;
-                let key = self.eval_named_or_positional_arg(args, "key", 1)?;
-                Ok(value_option(map_get(&expect_map(map)?, &key), |value| {
-                    value
-                }))
-            }
-            ("Map", "get_or_default") => {
-                let map = self.eval_named_or_positional_arg(args, "map", 0)?;
-                let key = self.eval_named_or_positional_arg(args, "key", 1)?;
-                let default = self.eval_named_or_positional_arg(args, "default", 2)?;
-                Ok(map_get(&expect_map(map)?, &key).unwrap_or(default))
             }
             ("Map", "filter") => {
                 let map = self.eval_named_or_positional_arg(args, "map", 0)?;
@@ -4070,21 +3860,6 @@ impl<'a> Interpreter<'a> {
                     }
                 }
                 Ok(Value::Map(merged))
-            }
-            ("Map", "keys") => {
-                let map = self.eval_first_arg(args)?;
-                Ok(Value::List(
-                    expect_map(map)?.into_iter().map(|(key, _)| key).collect(),
-                ))
-            }
-            ("Map", "values") => {
-                let map = self.eval_first_arg(args)?;
-                Ok(Value::List(
-                    expect_map(map)?
-                        .into_iter()
-                        .map(|(_, value)| value)
-                        .collect(),
-                ))
             }
             ("Regex", "compile") => {
                 let pattern = self.eval_first_arg(args)?;

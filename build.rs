@@ -156,6 +156,40 @@ enum InterpreterEvalKind {
     DurationSeconds,
     FileErrorMessage,
     IntToString,
+    ListAppend,
+    ListClear,
+    ListConsume,
+    ListContainsValue,
+    ListFirst,
+    ListGet,
+    ListIsEmpty,
+    ListJoin,
+    ListLast,
+    ListLen,
+    ListNew,
+    ListPop,
+    ListPush,
+    ListRemoveAt,
+    ListReverse,
+    ListSet,
+    ListSkip,
+    ListSlice,
+    ListSort,
+    ListTake,
+    ListToJsonStrings,
+    ListToJsonValues,
+    MapClear,
+    MapContainsKey,
+    MapGet,
+    MapGetOrDefault,
+    MapInsert,
+    MapInsertOld,
+    MapIsEmpty,
+    MapKeys,
+    MapLen,
+    MapNew,
+    MapRemove,
+    MapValues,
     OsClose,
     PersistentMapClear,
     PersistentMapContainsKey,
@@ -488,6 +522,210 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "to_string",
         variant: "IntToString",
         eval_kind: InterpreterEvalKind::IntToString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "append",
+        variant: "ListAppend",
+        eval_kind: InterpreterEvalKind::ListAppend,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "clear",
+        variant: "ListClear",
+        eval_kind: InterpreterEvalKind::ListClear,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "consume",
+        variant: "ListConsume",
+        eval_kind: InterpreterEvalKind::ListConsume,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "contains_value",
+        variant: "ListContainsValue",
+        eval_kind: InterpreterEvalKind::ListContainsValue,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "first",
+        variant: "ListFirst",
+        eval_kind: InterpreterEvalKind::ListFirst,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "get",
+        variant: "ListGet",
+        eval_kind: InterpreterEvalKind::ListGet,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "is_empty",
+        variant: "ListIsEmpty",
+        eval_kind: InterpreterEvalKind::ListIsEmpty,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "join",
+        variant: "ListJoin",
+        eval_kind: InterpreterEvalKind::ListJoin,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "last",
+        variant: "ListLast",
+        eval_kind: InterpreterEvalKind::ListLast,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "len",
+        variant: "ListLen",
+        eval_kind: InterpreterEvalKind::ListLen,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "new",
+        variant: "ListNew",
+        eval_kind: InterpreterEvalKind::ListNew,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "pop",
+        variant: "ListPop",
+        eval_kind: InterpreterEvalKind::ListPop,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "push",
+        variant: "ListPush",
+        eval_kind: InterpreterEvalKind::ListPush,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "remove_at",
+        variant: "ListRemoveAt",
+        eval_kind: InterpreterEvalKind::ListRemoveAt,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "reverse",
+        variant: "ListReverse",
+        eval_kind: InterpreterEvalKind::ListReverse,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "set",
+        variant: "ListSet",
+        eval_kind: InterpreterEvalKind::ListSet,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "skip",
+        variant: "ListSkip",
+        eval_kind: InterpreterEvalKind::ListSkip,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "slice",
+        variant: "ListSlice",
+        eval_kind: InterpreterEvalKind::ListSlice,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "sort",
+        variant: "ListSort",
+        eval_kind: InterpreterEvalKind::ListSort,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "take",
+        variant: "ListTake",
+        eval_kind: InterpreterEvalKind::ListTake,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "to_json_strings",
+        variant: "ListToJsonStrings",
+        eval_kind: InterpreterEvalKind::ListToJsonStrings,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "to_json_values",
+        variant: "ListToJsonValues",
+        eval_kind: InterpreterEvalKind::ListToJsonValues,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Map",
+        name: "clear",
+        variant: "MapClear",
+        eval_kind: InterpreterEvalKind::MapClear,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Map",
+        name: "contains_key",
+        variant: "MapContainsKey",
+        eval_kind: InterpreterEvalKind::MapContainsKey,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Map",
+        name: "get",
+        variant: "MapGet",
+        eval_kind: InterpreterEvalKind::MapGet,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Map",
+        name: "get_or_default",
+        variant: "MapGetOrDefault",
+        eval_kind: InterpreterEvalKind::MapGetOrDefault,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Map",
+        name: "insert",
+        variant: "MapInsert",
+        eval_kind: InterpreterEvalKind::MapInsert,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Map",
+        name: "insert_old",
+        variant: "MapInsertOld",
+        eval_kind: InterpreterEvalKind::MapInsertOld,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Map",
+        name: "is_empty",
+        variant: "MapIsEmpty",
+        eval_kind: InterpreterEvalKind::MapIsEmpty,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Map",
+        name: "keys",
+        variant: "MapKeys",
+        eval_kind: InterpreterEvalKind::MapKeys,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Map",
+        name: "len",
+        variant: "MapLen",
+        eval_kind: InterpreterEvalKind::MapLen,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Map",
+        name: "new",
+        variant: "MapNew",
+        eval_kind: InterpreterEvalKind::MapNew,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Map",
+        name: "remove",
+        variant: "MapRemove",
+        eval_kind: InterpreterEvalKind::MapRemove,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Map",
+        name: "values",
+        variant: "MapValues",
+        eval_kind: InterpreterEvalKind::MapValues,
     },
     InterpreterIntrinsicSpec {
         namespace: "OS",
@@ -1034,6 +1272,108 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::IntToString => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(expect_int(value)?.to_string()))\n        }"
+        }
+        InterpreterEvalKind::ListAppend => {
+            "{\n            let list_name = interpreter.mut_arg_local_name(args, \"list\", 0)?;\n            let values = interpreter.eval_named_or_positional_arg(args, \"values\", 1)?;\n            let mut list = expect_list(interpreter.lookup(list_name)?)?;\n            list.extend(expect_list(values)?);\n            interpreter.assign(list_name, Value::List(list))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::ListClear => {
+            "{\n            let list_name = interpreter.mut_arg_local_name(args, \"list\", 0)?;\n            interpreter.assign(list_name, Value::List(Vec::new()))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::ListConsume => {
+            "{\n            interpreter.eval_first_arg(args)?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::ListContainsValue => {
+            "{\n            let list = interpreter.eval_named_or_positional_arg(args, \"list\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            Ok(Value::Bool(\n                expect_list(list)?.iter().any(|item| item == &value),\n            ))\n        }"
+        }
+        InterpreterEvalKind::ListFirst => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(value_option(\n                expect_list(value)?.into_iter().next(),\n                |value| value,\n            ))\n        }"
+        }
+        InterpreterEvalKind::ListGet => {
+            "{\n            let list = interpreter.eval_named_or_positional_arg(args, \"list\", 0)?;\n            let index = interpreter.eval_named_or_positional_arg(args, \"index\", 1)?;\n            list_get(expect_list(list)?, expect_int(index)?)\n        }"
+        }
+        InterpreterEvalKind::ListIsEmpty => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(expect_list(value)?.is_empty()))\n        }"
+        }
+        InterpreterEvalKind::ListJoin => {
+            "{\n            let list = interpreter.eval_named_or_positional_arg(args, \"list\", 0)?;\n            let separator = interpreter.eval_named_or_positional_arg(args, \"separator\", 1)?;\n            let strings = expect_list(list)?\n                .into_iter()\n                .map(expect_string)\n                .collect::<Result<Vec<_>, _>>()?;\n            Ok(Value::String(strings.join(&expect_string(separator)?)))\n        }"
+        }
+        InterpreterEvalKind::ListLast => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(value_option(\n                expect_list(value)?.into_iter().last(),\n                |value| value,\n            ))\n        }"
+        }
+        InterpreterEvalKind::ListLen => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Int(expect_list(value)?.len() as i64))\n        }"
+        }
+        InterpreterEvalKind::ListNew => {
+            "{\n            Ok(Value::List(Vec::new()))\n        }"
+        }
+        InterpreterEvalKind::ListPop => {
+            "{\n            let list_name = interpreter.mut_arg_local_name(args, \"list\", 0)?;\n            let mut list = expect_list(interpreter.lookup(list_name)?)?;\n            let value = list.pop();\n            interpreter.assign(list_name, Value::List(list))?;\n            Ok(value_option(value, |value| value))\n        }"
+        }
+        InterpreterEvalKind::ListPush => {
+            "{\n            let list_name = interpreter.mut_arg_local_name(args, \"list\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            let mut list = expect_list(interpreter.lookup(list_name)?)?;\n            list.push(value);\n            interpreter.assign(list_name, Value::List(list))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::ListRemoveAt => {
+            "{\n            let list_name = interpreter.mut_arg_local_name(args, \"list\", 0)?;\n            let index = interpreter.eval_named_or_positional_arg(args, \"index\", 1)?;\n            let mut list = expect_list(interpreter.lookup(list_name)?)?;\n            let index = expect_int(index)?;\n            let value = if index < 0 || index as usize >= list.len() {\n                None\n            } else {\n                Some(list.remove(index as usize))\n            };\n            interpreter.assign(list_name, Value::List(list))?;\n            Ok(value_option(value, |value| value))\n        }"
+        }
+        InterpreterEvalKind::ListReverse => {
+            "{\n            let list = interpreter.eval_first_arg(args)?;\n            let mut list = expect_list(list)?;\n            list.reverse();\n            Ok(Value::List(list))\n        }"
+        }
+        InterpreterEvalKind::ListSet => {
+            "{\n            let list_name = interpreter.mut_arg_local_name(args, \"list\", 0)?;\n            let index = interpreter.eval_named_or_positional_arg(args, \"index\", 1)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 2)?;\n            interpreter.assign_list_index(list_name, expect_int(index)?, value)?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::ListSkip => {
+            "{\n            let list = interpreter.eval_named_or_positional_arg(args, \"list\", 0)?;\n            let count = interpreter.eval_named_or_positional_arg(args, \"count\", 1)?;\n            let count = expect_int(count)?.max(0) as usize;\n            Ok(Value::List(\n                expect_list(list)?.into_iter().skip(count).collect(),\n            ))\n        }"
+        }
+        InterpreterEvalKind::ListSlice => {
+            "{\n            let list = interpreter.eval_named_or_positional_arg(args, \"list\", 0)?;\n            let start = interpreter.eval_named_or_positional_arg(args, \"start\", 1)?;\n            let len = interpreter.eval_named_or_positional_arg(args, \"len\", 2)?;\n            Ok(Value::List(list_slice(\n                expect_list(list)?,\n                expect_int(start)?,\n                expect_int(len)?,\n            )))\n        }"
+        }
+        InterpreterEvalKind::ListSort => {
+            "{\n            let list_name = interpreter.mut_arg_local_name(args, \"list\", 0)?;\n            let mut list = expect_list(interpreter.lookup(list_name)?)?;\n            sort_values(&mut list)?;\n            interpreter.assign(list_name, Value::List(list))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::ListTake => {
+            "{\n            let list = interpreter.eval_named_or_positional_arg(args, \"list\", 0)?;\n            let count = interpreter.eval_named_or_positional_arg(args, \"count\", 1)?;\n            let count = expect_int(count)?.max(0) as usize;\n            Ok(Value::List(\n                expect_list(list)?.into_iter().take(count).collect(),\n            ))\n        }"
+        }
+        InterpreterEvalKind::ListToJsonStrings => {
+            "{\n            let list = interpreter.eval_first_arg(args)?;\n            let strings = expect_list(list)?\n                .into_iter()\n                .map(expect_string)\n                .map(|value| value.map(serde_json::Value::String))\n                .collect::<Result<Vec<_>, _>>()?;\n            Ok(Value::Json(serde_json::Value::Array(strings)))\n        }"
+        }
+        InterpreterEvalKind::ListToJsonValues => {
+            "{\n            let list = interpreter.eval_first_arg(args)?;\n            let values = expect_list(list)?\n                .into_iter()\n                .map(expect_json)\n                .collect::<Result<Vec<_>, _>>()?;\n            Ok(Value::Json(serde_json::Value::Array(values)))\n        }"
+        }
+        InterpreterEvalKind::MapClear => {
+            "{\n            let map_name = interpreter.mut_arg_local_name(args, \"map\", 0)?;\n            interpreter.assign(map_name, Value::Map(Vec::new()))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::MapContainsKey => {
+            "{\n            let map = interpreter.eval_named_or_positional_arg(args, \"map\", 0)?;\n            let key = interpreter.eval_named_or_positional_arg(args, \"key\", 1)?;\n            Ok(Value::Bool(map_get(&expect_map(map)?, &key).is_some()))\n        }"
+        }
+        InterpreterEvalKind::MapGet => {
+            "{\n            let map = interpreter.eval_named_or_positional_arg(args, \"map\", 0)?;\n            let key = interpreter.eval_named_or_positional_arg(args, \"key\", 1)?;\n            Ok(value_option(map_get(&expect_map(map)?, &key), |value| {\n                value\n            }))\n        }"
+        }
+        InterpreterEvalKind::MapGetOrDefault => {
+            "{\n            let map = interpreter.eval_named_or_positional_arg(args, \"map\", 0)?;\n            let key = interpreter.eval_named_or_positional_arg(args, \"key\", 1)?;\n            let default = interpreter.eval_named_or_positional_arg(args, \"default\", 2)?;\n            Ok(map_get(&expect_map(map)?, &key).unwrap_or(default))\n        }"
+        }
+        InterpreterEvalKind::MapInsert => {
+            "{\n            let map_name = interpreter.mut_arg_local_name(args, \"map\", 0)?;\n            let key = interpreter.eval_named_or_positional_arg(args, \"key\", 1)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 2)?;\n            let mut map = expect_map(interpreter.lookup(map_name)?)?;\n            map_insert(&mut map, key, value);\n            interpreter.assign(map_name, Value::Map(map))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::MapInsertOld => {
+            "{\n            let map_name = interpreter.mut_arg_local_name(args, \"map\", 0)?;\n            let key = interpreter.eval_named_or_positional_arg(args, \"key\", 1)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 2)?;\n            let mut map = expect_map(interpreter.lookup(map_name)?)?;\n            let old = map_insert(&mut map, key, value);\n            interpreter.assign(map_name, Value::Map(map))?;\n            Ok(value_option(old, |value| value))\n        }"
+        }
+        InterpreterEvalKind::MapIsEmpty => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(expect_map(value)?.is_empty()))\n        }"
+        }
+        InterpreterEvalKind::MapKeys => {
+            "{\n            let map = interpreter.eval_first_arg(args)?;\n            Ok(Value::List(\n                expect_map(map)?.into_iter().map(|(key, _)| key).collect(),\n            ))\n        }"
+        }
+        InterpreterEvalKind::MapLen => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Int(expect_map(value)?.len() as i64))\n        }"
+        }
+        InterpreterEvalKind::MapNew => {
+            "{\n            Ok(Value::Map(Vec::new()))\n        }"
+        }
+        InterpreterEvalKind::MapRemove => {
+            "{\n            let map_name = interpreter.mut_arg_local_name(args, \"map\", 0)?;\n            let key = interpreter.eval_named_or_positional_arg(args, \"key\", 1)?;\n            let mut map = expect_map(interpreter.lookup(map_name)?)?;\n            let old = map_remove(&mut map, &key);\n            interpreter.assign(map_name, Value::Map(map))?;\n            Ok(value_option(old, |value| value))\n        }"
+        }
+        InterpreterEvalKind::MapValues => {
+            "{\n            let map = interpreter.eval_first_arg(args)?;\n            Ok(Value::List(\n                expect_map(map)?\n                    .into_iter()\n                    .map(|(_, value)| value)\n                    .collect(),\n            ))\n        }"
         }
         InterpreterEvalKind::OsClose => {
             "{\n            let fd = interpreter.eval_named_or_positional_arg(args, \"fd\", 0)?;\n            let _ = expect_int(fd)?;\n            Ok(Value::Unit)\n        }"
