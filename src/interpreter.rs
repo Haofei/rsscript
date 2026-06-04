@@ -242,6 +242,11 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("File", "write_string_async"),
     ("File", "write_string_to_path"),
     ("FileError", "message"),
+    ("FalliblePipeline", "collect"),
+    ("FalliblePipeline", "each"),
+    ("FalliblePipeline", "filter"),
+    ("FalliblePipeline", "map"),
+    ("FalliblePipeline", "try_map"),
     ("FunctionObject", "has_closure"),
     ("FunctionObject", "new"),
     ("Diff", "unified"),
@@ -368,6 +373,7 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("List", "find"),
     ("List", "first"),
     ("List", "flat_map"),
+    ("List", "fold"),
     ("List", "get"),
     ("List", "is_empty"),
     ("List", "join"),
@@ -376,6 +382,7 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("List", "map"),
     ("List", "new"),
     ("List", "partition"),
+    ("List", "pipeline"),
     ("List", "pop"),
     ("List", "push"),
     ("List", "reverse"),
@@ -387,9 +394,11 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("List", "take"),
     ("List", "to_json_strings"),
     ("List", "to_json_values"),
+    ("List", "try_fold"),
     ("Map", "clear"),
     ("Map", "contains_key"),
     ("Map", "filter"),
+    ("Map", "fold"),
     ("Map", "for_each"),
     ("Map", "get"),
     ("Map", "get_or_default"),
@@ -402,6 +411,7 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Map", "merge"),
     ("Map", "new"),
     ("Map", "remove"),
+    ("Map", "try_fold"),
     ("Map", "values"),
     ("PersistentMap", "clear"),
     ("PersistentMap", "contains_key"),
@@ -411,6 +421,11 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("PersistentMap", "len"),
     ("PersistentMap", "new"),
     ("PersistentMap", "remove"),
+    ("Pipeline", "collect"),
+    ("Pipeline", "each"),
+    ("Pipeline", "filter"),
+    ("Pipeline", "map"),
+    ("Pipeline", "try_map"),
     ("Regex", "captures"),
     ("Regex", "compile"),
     ("Regex", "find"),
@@ -703,6 +718,11 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:File.write_string_async",
     "runtime:File.write_string_to_path",
     "runtime:FileError.message",
+    "runtime:FalliblePipeline.collect",
+    "runtime:FalliblePipeline.each",
+    "runtime:FalliblePipeline.filter",
+    "runtime:FalliblePipeline.map",
+    "runtime:FalliblePipeline.try_map",
     "runtime:FunctionObject.has_closure",
     "runtime:FunctionObject.new",
     "runtime:Diff.unified",
@@ -830,6 +850,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:List.find",
     "runtime:List.first",
     "runtime:List.flat_map",
+    "runtime:List.fold",
     "runtime:List.get",
     "runtime:List.is_empty",
     "runtime:List.join",
@@ -838,6 +859,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:List.map",
     "runtime:List.new",
     "runtime:List.partition",
+    "runtime:List.pipeline",
     "runtime:List.pop",
     "runtime:List.push",
     "runtime:List.reverse",
@@ -849,6 +871,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:List.take",
     "runtime:List.to_json_strings",
     "runtime:List.to_json_values",
+    "runtime:List.try_fold",
     "runtime:Log.error",
     "runtime:Log.error_json",
     "runtime:Log.trace",
@@ -857,6 +880,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Map.clear",
     "runtime:Map.contains_key",
     "runtime:Map.filter",
+    "runtime:Map.fold",
     "runtime:Map.for_each",
     "runtime:Map.get",
     "runtime:Map.get_or_default",
@@ -869,6 +893,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Map.merge",
     "runtime:Map.new",
     "runtime:Map.remove",
+    "runtime:Map.try_fold",
     "runtime:Map.values",
     "runtime:PersistentMap.clear",
     "runtime:PersistentMap.contains_key",
@@ -922,6 +947,11 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Path.with_extension",
     "runtime:Path.write_string",
     "runtime:Patch.apply_text",
+    "runtime:Pipeline.collect",
+    "runtime:Pipeline.each",
+    "runtime:Pipeline.filter",
+    "runtime:Pipeline.map",
+    "runtime:Pipeline.try_map",
     "runtime:Process.run_many_stdout",
     "runtime:Process.run_many_stdout_async",
     "runtime:Process.run_many_stdout_timeout",
@@ -2794,6 +2824,133 @@ impl<'a> Interpreter<'a> {
                 }
                 Ok(Value::List(mapped))
             }
+            ("List", "fold") => {
+                let list = self.eval_named_or_positional_arg(args, "list", 0)?;
+                let mut state = self.eval_named_or_positional_arg(args, "initial", 1)?;
+                let folder = self.eval_named_or_positional_arg(args, "folder", 2)?;
+                for value in expect_list(list)? {
+                    state = self.call_closure(folder.clone(), vec![state, value])?;
+                }
+                Ok(state)
+            }
+            ("List", "try_fold") => {
+                let list = self.eval_named_or_positional_arg(args, "list", 0)?;
+                let mut state = self.eval_named_or_positional_arg(args, "initial", 1)?;
+                let folder = self.eval_named_or_positional_arg(args, "folder", 2)?;
+                for value in expect_list(list)? {
+                    match result_payload(self.call_closure(folder.clone(), vec![state, value])?)? {
+                        Ok(next) => state = next,
+                        Err(error) => return Ok(value_err(error)),
+                    }
+                }
+                Ok(value_ok(state))
+            }
+            ("List", "pipeline") | ("Pipeline", "collect") => self.eval_first_arg(args),
+            ("Pipeline", "map") => {
+                let pipeline = self.eval_named_or_positional_arg(args, "pipeline", 0)?;
+                let mapper = self.eval_named_or_positional_arg(args, "mapper", 1)?;
+                let mut mapped = Vec::new();
+                for value in expect_list(pipeline)? {
+                    mapped.push(self.call_closure(mapper.clone(), vec![value])?);
+                }
+                Ok(Value::List(mapped))
+            }
+            ("Pipeline", "filter") => {
+                let pipeline = self.eval_named_or_positional_arg(args, "pipeline", 0)?;
+                let predicate = self.eval_named_or_positional_arg(args, "predicate", 1)?;
+                let mut filtered = Vec::new();
+                for value in expect_list(pipeline)? {
+                    if expect_bool(self.call_closure(predicate.clone(), vec![value.clone()])?)? {
+                        filtered.push(value);
+                    }
+                }
+                Ok(Value::List(filtered))
+            }
+            ("Pipeline", "each") => {
+                let pipeline = self.eval_named_or_positional_arg(args, "pipeline", 0)?;
+                let action = self.eval_named_or_positional_arg(args, "action", 1)?;
+                let items = expect_list(pipeline)?;
+                for value in items.iter().cloned() {
+                    let _ = self.call_closure(action.clone(), vec![value])?;
+                }
+                Ok(Value::List(items))
+            }
+            ("Pipeline", "try_map") => {
+                let pipeline = self.eval_named_or_positional_arg(args, "pipeline", 0)?;
+                let mapper = self.eval_named_or_positional_arg(args, "mapper", 1)?;
+                let mut mapped = Vec::new();
+                for value in expect_list(pipeline)? {
+                    match result_payload(self.call_closure(mapper.clone(), vec![value])?)? {
+                        Ok(value) => mapped.push(value),
+                        Err(error) => return Ok(value_err(error)),
+                    }
+                }
+                Ok(value_ok(Value::List(mapped)))
+            }
+            ("FalliblePipeline", "collect") => self.eval_first_arg(args),
+            ("FalliblePipeline", "map") => {
+                let pipeline = self.eval_named_or_positional_arg(args, "pipeline", 0)?;
+                let mapper = self.eval_named_or_positional_arg(args, "mapper", 1)?;
+                Ok(match result_payload(pipeline)? {
+                    Ok(items) => {
+                        let mut mapped = Vec::new();
+                        for value in expect_list(items)? {
+                            mapped.push(self.call_closure(mapper.clone(), vec![value])?);
+                        }
+                        value_ok(Value::List(mapped))
+                    }
+                    Err(error) => value_err(error),
+                })
+            }
+            ("FalliblePipeline", "filter") => {
+                let pipeline = self.eval_named_or_positional_arg(args, "pipeline", 0)?;
+                let predicate = self.eval_named_or_positional_arg(args, "predicate", 1)?;
+                Ok(match result_payload(pipeline)? {
+                    Ok(items) => {
+                        let mut filtered = Vec::new();
+                        for value in expect_list(items)? {
+                            if expect_bool(
+                                self.call_closure(predicate.clone(), vec![value.clone()])?,
+                            )? {
+                                filtered.push(value);
+                            }
+                        }
+                        value_ok(Value::List(filtered))
+                    }
+                    Err(error) => value_err(error),
+                })
+            }
+            ("FalliblePipeline", "each") => {
+                let pipeline = self.eval_named_or_positional_arg(args, "pipeline", 0)?;
+                let action = self.eval_named_or_positional_arg(args, "action", 1)?;
+                Ok(match result_payload(pipeline)? {
+                    Ok(items) => {
+                        let items = expect_list(items)?;
+                        for value in items.iter().cloned() {
+                            let _ = self.call_closure(action.clone(), vec![value])?;
+                        }
+                        value_ok(Value::List(items))
+                    }
+                    Err(error) => value_err(error),
+                })
+            }
+            ("FalliblePipeline", "try_map") => {
+                let pipeline = self.eval_named_or_positional_arg(args, "pipeline", 0)?;
+                let mapper = self.eval_named_or_positional_arg(args, "mapper", 1)?;
+                match result_payload(pipeline)? {
+                    Ok(items) => {
+                        let mut mapped = Vec::new();
+                        for value in expect_list(items)? {
+                            match result_payload(self.call_closure(mapper.clone(), vec![value])?)? {
+                                Ok(value) => mapped.push(value),
+                                Err(error) => return Ok(value_err(error)),
+                            }
+                        }
+                        Ok(value_ok(Value::List(mapped)))
+                    }
+                    Err(error) => Ok(value_err(error)),
+                }
+            }
             ("List", "flat_map") => {
                 let list = self.eval_named_or_positional_arg(args, "list", 0)?;
                 let mapper = self.eval_named_or_positional_arg(args, "mapper", 1)?;
@@ -2970,6 +3127,29 @@ impl<'a> Interpreter<'a> {
                     }
                 }
                 Ok(Value::Map(filtered))
+            }
+            ("Map", "fold") => {
+                let map = self.eval_named_or_positional_arg(args, "map", 0)?;
+                let mut state = self.eval_named_or_positional_arg(args, "initial", 1)?;
+                let folder = self.eval_named_or_positional_arg(args, "folder", 2)?;
+                for (key, value) in expect_map(map)? {
+                    state = self.call_closure(folder.clone(), vec![state, key, value])?;
+                }
+                Ok(state)
+            }
+            ("Map", "try_fold") => {
+                let map = self.eval_named_or_positional_arg(args, "map", 0)?;
+                let mut state = self.eval_named_or_positional_arg(args, "initial", 1)?;
+                let folder = self.eval_named_or_positional_arg(args, "folder", 2)?;
+                for (key, value) in expect_map(map)? {
+                    match result_payload(
+                        self.call_closure(folder.clone(), vec![state, key, value])?,
+                    )? {
+                        Ok(next) => state = next,
+                        Err(error) => return Ok(value_err(error)),
+                    }
+                }
+                Ok(value_ok(state))
             }
             ("Map", "for_each") => {
                 let map = self.eval_named_or_positional_arg(args, "map", 0)?;

@@ -424,11 +424,11 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:List.all runtime:List.any runtime:List.append runtime:List.clear
 // parity: runtime:List.contains runtime:List.contains_value runtime:List.count_where
 // parity: runtime:List.consume runtime:List.filter runtime:List.find runtime:List.first
-// parity: runtime:List.flat_map runtime:List.get runtime:List.is_empty runtime:List.join
-// parity: runtime:List.last runtime:List.len runtime:List.map runtime:List.new runtime:List.partition runtime:List.pop
-// parity: runtime:List.push runtime:List.reverse runtime:List.remove_at runtime:List.set
+// parity: runtime:List.flat_map runtime:List.fold runtime:List.get runtime:List.is_empty runtime:List.join
+// parity: runtime:List.last runtime:List.len runtime:List.map runtime:List.new runtime:List.partition
+// parity: runtime:List.pipeline runtime:List.pop runtime:List.push runtime:List.reverse runtime:List.remove_at runtime:List.set
 // parity: runtime:List.skip runtime:List.slice runtime:List.sort runtime:List.take
-// parity: runtime:List.to_json_strings runtime:List.to_json_values
+// parity: runtime:List.to_json_strings runtime:List.to_json_values runtime:List.try_fold
 // parity: runtime:Log.error runtime:Log.error_json runtime:Log.trace runtime:Log.write
 // parity: runtime:Log.write_json
 // parity: runtime:Env.current_dir runtime:Env.get runtime:Env.get_or_default
@@ -442,6 +442,9 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:File.write_bytes_view runtime:File.write_buffer runtime:File.write_buffer_view
 // parity: runtime:File.write_string runtime:File.write_string_async runtime:File.write_string_to_path
 // parity: runtime:FileError.message
+// parity: runtime:FalliblePipeline.collect runtime:FalliblePipeline.each
+// parity: runtime:FalliblePipeline.filter runtime:FalliblePipeline.map
+// parity: runtime:FalliblePipeline.try_map
 // parity: runtime:FunctionObject.has_closure runtime:FunctionObject.new
 // parity: runtime:PersistentMap.clear runtime:PersistentMap.contains_key runtime:PersistentMap.get
 // parity: runtime:PersistentMap.insert runtime:PersistentMap.is_empty runtime:PersistentMap.len
@@ -457,6 +460,8 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Path.resolve_relative runtime:Path.safe_relative
 // parity: runtime:Path.starts_with runtime:Path.to_string runtime:Path.with_extension
 // parity: runtime:Path.write_string
+// parity: runtime:Pipeline.collect runtime:Pipeline.each runtime:Pipeline.filter
+// parity: runtime:Pipeline.map runtime:Pipeline.try_map
 // parity: runtime:String.safe_relative runtime:String.to_path runtime:Workspace.resolve
 // parity: runtime:Process.run runtime:Process.run_async runtime:Process.run_many_stdout
 // parity: runtime:Process.run_many_stdout_async runtime:Process.run_many_stdout_timeout
@@ -465,10 +470,10 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Process.run_stdout runtime:Process.run_stdout_async runtime:Process.run_stdout_timeout
 // parity: runtime:Process.run_stdout_timeout_async runtime:Process.run_timeout runtime:Process.run_timeout_async
 // parity: runtime:Process.stream
-// parity: runtime:Map.clear runtime:Map.contains_key runtime:Map.filter runtime:Map.for_each
+// parity: runtime:Map.clear runtime:Map.contains_key runtime:Map.filter runtime:Map.fold runtime:Map.for_each
 // parity: runtime:Map.get runtime:Map.get_or_default runtime:Map.insert runtime:Map.insert_old
 // parity: runtime:Map.is_empty runtime:Map.keys runtime:Map.len runtime:Map.map_values
-// parity: runtime:Map.merge runtime:Map.new runtime:Map.remove runtime:Map.values
+// parity: runtime:Map.merge runtime:Map.new runtime:Map.remove runtime:Map.try_fold runtime:Map.values
 // parity: runtime:Option.and_then runtime:Option.filter runtime:Option.is_none
 // parity: runtime:Option.is_some runtime:Option.map runtime:Option.ok_or
 // parity: runtime:Option.or runtime:Option.unwrap_or runtime:Option.unwrap_or_else
@@ -2545,6 +2550,10 @@ fn parity_list_closure_intrinsics() {
     let source = r#"
 features: local
 
+struct Acc {
+    total: Int
+}
+
 fn is_even(value: Int) -> Bool {
     let half = value / 2
     return half * 2 == value
@@ -2591,6 +2600,39 @@ fn main() -> Unit {
     Log.write(message: read String.from_int(value: mapped[0]))
     Log.write(message: read String.from_int(value: mapped[4]))
 
+    let folded = List.fold<Int, Acc>(list: read numbers, initial: read Acc(total: 0), folder: |state, item| {
+        return Acc(total: state.total + item)
+    })
+    Log.write(message: read String.from_int(value: folded.total))
+
+    match List.try_fold<Int, Acc, String>(list: read numbers, initial: read Acc(total: 0), folder: |state, item| {
+        if item > 3 {
+            return Err(String.copy(value: read "too-large"))
+        }
+        return Ok(Acc(total: state.total + item))
+    }) {
+        Ok(value) => {
+            Log.write(message: read String.from_int(value: value.total))
+        }
+        Err(error) => {
+            Log.write(message: read error)
+        }
+    }
+
+    match List.try_fold<Int, Acc, String>(list: read filtered, initial: read Acc(total: 0), folder: |state, item| {
+        if item < 0 {
+            return Err(String.copy(value: read "negative"))
+        }
+        return Ok(Acc(total: state.total + item))
+    }) {
+        Ok(value) => {
+            Log.write(message: read String.from_int(value: value.total))
+        }
+        Err(error) => {
+            Log.write(message: read error)
+        }
+    }
+
     let flattened = List.flat_map<Int, Int>(list: read filtered, mapper: |item| {
         let values: List<Int> = [item, item + 10]
         return values
@@ -2614,6 +2656,114 @@ fn main() -> Unit {
         "rsscript_parity_list_closure",
         source,
     );
+}
+
+#[test]
+fn parity_pipeline_intrinsics() {
+    run_with_large_stack(|| {
+        let source = r#"
+features: local
+
+fn main() -> Unit {
+    let numbers: List<Int> = [1, 2, 3, 4]
+    let shifted = Pipeline.map<Int, Int>(
+        pipeline: read Pipeline.filter<Int>(
+            pipeline: read List.pipeline<Int>(list: read numbers),
+            predicate: |item| {
+                let half = item / 2
+                return half * 2 == item
+            },
+        ),
+        mapper: |item| {
+            return item + 10
+        },
+    )
+    let echoed = Pipeline.each<Int>(pipeline: read shifted, action: |item| {
+        Log.write(message: read String.from_int(value: item))
+        return Unit
+    })
+    let collected = Pipeline.collect<Int>(pipeline: read echoed)
+    Log.write(message: read String.from_int(value: List.len<Int>(list: read collected)))
+    Log.write(message: read String.from_int(value: collected[0]))
+    Log.write(message: read String.from_int(value: collected[1]))
+
+    let ok_pipeline = Pipeline.try_map<Int, Int, String>(pipeline: read shifted, mapper: |item| {
+        if item < 0 {
+            return Err(String.copy(value: read "negative"))
+        }
+        return Ok(item + 1)
+    })
+    match FalliblePipeline.collect<Int, String>(pipeline: read ok_pipeline) {
+        Ok(items) => {
+            Log.write(message: read String.from_int(value: items[0]))
+            Log.write(message: read String.from_int(value: items[1]))
+        }
+        Err(error) => {
+            Log.write(message: read error)
+        }
+    }
+
+    let mapped = FalliblePipeline.map<Int, Int, String>(pipeline: read ok_pipeline, mapper: |item| {
+        return item + 100
+    })
+    let filtered = FalliblePipeline.filter<Int, String>(pipeline: read mapped, predicate: |item| {
+        return item > 113
+    })
+    let touched = FalliblePipeline.each<Int, String>(pipeline: read filtered, action: |item| {
+        Log.write(message: read String.from_int(value: item))
+        return Unit
+    })
+    let final_pipeline = FalliblePipeline.try_map<Int, Int, String>(pipeline: read touched, mapper: |item| {
+        if item < 0 {
+            return Err(String.copy(value: read "negative"))
+        }
+        return Ok(item + 1)
+    })
+    match FalliblePipeline.collect<Int, String>(pipeline: read final_pipeline) {
+        Ok(items) => {
+            Log.write(message: read String.from_int(value: List.len<Int>(list: read items)))
+            Log.write(message: read String.from_int(value: items[0]))
+        }
+        Err(error) => {
+            Log.write(message: read error)
+        }
+    }
+
+    let failed = Pipeline.try_map<Int, Int, String>(pipeline: read List.pipeline<Int>(list: read numbers), mapper: |item| {
+        if item == 3 {
+            return Err(String.copy(value: read "stop"))
+        }
+        return Ok(item + 0)
+    })
+    match FalliblePipeline.collect<Int, String>(pipeline: read failed) {
+        Ok(items) => {
+            Log.write(message: read String.from_int(value: List.len<Int>(list: read items)))
+        }
+        Err(error) => {
+            Log.write(message: read error)
+        }
+    }
+    let still_failed = FalliblePipeline.map<Int, Int, String>(pipeline: read failed, mapper: |item| {
+        Log.write(message: read "should-not-run")
+        return item + 1
+    })
+    match FalliblePipeline.collect<Int, String>(pipeline: read still_failed) {
+        Ok(items) => {
+            Log.write(message: read String.from_int(value: List.len<Int>(list: read items)))
+        }
+        Err(error) => {
+            Log.write(message: read error)
+        }
+    }
+    return Unit
+}
+"#;
+        assert_interpreter_matches_backend(
+            "parity-pipeline.rss",
+            "rsscript_parity_pipeline",
+            source,
+        );
+    });
 }
 
 #[test]
@@ -2663,6 +2813,10 @@ fn main() -> Unit {
 #[test]
 fn parity_map_closure_intrinsics() {
     let source = r#"
+struct Acc {
+    total: Int
+}
+
 fn main() -> Unit {
     let mut left = Map<String, Int>.new()
     Map.insert<String, Int>(map: mut left, key: read "a", value: read 1)
@@ -2700,6 +2854,28 @@ fn main() -> Unit {
         Log.write(message: read String.from_int(value: value))
         return Unit
     })
+
+    let folded = Map.fold<String, Int, Acc>(map: read left, initial: read Acc(total: 0), folder: |state, key, value| {
+        if key == "a" {
+            return Acc(total: state.total + value)
+        }
+        return Acc(total: state.total + value + 10)
+    })
+    Log.write(message: read String.from_int(value: folded.total))
+
+    match Map.try_fold<String, Int, Acc, String>(map: read left, initial: read Acc(total: 0), folder: |state, key, value| {
+        if key == "b" {
+            return Err(String.copy(value: read "stop-b"))
+        }
+        return Ok(Acc(total: state.total + value))
+    }) {
+        Ok(value) => {
+            Log.write(message: read String.from_int(value: value.total))
+        }
+        Err(error) => {
+            Log.write(message: read error)
+        }
+    }
 
     let mut right = Map<String, Int>.new()
     Map.insert<String, Int>(map: mut right, key: read "b", value: read 20)
