@@ -217,6 +217,7 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Env", "home_dir"),
     ("Env", "run_workspace_root"),
     ("Env", "set"),
+    ("Env", "set_current_dir"),
     ("Env", "temp_dir"),
     ("File", "append_bytes"),
     ("File", "append_string"),
@@ -711,6 +712,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Env.home_dir",
     "runtime:Env.run_workspace_root",
     "runtime:Env.set",
+    "runtime:Env.set_current_dir",
     "runtime:Env.temp_dir",
     "runtime:File.append_bytes",
     "runtime:File.append_string",
@@ -2689,6 +2691,14 @@ impl<'a> Interpreter<'a> {
                 self.stderr
                     .push_str("[rsscript] warning: Env.set is a no-op in the safe runtime\n");
                 Ok(Value::Unit)
+            }
+            ("Env", "set_current_dir") => {
+                let path = self.eval_named_or_positional_arg(args, "path", 0)?;
+                Ok(result_value(
+                    std::env::set_current_dir(expect_string(path)?)
+                        .map(|_| Value::Unit)
+                        .map_err(file_error),
+                ))
             }
             ("Env", "temp_dir") => Ok(Value::String(path_to_string(&std::env::temp_dir()))),
             ("Diff", "unified") => {

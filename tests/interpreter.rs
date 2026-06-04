@@ -288,14 +288,15 @@ fn main() -> Unit {
 }
 
 #[test]
-fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
+fn eval_matches_backend_for_declared_host_boundary() {
     let source_path = "examples/scripts/core/interpreter_host_boundary.rss";
     let source = fs::read_to_string(source_path).expect("host boundary fixture should be readable");
-    let eval = eval_source_main(source_path, &source).expect_err("eval should fail closed");
-    assert!(
-        matches!(&eval, EvalError::Runtime(message) if message.contains("Env.set_current_dir")),
-        "{eval:?}"
-    );
+    let cwd = std::env::current_dir().expect("current dir should be readable");
+    let eval =
+        eval_source_main(source_path, &source).expect("eval should run host boundary fixture");
+    std::env::set_current_dir(&cwd).expect("current dir should be restored after eval");
+    assert_eq!(eval.stdout, "host-ok\n");
+    assert_eq!(eval.stderr, "");
 
     let runtime_path = format!("{}/runtime", env!("CARGO_MANIFEST_DIR"));
     let package = lower_source_to_rust_package(
@@ -435,7 +436,8 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Log.error runtime:Log.error_json runtime:Log.trace runtime:Log.write
 // parity: runtime:Log.write_json
 // parity: runtime:Env.current_dir runtime:Env.get runtime:Env.get_or_default
-// parity: runtime:Env.home_dir runtime:Env.run_workspace_root runtime:Env.set runtime:Env.temp_dir
+// parity: runtime:Env.home_dir runtime:Env.run_workspace_root runtime:Env.set
+// parity: runtime:Env.set_current_dir runtime:Env.temp_dir
 // parity: runtime:File.append_bytes runtime:File.append_string runtime:File.bytes_stream runtime:File.exists
 // parity: runtime:File.open runtime:File.open_read runtime:File.open_write
 // parity: runtime:File.read_all runtime:File.read_all_async
