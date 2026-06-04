@@ -298,7 +298,8 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:List.push runtime:List.reverse runtime:List.remove_at runtime:List.set
 // parity: runtime:List.skip runtime:List.slice runtime:List.sort runtime:List.take
 // parity: runtime:List.to_json_strings runtime:List.to_json_values
-// parity: runtime:Log.error runtime:Log.trace runtime:Log.write
+// parity: runtime:Log.error runtime:Log.error_json runtime:Log.trace runtime:Log.write
+// parity: runtime:Log.write_json
 // parity: runtime:Env.current_dir runtime:Env.get runtime:Env.get_or_default
 // parity: runtime:Env.home_dir runtime:Env.run_workspace_root runtime:Env.set runtime:Env.temp_dir
 // parity: runtime:File.append_bytes runtime:File.append_string runtime:File.exists
@@ -771,7 +772,9 @@ fn parity_logging_stdout_and_stderr() {
     let source = r#"
 fn main() -> Unit {
     Log.write(message: read "stdout line")
+    Log.write_json(value: read Json.value(value: read {"stream": "stdout", "count": 1}))
     Log.error(message: read "stderr line")
+    Log.error_json(value: read Json.value(value: read {"stream": "stderr", "count": 2}))
     Log.trace(event: read "parity.event", message: read "traced")
     return Unit
 }

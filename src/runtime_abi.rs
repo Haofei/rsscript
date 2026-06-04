@@ -878,7 +878,12 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "rsscript_runtime::log_error",
         InterpreterIntrinsic::LogError,
     ),
-    runtime_intrinsic("Log", "error_json", "rsscript_runtime::log_error_json"),
+    runtime_intrinsic_with_interpreter(
+        "Log",
+        "error_json",
+        "rsscript_runtime::log_error_json",
+        InterpreterIntrinsic::LogErrorJson,
+    ),
     runtime_intrinsic_with_interpreter(
         "Log",
         "trace",
@@ -891,7 +896,12 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "rsscript_runtime::log_write",
         InterpreterIntrinsic::LogWrite,
     ),
-    runtime_intrinsic("Log", "write_json", "rsscript_runtime::log_write_json"),
+    runtime_intrinsic_with_interpreter(
+        "Log",
+        "write_json",
+        "rsscript_runtime::log_write_json",
+        InterpreterIntrinsic::LogWriteJson,
+    ),
     runtime_intrinsic("Map", "clear", "rsscript_runtime::map_clear"),
     runtime_intrinsic("Map", "contains_key", "rsscript_runtime::map_contains_key"),
     runtime_intrinsic("Map", "filter", "rsscript_runtime::map_filter"),

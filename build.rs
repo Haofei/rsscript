@@ -158,8 +158,10 @@ enum InterpreterEvalKind {
     StringBefore,
     StringAfter,
     LogError,
+    LogErrorJson,
     LogTrace,
     LogWrite,
+    LogWriteJson,
 }
 
 const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
@@ -423,6 +425,12 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
     },
     InterpreterIntrinsicSpec {
         namespace: "Log",
+        name: "error_json",
+        variant: "LogErrorJson",
+        eval_kind: InterpreterEvalKind::LogErrorJson,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Log",
         name: "trace",
         variant: "LogTrace",
         eval_kind: InterpreterEvalKind::LogTrace,
@@ -432,6 +440,12 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "write",
         variant: "LogWrite",
         eval_kind: InterpreterEvalKind::LogWrite,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Log",
+        name: "write_json",
+        variant: "LogWriteJson",
+        eval_kind: InterpreterEvalKind::LogWriteJson,
     },
 ];
 
@@ -660,11 +674,17 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::LogError => {
             "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"message\", 0)?;\n            interpreter.stderr.push_str(&expect_string(value)?);\n            interpreter.stderr.push('\\n');\n            Ok(Value::Unit)\n        }"
         }
+        InterpreterEvalKind::LogErrorJson => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            interpreter.stderr.push_str(&expect_json(value)?.to_string());\n            interpreter.stderr.push('\\n');\n            Ok(Value::Unit)\n        }"
+        }
         InterpreterEvalKind::LogTrace => {
             "{\n            let event = interpreter.eval_named_or_positional_arg(args, \"event\", 0)?;\n            let message = interpreter.eval_named_or_positional_arg(args, \"message\", 1)?;\n            interpreter.stdout.push_str(\"trace \");\n            interpreter.stdout.push_str(&expect_string(event)?);\n            interpreter.stdout.push_str(\": \");\n            interpreter.stdout.push_str(&expect_string(message)?);\n            interpreter.stdout.push('\\n');\n            Ok(Value::Unit)\n        }"
         }
         InterpreterEvalKind::LogWrite => {
             "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"message\", 0)?;\n            interpreter.stdout.push_str(&expect_string(value)?);\n            interpreter.stdout.push('\\n');\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::LogWriteJson => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            interpreter.stdout.push_str(&expect_json(value)?.to_string());\n            interpreter.stdout.push('\\n');\n            Ok(Value::Unit)\n        }"
         }
     }
 }
