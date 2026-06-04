@@ -300,6 +300,10 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Hash", "sha256_bytes"),
     ("Hash", "sha256_file"),
     ("Hash", "sha256_string"),
+    ("Http", "get"),
+    ("Http", "post_form"),
+    ("Http", "post_json"),
+    ("HttpError", "message"),
     ("ImageCache", "len"),
     ("ImageCache", "new"),
     ("Instant", "elapsed"),
@@ -655,6 +659,10 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Hash.sha256_bytes",
     "runtime:Hash.sha256_file",
     "runtime:Hash.sha256_string",
+    "runtime:Http.get",
+    "runtime:Http.post_form",
+    "runtime:Http.post_json",
+    "runtime:HttpError.message",
     "runtime:ImageCache.len",
     "runtime:ImageCache.new",
     "runtime:List.append",
@@ -2463,6 +2471,33 @@ impl<'a> Interpreter<'a> {
             ("Response", "body") => {
                 let response = self.eval_first_arg(args)?;
                 read_field(&response, "body")
+            }
+            ("Http", "get") => {
+                let url = self.eval_named_or_positional_arg(args, "url", 0)?;
+                Ok(value_err(http_error(format!(
+                    "HTTP client runtime is not configured for GET {}",
+                    expect_string(url)?
+                ))))
+            }
+            ("Http", "post_json") => {
+                let url = self.eval_named_or_positional_arg(args, "url", 0)?;
+                let _body = self.eval_named_or_positional_arg(args, "body", 1)?;
+                Ok(value_err(http_error(format!(
+                    "HTTP client runtime is not configured for POST JSON {}",
+                    expect_string(url)?
+                ))))
+            }
+            ("Http", "post_form") => {
+                let url = self.eval_named_or_positional_arg(args, "url", 0)?;
+                let _body = self.eval_named_or_positional_arg(args, "body", 1)?;
+                Ok(value_err(http_error(format!(
+                    "HTTP client runtime is not configured for POST form {}",
+                    expect_string(url)?
+                ))))
+            }
+            ("HttpError", "message") => {
+                let error = self.eval_named_or_positional_arg(args, "error", 0)?;
+                read_field(&error, "message")
             }
             ("Option", "is_some") => {
                 let value = self.eval_first_arg(args)?;
@@ -4405,6 +4440,13 @@ fn regex_value(pattern: impl Into<String>) -> Value {
 fn regex_error(message: impl Into<String>) -> Value {
     Value::Struct {
         name: "RegexError".to_string(),
+        fields: BTreeMap::from([("message".to_string(), Value::String(message.into()))]),
+    }
+}
+
+fn http_error(message: impl Into<String>) -> Value {
+    Value::Struct {
+        name: "HttpError".to_string(),
         fields: BTreeMap::from([("message".to_string(), Value::String(message.into()))]),
     }
 }

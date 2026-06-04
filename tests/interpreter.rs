@@ -287,6 +287,7 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Json.value runtime:Json.value_at runtime:Json.values runtime:JsonError.message
 // parity: runtime:Instant.elapsed
 // parity: runtime:Hash.sha256_bytes runtime:Hash.sha256_file runtime:Hash.sha256_string
+// parity: runtime:Http.get runtime:Http.post_form runtime:Http.post_json runtime:HttpError.message
 // parity: runtime:ImageCache.len runtime:ImageCache.new
 // parity: runtime:List.append runtime:List.clear runtime:List.contains_value
 // parity: runtime:List.consume runtime:List.first runtime:List.get runtime:List.is_empty runtime:List.join
@@ -1395,6 +1396,52 @@ fn main() -> Result<Unit, HttpError> {
         "rsscript_parity_request_response",
         source,
     );
+}
+
+#[test]
+fn parity_sync_http_error_intrinsics() {
+    let source = r#"
+features: native
+
+fn main() -> Unit {
+    let url = Url.from_string(value: read "https://example.test/api")
+    match Http.get(url: read url) {
+        Ok(response) => {
+            Log.write(message: read String.from_int(value: HttpResponse.status(response: read response)))
+        }
+        Err(error) => {
+            let message = HttpError.message(error: read error)
+            if String.contains(value: read message, needle: read "GET https://example.test/api") {
+                Log.write(message: read "get-error")
+            }
+        }
+    }
+    match Http.post_json(url: read url, body: read "{\"ok\":true}") {
+        Ok(response) => {
+            Log.write(message: read String.from_int(value: HttpResponse.status(response: read response)))
+        }
+        Err(error) => {
+            let message = HttpError.message(error: read error)
+            if String.contains(value: read message, needle: read "POST JSON https://example.test/api") {
+                Log.write(message: read "post-json-error")
+            }
+        }
+    }
+    match Http.post_form(url: read url, body: read "a=1") {
+        Ok(response) => {
+            Log.write(message: read String.from_int(value: HttpResponse.status(response: read response)))
+        }
+        Err(error) => {
+            let message = HttpError.message(error: read error)
+            if String.contains(value: read message, needle: read "POST form https://example.test/api") {
+                Log.write(message: read "post-form-error")
+            }
+        }
+    }
+    return Unit
+}
+"#;
+    assert_interpreter_matches_backend("parity-http-sync.rss", "rsscript_parity_http_sync", source);
 }
 
 #[test]
