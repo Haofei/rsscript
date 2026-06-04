@@ -54,6 +54,10 @@ pub enum NativeValue {
         name: String,
         fields: BTreeMap<String, NativeValue>,
     },
+    Native {
+        type_name: String,
+        id: i64,
+    },
 }
 
 pub type NativeInterpreterFn = fn(Vec<NativeValue>) -> Result<NativeValue, String>;
@@ -147,7 +151,7 @@ const VALUE_TYPES: &[&str] = &[
 
 const INTERPRETER_SUPPORTED_VALUE_TYPES: &[&str] = &[
     "Unit", "Int", "Bool", "String", "Char", "Bytes", "List", "Map", "Json", "Struct", "Variant",
-    "Managed", "Closure",
+    "Managed", "Closure", "Native",
 ];
 
 const FUNCTION_KINDS: &[&str] = &["sync", "async", "native"];
@@ -1189,6 +1193,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "value:List",
     "value:Managed",
     "value:Map",
+    "value:Native",
     "value:String",
     "value:Struct",
     "value:Unit",
@@ -1326,6 +1331,10 @@ enum Value {
         name: String,
         fields: BTreeMap<String, Value>,
     },
+    Native {
+        type_name: String,
+        id: i64,
+    },
     Managed(Rc<RefCell<Value>>),
     Closure {
         params: Vec<String>,
@@ -1373,6 +1382,7 @@ impl Value {
                     .join(", ");
                 format!("{name} {{ {fields} }}")
             }
+            Self::Native { type_name, id } => format!("<native {type_name}#{id}>"),
             Self::Managed(value) => value.borrow().display(),
             Self::Closure { .. } => "<closure>".to_string(),
         }
@@ -6108,6 +6118,7 @@ fn native_value_from_value(value: Value) -> Result<NativeValue, EvalError> {
             .map(|(field, value)| Ok((field, native_value_from_value(value)?)))
             .collect::<Result<BTreeMap<_, _>, EvalError>>()
             .map(|fields| NativeValue::Variant { name, fields }),
+        Value::Native { type_name, id } => Ok(NativeValue::Native { type_name, id }),
         Value::Managed(_) => Err(EvalError::Runtime(
             "native host binding argument stayed managed after unwrapping.".to_string(),
         )),
@@ -6149,6 +6160,7 @@ fn value_from_native_value(value: NativeValue) -> Value {
                 .map(|(field, value)| (field, value_from_native_value(value)))
                 .collect(),
         },
+        NativeValue::Native { type_name, id } => Value::Native { type_name, id },
     }
 }
 

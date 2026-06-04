@@ -475,6 +475,23 @@ fn main() -> Unit {
 
 #[test]
 fn parity_native_host_bindings_match_lowered_backend() {
+    fn host_open(args: Vec<NativeValue>) -> Result<NativeValue, String> {
+        let [] = args.as_slice() else {
+            return Err(format!("unexpected args: {args:?}"));
+        };
+        Ok(NativeValue::Native {
+            type_name: "HostHandle".to_string(),
+            id: 7,
+        })
+    }
+
+    fn host_describe(args: Vec<NativeValue>) -> Result<NativeValue, String> {
+        let [NativeValue::Native { type_name, id }] = args.as_slice() else {
+            return Err(format!("unexpected args: {args:?}"));
+        };
+        Ok(NativeValue::String(format!("{type_name}:{id}")))
+    }
+
     fn host_echo(args: Vec<NativeValue>) -> Result<NativeValue, String> {
         let [NativeValue::String(message)] = args.as_slice() else {
             return Err(format!("unexpected args: {args:?}"));
@@ -485,10 +502,20 @@ fn parity_native_host_bindings_match_lowered_backend() {
     let source = r#"
 features: native
 
+opaque struct HostHandle
+
+native fn Host.open() -> HostHandle
+    effects(native)
+
+native fn Host.describe(handle: read HostHandle) -> String
+    effects(native)
+
 native fn Host.echo(message: read String) -> String
     effects(native)
 
 fn main() -> Unit {
+    let handle = Host.open()
+    Log.write(message: read Host.describe(handle: read handle))
     Log.write(message: read Host.echo(message: read "native"))
     return Unit
 }
@@ -498,7 +525,11 @@ fn main() -> Unit {
         "parity-native-host.rss",
         source,
         std::iter::empty::<&str>(),
-        [("Host.echo", host_echo as NativeInterpreterFn)],
+        [
+            ("Host.open", host_open as NativeInterpreterFn),
+            ("Host.describe", host_describe as NativeInterpreterFn),
+            ("Host.echo", host_echo as NativeInterpreterFn),
+        ],
     )
     .expect("interpreter should run native host binding");
 
@@ -519,7 +550,20 @@ path = "src/lib.rs"
     .expect("native Cargo.toml should write");
     fs::write(
         native_dir.join("src/lib.rs"),
-        r#"pub fn echo(message: &String) -> String {
+        r#"#[derive(Clone, Debug)]
+pub struct HostHandle {
+    id: i64,
+}
+
+pub fn open() -> HostHandle {
+    HostHandle { id: 7 }
+}
+
+pub fn describe(handle: &HostHandle) -> String {
+    format!("HostHandle:{}", handle.id)
+}
+
+pub fn echo(message: &String) -> String {
     format!("host:{message}")
 }
 "#,
@@ -536,10 +580,20 @@ path = "src/lib.rs"
             crate_name: "rsscript_test_native".to_string(),
             path: native_dir.to_string_lossy().to_string(),
             cargo_features: Vec::new(),
-            bindings: BTreeMap::from([(
-                "Host.echo".to_string(),
-                "rsscript_test_native::echo".to_string(),
-            )]),
+            bindings: BTreeMap::from([
+                (
+                    "Host.echo".to_string(),
+                    "rsscript_test_native::echo".to_string(),
+                ),
+                (
+                    "Host.open".to_string(),
+                    "rsscript_test_native::open".to_string(),
+                ),
+                (
+                    "Host.describe".to_string(),
+                    "rsscript_test_native::describe".to_string(),
+                ),
+            ]),
         }],
     )
     .expect("source should lower with native binding");
@@ -585,7 +639,7 @@ path = "src/lib.rs"
 // parity: hir_expr:Closure hir_expr:Ident hir_expr:Index hir_expr:Manage hir_expr:MapLiteral hir_expr:Match
 // parity: hir_expr:Number hir_expr:ObjectLiteral hir_expr:Spawn hir_expr:String hir_expr:Try
 // parity: value:Bool value:Bytes value:Int value:Json value:List value:Managed
-// parity: value:Char value:Closure value:Map value:String value:Struct value:Unit value:Variant
+// parity: value:Char value:Closure value:Map value:Native value:String value:Struct value:Unit value:Variant
 // parity: runtime:Args.all runtime:Args.count runtime:Args.get runtime:Args.get_or_default
 // parity: runtime:Assert.equal runtime:Assert.equal_bool runtime:Assert.equal_int
 // parity: runtime:Char.compare runtime:Char.from_code runtime:Char.is_alpha
