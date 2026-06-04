@@ -258,6 +258,8 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Buffer.new runtime:Buffer.view runtime:BufferView.is_empty
 // parity: runtime:BufferView.len runtime:BufferView.slice runtime:BufferView.to_bytes
 // parity: runtime:Cache.get runtime:Cache.insert runtime:Cache.lookup runtime:Cache.new
+// parity: runtime:Channel.bounded runtime:Channel.receiver runtime:Channel.sender
+// parity: runtime:ChannelError.message
 // parity: runtime:CancellationSource.cancel runtime:CancellationSource.new
 // parity: runtime:CancellationSource.token runtime:CancellationToken.is_cancelled
 // parity: runtime:Clock.now runtime:Clock.system_unix_ms
@@ -2482,6 +2484,47 @@ fn main() -> Unit {
 }
 "#;
     assert_interpreter_matches_backend("parity-cache.rss", "rsscript_parity_cache", source);
+}
+
+#[test]
+fn parity_channel_sync_intrinsics() {
+    let source = r#"
+features: async, native, local
+
+fn main() -> Result<Unit, ChannelError> {
+    match Channel.bounded<Int>(capacity: 0) {
+        Ok(channel) => {
+            let sender: Sender<Int> = Channel.sender<Int>(channel: read channel)
+            let _ = sender
+            Log.write(message: read "unexpected-channel")
+        }
+        Err(error) => {
+            Log.write(message: read ChannelError.message(error: read error))
+        }
+    }
+
+    let mut channel: Channel<Int> = Channel.bounded<Int>(capacity: 1)?
+    let sender: Sender<Int> = Channel.sender<Int>(channel: read channel)
+    let _ = sender
+    let receiver: Receiver<Int> = Channel.receiver<Int>(channel: mut channel)?
+    let _ = receiver
+    match Channel.receiver<Int>(channel: mut channel) {
+        Ok(receiver) => {
+            let _ = receiver
+            Log.write(message: read "unexpected-receiver")
+        }
+        Err(error) => {
+            Log.write(message: read ChannelError.message(error: read error))
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+    assert_interpreter_matches_backend(
+        "parity-channel-sync.rss",
+        "rsscript_parity_channel_sync",
+        source,
+    );
 }
 
 #[test]

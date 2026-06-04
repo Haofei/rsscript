@@ -143,6 +143,10 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Cache", "insert"),
     ("Cache", "lookup"),
     ("Cache", "new"),
+    ("Channel", "bounded"),
+    ("Channel", "receiver"),
+    ("Channel", "sender"),
+    ("ChannelError", "message"),
     ("CancellationSource", "cancel"),
     ("CancellationSource", "new"),
     ("CancellationSource", "token"),
@@ -540,6 +544,10 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Cache.insert",
     "runtime:Cache.lookup",
     "runtime:Cache.new",
+    "runtime:Channel.bounded",
+    "runtime:Channel.receiver",
+    "runtime:Channel.sender",
+    "runtime:ChannelError.message",
     "runtime:CancellationSource.cancel",
     "runtime:CancellationSource.new",
     "runtime:CancellationSource.token",
@@ -2193,6 +2201,35 @@ impl<'a> Interpreter<'a> {
             }
             ("BufferView", "to_bytes") | ("Bytes", "from_buffer") => self.eval_first_arg(args),
             ("Cache", "new") => Ok(Value::Map(Vec::new())),
+            ("Channel", "bounded") => {
+                let capacity = self.eval_named_or_positional_arg(args, "capacity", 0)?;
+                let capacity = expect_int(capacity)?;
+                Ok(result_value(if capacity <= 0 {
+                    Err(channel_error("channel capacity must be positive"))
+                } else {
+                    Ok(channel_value(capacity, false))
+                }))
+            }
+            ("Channel", "sender") => {
+                let channel = self.eval_named_or_positional_arg(args, "channel", 0)?;
+                let _ = expect_channel(channel)?;
+                Ok(sender_value())
+            }
+            ("Channel", "receiver") => {
+                let channel_name = self.mut_arg_local_name(args, "channel", 0)?;
+                let mut channel = expect_channel(self.lookup(channel_name)?)?;
+                Ok(result_value(if channel.receiver_taken {
+                    Err(channel_error("channel receiver already taken"))
+                } else {
+                    channel.receiver_taken = true;
+                    self.assign(channel_name, channel.to_value())?;
+                    Ok(receiver_value())
+                }))
+            }
+            ("ChannelError", "message") => {
+                let value = self.eval_first_arg(args)?;
+                read_field(&value, "message")
+            }
             ("Cache", "insert") => {
                 let cache_name = self.mut_arg_local_name(args, "cache", 0)?;
                 let key = self.eval_named_or_positional_arg(args, "key", 1)?;
@@ -5247,6 +5284,48 @@ fn image_error_from_io(error: std::io::Error) -> Value {
     image_error(error.to_string())
 }
 
+struct ChannelState {
+    capacity: i64,
+    receiver_taken: bool,
+}
+
+impl ChannelState {
+    fn to_value(&self) -> Value {
+        channel_value(self.capacity, self.receiver_taken)
+    }
+}
+
+fn channel_value(capacity: i64, receiver_taken: bool) -> Value {
+    Value::Struct {
+        name: "Channel".to_string(),
+        fields: BTreeMap::from([
+            ("capacity".to_string(), Value::Int(capacity)),
+            ("receiver_taken".to_string(), Value::Bool(receiver_taken)),
+        ]),
+    }
+}
+
+fn sender_value() -> Value {
+    Value::Struct {
+        name: "Sender".to_string(),
+        fields: BTreeMap::new(),
+    }
+}
+
+fn receiver_value() -> Value {
+    Value::Struct {
+        name: "Receiver".to_string(),
+        fields: BTreeMap::new(),
+    }
+}
+
+fn channel_error(message: impl Into<String>) -> Value {
+    Value::Struct {
+        name: "ChannelError".to_string(),
+        fields: BTreeMap::from([("message".to_string(), Value::String(message.into()))]),
+    }
+}
+
 fn tempdir_value(path: impl Into<String>) -> Value {
     Value::Struct {
         name: "TempDir".to_string(),
@@ -5431,6 +5510,27 @@ fn expect_function_has_closure(value: Value) -> Result<bool, EvalError> {
             .and_then(expect_bool),
         other => Err(EvalError::Runtime(format!(
             "expected FunctionObject, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn expect_channel(value: Value) -> Result<ChannelState, EvalError> {
+    match value {
+        Value::Struct { name, mut fields } if name == "Channel" => {
+            let capacity = fields.remove("capacity").ok_or_else(|| {
+                EvalError::Runtime("Channel value is missing capacity.".to_string())
+            })?;
+            let receiver_taken = fields.remove("receiver_taken").ok_or_else(|| {
+                EvalError::Runtime("Channel value is missing receiver_taken.".to_string())
+            })?;
+            Ok(ChannelState {
+                capacity: expect_int(capacity)?,
+                receiver_taken: expect_bool(receiver_taken)?,
+            })
+        }
+        other => Err(EvalError::Runtime(format!(
+            "expected Channel, got `{}`.",
             other.display()
         ))),
     }
