@@ -3494,47 +3494,6 @@ impl<'a> Interpreter<'a> {
                 self.eval_first_arg(args)?;
                 Ok(Value::Unit)
             }
-            ("Bytes", "from_string") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::Bytes(expect_string(value)?.into_bytes()))
-            }
-            ("Bytes", "consume") => {
-                self.eval_first_arg(args)?;
-                Ok(Value::Unit)
-            }
-            ("Bytes", "len") | ("BytesView", "len") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::Int(expect_bytes(value)?.len() as i64))
-            }
-            ("Bytes", "is_empty") | ("BytesView", "is_empty") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::Bool(expect_bytes(value)?.is_empty()))
-            }
-            ("Bytes", "concat") => {
-                let left = self.eval_named_or_positional_arg(args, "left", 0)?;
-                let right = self.eval_named_or_positional_arg(args, "right", 1)?;
-                let mut bytes = expect_bytes(left)?;
-                bytes.extend(expect_bytes(right)?);
-                Ok(Value::Bytes(bytes))
-            }
-            ("Bytes", "slice") | ("Bytes", "view") | ("BytesView", "slice") => {
-                let value = self.eval_named_or_positional_arg(args, "value", 0)?;
-                let start = self.eval_named_or_positional_arg(args, "start", 1)?;
-                let len = self.eval_named_or_positional_arg(args, "len", 2)?;
-                Ok(Value::Bytes(bytes_slice(
-                    expect_bytes(value)?,
-                    expect_int(start)?,
-                    expect_int(len)?,
-                )))
-            }
-            ("BytesView", "to_bytes") => self.eval_first_arg(args),
-            ("BytesView", "starts_with") => {
-                let value = self.eval_named_or_positional_arg(args, "value", 0)?;
-                let prefix = self.eval_named_or_positional_arg(args, "prefix", 1)?;
-                Ok(Value::Bool(
-                    expect_bytes(value)?.starts_with(&expect_bytes(prefix)?),
-                ))
-            }
             ("Hash", "sha256_string") => {
                 let value = self.eval_first_arg(args)?;
                 Ok(Value::String(sha256_digest(
@@ -4126,46 +4085,6 @@ impl<'a> Interpreter<'a> {
                         .map(|(_, value)| value)
                         .collect(),
                 ))
-            }
-            ("PersistentMap", "new") => Ok(Value::Map(Vec::new())),
-            ("PersistentMap", "len") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::Int(expect_map(value)?.len() as i64))
-            }
-            ("PersistentMap", "is_empty") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::Bool(expect_map(value)?.is_empty()))
-            }
-            ("PersistentMap", "contains_key") => {
-                let map = self.eval_named_or_positional_arg(args, "map", 0)?;
-                let key = self.eval_named_or_positional_arg(args, "key", 1)?;
-                Ok(Value::Bool(map_get(&expect_map(map)?, &key).is_some()))
-            }
-            ("PersistentMap", "get") => {
-                let map = self.eval_named_or_positional_arg(args, "map", 0)?;
-                let key = self.eval_named_or_positional_arg(args, "key", 1)?;
-                Ok(value_option(map_get(&expect_map(map)?, &key), |value| {
-                    value
-                }))
-            }
-            ("PersistentMap", "insert") => {
-                let map = self.eval_named_or_positional_arg(args, "map", 0)?;
-                let key = self.eval_named_or_positional_arg(args, "key", 1)?;
-                let value = self.eval_named_or_positional_arg(args, "value", 2)?;
-                let mut map = expect_map(map)?;
-                map_insert(&mut map, key, value);
-                Ok(Value::Map(map))
-            }
-            ("PersistentMap", "remove") => {
-                let map = self.eval_named_or_positional_arg(args, "map", 0)?;
-                let key = self.eval_named_or_positional_arg(args, "key", 1)?;
-                let mut map = expect_map(map)?;
-                map_remove(&mut map, &key);
-                Ok(Value::Map(map))
-            }
-            ("PersistentMap", "clear") => {
-                self.eval_first_arg(args)?;
-                Ok(Value::Map(Vec::new()))
             }
             ("Regex", "compile") => {
                 let pattern = self.eval_first_arg(args)?;

@@ -130,7 +130,15 @@ enum InterpreterEvalKind {
     BufferNew,
     BufferView,
     BufferViewToBytes,
+    BytesConcat,
+    BytesConsume,
     BytesFromBuffer,
+    BytesFromString,
+    BytesIsEmpty,
+    BytesLen,
+    BytesSlice,
+    BytesViewStartsWith,
+    BytesViewToBytes,
     CacheNew,
     CharCompare,
     CharFromCode,
@@ -149,6 +157,14 @@ enum InterpreterEvalKind {
     FileErrorMessage,
     IntToString,
     OsClose,
+    PersistentMapClear,
+    PersistentMapContainsKey,
+    PersistentMapGet,
+    PersistentMapInsert,
+    PersistentMapIsEmpty,
+    PersistentMapLen,
+    PersistentMapNew,
+    PersistentMapRemove,
     RowBufferNew,
     RowFieldString,
     StringConcat,
@@ -300,6 +316,78 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::BytesFromBuffer,
     },
     InterpreterIntrinsicSpec {
+        namespace: "Bytes",
+        name: "concat",
+        variant: "BytesConcat",
+        eval_kind: InterpreterEvalKind::BytesConcat,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Bytes",
+        name: "consume",
+        variant: "BytesConsume",
+        eval_kind: InterpreterEvalKind::BytesConsume,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Bytes",
+        name: "from_string",
+        variant: "BytesFromString",
+        eval_kind: InterpreterEvalKind::BytesFromString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Bytes",
+        name: "is_empty",
+        variant: "BytesIsEmpty",
+        eval_kind: InterpreterEvalKind::BytesIsEmpty,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Bytes",
+        name: "len",
+        variant: "BytesLen",
+        eval_kind: InterpreterEvalKind::BytesLen,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Bytes",
+        name: "slice",
+        variant: "BytesSlice",
+        eval_kind: InterpreterEvalKind::BytesSlice,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Bytes",
+        name: "view",
+        variant: "BytesView",
+        eval_kind: InterpreterEvalKind::BytesSlice,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "BytesView",
+        name: "is_empty",
+        variant: "BytesViewIsEmpty",
+        eval_kind: InterpreterEvalKind::BytesIsEmpty,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "BytesView",
+        name: "len",
+        variant: "BytesViewLen",
+        eval_kind: InterpreterEvalKind::BytesLen,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "BytesView",
+        name: "slice",
+        variant: "BytesViewSlice",
+        eval_kind: InterpreterEvalKind::BytesSlice,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "BytesView",
+        name: "starts_with",
+        variant: "BytesViewStartsWith",
+        eval_kind: InterpreterEvalKind::BytesViewStartsWith,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "BytesView",
+        name: "to_bytes",
+        variant: "BytesViewToBytes",
+        eval_kind: InterpreterEvalKind::BytesViewToBytes,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "Cache",
         name: "new",
         variant: "CacheNew",
@@ -406,6 +494,54 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "close",
         variant: "OsClose",
         eval_kind: InterpreterEvalKind::OsClose,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "PersistentMap",
+        name: "clear",
+        variant: "PersistentMapClear",
+        eval_kind: InterpreterEvalKind::PersistentMapClear,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "PersistentMap",
+        name: "contains_key",
+        variant: "PersistentMapContainsKey",
+        eval_kind: InterpreterEvalKind::PersistentMapContainsKey,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "PersistentMap",
+        name: "get",
+        variant: "PersistentMapGet",
+        eval_kind: InterpreterEvalKind::PersistentMapGet,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "PersistentMap",
+        name: "insert",
+        variant: "PersistentMapInsert",
+        eval_kind: InterpreterEvalKind::PersistentMapInsert,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "PersistentMap",
+        name: "is_empty",
+        variant: "PersistentMapIsEmpty",
+        eval_kind: InterpreterEvalKind::PersistentMapIsEmpty,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "PersistentMap",
+        name: "len",
+        variant: "PersistentMapLen",
+        eval_kind: InterpreterEvalKind::PersistentMapLen,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "PersistentMap",
+        name: "new",
+        variant: "PersistentMapNew",
+        eval_kind: InterpreterEvalKind::PersistentMapNew,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "PersistentMap",
+        name: "remove",
+        variant: "PersistentMapRemove",
+        eval_kind: InterpreterEvalKind::PersistentMapRemove,
     },
     InterpreterIntrinsicSpec {
         namespace: "RowBuffer",
@@ -827,6 +963,30 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::BufferViewToBytes | InterpreterEvalKind::BytesFromBuffer => {
             "{\n            interpreter.eval_first_arg(args)\n        }"
         }
+        InterpreterEvalKind::BytesConcat => {
+            "{\n            let left = interpreter.eval_named_or_positional_arg(args, \"left\", 0)?;\n            let right = interpreter.eval_named_or_positional_arg(args, \"right\", 1)?;\n            let mut bytes = expect_bytes(left)?;\n            bytes.extend(expect_bytes(right)?);\n            Ok(Value::Bytes(bytes))\n        }"
+        }
+        InterpreterEvalKind::BytesConsume => {
+            "{\n            interpreter.eval_first_arg(args)?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::BytesFromString => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bytes(expect_string(value)?.into_bytes()))\n        }"
+        }
+        InterpreterEvalKind::BytesIsEmpty => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(expect_bytes(value)?.is_empty()))\n        }"
+        }
+        InterpreterEvalKind::BytesLen => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Int(expect_bytes(value)?.len() as i64))\n        }"
+        }
+        InterpreterEvalKind::BytesSlice => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let start = interpreter.eval_named_or_positional_arg(args, \"start\", 1)?;\n            let len = interpreter.eval_named_or_positional_arg(args, \"len\", 2)?;\n            Ok(Value::Bytes(bytes_slice(\n                expect_bytes(value)?,\n                expect_int(start)?,\n                expect_int(len)?,\n            )))\n        }"
+        }
+        InterpreterEvalKind::BytesViewStartsWith => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let prefix = interpreter.eval_named_or_positional_arg(args, \"prefix\", 1)?;\n            Ok(Value::Bool(\n                expect_bytes(value)?.starts_with(&expect_bytes(prefix)?),\n            ))\n        }"
+        }
+        InterpreterEvalKind::BytesViewToBytes => {
+            "{\n            interpreter.eval_first_arg(args)\n        }"
+        }
         InterpreterEvalKind::CacheNew => {
             "{\n            Ok(Value::Map(Vec::new()))\n        }"
         }
@@ -877,6 +1037,30 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::OsClose => {
             "{\n            let fd = interpreter.eval_named_or_positional_arg(args, \"fd\", 0)?;\n            let _ = expect_int(fd)?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::PersistentMapClear => {
+            "{\n            interpreter.eval_first_arg(args)?;\n            Ok(Value::Map(Vec::new()))\n        }"
+        }
+        InterpreterEvalKind::PersistentMapContainsKey => {
+            "{\n            let map = interpreter.eval_named_or_positional_arg(args, \"map\", 0)?;\n            let key = interpreter.eval_named_or_positional_arg(args, \"key\", 1)?;\n            Ok(Value::Bool(map_get(&expect_map(map)?, &key).is_some()))\n        }"
+        }
+        InterpreterEvalKind::PersistentMapGet => {
+            "{\n            let map = interpreter.eval_named_or_positional_arg(args, \"map\", 0)?;\n            let key = interpreter.eval_named_or_positional_arg(args, \"key\", 1)?;\n            Ok(value_option(map_get(&expect_map(map)?, &key), |value| {\n                value\n            }))\n        }"
+        }
+        InterpreterEvalKind::PersistentMapInsert => {
+            "{\n            let map = interpreter.eval_named_or_positional_arg(args, \"map\", 0)?;\n            let key = interpreter.eval_named_or_positional_arg(args, \"key\", 1)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 2)?;\n            let mut map = expect_map(map)?;\n            map_insert(&mut map, key, value);\n            Ok(Value::Map(map))\n        }"
+        }
+        InterpreterEvalKind::PersistentMapIsEmpty => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(expect_map(value)?.is_empty()))\n        }"
+        }
+        InterpreterEvalKind::PersistentMapLen => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Int(expect_map(value)?.len() as i64))\n        }"
+        }
+        InterpreterEvalKind::PersistentMapNew => {
+            "{\n            Ok(Value::Map(Vec::new()))\n        }"
+        }
+        InterpreterEvalKind::PersistentMapRemove => {
+            "{\n            let map = interpreter.eval_named_or_positional_arg(args, \"map\", 0)?;\n            let key = interpreter.eval_named_or_positional_arg(args, \"key\", 1)?;\n            let mut map = expect_map(map)?;\n            map_remove(&mut map, &key);\n            Ok(Value::Map(map))\n        }"
         }
         InterpreterEvalKind::RowBufferNew => {
             "{\n            let size = interpreter.eval_named_or_positional_arg(args, \"size\", 0)?;\n            let capacity = expect_int(size)?.max(0) as usize;\n            Ok(row_buffer_value(Vec::with_capacity(capacity)))\n        }"
