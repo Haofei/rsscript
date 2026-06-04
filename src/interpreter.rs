@@ -105,6 +105,7 @@ const INTERPRETER_SUPPORTED_HIR_EXPR_VARIANTS: &[&str] = &[
     "Call",
     "Effect",
     "Manage",
+    "Await",
     "Try",
     "Closure",
     "Match",
@@ -121,7 +122,7 @@ const INTERPRETER_SUPPORTED_VALUE_TYPES: &[&str] = &[
 ];
 
 const FUNCTION_KINDS: &[&str] = &["sync", "async", "native"];
-const INTERPRETER_SUPPORTED_FUNCTION_KINDS: &[&str] = &["sync"];
+const INTERPRETER_SUPPORTED_FUNCTION_KINDS: &[&str] = &["sync", "async"];
 
 const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Args", "all"),
@@ -501,6 +502,9 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("TempDir", "new"),
     ("TempDir", "new_in"),
     ("TempDir", "path"),
+    ("Timer", "sleep"),
+    ("Timer", "sleep_cancellable"),
+    ("Timer", "sleep_until"),
     ("Url", "from_string"),
     ("Url", "to_string"),
     ("Workspace", "resolve"),
@@ -513,8 +517,10 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
 ];
 
 const INTERPRETER_PARITY_FEATURES: &[&str] = &[
+    "function:async",
     "function:sync",
     "hir_expr:ArrayLiteral",
+    "hir_expr:Await",
     "hir_expr:Binary",
     "hir_expr:Call",
     "hir_expr:Closure",
@@ -967,6 +973,9 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:TempDir.new",
     "runtime:TempDir.new_in",
     "runtime:TempDir.path",
+    "runtime:Timer.sleep",
+    "runtime:Timer.sleep_cancellable",
+    "runtime:Timer.sleep_until",
     "runtime:Toml.parse_file",
     "runtime:Url.from_string",
     "runtime:Url.to_string",
@@ -1248,14 +1257,9 @@ impl<'a> Interpreter<'a> {
         };
         let Some(body) = hir.function_body(name).and_then(|body| body.block.as_ref()) else {
             return Err(EvalError::Runtime(format!(
-                "interpreter P0 does not execute async/native function `{name}`."
+                "interpreter does not execute native function `{name}`."
             )));
         };
-        if signature.is_async {
-            return Err(EvalError::Runtime(format!(
-                "interpreter P0 does not execute async/native function `{name}`."
-            )));
-        }
         if args.len() != signature.params.len() {
             return Err(EvalError::Runtime(format!(
                 "function `{name}` expected {} arguments, got {}.",
@@ -1540,6 +1544,7 @@ impl<'a> Interpreter<'a> {
             }
             HirExpr::Call { callee, args, .. } => self.eval_call(callee, args),
             HirExpr::Effect { value, .. } | HirExpr::Manage { value, .. } => self.eval_expr(value),
+            HirExpr::Await { value, .. } => self.eval_expr(value),
             HirExpr::Closure { params, body, .. } => Ok(Value::Closure {
                 params: params.clone(),
                 body: body.clone(),
@@ -3193,6 +3198,23 @@ impl<'a> Interpreter<'a> {
                     .eval_named_or_positional_arg(args, "dir", 0)
                     .or_else(|_| self.eval_first_arg(args))?;
                 Ok(Value::String(expect_tempdir_path(dir)?))
+            }
+            ("Timer", "sleep") => {
+                let ms = self.eval_named_or_positional_arg(args, "ms", 0)?;
+                let _ = expect_int(ms)?;
+                Ok(value_ok(Value::Unit))
+            }
+            ("Timer", "sleep_until") => {
+                let deadline = self.eval_named_or_positional_arg(args, "deadline", 0)?;
+                let _ = expect_deadline_unix_ms(deadline)?;
+                Ok(value_ok(Value::Unit))
+            }
+            ("Timer", "sleep_cancellable") => {
+                let ms = self.eval_named_or_positional_arg(args, "ms", 0)?;
+                let token = self.eval_named_or_positional_arg(args, "token", 1)?;
+                let _ = expect_int(ms)?;
+                let _ = expect_cancellation_id(token, "CancellationToken")?;
+                Ok(value_ok(Value::Unit))
             }
             ("Path", "from_string")
             | ("Path", "to_string")

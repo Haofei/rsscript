@@ -81,6 +81,37 @@ fn main() -> Int {
 }
 
 #[test]
+fn parity_async_await_runs_synchronously() {
+    let source = r#"
+features: async, native
+
+async fn add_after_sleep(value: Int) -> Result<Int, TimerError> {
+    await Timer.sleep(ms: 1)?
+    return Ok(value + 1)
+}
+
+async fn main() -> Result<Unit, TimerError> {
+    let value = await add_after_sleep(value: 4)?
+    Log.write(message: read String.from_int(value: value))
+
+    let deadline = Deadline.after_ms(ms: 1)
+    await Timer.sleep_until(deadline: read deadline)?
+
+    let source = CancellationSource.new()
+    let token = CancellationSource.token(source: read source)
+    await Timer.sleep_cancellable(ms: 1, token: read token)?
+    Log.write(message: read "async-done")
+    return Ok(Unit)
+}
+"#;
+    assert_interpreter_matches_backend(
+        "parity-async-await.rss",
+        "rsscript_parity_async_await",
+        source,
+    );
+}
+
+#[test]
 fn eval_matches_lowered_rust_for_pure_core_example() {
     let source_path = "examples/scripts/core/interpreter_pure_parity.rss";
     let source = fs::read_to_string(source_path).expect("parity fixture should be readable");
@@ -223,10 +254,10 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 /// through the lowered-Rust backend, then assert their observable output agrees.
 /// This is the mechanism (not docs) that keeps the interpreter from diverging
 /// from the authoritative backend — one fixture per supported construct.
-// parity: function:sync
+// parity: function:async function:sync
 // parity: hir_stmt:Assign hir_stmt:Break hir_stmt:Continue hir_stmt:Expr hir_stmt:For
 // parity: hir_stmt:If hir_stmt:Let hir_stmt:Loop hir_stmt:Match hir_stmt:Return hir_stmt:With
-// parity: hir_expr:ArrayLiteral hir_expr:Binary hir_expr:Call hir_expr:Effect hir_expr:Field
+// parity: hir_expr:ArrayLiteral hir_expr:Await hir_expr:Binary hir_expr:Call hir_expr:Effect hir_expr:Field
 // parity: hir_expr:Closure hir_expr:Ident hir_expr:Index hir_expr:Manage hir_expr:MapLiteral hir_expr:Match
 // parity: hir_expr:Number hir_expr:ObjectLiteral hir_expr:String hir_expr:Try
 // parity: value:Bool value:Bytes value:Int value:Json value:List
@@ -383,11 +414,21 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Stream.collect_list runtime:Stream.from_list
 // parity: runtime:GlobalConfig.new runtime:GlobalConfig.replace runtime:GlobalConfig.rule_count
 // parity: runtime:TempDir.new runtime:TempDir.new_in runtime:TempDir.path
+// parity: runtime:Timer.sleep runtime:Timer.sleep_cancellable runtime:Timer.sleep_until
 // parity: runtime:Toml.parse_file
 // parity: runtime:Url.from_string runtime:Url.to_string
 // parity: runtime:Yaml.parse runtime:Yaml.parse_file
 fn assert_interpreter_matches_backend(name: &str, package: &str, source: &str) {
     assert_interpreter_matches_backend_with_args(name, package, source, &[]);
+}
+
+fn run_with_large_stack(test: impl FnOnce() + Send + 'static) {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(test)
+        .expect("large-stack test thread should spawn")
+        .join()
+        .expect("large-stack test thread should pass");
 }
 
 fn assert_interpreter_matches_backend_with_args(
@@ -1313,7 +1354,8 @@ fn main() -> Unit {
 
 #[test]
 fn parity_path_intrinsics() {
-    let source = r#"
+    run_with_large_stack(|| {
+        let source = r#"
 fn main() -> Unit {
     let root = Path.from_string(value: read "fixtures")
     let path = Path.join(base: read root, child: read "rsscript-path.txt")
@@ -1389,7 +1431,8 @@ fn main() -> Unit {
     return Unit
 }
 "#;
-    assert_interpreter_matches_backend("parity-path.rss", "rsscript_parity_path", source);
+        assert_interpreter_matches_backend("parity-path.rss", "rsscript_parity_path", source);
+    });
 }
 
 #[test]

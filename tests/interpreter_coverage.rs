@@ -37,12 +37,12 @@ fn interpreter_coverage_report_tracks_hir_surface() {
 fn interpreter_coverage_baseline_is_explicit() {
     let report = interpreter_coverage_report();
 
-    assert_bucket_counts(&report.runtime_intrinsics, 519, 433, 86);
+    assert_bucket_counts(&report.runtime_intrinsics, 519, 436, 83);
     assert_bucket_counts(&report.hir_statements, 13, 11, 2);
-    assert_bucket_counts(&report.hir_expressions, 18, 15, 3);
+    assert_bucket_counts(&report.hir_expressions, 18, 16, 2);
     assert_bucket_counts(&report.value_types, 14, 12, 2);
-    assert_bucket_counts(&report.function_kinds, 3, 1, 2);
-    assert_bucket_counts(&report.parity_features, 472, 472, 0);
+    assert_bucket_counts(&report.function_kinds, 3, 2, 1);
+    assert_bucket_counts(&report.parity_features, 477, 477, 0);
 
     assert!(
         report
@@ -59,7 +59,10 @@ fn interpreter_coverage_baseline_is_explicit() {
         "known expression gap should stay visible"
     );
     assert!(
-        report.function_kinds.missing.contains(&"async".to_string()),
+        report
+            .function_kinds
+            .missing
+            .contains(&"native".to_string()),
         "known function-kind gap should stay visible"
     );
     assert!(
