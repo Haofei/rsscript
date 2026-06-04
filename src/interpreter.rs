@@ -3836,23 +3836,6 @@ impl<'a> Interpreter<'a> {
                     None => value_none(),
                 })
             }
-            ("TempDir", "new") => Ok(result_value(tempdir_new_value(std::env::temp_dir()))),
-            ("TempDir", "new_in") => {
-                let parent = self.eval_named_or_positional_arg(args, "parent", 0)?;
-                Ok(result_value(tempdir_new_value(PathBuf::from(
-                    expect_string(parent)?,
-                ))))
-            }
-            ("TempDir", "keep") => {
-                let dir = self.eval_named_or_positional_arg(args, "dir", 0)?;
-                Ok(Value::String(expect_tempdir_path(dir)?))
-            }
-            ("TempDir", "path") => {
-                let dir = self
-                    .eval_named_or_positional_arg(args, "dir", 0)
-                    .or_else(|_| self.eval_first_arg(args))?;
-                Ok(Value::String(expect_tempdir_path(dir)?))
-            }
             ("Timer", "sleep") => {
                 let ms = self.eval_named_or_positional_arg(args, "ms", 0)?;
                 let _ = expect_int(ms)?;

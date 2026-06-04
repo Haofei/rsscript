@@ -415,6 +415,10 @@ enum InterpreterEvalKind {
     StringToPath,
     StringToUrl,
     TcpErrorMessage,
+    TempDirKeep,
+    TempDirNew,
+    TempDirNewIn,
+    TempDirPath,
     TomlParseFile,
     UrlFromString,
     UrlToString,
@@ -2303,6 +2307,30 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::TcpErrorMessage,
     },
     InterpreterIntrinsicSpec {
+        namespace: "TempDir",
+        name: "keep",
+        variant: "TempDirKeep",
+        eval_kind: InterpreterEvalKind::TempDirKeep,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "TempDir",
+        name: "new",
+        variant: "TempDirNew",
+        eval_kind: InterpreterEvalKind::TempDirNew,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "TempDir",
+        name: "new_in",
+        variant: "TempDirNewIn",
+        eval_kind: InterpreterEvalKind::TempDirNewIn,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "TempDir",
+        name: "path",
+        variant: "TempDirPath",
+        eval_kind: InterpreterEvalKind::TempDirPath,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "Toml",
         name: "parse_file",
         variant: "TomlParseFile",
@@ -3392,6 +3420,18 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::TcpErrorMessage | InterpreterEvalKind::WebSocketErrorMessage => {
             "{\n            let error = interpreter.eval_named_or_positional_arg(args, \"error\", 0)?;\n            read_field(&error, \"message\")\n        }"
+        }
+        InterpreterEvalKind::TempDirKeep => {
+            "{\n            let dir = interpreter.eval_named_or_positional_arg(args, \"dir\", 0)?;\n            Ok(Value::String(expect_tempdir_path(dir)?))\n        }"
+        }
+        InterpreterEvalKind::TempDirNew => {
+            "{\n            Ok(result_value(tempdir_new_value(std::env::temp_dir())))\n        }"
+        }
+        InterpreterEvalKind::TempDirNewIn => {
+            "{\n            let parent = interpreter.eval_named_or_positional_arg(args, \"parent\", 0)?;\n            Ok(result_value(tempdir_new_value(PathBuf::from(\n                expect_string(parent)?,\n            ))))\n        }"
+        }
+        InterpreterEvalKind::TempDirPath => {
+            "{\n            let dir = interpreter\n                .eval_named_or_positional_arg(args, \"dir\", 0)\n                .or_else(|_| interpreter.eval_first_arg(args))?;\n            Ok(Value::String(expect_tempdir_path(dir)?))\n        }"
         }
         InterpreterEvalKind::TomlParseFile => {
             "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            Ok(json_result(\n                std::fs::read_to_string(expect_string(path)?)\n                    .map_err(|error| error.to_string())\n                    .and_then(|text| {\n                        text.parse::<toml::Value>()\n                            .map_err(|error| error.to_string())\n                    })\n                    .and_then(|value| {\n                        serde_json::to_value(value).map_err(|error| error.to_string())\n                    }),\n            ))\n        }"
