@@ -336,7 +336,7 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Path.write_string
 // parity: runtime:String.safe_relative runtime:String.to_path runtime:Workspace.resolve
 // parity: runtime:Process.run runtime:Process.run_many_stdout
-// parity: runtime:Process.run_many_stdout_timeout runtime:Process.run_stdout
+// parity: runtime:Process.run_many_stdout_timeout runtime:Process.run_request runtime:Process.run_stdout
 // parity: runtime:Process.run_stdout_timeout runtime:Process.run_timeout
 // parity: runtime:Map.clear runtime:Map.contains_key runtime:Map.get
 // parity: runtime:Map.get_or_default runtime:Map.insert runtime:Map.insert_old
@@ -2031,6 +2031,37 @@ fn main() -> Result<Unit, String> {
 
     let many_timeout = Process.run_many_stdout_timeout(command: read "printf", args: read format_args, appended_args: read items, jobs: 2, timeout_ms: 1000)?
     Log.write(message: read List.join<String>(list: read many_timeout, separator: read "|"))
+
+    let stdin_request = ProcessRequest(
+        command: "cat",
+        args: List<String>.new(),
+        cwd: None,
+        stdin: Some("stdin-body"),
+        env: List<ProcessEnv>.new(),
+        timeout_ms: 1000,
+        merge_stderr: false,
+        output_cap_bytes: 0,
+    )
+    let stdin_output = Process.run_request(request: read stdin_request)?
+    Log.write(message: read String.from_int(value: stdin_output.status))
+    Log.write(message: read stdin_output.stdout)
+    Log.write(message: read stdin_output.merged)
+
+    let capped_request = ProcessRequest(
+        command: "printf",
+        args: ["%s", "abcdef"],
+        cwd: None,
+        stdin: None,
+        env: List<ProcessEnv>.new(),
+        timeout_ms: 1000,
+        merge_stderr: false,
+        output_cap_bytes: 3,
+    )
+    let capped = Process.run_request(request: read capped_request)?
+    Log.write(message: read capped.stdout)
+    if capped.truncated {
+        Log.write(message: read "request-truncated")
+    }
     return Ok(Unit)
 }
 "#;

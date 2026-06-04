@@ -425,6 +425,7 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Process", "run_many_stdout"),
     ("Process", "run_many_stdout_timeout"),
     ("Process", "run"),
+    ("Process", "run_request"),
     ("Process", "run_stdout"),
     ("Process", "run_stdout_timeout"),
     ("Process", "run_timeout"),
@@ -837,6 +838,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Process.run_many_stdout",
     "runtime:Process.run_many_stdout_timeout",
     "runtime:Process.run",
+    "runtime:Process.run_request",
     "runtime:Process.run_stdout",
     "runtime:Process.run_stdout_timeout",
     "runtime:Process.run_timeout",
@@ -3095,6 +3097,14 @@ impl<'a> Interpreter<'a> {
                     .map_err(Value::String),
                 ))
             }
+            ("Process", "run_request") => {
+                let request = self.eval_named_or_positional_arg(args, "request", 0)?;
+                Ok(result_value(
+                    process_run_request_output(&expect_process_request(request)?)
+                        .map(process_output_value)
+                        .map_err(Value::String),
+                ))
+            }
             ("Process", "run_stdout_timeout") => {
                 let command = self.eval_named_or_positional_arg(args, "command", 0)?;
                 let args_value = self.eval_named_or_positional_arg(args, "args", 1)?;
@@ -4050,6 +4060,12 @@ impl<'a> Interpreter<'a> {
                 fields: BTreeMap::new(),
             }));
         }
+        if let Some(fields) = self.eval_builtin_constructor_fields(name, args)? {
+            return Ok(Some(Value::Struct {
+                name: name.to_string(),
+                fields,
+            }));
+        }
         // Struct field declaration order is not retained by HIR, so the ordered
         // field list comes from the parsed AST declarations.
         for item in &self.program.items {
@@ -4073,6 +4089,35 @@ impl<'a> Interpreter<'a> {
             }
         }
         Ok(None)
+    }
+
+    fn eval_builtin_constructor_fields(
+        &mut self,
+        name: &str,
+        args: &[HirCallArg],
+    ) -> Result<Option<BTreeMap<String, Value>>, EvalError> {
+        let fields: &[&str] = match name {
+            "ProcessEnv" => &["name", "value"],
+            "ProcessRequest" => &[
+                "command",
+                "args",
+                "cwd",
+                "stdin",
+                "env",
+                "timeout_ms",
+                "merge_stderr",
+                "output_cap_bytes",
+            ],
+            _ => return Ok(None),
+        };
+        let mut values = BTreeMap::new();
+        for (index, field) in fields.iter().enumerate() {
+            values.insert(
+                (*field).to_string(),
+                self.eval_named_or_positional_arg(args, field, index)?,
+            );
+        }
+        Ok(Some(values))
     }
 
     fn eval_constructor_fields(
@@ -4265,6 +4310,83 @@ struct ProcessOutputState {
     truncated: bool,
 }
 
+struct ProcessRequestState {
+    command: String,
+    args: Vec<String>,
+    cwd: Option<String>,
+    stdin: Option<String>,
+    env: Vec<(String, String)>,
+    timeout_ms: i64,
+    merge_stderr: bool,
+    output_cap_bytes: i64,
+}
+
+fn expect_process_request(value: Value) -> Result<ProcessRequestState, EvalError> {
+    match value {
+        Value::Struct { name, mut fields } if name == "ProcessRequest" => {
+            let command = fields.remove("command").ok_or_else(|| {
+                EvalError::Runtime("ProcessRequest value is missing command.".to_string())
+            })?;
+            let args = fields.remove("args").ok_or_else(|| {
+                EvalError::Runtime("ProcessRequest value is missing args.".to_string())
+            })?;
+            let cwd = fields.remove("cwd").ok_or_else(|| {
+                EvalError::Runtime("ProcessRequest value is missing cwd.".to_string())
+            })?;
+            let stdin = fields.remove("stdin").ok_or_else(|| {
+                EvalError::Runtime("ProcessRequest value is missing stdin.".to_string())
+            })?;
+            let env = fields.remove("env").ok_or_else(|| {
+                EvalError::Runtime("ProcessRequest value is missing env.".to_string())
+            })?;
+            let timeout_ms = fields.remove("timeout_ms").ok_or_else(|| {
+                EvalError::Runtime("ProcessRequest value is missing timeout_ms.".to_string())
+            })?;
+            let merge_stderr = fields.remove("merge_stderr").ok_or_else(|| {
+                EvalError::Runtime("ProcessRequest value is missing merge_stderr.".to_string())
+            })?;
+            let output_cap_bytes = fields.remove("output_cap_bytes").ok_or_else(|| {
+                EvalError::Runtime("ProcessRequest value is missing output_cap_bytes.".to_string())
+            })?;
+            Ok(ProcessRequestState {
+                command: expect_string(command)?,
+                args: expect_string_list(args)?,
+                cwd: option_payload(cwd)?.map(expect_string).transpose()?,
+                stdin: option_payload(stdin)?.map(expect_string).transpose()?,
+                env: expect_process_env_list(env)?,
+                timeout_ms: expect_int(timeout_ms)?,
+                merge_stderr: expect_bool(merge_stderr)?,
+                output_cap_bytes: expect_int(output_cap_bytes)?,
+            })
+        }
+        other => Err(EvalError::Runtime(format!(
+            "expected ProcessRequest, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn expect_process_env_list(value: Value) -> Result<Vec<(String, String)>, EvalError> {
+    expect_list(value)?
+        .into_iter()
+        .map(|value| match value {
+            Value::Struct { name, mut fields } if name == "ProcessEnv" => {
+                let name = fields.remove("name").ok_or_else(|| {
+                    EvalError::Runtime("ProcessEnv value is missing name.".to_string())
+                })?;
+                let value = fields.remove("value").ok_or_else(|| {
+                    EvalError::Runtime("ProcessEnv value is missing value.".to_string())
+                })?;
+                Ok((expect_string(name)?, expect_string(value)?))
+            }
+            other => Err(EvalError::Runtime(format!(
+                "expected ProcessEnv, got `{}`.",
+                other.display()
+            ))),
+        })
+        .collect()
+}
+
 fn process_run_output(command: &str, args: &[String]) -> Result<ProcessOutputState, String> {
     let mut child = std::process::Command::new(command);
     child.args(args);
@@ -4334,6 +4456,152 @@ fn process_run_timeout_output(
         ));
     }
     Ok(output)
+}
+
+fn process_run_request_output(request: &ProcessRequestState) -> Result<ProcessOutputState, String> {
+    if request.command.trim().is_empty() {
+        return Err("process command must not be empty".to_string());
+    }
+
+    use std::io::{Read, Write};
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let mut command = std::process::Command::new(&request.command);
+    command
+        .args(&request.args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if request.stdin.is_some() {
+        command.stdin(Stdio::piped());
+    }
+    if let Some(cwd) = &request.cwd {
+        command.current_dir(cwd);
+    }
+    for (name, value) in &request.env {
+        command.env(name, value);
+    }
+
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("failed to run `{}`: {error}", request.command))?;
+    if let Some(stdin) = &request.stdin
+        && let Some(mut child_stdin) = child.stdin.take()
+    {
+        child_stdin
+            .write_all(stdin.as_bytes())
+            .map_err(|error| format!("failed to write stdin for `{}`: {error}", request.command))?;
+    }
+
+    let deadline = u64::try_from(request.timeout_ms)
+        .ok()
+        .filter(|value| *value > 0)
+        .map(|timeout_ms| Instant::now() + Duration::from_millis(timeout_ms));
+    let mut timed_out = false;
+    loop {
+        if child
+            .try_wait()
+            .map_err(|error| format!("failed to poll `{}`: {error}", request.command))?
+            .is_some()
+        {
+            break;
+        }
+        if let Some(deadline) = deadline
+            && Instant::now() >= deadline
+        {
+            timed_out = true;
+            let _ = child.kill();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    let status = child
+        .wait()
+        .map_err(|error| format!("failed to wait for `{}`: {error}", request.command))?;
+    let mut stdout = Vec::new();
+    if let Some(mut pipe) = child.stdout.take() {
+        pipe.read_to_end(&mut stdout)
+            .map_err(|error| format!("stdout reader failed for `{}`: {error}", request.command))?;
+    }
+    let mut stderr = Vec::new();
+    if let Some(mut pipe) = child.stderr.take() {
+        pipe.read_to_end(&mut stderr)
+            .map_err(|error| format!("stderr reader failed for `{}`: {error}", request.command))?;
+    }
+
+    let (stdout, stderr, merged, truncated) = cap_process_request_output(
+        stdout,
+        stderr,
+        request.merge_stderr,
+        request.output_cap_bytes,
+    );
+    let output = ProcessOutputState {
+        status: status.code().map(i64::from).unwrap_or(-1),
+        stdout,
+        stderr,
+        merged,
+        truncated,
+    };
+    if timed_out {
+        return Err(format!(
+            "`{}` timed out after {}ms: {}",
+            request.command,
+            request.timeout_ms,
+            process_output_details(&output.stdout, &output.stderr)
+        ));
+    }
+    Ok(output)
+}
+
+fn cap_process_request_output(
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    merge_stderr: bool,
+    cap: i64,
+) -> (String, String, String, bool) {
+    let cap = usize::try_from(cap).ok().filter(|value| *value > 0);
+    let mut used = 0usize;
+    let mut truncated = false;
+    let stdout = cap_bytes(&stdout, cap, &mut used, &mut truncated).to_vec();
+    let stderr = cap_bytes(&stderr, cap, &mut used, &mut truncated).to_vec();
+    let merged = if merge_stderr {
+        let mut merged = stdout.clone();
+        merged.extend_from_slice(&stderr);
+        merged
+    } else {
+        stdout.clone()
+    };
+    (
+        String::from_utf8_lossy(&stdout).to_string(),
+        String::from_utf8_lossy(&stderr).to_string(),
+        String::from_utf8_lossy(&merged).to_string(),
+        truncated,
+    )
+}
+
+fn cap_bytes<'a>(
+    bytes: &'a [u8],
+    cap: Option<usize>,
+    used: &mut usize,
+    truncated: &mut bool,
+) -> &'a [u8] {
+    let Some(cap) = cap else {
+        return bytes;
+    };
+    if *used >= cap {
+        *truncated = true;
+        return &bytes[..0];
+    }
+    let remaining = cap - *used;
+    if bytes.len() > remaining {
+        *truncated = true;
+        *used = cap;
+        &bytes[..remaining]
+    } else {
+        *used += bytes.len();
+        bytes
+    }
 }
 
 fn process_output_state(output: std::process::Output) -> ProcessOutputState {
