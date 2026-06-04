@@ -3802,73 +3802,6 @@ impl<'a> Interpreter<'a> {
                 }
                 Ok(Value::Map(merged))
             }
-            ("Regex", "compile") => {
-                let pattern = self.eval_first_arg(args)?;
-                let pattern = expect_string(pattern)?;
-                Ok(result_value(
-                    regex::Regex::new(&pattern)
-                        .map(|_| regex_value(pattern))
-                        .map_err(|error| regex_error(error.to_string())),
-                ))
-            }
-            ("Regex", "is_match") => {
-                let regex = self.eval_named_or_positional_arg(args, "regex", 0)?;
-                let value = self.eval_named_or_positional_arg(args, "value", 1)?;
-                let regex = expect_regex(regex)?;
-                Ok(Value::Bool(regex.is_match(&expect_string(value)?)))
-            }
-            ("Regex", "find") => {
-                let regex = self.eval_named_or_positional_arg(args, "regex", 0)?;
-                let value = self.eval_named_or_positional_arg(args, "value", 1)?;
-                let regex = expect_regex(regex)?;
-                let value = expect_string(value)?;
-                Ok(value_option(
-                    regex.find(&value).map(|m| m.as_str().to_string()),
-                    Value::String,
-                ))
-            }
-            ("Regex", "captures") => {
-                let regex = self.eval_named_or_positional_arg(args, "regex", 0)?;
-                let value = self.eval_named_or_positional_arg(args, "value", 1)?;
-                let regex = expect_regex(regex)?;
-                let captures = regex
-                    .captures(&expect_string(value)?)
-                    .map(|captures| {
-                        captures
-                            .iter()
-                            .filter_map(|matched| {
-                                matched.map(|matched| Value::String(matched.as_str().to_string()))
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                Ok(Value::List(captures))
-            }
-            ("Regex", "replace_all") => {
-                let regex = self.eval_named_or_positional_arg(args, "regex", 0)?;
-                let value = self.eval_named_or_positional_arg(args, "value", 1)?;
-                let replacement = self.eval_named_or_positional_arg(args, "replacement", 2)?;
-                let regex = expect_regex(regex)?;
-                Ok(Value::String(
-                    regex
-                        .replace_all(&expect_string(value)?, &expect_string(replacement)?)
-                        .to_string(),
-                ))
-            }
-            ("Regex", "split") => {
-                let regex = self.eval_named_or_positional_arg(args, "regex", 0)?;
-                let value = self.eval_named_or_positional_arg(args, "value", 1)?;
-                let regex = expect_regex(regex)?;
-                let parts = regex
-                    .split(&expect_string(value)?)
-                    .map(|part| Value::String(part.to_string()))
-                    .collect();
-                Ok(Value::List(parts))
-            }
-            ("RegexError", "message") => {
-                let value = self.eval_first_arg(args)?;
-                read_field(&value, "message")
-            }
             ("Request", "new") => {
                 let path = self.eval_first_arg(args)?;
                 Ok(Value::Struct {
@@ -4079,25 +4012,6 @@ impl<'a> Interpreter<'a> {
                 request.header_count += 1;
                 Ok(request.to_value())
             }
-            ("Option", "is_some") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::Bool(matches!(
-                    value,
-                    Value::Variant { name, .. } if name == "Some"
-                )))
-            }
-            ("Option", "is_none") => {
-                let value = self.eval_first_arg(args)?;
-                Ok(Value::Bool(matches!(
-                    value,
-                    Value::Variant { name, .. } if name == "None"
-                )))
-            }
-            ("Option", "unwrap_or") => {
-                let value = self.eval_named_or_positional_arg(args, "value", 0)?;
-                let default = self.eval_named_or_positional_arg(args, "default", 1)?;
-                Ok(option_payload(value)?.unwrap_or(default))
-            }
             ("Option", "unwrap_or_else") => {
                 let value = self.eval_named_or_positional_arg(args, "value", 0)?;
                 let default = self.eval_named_or_positional_arg(args, "default", 1)?;
@@ -4138,22 +4052,6 @@ impl<'a> Interpreter<'a> {
                         }
                     }
                     None => value_none(),
-                })
-            }
-            ("Option", "ok_or") => {
-                let value = self.eval_named_or_positional_arg(args, "value", 0)?;
-                let error = self.eval_named_or_positional_arg(args, "error", 1)?;
-                Ok(match option_payload(value)? {
-                    Some(value) => value_ok(value),
-                    None => value_err(error),
-                })
-            }
-            ("Option", "or") => {
-                let value = self.eval_named_or_positional_arg(args, "value", 0)?;
-                let fallback = self.eval_named_or_positional_arg(args, "fallback", 1)?;
-                Ok(match option_payload(value)? {
-                    Some(value) => value_some(value),
-                    None => fallback,
                 })
             }
             ("String", "join") => {

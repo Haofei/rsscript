@@ -199,6 +199,11 @@ enum InterpreterEvalKind {
     MapNew,
     MapRemove,
     MapValues,
+    OptionIsNone,
+    OptionIsSome,
+    OptionOkOr,
+    OptionOr,
+    OptionUnwrapOr,
     OsClose,
     PersistentMapClear,
     PersistentMapContainsKey,
@@ -210,6 +215,13 @@ enum InterpreterEvalKind {
     PersistentMapRemove,
     RowBufferNew,
     RowFieldString,
+    RegexCaptures,
+    RegexCompile,
+    RegexErrorMessage,
+    RegexFind,
+    RegexIsMatch,
+    RegexReplaceAll,
+    RegexSplit,
     StringConcat,
     StringCopy,
     StringFromBool,
@@ -794,6 +806,36 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::MapValues,
     },
     InterpreterIntrinsicSpec {
+        namespace: "Option",
+        name: "is_none",
+        variant: "OptionIsNone",
+        eval_kind: InterpreterEvalKind::OptionIsNone,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Option",
+        name: "is_some",
+        variant: "OptionIsSome",
+        eval_kind: InterpreterEvalKind::OptionIsSome,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Option",
+        name: "ok_or",
+        variant: "OptionOkOr",
+        eval_kind: InterpreterEvalKind::OptionOkOr,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Option",
+        name: "or",
+        variant: "OptionOr",
+        eval_kind: InterpreterEvalKind::OptionOr,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Option",
+        name: "unwrap_or",
+        variant: "OptionUnwrapOr",
+        eval_kind: InterpreterEvalKind::OptionUnwrapOr,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "OS",
         name: "close",
         variant: "OsClose",
@@ -858,6 +900,48 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "field_string",
         variant: "RowFieldString",
         eval_kind: InterpreterEvalKind::RowFieldString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Regex",
+        name: "captures",
+        variant: "RegexCaptures",
+        eval_kind: InterpreterEvalKind::RegexCaptures,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Regex",
+        name: "compile",
+        variant: "RegexCompile",
+        eval_kind: InterpreterEvalKind::RegexCompile,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Regex",
+        name: "find",
+        variant: "RegexFind",
+        eval_kind: InterpreterEvalKind::RegexFind,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Regex",
+        name: "is_match",
+        variant: "RegexIsMatch",
+        eval_kind: InterpreterEvalKind::RegexIsMatch,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Regex",
+        name: "replace_all",
+        variant: "RegexReplaceAll",
+        eval_kind: InterpreterEvalKind::RegexReplaceAll,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Regex",
+        name: "split",
+        variant: "RegexSplit",
+        eval_kind: InterpreterEvalKind::RegexSplit,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "RegexError",
+        name: "message",
+        variant: "RegexErrorMessage",
+        eval_kind: InterpreterEvalKind::RegexErrorMessage,
     },
     InterpreterIntrinsicSpec {
         namespace: "String",
@@ -1486,6 +1570,21 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::MapValues => {
             "{\n            let map = interpreter.eval_first_arg(args)?;\n            Ok(Value::List(\n                expect_map(map)?\n                    .into_iter()\n                    .map(|(_, value)| value)\n                    .collect(),\n            ))\n        }"
         }
+        InterpreterEvalKind::OptionIsNone => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(matches!(\n                value,\n                Value::Variant { name, .. } if name == \"None\"\n            )))\n        }"
+        }
+        InterpreterEvalKind::OptionIsSome => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(matches!(\n                value,\n                Value::Variant { name, .. } if name == \"Some\"\n            )))\n        }"
+        }
+        InterpreterEvalKind::OptionOkOr => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let error = interpreter.eval_named_or_positional_arg(args, \"error\", 1)?;\n            Ok(match option_payload(value)? {\n                Some(value) => value_ok(value),\n                None => value_err(error),\n            })\n        }"
+        }
+        InterpreterEvalKind::OptionOr => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let fallback = interpreter.eval_named_or_positional_arg(args, \"fallback\", 1)?;\n            Ok(match option_payload(value)? {\n                Some(value) => value_some(value),\n                None => fallback,\n            })\n        }"
+        }
+        InterpreterEvalKind::OptionUnwrapOr => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let default = interpreter.eval_named_or_positional_arg(args, \"default\", 1)?;\n            Ok(option_payload(value)?.unwrap_or(default))\n        }"
+        }
         InterpreterEvalKind::OsClose => {
             "{\n            let fd = interpreter.eval_named_or_positional_arg(args, \"fd\", 0)?;\n            let _ = expect_int(fd)?;\n            Ok(Value::Unit)\n        }"
         }
@@ -1518,6 +1617,27 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::RowFieldString => {
             "{\n            let row = interpreter.eval_named_or_positional_arg(args, \"row\", 0)?;\n            let index = interpreter.eval_named_or_positional_arg(args, \"index\", 1)?;\n            Ok(result_value(row_field_string_value(\n                expect_row_fields(row)?,\n                expect_int(index)?,\n            )))\n        }"
+        }
+        InterpreterEvalKind::RegexCaptures => {
+            "{\n            let regex = interpreter.eval_named_or_positional_arg(args, \"regex\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            let regex = expect_regex(regex)?;\n            let captures = regex\n                .captures(&expect_string(value)?)\n                .map(|captures| {\n                    captures\n                        .iter()\n                        .filter_map(|matched| {\n                            matched.map(|matched| Value::String(matched.as_str().to_string()))\n                        })\n                        .collect()\n                })\n                .unwrap_or_default();\n            Ok(Value::List(captures))\n        }"
+        }
+        InterpreterEvalKind::RegexCompile => {
+            "{\n            let pattern = interpreter.eval_first_arg(args)?;\n            let pattern = expect_string(pattern)?;\n            Ok(result_value(\n                regex::Regex::new(&pattern)\n                    .map(|_| regex_value(pattern))\n                    .map_err(|error| regex_error(error.to_string())),\n            ))\n        }"
+        }
+        InterpreterEvalKind::RegexErrorMessage => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            read_field(&value, \"message\")\n        }"
+        }
+        InterpreterEvalKind::RegexFind => {
+            "{\n            let regex = interpreter.eval_named_or_positional_arg(args, \"regex\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            let regex = expect_regex(regex)?;\n            let value = expect_string(value)?;\n            Ok(value_option(\n                regex.find(&value).map(|m| m.as_str().to_string()),\n                Value::String,\n            ))\n        }"
+        }
+        InterpreterEvalKind::RegexIsMatch => {
+            "{\n            let regex = interpreter.eval_named_or_positional_arg(args, \"regex\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            let regex = expect_regex(regex)?;\n            Ok(Value::Bool(regex.is_match(&expect_string(value)?)))\n        }"
+        }
+        InterpreterEvalKind::RegexReplaceAll => {
+            "{\n            let regex = interpreter.eval_named_or_positional_arg(args, \"regex\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            let replacement = interpreter.eval_named_or_positional_arg(args, \"replacement\", 2)?;\n            let regex = expect_regex(regex)?;\n            Ok(Value::String(\n                regex\n                    .replace_all(&expect_string(value)?, &expect_string(replacement)?)\n                    .to_string(),\n            ))\n        }"
+        }
+        InterpreterEvalKind::RegexSplit => {
+            "{\n            let regex = interpreter.eval_named_or_positional_arg(args, \"regex\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            let regex = expect_regex(regex)?;\n            let parts = regex\n                .split(&expect_string(value)?)\n                .map(|part| Value::String(part.to_string()))\n                .collect();\n            Ok(Value::List(parts))\n        }"
         }
         InterpreterEvalKind::StringChars => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::List(expect_string(value)?.chars().map(Value::Char).collect()))\n        }"
