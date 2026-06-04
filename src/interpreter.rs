@@ -418,6 +418,8 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Patch", "apply_text"),
     ("Process", "run"),
     ("Process", "run_stdout"),
+    ("Process", "run_stdout_timeout"),
+    ("Process", "run_timeout"),
     ("Result", "err"),
     ("Result", "err_message"),
     ("Result", "is_err"),
@@ -817,6 +819,8 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Patch.apply_text",
     "runtime:Process.run",
     "runtime:Process.run_stdout",
+    "runtime:Process.run_stdout_timeout",
+    "runtime:Process.run_timeout",
     "runtime:Result.err",
     "runtime:Result.err_message",
     "runtime:Result.is_err",
@@ -3000,6 +3004,37 @@ impl<'a> Interpreter<'a> {
                         .map_err(Value::String),
                 ))
             }
+            ("Process", "run_timeout") => {
+                let command = self.eval_named_or_positional_arg(args, "command", 0)?;
+                let args_value = self.eval_named_or_positional_arg(args, "args", 1)?;
+                let timeout = self.eval_named_or_positional_arg(args, "timeout_ms", 2)?;
+                let command = expect_string(command)?;
+                Ok(result_value(
+                    process_run_timeout_output(
+                        &command,
+                        &expect_string_list(args_value)?,
+                        expect_int(timeout)?,
+                    )
+                    .map(process_output_value)
+                    .map_err(Value::String),
+                ))
+            }
+            ("Process", "run_stdout_timeout") => {
+                let command = self.eval_named_or_positional_arg(args, "command", 0)?;
+                let args_value = self.eval_named_or_positional_arg(args, "args", 1)?;
+                let timeout = self.eval_named_or_positional_arg(args, "timeout_ms", 2)?;
+                let command = expect_string(command)?;
+                Ok(result_value(
+                    process_run_timeout_output(
+                        &command,
+                        &expect_string_list(args_value)?,
+                        expect_int(timeout)?,
+                    )
+                    .and_then(|output| process_stdout_result(&command, output))
+                    .map(Value::String)
+                    .map_err(Value::String),
+                ))
+            }
             ("Result", "is_ok") => {
                 let value = self.eval_first_arg(args)?;
                 Ok(Value::Bool(matches!(
@@ -4128,17 +4163,88 @@ fn process_run_output(command: &str, args: &[String]) -> Result<ProcessOutputSta
         .map_err(|error| format!("failed to run `{command}`: {error}"))
 }
 
+fn process_run_timeout_output(
+    command: &str,
+    args: &[String],
+    timeout_ms: i64,
+) -> Result<ProcessOutputState, String> {
+    if timeout_ms <= 0 {
+        return process_run_output(command, args);
+    }
+
+    use std::io::Read;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let mut child = std::process::Command::new(command);
+    child
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = child
+        .spawn()
+        .map_err(|error| format!("failed to run `{command}`: {error}"))?;
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+    let mut timed_out = false;
+    loop {
+        if child
+            .try_wait()
+            .map_err(|error| format!("failed to poll `{command}`: {error}"))?
+            .is_some()
+        {
+            break;
+        }
+        if Instant::now() >= deadline {
+            timed_out = true;
+            let _ = child.kill();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    let status = child
+        .wait()
+        .map_err(|error| format!("failed to wait for `{command}`: {error}"))?;
+    let mut stdout = Vec::new();
+    if let Some(mut pipe) = child.stdout.take() {
+        pipe.read_to_end(&mut stdout)
+            .map_err(|error| format!("stdout reader failed for `{command}`: {error}"))?;
+    }
+    let mut stderr = Vec::new();
+    if let Some(mut pipe) = child.stderr.take() {
+        pipe.read_to_end(&mut stderr)
+            .map_err(|error| format!("stderr reader failed for `{command}`: {error}"))?;
+    }
+    let output = process_output_state_from_parts(status, stdout, stderr, false);
+    if timed_out {
+        return Err(format!(
+            "`{command}` timed out after {timeout_ms}ms: {}",
+            process_output_details(&output.stdout, &output.stderr)
+        ));
+    }
+    Ok(output)
+}
+
 fn process_output_state(output: std::process::Output) -> ProcessOutputState {
-    let status = output.status.code().map(i64::from).unwrap_or(-1);
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    process_output_state_from_parts(output.status, output.stdout, output.stderr, false)
+}
+
+fn process_output_state_from_parts(
+    status: std::process::ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    truncated: bool,
+) -> ProcessOutputState {
+    let status = status.code().map(i64::from).unwrap_or(-1);
+    let stdout = String::from_utf8_lossy(&stdout).to_string();
+    let stderr = String::from_utf8_lossy(&stderr).to_string();
     let merged = process_output_details(&stdout, &stderr);
     ProcessOutputState {
         status,
         stdout,
         stderr,
         merged,
-        truncated: false,
+        truncated,
     }
 }
 

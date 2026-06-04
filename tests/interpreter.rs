@@ -332,7 +332,8 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Path.starts_with runtime:Path.to_string runtime:Path.with_extension
 // parity: runtime:Path.write_string
 // parity: runtime:String.safe_relative runtime:String.to_path runtime:Workspace.resolve
-// parity: runtime:Process.run runtime:Process.run_stdout
+// parity: runtime:Process.run runtime:Process.run_stdout runtime:Process.run_stdout_timeout
+// parity: runtime:Process.run_timeout
 // parity: runtime:Map.clear runtime:Map.contains_key runtime:Map.get
 // parity: runtime:Map.get_or_default runtime:Map.insert runtime:Map.insert_old
 // parity: runtime:Map.is_empty runtime:Map.keys runtime:Map.len runtime:Map.new
@@ -2003,6 +2004,18 @@ fn main() -> Result<Unit, String> {
     if output.truncated == false {
         Log.write(message: read "not-truncated")
     }
+
+    let mut timeout_args = List<String>.new()
+    List.push<String>(list: mut timeout_args, value: read "timeout")
+    let timeout_stdout = Process.run_stdout_timeout(command: read "printf", args: read timeout_args, timeout_ms: 1000)?
+    Log.write(message: read timeout_stdout)
+
+    let mut run_timeout_args = List<String>.new()
+    List.push<String>(list: mut run_timeout_args, value: read "done")
+    let timed = Process.run_timeout(command: read "printf", args: read run_timeout_args, timeout_ms: 1000)?
+    Log.write(message: read String.from_int(value: timed.status))
+    Log.write(message: read timed.stdout)
+    Log.write(message: read timed.merged)
     return Ok(Unit)
 }
 "#;
