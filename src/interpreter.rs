@@ -169,6 +169,7 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Csv", "open_read"),
     ("Csv", "parse_row"),
     ("Csv", "read_into"),
+    ("Csv", "rows"),
     ("Deadline", "after"),
     ("Deadline", "after_ms"),
     ("Deadline", "is_expired"),
@@ -219,6 +220,7 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Env", "temp_dir"),
     ("File", "append_bytes"),
     ("File", "append_string"),
+    ("File", "bytes_stream"),
     ("File", "exists"),
     ("File", "open"),
     ("File", "open_read"),
@@ -268,6 +270,8 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Json", "array_contains_prefix"),
     ("Json", "array_contains_string"),
     ("Json", "array_contains_substring"),
+    ("Json", "array_count_where"),
+    ("Json", "array_fold"),
     ("Json", "array_get"),
     ("Json", "array_ints"),
     ("Json", "array_len"),
@@ -645,6 +649,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Csv.open_read",
     "runtime:Csv.parse_row",
     "runtime:Csv.read_into",
+    "runtime:Csv.rows",
     "runtime:Deadline.after",
     "runtime:Deadline.after_ms",
     "runtime:Deadline.is_expired",
@@ -695,6 +700,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Env.temp_dir",
     "runtime:File.append_bytes",
     "runtime:File.append_string",
+    "runtime:File.bytes_stream",
     "runtime:File.exists",
     "runtime:File.open",
     "runtime:File.open_read",
@@ -745,6 +751,8 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Json.array_contains_prefix",
     "runtime:Json.array_contains_string",
     "runtime:Json.array_contains_substring",
+    "runtime:Json.array_count_where",
+    "runtime:Json.array_fold",
     "runtime:Json.array_get",
     "runtime:Json.array_ints",
     "runtime:Json.array_len",
@@ -1969,6 +1977,14 @@ impl<'a> Interpreter<'a> {
                         .map_err(file_error),
                 ))
             }
+            ("File", "bytes_stream") => {
+                let path = self.eval_named_or_positional_arg(args, "path", 0)?;
+                let chunk_size = self.eval_named_or_positional_arg(args, "chunk_size", 1)?;
+                Ok(result_value(
+                    file_bytes_stream_value(&expect_string(path)?, expect_int(chunk_size)?)
+                        .map_err(channel_error),
+                ))
+            }
             ("File", "read_all") => {
                 let file_name = self.mut_arg_local_name(args, "file", 0)?;
                 let mut file = expect_file(self.lookup(file_name)?)?;
@@ -2178,6 +2194,13 @@ impl<'a> Interpreter<'a> {
                 Ok(result_value(csv_parse_row_value(&expect_row_buffer_bytes(
                     buffer,
                 )?)))
+            }
+            ("Csv", "rows") => {
+                let path = self.eval_named_or_positional_arg(args, "path", 0)?;
+                let _buffer_size = self.eval_named_or_positional_arg(args, "buffer_size", 1)?;
+                Ok(result_value(
+                    csv_rows_stream_value(&expect_string(path)?).map_err(channel_error),
+                ))
             }
             ("Row", "field_string") => {
                 let row = self.eval_named_or_positional_arg(args, "row", 0)?;
@@ -4677,6 +4700,48 @@ impl<'a> Interpreter<'a> {
                     JsonArrayStringMatch::Prefix,
                 )))
             }
+            ("Json", "array_count_where") => {
+                let value = self.eval_named_or_positional_arg(args, "value", 0)?;
+                let predicate = self.eval_named_or_positional_arg(args, "predicate", 1)?;
+                let json = expect_json(value)?;
+                let items = match json_array(&json) {
+                    Ok(items) => items,
+                    Err(error) => return Ok(value_err(error)),
+                };
+                let mut count = 0_i64;
+                for item in items {
+                    match result_payload(
+                        self.call_closure(predicate.clone(), vec![Value::Json(item.clone())])?,
+                    )? {
+                        Ok(value) => {
+                            if expect_bool(value)? {
+                                count += 1;
+                            }
+                        }
+                        Err(error) => return Ok(value_err(error)),
+                    }
+                }
+                Ok(value_ok(Value::Int(count)))
+            }
+            ("Json", "array_fold") => {
+                let value = self.eval_named_or_positional_arg(args, "value", 0)?;
+                let mut state = self.eval_named_or_positional_arg(args, "initial", 1)?;
+                let folder = self.eval_named_or_positional_arg(args, "folder", 2)?;
+                let json = expect_json(value)?;
+                let items = match json_array(&json) {
+                    Ok(items) => items,
+                    Err(error) => return Ok(value_err(error)),
+                };
+                for item in items {
+                    match result_payload(
+                        self.call_closure(folder.clone(), vec![state, Value::Json(item.clone())])?,
+                    )? {
+                        Ok(next) => state = next,
+                        Err(error) => return Ok(value_err(error)),
+                    }
+                }
+                Ok(value_ok(state))
+            }
             ("Json", "object_len") => {
                 let value = self.eval_first_arg(args)?;
                 let json = expect_json(value)?;
@@ -7005,6 +7070,37 @@ fn csv_parse_row_value(bytes: &[u8]) -> Result<Value, Value> {
     Ok(row_value(
         line.split(',')
             .map(|field| field.trim().to_string())
+            .collect(),
+    ))
+}
+
+fn csv_rows_stream_value(path: &str) -> Result<Value, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| format!("CSV row stream open failed: {error}"))?;
+    let mut skipped_header = false;
+    let mut rows = Vec::new();
+    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if !skipped_header {
+            skipped_header = true;
+            continue;
+        }
+        rows.push(row_value(
+            line.split(',')
+                .map(|field| field.trim().to_string())
+                .collect(),
+        ));
+    }
+    Ok(stream_value(rows))
+}
+
+fn file_bytes_stream_value(path: &str, chunk_size: i64) -> Result<Value, String> {
+    let bytes =
+        std::fs::read(path).map_err(|error| format!("file byte stream open failed: {error}"))?;
+    let chunk_size = chunk_size.max(1) as usize;
+    Ok(stream_value(
+        bytes
+            .chunks(chunk_size)
+            .map(|chunk| Value::Bytes(chunk.to_vec()))
             .collect(),
     ))
 }

@@ -382,12 +382,13 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Config.load runtime:Config.name runtime:Config.new runtime:Config.rule_count
 // parity: runtime:ConfigStore.name runtime:ConfigStore.new runtime:ConfigStore.replace
 // parity: runtime:Counter.add runtime:Counter.new runtime:Counter.value
-// parity: runtime:Csv.open_read runtime:Csv.parse_row runtime:Csv.read_into
+// parity: runtime:Csv.open_read runtime:Csv.parse_row runtime:Csv.read_into runtime:Csv.rows
 // parity: runtime:Deadline.after runtime:Deadline.after_ms
 // parity: runtime:Deadline.is_expired runtime:Deadline.remaining_ms
 // parity: runtime:Json.array runtime:Json.array_bools runtime:Json.array_contains_prefix
 // parity: runtime:Json.array_contains_string runtime:Json.array_contains_substring
-// parity: runtime:Json.array_get runtime:Json.array_ints runtime:Json.array_len runtime:Json.array_strings
+// parity: runtime:Json.array_count_where runtime:Json.array_fold runtime:Json.array_get
+// parity: runtime:Json.array_ints runtime:Json.array_len runtime:Json.array_strings
 // parity: runtime:Json.as_bool runtime:Json.as_int runtime:Json.as_string runtime:Json.field
 // parity: runtime:Json.at runtime:Json.at_bool runtime:Json.at_bool_or runtime:Json.at_int
 // parity: runtime:Json.at_int_or runtime:Json.at_optional runtime:Json.at_optional_bool
@@ -433,7 +434,7 @@ fn eval_fails_closed_where_lowered_rust_crosses_declared_host_boundary() {
 // parity: runtime:Log.write_json
 // parity: runtime:Env.current_dir runtime:Env.get runtime:Env.get_or_default
 // parity: runtime:Env.home_dir runtime:Env.run_workspace_root runtime:Env.set runtime:Env.temp_dir
-// parity: runtime:File.append_bytes runtime:File.append_string runtime:File.exists
+// parity: runtime:File.append_bytes runtime:File.append_string runtime:File.bytes_stream runtime:File.exists
 // parity: runtime:File.open runtime:File.open_read runtime:File.open_write
 // parity: runtime:File.read_all runtime:File.read_all_async
 // parity: runtime:File.read_all_string runtime:File.read_all_string_async runtime:File.read_into
@@ -2040,6 +2041,24 @@ fn main() -> Result<Unit, FileError> {
     File.append_string(path: read bytes_file, text: read "f")?
     let bytes = File.read_bytes(path: read bytes_file)?
     Log.write(message: read String.from_int(value: Bytes.len(value: read bytes)))
+    match File.bytes_stream(path: read bytes_file, chunk_size: 2) {
+        Ok(stream) => {
+            match Stream.collect_list<Bytes>(stream: read stream) {
+                Ok(chunks) => {
+                    Log.write(message: read String.from_int(value: List.len<Bytes>(list: read chunks)))
+                    Log.write(message: read String.from_int(value: Bytes.len(value: read chunks[0])))
+                    Log.write(message: read String.from_int(value: Bytes.len(value: read chunks[1])))
+                    Log.write(message: read String.from_int(value: Bytes.len(value: read chunks[2])))
+                }
+                Err(error) => {
+                    Log.write(message: read ChannelError.message(error: read error))
+                }
+            }
+        }
+        Err(error) => {
+            Log.write(message: read ChannelError.message(error: read error))
+        }
+    }
 
     let handle_file = Path.join(base: read nested, child: read "handle.txt")
     with File.open_write(path: read handle_file)? as writer {
@@ -2183,6 +2202,25 @@ fn main() -> Result<Unit, CsvError> {
     let amount = Row.field_string(row: read row, index: 1)?
     Log.write(message: read name)
     Log.write(message: read amount)
+    match Csv.rows(path: read path, buffer_size: 16) {
+        Ok(stream) => {
+            match Stream.collect_list<Row>(stream: read stream) {
+                Ok(rows) => {
+                    Log.write(message: read String.from_int(value: List.len<Row>(list: read rows)))
+                    let first_stream_name = Row.field_string(row: read rows[0], index: 0)?
+                    let second_stream_amount = Row.field_string(row: read rows[1], index: 1)?
+                    Log.write(message: read first_stream_name)
+                    Log.write(message: read second_stream_amount)
+                }
+                Err(error) => {
+                    Log.write(message: read ChannelError.message(error: read error))
+                }
+            }
+        }
+        Err(error) => {
+            Log.write(message: read ChannelError.message(error: read error))
+        }
+    }
     return Ok(Unit)
 }
 "#;
@@ -3389,6 +3427,10 @@ fn main() -> Unit {
 fn parity_json_builder_and_array_intrinsics() {
     run_with_large_stack(|| {
         let source = r#"
+struct JsonAcc {
+    total: Int
+}
+
 fn main() -> Result<Unit, JsonError> {
     let mut fields = List<String>.new()
     List.push<String>(list: mut fields, value: read Json.string_field(name: read "name", value: read "rss"))
@@ -3416,6 +3458,16 @@ fn main() -> Result<Unit, JsonError> {
     let ints_json = Json.parse(text: read "[1,2,3]")?
     let ints = Json.array_ints(value: read ints_json)?
     Log.write(message: read String.from_int(value: ints[2]))
+    let count = Json.array_count_where(value: read ints_json, predicate: |item| {
+        let parsed = Json.as_int(value: read item)?
+        return Ok(parsed > 1)
+    })?
+    Log.write(message: read String.from_int(value: count))
+    let folded = Json.array_fold<JsonAcc>(value: read ints_json, initial: read JsonAcc(total: 0), folder: |state, item| {
+        let parsed = Json.as_int(value: read item)?
+        return Ok(JsonAcc(total: state.total + parsed))
+    })?
+    Log.write(message: read String.from_int(value: folded.total))
     let bools_json = Json.parse(text: read "[true,false]")?
     let bools = Json.array_bools(value: read bools_json)?
     if bools[0] {
