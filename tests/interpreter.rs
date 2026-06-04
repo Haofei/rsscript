@@ -530,7 +530,7 @@ fn eval_matches_backend_for_declared_host_boundary() {
 // parity: runtime:StringBuilder.finish runtime:StringBuilder.new runtime:StringBuilder.push
 // parity: runtime:Stream.collect_list runtime:Stream.from_list runtime:Stream.next
 // parity: runtime:GlobalConfig.new runtime:GlobalConfig.replace runtime:GlobalConfig.rule_count
-// parity: runtime:TempDir.new runtime:TempDir.new_in runtime:TempDir.path
+// parity: runtime:TempDir.keep runtime:TempDir.new runtime:TempDir.new_in runtime:TempDir.path
 // parity: runtime:Timer.sleep runtime:Timer.sleep_cancellable runtime:Timer.sleep_until
 // parity: runtime:Tcp.connect runtime:TcpError.message
 // parity: runtime:TcpStream.read runtime:TcpStream.shutdown
@@ -2687,6 +2687,13 @@ fn main() -> Result<Unit, FileError> {
         let path = TempDir.path(dir: read created)
         if Path.is_dir(path: read path) {
             Log.write(message: read "new-dir")
+        }
+        Directory.remove_dir_all(path: read path)?
+    }
+    with TempDir.new_in(parent: read root)? as kept {
+        let path = TempDir.keep(dir: take kept)
+        if Path.is_dir(path: read path) {
+            Log.write(message: read "kept-dir")
         }
         Directory.remove_dir_all(path: read path)?
     }

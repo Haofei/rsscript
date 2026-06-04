@@ -570,6 +570,7 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("Stream", "collect_list"),
     ("Stream", "from_list"),
     ("Stream", "next"),
+    ("TempDir", "keep"),
     ("TempDir", "new"),
     ("TempDir", "new_in"),
     ("TempDir", "path"),
@@ -1123,6 +1124,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:GlobalConfig.new",
     "runtime:GlobalConfig.replace",
     "runtime:GlobalConfig.rule_count",
+    "runtime:TempDir.keep",
     "runtime:TempDir.new",
     "runtime:TempDir.new_in",
     "runtime:TempDir.path",
@@ -4360,6 +4362,10 @@ impl<'a> Interpreter<'a> {
                 Ok(result_value(tempdir_new_value(PathBuf::from(
                     expect_string(parent)?,
                 ))))
+            }
+            ("TempDir", "keep") => {
+                let dir = self.eval_named_or_positional_arg(args, "dir", 0)?;
+                Ok(Value::String(expect_tempdir_path(dir)?))
             }
             ("TempDir", "path") => {
                 let dir = self

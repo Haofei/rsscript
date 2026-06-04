@@ -2310,15 +2310,17 @@ fn check_expr_semantics_with_context(
             let weak_upgrade = is_weak_upgrade_callee(callee);
             let mut arg_live_after = live_after.clone();
             for arg in args.iter().rev() {
-                check_expr_semantics_with_context(
-                    analyzer,
-                    local_analysis,
-                    &arg.value,
-                    state,
-                    weak_upgrade,
-                    false,
-                    &arg_live_after,
-                );
+                if !tempdir_keep_consumes_resource_arg(callee, arg, state) {
+                    check_expr_semantics_with_context(
+                        analyzer,
+                        local_analysis,
+                        &arg.value,
+                        state,
+                        weak_upgrade,
+                        false,
+                        &arg_live_after,
+                    );
+                }
                 collect_expr_uses(&arg.value, &mut arg_live_after);
             }
         }
@@ -4556,6 +4558,29 @@ fn check_take_operand_is_local(
             span.clone(),
         );
     }
+}
+
+fn tempdir_keep_consumes_resource_arg(
+    callee: &Callee,
+    arg: &HirCallArg,
+    state: &BodyState,
+) -> bool {
+    let is_tempdir_keep = matches!(
+        callee,
+        Callee::Qualified { namespace, name } if namespace == "TempDir" && name == "keep"
+    ) || matches!(callee, Callee::Name(name) if name == "TempDir.keep");
+    if !is_tempdir_keep || arg.name.as_deref().unwrap_or("dir") != "dir" {
+        return false;
+    }
+    let HirExpr::Effect {
+        effect: ParamEffect::Take,
+        value,
+        ..
+    } = &arg.value
+    else {
+        return false;
+    };
+    matches!(value.as_ref(), HirExpr::Ident { name, .. } if state.is_resource(name))
 }
 
 fn hir_ident_name(expr: &HirExpr) -> Option<&str> {

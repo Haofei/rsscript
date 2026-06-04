@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::diagnostic::Span;
 use crate::hir::{
-    CallResolution, HirBinding, HirBindingKind, HirBlock, HirEffectEvent, HirEffectEventKind,
-    HirExpr, HirFunctionBody, HirReturnProof, HirStmt, ParamEffect,
+    CallResolution, HirBinding, HirBindingKind, HirBlock, HirCallArg, HirEffectEvent,
+    HirEffectEventKind, HirExpr, HirFunctionBody, HirReturnProof, HirStmt, ParamEffect,
 };
 use crate::syntax::ast::{Callee, Expr};
 
@@ -1539,6 +1539,18 @@ fn collect_resource_escapes_in_expr(
             }
             collect_resource_escapes_in_expr(binding, value, escapes);
         }
+        HirExpr::Call {
+            callee,
+            args,
+            events,
+            ..
+        } if tempdir_keep_consumes_binding(callee, args, binding) => {
+            for arg in args {
+                if !take_ident_effect_expr(&arg.value, binding) {
+                    collect_resource_escapes_in_expr(binding, &arg.value, escapes);
+                }
+            }
+        }
         HirExpr::Call { args, events, .. } => {
             for event in events {
                 if matches!(event.kind, HirEffectEventKind::Retain { .. })
@@ -1604,6 +1616,32 @@ fn resource_escape_operand_span(expr: &HirExpr, binding: &str) -> Option<Span> {
             .find_map(|arg| resource_escape_operand_span(&arg.value, binding)),
         _ => None,
     }
+}
+
+fn tempdir_keep_consumes_binding(callee: &Callee, args: &[HirCallArg], binding: &str) -> bool {
+    (matches!(
+        callee,
+        Callee::Qualified { namespace, name } if namespace == "TempDir" && name == "keep"
+    ) || matches!(
+        callee,
+        Callee::Name(name) if name == "TempDir.keep"
+    )) && args.iter().any(|arg| {
+        arg.name.as_deref().unwrap_or("dir") == "dir" && take_ident_effect_expr(&arg.value, binding)
+    })
+}
+
+fn take_ident_effect_expr(expr: &HirExpr, binding: &str) -> bool {
+    matches!(
+        expr,
+        HirExpr::Effect {
+            effect: ParamEffect::Take,
+            value,
+            ..
+        } if matches!(
+            value.as_ref(),
+            HirExpr::Ident { name, .. } if name == binding
+        )
+    )
 }
 
 fn resource_escape_wrapper_callee(callee: &Callee) -> bool {

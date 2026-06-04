@@ -453,6 +453,23 @@ fn bad_take(path: read Path) -> Unit {
 }
 
 #[test]
+fn tempdir_keep_may_consume_with_resource() {
+    let source = r#"
+features: local
+
+fn keep_tempdir() -> Result<Unit, FileError> {
+    with TempDir.new()? as dir {
+        let path = TempDir.keep(dir: take dir)
+        Log.write(message: read Path.to_string(path: read path))
+        Directory.remove_dir_all(path: read path)?
+    }
+    return Ok(Unit)
+}
+"#;
+    assert_eq!(analyze_source("tempdir-keep.rss", source), Vec::new());
+}
+
+#[test]
 fn managed_closure_capture_makes_fresh_local_unclean() {
     let source = r#"
 features: local
