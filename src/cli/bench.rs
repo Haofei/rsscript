@@ -2,16 +2,55 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use rsscript::write_generated_rust_package;
+use rsscript::{
+    EvalError, eval_source_main_with_args, format_diagnostics_human, write_generated_rust_package,
+};
 
 use super::{
-    cleanup_temp_dir, default_runtime_path, lower_cli_input_to_rust_package, print_usage,
-    required_flag_value,
+    cleanup_temp_dir, default_runtime_path, is_package_directory, lower_cli_input_to_rust_package,
+    print_usage, required_flag_value,
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BenchMode {
+    Eval,
+    Run,
+    Release,
+}
+
+impl BenchMode {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "eval" => Ok(Self::Eval),
+            "run" => Ok(Self::Run),
+            "release" => Ok(Self::Release),
+            _ => Err(format!(
+                "invalid benchmark mode `{value}`; expected eval, run, or release."
+            )),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Eval => "eval",
+            Self::Run => "run",
+            Self::Release => "release",
+        }
+    }
+
+    fn cargo_profile_dir(self) -> &'static str {
+        match self {
+            Self::Eval => unreachable!("eval mode does not build a cargo profile"),
+            Self::Run => "debug",
+            Self::Release => "release",
+        }
+    }
+}
 
 #[derive(Debug)]
 struct BenchOptions<'a> {
     json: bool,
+    mode: BenchMode,
     iterations: usize,
     warmup: usize,
     path: &'a str,
@@ -21,6 +60,7 @@ struct BenchOptions<'a> {
 #[derive(Debug)]
 struct BenchResult {
     name: String,
+    mode: BenchMode,
     iterations: usize,
     warmup: usize,
     min: Duration,
@@ -30,6 +70,7 @@ struct BenchResult {
 
 fn parse_bench_args(args: &[String]) -> Result<BenchOptions<'_>, String> {
     let mut json = false;
+    let mut mode = BenchMode::Release;
     let mut iterations = 10usize;
     let mut warmup = 1usize;
     let mut path = None;
@@ -42,6 +83,9 @@ fn parse_bench_args(args: &[String]) -> Result<BenchOptions<'_>, String> {
             break;
         } else if arg == "--json" {
             json = true;
+        } else if arg == "--mode" {
+            index += 1;
+            mode = BenchMode::parse(required_flag_value(args, index, "--mode")?)?;
         } else if arg == "--iterations" {
             index += 1;
             iterations = parse_positive_usize(required_flag_value(args, index, "--iterations")?)?;
@@ -63,6 +107,7 @@ fn parse_bench_args(args: &[String]) -> Result<BenchOptions<'_>, String> {
     };
     Ok(BenchOptions {
         json,
+        mode,
         iterations,
         warmup,
         path,
@@ -109,6 +154,48 @@ pub(crate) fn run_bench(args: &[String]) -> ExitCode {
 }
 
 fn run_bench_inner(options: &BenchOptions<'_>) -> Result<BenchResult, String> {
+    match options.mode {
+        BenchMode::Eval => run_eval_bench(options),
+        BenchMode::Run | BenchMode::Release => run_generated_bench(options),
+    }
+}
+
+fn run_eval_bench(options: &BenchOptions<'_>) -> Result<BenchResult, String> {
+    if is_package_directory(options.path) {
+        return Err("rss bench --mode eval only supports single-file inputs.".to_string());
+    }
+    let source = std::fs::read_to_string(options.path)
+        .map_err(|error| format!("failed to read {}: {error}", options.path))?;
+    for _ in 0..options.warmup {
+        eval_source_once(options.path, &source, &options.program_args)?;
+    }
+
+    let mut measurements = Vec::with_capacity(options.iterations);
+    for _ in 0..options.iterations {
+        let start = Instant::now();
+        eval_source_once(options.path, &source, &options.program_args)?;
+        measurements.push(start.elapsed());
+    }
+    Ok(summarize_measurements(
+        benchmark_name(options.path),
+        options.mode,
+        options.iterations,
+        options.warmup,
+        &measurements,
+    ))
+}
+
+fn eval_source_once(path: &str, source: &str, args: &[&str]) -> Result<(), String> {
+    eval_source_main_with_args(path, source, args.iter().copied()).map_err(
+        |error| match error {
+            EvalError::Diagnostics(diagnostics) => format_diagnostics_human(&diagnostics),
+            EvalError::Runtime(error) => error,
+        },
+    )?;
+    Ok(())
+}
+
+fn run_generated_bench(options: &BenchOptions<'_>) -> Result<BenchResult, String> {
     let runtime_path = default_runtime_path()?;
     let package = lower_cli_input_to_rust_package(options.path, &runtime_path, false)
         .map_err(|code| format!("failed to lower benchmark input; exit code {code:?}"))?;
@@ -117,8 +204,8 @@ fn run_bench_inner(options: &BenchOptions<'_>) -> Result<BenchResult, String> {
     }
     let package_dir = bench_temp_dir(&package.package_name);
     write_generated_rust_package(&package_dir, &package)?;
-    build_benchmark_binary(&package_dir)?;
-    let binary = benchmark_binary_path(&package_dir, &package.package_name);
+    build_benchmark_binary(&package_dir, options.mode)?;
+    let binary = benchmark_binary_path(&package_dir, &package.package_name, options.mode);
 
     for _ in 0..options.warmup {
         run_binary_once(&binary, &options.program_args)?;
@@ -133,20 +220,25 @@ fn run_bench_inner(options: &BenchOptions<'_>) -> Result<BenchResult, String> {
     cleanup_temp_dir(&package_dir);
     Ok(summarize_measurements(
         package.package_name,
+        options.mode,
         options.iterations,
         options.warmup,
         &measurements,
     ))
 }
 
-fn build_benchmark_binary(package_dir: &Path) -> Result<(), String> {
-    let output = Command::new("cargo")
+fn build_benchmark_binary(package_dir: &Path, mode: BenchMode) -> Result<(), String> {
+    let mut command = Command::new("cargo");
+    command
         .arg("build")
         .arg("--quiet")
-        .arg("--release")
         .arg("--manifest-path")
         .arg(package_dir.join("Cargo.toml"))
-        .env("CARGO_TARGET_DIR", package_dir.join("target"))
+        .env("CARGO_TARGET_DIR", package_dir.join("target"));
+    if mode == BenchMode::Release {
+        command.arg("--release");
+    }
+    let output = command
         .output()
         .map_err(|error| format!("failed to run cargo build: {error}"))?;
     if !output.status.success() {
@@ -174,17 +266,21 @@ fn run_binary_once(binary: &Path, args: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-fn benchmark_binary_path(package_dir: &Path, package_name: &str) -> PathBuf {
+fn benchmark_binary_path(package_dir: &Path, package_name: &str, mode: BenchMode) -> PathBuf {
     let binary_name = if cfg!(windows) {
         format!("{package_name}.exe")
     } else {
         package_name.to_string()
     };
-    package_dir.join("target").join("release").join(binary_name)
+    package_dir
+        .join("target")
+        .join(mode.cargo_profile_dir())
+        .join(binary_name)
 }
 
 fn summarize_measurements(
     name: String,
+    mode: BenchMode,
     iterations: usize,
     warmup: usize,
     measurements: &[Duration],
@@ -195,6 +291,7 @@ fn summarize_measurements(
     let mean = Duration::from_nanos((total_nanos / measurements.len() as u128) as u64);
     BenchResult {
         name,
+        mode,
         iterations,
         warmup,
         min,
@@ -205,8 +302,9 @@ fn summarize_measurements(
 
 fn bench_result_human(result: &BenchResult) -> String {
     format!(
-        "bench {} iterations={} warmup={} min_ms={:.3} mean_ms={:.3} max_ms={:.3}",
+        "bench {} mode={} iterations={} warmup={} min_ms={:.3} mean_ms={:.3} max_ms={:.3}",
         result.name,
+        result.mode.as_str(),
         result.iterations,
         result.warmup,
         millis(result.min),
@@ -218,6 +316,7 @@ fn bench_result_human(result: &BenchResult) -> String {
 fn bench_result_json(result: &BenchResult) -> String {
     serde_json::json!({
         "name": result.name,
+        "mode": result.mode.as_str(),
         "iterations": result.iterations,
         "warmup": result.warmup,
         "min_ms": millis(result.min),
@@ -225,6 +324,14 @@ fn bench_result_json(result: &BenchResult) -> String {
         "max_ms": millis(result.max),
     })
     .to_string()
+}
+
+fn benchmark_name(path: &str) -> String {
+    Path::new(path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("rsscript-bench")
+        .to_string()
 }
 
 fn millis(duration: Duration) -> f64 {
@@ -256,6 +363,8 @@ mod tests {
     fn parse_bench_args_accepts_path_options_and_program_args() {
         let values = args(&[
             "--json",
+            "--mode",
+            "eval",
             "--iterations",
             "3",
             "--warmup",
@@ -267,6 +376,7 @@ mod tests {
         let options = super::parse_bench_args(&values).expect("bench args should parse");
 
         assert!(options.json);
+        assert_eq!(options.mode, super::BenchMode::Eval);
         assert_eq!(options.iterations, 3);
         assert_eq!(options.warmup, 2);
         assert_eq!(options.path, "examples/scripts/basic/hello.rss");
@@ -283,6 +393,11 @@ mod tests {
             super::parse_bench_args(&args(&["--iterations", "0", "bench.rss"]))
                 .expect_err("zero iterations should fail"),
             "benchmark iterations must be greater than zero."
+        );
+        assert_eq!(
+            super::parse_bench_args(&args(&["--mode", "fast", "bench.rss"]))
+                .expect_err("unknown mode should fail"),
+            "invalid benchmark mode `fast`; expected eval, run, or release."
         );
     }
 }

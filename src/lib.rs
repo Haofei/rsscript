@@ -48,8 +48,9 @@ pub use generate::{
 };
 pub use interpreter::{
     CoverageBucket, EvalError, EvalOutput, InterpreterCoverageReport, NativeInterpreterFn,
-    NativeValue, eval_source_main, eval_source_main_with_args,
-    eval_source_main_with_args_and_native_bindings, interpreter_coverage_report,
+    NativeValue, eval_package_main_with_args, eval_package_main_with_args_and_native_bindings,
+    eval_source_main, eval_source_main_with_args, eval_source_main_with_args_and_native_bindings,
+    interpreter_coverage_report,
 };
 pub use lint::lint_source;
 pub use package::{

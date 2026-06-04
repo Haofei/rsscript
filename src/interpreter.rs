@@ -9,12 +9,16 @@ use std::rc::Rc;
 use sha2::{Digest, Sha256};
 
 use crate::analyze_source_with_interfaces;
+use crate::analyze_sources_with_interfaces_without_core;
 use crate::diagnostic::Diagnostic;
 use crate::hir::{Hir, HirBlock, HirCallArg, HirExpr, HirMatchArm, HirStmt};
-use crate::interfaces::standard_package_interfaces;
+use crate::interfaces::{builtin_interfaces, standard_package_interfaces};
+use crate::package::package_lowering_input;
 use crate::runtime_abi;
 use crate::runtime_abi::InterpreterIntrinsic;
-use crate::syntax::ast::{BinaryOp, Callee, Expr, Item, MatchLiteral, MatchPattern, Program};
+use crate::syntax::ast::{
+    BinaryOp, Callee, Expr, Item, MatchLiteral, MatchPattern, Program, merge_programs,
+};
 use crate::syntax::parse_source;
 
 include!(concat!(
@@ -22,9 +26,11 @@ include!(concat!(
     "/rss-interpreter-intrinsics-dispatch.rs"
 ));
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EvalOutput {
     pub value: String,
+    pub display_value: String,
+    pub native_value: Option<NativeValue>,
     pub stdout: String,
     pub stderr: String,
 }
@@ -1421,6 +1427,69 @@ pub fn eval_source_main_with_args_and_native_bindings(
     // field declaration order and receiver-call receiver expressions.
     let program = parse_source(file, source);
     let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
+    eval_program_main_with_args_and_native_bindings(program, hir, args, native_bindings)
+}
+
+pub fn eval_package_main_with_args(
+    package_dir: &Path,
+    args: impl IntoIterator<Item = impl Into<String>>,
+) -> Result<EvalOutput, EvalError> {
+    eval_package_main_with_args_and_native_bindings(
+        package_dir,
+        args,
+        std::iter::empty::<(String, NativeInterpreterFn)>(),
+    )
+}
+
+pub fn eval_package_main_with_args_and_native_bindings(
+    package_dir: &Path,
+    args: impl IntoIterator<Item = impl Into<String>>,
+    native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
+) -> Result<EvalOutput, EvalError> {
+    let input = package_lowering_input(package_dir).map_err(EvalError::Runtime)?;
+    let mut interface_refs = builtin_interfaces()
+        .map(|(path, contents)| (path.to_string(), contents.to_string()))
+        .collect::<Vec<_>>();
+    interface_refs.extend(input.interfaces.iter().cloned());
+    let source_refs = input
+        .sources
+        .iter()
+        .map(|(path, contents)| (path.as_str(), contents.as_str()))
+        .collect::<Vec<_>>();
+    let interface_refs_borrowed = interface_refs
+        .iter()
+        .map(|(path, contents)| (path.as_str(), contents.as_str()))
+        .collect::<Vec<_>>();
+    let diagnostics =
+        analyze_sources_with_interfaces_without_core(&source_refs, &interface_refs_borrowed);
+    let errors = diagnostics
+        .into_iter()
+        .filter(|diagnostic| diagnostic.severity.is_error())
+        .collect::<Vec<_>>();
+    if !errors.is_empty() {
+        return Err(EvalError::Diagnostics(errors));
+    }
+
+    let program = merge_programs(
+        input
+            .sources
+            .iter()
+            .map(|(path, source)| parse_source(path, source)),
+    );
+    let interface_programs = interface_refs
+        .iter()
+        .map(|(path, source)| parse_source(path, source))
+        .collect::<Vec<_>>();
+    let hir = Hir::from_syntax_with_interfaces(&program, &interface_programs);
+    eval_program_main_with_args_and_native_bindings(program, hir, args, native_bindings)
+}
+
+fn eval_program_main_with_args_and_native_bindings(
+    program: Program,
+    hir: Hir,
+    args: impl IntoIterator<Item = impl Into<String>>,
+    native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
+) -> Result<EvalOutput, EvalError> {
     let native_bindings = native_bindings
         .into_iter()
         .map(|(key, function)| (key.into(), function))
@@ -1432,8 +1501,12 @@ pub fn eval_source_main_with_args_and_native_bindings(
         native_bindings,
     );
     let value = interpreter.call_function("main", Vec::new())?;
+    let display_value = value.display();
+    let native_value = native_value_from_value(value.clone()).ok();
     Ok(EvalOutput {
-        value: value.display(),
+        value: display_value.clone(),
+        display_value,
+        native_value,
         stdout: interpreter.stdout,
         stderr: interpreter.stderr,
     })
@@ -2074,17 +2147,25 @@ impl<'a> Interpreter<'a> {
 
     fn eval_block(&mut self, block: &HirBlock) -> Result<Control, EvalError> {
         self.scopes.push(HashMap::new());
-        for statement in &block.statements {
-            match self.eval_stmt(statement)? {
-                Control::Continue => {}
-                control => {
-                    self.scopes.pop();
-                    return Ok(control);
+        let result = {
+            let mut result = Ok(Control::Continue);
+            for statement in &block.statements {
+                match self.eval_stmt(statement) {
+                    Ok(Control::Continue) => {}
+                    Ok(control) => {
+                        result = Ok(control);
+                        break;
+                    }
+                    Err(error) => {
+                        result = Err(error);
+                        break;
+                    }
                 }
             }
-        }
+            result
+        };
         self.scopes.pop();
-        Ok(Control::Continue)
+        result
     }
 
     fn eval_stmt(&mut self, statement: &HirStmt) -> Result<Control, EvalError> {
@@ -2149,13 +2230,17 @@ impl<'a> Interpreter<'a> {
                 }
                 self.scopes
                     .push(HashMap::from([(binding.clone(), resource)]));
-                let control = self.eval_block(body)?;
-                let leased = self.lookup(binding)?;
-                if !self.finish_resource_pool_lease(leased.clone())? {
-                    self.eval_resource_drop(leased)?;
-                }
+                let control = self.eval_block(body);
+                let cleanup = self.lookup(binding).and_then(|leased| {
+                    if self.finish_resource_pool_lease(leased.clone())? {
+                        Ok(())
+                    } else {
+                        self.eval_resource_drop(leased)
+                    }
+                });
                 self.scopes.pop();
-                Ok(control)
+                cleanup?;
+                control
             }
             HirStmt::If {
                 condition,
@@ -2207,9 +2292,9 @@ impl<'a> Interpreter<'a> {
                 };
                 for item in items {
                     self.scopes.push(HashMap::from([(binding.clone(), item)]));
-                    let control = self.eval_block(body)?;
+                    let control = self.eval_block(body);
                     self.scopes.pop();
-                    match control {
+                    match control? {
                         Control::Continue | Control::LoopContinue => {}
                         Control::Break => break,
                         control @ Control::Return(_) => return Ok(control),
@@ -2257,6 +2342,9 @@ impl<'a> Interpreter<'a> {
     }
 
     fn eval_expr(&mut self, expr: &HirExpr) -> Result<Value, EvalError> {
+        if self.pending_return.is_some() {
+            return Ok(Value::Unit);
+        }
         match expr {
             HirExpr::Ident { name, .. } => self.eval_ident(name),
             HirExpr::Number { value, .. } => value
@@ -2268,45 +2356,100 @@ impl<'a> Interpreter<'a> {
                 let mut object = serde_json::Map::new();
                 for field in fields {
                     let value = self.eval_expr(&field.value)?;
+                    if self.pending_return.is_some() {
+                        return Ok(Value::Unit);
+                    }
                     object.insert(field.name.clone(), value_to_json_literal(value)?);
                 }
                 Ok(Value::Json(serde_json::Value::Object(object)))
             }
             HirExpr::MapLiteral { entries, .. } => {
-                let entries = entries
-                    .iter()
-                    .map(|entry| Ok((self.eval_expr(&entry.key)?, self.eval_expr(&entry.value)?)))
-                    .collect::<Result<Vec<_>, EvalError>>()?;
-                Ok(Value::Map(entries))
+                let mut values = Vec::with_capacity(entries.len());
+                for entry in entries {
+                    let key = self.eval_expr(&entry.key)?;
+                    if self.pending_return.is_some() {
+                        return Ok(Value::Unit);
+                    }
+                    let value = self.eval_expr(&entry.value)?;
+                    if self.pending_return.is_some() {
+                        return Ok(Value::Unit);
+                    }
+                    values.push((key, value));
+                }
+                Ok(Value::Map(values))
             }
             HirExpr::ArrayLiteral { items, .. } => {
-                let items = items
-                    .iter()
-                    .map(|item| self.eval_expr(item))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(Value::List(items))
+                let mut values = Vec::with_capacity(items.len());
+                for item in items {
+                    values.push(self.eval_expr(item)?);
+                    if self.pending_return.is_some() {
+                        return Ok(Value::Unit);
+                    }
+                }
+                Ok(Value::List(values))
             }
             HirExpr::Binary {
                 op, left, right, ..
             } => {
                 let left = self.eval_expr(left)?;
+                if self.pending_return.is_some() {
+                    return Ok(Value::Unit);
+                }
+                if *op == BinaryOp::LogicalAnd {
+                    let left = expect_bool(left)?;
+                    if !left {
+                        return Ok(Value::Bool(false));
+                    }
+                    let right = self.eval_expr(right)?;
+                    if self.pending_return.is_some() {
+                        return Ok(Value::Unit);
+                    }
+                    return Ok(Value::Bool(expect_bool(right)?));
+                }
+                if *op == BinaryOp::LogicalOr {
+                    let left = expect_bool(left)?;
+                    if left {
+                        return Ok(Value::Bool(true));
+                    }
+                    let right = self.eval_expr(right)?;
+                    if self.pending_return.is_some() {
+                        return Ok(Value::Unit);
+                    }
+                    return Ok(Value::Bool(expect_bool(right)?));
+                }
                 let right = self.eval_expr(right)?;
+                if self.pending_return.is_some() {
+                    return Ok(Value::Unit);
+                }
                 eval_binary(*op, left, right)
             }
             HirExpr::Field { base, name, .. } => {
                 let base = self.eval_expr(base)?;
+                if self.pending_return.is_some() {
+                    return Ok(Value::Unit);
+                }
                 read_field(&base, name)
             }
             HirExpr::Index { base, index, .. } => {
                 let base = self.eval_expr(base)?;
+                if self.pending_return.is_some() {
+                    return Ok(Value::Unit);
+                }
                 let index = self.eval_expr(index)?;
+                if self.pending_return.is_some() {
+                    return Ok(Value::Unit);
+                }
                 eval_index(base, index)
             }
             HirExpr::Call { callee, args, .. } => self.eval_call(callee, args),
             HirExpr::Effect { value, .. } => self.eval_expr(value),
-            HirExpr::Manage { value, .. } => Ok(Value::Managed(Rc::new(RefCell::new(
-                self.eval_expr(value)?,
-            )))),
+            HirExpr::Manage { value, .. } => {
+                let value = self.eval_expr(value)?;
+                if self.pending_return.is_some() {
+                    return Ok(Value::Unit);
+                }
+                Ok(Value::Managed(Rc::new(RefCell::new(value))))
+            }
             HirExpr::Spawn { value, .. } => self.eval_expr(value),
             HirExpr::Await { value, .. } => self.eval_expr(value),
             HirExpr::Closure { params, body, .. } => Ok(Value::Closure {
@@ -2316,6 +2459,9 @@ impl<'a> Interpreter<'a> {
             }),
             HirExpr::Try { value, .. } => {
                 let value = self.eval_expr(value)?;
+                if self.pending_return.is_some() {
+                    return Ok(Value::Unit);
+                }
                 match value {
                     Value::Variant { name, fields } if name == "Ok" => fields
                         .get("value")
@@ -2336,6 +2482,9 @@ impl<'a> Interpreter<'a> {
             }
             HirExpr::Match { value, arms, .. } => {
                 let value = self.eval_expr(value)?;
+                if self.pending_return.is_some() {
+                    return Ok(Value::Unit);
+                }
                 match self.eval_match(value, arms)? {
                     Control::Return(value) => Ok(value),
                     Control::Continue => Ok(Value::Unit),
@@ -2359,6 +2508,9 @@ impl<'a> Interpreter<'a> {
                     .contains_key(&native_callee_key(callee))
                 {
                     let values = self.eval_call_arg_values(args)?;
+                    if self.pending_return.is_some() {
+                        return Ok(Value::Unit);
+                    }
                     return self.call_native_callee(callee, values);
                 }
                 if let Some(signature) = self.hir.resolve_function(None, name)
@@ -2370,10 +2522,10 @@ impl<'a> Interpreter<'a> {
                     )));
                 }
                 if self.hir.function_body(name).is_some() {
-                    let values = args
-                        .iter()
-                        .map(|arg| self.eval_expr(&arg.value))
-                        .collect::<Result<Vec<_>, _>>()?;
+                    let values = self.eval_call_arg_values(args)?;
+                    if self.pending_return.is_some() {
+                        return Ok(Value::Unit);
+                    }
                     return self.call_function(name, values);
                 }
                 if let Some(value) = self.construct_value(name, args)? {
@@ -2411,6 +2563,9 @@ impl<'a> Interpreter<'a> {
                     .contains_key(&native_callee_key(callee))
                 {
                     let values = self.eval_call_arg_values(args)?;
+                    if self.pending_return.is_some() {
+                        return Ok(Value::Unit);
+                    }
                     return self.call_native_callee(callee, values);
                 }
                 if let Some(signature) = self.hir.resolve_function(Some(namespace), name)
@@ -2434,22 +2589,36 @@ impl<'a> Interpreter<'a> {
                 {
                     let mut values = Vec::with_capacity(args.len() + 1);
                     values.push(self.eval_ast_expr(receiver)?);
+                    if self.pending_return.is_some() {
+                        return Ok(Value::Unit);
+                    }
                     values.extend(self.eval_call_arg_values(args)?);
+                    if self.pending_return.is_some() {
+                        return Ok(Value::Unit);
+                    }
                     return self.call_native_callee(callee, values);
                 }
                 // HIR reuses the AST `Callee`, so the receiver is still an AST
                 // expression (only the call arguments are lowered). Evaluate it
                 // through the small AST bridge below.
                 let receiver = self.eval_ast_expr(receiver)?;
+                if self.pending_return.is_some() {
+                    return Ok(Value::Unit);
+                }
                 self.eval_receiver_call(receiver, method, args)
             }
         }
     }
 
     fn eval_call_arg_values(&mut self, args: &[HirCallArg]) -> Result<Vec<Value>, EvalError> {
-        args.iter()
-            .map(|arg| self.eval_expr(&arg.value))
-            .collect::<Result<Vec<_>, _>>()
+        let mut values = Vec::with_capacity(args.len());
+        for arg in args {
+            values.push(self.eval_expr(&arg.value)?);
+            if self.pending_return.is_some() {
+                break;
+            }
+        }
+        Ok(values)
     }
 
     fn call_native_callee(&self, callee: &Callee, args: Vec<Value>) -> Result<Value, EvalError> {
@@ -5826,6 +5995,9 @@ impl<'a> Interpreter<'a> {
     ) -> Result<Option<Value>, EvalError> {
         if matches!(name, "Some" | "Ok" | "Err") {
             let value = self.eval_first_arg(args)?;
+            if self.pending_return.is_some() {
+                return Ok(Some(Value::Unit));
+            }
             return Ok(Some(Value::Variant {
                 name: name.to_string(),
                 fields: BTreeMap::from([("value".to_string(), value)]),
@@ -5838,6 +6010,9 @@ impl<'a> Interpreter<'a> {
             }));
         }
         if let Some(fields) = self.eval_builtin_constructor_fields(name, args)? {
+            if self.pending_return.is_some() {
+                return Ok(Some(Value::Unit));
+            }
             return Ok(Some(Value::Struct {
                 name: name.to_string(),
                 fields,
@@ -5848,17 +6023,25 @@ impl<'a> Interpreter<'a> {
         for item in &self.program.items {
             match item {
                 Item::Type(type_decl) if type_decl.name == name => {
+                    let fields = self.eval_constructor_fields(&type_decl.fields, args)?;
+                    if self.pending_return.is_some() {
+                        return Ok(Some(Value::Unit));
+                    }
                     return Ok(Some(Value::Struct {
                         name: name.to_string(),
-                        fields: self.eval_constructor_fields(&type_decl.fields, args)?,
+                        fields,
                     }));
                 }
                 Item::SumType(sum) => {
                     if let Some(variant) = sum.variants.iter().find(|variant| variant.name == name)
                     {
+                        let fields = self.eval_constructor_fields(&variant.fields, args)?;
+                        if self.pending_return.is_some() {
+                            return Ok(Some(Value::Unit));
+                        }
                         return Ok(Some(Value::Variant {
                             name: name.to_string(),
-                            fields: self.eval_constructor_fields(&variant.fields, args)?,
+                            fields,
                         }));
                     }
                 }
@@ -5889,10 +6072,11 @@ impl<'a> Interpreter<'a> {
         };
         let mut values = BTreeMap::new();
         for (index, field) in fields.iter().enumerate() {
-            values.insert(
-                (*field).to_string(),
-                self.eval_named_or_positional_arg(args, field, index)?,
-            );
+            let value = self.eval_named_or_positional_arg(args, field, index)?;
+            if self.pending_return.is_some() {
+                break;
+            }
+            values.insert((*field).to_string(), value);
         }
         Ok(Some(values))
     }
@@ -5909,7 +6093,11 @@ impl<'a> Interpreter<'a> {
                 .find(|arg| arg.name.as_deref() == Some(field.name.as_str()))
                 .or_else(|| args.get(index))
                 .ok_or_else(|| EvalError::Runtime(format!("missing field `{}`.", field.name)))?;
-            values.insert(field.name.clone(), self.eval_expr(&arg.value)?);
+            let value = self.eval_expr(&arg.value)?;
+            if self.pending_return.is_some() {
+                break;
+            }
+            values.insert(field.name.clone(), value);
         }
         Ok(values)
     }
@@ -5923,8 +6111,14 @@ impl<'a> Interpreter<'a> {
                     .guard
                     .as_ref()
                     .map(|guard| self.eval_expr(guard).and_then(expect_bool))
-                    .transpose()?
-                    .unwrap_or(true);
+                    .transpose();
+                let guard_matches = match guard_matches {
+                    Ok(value) => value.unwrap_or(true),
+                    Err(error) => {
+                        self.scopes.pop();
+                        return Err(error);
+                    }
+                };
                 if guard_matches {
                     let result = self.eval_block(&arm.body);
                     self.scopes.pop();
@@ -6313,7 +6507,6 @@ fn process_run_timeout_output(
         return process_run_output(command, args);
     }
 
-    use std::io::Read;
     use std::process::Stdio;
     use std::time::{Duration, Instant};
 
@@ -6325,6 +6518,14 @@ fn process_run_timeout_output(
     let mut child = child
         .spawn()
         .map_err(|error| format!("failed to run `{command}`: {error}"))?;
+    let stdout_reader = child
+        .stdout
+        .take()
+        .map(|pipe| spawn_pipe_reader(pipe, command.to_string(), "stdout"));
+    let stderr_reader = child
+        .stderr
+        .take()
+        .map(|pipe| spawn_pipe_reader(pipe, command.to_string(), "stderr"));
     let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
     let mut timed_out = false;
     loop {
@@ -6346,16 +6547,8 @@ fn process_run_timeout_output(
     let status = child
         .wait()
         .map_err(|error| format!("failed to wait for `{command}`: {error}"))?;
-    let mut stdout = Vec::new();
-    if let Some(mut pipe) = child.stdout.take() {
-        pipe.read_to_end(&mut stdout)
-            .map_err(|error| format!("stdout reader failed for `{command}`: {error}"))?;
-    }
-    let mut stderr = Vec::new();
-    if let Some(mut pipe) = child.stderr.take() {
-        pipe.read_to_end(&mut stderr)
-            .map_err(|error| format!("stderr reader failed for `{command}`: {error}"))?;
-    }
+    let stdout = join_pipe_reader(stdout_reader)?;
+    let stderr = join_pipe_reader(stderr_reader)?;
     let output = process_output_state_from_parts(status, stdout, stderr, false);
     if timed_out {
         return Err(format!(
@@ -6371,7 +6564,7 @@ fn process_run_request_output(request: &ProcessRequestState) -> Result<ProcessOu
         return Err("process command must not be empty".to_string());
     }
 
-    use std::io::{Read, Write};
+    use std::io::Write;
     use std::process::Stdio;
     use std::time::{Duration, Instant};
 
@@ -6393,6 +6586,14 @@ fn process_run_request_output(request: &ProcessRequestState) -> Result<ProcessOu
     let mut child = command
         .spawn()
         .map_err(|error| format!("failed to run `{}`: {error}", request.command))?;
+    let stdout_reader = child
+        .stdout
+        .take()
+        .map(|pipe| spawn_pipe_reader(pipe, request.command.clone(), "stdout"));
+    let stderr_reader = child
+        .stderr
+        .take()
+        .map(|pipe| spawn_pipe_reader(pipe, request.command.clone(), "stderr"));
     if let Some(stdin) = &request.stdin
         && let Some(mut child_stdin) = child.stdin.take()
     {
@@ -6427,16 +6628,8 @@ fn process_run_request_output(request: &ProcessRequestState) -> Result<ProcessOu
     let status = child
         .wait()
         .map_err(|error| format!("failed to wait for `{}`: {error}", request.command))?;
-    let mut stdout = Vec::new();
-    if let Some(mut pipe) = child.stdout.take() {
-        pipe.read_to_end(&mut stdout)
-            .map_err(|error| format!("stdout reader failed for `{}`: {error}", request.command))?;
-    }
-    let mut stderr = Vec::new();
-    if let Some(mut pipe) = child.stderr.take() {
-        pipe.read_to_end(&mut stderr)
-            .map_err(|error| format!("stderr reader failed for `{}`: {error}", request.command))?;
-    }
+    let stdout = join_pipe_reader(stdout_reader)?;
+    let stderr = join_pipe_reader(stderr_reader)?;
 
     let (stdout, stderr, merged, truncated) = cap_process_request_output(
         stdout,
@@ -6460,6 +6653,33 @@ fn process_run_request_output(request: &ProcessRequestState) -> Result<ProcessOu
         ));
     }
     Ok(output)
+}
+
+fn spawn_pipe_reader<R>(
+    mut pipe: R,
+    command: String,
+    label: &'static str,
+) -> std::thread::JoinHandle<Result<Vec<u8>, String>>
+where
+    R: Read + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes)
+            .map_err(|error| format!("{label} reader failed for `{command}`: {error}"))?;
+        Ok(bytes)
+    })
+}
+
+fn join_pipe_reader(
+    reader: Option<std::thread::JoinHandle<Result<Vec<u8>, String>>>,
+) -> Result<Vec<u8>, String> {
+    match reader {
+        Some(reader) => reader
+            .join()
+            .map_err(|_| "process pipe reader thread panicked".to_string())?,
+        None => Ok(Vec::new()),
+    }
 }
 
 fn cap_process_request_output(

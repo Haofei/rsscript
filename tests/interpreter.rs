@@ -10,8 +10,8 @@ use std::process::Command;
 use std::thread;
 
 use rsscript::{
-    EvalError, NativeInterpreterFn, NativeRustDependency, NativeValue, eval_source_main,
-    eval_source_main_with_args, eval_source_main_with_args_and_native_bindings,
+    EvalError, NativeInterpreterFn, NativeRustDependency, NativeValue, eval_package_main_with_args,
+    eval_source_main, eval_source_main_with_args, eval_source_main_with_args_and_native_bindings,
     lower_source_to_rust_package, lower_sources_to_rust_package_with_options,
     write_generated_rust_package,
 };
@@ -29,6 +29,8 @@ fn main() -> Int {
     let output = eval_source_main("eval-arithmetic.rss", source).expect("eval should succeed");
 
     assert_eq!(output.value, "14");
+    assert_eq!(output.display_value, "14");
+    assert_eq!(output.native_value, Some(NativeValue::Int(14)));
 }
 
 #[test]
@@ -48,6 +50,52 @@ fn main() -> Int {
     let output = eval_source_main("eval-function.rss", source).expect("eval should succeed");
 
     assert_eq!(output.value, "7");
+}
+
+#[test]
+fn eval_package_runs_merged_sources_with_args() {
+    let package_dir = common::unique_temp_dir("rsscript-eval-package");
+    fs::create_dir_all(package_dir.join("src")).expect("package src should create");
+    fs::write(
+        package_dir.join("rsspkg.toml"),
+        r#"[package]
+name = "rsscript-eval-package"
+version = "0.1.0"
+edition = "2026"
+
+[sources]
+paths = ["src"]
+"#,
+    )
+    .expect("manifest should write");
+    fs::write(
+        package_dir.join("src/helper.rss"),
+        r#"
+fn decorate(value: read String) -> String {
+    return value
+}
+"#,
+    )
+    .expect("helper source should write");
+    fs::write(
+        package_dir.join("src/main.rss"),
+        r#"
+fn main() -> Unit {
+    let args = Args.all()
+    let joined = List.join<String>(list: read args, separator: read "|")
+    Log.write(message: read decorate(value: read joined))
+    return Unit
+}
+"#,
+    )
+    .expect("main source should write");
+
+    let output = eval_package_main_with_args(&package_dir, ["alpha", "beta"])
+        .expect("package eval should run");
+
+    assert_eq!(output.stdout, "alpha|beta\n");
+    assert_eq!(output.value, "Unit");
+    let _ = fs::remove_dir_all(package_dir);
 }
 
 #[test]
@@ -3168,6 +3216,22 @@ fn main() -> Result<Unit, String> {
         Log.write(message: read "request-truncated")
     }
 
+    let large_output_request = ProcessRequest(
+        command: "sh",
+        args: ["-c", "yes x | head -c 200000"],
+        cwd: None,
+        stdin: None,
+        env: List<ProcessEnv>.new(),
+        timeout_ms: 1000,
+        merge_stderr: false,
+        output_cap_bytes: 3,
+    )
+    let large_output = Process.run_request(request: read large_output_request)?
+    Log.write(message: read large_output.stdout)
+    if large_output.truncated {
+        Log.write(message: read "large-output-truncated")
+    }
+
     let stream_request = ProcessRequest(
         command: "true",
         args: List<String>.new(),
@@ -4646,4 +4710,101 @@ fn main() -> Unit {
 }
 "#;
     assert_interpreter_matches_backend("parity-with-try.rss", "rsscript_parity_with_try", source);
+}
+
+#[test]
+fn parity_try_short_circuits_inside_expressions() {
+    let source = r#"
+fn fail() -> Result<Int, String> {
+    return Err("bad")
+}
+
+fn side_effect() -> Int {
+    Log.write(message: read "should-not-run")
+    return 1
+}
+
+fn combine(a: Int, b: Int) -> Int {
+    return a + b
+}
+
+fn binary_case() -> Result<Int, String> {
+    return Ok(fail()? + side_effect())
+}
+
+fn call_case() -> Result<Int, String> {
+    return Ok(combine(a: fail()?, b: side_effect()))
+}
+
+fn list_case() -> Result<Unit, String> {
+    let _ = [fail()?, side_effect()]
+    return Ok(Unit)
+}
+
+fn print_result(label: read String, value: read Result<Unit, String>) -> Unit {
+    match value {
+        Ok(_) => {
+            Log.write(message: read "unexpected-ok")
+        }
+        Err(message) => {
+            Log.write(message: read label)
+            Log.write(message: read message)
+        }
+    }
+    return Unit
+}
+
+fn main() -> Unit {
+    match binary_case() {
+        Ok(_) => {
+            Log.write(message: read "unexpected-binary")
+        }
+        Err(message) => {
+            Log.write(message: read "binary")
+            Log.write(message: read message)
+        }
+    }
+    match call_case() {
+        Ok(_) => {
+            Log.write(message: read "unexpected-call")
+        }
+        Err(message) => {
+            Log.write(message: read "call")
+            Log.write(message: read message)
+        }
+    }
+    print_result(label: read "list", value: read list_case())
+    return Unit
+}
+"#;
+    assert_interpreter_matches_backend(
+        "parity-try-short-circuit.rss",
+        "rsscript_parity_try_short_circuit",
+        source,
+    );
+}
+
+#[test]
+fn parity_boolean_operators_short_circuit() {
+    let source = r#"
+fn side_effect() -> Bool {
+    Log.write(message: read "should-not-run")
+    return true
+}
+
+fn main() -> Unit {
+    if false && side_effect() {
+        Log.write(message: read "unexpected-and")
+    }
+    if true || side_effect() {
+        Log.write(message: read "or-ok")
+    }
+    return Unit
+}
+"#;
+    assert_interpreter_matches_backend(
+        "parity-bool-short-circuit.rss",
+        "rsscript_parity_bool_short_circuit",
+        source,
+    );
 }
