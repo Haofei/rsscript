@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use rsscript::{interpreter_coverage_report, lower_coverage_report};
+use rsscript::{interpreter_coverage_report, lower_coverage_report, vm_coverage_report};
 
 #[test]
 fn interpreter_coverage_report_tracks_hir_surface() {
@@ -104,6 +104,46 @@ fn lower_coverage_report_tracks_ast_and_runtime_surface() {
 }
 
 #[test]
+fn vm_coverage_gap_is_explicit() {
+    let interpreter = interpreter_coverage_report();
+    let vm = vm_coverage_report();
+
+    assert_bucket_counts(&vm.runtime_intrinsics, 519, 19, 500);
+    assert_bucket_counts(&vm.hir_statements, 12, 7, 5);
+    assert_bucket_counts(&vm.hir_expressions, 17, 9, 8);
+    assert_bucket_counts(&vm.value_types, 14, 9, 5);
+    assert_bucket_counts(&vm.function_kinds, 3, 1, 2);
+    assert_bucket_counts(&vm.parity_features, 565, 45, 520);
+
+    assert_vm_bucket_targets_interpreter(
+        &vm.runtime_intrinsics,
+        &interpreter.runtime_intrinsics,
+        "runtime intrinsic",
+    );
+    assert_vm_bucket_targets_interpreter(
+        &vm.hir_statements,
+        &interpreter.hir_statements,
+        "HIR statement",
+    );
+    assert_vm_bucket_targets_interpreter(
+        &vm.hir_expressions,
+        &interpreter.hir_expressions,
+        "HIR expression",
+    );
+    assert_vm_bucket_targets_interpreter(&vm.value_types, &interpreter.value_types, "value type");
+    assert_vm_bucket_targets_interpreter(
+        &vm.function_kinds,
+        &interpreter.function_kinds,
+        "function kind",
+    );
+    assert_vm_bucket_targets_interpreter(
+        &vm.parity_features,
+        &interpreter.parity_features,
+        "parity feature",
+    );
+}
+
+#[test]
 fn parity_fixture_annotations_cover_supported_interpreter_features() {
     let report = interpreter_coverage_report();
     let source = std::fs::read_to_string("tests/interpreter.rs")
@@ -163,6 +203,22 @@ fn combined_bucket_all(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
+}
+
+fn assert_vm_bucket_targets_interpreter(
+    vm: &rsscript::CoverageBucket,
+    interpreter: &rsscript::CoverageBucket,
+    label: &str,
+) {
+    assert_eq!(
+        vm.all, interpreter.supported,
+        "VM {label} coverage target should be the interpreter-supported surface"
+    );
+    assert_eq!(
+        vm.supported.len() + vm.missing.len(),
+        interpreter.supported.len(),
+        "VM {label} coverage should partition the interpreter-supported surface"
+    );
 }
 
 fn enum_variants(source: &str, enum_name: &str) -> Vec<String> {

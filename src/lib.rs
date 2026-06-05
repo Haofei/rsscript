@@ -26,6 +26,7 @@ mod runtime_abi;
 mod rust_lower;
 mod symbols;
 pub mod syntax;
+mod vm;
 
 pub use analyzer::{
     analyze_source, analyze_source_with_core, analyze_source_with_interfaces,
@@ -99,4 +100,8 @@ pub use rust_lower::{
 pub use symbols::{
     Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
     document_symbols, symbol_index,
+};
+pub use vm::{
+    VmCoverageReport, VmExecutable, vm_compile_source, vm_coverage_report,
+    vm_eval_source_main_with_args,
 };

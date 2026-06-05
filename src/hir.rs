@@ -723,6 +723,12 @@ impl Hir {
         self.function_bodies.get(function_name)
     }
 
+    pub fn function_bodies(&self) -> impl Iterator<Item = (&str, &HirFunctionBody)> {
+        self.function_bodies
+            .iter()
+            .map(|(name, body)| (name.as_str(), body))
+    }
+
     pub fn resource_drop_body(&self, type_name: &str) -> Option<&HirBlock> {
         self.resource_drop_bodies.get(type_root_name(type_name))
     }

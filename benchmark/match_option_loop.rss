@@ -1,0 +1,41 @@
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn maybe_value(value: Int) -> Option<Int> {
+    let half = value / 2
+    if half * 2 == value {
+        return Some(value)
+    }
+    return None
+}
+
+fn main() -> Unit {
+    let limit = bench_size(default: 200000)
+    let mut index = 0
+    let mut total = 0
+
+    while index < limit {
+        match maybe_value(value: index) {
+            Some(value) => {
+                total = total + value
+            }
+            None => {
+                total = total - 1
+            }
+        }
+        index = index + 1
+    }
+
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+

@@ -1136,11 +1136,23 @@ fn default_ramdisk_root_dir() -> Option<std::path::PathBuf> {
 }
 
 pub fn log_write(message: &str) {
+    if bench_silences_log() {
+        std::hint::black_box(message);
+        return;
+    }
     println!("{message}");
 }
 
 pub fn log_write_json(value: &JsonValue) {
+    if bench_silences_log() {
+        std::hint::black_box(value);
+        return;
+    }
     println!("{}", json_to_string(value));
+}
+
+fn bench_silences_log() -> bool {
+    std::env::var_os("RSSCRIPT_BENCH_SILENCE_LOG").is_some_and(|value| value == "1")
 }
 
 pub fn log_error(message: &str) {
