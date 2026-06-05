@@ -2290,6 +2290,7 @@ fn main() -> Result<Unit, FileError> {
     if Path.is_dir(path: read current) {
         Log.write(message: read "current-dir")
     }
+    Env.set_current_dir(path: read current)?
     let root = Env.run_workspace_root()
     if Path.is_dir(path: read root) {
         Log.write(message: read "workspace-root")

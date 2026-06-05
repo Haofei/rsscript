@@ -143,7 +143,10 @@ enum InterpreterEvalKind {
     CacheInsert,
     CacheLookup,
     CacheNew,
+    ChannelBounded,
     ChannelErrorMessage,
+    ChannelReceiver,
+    ChannelSender,
     CharCompare,
     CharFromCode,
     CharIsAlphanumeric,
@@ -152,6 +155,12 @@ enum InterpreterEvalKind {
     CharIsWhitespace,
     CharToCode,
     CharToString,
+    CancellationSourceCancel,
+    CancellationSourceNew,
+    CancellationSourceToken,
+    CancellationTokenIsCancelled,
+    ClockNow,
+    ClockSystemUnixMs,
     ConfigLoad,
     ConfigName,
     ConfigNew,
@@ -159,6 +168,10 @@ enum InterpreterEvalKind {
     ConfigStoreName,
     ConfigStoreNew,
     ConfigStoreReplace,
+    CsvOpenRead,
+    CsvParseRow,
+    CsvReadInto,
+    CsvRows,
     DequeClear,
     DequeIsEmpty,
     DequeLen,
@@ -172,41 +185,130 @@ enum InterpreterEvalKind {
     CounterAdd,
     CounterNew,
     CounterValue,
+    FalliblePipelineCollect,
+    FalliblePipelineEach,
+    FalliblePipelineFilter,
+    FalliblePipelineMap,
+    FalliblePipelineTryMap,
+    DeadlineAfter,
+    DeadlineAfterMs,
+    DeadlineIsExpired,
+    DeadlineRemainingMs,
+    DbClose,
+    DbConnectionOpen,
+    DbConnectionQuery,
+    DbConnectionTryOpen,
+    DirectoryCopyFile,
+    DirectoryCreate,
+    DirectoryCreateAll,
+    DirectoryCreateDirAll,
+    DirectoryExists,
+    DirectoryIsDir,
+    DirectoryIsFile,
+    DirectoryListFiles,
+    DirectoryListPaths,
+    DirectoryMetadata,
+    DirectoryReadString,
+    DirectoryRemoveDirAll,
+    DirectoryRemoveFile,
+    DirectoryRename,
+    DirectoryWriteString,
     DurationAdd,
     DurationAsMs,
     DurationAsSeconds,
     DurationMs,
     DurationSeconds,
+    EnvironmentBindFunction,
+    EnvironmentChild,
+    EnvironmentHasFunction,
+    EnvironmentHasParent,
+    EnvironmentRoot,
+    EnvCurrentDir,
+    EnvGet,
+    EnvGetOrDefault,
+    EnvHomeDir,
+    EnvRunWorkspaceRoot,
+    EnvSet,
+    EnvSetCurrentDir,
+    EnvTempDir,
+    FileAppendBytes,
+    FileAppendString,
+    FileBytesStream,
+    FileExists,
     FileErrorMessage,
+    FileOpen,
+    FileOpenRead,
+    FileOpenWrite,
+    FileReadAll,
+    FileReadAllAsync,
+    FileReadAllString,
+    FileReadAllStringAsync,
+    FileReadBytes,
+    FileReadInto,
+    FileReadString,
+    FileRemove,
+    FileWrite,
+    FileWriteAsync,
+    FileWriteAtomic,
+    FileWriteBytes,
+    FileWriteBytesView,
+    FileWriteBuffer,
+    FileWriteBufferView,
+    FileWriteString,
+    FileWriteStringAsync,
+    FileWriteStringToPath,
+    FunctionObjectHasClosure,
+    FunctionObjectNew,
     GlobalConfigNew,
     GlobalConfigReplace,
     GlobalConfigRuleCount,
     HashSha256Bytes,
+    HashSha256File,
     HashSha256String,
+    InstantElapsed,
+    PathExists,
     PathExtension,
     PathFileName,
     PathFromString,
     PathIsAbsolute,
+    PathIsDir,
+    PathIsFile,
     PathJoin,
+    PathListFiles,
+    PathListPaths,
     PathNormalize,
     PathParent,
+    PathReadString,
     PathResolveRelative,
     PathSafeRelative,
     PathStartsWith,
     PathToString,
     PathWithExtension,
+    PathWriteString,
     IntToString,
+    ListAll,
     ListAppend,
+    ListAny,
     ListClear,
     ListConsume,
+    ListContains,
     ListContainsValue,
+    ListCountWhere,
+    ListFilter,
+    ListFind,
     ListFirst,
+    ListFlatMap,
+    ListFold,
     ListGet,
+    ListGroupBy,
     ListIsEmpty,
     ListJoin,
     ListLast,
     ListLen,
+    ListMap,
     ListNew,
+    ListPartition,
+    ListPipeline,
     ListPop,
     ListPush,
     ListRemoveAt,
@@ -215,11 +317,17 @@ enum InterpreterEvalKind {
     ListSkip,
     ListSlice,
     ListSort,
+    ListSortBy,
+    ListSortWith,
     ListTake,
     ListToJsonStrings,
     ListToJsonValues,
+    ListTryFold,
     MapClear,
     MapContainsKey,
+    MapFilter,
+    MapFold,
+    MapForEach,
     MapGet,
     MapGetOrDefault,
     MapInsert,
@@ -227,14 +335,39 @@ enum InterpreterEvalKind {
     MapIsEmpty,
     MapKeys,
     MapLen,
+    MapMapValues,
+    MapMerge,
     MapNew,
     MapRemove,
+    MapTryFold,
     MapValues,
     HttpErrorMessage,
+    HttpGet,
+    HttpGetAsync,
+    HttpGetRetryAsync,
+    HttpGetTimeoutAsync,
+    HttpPostForm,
+    HttpPostFormAsync,
+    HttpPostJson,
+    HttpPostJsonAsync,
+    HttpPostJsonBearerRetryAsync,
+    HttpPostJsonRetryAsync,
+    HttpPostJsonTimeoutAsync,
+    HttpSendAsync,
+    HttpRequestJson,
+    HttpRequestWithHeader,
+    HttpRequestWithRetry,
+    HttpRequestWithTimeout,
     HttpResponseIsSuccess,
     HttpResponseLines,
     HttpResponseStatus,
     HttpResponseText,
+    ImageInspect,
+    ImageLoad,
+    ImageNormalize,
+    ImageResize,
+    ImageSave,
+    ImageSharpen,
     ImageCacheLen,
     ImageCacheNew,
     ImageCacheStore,
@@ -303,12 +436,18 @@ enum InterpreterEvalKind {
     JsonValue,
     JsonValues,
     JsonErrorMessage,
+    OptionAndThen,
+    OptionFilter,
     OptionIsNone,
     OptionIsSome,
+    OptionMap,
     OptionOkOr,
     OptionOr,
     OptionUnwrapOr,
+    OptionUnwrapOrElse,
+    OrdCompare,
     OsClose,
+    PatchApplyText,
     PersistentMapClear,
     PersistentMapContainsKey,
     PersistentMapGet,
@@ -322,6 +461,29 @@ enum InterpreterEvalKind {
     PoolStatsCapacity,
     PoolStatsCreated,
     PoolStatsInUse,
+    PipelineCollect,
+    PipelineEach,
+    PipelineFilter,
+    PipelineMap,
+    PipelineTryMap,
+    ProcessRun,
+    ProcessRunAsync,
+    ProcessRunManyStdout,
+    ProcessRunManyStdoutAsync,
+    ProcessRunManyStdoutTimeout,
+    ProcessRunManyStdoutTimeoutAsync,
+    ProcessRunRequest,
+    ProcessRunRequestAsync,
+    ProcessRunRequestCancellableAsync,
+    ProcessRunStdout,
+    ProcessRunStdoutAsync,
+    ProcessRunStdoutTimeout,
+    ProcessRunStdoutTimeoutAsync,
+    ProcessRunTimeout,
+    ProcessRunTimeoutAsync,
+    ProcessStream,
+    ResourcePoolDiscard,
+    ResourcePoolStats,
     RowBufferNew,
     RowFieldString,
     RegexCaptures,
@@ -331,6 +493,10 @@ enum InterpreterEvalKind {
     RegexIsMatch,
     RegexReplaceAll,
     RegexSplit,
+    ReceiverClose,
+    ReceiverIntoStream,
+    ReceiverRecv,
+    ReceiverRecvCancellable,
     RequestNew,
     RequestPath,
     ResponseBody,
@@ -338,14 +504,19 @@ enum InterpreterEvalKind {
     ResponseStatus,
     ResultErr,
     ResultErrMessage,
+    ResultAndThen,
     ResultIsErr,
     ResultIsOk,
+    ResultMap,
+    ResultMapError,
     ResultOk,
     ResultUnwrapOr,
+    ResultUnwrapOrElse,
     RuleLoaderLoadRules,
     SetClear,
     SetContains,
     SetDifference,
+    SetForEach,
     SetInsert,
     SetIntersection,
     SetIsEmpty,
@@ -355,6 +526,9 @@ enum InterpreterEvalKind {
     SetRemove,
     SetToList,
     SetUnion,
+    SenderClose,
+    SenderSend,
+    SenderSendCancellable,
     SortedMapClear,
     SortedMapContainsKey,
     SortedMapGet,
@@ -414,15 +588,32 @@ enum InterpreterEvalKind {
     StringSafeRelative,
     StringToPath,
     StringToUrl,
+    StreamCollectList,
+    StreamFromList,
+    StreamNext,
+    TcpConnect,
     TcpErrorMessage,
+    TcpStreamRead,
+    TcpStreamShutdown,
+    TcpStreamWrite,
+    TcpStreamWriteAll,
     TempDirKeep,
     TempDirNew,
     TempDirNewIn,
     TempDirPath,
+    TimerSleep,
+    TimerSleepCancellable,
+    TimerSleepUntil,
     TomlParseFile,
     UrlFromString,
     UrlToString,
+    WebSocketClose,
+    WebSocketConnect,
     WebSocketErrorMessage,
+    WebSocketRecvBytes,
+    WebSocketRecvText,
+    WebSocketSendBytes,
+    WebSocketSendText,
     WorkspaceResolve,
     YamlParse,
     YamlParseFile,
@@ -639,6 +830,24 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::CacheLookup,
     },
     InterpreterIntrinsicSpec {
+        namespace: "Channel",
+        name: "bounded",
+        variant: "ChannelBounded",
+        eval_kind: InterpreterEvalKind::ChannelBounded,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Channel",
+        name: "receiver",
+        variant: "ChannelReceiver",
+        eval_kind: InterpreterEvalKind::ChannelReceiver,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Channel",
+        name: "sender",
+        variant: "ChannelSender",
+        eval_kind: InterpreterEvalKind::ChannelSender,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "ChannelError",
         name: "message",
         variant: "ChannelErrorMessage",
@@ -693,6 +902,42 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::CharToString,
     },
     InterpreterIntrinsicSpec {
+        namespace: "CancellationSource",
+        name: "cancel",
+        variant: "CancellationSourceCancel",
+        eval_kind: InterpreterEvalKind::CancellationSourceCancel,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "CancellationSource",
+        name: "new",
+        variant: "CancellationSourceNew",
+        eval_kind: InterpreterEvalKind::CancellationSourceNew,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "CancellationSource",
+        name: "token",
+        variant: "CancellationSourceToken",
+        eval_kind: InterpreterEvalKind::CancellationSourceToken,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "CancellationToken",
+        name: "is_cancelled",
+        variant: "CancellationTokenIsCancelled",
+        eval_kind: InterpreterEvalKind::CancellationTokenIsCancelled,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Clock",
+        name: "now",
+        variant: "ClockNow",
+        eval_kind: InterpreterEvalKind::ClockNow,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Clock",
+        name: "system_unix_ms",
+        variant: "ClockSystemUnixMs",
+        eval_kind: InterpreterEvalKind::ClockSystemUnixMs,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "Config",
         name: "load",
         variant: "ConfigLoad",
@@ -733,6 +978,30 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "replace",
         variant: "ConfigStoreReplace",
         eval_kind: InterpreterEvalKind::ConfigStoreReplace,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Csv",
+        name: "open_read",
+        variant: "CsvOpenRead",
+        eval_kind: InterpreterEvalKind::CsvOpenRead,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Csv",
+        name: "parse_row",
+        variant: "CsvParseRow",
+        eval_kind: InterpreterEvalKind::CsvParseRow,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Csv",
+        name: "read_into",
+        variant: "CsvReadInto",
+        eval_kind: InterpreterEvalKind::CsvReadInto,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Csv",
+        name: "rows",
+        variant: "CsvRows",
+        eval_kind: InterpreterEvalKind::CsvRows,
     },
     InterpreterIntrinsicSpec {
         namespace: "Deque",
@@ -807,6 +1076,144 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::CounterValue,
     },
     InterpreterIntrinsicSpec {
+        namespace: "Deadline",
+        name: "after",
+        variant: "DeadlineAfter",
+        eval_kind: InterpreterEvalKind::DeadlineAfter,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Deadline",
+        name: "after_ms",
+        variant: "DeadlineAfterMs",
+        eval_kind: InterpreterEvalKind::DeadlineAfterMs,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Deadline",
+        name: "is_expired",
+        variant: "DeadlineIsExpired",
+        eval_kind: InterpreterEvalKind::DeadlineIsExpired,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Deadline",
+        name: "remaining_ms",
+        variant: "DeadlineRemainingMs",
+        eval_kind: InterpreterEvalKind::DeadlineRemainingMs,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Db",
+        name: "close",
+        variant: "DbClose",
+        eval_kind: InterpreterEvalKind::DbClose,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "DbConnection",
+        name: "open",
+        variant: "DbConnectionOpen",
+        eval_kind: InterpreterEvalKind::DbConnectionOpen,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "DbConnection",
+        name: "query",
+        variant: "DbConnectionQuery",
+        eval_kind: InterpreterEvalKind::DbConnectionQuery,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "DbConnection",
+        name: "try_open",
+        variant: "DbConnectionTryOpen",
+        eval_kind: InterpreterEvalKind::DbConnectionTryOpen,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Directory",
+        name: "copy_file",
+        variant: "DirectoryCopyFile",
+        eval_kind: InterpreterEvalKind::DirectoryCopyFile,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Directory",
+        name: "create",
+        variant: "DirectoryCreate",
+        eval_kind: InterpreterEvalKind::DirectoryCreate,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Directory",
+        name: "create_all",
+        variant: "DirectoryCreateAll",
+        eval_kind: InterpreterEvalKind::DirectoryCreateAll,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Directory",
+        name: "create_dir_all",
+        variant: "DirectoryCreateDirAll",
+        eval_kind: InterpreterEvalKind::DirectoryCreateDirAll,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Directory",
+        name: "exists",
+        variant: "DirectoryExists",
+        eval_kind: InterpreterEvalKind::DirectoryExists,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Directory",
+        name: "is_dir",
+        variant: "DirectoryIsDir",
+        eval_kind: InterpreterEvalKind::DirectoryIsDir,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Directory",
+        name: "is_file",
+        variant: "DirectoryIsFile",
+        eval_kind: InterpreterEvalKind::DirectoryIsFile,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Directory",
+        name: "list_files",
+        variant: "DirectoryListFiles",
+        eval_kind: InterpreterEvalKind::DirectoryListFiles,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Directory",
+        name: "list_paths",
+        variant: "DirectoryListPaths",
+        eval_kind: InterpreterEvalKind::DirectoryListPaths,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Directory",
+        name: "metadata",
+        variant: "DirectoryMetadata",
+        eval_kind: InterpreterEvalKind::DirectoryMetadata,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Directory",
+        name: "read_string",
+        variant: "DirectoryReadString",
+        eval_kind: InterpreterEvalKind::DirectoryReadString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Directory",
+        name: "remove_dir_all",
+        variant: "DirectoryRemoveDirAll",
+        eval_kind: InterpreterEvalKind::DirectoryRemoveDirAll,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Directory",
+        name: "remove_file",
+        variant: "DirectoryRemoveFile",
+        eval_kind: InterpreterEvalKind::DirectoryRemoveFile,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Directory",
+        name: "rename",
+        variant: "DirectoryRename",
+        eval_kind: InterpreterEvalKind::DirectoryRename,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Directory",
+        name: "write_string",
+        variant: "DirectoryWriteString",
+        eval_kind: InterpreterEvalKind::DirectoryWriteString,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "Diff",
         name: "unified",
         variant: "DiffUnified",
@@ -843,10 +1250,280 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::DurationSeconds,
     },
     InterpreterIntrinsicSpec {
+        namespace: "Environment",
+        name: "bind_function",
+        variant: "EnvironmentBindFunction",
+        eval_kind: InterpreterEvalKind::EnvironmentBindFunction,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Environment",
+        name: "child",
+        variant: "EnvironmentChild",
+        eval_kind: InterpreterEvalKind::EnvironmentChild,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Environment",
+        name: "has_function",
+        variant: "EnvironmentHasFunction",
+        eval_kind: InterpreterEvalKind::EnvironmentHasFunction,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Environment",
+        name: "has_parent",
+        variant: "EnvironmentHasParent",
+        eval_kind: InterpreterEvalKind::EnvironmentHasParent,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Environment",
+        name: "root",
+        variant: "EnvironmentRoot",
+        eval_kind: InterpreterEvalKind::EnvironmentRoot,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Env",
+        name: "current_dir",
+        variant: "EnvCurrentDir",
+        eval_kind: InterpreterEvalKind::EnvCurrentDir,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Env",
+        name: "get",
+        variant: "EnvGet",
+        eval_kind: InterpreterEvalKind::EnvGet,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Env",
+        name: "get_or_default",
+        variant: "EnvGetOrDefault",
+        eval_kind: InterpreterEvalKind::EnvGetOrDefault,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Env",
+        name: "home_dir",
+        variant: "EnvHomeDir",
+        eval_kind: InterpreterEvalKind::EnvHomeDir,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Env",
+        name: "run_workspace_root",
+        variant: "EnvRunWorkspaceRoot",
+        eval_kind: InterpreterEvalKind::EnvRunWorkspaceRoot,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Env",
+        name: "set",
+        variant: "EnvSet",
+        eval_kind: InterpreterEvalKind::EnvSet,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Env",
+        name: "set_current_dir",
+        variant: "EnvSetCurrentDir",
+        eval_kind: InterpreterEvalKind::EnvSetCurrentDir,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Env",
+        name: "temp_dir",
+        variant: "EnvTempDir",
+        eval_kind: InterpreterEvalKind::EnvTempDir,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "append_bytes",
+        variant: "FileAppendBytes",
+        eval_kind: InterpreterEvalKind::FileAppendBytes,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "append_string",
+        variant: "FileAppendString",
+        eval_kind: InterpreterEvalKind::FileAppendString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "bytes_stream",
+        variant: "FileBytesStream",
+        eval_kind: InterpreterEvalKind::FileBytesStream,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "exists",
+        variant: "FileExists",
+        eval_kind: InterpreterEvalKind::FileExists,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "open",
+        variant: "FileOpen",
+        eval_kind: InterpreterEvalKind::FileOpen,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "open_read",
+        variant: "FileOpenRead",
+        eval_kind: InterpreterEvalKind::FileOpenRead,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "open_write",
+        variant: "FileOpenWrite",
+        eval_kind: InterpreterEvalKind::FileOpenWrite,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "read_all",
+        variant: "FileReadAll",
+        eval_kind: InterpreterEvalKind::FileReadAll,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "read_all_async",
+        variant: "FileReadAllAsync",
+        eval_kind: InterpreterEvalKind::FileReadAllAsync,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "read_all_string",
+        variant: "FileReadAllString",
+        eval_kind: InterpreterEvalKind::FileReadAllString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "read_all_string_async",
+        variant: "FileReadAllStringAsync",
+        eval_kind: InterpreterEvalKind::FileReadAllStringAsync,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "read_bytes",
+        variant: "FileReadBytes",
+        eval_kind: InterpreterEvalKind::FileReadBytes,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "read_into",
+        variant: "FileReadInto",
+        eval_kind: InterpreterEvalKind::FileReadInto,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "read_string",
+        variant: "FileReadString",
+        eval_kind: InterpreterEvalKind::FileReadString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "remove",
+        variant: "FileRemove",
+        eval_kind: InterpreterEvalKind::FileRemove,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "write",
+        variant: "FileWrite",
+        eval_kind: InterpreterEvalKind::FileWrite,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "write_async",
+        variant: "FileWriteAsync",
+        eval_kind: InterpreterEvalKind::FileWriteAsync,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "write_atomic",
+        variant: "FileWriteAtomic",
+        eval_kind: InterpreterEvalKind::FileWriteAtomic,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "write_bytes",
+        variant: "FileWriteBytes",
+        eval_kind: InterpreterEvalKind::FileWriteBytes,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "write_bytes_view",
+        variant: "FileWriteBytesView",
+        eval_kind: InterpreterEvalKind::FileWriteBytesView,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "write_buffer",
+        variant: "FileWriteBuffer",
+        eval_kind: InterpreterEvalKind::FileWriteBuffer,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "write_buffer_view",
+        variant: "FileWriteBufferView",
+        eval_kind: InterpreterEvalKind::FileWriteBufferView,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "write_string",
+        variant: "FileWriteString",
+        eval_kind: InterpreterEvalKind::FileWriteString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "write_string_async",
+        variant: "FileWriteStringAsync",
+        eval_kind: InterpreterEvalKind::FileWriteStringAsync,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "File",
+        name: "write_string_to_path",
+        variant: "FileWriteStringToPath",
+        eval_kind: InterpreterEvalKind::FileWriteStringToPath,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "FileError",
         name: "message",
         variant: "FileErrorMessage",
         eval_kind: InterpreterEvalKind::FileErrorMessage,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "FalliblePipeline",
+        name: "collect",
+        variant: "FalliblePipelineCollect",
+        eval_kind: InterpreterEvalKind::FalliblePipelineCollect,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "FalliblePipeline",
+        name: "each",
+        variant: "FalliblePipelineEach",
+        eval_kind: InterpreterEvalKind::FalliblePipelineEach,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "FalliblePipeline",
+        name: "filter",
+        variant: "FalliblePipelineFilter",
+        eval_kind: InterpreterEvalKind::FalliblePipelineFilter,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "FalliblePipeline",
+        name: "map",
+        variant: "FalliblePipelineMap",
+        eval_kind: InterpreterEvalKind::FalliblePipelineMap,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "FalliblePipeline",
+        name: "try_map",
+        variant: "FalliblePipelineTryMap",
+        eval_kind: InterpreterEvalKind::FalliblePipelineTryMap,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "FunctionObject",
+        name: "has_closure",
+        variant: "FunctionObjectHasClosure",
+        eval_kind: InterpreterEvalKind::FunctionObjectHasClosure,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "FunctionObject",
+        name: "new",
+        variant: "FunctionObjectNew",
+        eval_kind: InterpreterEvalKind::FunctionObjectNew,
     },
     InterpreterIntrinsicSpec {
         namespace: "GlobalConfig",
@@ -874,9 +1551,21 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
     },
     InterpreterIntrinsicSpec {
         namespace: "Hash",
+        name: "sha256_file",
+        variant: "HashSha256File",
+        eval_kind: InterpreterEvalKind::HashSha256File,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Hash",
         name: "sha256_string",
         variant: "HashSha256String",
         eval_kind: InterpreterEvalKind::HashSha256String,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Instant",
+        name: "elapsed",
+        variant: "InstantElapsed",
+        eval_kind: InterpreterEvalKind::InstantElapsed,
     },
     InterpreterIntrinsicSpec {
         namespace: "Int",
@@ -889,6 +1578,12 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "extension",
         variant: "PathExtension",
         eval_kind: InterpreterEvalKind::PathExtension,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Path",
+        name: "exists",
+        variant: "PathExists",
+        eval_kind: InterpreterEvalKind::PathExists,
     },
     InterpreterIntrinsicSpec {
         namespace: "Path",
@@ -910,9 +1605,33 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
     },
     InterpreterIntrinsicSpec {
         namespace: "Path",
+        name: "is_dir",
+        variant: "PathIsDir",
+        eval_kind: InterpreterEvalKind::PathIsDir,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Path",
+        name: "is_file",
+        variant: "PathIsFile",
+        eval_kind: InterpreterEvalKind::PathIsFile,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Path",
         name: "join",
         variant: "PathJoin",
         eval_kind: InterpreterEvalKind::PathJoin,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Path",
+        name: "list_files",
+        variant: "PathListFiles",
+        eval_kind: InterpreterEvalKind::PathListFiles,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Path",
+        name: "list_paths",
+        variant: "PathListPaths",
+        eval_kind: InterpreterEvalKind::PathListPaths,
     },
     InterpreterIntrinsicSpec {
         namespace: "Path",
@@ -925,6 +1644,12 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "parent",
         variant: "PathParent",
         eval_kind: InterpreterEvalKind::PathParent,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Path",
+        name: "read_string",
+        variant: "PathReadString",
+        eval_kind: InterpreterEvalKind::PathReadString,
     },
     InterpreterIntrinsicSpec {
         namespace: "Path",
@@ -957,10 +1682,28 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::PathWithExtension,
     },
     InterpreterIntrinsicSpec {
+        namespace: "Path",
+        name: "write_string",
+        variant: "PathWriteString",
+        eval_kind: InterpreterEvalKind::PathWriteString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "all",
+        variant: "ListAll",
+        eval_kind: InterpreterEvalKind::ListAll,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "List",
         name: "append",
         variant: "ListAppend",
         eval_kind: InterpreterEvalKind::ListAppend,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "any",
+        variant: "ListAny",
+        eval_kind: InterpreterEvalKind::ListAny,
     },
     InterpreterIntrinsicSpec {
         namespace: "List",
@@ -976,9 +1719,33 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
     },
     InterpreterIntrinsicSpec {
         namespace: "List",
+        name: "contains",
+        variant: "ListContains",
+        eval_kind: InterpreterEvalKind::ListContains,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
         name: "contains_value",
         variant: "ListContainsValue",
         eval_kind: InterpreterEvalKind::ListContainsValue,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "count_where",
+        variant: "ListCountWhere",
+        eval_kind: InterpreterEvalKind::ListCountWhere,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "filter",
+        variant: "ListFilter",
+        eval_kind: InterpreterEvalKind::ListFilter,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "find",
+        variant: "ListFind",
+        eval_kind: InterpreterEvalKind::ListFind,
     },
     InterpreterIntrinsicSpec {
         namespace: "List",
@@ -988,9 +1755,27 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
     },
     InterpreterIntrinsicSpec {
         namespace: "List",
+        name: "flat_map",
+        variant: "ListFlatMap",
+        eval_kind: InterpreterEvalKind::ListFlatMap,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "fold",
+        variant: "ListFold",
+        eval_kind: InterpreterEvalKind::ListFold,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
         name: "get",
         variant: "ListGet",
         eval_kind: InterpreterEvalKind::ListGet,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "group_by",
+        variant: "ListGroupBy",
+        eval_kind: InterpreterEvalKind::ListGroupBy,
     },
     InterpreterIntrinsicSpec {
         namespace: "List",
@@ -1018,9 +1803,27 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
     },
     InterpreterIntrinsicSpec {
         namespace: "List",
+        name: "map",
+        variant: "ListMap",
+        eval_kind: InterpreterEvalKind::ListMap,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
         name: "new",
         variant: "ListNew",
         eval_kind: InterpreterEvalKind::ListNew,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "partition",
+        variant: "ListPartition",
+        eval_kind: InterpreterEvalKind::ListPartition,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "pipeline",
+        variant: "ListPipeline",
+        eval_kind: InterpreterEvalKind::ListPipeline,
     },
     InterpreterIntrinsicSpec {
         namespace: "List",
@@ -1072,6 +1875,18 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
     },
     InterpreterIntrinsicSpec {
         namespace: "List",
+        name: "sort_by",
+        variant: "ListSortBy",
+        eval_kind: InterpreterEvalKind::ListSortBy,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "sort_with",
+        variant: "ListSortWith",
+        eval_kind: InterpreterEvalKind::ListSortWith,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "List",
         name: "take",
         variant: "ListTake",
         eval_kind: InterpreterEvalKind::ListTake,
@@ -1089,6 +1904,12 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::ListToJsonValues,
     },
     InterpreterIntrinsicSpec {
+        namespace: "List",
+        name: "try_fold",
+        variant: "ListTryFold",
+        eval_kind: InterpreterEvalKind::ListTryFold,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "Map",
         name: "clear",
         variant: "MapClear",
@@ -1099,6 +1920,24 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "contains_key",
         variant: "MapContainsKey",
         eval_kind: InterpreterEvalKind::MapContainsKey,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Map",
+        name: "filter",
+        variant: "MapFilter",
+        eval_kind: InterpreterEvalKind::MapFilter,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Map",
+        name: "fold",
+        variant: "MapFold",
+        eval_kind: InterpreterEvalKind::MapFold,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Map",
+        name: "for_each",
+        variant: "MapForEach",
+        eval_kind: InterpreterEvalKind::MapForEach,
     },
     InterpreterIntrinsicSpec {
         namespace: "Map",
@@ -1144,6 +1983,18 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
     },
     InterpreterIntrinsicSpec {
         namespace: "Map",
+        name: "map_values",
+        variant: "MapMapValues",
+        eval_kind: InterpreterEvalKind::MapMapValues,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Map",
+        name: "merge",
+        variant: "MapMerge",
+        eval_kind: InterpreterEvalKind::MapMerge,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Map",
         name: "new",
         variant: "MapNew",
         eval_kind: InterpreterEvalKind::MapNew,
@@ -1156,6 +2007,12 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
     },
     InterpreterIntrinsicSpec {
         namespace: "Map",
+        name: "try_fold",
+        variant: "MapTryFold",
+        eval_kind: InterpreterEvalKind::MapTryFold,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Map",
         name: "values",
         variant: "MapValues",
         eval_kind: InterpreterEvalKind::MapValues,
@@ -1165,6 +2022,102 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "message",
         variant: "HttpErrorMessage",
         eval_kind: InterpreterEvalKind::HttpErrorMessage,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Http",
+        name: "get",
+        variant: "HttpGet",
+        eval_kind: InterpreterEvalKind::HttpGet,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Http",
+        name: "get_async",
+        variant: "HttpGetAsync",
+        eval_kind: InterpreterEvalKind::HttpGetAsync,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Http",
+        name: "get_retry_async",
+        variant: "HttpGetRetryAsync",
+        eval_kind: InterpreterEvalKind::HttpGetRetryAsync,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Http",
+        name: "get_timeout_async",
+        variant: "HttpGetTimeoutAsync",
+        eval_kind: InterpreterEvalKind::HttpGetTimeoutAsync,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Http",
+        name: "post_form",
+        variant: "HttpPostForm",
+        eval_kind: InterpreterEvalKind::HttpPostForm,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Http",
+        name: "post_form_async",
+        variant: "HttpPostFormAsync",
+        eval_kind: InterpreterEvalKind::HttpPostFormAsync,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Http",
+        name: "post_json",
+        variant: "HttpPostJson",
+        eval_kind: InterpreterEvalKind::HttpPostJson,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Http",
+        name: "post_json_async",
+        variant: "HttpPostJsonAsync",
+        eval_kind: InterpreterEvalKind::HttpPostJsonAsync,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Http",
+        name: "post_json_bearer_retry_async",
+        variant: "HttpPostJsonBearerRetryAsync",
+        eval_kind: InterpreterEvalKind::HttpPostJsonBearerRetryAsync,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Http",
+        name: "post_json_retry_async",
+        variant: "HttpPostJsonRetryAsync",
+        eval_kind: InterpreterEvalKind::HttpPostJsonRetryAsync,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Http",
+        name: "post_json_timeout_async",
+        variant: "HttpPostJsonTimeoutAsync",
+        eval_kind: InterpreterEvalKind::HttpPostJsonTimeoutAsync,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Http",
+        name: "send_async",
+        variant: "HttpSendAsync",
+        eval_kind: InterpreterEvalKind::HttpSendAsync,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "HttpRequest",
+        name: "json",
+        variant: "HttpRequestJson",
+        eval_kind: InterpreterEvalKind::HttpRequestJson,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "HttpRequest",
+        name: "with_header",
+        variant: "HttpRequestWithHeader",
+        eval_kind: InterpreterEvalKind::HttpRequestWithHeader,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "HttpRequest",
+        name: "with_retry",
+        variant: "HttpRequestWithRetry",
+        eval_kind: InterpreterEvalKind::HttpRequestWithRetry,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "HttpRequest",
+        name: "with_timeout",
+        variant: "HttpRequestWithTimeout",
+        eval_kind: InterpreterEvalKind::HttpRequestWithTimeout,
     },
     InterpreterIntrinsicSpec {
         namespace: "HttpResponse",
@@ -1189,6 +2142,42 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "text",
         variant: "HttpResponseText",
         eval_kind: InterpreterEvalKind::HttpResponseText,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Image",
+        name: "inspect",
+        variant: "ImageInspect",
+        eval_kind: InterpreterEvalKind::ImageInspect,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Image",
+        name: "load",
+        variant: "ImageLoad",
+        eval_kind: InterpreterEvalKind::ImageLoad,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Image",
+        name: "normalize",
+        variant: "ImageNormalize",
+        eval_kind: InterpreterEvalKind::ImageNormalize,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Image",
+        name: "resize",
+        variant: "ImageResize",
+        eval_kind: InterpreterEvalKind::ImageResize,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Image",
+        name: "save",
+        variant: "ImageSave",
+        eval_kind: InterpreterEvalKind::ImageSave,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Image",
+        name: "sharpen",
+        variant: "ImageSharpen",
+        eval_kind: InterpreterEvalKind::ImageSharpen,
     },
     InterpreterIntrinsicSpec {
         namespace: "ImageCache",
@@ -1630,6 +2619,18 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
     },
     InterpreterIntrinsicSpec {
         namespace: "Option",
+        name: "and_then",
+        variant: "OptionAndThen",
+        eval_kind: InterpreterEvalKind::OptionAndThen,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Option",
+        name: "filter",
+        variant: "OptionFilter",
+        eval_kind: InterpreterEvalKind::OptionFilter,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Option",
         name: "is_none",
         variant: "OptionIsNone",
         eval_kind: InterpreterEvalKind::OptionIsNone,
@@ -1639,6 +2640,12 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "is_some",
         variant: "OptionIsSome",
         eval_kind: InterpreterEvalKind::OptionIsSome,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Option",
+        name: "map",
+        variant: "OptionMap",
+        eval_kind: InterpreterEvalKind::OptionMap,
     },
     InterpreterIntrinsicSpec {
         namespace: "Option",
@@ -1659,10 +2666,28 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::OptionUnwrapOr,
     },
     InterpreterIntrinsicSpec {
+        namespace: "Option",
+        name: "unwrap_or_else",
+        variant: "OptionUnwrapOrElse",
+        eval_kind: InterpreterEvalKind::OptionUnwrapOrElse,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Ord",
+        name: "compare",
+        variant: "OrdCompare",
+        eval_kind: InterpreterEvalKind::OrdCompare,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "OS",
         name: "close",
         variant: "OsClose",
         eval_kind: InterpreterEvalKind::OsClose,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Patch",
+        name: "apply_text",
+        variant: "PatchApplyText",
+        eval_kind: InterpreterEvalKind::PatchApplyText,
     },
     InterpreterIntrinsicSpec {
         namespace: "PersistentMap",
@@ -1743,6 +2768,144 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::PoolStatsInUse,
     },
     InterpreterIntrinsicSpec {
+        namespace: "Pipeline",
+        name: "collect",
+        variant: "PipelineCollect",
+        eval_kind: InterpreterEvalKind::PipelineCollect,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Pipeline",
+        name: "each",
+        variant: "PipelineEach",
+        eval_kind: InterpreterEvalKind::PipelineEach,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Pipeline",
+        name: "filter",
+        variant: "PipelineFilter",
+        eval_kind: InterpreterEvalKind::PipelineFilter,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Pipeline",
+        name: "map",
+        variant: "PipelineMap",
+        eval_kind: InterpreterEvalKind::PipelineMap,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Pipeline",
+        name: "try_map",
+        variant: "PipelineTryMap",
+        eval_kind: InterpreterEvalKind::PipelineTryMap,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Process",
+        name: "run",
+        variant: "ProcessRun",
+        eval_kind: InterpreterEvalKind::ProcessRun,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Process",
+        name: "run_async",
+        variant: "ProcessRunAsync",
+        eval_kind: InterpreterEvalKind::ProcessRunAsync,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Process",
+        name: "run_many_stdout",
+        variant: "ProcessRunManyStdout",
+        eval_kind: InterpreterEvalKind::ProcessRunManyStdout,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Process",
+        name: "run_many_stdout_async",
+        variant: "ProcessRunManyStdoutAsync",
+        eval_kind: InterpreterEvalKind::ProcessRunManyStdoutAsync,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Process",
+        name: "run_many_stdout_timeout",
+        variant: "ProcessRunManyStdoutTimeout",
+        eval_kind: InterpreterEvalKind::ProcessRunManyStdoutTimeout,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Process",
+        name: "run_many_stdout_timeout_async",
+        variant: "ProcessRunManyStdoutTimeoutAsync",
+        eval_kind: InterpreterEvalKind::ProcessRunManyStdoutTimeoutAsync,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Process",
+        name: "run_request",
+        variant: "ProcessRunRequest",
+        eval_kind: InterpreterEvalKind::ProcessRunRequest,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Process",
+        name: "run_request_async",
+        variant: "ProcessRunRequestAsync",
+        eval_kind: InterpreterEvalKind::ProcessRunRequestAsync,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Process",
+        name: "run_request_cancellable_async",
+        variant: "ProcessRunRequestCancellableAsync",
+        eval_kind: InterpreterEvalKind::ProcessRunRequestCancellableAsync,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Process",
+        name: "run_stdout",
+        variant: "ProcessRunStdout",
+        eval_kind: InterpreterEvalKind::ProcessRunStdout,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Process",
+        name: "run_stdout_async",
+        variant: "ProcessRunStdoutAsync",
+        eval_kind: InterpreterEvalKind::ProcessRunStdoutAsync,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Process",
+        name: "run_stdout_timeout",
+        variant: "ProcessRunStdoutTimeout",
+        eval_kind: InterpreterEvalKind::ProcessRunStdoutTimeout,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Process",
+        name: "run_stdout_timeout_async",
+        variant: "ProcessRunStdoutTimeoutAsync",
+        eval_kind: InterpreterEvalKind::ProcessRunStdoutTimeoutAsync,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Process",
+        name: "run_timeout",
+        variant: "ProcessRunTimeout",
+        eval_kind: InterpreterEvalKind::ProcessRunTimeout,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Process",
+        name: "run_timeout_async",
+        variant: "ProcessRunTimeoutAsync",
+        eval_kind: InterpreterEvalKind::ProcessRunTimeoutAsync,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Process",
+        name: "stream",
+        variant: "ProcessStream",
+        eval_kind: InterpreterEvalKind::ProcessStream,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "ResourcePool",
+        name: "discard",
+        variant: "ResourcePoolDiscard",
+        eval_kind: InterpreterEvalKind::ResourcePoolDiscard,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "ResourcePool",
+        name: "stats",
+        variant: "ResourcePoolStats",
+        eval_kind: InterpreterEvalKind::ResourcePoolStats,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "RowBuffer",
         name: "new",
         variant: "RowBufferNew",
@@ -1797,6 +2960,30 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::RegexErrorMessage,
     },
     InterpreterIntrinsicSpec {
+        namespace: "Receiver",
+        name: "close",
+        variant: "ReceiverClose",
+        eval_kind: InterpreterEvalKind::ReceiverClose,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Receiver",
+        name: "into_stream",
+        variant: "ReceiverIntoStream",
+        eval_kind: InterpreterEvalKind::ReceiverIntoStream,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Receiver",
+        name: "recv",
+        variant: "ReceiverRecv",
+        eval_kind: InterpreterEvalKind::ReceiverRecv,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Receiver",
+        name: "recv_cancellable",
+        variant: "ReceiverRecvCancellable",
+        eval_kind: InterpreterEvalKind::ReceiverRecvCancellable,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "Request",
         name: "new",
         variant: "RequestNew",
@@ -1840,6 +3027,12 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
     },
     InterpreterIntrinsicSpec {
         namespace: "Result",
+        name: "and_then",
+        variant: "ResultAndThen",
+        eval_kind: InterpreterEvalKind::ResultAndThen,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Result",
         name: "is_err",
         variant: "ResultIsErr",
         eval_kind: InterpreterEvalKind::ResultIsErr,
@@ -1852,6 +3045,18 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
     },
     InterpreterIntrinsicSpec {
         namespace: "Result",
+        name: "map",
+        variant: "ResultMap",
+        eval_kind: InterpreterEvalKind::ResultMap,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Result",
+        name: "map_error",
+        variant: "ResultMapError",
+        eval_kind: InterpreterEvalKind::ResultMapError,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Result",
         name: "ok",
         variant: "ResultOk",
         eval_kind: InterpreterEvalKind::ResultOk,
@@ -1861,6 +3066,12 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "unwrap_or",
         variant: "ResultUnwrapOr",
         eval_kind: InterpreterEvalKind::ResultUnwrapOr,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Result",
+        name: "unwrap_or_else",
+        variant: "ResultUnwrapOrElse",
+        eval_kind: InterpreterEvalKind::ResultUnwrapOrElse,
     },
     InterpreterIntrinsicSpec {
         namespace: "RuleLoader",
@@ -1885,6 +3096,12 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "difference",
         variant: "SetDifference",
         eval_kind: InterpreterEvalKind::SetDifference,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Set",
+        name: "for_each",
+        variant: "SetForEach",
+        eval_kind: InterpreterEvalKind::SetForEach,
     },
     InterpreterIntrinsicSpec {
         namespace: "Set",
@@ -1939,6 +3156,24 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "union",
         variant: "SetUnion",
         eval_kind: InterpreterEvalKind::SetUnion,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Sender",
+        name: "close",
+        variant: "SenderClose",
+        eval_kind: InterpreterEvalKind::SenderClose,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Sender",
+        name: "send",
+        variant: "SenderSend",
+        eval_kind: InterpreterEvalKind::SenderSend,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Sender",
+        name: "send_cancellable",
+        variant: "SenderSendCancellable",
+        eval_kind: InterpreterEvalKind::SenderSendCancellable,
     },
     InterpreterIntrinsicSpec {
         namespace: "SortedMap",
@@ -2301,10 +3536,58 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::StringToUrl,
     },
     InterpreterIntrinsicSpec {
+        namespace: "Stream",
+        name: "collect_list",
+        variant: "StreamCollectList",
+        eval_kind: InterpreterEvalKind::StreamCollectList,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Stream",
+        name: "from_list",
+        variant: "StreamFromList",
+        eval_kind: InterpreterEvalKind::StreamFromList,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Stream",
+        name: "next",
+        variant: "StreamNext",
+        eval_kind: InterpreterEvalKind::StreamNext,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Tcp",
+        name: "connect",
+        variant: "TcpConnect",
+        eval_kind: InterpreterEvalKind::TcpConnect,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "TcpError",
         name: "message",
         variant: "TcpErrorMessage",
         eval_kind: InterpreterEvalKind::TcpErrorMessage,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "TcpStream",
+        name: "read",
+        variant: "TcpStreamRead",
+        eval_kind: InterpreterEvalKind::TcpStreamRead,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "TcpStream",
+        name: "shutdown",
+        variant: "TcpStreamShutdown",
+        eval_kind: InterpreterEvalKind::TcpStreamShutdown,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "TcpStream",
+        name: "write",
+        variant: "TcpStreamWrite",
+        eval_kind: InterpreterEvalKind::TcpStreamWrite,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "TcpStream",
+        name: "write_all",
+        variant: "TcpStreamWriteAll",
+        eval_kind: InterpreterEvalKind::TcpStreamWriteAll,
     },
     InterpreterIntrinsicSpec {
         namespace: "TempDir",
@@ -2331,6 +3614,24 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::TempDirPath,
     },
     InterpreterIntrinsicSpec {
+        namespace: "Timer",
+        name: "sleep",
+        variant: "TimerSleep",
+        eval_kind: InterpreterEvalKind::TimerSleep,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Timer",
+        name: "sleep_cancellable",
+        variant: "TimerSleepCancellable",
+        eval_kind: InterpreterEvalKind::TimerSleepCancellable,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Timer",
+        name: "sleep_until",
+        variant: "TimerSleepUntil",
+        eval_kind: InterpreterEvalKind::TimerSleepUntil,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "Toml",
         name: "parse_file",
         variant: "TomlParseFile",
@@ -2347,6 +3648,42 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "to_string",
         variant: "UrlToString",
         eval_kind: InterpreterEvalKind::UrlToString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "WebSocket",
+        name: "close",
+        variant: "WebSocketClose",
+        eval_kind: InterpreterEvalKind::WebSocketClose,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "WebSocket",
+        name: "connect",
+        variant: "WebSocketConnect",
+        eval_kind: InterpreterEvalKind::WebSocketConnect,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "WebSocket",
+        name: "recv_bytes",
+        variant: "WebSocketRecvBytes",
+        eval_kind: InterpreterEvalKind::WebSocketRecvBytes,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "WebSocket",
+        name: "recv_text",
+        variant: "WebSocketRecvText",
+        eval_kind: InterpreterEvalKind::WebSocketRecvText,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "WebSocket",
+        name: "send_bytes",
+        variant: "WebSocketSendBytes",
+        eval_kind: InterpreterEvalKind::WebSocketSendBytes,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "WebSocket",
+        name: "send_text",
+        variant: "WebSocketSendText",
+        eval_kind: InterpreterEvalKind::WebSocketSendText,
     },
     InterpreterIntrinsicSpec {
         namespace: "WebSocketError",
@@ -2467,7 +3804,7 @@ fn ensure_interpreter_intrinsic_interfaces(root: &Path) -> Result<(), String> {
     for path in files {
         let source = fs::read_to_string(&path)
             .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-        functions.extend(collect_functions(&source));
+        functions.extend(collect_interpreter_interface_functions(&source));
     }
     for intrinsic in INTERPRETER_INTRINSICS {
         let signature = format!("{}.{}", intrinsic.namespace, intrinsic.name);
@@ -2494,19 +3831,62 @@ fn generated_interpreter_intrinsic_enum() -> String {
 }
 
 fn generated_interpreter_intrinsic_dispatch() -> String {
+    let mut by_namespace: BTreeMap<&str, Vec<&InterpreterIntrinsicSpec>> = BTreeMap::new();
+    for intrinsic in INTERPRETER_INTRINSICS {
+        by_namespace
+            .entry(intrinsic.namespace)
+            .or_default()
+            .push(intrinsic);
+    }
+
     let mut out = String::new();
     out.push_str(
         "fn eval_generated_runtime_intrinsic(\n    interpreter: &mut Interpreter<'_>,\n    intrinsic: InterpreterIntrinsic,\n    args: &[crate::hir::HirCallArg],\n) -> Result<Value, EvalError> {\n    match intrinsic {\n",
     );
-    for intrinsic in INTERPRETER_INTRINSICS {
-        out.push_str("        InterpreterIntrinsic::");
-        out.push_str(intrinsic.variant);
+    for (namespace, intrinsics) in &by_namespace {
+        out.push_str("        ");
+        for (index, intrinsic) in intrinsics.iter().enumerate() {
+            if index > 0 {
+                out.push_str("\n        | ");
+            }
+            out.push_str("InterpreterIntrinsic::");
+            out.push_str(intrinsic.variant);
+        }
         out.push_str(" => ");
-        out.push_str(eval_kind_body(intrinsic.eval_kind));
-        out.push_str(",\n");
+        out.push_str(&interpreter_intrinsic_helper_name(namespace));
+        out.push_str("(interpreter, intrinsic, args),\n");
     }
     out.push_str("    }\n}\n");
+
+    for (namespace, intrinsics) in by_namespace {
+        out.push('\n');
+        out.push_str("#[allow(unused_variables)]\nfn ");
+        out.push_str(&interpreter_intrinsic_helper_name(namespace));
+        out.push_str(
+            "(\n    interpreter: &mut Interpreter<'_>,\n    intrinsic: InterpreterIntrinsic,\n    args: &[crate::hir::HirCallArg],\n) -> Result<Value, EvalError> {\n    match intrinsic {\n",
+        );
+        for intrinsic in intrinsics {
+            out.push_str("        InterpreterIntrinsic::");
+            out.push_str(intrinsic.variant);
+            out.push_str(" => ");
+            out.push_str(eval_kind_body(intrinsic.eval_kind));
+            out.push_str(",\n");
+        }
+        out.push_str("        _ => unreachable!(\"generated interpreter intrinsic helper received mismatched namespace\"),\n    }\n}\n");
+    }
     out
+}
+
+fn interpreter_intrinsic_helper_name(namespace: &str) -> String {
+    let mut name = String::from("eval_generated_runtime_intrinsic_");
+    for ch in namespace.chars() {
+        if ch.is_ascii_alphanumeric() {
+            name.push(ch.to_ascii_lowercase());
+        } else {
+            name.push('_');
+        }
+    }
+    name
 }
 
 fn generated_interpreter_intrinsic_lookup() -> String {
@@ -2606,9 +3986,7 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::BytesViewToBytes => {
             "{\n            interpreter.eval_first_arg(args)\n        }"
         }
-        InterpreterEvalKind::CacheNew => {
-            "{\n            Ok(Value::Map(Vec::new()))\n        }"
-        }
+        InterpreterEvalKind::CacheNew => "{\n            Ok(Value::Map(Vec::new()))\n        }",
         InterpreterEvalKind::CacheGet => {
             "{\n            let cache = interpreter.eval_named_or_positional_arg(args, \"cache\", 0)?;\n            let bytes = expect_map(cache)?\n                .into_iter()\n                .find_map(|(_, value)| expect_string(value).ok())\n                .map(String::into_bytes)\n                .unwrap_or_default();\n            Ok(image_value(\n                bytes,\n                None,\n                None,\n                vec![\"cache-get\".to_string()],\n            ))\n        }"
         }
@@ -2617,6 +3995,15 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::CacheLookup => {
             "{\n            let cache = interpreter.eval_named_or_positional_arg(args, \"cache\", 0)?;\n            let key = interpreter.eval_named_or_positional_arg(args, \"key\", 1)?;\n            Ok(match map_get(&expect_map(cache)?, &key) {\n                Some(value) => value,\n                None => Value::String(String::new()),\n            })\n        }"
+        }
+        InterpreterEvalKind::ChannelBounded => {
+            "{\n            let capacity = interpreter.eval_named_or_positional_arg(args, \"capacity\", 0)?;\n            let capacity = expect_int(capacity)?;\n            Ok(result_value(if capacity <= 0 {\n                Err(channel_error(\"channel capacity must be positive\"))\n            } else {\n                let id = interpreter.next_channel_id;\n                interpreter.next_channel_id = interpreter.next_channel_id.saturating_add(1);\n                interpreter.channels.insert(id, InterpreterChannel::new(capacity as usize));\n                Ok(channel_value(id, capacity, false))\n            }))\n        }"
+        }
+        InterpreterEvalKind::ChannelSender => {
+            "{\n            let channel = interpreter.eval_named_or_positional_arg(args, \"channel\", 0)?;\n            let channel = expect_channel(channel)?;\n            let state = interpreter.channel_state_mut(channel.id)?;\n            state.senders = state.senders.saturating_add(1);\n            Ok(sender_value(channel.id, false))\n        }"
+        }
+        InterpreterEvalKind::ChannelReceiver => {
+            "{\n            let channel_name = interpreter.mut_arg_local_name(args, \"channel\", 0)?;\n            let mut channel = expect_channel(interpreter.lookup(channel_name)?)?;\n            let already_taken = interpreter\n                .channels\n                .get(&channel.id)\n                .map(|state| state.receiver_taken)\n                .unwrap_or(channel.receiver_taken);\n            Ok(result_value(if already_taken {\n                Err(channel_error(\"channel receiver already taken\"))\n            } else {\n                channel.receiver_taken = true;\n                interpreter.channel_state_mut(channel.id)?.receiver_taken = true;\n                interpreter.assign(channel_name, channel.to_value())?;\n                Ok(receiver_value(channel.id, false))\n            }))\n        }"
         }
         InterpreterEvalKind::ChannelErrorMessage => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            read_field(&value, \"message\")\n        }"
@@ -2645,6 +4032,24 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::CharToString => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(expect_char(value)?.to_string()))\n        }"
         }
+        InterpreterEvalKind::CancellationSourceCancel => {
+            "{\n            let source_name = interpreter.mut_arg_local_name(args, \"source\", 0)?;\n            let id = expect_cancellation_id(interpreter.lookup(source_name)?, \"CancellationSource\")?;\n            interpreter.cancellation_flags.insert(id, true);\n            interpreter.assign(source_name, cancellation_source_value(id))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::CancellationSourceNew => {
+            "{\n            let id = interpreter.next_cancellation_id;\n            interpreter.next_cancellation_id = interpreter.next_cancellation_id.saturating_add(1);\n            interpreter.cancellation_flags.insert(id, false);\n            Ok(cancellation_source_value(id))\n        }"
+        }
+        InterpreterEvalKind::CancellationSourceToken => {
+            "{\n            let source = interpreter.eval_named_or_positional_arg(args, \"source\", 0)?;\n            Ok(cancellation_token_value(expect_cancellation_id(\n                source,\n                \"CancellationSource\",\n            )?))\n        }"
+        }
+        InterpreterEvalKind::CancellationTokenIsCancelled => {
+            "{\n            let token = interpreter.eval_named_or_positional_arg(args, \"token\", 0)?;\n            let id = expect_cancellation_id(token, \"CancellationToken\")?;\n            Ok(Value::Bool(\n                interpreter.cancellation_flags.get(&id).copied().unwrap_or(false),\n            ))\n        }"
+        }
+        InterpreterEvalKind::ClockNow => {
+            "{\n            Ok(instant_value(clock_system_unix_ms()))\n        }"
+        }
+        InterpreterEvalKind::ClockSystemUnixMs => {
+            "{\n            Ok(Value::Int(clock_system_unix_ms()))\n        }"
+        }
         InterpreterEvalKind::ConfigLoad => {
             "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            Ok(result_value(\n                std::fs::read_to_string(expect_string(path)?)\n                    .map(|text| config_value(config_name_from_text(&text)))\n                    .map_err(config_error),\n            ))\n        }"
         }
@@ -2666,6 +4071,18 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::ConfigStoreReplace => {
             "{\n            let store_name = interpreter.mut_arg_local_name(args, \"store\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            interpreter.assign(\n                store_name,\n                config_store_value(expect_config_value_name(value)?),\n            )?;\n            Ok(Value::Unit)\n        }"
         }
+        InterpreterEvalKind::CsvOpenRead => {
+            "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            let path = expect_string(path)?;\n            Ok(result_value(\n                std::fs::File::open(&path)\n                    .map(|_| file_value(path, \"read\", 0))\n                    .map_err(csv_error_from_io),\n            ))\n        }"
+        }
+        InterpreterEvalKind::CsvParseRow => {
+            "{\n            let buffer = interpreter.eval_named_or_positional_arg(args, \"buffer\", 0)?;\n            Ok(result_value(csv_parse_row_value(&expect_row_buffer_bytes(\n                buffer,\n            )?)))\n        }"
+        }
+        InterpreterEvalKind::CsvReadInto => {
+            "{\n            let file_name = interpreter.mut_arg_local_name(args, \"file\", 0)?;\n            let buffer_name = interpreter.mut_arg_local_name(args, \"buffer\", 1)?;\n            let mut file = expect_file(interpreter.lookup(file_name)?)?;\n            let result = file_read_remaining(&mut file).map_err(csv_error_from_io);\n            interpreter.assign(file_name, file.to_value())?;\n            Ok(match result {\n                Ok(bytes) => {\n                    interpreter.assign(buffer_name, row_buffer_value(bytes))?;\n                    value_ok(Value::Unit)\n                }\n                Err(error) => value_err(error),\n            })\n        }"
+        }
+        InterpreterEvalKind::CsvRows => {
+            "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            let _buffer_size = interpreter.eval_named_or_positional_arg(args, \"buffer_size\", 1)?;\n            Ok(result_value(\n                csv_rows_stream_value(&expect_string(path)?).map_err(channel_error),\n            ))\n        }"
+        }
         InterpreterEvalKind::DequeClear => {
             "{\n            let deque_name = interpreter.mut_arg_local_name(args, \"deque\", 0)?;\n            interpreter.assign(deque_name, Value::List(Vec::new()))?;\n            Ok(Value::Unit)\n        }"
         }
@@ -2675,9 +4092,7 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::DequeLen => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Int(expect_list(value)?.len() as i64))\n        }"
         }
-        InterpreterEvalKind::DequeNew => {
-            "{\n            Ok(Value::List(Vec::new()))\n        }"
-        }
+        InterpreterEvalKind::DequeNew => "{\n            Ok(Value::List(Vec::new()))\n        }",
         InterpreterEvalKind::DequePopBack => {
             "{\n            let deque_name = interpreter.mut_arg_local_name(args, \"deque\", 0)?;\n            let mut deque = expect_list(interpreter.lookup(deque_name)?)?;\n            let value = deque.pop();\n            interpreter.assign(deque_name, Value::List(deque))?;\n            Ok(value_option(value, |value| value))\n        }"
         }
@@ -2702,6 +4117,90 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::CounterValue => {
             "{\n            let counter = interpreter.eval_named_or_positional_arg(args, \"counter\", 0)?;\n            Ok(Value::Int(expect_counter_value(counter)?))\n        }"
         }
+        InterpreterEvalKind::DeadlineAfter | InterpreterEvalKind::DeadlineAfterMs => {
+            "{\n            let ms = interpreter\n                .eval_named_or_positional_arg(args, \"ms\", 0)\n                .or_else(|_| interpreter.eval_named_or_positional_arg(args, \"duration\", 0))?;\n            Ok(deadline_value(deadline_after_ms(expect_int(ms)?)))\n        }"
+        }
+        InterpreterEvalKind::DeadlineIsExpired => {
+            "{\n            let deadline = interpreter.eval_named_or_positional_arg(args, \"deadline\", 0)?;\n            Ok(Value::Bool(\n                clock_system_unix_ms() >= expect_deadline_unix_ms(deadline)?,\n            ))\n        }"
+        }
+        InterpreterEvalKind::DeadlineRemainingMs => {
+            "{\n            let deadline = interpreter.eval_named_or_positional_arg(args, \"deadline\", 0)?;\n            Ok(Value::Int(\n                expect_deadline_unix_ms(deadline)?\n                    .saturating_sub(clock_system_unix_ms())\n                    .max(0),\n            ))\n        }"
+        }
+        InterpreterEvalKind::DbClose => {
+            "{\n            let fd = interpreter.eval_named_or_positional_arg(args, \"fd\", 0)?;\n            let _ = expect_int(fd)?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::DbConnectionOpen => {
+            "{\n            let url = interpreter.eval_named_or_positional_arg(args, \"url\", 0)?;\n            Ok(db_connection_value(expect_string(url)?, Vec::new()))\n        }"
+        }
+        InterpreterEvalKind::DbConnectionQuery => {
+            "{\n            let conn_name = interpreter.mut_arg_local_name(args, \"conn\", 0)?;\n            let sql = interpreter.eval_named_or_positional_arg(args, \"sql\", 1)?;\n            let sql = expect_string(sql)?;\n            let mut conn = expect_db_connection(interpreter.lookup(conn_name)?)?;\n            Ok(result_value(if sql.trim().is_empty() {\n                Err(db_error(\"SQL query is empty\"))\n            } else {\n                interpreter\n                    .stdout\n                    .push_str(&format!(\"db query on {}: {sql}\\n\", conn.url));\n                conn.queries.push(sql);\n                interpreter.assign(conn_name, conn.to_value())?;\n                Ok(Value::Unit)\n            }))\n        }"
+        }
+        InterpreterEvalKind::DbConnectionTryOpen => {
+            "{\n            let url = interpreter.eval_named_or_positional_arg(args, \"url\", 0)?;\n            let url = expect_string(url)?;\n            Ok(result_value(if url.trim().is_empty() {\n                Err(db_error(\"database URL is empty\"))\n            } else {\n                Ok(db_connection_value(url, Vec::new()))\n            }))\n        }"
+        }
+        InterpreterEvalKind::DirectoryCopyFile => {
+            "{\n            let from = interpreter.eval_named_or_positional_arg(args, \"from\", 0)?;\n            let to = interpreter.eval_named_or_positional_arg(args, \"to\", 1)?;\n            Ok(file_result_unit(\n                std::fs::copy(expect_string(from)?, expect_string(to)?).map(|_| ()),\n            ))\n        }"
+        }
+        InterpreterEvalKind::DirectoryCreate => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(file_result_unit(std::fs::create_dir(expect_string(path)?)))\n        }"
+        }
+        InterpreterEvalKind::DirectoryCreateAll | InterpreterEvalKind::DirectoryCreateDirAll => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(file_result_unit(std::fs::create_dir_all(expect_string(\n                path,\n            )?)))\n        }"
+        }
+        InterpreterEvalKind::DirectoryExists => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(Path::new(&expect_string(path)?).exists()))\n        }"
+        }
+        InterpreterEvalKind::DirectoryIsDir => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(Path::new(&expect_string(path)?).is_dir()))\n        }"
+        }
+        InterpreterEvalKind::DirectoryIsFile => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(Path::new(&expect_string(path)?).is_file()))\n        }"
+        }
+        InterpreterEvalKind::DirectoryListFiles => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(result_value(\n                directory_list_files(&PathBuf::from(expect_string(path)?))\n                    .map(|files| Value::List(files.into_iter().map(Value::String).collect()))\n                    .map_err(file_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::DirectoryListPaths => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(result_value(\n                directory_list_paths(&PathBuf::from(expect_string(path)?))\n                    .map(|paths| {\n                        Value::List(\n                            paths\n                                .into_iter()\n                                .map(|path| Value::String(path.to_string_lossy().to_string()))\n                                .collect(),\n                        )\n                    })\n                    .map_err(file_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::DirectoryMetadata => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(result_value(\n                std::fs::metadata(expect_string(path)?)\n                    .map(|metadata| Value::Struct {\n                        name: \"FileMetadata\".to_string(),\n                        fields: BTreeMap::from([\n                            (\"is_file\".to_string(), Value::Bool(metadata.is_file())),\n                            (\"is_dir\".to_string(), Value::Bool(metadata.is_dir())),\n                            (\"len\".to_string(), Value::Int(metadata.len() as i64)),\n                        ]),\n                    })\n                    .map_err(file_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::DirectoryReadString => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(result_value(\n                std::fs::read_to_string(expect_string(path)?)\n                    .map(Value::String)\n                    .map_err(file_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::DirectoryRemoveDirAll => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(file_result_unit(std::fs::remove_dir_all(expect_string(\n                path,\n            )?)))\n        }"
+        }
+        InterpreterEvalKind::DirectoryRemoveFile => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(file_result_unit(std::fs::remove_file(expect_string(path)?)))\n        }"
+        }
+        InterpreterEvalKind::DirectoryRename => {
+            "{\n            let from = interpreter.eval_named_or_positional_arg(args, \"from\", 0)?;\n            let to = interpreter.eval_named_or_positional_arg(args, \"to\", 1)?;\n            Ok(file_result_unit(std::fs::rename(\n                expect_string(from)?,\n                expect_string(to)?,\n            )))\n        }"
+        }
+        InterpreterEvalKind::DirectoryWriteString => {
+            "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            let content = interpreter.eval_named_or_positional_arg(args, \"content\", 1)?;\n            Ok(file_result_unit(std::fs::write(\n                expect_string(path)?,\n                expect_string(content)?,\n            )))\n        }"
+        }
+        InterpreterEvalKind::PathExists => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(Path::new(&expect_string(path)?).exists()))\n        }"
+        }
+        InterpreterEvalKind::PathIsDir => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(Path::new(&expect_string(path)?).is_dir()))\n        }"
+        }
+        InterpreterEvalKind::PathIsFile => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(Path::new(&expect_string(path)?).is_file()))\n        }"
+        }
+        InterpreterEvalKind::PathListFiles => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(result_value(\n                directory_list_files(&PathBuf::from(expect_string(path)?))\n                    .map(|files| Value::List(files.into_iter().map(Value::String).collect()))\n                    .map_err(file_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::PathListPaths => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(result_value(\n                directory_list_paths(&PathBuf::from(expect_string(path)?))\n                    .map(|paths| {\n                        Value::List(\n                            paths\n                                .into_iter()\n                                .map(|path| Value::String(path.to_string_lossy().to_string()))\n                                .collect(),\n                        )\n                    })\n                    .map_err(file_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::PathReadString => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(result_value(\n                std::fs::read_to_string(expect_string(path)?)\n                    .map(Value::String)\n                    .map_err(file_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::PathWriteString => {
+            "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            let text = interpreter.eval_named_or_positional_arg(args, \"text\", 1)?;\n            Ok(file_result_unit(std::fs::write(\n                expect_string(path)?,\n                expect_string(text)?,\n            )))\n        }"
+        }
         InterpreterEvalKind::DiffUnified => {
             "{\n            let old = interpreter.eval_named_or_positional_arg(args, \"old\", 0)?;\n            let new = interpreter.eval_named_or_positional_arg(args, \"new\", 1)?;\n            Ok(Value::String(diff_unified_string(\n                &expect_string(old)?,\n                &expect_string(new)?,\n            )))\n        }"
         }
@@ -2717,8 +4216,128 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::DurationSeconds => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Int(expect_int(value)? * 1000))\n        }"
         }
+        InterpreterEvalKind::EnvironmentBindFunction => {
+            "{\n            let env_name = interpreter.mut_arg_local_name(args, \"env\", 0)?;\n            let function = interpreter.eval_named_or_positional_arg(args, \"function\", 1)?;\n            let _ = expect_function_has_closure(function)?;\n            let (has_parent, _) = expect_environment_state(interpreter.lookup(env_name)?)?;\n            interpreter.assign(env_name, environment_value(has_parent, true))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::EnvironmentChild => {
+            "{\n            let parent = interpreter.eval_named_or_positional_arg(args, \"parent\", 0)?;\n            let _ = expect_environment_state(parent)?;\n            Ok(environment_value(true, false))\n        }"
+        }
+        InterpreterEvalKind::EnvironmentHasFunction => {
+            "{\n            let env = interpreter.eval_named_or_positional_arg(args, \"env\", 0)?;\n            let (_, has_function) = expect_environment_state(env)?;\n            Ok(Value::Bool(has_function))\n        }"
+        }
+        InterpreterEvalKind::EnvironmentHasParent => {
+            "{\n            let env = interpreter.eval_named_or_positional_arg(args, \"env\", 0)?;\n            let (has_parent, _) = expect_environment_state(env)?;\n            Ok(Value::Bool(has_parent))\n        }"
+        }
+        InterpreterEvalKind::EnvironmentRoot => {
+            "{\n            Ok(environment_value(false, false))\n        }"
+        }
+        InterpreterEvalKind::EnvCurrentDir => {
+            "{\n            Ok(result_value(\n                std::env::current_dir()\n                    .map(|path| Value::String(path_to_string(&path)))\n                    .map_err(file_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::EnvGet => {
+            "{\n            let name = interpreter.eval_first_arg(args)?;\n            Ok(value_option(\n                std::env::var(expect_string(name)?).ok(),\n                Value::String,\n            ))\n        }"
+        }
+        InterpreterEvalKind::EnvGetOrDefault => {
+            "{\n            let name = interpreter.eval_named_or_positional_arg(args, \"name\", 0)?;\n            let default = interpreter.eval_named_or_positional_arg(args, \"default\", 1)?;\n            Ok(Value::String(\n                std::env::var(expect_string(name)?).unwrap_or(expect_string(default)?),\n            ))\n        }"
+        }
+        InterpreterEvalKind::EnvHomeDir => {
+            "{\n            Ok(value_option(\n                std::env::var(\"HOME\").ok().filter(|value| !value.is_empty()),\n                Value::String,\n            ))\n        }"
+        }
+        InterpreterEvalKind::EnvRunWorkspaceRoot => {
+            "{\n            Ok(Value::String(path_to_string(Path::new(env!(\n                \"CARGO_MANIFEST_DIR\"\n            )))))\n        }"
+        }
+        InterpreterEvalKind::EnvSet => {
+            "{\n            let _name = interpreter.eval_named_or_positional_arg(args, \"name\", 0)?;\n            let _value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            interpreter\n                .stderr\n                .push_str(\"[rsscript] warning: Env.set is a no-op in the safe runtime\\n\");\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::EnvSetCurrentDir => {
+            "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            Ok(result_value(\n                std::env::set_current_dir(expect_string(path)?)\n                    .map(|_| Value::Unit)\n                    .map_err(file_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::EnvTempDir => {
+            "{\n            Ok(Value::String(path_to_string(&std::env::temp_dir())))\n        }"
+        }
+        InterpreterEvalKind::FileAppendBytes => {
+            "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            let data = interpreter.eval_named_or_positional_arg(args, \"data\", 1)?;\n            Ok(file_append_result(\n                expect_string(path)?,\n                &expect_bytes(data)?,\n            ))\n        }"
+        }
+        InterpreterEvalKind::FileAppendString => {
+            "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            let text = interpreter.eval_named_or_positional_arg(args, \"text\", 1)?;\n            Ok(file_append_result(\n                expect_string(path)?,\n                expect_string(text)?.as_bytes(),\n            ))\n        }"
+        }
+        InterpreterEvalKind::FileBytesStream => {
+            "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            let chunk_size = interpreter.eval_named_or_positional_arg(args, \"chunk_size\", 1)?;\n            Ok(result_value(\n                file_bytes_stream_value(&expect_string(path)?, expect_int(chunk_size)?)\n                    .map_err(channel_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::FileExists => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(Path::new(&expect_string(path)?).exists()))\n        }"
+        }
         InterpreterEvalKind::FileErrorMessage => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            read_field(&value, \"message\")\n        }"
+        }
+        InterpreterEvalKind::FalliblePipelineCollect => {
+            "{\n            interpreter.eval_first_arg(args)\n        }"
+        }
+        InterpreterEvalKind::FalliblePipelineMap => {
+            "{\n            let pipeline = interpreter.eval_named_or_positional_arg(args, \"pipeline\", 0)?;\n            let mapper = interpreter.eval_named_or_positional_arg(args, \"mapper\", 1)?;\n            Ok(match result_payload(pipeline)? {\n                Ok(items) => {\n                    let mut mapped = Vec::new();\n                    for value in expect_list(items)? {\n                        mapped.push(interpreter.call_closure(mapper.clone(), vec![value])?);\n                    }\n                    value_ok(Value::List(mapped))\n                }\n                Err(error) => value_err(error),\n            })\n        }"
+        }
+        InterpreterEvalKind::FalliblePipelineFilter => {
+            "{\n            let pipeline = interpreter.eval_named_or_positional_arg(args, \"pipeline\", 0)?;\n            let predicate = interpreter.eval_named_or_positional_arg(args, \"predicate\", 1)?;\n            Ok(match result_payload(pipeline)? {\n                Ok(items) => {\n                    let mut filtered = Vec::new();\n                    for value in expect_list(items)? {\n                        if expect_bool(interpreter.call_closure(predicate.clone(), vec![value.clone()])?)? {\n                            filtered.push(value);\n                        }\n                    }\n                    value_ok(Value::List(filtered))\n                }\n                Err(error) => value_err(error),\n            })\n        }"
+        }
+        InterpreterEvalKind::FalliblePipelineEach => {
+            "{\n            let pipeline = interpreter.eval_named_or_positional_arg(args, \"pipeline\", 0)?;\n            let action = interpreter.eval_named_or_positional_arg(args, \"action\", 1)?;\n            Ok(match result_payload(pipeline)? {\n                Ok(items) => {\n                    let items = expect_list(items)?;\n                    for value in items.iter().cloned() {\n                        let _ = interpreter.call_closure(action.clone(), vec![value])?;\n                    }\n                    value_ok(Value::List(items))\n                }\n                Err(error) => value_err(error),\n            })\n        }"
+        }
+        InterpreterEvalKind::FalliblePipelineTryMap => {
+            "{\n            let pipeline = interpreter.eval_named_or_positional_arg(args, \"pipeline\", 0)?;\n            let mapper = interpreter.eval_named_or_positional_arg(args, \"mapper\", 1)?;\n            match result_payload(pipeline)? {\n                Ok(items) => {\n                    let mut mapped = Vec::new();\n                    for value in expect_list(items)? {\n                        match result_payload(interpreter.call_closure(mapper.clone(), vec![value])?)? {\n                            Ok(value) => mapped.push(value),\n                            Err(error) => return Ok(value_err(error)),\n                        }\n                    }\n                    Ok(value_ok(Value::List(mapped)))\n                }\n                Err(error) => Ok(value_err(error)),\n            }\n        }"
+        }
+        InterpreterEvalKind::FileOpen | InterpreterEvalKind::FileOpenRead => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            let path = expect_string(path)?;\n            Ok(result_value(\n                std::fs::File::open(&path)\n                    .map(|_| file_value(path, \"read\", 0))\n                    .map_err(file_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::FileOpenWrite => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            let path = expect_string(path)?;\n            Ok(result_value(\n                std::fs::File::create(&path)\n                    .map(|_| file_value(path, \"write\", 0))\n                    .map_err(file_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::FileReadAll => {
+            "{\n            let file_name = interpreter.mut_arg_local_name(args, \"file\", 0)?;\n            let mut file = expect_file(interpreter.lookup(file_name)?)?;\n            let result = file_read_remaining(&mut file)\n                .map(Value::Bytes)\n                .map_err(file_error);\n            interpreter.assign(file_name, file.to_value())?;\n            Ok(result_value(result))\n        }"
+        }
+        InterpreterEvalKind::FileReadAllAsync | InterpreterEvalKind::FileReadBytes => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(result_value(\n                std::fs::read(expect_string(path)?)\n                    .map(Value::Bytes)\n                    .map_err(file_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::FileReadAllString => {
+            "{\n            let file_name = interpreter.mut_arg_local_name(args, \"file\", 0)?;\n            let mut file = expect_file(interpreter.lookup(file_name)?)?;\n            let result = file_read_remaining(&mut file)\n                .and_then(|bytes| {\n                    String::from_utf8(bytes).map_err(|error| {\n                        std::io::Error::new(std::io::ErrorKind::InvalidData, error)\n                    })\n                })\n                .map(Value::String)\n                .map_err(file_error);\n            interpreter.assign(file_name, file.to_value())?;\n            Ok(result_value(result))\n        }"
+        }
+        InterpreterEvalKind::FileReadAllStringAsync => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(result_value(\n                std::fs::read_to_string(expect_string(path)?)\n                    .map(Value::String)\n                    .map_err(file_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::FileReadInto => {
+            "{\n            let file_name = interpreter.mut_arg_local_name(args, \"file\", 0)?;\n            let buffer_name = interpreter.mut_arg_local_name(args, \"buffer\", 1)?;\n            let mut file = expect_file(interpreter.lookup(file_name)?)?;\n            let result = file_read_remaining(&mut file)\n                .map(|bytes| {\n                    let did_read = !bytes.is_empty();\n                    (Value::Bytes(bytes), Value::Bool(did_read))\n                })\n                .map_err(file_error);\n            interpreter.assign(file_name, file.to_value())?;\n            Ok(match result {\n                Ok((buffer, did_read)) => {\n                    interpreter.assign(buffer_name, buffer)?;\n                    value_ok(did_read)\n                }\n                Err(error) => value_err(error),\n            })\n        }"
+        }
+        InterpreterEvalKind::FileReadString => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(result_value(\n                std::fs::read_to_string(expect_string(path)?)\n                    .map(Value::String)\n                    .map_err(file_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::FileRemove => {
+            "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(file_result_unit(std::fs::remove_file(expect_string(path)?)))\n        }"
+        }
+        InterpreterEvalKind::FileWrite
+        | InterpreterEvalKind::FileWriteBytesView
+        | InterpreterEvalKind::FileWriteBuffer
+        | InterpreterEvalKind::FileWriteBufferView => {
+            "{\n            let file_name = interpreter.mut_arg_local_name(args, \"file\", 0)?;\n            let data = interpreter\n                .eval_named_or_positional_arg(args, \"data\", 1)\n                .or_else(|_| interpreter.eval_named_or_positional_arg(args, \"buffer\", 1))?;\n            let mut file = expect_file(interpreter.lookup(file_name)?)?;\n            let result = file_write_at_cursor(&mut file, &expect_bytes(data)?);\n            interpreter.assign(file_name, file.to_value())?;\n            Ok(file_result_unit(result))\n        }"
+        }
+        InterpreterEvalKind::FileWriteAsync | InterpreterEvalKind::FileWriteBytes => {
+            "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            let data = interpreter.eval_named_or_positional_arg(args, \"data\", 1)?;\n            Ok(file_result_unit(std::fs::write(\n                expect_string(path)?,\n                expect_bytes(data)?,\n            )))\n        }"
+        }
+        InterpreterEvalKind::FileWriteAtomic => {
+            "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            let text = interpreter.eval_named_or_positional_arg(args, \"text\", 1)?;\n            Ok(file_atomic_write_result(\n                PathBuf::from(expect_string(path)?),\n                &expect_string(text)?,\n            ))\n        }"
+        }
+        InterpreterEvalKind::FileWriteString => {
+            "{\n            let file_name = interpreter.mut_arg_local_name(args, \"file\", 0)?;\n            let text = interpreter.eval_named_or_positional_arg(args, \"text\", 1)?;\n            let mut file = expect_file(interpreter.lookup(file_name)?)?;\n            let result = file_write_at_cursor(&mut file, expect_string(text)?.as_bytes());\n            interpreter.assign(file_name, file.to_value())?;\n            Ok(file_result_unit(result))\n        }"
+        }
+        InterpreterEvalKind::FileWriteStringAsync => {
+            "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            let text = interpreter.eval_named_or_positional_arg(args, \"text\", 1)?;\n            Ok(file_result_unit(std::fs::write(\n                expect_string(path)?,\n                expect_string(text)?,\n            )))\n        }"
+        }
+        InterpreterEvalKind::FileWriteStringToPath => {
+            "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            let text = interpreter.eval_named_or_positional_arg(args, \"text\", 1)?;\n            Ok(file_result_unit(std::fs::write(\n                expect_string(path)?,\n                expect_string(text)?,\n            )))\n        }"
+        }
+        InterpreterEvalKind::FunctionObjectHasClosure => {
+            "{\n            let function = interpreter.eval_named_or_positional_arg(args, \"function\", 0)?;\n            Ok(Value::Bool(expect_function_has_closure(function)?))\n        }"
+        }
+        InterpreterEvalKind::FunctionObjectNew => {
+            "{\n            let closure = interpreter.eval_named_or_positional_arg(args, \"closure\", 0)?;\n            let _ = expect_environment_state(closure)?;\n            Ok(function_object_value(true))\n        }"
         }
         InterpreterEvalKind::GlobalConfigNew => {
             "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            Ok(global_config_value(expect_config_rule_count(value)?))\n        }"
@@ -2732,8 +4351,14 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::HashSha256Bytes => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(sha256_digest(&expect_bytes(value)?)))\n        }"
         }
+        InterpreterEvalKind::HashSha256File => {
+            "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            Ok(result_value(\n                std::fs::read(expect_string(path)?)\n                    .map(|bytes| Value::String(sha256_digest(&bytes)))\n                    .map_err(file_error),\n            ))\n        }"
+        }
         InterpreterEvalKind::HashSha256String => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(sha256_digest(\n                expect_string(value)?.as_bytes(),\n            )))\n        }"
+        }
+        InterpreterEvalKind::InstantElapsed => {
+            "{\n            let start = interpreter.eval_first_arg(args)?;\n            Ok(Value::Int(\n                clock_system_unix_ms()\n                    .saturating_sub(expect_instant_unix_ms(start)?)\n                    .max(0),\n            ))\n        }"
         }
         InterpreterEvalKind::IntToString => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(expect_int(value)?.to_string()))\n        }"
@@ -2779,6 +4404,18 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::ListAppend => {
             "{\n            let list_name = interpreter.mut_arg_local_name(args, \"list\", 0)?;\n            let values = interpreter.eval_named_or_positional_arg(args, \"values\", 1)?;\n            let mut list = expect_list(interpreter.lookup(list_name)?)?;\n            list.extend(expect_list(values)?);\n            interpreter.assign(list_name, Value::List(list))?;\n            Ok(Value::Unit)\n        }"
         }
+        InterpreterEvalKind::ListCountWhere => {
+            "{\n            let list = interpreter.eval_named_or_positional_arg(args, \"list\", 0)?;\n            let predicate = interpreter.eval_named_or_positional_arg(args, \"predicate\", 1)?;\n            let mut count = 0_i64;\n            for value in expect_list(list)? {\n                if expect_bool(interpreter.call_closure(predicate.clone(), vec![value])?)? {\n                    count += 1;\n                }\n            }\n            Ok(Value::Int(count))\n        }"
+        }
+        InterpreterEvalKind::ListAny | InterpreterEvalKind::ListContains => {
+            "{\n            let list = interpreter.eval_named_or_positional_arg(args, \"list\", 0)?;\n            let predicate = interpreter.eval_named_or_positional_arg(args, \"predicate\", 1)?;\n            for value in expect_list(list)? {\n                if expect_bool(interpreter.call_closure(predicate.clone(), vec![value])?)? {\n                    return Ok(Value::Bool(true));\n                }\n            }\n            Ok(Value::Bool(false))\n        }"
+        }
+        InterpreterEvalKind::ListAll => {
+            "{\n            let list = interpreter.eval_named_or_positional_arg(args, \"list\", 0)?;\n            let predicate = interpreter.eval_named_or_positional_arg(args, \"predicate\", 1)?;\n            for value in expect_list(list)? {\n                if !expect_bool(interpreter.call_closure(predicate.clone(), vec![value])?)? {\n                    return Ok(Value::Bool(false));\n                }\n            }\n            Ok(Value::Bool(true))\n        }"
+        }
+        InterpreterEvalKind::ListFind => {
+            "{\n            let list = interpreter.eval_named_or_positional_arg(args, \"list\", 0)?;\n            let predicate = interpreter.eval_named_or_positional_arg(args, \"predicate\", 1)?;\n            for value in expect_list(list)? {\n                if expect_bool(interpreter.call_closure(predicate.clone(), vec![value.clone()])?)? {\n                    return Ok(value_some(value));\n                }\n            }\n            Ok(value_none())\n        }"
+        }
         InterpreterEvalKind::ListClear => {
             "{\n            let list_name = interpreter.mut_arg_local_name(args, \"list\", 0)?;\n            interpreter.assign(list_name, Value::List(Vec::new()))?;\n            Ok(Value::Unit)\n        }"
         }
@@ -2790,6 +4427,21 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::ListFirst => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(value_option(\n                expect_list(value)?.into_iter().next(),\n                |value| value,\n            ))\n        }"
+        }
+        InterpreterEvalKind::ListFilter => {
+            "{\n            let list = interpreter.eval_named_or_positional_arg(args, \"list\", 0)?;\n            let predicate = interpreter.eval_named_or_positional_arg(args, \"predicate\", 1)?;\n            let mut filtered = Vec::new();\n            for value in expect_list(list)? {\n                if expect_bool(interpreter.call_closure(predicate.clone(), vec![value.clone()])?)? {\n                    filtered.push(value);\n                }\n            }\n            Ok(Value::List(filtered))\n        }"
+        }
+        InterpreterEvalKind::ListMap => {
+            "{\n            let list = interpreter.eval_named_or_positional_arg(args, \"list\", 0)?;\n            let mapper = interpreter.eval_named_or_positional_arg(args, \"mapper\", 1)?;\n            let mut mapped = Vec::new();\n            for value in expect_list(list)? {\n                mapped.push(interpreter.call_closure(mapper.clone(), vec![value])?);\n            }\n            Ok(Value::List(mapped))\n        }"
+        }
+        InterpreterEvalKind::ListFold => {
+            "{\n            let list = interpreter.eval_named_or_positional_arg(args, \"list\", 0)?;\n            let mut state = interpreter.eval_named_or_positional_arg(args, \"initial\", 1)?;\n            let folder = interpreter.eval_named_or_positional_arg(args, \"folder\", 2)?;\n            for value in expect_list(list)? {\n                state = interpreter.call_closure(folder.clone(), vec![state, value])?;\n            }\n            Ok(state)\n        }"
+        }
+        InterpreterEvalKind::ListTryFold => {
+            "{\n            let list = interpreter.eval_named_or_positional_arg(args, \"list\", 0)?;\n            let mut state = interpreter.eval_named_or_positional_arg(args, \"initial\", 1)?;\n            let folder = interpreter.eval_named_or_positional_arg(args, \"folder\", 2)?;\n            for value in expect_list(list)? {\n                match result_payload(interpreter.call_closure(folder.clone(), vec![state, value])?)? {\n                    Ok(next) => state = next,\n                    Err(error) => return Ok(value_err(error)),\n                }\n            }\n            Ok(value_ok(state))\n        }"
+        }
+        InterpreterEvalKind::ListGroupBy => {
+            "{\n            let list = interpreter.eval_named_or_positional_arg(args, \"list\", 0)?;\n            let key = interpreter.eval_named_or_positional_arg(args, \"key\", 1)?;\n            let mut groups: Vec<(Value, Value)> = Vec::new();\n            for value in expect_list(list)? {\n                let group_key = interpreter.call_closure(key.clone(), vec![value.clone()])?;\n                if let Some((_, group)) = groups\n                    .iter_mut()\n                    .find(|(entry_key, _)| entry_key == &group_key)\n                {\n                    expect_list_mut(group)?.push(value);\n                } else {\n                    groups.push((group_key, Value::List(vec![value])));\n                }\n            }\n            Ok(Value::Map(groups))\n        }"
         }
         InterpreterEvalKind::ListGet => {
             "{\n            let list = interpreter.eval_named_or_positional_arg(args, \"list\", 0)?;\n            let index = interpreter.eval_named_or_positional_arg(args, \"index\", 1)?;\n            list_get(expect_list(list)?, expect_int(index)?)\n        }"
@@ -2806,8 +4458,15 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::ListLen => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Int(expect_list(value)?.len() as i64))\n        }"
         }
-        InterpreterEvalKind::ListNew => {
-            "{\n            Ok(Value::List(Vec::new()))\n        }"
+        InterpreterEvalKind::ListNew => "{\n            Ok(Value::List(Vec::new()))\n        }",
+        InterpreterEvalKind::ListPipeline | InterpreterEvalKind::PipelineCollect => {
+            "{\n            interpreter.eval_first_arg(args)\n        }"
+        }
+        InterpreterEvalKind::ListFlatMap => {
+            "{\n            let list = interpreter.eval_named_or_positional_arg(args, \"list\", 0)?;\n            let mapper = interpreter.eval_named_or_positional_arg(args, \"mapper\", 1)?;\n            let mut flattened = Vec::new();\n            for value in expect_list(list)? {\n                flattened.extend(expect_list(\n                    interpreter.call_closure(mapper.clone(), vec![value])?,\n                )?);\n            }\n            Ok(Value::List(flattened))\n        }"
+        }
+        InterpreterEvalKind::ListPartition => {
+            "{\n            let list = interpreter.eval_named_or_positional_arg(args, \"list\", 0)?;\n            let predicate = interpreter.eval_named_or_positional_arg(args, \"predicate\", 1)?;\n            let mut matched = Vec::new();\n            let mut unmatched = Vec::new();\n            for value in expect_list(list)? {\n                if expect_bool(interpreter.call_closure(predicate.clone(), vec![value.clone()])?)? {\n                    matched.push(value);\n                } else {\n                    unmatched.push(value);\n                }\n            }\n            Ok(Value::List(vec![\n                Value::List(matched),\n                Value::List(unmatched),\n            ]))\n        }"
         }
         InterpreterEvalKind::ListPop => {
             "{\n            let list_name = interpreter.mut_arg_local_name(args, \"list\", 0)?;\n            let mut list = expect_list(interpreter.lookup(list_name)?)?;\n            let value = list.pop();\n            interpreter.assign(list_name, Value::List(list))?;\n            Ok(value_option(value, |value| value))\n        }"
@@ -2833,6 +4492,12 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::ListSort => {
             "{\n            let list_name = interpreter.mut_arg_local_name(args, \"list\", 0)?;\n            let mut list = expect_list(interpreter.lookup(list_name)?)?;\n            sort_values(&mut list)?;\n            interpreter.assign(list_name, Value::List(list))?;\n            Ok(Value::Unit)\n        }"
         }
+        InterpreterEvalKind::ListSortWith => {
+            "{\n            let list_name = interpreter.mut_arg_local_name(args, \"list\", 0)?;\n            let compare = interpreter.eval_named_or_positional_arg(args, \"compare\", 1)?;\n            let mut list = expect_list(interpreter.lookup(list_name)?)?;\n            interpreter.sort_list_with_closure(&mut list, compare)?;\n            interpreter.assign(list_name, Value::List(list))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::ListSortBy => {
+            "{\n            let list = interpreter.eval_named_or_positional_arg(args, \"list\", 0)?;\n            let key = interpreter.eval_named_or_positional_arg(args, \"key\", 1)?;\n            let compare = interpreter.eval_named_or_positional_arg(args, \"compare\", 2)?;\n            let mut list = expect_list(list)?;\n            interpreter.sort_list_by_closure(&mut list, key, compare)?;\n            Ok(Value::List(list))\n        }"
+        }
         InterpreterEvalKind::ListTake => {
             "{\n            let list = interpreter.eval_named_or_positional_arg(args, \"list\", 0)?;\n            let count = interpreter.eval_named_or_positional_arg(args, \"count\", 1)?;\n            let count = expect_int(count)?.max(0) as usize;\n            Ok(Value::List(\n                expect_list(list)?.into_iter().take(count).collect(),\n            ))\n        }"
         }
@@ -2841,6 +4506,24 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::ListToJsonValues => {
             "{\n            let list = interpreter.eval_first_arg(args)?;\n            let values = expect_list(list)?\n                .into_iter()\n                .map(expect_json)\n                .collect::<Result<Vec<_>, _>>()?;\n            Ok(Value::Json(serde_json::Value::Array(values)))\n        }"
+        }
+        InterpreterEvalKind::MapFilter => {
+            "{\n            let map = interpreter.eval_named_or_positional_arg(args, \"map\", 0)?;\n            let predicate = interpreter.eval_named_or_positional_arg(args, \"predicate\", 1)?;\n            let mut filtered = Vec::new();\n            for (key, value) in expect_map(map)? {\n                if expect_bool(\n                    interpreter.call_closure(predicate.clone(), vec![key.clone(), value.clone()])?,\n                )? {\n                    filtered.push((key, value));\n                }\n            }\n            Ok(Value::Map(filtered))\n        }"
+        }
+        InterpreterEvalKind::MapFold => {
+            "{\n            let map = interpreter.eval_named_or_positional_arg(args, \"map\", 0)?;\n            let mut state = interpreter.eval_named_or_positional_arg(args, \"initial\", 1)?;\n            let folder = interpreter.eval_named_or_positional_arg(args, \"folder\", 2)?;\n            for (key, value) in expect_map(map)? {\n                state = interpreter.call_closure(folder.clone(), vec![state, key, value])?;\n            }\n            Ok(state)\n        }"
+        }
+        InterpreterEvalKind::MapTryFold => {
+            "{\n            let map = interpreter.eval_named_or_positional_arg(args, \"map\", 0)?;\n            let mut state = interpreter.eval_named_or_positional_arg(args, \"initial\", 1)?;\n            let folder = interpreter.eval_named_or_positional_arg(args, \"folder\", 2)?;\n            for (key, value) in expect_map(map)? {\n                match result_payload(\n                    interpreter.call_closure(folder.clone(), vec![state, key, value])?,\n                )? {\n                    Ok(next) => state = next,\n                    Err(error) => return Ok(value_err(error)),\n                }\n            }\n            Ok(value_ok(state))\n        }"
+        }
+        InterpreterEvalKind::MapForEach => {
+            "{\n            let map = interpreter.eval_named_or_positional_arg(args, \"map\", 0)?;\n            let callback = interpreter.eval_named_or_positional_arg(args, \"callback\", 1)?;\n            for (key, value) in expect_map(map)? {\n                let _ = interpreter.call_closure(callback.clone(), vec![key, value])?;\n            }\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::MapMapValues => {
+            "{\n            let map = interpreter.eval_named_or_positional_arg(args, \"map\", 0)?;\n            let mapper = interpreter.eval_named_or_positional_arg(args, \"mapper\", 1)?;\n            let mut mapped = Vec::new();\n            for (key, value) in expect_map(map)? {\n                mapped.push((key, interpreter.call_closure(mapper.clone(), vec![value])?));\n            }\n            Ok(Value::Map(mapped))\n        }"
+        }
+        InterpreterEvalKind::MapMerge => {
+            "{\n            let left = interpreter.eval_named_or_positional_arg(args, \"left\", 0)?;\n            let right = interpreter.eval_named_or_positional_arg(args, \"right\", 1)?;\n            let resolver = interpreter.eval_named_or_positional_arg(args, \"resolver\", 2)?;\n            let mut merged = expect_map(left)?;\n            for (key, right_value) in expect_map(right)? {\n                if let Some((_, left_value)) =\n                    merged.iter_mut().find(|(entry_key, _)| entry_key == &key)\n                {\n                    *left_value = interpreter.call_closure(\n                        resolver.clone(),\n                        vec![left_value.clone(), right_value],\n                    )?;\n                } else {\n                    merged.push((key, right_value));\n                }\n            }\n            Ok(Value::Map(merged))\n        }"
         }
         InterpreterEvalKind::MapClear => {
             "{\n            let map_name = interpreter.mut_arg_local_name(args, \"map\", 0)?;\n            interpreter.assign(map_name, Value::Map(Vec::new()))?;\n            Ok(Value::Unit)\n        }"
@@ -2869,9 +4552,7 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::MapLen => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Int(expect_map(value)?.len() as i64))\n        }"
         }
-        InterpreterEvalKind::MapNew => {
-            "{\n            Ok(Value::Map(Vec::new()))\n        }"
-        }
+        InterpreterEvalKind::MapNew => "{\n            Ok(Value::Map(Vec::new()))\n        }",
         InterpreterEvalKind::MapRemove => {
             "{\n            let map_name = interpreter.mut_arg_local_name(args, \"map\", 0)?;\n            let key = interpreter.eval_named_or_positional_arg(args, \"key\", 1)?;\n            let mut map = expect_map(interpreter.lookup(map_name)?)?;\n            let old = map_remove(&mut map, &key);\n            interpreter.assign(map_name, Value::Map(map))?;\n            Ok(value_option(old, |value| value))\n        }"
         }
@@ -2880,6 +4561,54 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::HttpErrorMessage => {
             "{\n            let error = interpreter.eval_named_or_positional_arg(args, \"error\", 0)?;\n            read_field(&error, \"message\")\n        }"
+        }
+        InterpreterEvalKind::HttpGet => {
+            "{\n            let url = interpreter.eval_named_or_positional_arg(args, \"url\", 0)?;\n            Ok(value_err(http_error(format!(\n                \"HTTP client runtime is not configured for GET {}\",\n                expect_string(url)?\n            ))))\n        }"
+        }
+        InterpreterEvalKind::HttpGetAsync => {
+            "{\n            let url = interpreter.eval_named_or_positional_arg(args, \"url\", 0)?;\n            let url = expect_string(url)?;\n            Ok(result_value(interpreter.http_get_local(&url).map_err(http_error)))\n        }"
+        }
+        InterpreterEvalKind::HttpGetRetryAsync => {
+            "{\n            let url = interpreter.eval_named_or_positional_arg(args, \"url\", 0)?;\n            let timeout = interpreter.eval_named_or_positional_arg(args, \"timeout_ms\", 1)?;\n            let attempts = interpreter.eval_named_or_positional_arg(args, \"attempts\", 2)?;\n            let backoff = interpreter.eval_named_or_positional_arg(args, \"backoff_ms\", 3)?;\n            Ok(value_err(http_error(format!(\n                \"HTTP async provider is not configured for GET {} with timeout {}ms attempts {} backoff {}ms\",\n                expect_string(url)?,\n                expect_int(timeout)?,\n                expect_int(attempts)?,\n                expect_int(backoff)?\n            ))))\n        }"
+        }
+        InterpreterEvalKind::HttpGetTimeoutAsync => {
+            "{\n            let url = interpreter.eval_named_or_positional_arg(args, \"url\", 0)?;\n            let timeout = interpreter.eval_named_or_positional_arg(args, \"timeout_ms\", 1)?;\n            Ok(value_err(http_error(format!(\n                \"HTTP async provider is not configured for GET {} with timeout {}ms\",\n                expect_string(url)?,\n                expect_int(timeout)?\n            ))))\n        }"
+        }
+        InterpreterEvalKind::HttpPostForm => {
+            "{\n            let url = interpreter.eval_named_or_positional_arg(args, \"url\", 0)?;\n            let _body = interpreter.eval_named_or_positional_arg(args, \"body\", 1)?;\n            Ok(value_err(http_error(format!(\n                \"HTTP client runtime is not configured for POST form {}\",\n                expect_string(url)?\n            ))))\n        }"
+        }
+        InterpreterEvalKind::HttpPostFormAsync => {
+            "{\n            let url = interpreter.eval_named_or_positional_arg(args, \"url\", 0)?;\n            let _body = interpreter.eval_named_or_positional_arg(args, \"body\", 1)?;\n            Ok(value_err(http_error(format!(\n                \"HTTP async provider is not configured for POST form {}\",\n                expect_string(url)?\n            ))))\n        }"
+        }
+        InterpreterEvalKind::HttpPostJson => {
+            "{\n            let url = interpreter.eval_named_or_positional_arg(args, \"url\", 0)?;\n            let _body = interpreter.eval_named_or_positional_arg(args, \"body\", 1)?;\n            Ok(value_err(http_error(format!(\n                \"HTTP client runtime is not configured for POST JSON {}\",\n                expect_string(url)?\n            ))))\n        }"
+        }
+        InterpreterEvalKind::HttpPostJsonAsync => {
+            "{\n            let url = interpreter.eval_named_or_positional_arg(args, \"url\", 0)?;\n            let _body = interpreter.eval_named_or_positional_arg(args, \"body\", 1)?;\n            Ok(value_err(http_error(format!(\n                \"HTTP async provider is not configured for POST JSON {}\",\n                expect_string(url)?\n            ))))\n        }"
+        }
+        InterpreterEvalKind::HttpPostJsonBearerRetryAsync => {
+            "{\n            let url = interpreter.eval_named_or_positional_arg(args, \"url\", 0)?;\n            let _body = interpreter.eval_named_or_positional_arg(args, \"body\", 1)?;\n            let _token = interpreter.eval_named_or_positional_arg(args, \"token\", 2)?;\n            let timeout = interpreter.eval_named_or_positional_arg(args, \"timeout_ms\", 3)?;\n            let attempts = interpreter.eval_named_or_positional_arg(args, \"attempts\", 4)?;\n            let backoff = interpreter.eval_named_or_positional_arg(args, \"backoff_ms\", 5)?;\n            Ok(value_err(http_error(format!(\n                \"HTTP async provider is not configured for bearer POST JSON {} with timeout {}ms attempts {} backoff {}ms\",\n                expect_string(url)?,\n                expect_int(timeout)?,\n                expect_int(attempts)?,\n                expect_int(backoff)?\n            ))))\n        }"
+        }
+        InterpreterEvalKind::HttpPostJsonRetryAsync => {
+            "{\n            let url = interpreter.eval_named_or_positional_arg(args, \"url\", 0)?;\n            let _body = interpreter.eval_named_or_positional_arg(args, \"body\", 1)?;\n            let timeout = interpreter.eval_named_or_positional_arg(args, \"timeout_ms\", 2)?;\n            let attempts = interpreter.eval_named_or_positional_arg(args, \"attempts\", 3)?;\n            let backoff = interpreter.eval_named_or_positional_arg(args, \"backoff_ms\", 4)?;\n            Ok(value_err(http_error(format!(\n                \"HTTP async provider is not configured for POST JSON {} with timeout {}ms attempts {} backoff {}ms\",\n                expect_string(url)?,\n                expect_int(timeout)?,\n                expect_int(attempts)?,\n                expect_int(backoff)?\n            ))))\n        }"
+        }
+        InterpreterEvalKind::HttpPostJsonTimeoutAsync => {
+            "{\n            let url = interpreter.eval_named_or_positional_arg(args, \"url\", 0)?;\n            let _body = interpreter.eval_named_or_positional_arg(args, \"body\", 1)?;\n            let timeout = interpreter.eval_named_or_positional_arg(args, \"timeout_ms\", 2)?;\n            Ok(value_err(http_error(format!(\n                \"HTTP async provider is not configured for POST JSON {} with timeout {}ms\",\n                expect_string(url)?,\n                expect_int(timeout)?\n            ))))\n        }"
+        }
+        InterpreterEvalKind::HttpSendAsync => {
+            "{\n            let request = interpreter.eval_named_or_positional_arg(args, \"request\", 0)?;\n            let request = expect_http_request(request)?;\n            Ok(value_err(http_error(format!(\n                \"HTTP async provider is not configured for {} {}\",\n                request.method, request.url\n            ))))\n        }"
+        }
+        InterpreterEvalKind::HttpRequestJson => {
+            "{\n            let url = interpreter.eval_named_or_positional_arg(args, \"url\", 0)?;\n            let body = interpreter.eval_named_or_positional_arg(args, \"body\", 1)?;\n            Ok(http_request_value(\n                \"POST\",\n                expect_string(url)?,\n                expect_string(body)?,\n                0,\n                1,\n                0,\n                0,\n            ))\n        }"
+        }
+        InterpreterEvalKind::HttpRequestWithHeader => {
+            "{\n            let request = interpreter.eval_named_or_positional_arg(args, \"request\", 0)?;\n            let _name = interpreter.eval_named_or_positional_arg(args, \"name\", 1)?;\n            let _value = interpreter.eval_named_or_positional_arg(args, \"value\", 2)?;\n            let mut request = expect_http_request(request)?;\n            request.header_count += 1;\n            Ok(request.to_value())\n        }"
+        }
+        InterpreterEvalKind::HttpRequestWithRetry => {
+            "{\n            let request = interpreter.eval_named_or_positional_arg(args, \"request\", 0)?;\n            let attempts = interpreter.eval_named_or_positional_arg(args, \"attempts\", 1)?;\n            let backoff_ms = interpreter.eval_named_or_positional_arg(args, \"backoff_ms\", 2)?;\n            let mut request = expect_http_request(request)?;\n            request.attempts = expect_int(attempts)?;\n            request.backoff_ms = expect_int(backoff_ms)?;\n            Ok(request.to_value())\n        }"
+        }
+        InterpreterEvalKind::HttpRequestWithTimeout => {
+            "{\n            let request = interpreter.eval_named_or_positional_arg(args, \"request\", 0)?;\n            let timeout_ms = interpreter.eval_named_or_positional_arg(args, \"timeout_ms\", 1)?;\n            let mut request = expect_http_request(request)?;\n            request.timeout_ms = expect_int(timeout_ms)?;\n            Ok(request.to_value())\n        }"
         }
         InterpreterEvalKind::HttpResponseIsSuccess => {
             "{\n            let response = interpreter.eval_named_or_positional_arg(args, \"response\", 0)?;\n            let (status, _) = expect_http_response(response)?;\n            Ok(Value::Bool((200..300).contains(&status)))\n        }"
@@ -2892,6 +4621,24 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::HttpResponseText => {
             "{\n            let response = interpreter.eval_named_or_positional_arg(args, \"response\", 0)?;\n            let (_, body) = expect_http_response(response)?;\n            Ok(Value::String(body))\n        }"
+        }
+        InterpreterEvalKind::ImageInspect => {
+            "{\n            let image = interpreter.eval_named_or_positional_arg(args, \"image\", 0)?;\n            let image = expect_image(image)?;\n            interpreter.stdout.push_str(&image.inspect_line());\n            interpreter.stdout.push('\\n');\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::ImageLoad => {
+            "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            Ok(result_value(\n                std::fs::read(expect_string(path)?)\n                    .map(|bytes| image_value(bytes, None, None, vec![\"load\".to_string()]))\n                    .map_err(image_error_from_io),\n            ))\n        }"
+        }
+        InterpreterEvalKind::ImageNormalize => {
+            "{\n            let image_name = interpreter.mut_arg_local_name(args, \"image\", 0)?;\n            let mut image = expect_image(interpreter.lookup(image_name)?)?;\n            image.operations.push(\"normalize\".to_string());\n            interpreter.assign(image_name, image.to_value())?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::ImageResize => {
+            "{\n            let image_name = interpreter.mut_arg_local_name(args, \"image\", 0)?;\n            let width = interpreter.eval_named_or_positional_arg(args, \"width\", 1)?;\n            let height = interpreter.eval_named_or_positional_arg(args, \"height\", 2)?;\n            let mut image = expect_image(interpreter.lookup(image_name)?)?;\n            image.width = Some(expect_int(width)?);\n            image.height = Some(expect_int(height)?);\n            image.operations.push(\"resize\".to_string());\n            interpreter.assign(image_name, image.to_value())?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::ImageSave => {
+            "{\n            let image = interpreter.eval_named_or_positional_arg(args, \"image\", 0)?;\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 1)?;\n            let image = expect_image(image)?;\n            Ok(result_value(\n                std::fs::write(expect_string(path)?, image.saved_bytes())\n                    .map(|_| Value::Unit)\n                    .map_err(image_error_from_io),\n            ))\n        }"
+        }
+        InterpreterEvalKind::ImageSharpen => {
+            "{\n            let image_name = interpreter.mut_arg_local_name(args, \"image\", 0)?;\n            let mut image = expect_image(interpreter.lookup(image_name)?)?;\n            image.operations.push(\"sharpen\".to_string());\n            interpreter.assign(image_name, image.to_value())?;\n            Ok(Value::Unit)\n        }"
         }
         InterpreterEvalKind::ImageCacheLen => {
             "{\n            let cache = interpreter.eval_named_or_positional_arg(args, \"cache\", 0)?;\n            Ok(Value::Int(expect_image_cache_len(cache)?))\n        }"
@@ -3097,6 +4844,18 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::JsonErrorMessage => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            read_field(&value, \"message\")\n        }"
         }
+        InterpreterEvalKind::OptionUnwrapOrElse => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let default = interpreter.eval_named_or_positional_arg(args, \"default\", 1)?;\n            Ok(match option_payload(value)? {\n                Some(value) => value,\n                None => interpreter.call_closure(default, Vec::new())?,\n            })\n        }"
+        }
+        InterpreterEvalKind::OptionMap => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let mapper = interpreter.eval_named_or_positional_arg(args, \"mapper\", 1)?;\n            Ok(match option_payload(value)? {\n                Some(value) => value_some(interpreter.call_closure(mapper, vec![value])?),\n                None => value_none(),\n            })\n        }"
+        }
+        InterpreterEvalKind::OptionAndThen => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let mapper = interpreter.eval_named_or_positional_arg(args, \"mapper\", 1)?;\n            match option_payload(value)? {\n                Some(value) => {\n                    let mapped = interpreter.call_closure(mapper, vec![value])?;\n                    let _ = option_payload(mapped.clone())?;\n                    Ok(mapped)\n                }\n                None => Ok(value_none()),\n            }\n        }"
+        }
+        InterpreterEvalKind::OptionFilter => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let predicate = interpreter.eval_named_or_positional_arg(args, \"predicate\", 1)?;\n            Ok(match option_payload(value)? {\n                Some(value) => {\n                    if expect_bool(interpreter.call_closure(predicate, vec![value.clone()])?)? {\n                        value_some(value)\n                    } else {\n                        value_none()\n                    }\n                }\n                None => value_none(),\n            })\n        }"
+        }
         InterpreterEvalKind::OptionIsNone => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(matches!(\n                value,\n                Value::Variant { name, .. } if name == \"None\"\n            )))\n        }"
         }
@@ -3112,8 +4871,14 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::OptionUnwrapOr => {
             "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 0)?;\n            let default = interpreter.eval_named_or_positional_arg(args, \"default\", 1)?;\n            Ok(option_payload(value)?.unwrap_or(default))\n        }"
         }
+        InterpreterEvalKind::OrdCompare => {
+            "{\n            let left = interpreter.eval_named_or_positional_arg(args, \"self\", 0)?;\n            let right = interpreter.eval_named_or_positional_arg(args, \"other\", 1)?;\n            Ok(Value::Int(match value_cmp(&left, &right)? {\n                Ordering::Less => -1,\n                Ordering::Equal => 0,\n                Ordering::Greater => 1,\n            }))\n        }"
+        }
         InterpreterEvalKind::OsClose => {
             "{\n            let fd = interpreter.eval_named_or_positional_arg(args, \"fd\", 0)?;\n            let _ = expect_int(fd)?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::PatchApplyText => {
+            "{\n            let original = interpreter.eval_named_or_positional_arg(args, \"original\", 0)?;\n            let patch = interpreter.eval_named_or_positional_arg(args, \"patch\", 1)?;\n            Ok(result_value(\n                patch_apply_text_string(&expect_string(original)?, &expect_string(patch)?)\n                    .map(Value::String)\n                    .map_err(Value::String),\n            ))\n        }"
         }
         InterpreterEvalKind::PersistentMapClear => {
             "{\n            interpreter.eval_first_arg(args)?;\n            Ok(Value::Map(Vec::new()))\n        }"
@@ -3154,6 +4919,54 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::PoolStatsInUse => {
             "{\n            let stats = interpreter.eval_named_or_positional_arg(args, \"stats\", 0)?;\n            read_field(&stats, \"in_use\")\n        }"
         }
+        InterpreterEvalKind::PipelineMap => {
+            "{\n            let pipeline = interpreter.eval_named_or_positional_arg(args, \"pipeline\", 0)?;\n            let mapper = interpreter.eval_named_or_positional_arg(args, \"mapper\", 1)?;\n            let mut mapped = Vec::new();\n            for value in expect_list(pipeline)? {\n                mapped.push(interpreter.call_closure(mapper.clone(), vec![value])?);\n            }\n            Ok(Value::List(mapped))\n        }"
+        }
+        InterpreterEvalKind::PipelineFilter => {
+            "{\n            let pipeline = interpreter.eval_named_or_positional_arg(args, \"pipeline\", 0)?;\n            let predicate = interpreter.eval_named_or_positional_arg(args, \"predicate\", 1)?;\n            let mut filtered = Vec::new();\n            for value in expect_list(pipeline)? {\n                if expect_bool(interpreter.call_closure(predicate.clone(), vec![value.clone()])?)? {\n                    filtered.push(value);\n                }\n            }\n            Ok(Value::List(filtered))\n        }"
+        }
+        InterpreterEvalKind::PipelineEach => {
+            "{\n            let pipeline = interpreter.eval_named_or_positional_arg(args, \"pipeline\", 0)?;\n            let action = interpreter.eval_named_or_positional_arg(args, \"action\", 1)?;\n            let items = expect_list(pipeline)?;\n            for value in items.iter().cloned() {\n                let _ = interpreter.call_closure(action.clone(), vec![value])?;\n            }\n            Ok(Value::List(items))\n        }"
+        }
+        InterpreterEvalKind::PipelineTryMap => {
+            "{\n            let pipeline = interpreter.eval_named_or_positional_arg(args, \"pipeline\", 0)?;\n            let mapper = interpreter.eval_named_or_positional_arg(args, \"mapper\", 1)?;\n            let mut mapped = Vec::new();\n            for value in expect_list(pipeline)? {\n                match result_payload(interpreter.call_closure(mapper.clone(), vec![value])?)? {\n                    Ok(value) => mapped.push(value),\n                    Err(error) => return Ok(value_err(error)),\n                }\n            }\n            Ok(value_ok(Value::List(mapped)))\n        }"
+        }
+        InterpreterEvalKind::ProcessRun | InterpreterEvalKind::ProcessRunAsync => {
+            "{\n            let command = interpreter.eval_named_or_positional_arg(args, \"command\", 0)?;\n            let args_value = interpreter.eval_named_or_positional_arg(args, \"args\", 1)?;\n            let command = expect_string(command)?;\n            Ok(result_value(\n                process_run_output(&command, &expect_string_list(args_value)?)\n                    .map(process_output_value)\n                    .map_err(Value::String),\n            ))\n        }"
+        }
+        InterpreterEvalKind::ProcessRunStdout | InterpreterEvalKind::ProcessRunStdoutAsync => {
+            "{\n            let command = interpreter.eval_named_or_positional_arg(args, \"command\", 0)?;\n            let args_value = interpreter.eval_named_or_positional_arg(args, \"args\", 1)?;\n            let command = expect_string(command)?;\n            Ok(result_value(\n                process_run_output(&command, &expect_string_list(args_value)?)\n                    .and_then(|output| process_stdout_result(&command, output))\n                    .map(Value::String)\n                    .map_err(Value::String),\n            ))\n        }"
+        }
+        InterpreterEvalKind::ProcessRunTimeout | InterpreterEvalKind::ProcessRunTimeoutAsync => {
+            "{\n            let command = interpreter.eval_named_or_positional_arg(args, \"command\", 0)?;\n            let args_value = interpreter.eval_named_or_positional_arg(args, \"args\", 1)?;\n            let timeout = interpreter.eval_named_or_positional_arg(args, \"timeout_ms\", 2)?;\n            let command = expect_string(command)?;\n            Ok(result_value(\n                process_run_timeout_output(\n                    &command,\n                    &expect_string_list(args_value)?,\n                    expect_int(timeout)?,\n                )\n                .map(process_output_value)\n                .map_err(Value::String),\n            ))\n        }"
+        }
+        InterpreterEvalKind::ProcessRunRequest | InterpreterEvalKind::ProcessRunRequestAsync => {
+            "{\n            let request = interpreter.eval_named_or_positional_arg(args, \"request\", 0)?;\n            Ok(result_value(\n                process_run_request_output(&expect_process_request(request)?)\n                    .map(process_output_value)\n                    .map_err(Value::String),\n            ))\n        }"
+        }
+        InterpreterEvalKind::ProcessRunRequestCancellableAsync => {
+            "{\n            let request = interpreter.eval_named_or_positional_arg(args, \"request\", 0)?;\n            let token = interpreter.eval_named_or_positional_arg(args, \"token\", 1)?;\n            let _ = expect_cancellation_id(token, \"CancellationToken\")?;\n            Ok(result_value(\n                process_run_request_output(&expect_process_request(request)?)\n                    .map(process_output_value)\n                    .map_err(Value::String),\n            ))\n        }"
+        }
+        InterpreterEvalKind::ProcessStream => {
+            "{\n            let request = interpreter.eval_named_or_positional_arg(args, \"request\", 0)?;\n            Ok(result_value(\n                process_stream_value(&expect_process_request(request)?).map_err(Value::String),\n            ))\n        }"
+        }
+        InterpreterEvalKind::ProcessRunStdoutTimeout
+        | InterpreterEvalKind::ProcessRunStdoutTimeoutAsync => {
+            "{\n            let command = interpreter.eval_named_or_positional_arg(args, \"command\", 0)?;\n            let args_value = interpreter.eval_named_or_positional_arg(args, \"args\", 1)?;\n            let timeout = interpreter.eval_named_or_positional_arg(args, \"timeout_ms\", 2)?;\n            let command = expect_string(command)?;\n            Ok(result_value(\n                process_run_timeout_output(\n                    &command,\n                    &expect_string_list(args_value)?,\n                    expect_int(timeout)?,\n                )\n                .and_then(|output| process_stdout_result(&command, output))\n                .map(Value::String)\n                .map_err(Value::String),\n            ))\n        }"
+        }
+        InterpreterEvalKind::ProcessRunManyStdout
+        | InterpreterEvalKind::ProcessRunManyStdoutAsync => {
+            "{\n            let command = interpreter.eval_named_or_positional_arg(args, \"command\", 0)?;\n            let args_value = interpreter.eval_named_or_positional_arg(args, \"args\", 1)?;\n            let appended = interpreter.eval_named_or_positional_arg(args, \"appended_args\", 2)?;\n            let _jobs = interpreter.eval_named_or_positional_arg(args, \"jobs\", 3)?;\n            let command = expect_string(command)?;\n            Ok(result_value(\n                process_run_many_stdout(\n                    &command,\n                    &expect_string_list(args_value)?,\n                    &expect_string_list(appended)?,\n                    None,\n                )\n                .map(|items| Value::List(items.into_iter().map(Value::String).collect()))\n                .map_err(Value::String),\n            ))\n        }"
+        }
+        InterpreterEvalKind::ProcessRunManyStdoutTimeout
+        | InterpreterEvalKind::ProcessRunManyStdoutTimeoutAsync => {
+            "{\n            let command = interpreter.eval_named_or_positional_arg(args, \"command\", 0)?;\n            let args_value = interpreter.eval_named_or_positional_arg(args, \"args\", 1)?;\n            let appended = interpreter.eval_named_or_positional_arg(args, \"appended_args\", 2)?;\n            let _jobs = interpreter.eval_named_or_positional_arg(args, \"jobs\", 3)?;\n            let timeout = interpreter.eval_named_or_positional_arg(args, \"timeout_ms\", 4)?;\n            let command = expect_string(command)?;\n            Ok(result_value(\n                process_run_many_stdout(\n                    &command,\n                    &expect_string_list(args_value)?,\n                    &expect_string_list(appended)?,\n                    Some(expect_int(timeout)?),\n                )\n                .map(|items| Value::List(items.into_iter().map(Value::String).collect()))\n                .map_err(Value::String),\n            ))\n        }"
+        }
+        InterpreterEvalKind::ResourcePoolDiscard => {
+            "{\n            let lease_name = interpreter.mut_arg_local_name(args, \"lease\", 0)?;\n            let lease = interpreter.lookup(lease_name)?;\n            interpreter.assign(lease_name, mark_pool_lease_discarded(lease)?)?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::ResourcePoolStats => {
+            "{\n            let pool_name = interpreter.mut_arg_local_name(args, \"pool\", 0)?;\n            let pool = expect_resource_pool(interpreter.lookup(pool_name)?)?;\n            let state = interpreter.pools.get(&pool.id).ok_or_else(|| {\n                EvalError::Runtime(format!(\"unknown ResourcePool id `{}`.\", pool.id))\n            })?;\n            Ok(pool_stats_value(\n                state.capacity,\n                state.created,\n                state.idle.len() as i64,\n                state.in_use,\n            ))\n        }"
+        }
         InterpreterEvalKind::RowBufferNew => {
             "{\n            let size = interpreter.eval_named_or_positional_arg(args, \"size\", 0)?;\n            let capacity = expect_int(size)?.max(0) as usize;\n            Ok(row_buffer_value(Vec::with_capacity(capacity)))\n        }"
         }
@@ -3181,6 +4994,18 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::RegexSplit => {
             "{\n            let regex = interpreter.eval_named_or_positional_arg(args, \"regex\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            let regex = expect_regex(regex)?;\n            let parts = regex\n                .split(&expect_string(value)?)\n                .map(|part| Value::String(part.to_string()))\n                .collect();\n            Ok(Value::List(parts))\n        }"
         }
+        InterpreterEvalKind::ReceiverClose => {
+            "{\n            let receiver_name = interpreter.mut_arg_local_name(args, \"receiver\", 0)?;\n            let receiver = expect_receiver(interpreter.lookup(receiver_name)?)?;\n            interpreter.channel_state_mut(receiver.channel_id)?.receiver_closed = true;\n            interpreter.assign(receiver_name, receiver_value(receiver.channel_id, true))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::ReceiverRecv => {
+            "{\n            let receiver = interpreter.eval_named_or_positional_arg(args, \"receiver\", 0)?;\n            let receiver = expect_receiver(receiver)?;\n            if receiver.closed {\n                return Ok(value_err(channel_error(\"channel receiver closed\")));\n            }\n            Ok(result_value(interpreter.channel_recv(receiver.channel_id)))\n        }"
+        }
+        InterpreterEvalKind::ReceiverRecvCancellable => {
+            "{\n            let receiver = interpreter.eval_named_or_positional_arg(args, \"receiver\", 0)?;\n            let receiver = expect_receiver(receiver)?;\n            if receiver.closed {\n                return Ok(value_err(channel_error(\"channel receiver closed\")));\n            }\n            let token = interpreter.eval_named_or_positional_arg(args, \"token\", 1)?;\n            let id = expect_cancellation_id(token, \"CancellationToken\")?;\n            if interpreter.cancellation_flags.get(&id).copied().unwrap_or(false) {\n                return Ok(value_err(channel_error(\"channel recv cancelled\")));\n            }\n            Ok(result_value(interpreter.channel_recv(receiver.channel_id)))\n        }"
+        }
+        InterpreterEvalKind::ReceiverIntoStream => {
+            "{\n            let receiver = interpreter.eval_named_or_positional_arg(args, \"receiver\", 0)?;\n            let receiver = expect_receiver(receiver)?;\n            if receiver.closed {\n                return Ok(stream_collect_error_value(\"channel receiver closed\"));\n            }\n            Ok(stream_channel_value(receiver.channel_id))\n        }"
+        }
         InterpreterEvalKind::RequestNew => {
             "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(Value::Struct {\n                name: \"Request\".to_string(),\n                fields: BTreeMap::from([(\n                    \"path\".to_string(),\n                    Value::String(expect_string(path)?),\n                )]),\n            })\n        }"
         }
@@ -3201,6 +5026,18 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::ResultErrMessage => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(match result_payload(value)? {\n                Ok(_) => value_none(),\n                Err(error) => value_some(Value::String(error.display())),\n            })\n        }"
+        }
+        InterpreterEvalKind::ResultUnwrapOrElse => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"result\", 0)?;\n            let fallback = interpreter.eval_named_or_positional_arg(args, \"fallback\", 1)?;\n            Ok(match result_payload(value)? {\n                Ok(value) => value,\n                Err(error) => interpreter.call_closure(fallback, vec![error])?,\n            })\n        }"
+        }
+        InterpreterEvalKind::ResultMap => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"result\", 0)?;\n            let mapper = interpreter.eval_named_or_positional_arg(args, \"mapper\", 1)?;\n            Ok(match result_payload(value)? {\n                Ok(value) => value_ok(interpreter.call_closure(mapper, vec![value])?),\n                Err(error) => value_err(error),\n            })\n        }"
+        }
+        InterpreterEvalKind::ResultMapError => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"result\", 0)?;\n            let mapper = interpreter.eval_named_or_positional_arg(args, \"mapper\", 1)?;\n            Ok(match result_payload(value)? {\n                Ok(value) => value_ok(value),\n                Err(error) => value_err(interpreter.call_closure(mapper, vec![error])?),\n            })\n        }"
+        }
+        InterpreterEvalKind::ResultAndThen => {
+            "{\n            let value = interpreter.eval_named_or_positional_arg(args, \"result\", 0)?;\n            let mapper = interpreter.eval_named_or_positional_arg(args, \"mapper\", 1)?;\n            match result_payload(value)? {\n                Ok(value) => {\n                    let mapped = interpreter.call_closure(mapper, vec![value])?;\n                    let _ = result_payload(mapped.clone())?;\n                    Ok(mapped)\n                }\n                Err(error) => Ok(value_err(error)),\n            }\n        }"
         }
         InterpreterEvalKind::ResultIsErr => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(matches!(\n                value,\n                Value::Variant { name, .. } if name == \"Err\"\n            )))\n        }"
@@ -3226,6 +5063,9 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::SetDifference => {
             "{\n            let left = interpreter.eval_named_or_positional_arg(args, \"left\", 0)?;\n            let right = interpreter.eval_named_or_positional_arg(args, \"right\", 1)?;\n            let right = expect_list(right)?;\n            Ok(Value::List(\n                expect_list(left)?\n                    .into_iter()\n                    .filter(|value| !right.iter().any(|item| item == value))\n                    .collect(),\n            ))\n        }"
         }
+        InterpreterEvalKind::SetForEach => {
+            "{\n            let set = interpreter.eval_named_or_positional_arg(args, \"set\", 0)?;\n            let callback = interpreter.eval_named_or_positional_arg(args, \"callback\", 1)?;\n            for value in expect_list(set)? {\n                let _ = interpreter.call_closure(callback.clone(), vec![value])?;\n            }\n            Ok(Value::Unit)\n        }"
+        }
         InterpreterEvalKind::SetInsert => {
             "{\n            let set_name = interpreter.mut_arg_local_name(args, \"set\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            let mut set = expect_list(interpreter.lookup(set_name)?)?;\n            let inserted = set_insert(&mut set, value);\n            interpreter.assign(set_name, Value::List(set))?;\n            Ok(Value::Bool(inserted))\n        }"
         }
@@ -3241,9 +5081,7 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::SetLen => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Int(expect_list(value)?.len() as i64))\n        }"
         }
-        InterpreterEvalKind::SetNew => {
-            "{\n            Ok(Value::List(Vec::new()))\n        }"
-        }
+        InterpreterEvalKind::SetNew => "{\n            Ok(Value::List(Vec::new()))\n        }",
         InterpreterEvalKind::SetRemove => {
             "{\n            let set_name = interpreter.mut_arg_local_name(args, \"set\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            let mut set = expect_list(interpreter.lookup(set_name)?)?;\n            let removed = set_remove(&mut set, &value);\n            interpreter.assign(set_name, Value::List(set))?;\n            Ok(Value::Bool(removed))\n        }"
         }
@@ -3252,6 +5090,15 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::SetUnion => {
             "{\n            let left = interpreter.eval_named_or_positional_arg(args, \"left\", 0)?;\n            let right = interpreter.eval_named_or_positional_arg(args, \"right\", 1)?;\n            let mut set = expect_list(left)?;\n            for value in expect_list(right)? {\n                set_insert(&mut set, value);\n            }\n            Ok(Value::List(set))\n        }"
+        }
+        InterpreterEvalKind::SenderClose => {
+            "{\n            let sender_name = interpreter.mut_arg_local_name(args, \"sender\", 0)?;\n            let sender = expect_sender(interpreter.lookup(sender_name)?)?;\n            if !sender.closed {\n                let state = interpreter.channel_state_mut(sender.channel_id)?;\n                state.senders = state.senders.saturating_sub(1);\n            }\n            interpreter.assign(sender_name, sender_value(sender.channel_id, true))?;\n            Ok(Value::Unit)\n        }"
+        }
+        InterpreterEvalKind::SenderSend => {
+            "{\n            let sender = interpreter.eval_named_or_positional_arg(args, \"sender\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            Ok(result_value(interpreter.channel_send(expect_sender(sender)?, value)))\n        }"
+        }
+        InterpreterEvalKind::SenderSendCancellable => {
+            "{\n            let sender = interpreter.eval_named_or_positional_arg(args, \"sender\", 0)?;\n            let value = interpreter.eval_named_or_positional_arg(args, \"value\", 1)?;\n            let sender = expect_sender(sender)?;\n            let token = interpreter.eval_named_or_positional_arg(args, \"token\", 2)?;\n            let id = expect_cancellation_id(token, \"CancellationToken\")?;\n            if interpreter.cancellation_flags.get(&id).copied().unwrap_or(false) {\n                return Ok(value_err(channel_error(\"channel send cancelled\")));\n            }\n            Ok(result_value(interpreter.channel_send(sender, value)))\n        }"
         }
         InterpreterEvalKind::SortedMapClear => {
             "{\n            let map_name = interpreter.mut_arg_local_name(args, \"map\", 0)?;\n            interpreter.assign(map_name, Value::Map(Vec::new()))?;\n            Ok(Value::Unit)\n        }"
@@ -3274,9 +5121,7 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::SortedMapLen => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::Int(expect_map(value)?.len() as i64))\n        }"
         }
-        InterpreterEvalKind::SortedMapNew => {
-            "{\n            Ok(Value::Map(Vec::new()))\n        }"
-        }
+        InterpreterEvalKind::SortedMapNew => "{\n            Ok(Value::Map(Vec::new()))\n        }",
         InterpreterEvalKind::SortedMapRemove => {
             "{\n            let map_name = interpreter.mut_arg_local_name(args, \"map\", 0)?;\n            let key = interpreter.eval_named_or_positional_arg(args, \"key\", 1)?;\n            let mut map = expect_map(interpreter.lookup(map_name)?)?;\n            let old = map_remove(&mut map, &key);\n            interpreter.assign(map_name, Value::Map(map))?;\n            Ok(value_option(old, |value| value))\n        }"
         }
@@ -3418,8 +5263,32 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::StringJoin => {
             "{\n            let parts = interpreter.eval_named_or_positional_arg(args, \"parts\", 0)?;\n            let separator = interpreter.eval_named_or_positional_arg(args, \"separator\", 1)?;\n            Ok(Value::String(\n                expect_string_list(parts)?.join(&expect_string(separator)?),\n            ))\n        }"
         }
+        InterpreterEvalKind::StreamCollectList => {
+            "{\n            let stream = interpreter.eval_named_or_positional_arg(args, \"stream\", 0)?;\n            Ok(result_value(\n                interpreter.expect_stream_collect_items(stream)?.map(Value::List),\n            ))\n        }"
+        }
+        InterpreterEvalKind::StreamFromList => {
+            "{\n            let items = interpreter.eval_named_or_positional_arg(args, \"items\", 0)?;\n            Ok(interpreter.stream_from_list(expect_list(items)?))\n        }"
+        }
+        InterpreterEvalKind::StreamNext => {
+            "{\n            let stream = interpreter.eval_named_or_positional_arg(args, \"stream\", 0)?;\n            Ok(result_value(interpreter.stream_next(stream)?))\n        }"
+        }
+        InterpreterEvalKind::TcpConnect => {
+            "{\n            let host = interpreter.eval_named_or_positional_arg(args, \"host\", 0)?;\n            let port = interpreter.eval_named_or_positional_arg(args, \"port\", 1)?;\n            let host = expect_string(host)?;\n            let port = expect_int(port)?;\n            Ok(result_value(\n                interpreter.tcp_connect(&host, port).map_err(tcp_error),\n            ))\n        }"
+        }
         InterpreterEvalKind::TcpErrorMessage | InterpreterEvalKind::WebSocketErrorMessage => {
             "{\n            let error = interpreter.eval_named_or_positional_arg(args, \"error\", 0)?;\n            read_field(&error, \"message\")\n        }"
+        }
+        InterpreterEvalKind::TcpStreamRead => {
+            "{\n            let stream = interpreter.eval_named_or_positional_arg(args, \"stream\", 0)?;\n            let max_bytes = interpreter.eval_named_or_positional_arg(args, \"max_bytes\", 1)?;\n            let id = expect_tcp_stream_id(stream)?;\n            Ok(result_value(\n                interpreter\n                    .tcp_stream_read(id, expect_int(max_bytes)?)\n                    .map(Value::Bytes)\n                    .map_err(tcp_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::TcpStreamWrite => {
+            "{\n            let stream = interpreter.eval_named_or_positional_arg(args, \"stream\", 0)?;\n            let data = interpreter.eval_named_or_positional_arg(args, \"data\", 1)?;\n            let id = expect_tcp_stream_id(stream)?;\n            Ok(result_value(\n                interpreter\n                    .tcp_stream_write(id, &expect_bytes(data)?)\n                    .map(Value::Int)\n                    .map_err(tcp_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::TcpStreamWriteAll => {
+            "{\n            let stream = interpreter.eval_named_or_positional_arg(args, \"stream\", 0)?;\n            let data = interpreter.eval_named_or_positional_arg(args, \"data\", 1)?;\n            let id = expect_tcp_stream_id(stream)?;\n            Ok(result_value(\n                interpreter\n                    .tcp_stream_write_all(id, &expect_bytes(data)?)\n                    .map(|_| Value::Unit)\n                    .map_err(tcp_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::TcpStreamShutdown => {
+            "{\n            let stream = interpreter.eval_named_or_positional_arg(args, \"stream\", 0)?;\n            let id = expect_tcp_stream_id(stream)?;\n            Ok(result_value(\n                interpreter\n                    .tcp_stream_shutdown(id)\n                    .map(|_| Value::Unit)\n                    .map_err(tcp_error),\n            ))\n        }"
         }
         InterpreterEvalKind::TempDirKeep => {
             "{\n            let dir = interpreter.eval_named_or_positional_arg(args, \"dir\", 0)?;\n            Ok(Value::String(expect_tempdir_path(dir)?))\n        }"
@@ -3433,8 +5302,35 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::TempDirPath => {
             "{\n            let dir = interpreter\n                .eval_named_or_positional_arg(args, \"dir\", 0)\n                .or_else(|_| interpreter.eval_first_arg(args))?;\n            Ok(Value::String(expect_tempdir_path(dir)?))\n        }"
         }
+        InterpreterEvalKind::TimerSleep => {
+            "{\n            let ms = interpreter.eval_named_or_positional_arg(args, \"ms\", 0)?;\n            let _ = expect_int(ms)?;\n            Ok(value_ok(Value::Unit))\n        }"
+        }
+        InterpreterEvalKind::TimerSleepCancellable => {
+            "{\n            let ms = interpreter.eval_named_or_positional_arg(args, \"ms\", 0)?;\n            let token = interpreter.eval_named_or_positional_arg(args, \"token\", 1)?;\n            let _ = expect_int(ms)?;\n            let _ = expect_cancellation_id(token, \"CancellationToken\")?;\n            Ok(value_ok(Value::Unit))\n        }"
+        }
+        InterpreterEvalKind::TimerSleepUntil => {
+            "{\n            let deadline = interpreter.eval_named_or_positional_arg(args, \"deadline\", 0)?;\n            let _ = expect_deadline_unix_ms(deadline)?;\n            Ok(value_ok(Value::Unit))\n        }"
+        }
         InterpreterEvalKind::TomlParseFile => {
             "{\n            let path = interpreter.eval_named_or_positional_arg(args, \"path\", 0)?;\n            Ok(json_result(\n                std::fs::read_to_string(expect_string(path)?)\n                    .map_err(|error| error.to_string())\n                    .and_then(|text| {\n                        text.parse::<toml::Value>()\n                            .map_err(|error| error.to_string())\n                    })\n                    .and_then(|value| {\n                        serde_json::to_value(value).map_err(|error| error.to_string())\n                    }),\n            ))\n        }"
+        }
+        InterpreterEvalKind::WebSocketConnect => {
+            "{\n            let url = interpreter.eval_named_or_positional_arg(args, \"url\", 0)?;\n            let url = expect_string(url)?;\n            Ok(result_value(\n                interpreter.websocket_connect(&url).map_err(websocket_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::WebSocketSendText => {
+            "{\n            let socket = interpreter.eval_named_or_positional_arg(args, \"socket\", 0)?;\n            let text = interpreter.eval_named_or_positional_arg(args, \"text\", 1)?;\n            let id = expect_websocket_id(socket)?;\n            Ok(result_value(\n                interpreter\n                    .websocket_send_text(id, &expect_string(text)?)\n                    .map(|_| Value::Unit)\n                    .map_err(websocket_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::WebSocketSendBytes => {
+            "{\n            let socket = interpreter.eval_named_or_positional_arg(args, \"socket\", 0)?;\n            let bytes = interpreter.eval_named_or_positional_arg(args, \"bytes\", 1)?;\n            let id = expect_websocket_id(socket)?;\n            Ok(result_value(\n                interpreter\n                    .websocket_send_bytes(id, &expect_bytes(bytes)?)\n                    .map(|_| Value::Unit)\n                    .map_err(websocket_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::WebSocketRecvText => {
+            "{\n            let socket = interpreter.eval_named_or_positional_arg(args, \"socket\", 0)?;\n            let id = expect_websocket_id(socket)?;\n            Ok(result_value(\n                interpreter\n                    .websocket_recv_text(id)\n                    .map(|value| value.map(Value::String).map_or_else(value_none, value_some))\n                    .map_err(websocket_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::WebSocketRecvBytes => {
+            "{\n            let socket = interpreter.eval_named_or_positional_arg(args, \"socket\", 0)?;\n            let id = expect_websocket_id(socket)?;\n            Ok(result_value(\n                interpreter\n                    .websocket_recv_bytes(id)\n                    .map(|value| value.map(Value::Bytes).map_or_else(value_none, value_some))\n                    .map_err(websocket_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::WebSocketClose => {
+            "{\n            let socket = interpreter.eval_named_or_positional_arg(args, \"socket\", 0)?;\n            let id = expect_websocket_id(socket)?;\n            Ok(result_value(\n                interpreter\n                    .websocket_close(id)\n                    .map(|_| Value::Unit)\n                    .map_err(websocket_error),\n            ))\n        }"
         }
         InterpreterEvalKind::YamlParse => {
             "{\n            let text = interpreter.eval_named_or_positional_arg(args, \"text\", 0)?;\n            Ok(yaml_parse_result(&expect_string(text)?))\n        }"
@@ -3577,6 +5473,103 @@ fn collect_functions(source: &str) -> Vec<String> {
     functions.sort();
     functions.dedup();
     functions
+}
+
+fn collect_interpreter_interface_functions(source: &str) -> Vec<String> {
+    let mut functions = collect_functions(source);
+    functions.extend(collect_protocol_method_signatures(source));
+    functions.sort();
+    functions.dedup();
+    functions
+}
+
+fn collect_protocol_method_signatures(source: &str) -> Vec<String> {
+    let mut methods = Vec::new();
+    let bytes = source.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if starts_line_comment(bytes, index) {
+            index = skip_line_comment(bytes, index + 2);
+            continue;
+        }
+        if bytes[index] == b'"' {
+            index = skip_string_literal(bytes, index + 1);
+            continue;
+        }
+        if !is_ident_start(bytes[index]) {
+            index += 1;
+            continue;
+        }
+        let token_start = index;
+        index += 1;
+        while index < bytes.len() && is_ident_continue(bytes[index]) {
+            index += 1;
+        }
+        if &source[token_start..index] != "protocol" {
+            continue;
+        }
+        index = skip_ascii_whitespace(bytes, index);
+        let Some((protocol, after_protocol)) = read_symbol(source, index) else {
+            continue;
+        };
+        index = skip_ascii_whitespace(bytes, after_protocol);
+        if bytes.get(index) != Some(&b'{') {
+            continue;
+        }
+        let open = index;
+        let Some(close) = find_matching_brace(source, open) else {
+            break;
+        };
+        for method in collect_functions(&source[open + 1..close]) {
+            methods.push(format!("{protocol}.{method}"));
+        }
+        index = close + 1;
+    }
+    methods
+}
+
+fn read_symbol(source: &str, index: usize) -> Option<(String, usize)> {
+    let bytes = source.as_bytes();
+    if !bytes.get(index).copied().is_some_and(is_symbol_start) {
+        return None;
+    }
+    let start = index;
+    let mut end = index + 1;
+    while end < bytes.len() && is_symbol_continue(bytes[end]) {
+        end += 1;
+    }
+    Some((source[start..end].to_string(), end))
+}
+
+fn find_matching_brace(source: &str, open: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    if bytes.get(open) != Some(&b'{') {
+        return None;
+    }
+    let mut depth = 1usize;
+    let mut index = open + 1;
+    while index < bytes.len() {
+        if starts_line_comment(bytes, index) {
+            index = skip_line_comment(bytes, index + 2);
+            continue;
+        }
+        if bytes[index] == b'"' {
+            index = skip_string_literal(bytes, index + 1);
+            continue;
+        }
+        match bytes[index] {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    None
 }
 
 fn collect_types(source: &str) -> Vec<String> {

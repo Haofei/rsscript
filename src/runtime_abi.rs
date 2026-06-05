@@ -1409,9 +1409,18 @@ mod tests {
         let mut public_functions = HashSet::new();
         for (path, source) in default_interfaces() {
             let program = parse_source(path, source);
+            let protocol_names = program
+                .protocols
+                .iter()
+                .map(|protocol| protocol.name.as_str())
+                .collect::<HashSet<_>>();
             for item in program.items {
                 if let Item::Function(function) = item
-                    && function.is_public
+                    && (function.is_public
+                        || function
+                            .name
+                            .rsplit_once('.')
+                            .is_some_and(|(namespace, _)| protocol_names.contains(namespace)))
                 {
                     public_functions.insert(function.name);
                 }
