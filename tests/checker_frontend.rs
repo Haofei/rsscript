@@ -351,11 +351,6 @@ fn bundled_core_interfaces_are_available_to_checker() {
     assert!(
         core_interfaces()
             .iter()
-            .any(|(path, _)| *path == "core/cache/image_cache.rssi")
-    );
-    assert!(
-        core_interfaces()
-            .iter()
             .any(|(path, _)| *path == "core/counter/counter.rssi")
     );
     assert!(

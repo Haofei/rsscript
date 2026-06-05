@@ -280,9 +280,6 @@ const INTERPRETER_HANDWRITTEN_INTRINSICS: &[(&str, &str)] = &[
     ("HttpResponse", "lines"),
     ("HttpResponse", "status"),
     ("HttpResponse", "text"),
-    ("ImageCache", "len"),
-    ("ImageCache", "new"),
-    ("ImageCache", "store"),
     ("List", "append"),
     ("List", "clear"),
     ("List", "contains_value"),
@@ -465,6 +462,10 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Assert.equal",
     "runtime:Assert.equal_bool",
     "runtime:Assert.equal_int",
+    "runtime:Base64.decode",
+    "runtime:Base64.decode_string",
+    "runtime:Base64.encode",
+    "runtime:Base64.encode_bytes",
     "runtime:Char.compare",
     "runtime:Char.from_code",
     "runtime:Char.is_alpha",
@@ -473,6 +474,7 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Char.is_whitespace",
     "runtime:Char.to_code",
     "runtime:Char.to_string",
+    "runtime:DecodeError.message",
     "runtime:Buffer.clear",
     "runtime:Buffer.consume",
     "runtime:Buffer.is_empty",
@@ -683,6 +685,9 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Hash.sha256_bytes",
     "runtime:Hash.sha256_file",
     "runtime:Hash.sha256_string",
+    "runtime:Hex.decode",
+    "runtime:Hex.encode",
+    "runtime:Hex.encode_string",
     "runtime:Http.get",
     "runtime:Http.get_async",
     "runtime:Http.get_retry_async",
@@ -710,9 +715,6 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:Image.resize",
     "runtime:Image.save",
     "runtime:Image.sharpen",
-    "runtime:ImageCache.len",
-    "runtime:ImageCache.new",
-    "runtime:ImageCache.store",
     "runtime:List.append",
     "runtime:List.all",
     "runtime:List.any",
@@ -965,6 +967,8 @@ const INTERPRETER_PARITY_FEATURES: &[&str] = &[
     "runtime:TcpStream.write",
     "runtime:TcpStream.write_all",
     "runtime:Toml.parse_file",
+    "runtime:Url.decode_component",
+    "runtime:Url.encode_component",
     "runtime:Url.from_string",
     "runtime:Url.to_string",
     "runtime:WebSocket.close",
@@ -4085,6 +4089,13 @@ fn json_error(message: impl Into<String>) -> Value {
     }
 }
 
+fn decode_error(message: impl ToString) -> Value {
+    Value::Struct {
+        name: "DecodeError".to_string(),
+        fields: BTreeMap::from([("message".to_string(), Value::String(message.to_string()))]),
+    }
+}
+
 fn json_result(value: Result<serde_json::Value, String>) -> Value {
     result_value(value.map(Value::Json).map_err(json_error))
 }
@@ -4319,16 +4330,6 @@ fn config_store_value(name: impl Into<String>) -> Value {
     Value::Struct {
         name: "ConfigStore".to_string(),
         fields: BTreeMap::from([("name".to_string(), Value::String(name.into()))]),
-    }
-}
-
-fn image_cache_value(capacity: i64, len: i64) -> Value {
-    Value::Struct {
-        name: "ImageCache".to_string(),
-        fields: BTreeMap::from([
-            ("capacity".to_string(), Value::Int(capacity)),
-            ("len".to_string(), Value::Int(len)),
-        ]),
     }
 }
 
@@ -5112,28 +5113,6 @@ fn expect_config_store_name(value: Value) -> Result<String, EvalError> {
             .and_then(expect_string),
         other => Err(EvalError::Runtime(format!(
             "expected ConfigStore, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-fn expect_image_cache_len(value: Value) -> Result<i64, EvalError> {
-    expect_image_cache_state(value).map(|(_, len)| len)
-}
-
-fn expect_image_cache_state(value: Value) -> Result<(i64, i64), EvalError> {
-    match unmanage_value(value) {
-        Value::Struct { name, mut fields } if name == "ImageCache" => {
-            let capacity = fields
-                .remove("capacity")
-                .ok_or_else(|| EvalError::Runtime("ImageCache capacity is missing.".to_string()))?;
-            let len = fields
-                .remove("len")
-                .ok_or_else(|| EvalError::Runtime("ImageCache len is missing.".to_string()))?;
-            Ok((expect_int(capacity)?, expect_int(len)?))
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected ImageCache, got `{}`.",
             other.display()
         ))),
     }

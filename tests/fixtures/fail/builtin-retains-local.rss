@@ -1,7 +1,7 @@
 // expect: RS0501
 features: local
 
-class ImageCache {
+class RetainedImageStore {
     entries: Map<String, Image>
 }
 
@@ -9,7 +9,7 @@ struct Image {
     pixels: Buffer
 }
 
-fn bad_store(cache: mut ImageCache, path: read Path) -> Unit {
+fn bad_store(cache: mut RetainedImageStore, path: read Path) -> Unit {
     local image = Image.load(path: read path)
-    ImageCache.store(cache: mut cache, image: read image)
+    RetainedImageStore.store(cache: mut cache, image: read image)
 }

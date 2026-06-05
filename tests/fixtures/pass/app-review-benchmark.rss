@@ -30,6 +30,14 @@ struct RenderResult {
     status: String
 }
 
+class RetainedImageStore {
+}
+
+fn RetainedImageStore.new(capacity: Int) -> fresh RetainedImageStore
+
+fn RetainedImageStore.store(cache: mut RetainedImageStore, image: read Image) -> Unit
+    effects(retains(image))
+
 fn User.lookup(id: read String) -> User
 
 fn User.touch(user: read User) -> Unit
@@ -112,7 +120,7 @@ fn decode_row_status(path: read Path) -> Result<String, CsvError> {
     return Ok(status)
 }
 
-fn process_image(plan: read UploadPlan, cache: mut ImageCache) -> Result<Unit, ImageError> {
+fn process_image(plan: read UploadPlan, cache: mut RetainedImageStore) -> Result<Unit, ImageError> {
     local image = Image.load(path: read plan.input)?
 
     audit_step(callback: || {
@@ -124,14 +132,14 @@ fn process_image(plan: read UploadPlan, cache: mut ImageCache) -> Result<Unit, I
     Image.sharpen(image: mut image)
 
     let shared = manage image
-    ImageCache.store(cache: mut cache, image: read shared)
+    RetainedImageStore.store(cache: mut cache, image: read shared)
     Image.save(image: read shared, path: read plan.output)?
 
     return Ok(Unit)
 }
 
-fn build_image_cache() -> fresh ImageCache {
-    return ImageCache.new(capacity: 64)
+fn build_image_store() -> fresh RetainedImageStore {
+    return RetainedImageStore.new(capacity: 64)
 }
 
 fn refresh_config(path: read Path, store: mut ConfigStore) -> Result<Unit, ConfigError> {
@@ -252,7 +260,7 @@ fn build_work_item_http(
     }
 }
 
-fn process_image_http(plan: read UploadPlan, cache: mut ImageCache) -> Result<Unit, HttpError> {
+fn process_image_http(plan: read UploadPlan, cache: mut RetainedImageStore) -> Result<Unit, HttpError> {
     match process_image(plan: read plan, cache: mut cache) {
         Ok(unit) => {
             return Ok(Unit)
@@ -360,7 +368,7 @@ fn render_response(status: read String) -> Result<fresh RenderResult, HttpError>
 fn complete_request(
     request: read Request,
     owner_id: read String,
-    image_cache: mut ImageCache,
+    image_store: mut RetainedImageStore,
     config_store: mut ConfigStore,
     rules_global: mut GlobalConfig,
     status_cache: mut Cache,
@@ -376,7 +384,7 @@ fn complete_request(
     let item = build_work_item_http(request: read request, owner_id: read owner_id)?
     inspect_session(session: read item.session)
 
-    process_image_http(plan: read item.plan, cache: mut image_cache)?
+    process_image_http(plan: read item.plan, cache: mut image_store)?
     run_audit_query_http(url: read db_url, trace_id: read item.plan.trace_id)?
 
     let csv_status = decode_row_status_http(path: read csv_path)?
@@ -408,7 +416,7 @@ fn main_handler(
     db_url: read Url,
     csv_path: read Path,
 ) -> Result<fresh Response, HttpError> {
-    let image_cache = build_image_cache()
+    let image_store = build_image_store()
     let env = build_environment()
     let child = Environment.child(parent: read env)
     let function = FunctionObject.new(closure: read child)
@@ -417,7 +425,7 @@ fn main_handler(
     return complete_request(
         request: read request,
         owner_id: read owner_id,
-        image_cache: mut image_cache,
+        image_store: mut image_store,
         config_store: mut config_store,
         rules_global: mut rules_global,
         status_cache: mut status_cache,

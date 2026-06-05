@@ -42,48 +42,38 @@ json_field() {
   JSON="$json" FIELD="$field" perl -MJSON::PP -e 'my $data = decode_json($ENV{JSON}); print $data->{$ENV{FIELD}}'
 }
 
-printf '%-26s %10s %12s %12s %12s %12s %12s\n' \
-  "case" "size" "eval_ms" "vm_ms" "vm_internal_ms" "release_internal_ms" "vm_int/release"
-printf '%-26s %10s %12s %12s %12s %12s %12s\n' \
-  "----" "----" "-------" "-----" "--------------" "-------------------" "--------------"
+printf '%-26s %10s %12s %12s %12s\n' \
+  "case" "size" "reg_vm_ms" "rust_ms" "reg/rust"
+printf '%-26s %10s %12s %12s %12s\n' \
+  "----" "----" "---------" "-------" "--------"
 
 for entry in "${cases[@]}"; do
   case_file="${entry%%:*}"
   size="${entry##*:}"
   path="$repo_root/benchmark/$case_file"
 
-  eval_json="$(
-    "${bench_cmd[@]}" bench --json --mode eval \
-      --iterations "$iterations" --warmup "$warmup" "$path" -- "$size"
-  )"
   release_json="$(
     "${bench_cmd[@]}" bench --json --mode release-internal \
       --iterations "$iterations" --warmup "$warmup" "$path" -- "$size"
   )"
-  vm_json="$(
-    "${bench_cmd[@]}" bench --json --mode vm \
-      --iterations "$iterations" --warmup "$warmup" "$path" -- "$size"
-  )"
-  vm_internal_json="$(
-    "${bench_cmd[@]}" bench --json --mode vm-internal \
-      --iterations "$iterations" --warmup "$warmup" "$path" -- "$size"
+  reg_json="$(
+    "${bench_cmd[@]}" bench --json --mode vm-internal --vm reg \
+      --iterations "$iterations" --warmup "$warmup" "$path" -- "$size" 2>/dev/null || true
   )"
 
-  eval_ms="$(json_field "$eval_json" mean_ms)"
-  vm_ms="$(json_field "$vm_json" mean_ms)"
-  vm_internal_ms="$(json_field "$vm_internal_json" mean_ms)"
   release_ms="$(json_field "$release_json" mean_ms)"
-  vm_release_ratio="$(
-    VM_MS="$vm_internal_ms" RELEASE_MS="$release_ms" perl -e '
-      my $release = $ENV{RELEASE_MS};
-      if ($release == 0) {
-        print "inf";
-      } else {
-        printf "%.2f", $ENV{VM_MS} / $release;
-      }
-    '
-  )"
-
-  printf '%-26s %10s %12.3f %12.3f %14.3f %19.3f %14s\n' \
-    "$case_file" "$size" "$eval_ms" "$vm_ms" "$vm_internal_ms" "$release_ms" "$vm_release_ratio"
+  if [[ "$reg_json" == \{* ]]; then
+    reg_ms="$(json_field "$reg_json" mean_ms)"
+    reg_release_ratio="$(
+      REG_MS="$reg_ms" RELEASE_MS="$release_ms" perl -e '
+        my $release = $ENV{RELEASE_MS};
+        if ($release == 0) { print "inf"; } else { printf "%.2f", $ENV{REG_MS} / $release; }
+      '
+    )"
+    printf '%-26s %10s %12.3f %12.3f %12s\n' \
+      "$case_file" "$size" "$reg_ms" "$release_ms" "$reg_release_ratio"
+  else
+    printf '%-26s %10s %12s %12.3f %12s\n' \
+      "$case_file" "$size" "unsupported" "$release_ms" "-"
+  fi
 done

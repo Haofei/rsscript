@@ -3932,7 +3932,6 @@ impl<'a> RustLowerer<'a> {
             "DbConnection" => "rsscript_runtime::DbConnection".to_string(),
             "DbError" => "rsscript_runtime::DbError".to_string(),
             "Image" => "rsscript_runtime::Image".to_string(),
-            "ImageCache" => "rsscript_runtime::ImageCache".to_string(),
             "ImageError" => "rsscript_runtime::ImageError".to_string(),
             "JsonValue" => "rsscript_runtime::JsonValue".to_string(),
             "JsonError" => "rsscript_runtime::JsonError".to_string(),

@@ -4,7 +4,13 @@ struct Image {
     pixels: Buffer
 }
 
-fn process_upload(input: read Path, cache: mut ImageCache) -> Result<Unit, ImageError> {
+class RetainedImageStore {
+}
+
+fn RetainedImageStore.store(cache: mut RetainedImageStore, image: read Image) -> Unit
+    effects(retains(image))
+
+fn process_upload(input: read Path, cache: mut RetainedImageStore) -> Result<Unit, ImageError> {
     local image = Image.load(path: read input)?
 
     Image.resize(image: mut image, width: 1280, height: 720)
@@ -12,7 +18,7 @@ fn process_upload(input: read Path, cache: mut ImageCache) -> Result<Unit, Image
     Image.sharpen(image: mut image)
 
     let shared = manage image
-    ImageCache.store(cache: mut cache, image: read shared)
+    RetainedImageStore.store(cache: mut cache, image: read shared)
 
     return Ok(Unit)
 }

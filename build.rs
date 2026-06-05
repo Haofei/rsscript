@@ -123,6 +123,10 @@ enum InterpreterEvalKind {
     AssertEqual,
     AssertEqualBool,
     AssertEqualInt,
+    Base64Decode,
+    Base64DecodeString,
+    Base64Encode,
+    Base64EncodeBytes,
     BufferClear,
     BufferConsume,
     BufferIsEmpty,
@@ -155,6 +159,7 @@ enum InterpreterEvalKind {
     CharIsWhitespace,
     CharToCode,
     CharToString,
+    DecodeErrorMessage,
     CancellationSourceCancel,
     CancellationSourceNew,
     CancellationSourceToken,
@@ -265,6 +270,9 @@ enum InterpreterEvalKind {
     HashSha256Bytes,
     HashSha256File,
     HashSha256String,
+    HexDecode,
+    HexEncode,
+    HexEncodeString,
     InstantElapsed,
     PathExists,
     PathExtension,
@@ -368,9 +376,6 @@ enum InterpreterEvalKind {
     ImageResize,
     ImageSave,
     ImageSharpen,
-    ImageCacheLen,
-    ImageCacheNew,
-    ImageCacheStore,
     JsonArray,
     JsonArrayBools,
     JsonArrayContainsPrefix,
@@ -606,6 +611,8 @@ enum InterpreterEvalKind {
     TimerSleepUntil,
     TomlParseFile,
     UrlFromString,
+    UrlDecodeComponent,
+    UrlEncodeComponent,
     UrlToString,
     WebSocketClose,
     WebSocketConnect,
@@ -666,6 +673,30 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "equal_int",
         variant: "AssertEqualInt",
         eval_kind: InterpreterEvalKind::AssertEqualInt,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Base64",
+        name: "decode",
+        variant: "Base64Decode",
+        eval_kind: InterpreterEvalKind::Base64Decode,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Base64",
+        name: "decode_string",
+        variant: "Base64DecodeString",
+        eval_kind: InterpreterEvalKind::Base64DecodeString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Base64",
+        name: "encode",
+        variant: "Base64Encode",
+        eval_kind: InterpreterEvalKind::Base64Encode,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Base64",
+        name: "encode_bytes",
+        variant: "Base64EncodeBytes",
+        eval_kind: InterpreterEvalKind::Base64EncodeBytes,
     },
     InterpreterIntrinsicSpec {
         namespace: "Buffer",
@@ -900,6 +931,12 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "to_string",
         variant: "CharToString",
         eval_kind: InterpreterEvalKind::CharToString,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "DecodeError",
+        name: "message",
+        variant: "DecodeErrorMessage",
+        eval_kind: InterpreterEvalKind::DecodeErrorMessage,
     },
     InterpreterIntrinsicSpec {
         namespace: "CancellationSource",
@@ -1562,6 +1599,24 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         eval_kind: InterpreterEvalKind::HashSha256String,
     },
     InterpreterIntrinsicSpec {
+        namespace: "Hex",
+        name: "decode",
+        variant: "HexDecode",
+        eval_kind: InterpreterEvalKind::HexDecode,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Hex",
+        name: "encode",
+        variant: "HexEncode",
+        eval_kind: InterpreterEvalKind::HexEncode,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Hex",
+        name: "encode_string",
+        variant: "HexEncodeString",
+        eval_kind: InterpreterEvalKind::HexEncodeString,
+    },
+    InterpreterIntrinsicSpec {
         namespace: "Instant",
         name: "elapsed",
         variant: "InstantElapsed",
@@ -2178,24 +2233,6 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
         name: "sharpen",
         variant: "ImageSharpen",
         eval_kind: InterpreterEvalKind::ImageSharpen,
-    },
-    InterpreterIntrinsicSpec {
-        namespace: "ImageCache",
-        name: "len",
-        variant: "ImageCacheLen",
-        eval_kind: InterpreterEvalKind::ImageCacheLen,
-    },
-    InterpreterIntrinsicSpec {
-        namespace: "ImageCache",
-        name: "new",
-        variant: "ImageCacheNew",
-        eval_kind: InterpreterEvalKind::ImageCacheNew,
-    },
-    InterpreterIntrinsicSpec {
-        namespace: "ImageCache",
-        name: "store",
-        variant: "ImageCacheStore",
-        eval_kind: InterpreterEvalKind::ImageCacheStore,
     },
     InterpreterIntrinsicSpec {
         namespace: "Json",
@@ -3639,6 +3676,18 @@ const INTERPRETER_INTRINSICS: &[InterpreterIntrinsicSpec] = &[
     },
     InterpreterIntrinsicSpec {
         namespace: "Url",
+        name: "decode_component",
+        variant: "UrlDecodeComponent",
+        eval_kind: InterpreterEvalKind::UrlDecodeComponent,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Url",
+        name: "encode_component",
+        variant: "UrlEncodeComponent",
+        eval_kind: InterpreterEvalKind::UrlEncodeComponent,
+    },
+    InterpreterIntrinsicSpec {
+        namespace: "Url",
         name: "from_string",
         variant: "UrlFromString",
         eval_kind: InterpreterEvalKind::UrlFromString,
@@ -3941,6 +3990,18 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::AssertEqualInt => {
             "{\n            let left = interpreter.eval_named_or_positional_arg(args, \"left\", 0)?;\n            let right = interpreter.eval_named_or_positional_arg(args, \"right\", 1)?;\n            let left = expect_int(left)?;\n            let right = expect_int(right)?;\n            if left != right {\n                return Err(EvalError::Runtime(format!(\"assertion failed: left `{left}` did not equal right `{right}`\")));\n            }\n            Ok(Value::Unit)\n        }"
         }
+        InterpreterEvalKind::Base64Decode => {
+            "{\n            let text = interpreter.eval_first_arg(args)?;\n            Ok(result_value(\n                base64::Engine::decode(\n                    &base64::engine::general_purpose::STANDARD,\n                    expect_string(text)?,\n                )\n                .map(Value::Bytes)\n                .map_err(decode_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::Base64DecodeString => {
+            "{\n            let text = interpreter.eval_first_arg(args)?;\n            let result = base64::Engine::decode(\n                &base64::engine::general_purpose::STANDARD,\n                expect_string(text)?,\n            )\n            .map_err(decode_error)\n            .and_then(|bytes| String::from_utf8(bytes).map(Value::String).map_err(decode_error));\n            Ok(result_value(result))\n        }"
+        }
+        InterpreterEvalKind::Base64Encode => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(base64::Engine::encode(\n                &base64::engine::general_purpose::STANDARD,\n                expect_string(value)?.as_bytes(),\n            )))\n        }"
+        }
+        InterpreterEvalKind::Base64EncodeBytes => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(base64::Engine::encode(\n                &base64::engine::general_purpose::STANDARD,\n                expect_bytes(value)?,\n            )))\n        }"
+        }
         InterpreterEvalKind::BufferClear => {
             "{\n            let buffer_name = interpreter.mut_arg_local_name(args, \"buffer\", 0)?;\n            interpreter.assign(buffer_name, Value::Bytes(Vec::new()))?;\n            Ok(Value::Unit)\n        }"
         }
@@ -4006,6 +4067,9 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
             "{\n            let channel_name = interpreter.mut_arg_local_name(args, \"channel\", 0)?;\n            let mut channel = expect_channel(interpreter.lookup(channel_name)?)?;\n            let already_taken = interpreter\n                .channels\n                .get(&channel.id)\n                .map(|state| state.receiver_taken)\n                .unwrap_or(channel.receiver_taken);\n            Ok(result_value(if already_taken {\n                Err(channel_error(\"channel receiver already taken\"))\n            } else {\n                channel.receiver_taken = true;\n                interpreter.channel_state_mut(channel.id)?.receiver_taken = true;\n                interpreter.assign(channel_name, channel.to_value())?;\n                Ok(receiver_value(channel.id, false))\n            }))\n        }"
         }
         InterpreterEvalKind::ChannelErrorMessage => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            read_field(&value, \"message\")\n        }"
+        }
+        InterpreterEvalKind::DecodeErrorMessage => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            read_field(&value, \"message\")\n        }"
         }
         InterpreterEvalKind::CharCompare => {
@@ -4357,6 +4421,15 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         InterpreterEvalKind::HashSha256String => {
             "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(sha256_digest(\n                expect_string(value)?.as_bytes(),\n            )))\n        }"
         }
+        InterpreterEvalKind::HexDecode => {
+            "{\n            let text = interpreter.eval_first_arg(args)?;\n            Ok(result_value(\n                hex::decode(expect_string(text)?)\n                    .map(Value::Bytes)\n                    .map_err(decode_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::HexEncode => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(hex::encode(expect_bytes(value)?)))\n        }"
+        }
+        InterpreterEvalKind::HexEncodeString => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(hex::encode(expect_string(value)?.as_bytes())))\n        }"
+        }
         InterpreterEvalKind::InstantElapsed => {
             "{\n            let start = interpreter.eval_first_arg(args)?;\n            Ok(Value::Int(\n                clock_system_unix_ms()\n                    .saturating_sub(expect_instant_unix_ms(start)?)\n                    .max(0),\n            ))\n        }"
         }
@@ -4376,6 +4449,12 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         | InterpreterEvalKind::UrlFromString
         | InterpreterEvalKind::UrlToString => {
             "{\n            interpreter.eval_first_arg(args)\n        }"
+        }
+        InterpreterEvalKind::UrlDecodeComponent => {
+            "{\n            let value = interpreter.eval_first_arg(args)?;\n            Ok(result_value(\n                percent_encoding::percent_decode_str(&expect_string(value)?)\n                    .decode_utf8()\n                    .map(|value| Value::String(value.to_string()))\n                    .map_err(decode_error),\n            ))\n        }"
+        }
+        InterpreterEvalKind::UrlEncodeComponent => {
+            "{\n            const COMPONENT_SET: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC\n                .remove(b'-')\n                .remove(b'_')\n                .remove(b'.')\n                .remove(b'~');\n            let value = interpreter.eval_first_arg(args)?;\n            let value = expect_string(value)?;\n            Ok(Value::String(\n                percent_encoding::utf8_percent_encode(&value, COMPONENT_SET).to_string(),\n            ))\n        }"
         }
         InterpreterEvalKind::PathIsAbsolute => {
             "{\n            let path = interpreter.eval_first_arg(args)?;\n            Ok(Value::Bool(Path::new(&expect_string(path)?).is_absolute()))\n        }"
@@ -4639,15 +4718,6 @@ fn eval_kind_body(kind: InterpreterEvalKind) -> &'static str {
         }
         InterpreterEvalKind::ImageSharpen => {
             "{\n            let image_name = interpreter.mut_arg_local_name(args, \"image\", 0)?;\n            let mut image = expect_image(interpreter.lookup(image_name)?)?;\n            image.operations.push(\"sharpen\".to_string());\n            interpreter.assign(image_name, image.to_value())?;\n            Ok(Value::Unit)\n        }"
-        }
-        InterpreterEvalKind::ImageCacheLen => {
-            "{\n            let cache = interpreter.eval_named_or_positional_arg(args, \"cache\", 0)?;\n            Ok(Value::Int(expect_image_cache_len(cache)?))\n        }"
-        }
-        InterpreterEvalKind::ImageCacheNew => {
-            "{\n            let capacity = interpreter.eval_named_or_positional_arg(args, \"capacity\", 0)?;\n            Ok(image_cache_value(expect_int(capacity)?.max(0), 0))\n        }"
-        }
-        InterpreterEvalKind::ImageCacheStore => {
-            "{\n            let cache_name = interpreter.mut_arg_local_name(args, \"cache\", 0)?;\n            let image = interpreter.eval_named_or_positional_arg(args, \"image\", 1)?;\n            let _ = expect_image(image)?;\n            let (capacity, len) = expect_image_cache_state(interpreter.lookup(cache_name)?)?;\n            let len = if capacity == 0 {\n                0\n            } else {\n                (len + 1).min(capacity)\n            };\n            interpreter.assign(cache_name, image_cache_value(capacity, len))?;\n            Ok(Value::Unit)\n        }"
         }
         InterpreterEvalKind::JsonArray => {
             "{\n            let items = interpreter.eval_first_arg(args)?;\n            Ok(Value::String(format!(\n                \"[{}]\",\n                expect_string_list(items)?.join(\",\")\n            )))\n        }"

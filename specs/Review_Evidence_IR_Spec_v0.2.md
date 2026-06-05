@@ -1867,7 +1867,7 @@ Deterministic encoding helpers such as `Base64.encode`, `Hex.decode`, and
 `Url.encode_component` remain public/native contract evidence but do not emit a
 separate external capability fact unless a future profile introduces a
 compute-encoding capability category.
-Purely in-memory façade helpers such as `Cache.*`, `ImageCache.*`,
+Purely in-memory façade helpers such as `Cache.*`, `RetainedImageStore.*`,
 `Environment.*`, and `FunctionObject.*` similarly do not emit external
 capability facts beyond their public contract, retention, and native-boundary
 evidence.

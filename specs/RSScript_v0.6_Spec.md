@@ -4246,11 +4246,11 @@ fn make_thumbnail(input: read Path, output: read Path) -> Result<Unit, ImageErro
 ### 19.3 Cache retention
 
 ```rust
-class ImageCache {
+class RetainedImageStore {
     entries: Map<String, Image>
 }
 
-fn cache_put(cache: mut ImageCache, key: read String, value: read Image) -> Unit
+fn cache_put(cache: mut RetainedImageStore, key: read String, value: read Image) -> Unit
     effects(retains(key), retains(value))
 {
     Map.insert(map: mut cache.entries, key: read key, value: read value)

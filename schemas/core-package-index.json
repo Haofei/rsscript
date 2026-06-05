@@ -14,18 +14,6 @@
       "types": []
     },
     {
-      "path": "core/cache/image_cache.rssi",
-      "module": "cache.image_cache",
-      "functions": [
-        "ImageCache.len",
-        "ImageCache.new",
-        "ImageCache.store"
-      ],
-      "types": [
-        "ImageCache"
-      ]
-    },
-    {
       "path": "core/capability/capability.rssi",
       "module": "capability.capability",
       "functions": [

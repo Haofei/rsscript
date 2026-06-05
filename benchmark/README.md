@@ -1,12 +1,10 @@
 # RSScript execution benchmark matrix
 
-This directory contains RSScript programs for comparing the current HIR
-interpreter (`rss bench --mode eval`), the VM total path (`rss bench --mode vm`),
-the VM execution path (`rss bench --mode vm-internal`), and the generated Rust
-backend (`rss bench --mode release-internal`). The default matrix is tuned toward
-VM planning: it uses collection, closure, and lookup-heavy programs where the
-interpreter is currently roughly two orders of magnitude slower than the faster
-execution paths.
+This directory contains RSScript programs for tracking the register VM
+(`rss bench --mode vm-internal --vm reg`) against the generated Rust backend
+(`rss bench --mode release-internal`). The default matrix is tuned toward VM
+planning: it uses collection, closure, and lookup-heavy programs that expose
+the execution gap between the VM and generated release code.
 
 Run the matrix from the repository root:
 
@@ -24,14 +22,16 @@ Optional controls:
 ./benchmark/run-matrix.sh --iterations 5 --warmup 1
 ```
 
-The matrix prints one row per benchmark with mean milliseconds for each backend
-and the `vm_internal/release_internal` ratio. The release-internal mode builds
-each generated package once before timing, starts the binary once, and measures a
-loop inside the generated release binary. Build time and process startup are not
-included in the reported release milliseconds. VM-internal compiles the source to
-a VM executable once and measures only repeated VM execution. Eval and VM modes
-use the single-file in-process paths for each iteration, so they currently
-include parse/analyze plus execution/lowering work. Lower-gap baseline programs such as
+The matrix prints one row per benchmark with mean milliseconds for register VM
+and release Rust, plus the `reg/rust` ratio. If the register VM does not support
+a benchmark yet, the row reports `unsupported` instead of hiding the coverage
+gap. The release-internal mode builds each generated package once before
+timing, starts the binary once, and measures a loop inside the generated release
+binary. Build time and process startup are not included in the reported release
+milliseconds. VM-internal compiles the source to a VM executable once and
+measures only repeated VM execution. Eval and VM total modes remain available as
+individual probes.
+Lower-gap baseline programs such as
 `pure_loop_sum.rss`, `function_call_hot_loop.rss`, `json_parse_access.rss`,
 `option_result_chain.rss`, `match_option_loop.rss`, and `sorted_map_scan.rss`
 are kept in this directory as additional probes but are intentionally not in the
@@ -48,5 +48,7 @@ intrinsic group that can materially affect VM throughput or allocation behavior.
 The minimum expectation is a focused `.rss` benchmark plus inclusion in
 `run-matrix.sh` when the feature is part of the default VM performance story.
 Feature work can still start with a smaller probe, but it should not be treated
-as complete without a benchmark that tracks `vm-internal` against
-`release-internal`.
+as complete without a benchmark that tracks register VM and `release-internal`.
+
+The stack VM comparison gate was used during the register VM migration. The
+public benchmark CLI now treats `vm` and `vm-internal` as register VM modes.

@@ -150,7 +150,7 @@ If a function keeps a parameter alive after it returns (stores it in a field, a
 collection, or a closure capture), it must declare it:
 
 ```rust
-fn cache_put(cache: mut ImageCache, key: read String, value: read Image) -> Unit
+fn cache_put(cache: mut RetainedImageStore, key: read String, value: read Image) -> Unit
     effects(retains(key), retains(value))
 {
     Map.insert(map: mut cache.entries, key: read key, value: read value)
@@ -257,7 +257,7 @@ fn make_thumbnail(input: read Path, output: read Path) -> Result<Unit, ImageErro
 ### 6.1 Declarations
 
 ```rust
-class ImageCache {            // managed reference type (default for app types)
+class RetainedImageStore {            // managed reference type (default for app types)
     entries: Map<String, Image>
 }
 
@@ -495,18 +495,18 @@ boundaries, or build-time execution changed* before you build or run.
 ## 11. Worked example (managed cache with retention)
 
 ```rust
-class ImageCache {
+class RetainedImageStore {
     entries: Map<String, Image>
 }
 
-fn cache_put(cache: mut ImageCache, key: read String, value: read Image) -> Unit
+fn cache_put(cache: mut RetainedImageStore, key: read String, value: read Image) -> Unit
     effects(retains(key), retains(value))
 {
     Map.insert(map: mut cache.entries, key: read key, value: read value)
 }
 
 fn main() -> Result<Unit, ImageError> {
-    let cache = ImageCache.new(capacity: 16)
+    let cache = RetainedImageStore.new(capacity: 16)
     let path = Path.from_string(value: read "in.png")
     let image = Image.load(path: read path)?
     cache_put(cache: mut cache, key: read "in", value: read image)

@@ -21,12 +21,14 @@ mod interpreter;
 mod lexer;
 mod lint;
 mod package;
+mod reg_vm;
 mod review;
 mod runtime_abi;
 mod rust_lower;
 mod symbols;
 pub mod syntax;
-mod vm;
+mod vm_coverage;
+mod vm_value;
 
 pub use analyzer::{
     analyze_source, analyze_source_with_core, analyze_source_with_interfaces,
@@ -81,6 +83,12 @@ pub use package::{
     package_tree, publish_package_dry_run, publish_package_dry_run_with_registry,
     review_package_dir, vendor_package_dir,
 };
+pub use reg_vm::{
+    RegVmExecutable, RegVmExecutable as VmExecutable, reg_vm_compile_source,
+    reg_vm_compile_source as vm_compile_source, reg_vm_eval_source_main_with_args,
+    reg_vm_eval_source_main_with_args as vm_eval_source_main_with_args,
+    reg_vm_eval_source_main_with_args_and_native_bindings,
+};
 pub use review::{
     ReviewFinding, ReviewFix, ReviewMap, ReviewMapCategorySummary, ReviewMapClassification,
     ReviewMapFile, ReviewMapFileRisk, ReviewMapRegion, ReviewMapSummary, ReviewRisk,
@@ -101,7 +109,4 @@ pub use symbols::{
     Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
     document_symbols, symbol_index,
 };
-pub use vm::{
-    VmCoverageReport, VmExecutable, vm_compile_source, vm_coverage_report,
-    vm_eval_source_main_with_args,
-};
+pub use vm_coverage::{VmCoverageReport, vm_coverage_report};

@@ -62,10 +62,6 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../core/cache/cache.rssi"),
     ),
     (
-        "core/cache/image_cache.rssi",
-        include_str!("../core/cache/image_cache.rssi"),
-    ),
-    (
         "core/clock/clock.rssi",
         include_str!("../core/clock/clock.rssi"),
     ),

@@ -5,6 +5,12 @@ struct UploadPlan {
     output: Path
 }
 
+class RetainedImageStore {
+}
+
+fn RetainedImageStore.store(cache: mut RetainedImageStore, image: read Image) -> Unit
+    effects(retains(image))
+
 fn audit_step(callback: noescape Fn()) -> Unit {
     callback()
     return Unit
@@ -26,7 +32,7 @@ fn decode_upload(request: read Request) -> Result<fresh UploadPlan, JsonError> {
     return UploadPlan(input: take input, output: take output)
 }
 
-fn transform_image(plan: read UploadPlan, cache: mut ImageCache) -> Result<Unit, ImageError> {
+fn transform_image(plan: read UploadPlan, cache: mut RetainedImageStore) -> Result<Unit, ImageError> {
     local image = Image.load(path: read plan.input)?
 
     audit_step(callback: || {
@@ -38,7 +44,7 @@ fn transform_image(plan: read UploadPlan, cache: mut ImageCache) -> Result<Unit,
     Image.sharpen(image: mut image)
 
     let shared = manage image
-    ImageCache.store(cache: mut cache, image: read shared)
+    RetainedImageStore.store(cache: mut cache, image: read shared)
     Image.save(image: read shared, path: read plan.output)?
 
     return Ok(Unit)
@@ -86,7 +92,7 @@ fn decode_upload_http(request: read Request) -> Result<UploadPlan, HttpError> {
     }
 }
 
-fn transform_image_http(plan: read UploadPlan, cache: mut ImageCache) -> Result<Unit, HttpError> {
+fn transform_image_http(plan: read UploadPlan, cache: mut RetainedImageStore) -> Result<Unit, HttpError> {
     match transform_image(plan: read plan, cache: mut cache) {
         Ok(unit) => {
             return Ok(Unit)
@@ -110,7 +116,7 @@ fn run_query_http(url: read Url, sql: read String) -> Result<Unit, HttpError> {
 
 fn handle_upload(
     request: read Request,
-    cache: mut ImageCache,
+    cache: mut RetainedImageStore,
     config_store: mut ConfigStore,
     counter: mut Counter,
     db_url: read Url,

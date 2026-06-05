@@ -3671,7 +3671,7 @@ mod tests {
         let retain_event = HirEffectEvent {
             function_name: "render".to_string(),
             kind: HirEffectEventKind::Retain {
-                callee: "ImageCache.store".to_string(),
+                callee: "RetainedImageStore.store".to_string(),
                 param: "image".to_string(),
             },
             binding_name: "image".to_string(),
@@ -3700,7 +3700,7 @@ mod tests {
                         span: span(1),
                     },
                     HirStmt::Expr(HirExpr::Call {
-                        callee: Callee::Name("ImageCache.store".to_string()),
+                        callee: Callee::Name("RetainedImageStore.store".to_string()),
                         receiver: None,
                         args: Vec::new(),
                         resolution: CallResolution::Unknown,

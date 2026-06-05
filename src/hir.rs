@@ -733,6 +733,12 @@ impl Hir {
         self.resource_drop_bodies.get(type_root_name(type_name))
     }
 
+    pub fn resource_drop_bodies(&self) -> impl Iterator<Item = (&str, &HirBlock)> {
+        self.resource_drop_bodies
+            .iter()
+            .map(|(type_name, body)| (type_name.as_str(), body))
+    }
+
     pub fn feature_uses(&self) -> &[HirFeatureUse] {
         &self.feature_uses
     }
@@ -3675,10 +3681,16 @@ fn take_rules(config: mut Config) -> Unit {
         let source = r#"
 features: local
 
-fn publish(cache: mut ImageCache, path: read Path) -> Unit {
+class RetainedImageStore {
+}
+
+fn RetainedImageStore.store(cache: mut RetainedImageStore, image: read Image) -> Unit
+    effects(retains(image))
+
+fn publish(cache: mut RetainedImageStore, path: read Path) -> Unit {
     local image = Image.load(path: read path)
     let shared = manage image
-    ImageCache.store(cache: mut cache, image: read shared)
+    RetainedImageStore.store(cache: mut cache, image: read shared)
     Buffer.consume(buffer: take image)
 }
 "#;
@@ -3723,9 +3735,15 @@ struct Config {
     rules: handle Rules
 }
 
-fn update(cache: mut ImageCache, config: mut Config, path: read Path) -> Unit {
+class RetainedImageStore {
+}
+
+fn RetainedImageStore.store(cache: mut RetainedImageStore, image: read Image) -> Unit
+    effects(retains(image))
+
+fn update(cache: mut RetainedImageStore, config: mut Config, path: read Path) -> Unit {
     local image = Image.load(path: read path)?
-    ImageCache.store(cache: mut cache, image: read image)
+    RetainedImageStore.store(cache: mut cache, image: read image)
     List.consume(list: take config.rules)
 }
 "#;

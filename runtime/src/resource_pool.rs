@@ -970,28 +970,6 @@ mod tests {
     }
 
     #[test]
-    fn image_cache_runtime_hooks_retain_managed_images_with_capacity() {
-        let mut cache = crate::image_cache_new(1);
-        let first = crate::manage(crate::Image {
-            bytes: b"first".to_vec(),
-            width: None,
-            height: None,
-            operations: vec!["test"],
-        });
-        let second = crate::manage(crate::Image {
-            bytes: b"second".to_vec(),
-            width: None,
-            height: None,
-            operations: vec!["test"],
-        });
-
-        crate::image_cache_store(&mut cache, &first);
-        crate::image_cache_store(&mut cache, &second);
-
-        assert_eq!(crate::image_cache_len(&cache), 1);
-    }
-
-    #[test]
     fn http_runtime_hooks_create_request_and_response() {
         let request = crate::request_new("/users");
         let path = crate::request_path(&request);

@@ -261,7 +261,7 @@ pub(crate) fn is_package_directory(path: &str) -> bool {
 pub(crate) fn print_usage() {
     eprintln!("usage:");
     eprintln!(
-        "  rss bench [--json] [--mode eval|vm|vm-internal|run|release|release-internal] [--iterations <n>] [--warmup <n>] <file-or-package-directory> [-- <args>...]"
+        "  rss bench [--json] [--mode eval|vm|vm-internal|run|release|release-internal] [--vm reg] [--iterations <n>] [--warmup <n>] <file-or-package-directory> [-- <args>...]"
     );
     eprintln!("  rss check [--json] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>");
     eprintln!("  rss check [--json] <package-directory>");

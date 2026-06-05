@@ -1192,6 +1192,8 @@ name = "rsscript"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "hex",
+ "percent-encoding",
  "regex",
  "reir",
  "serde",

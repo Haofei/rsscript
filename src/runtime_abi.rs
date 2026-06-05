@@ -75,6 +75,18 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "rsscript_runtime::assert_equal_bool",
     ),
     runtime_intrinsic("Assert", "equal_int", "rsscript_runtime::assert_equal_int"),
+    runtime_intrinsic("Base64", "decode", "rsscript_runtime::base64_decode"),
+    runtime_intrinsic(
+        "Base64",
+        "decode_string",
+        "rsscript_runtime::base64_decode_string",
+    ),
+    runtime_intrinsic("Base64", "encode", "rsscript_runtime::base64_encode"),
+    runtime_intrinsic(
+        "Base64",
+        "encode_bytes",
+        "rsscript_runtime::base64_encode_bytes",
+    ),
     runtime_intrinsic("Buffer", "clear", "rsscript_runtime::buffer_clear"),
     runtime_intrinsic("Buffer", "consume", "rsscript_runtime::buffer_consume"),
     runtime_intrinsic("Buffer", "is_empty", "rsscript_runtime::buffer_is_empty"),
@@ -214,6 +226,11 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "rsscript_runtime::directory_write_string",
     ),
     runtime_intrinsic("Diff", "unified", "rsscript_runtime::diff_unified"),
+    runtime_intrinsic(
+        "DecodeError",
+        "message",
+        "rsscript_runtime::decode_error_message",
+    ),
     runtime_intrinsic("Duration", "add", "rsscript_runtime::duration_add"),
     runtime_intrinsic("Duration", "as_ms", "rsscript_runtime::duration_as_ms"),
     runtime_intrinsic(
@@ -538,6 +555,13 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "sha256_string",
         "rsscript_runtime::hash_sha256_string",
     ),
+    runtime_intrinsic("Hex", "decode", "rsscript_runtime::hex_decode"),
+    runtime_intrinsic("Hex", "encode", "rsscript_runtime::hex_encode"),
+    runtime_intrinsic(
+        "Hex",
+        "encode_string",
+        "rsscript_runtime::hex_encode_string",
+    ),
     runtime_intrinsic("Http", "get", "rsscript_runtime::http_get"),
     runtime_intrinsic("Http", "get_async", "rsscript_runtime::http_get_async"),
     runtime_intrinsic("Http", "send_async", "rsscript_runtime::http_send_async"),
@@ -630,14 +654,6 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Image", "resize", "rsscript_runtime::image_resize"),
     runtime_intrinsic_with_handles("Image", "save", "rsscript_runtime::image_save", &["image"]),
     runtime_intrinsic("Image", "sharpen", "rsscript_runtime::image_sharpen"),
-    runtime_intrinsic("ImageCache", "len", "rsscript_runtime::image_cache_len"),
-    runtime_intrinsic("ImageCache", "new", "rsscript_runtime::image_cache_new"),
-    runtime_intrinsic_with_handles(
-        "ImageCache",
-        "store",
-        "rsscript_runtime::image_cache_store",
-        &["image"],
-    ),
     runtime_intrinsic("Instant", "elapsed", "rsscript_runtime::instant_elapsed"),
     runtime_intrinsic(
         "Json",
@@ -1323,6 +1339,16 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "rsscript_runtime::timer_sleep_cancellable_native_start",
     ),
     runtime_intrinsic("Url", "from_string", "rsscript_runtime::url_from_string"),
+    runtime_intrinsic(
+        "Url",
+        "decode_component",
+        "rsscript_runtime::url_decode_component",
+    ),
+    runtime_intrinsic(
+        "Url",
+        "encode_component",
+        "rsscript_runtime::url_encode_component",
+    ),
     runtime_intrinsic("Url", "to_string", "rsscript_runtime::string_copy"),
     runtime_intrinsic(
         "Workspace",

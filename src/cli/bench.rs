@@ -3,8 +3,8 @@ use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rsscript::{
-    EvalError, eval_source_main_with_args, format_diagnostics_human, vm_compile_source,
-    vm_eval_source_main_with_args, write_generated_rust_package,
+    EvalError, eval_source_main_with_args, format_diagnostics_human, reg_vm_compile_source,
+    reg_vm_eval_source_main_with_args, write_generated_rust_package,
 };
 
 use super::{
@@ -20,6 +20,11 @@ enum BenchMode {
     Run,
     Release,
     ReleaseInternal,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BenchVm {
+    Reg,
 }
 
 impl BenchMode {
@@ -59,10 +64,26 @@ impl BenchMode {
     }
 }
 
+impl BenchVm {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "reg" => Ok(Self::Reg),
+            _ => Err(format!("invalid benchmark VM `{value}`; expected reg.")),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Reg => "reg",
+        }
+    }
+}
+
 #[derive(Debug)]
 struct BenchOptions<'a> {
     json: bool,
     mode: BenchMode,
+    vm: BenchVm,
     iterations: usize,
     warmup: usize,
     path: &'a str,
@@ -73,6 +94,7 @@ struct BenchOptions<'a> {
 struct BenchResult {
     name: String,
     mode: BenchMode,
+    vm: BenchVm,
     iterations: usize,
     warmup: usize,
     min: Duration,
@@ -83,6 +105,7 @@ struct BenchResult {
 fn parse_bench_args(args: &[String]) -> Result<BenchOptions<'_>, String> {
     let mut json = false;
     let mut mode = BenchMode::Release;
+    let mut vm = BenchVm::Reg;
     let mut iterations = 10usize;
     let mut warmup = 1usize;
     let mut path = None;
@@ -97,7 +120,21 @@ fn parse_bench_args(args: &[String]) -> Result<BenchOptions<'_>, String> {
             json = true;
         } else if arg == "--mode" {
             index += 1;
-            mode = BenchMode::parse(required_flag_value(args, index, "--mode")?)?;
+            let value = required_flag_value(args, index, "--mode")?;
+            match value {
+                "reg-vm" => {
+                    mode = BenchMode::Vm;
+                    vm = BenchVm::Reg;
+                }
+                "reg-vm-internal" => {
+                    mode = BenchMode::VmInternal;
+                    vm = BenchVm::Reg;
+                }
+                _ => mode = BenchMode::parse(value)?,
+            }
+        } else if arg == "--vm" {
+            index += 1;
+            vm = BenchVm::parse(required_flag_value(args, index, "--vm")?)?;
         } else if arg == "--iterations" {
             index += 1;
             iterations = parse_positive_usize(required_flag_value(args, index, "--iterations")?)?;
@@ -120,6 +157,7 @@ fn parse_bench_args(args: &[String]) -> Result<BenchOptions<'_>, String> {
     Ok(BenchOptions {
         json,
         mode,
+        vm,
         iterations,
         warmup,
         path,
@@ -168,8 +206,8 @@ pub(crate) fn run_bench(args: &[String]) -> ExitCode {
 fn run_bench_inner(options: &BenchOptions<'_>) -> Result<BenchResult, String> {
     match options.mode {
         BenchMode::Eval => run_eval_bench(options),
-        BenchMode::Vm => run_vm_bench(options),
-        BenchMode::VmInternal => run_vm_internal_bench(options),
+        BenchMode::Vm => run_reg_vm_bench(options),
+        BenchMode::VmInternal => run_reg_vm_internal_bench(options),
         BenchMode::Run | BenchMode::Release | BenchMode::ReleaseInternal => {
             run_generated_bench(options)
         }
@@ -195,6 +233,7 @@ fn run_eval_bench(options: &BenchOptions<'_>) -> Result<BenchResult, String> {
     Ok(summarize_measurements(
         benchmark_name(options.path),
         options.mode,
+        options.vm,
         options.iterations,
         options.warmup,
         &measurements,
@@ -211,48 +250,49 @@ fn eval_source_once(path: &str, source: &str, args: &[&str]) -> Result<(), Strin
     Ok(())
 }
 
-fn run_vm_bench(options: &BenchOptions<'_>) -> Result<BenchResult, String> {
+fn run_reg_vm_bench(options: &BenchOptions<'_>) -> Result<BenchResult, String> {
     if is_package_directory(options.path) {
         return Err("rss bench --mode vm only supports single-file inputs.".to_string());
     }
     let source = std::fs::read_to_string(options.path)
         .map_err(|error| format!("failed to read {}: {error}", options.path))?;
     for _ in 0..options.warmup {
-        vm_source_once(options.path, &source, &options.program_args)?;
+        reg_vm_source_once(options.path, &source, &options.program_args)?;
     }
 
     let mut measurements = Vec::with_capacity(options.iterations);
     for _ in 0..options.iterations {
         let start = Instant::now();
-        vm_source_once(options.path, &source, &options.program_args)?;
+        reg_vm_source_once(options.path, &source, &options.program_args)?;
         measurements.push(start.elapsed());
     }
     Ok(summarize_measurements(
         benchmark_name(options.path),
         options.mode,
+        options.vm,
         options.iterations,
         options.warmup,
         &measurements,
     ))
 }
 
-fn vm_source_once(path: &str, source: &str, args: &[&str]) -> Result<(), String> {
-    vm_eval_source_main_with_args(path, source, args.iter().copied()).map_err(
-        |error| match error {
+fn reg_vm_source_once(path: &str, source: &str, args: &[&str]) -> Result<(), String> {
+    reg_vm_eval_source_main_with_args(path, source, args.iter().copied()).map_err(|error| {
+        match error {
             EvalError::Diagnostics(diagnostics) => format_diagnostics_human(&diagnostics),
             EvalError::Runtime(error) => error,
-        },
-    )?;
+        }
+    })?;
     Ok(())
 }
 
-fn run_vm_internal_bench(options: &BenchOptions<'_>) -> Result<BenchResult, String> {
+fn run_reg_vm_internal_bench(options: &BenchOptions<'_>) -> Result<BenchResult, String> {
     if is_package_directory(options.path) {
         return Err("rss bench --mode vm-internal only supports single-file inputs.".to_string());
     }
     let source = std::fs::read_to_string(options.path)
         .map_err(|error| format!("failed to read {}: {error}", options.path))?;
-    let executable = vm_compile_source(options.path, &source).map_err(|error| match error {
+    let executable = reg_vm_compile_source(options.path, &source).map_err(|error| match error {
         EvalError::Diagnostics(diagnostics) => format_diagnostics_human(&diagnostics),
         EvalError::Runtime(error) => error,
     })?;
@@ -279,6 +319,7 @@ fn run_vm_internal_bench(options: &BenchOptions<'_>) -> Result<BenchResult, Stri
     Ok(summarize_measurements(
         benchmark_name(options.path),
         options.mode,
+        options.vm,
         options.iterations,
         options.warmup,
         &measurements,
@@ -324,6 +365,7 @@ fn run_generated_bench(options: &BenchOptions<'_>) -> Result<BenchResult, String
     Ok(summarize_measurements(
         package.package_name,
         options.mode,
+        options.vm,
         options.iterations,
         options.warmup,
         &measurements,
@@ -390,6 +432,7 @@ fn run_internal_benchmark_binary(
     Ok(BenchResult {
         name: benchmark_name(options.path),
         mode: options.mode,
+        vm: options.vm,
         iterations: options.iterations,
         warmup: options.warmup,
         min: nanos("min_nanos")?,
@@ -483,6 +526,7 @@ fn benchmark_binary_path(package_dir: &Path, package_name: &str, mode: BenchMode
 fn summarize_measurements(
     name: String,
     mode: BenchMode,
+    vm: BenchVm,
     iterations: usize,
     warmup: usize,
     measurements: &[Duration],
@@ -494,6 +538,7 @@ fn summarize_measurements(
     BenchResult {
         name,
         mode,
+        vm,
         iterations,
         warmup,
         min,
@@ -504,9 +549,10 @@ fn summarize_measurements(
 
 fn bench_result_human(result: &BenchResult) -> String {
     format!(
-        "bench {} mode={} iterations={} warmup={} min_ms={:.3} mean_ms={:.3} max_ms={:.3}",
+        "bench {} mode={} vm={} iterations={} warmup={} min_ms={:.3} mean_ms={:.3} max_ms={:.3}",
         result.name,
         result.mode.as_str(),
+        result.vm.as_str(),
         result.iterations,
         result.warmup,
         millis(result.min),
@@ -519,6 +565,7 @@ fn bench_result_json(result: &BenchResult) -> String {
     serde_json::json!({
         "name": result.name,
         "mode": result.mode.as_str(),
+        "vm": result.vm.as_str(),
         "iterations": result.iterations,
         "warmup": result.warmup,
         "min_ms": millis(result.min),
@@ -566,7 +613,9 @@ mod tests {
         let values = args(&[
             "--json",
             "--mode",
-            "eval",
+            "vm-internal",
+            "--vm",
+            "reg",
             "--iterations",
             "3",
             "--warmup",
@@ -578,7 +627,8 @@ mod tests {
         let options = super::parse_bench_args(&values).expect("bench args should parse");
 
         assert!(options.json);
-        assert_eq!(options.mode, super::BenchMode::Eval);
+        assert_eq!(options.mode, super::BenchMode::VmInternal);
+        assert_eq!(options.vm, super::BenchVm::Reg);
         assert_eq!(options.iterations, 3);
         assert_eq!(options.warmup, 2);
         assert_eq!(options.path, "examples/scripts/basic/hello.rss");
@@ -601,5 +651,19 @@ mod tests {
                 .expect_err("unknown mode should fail"),
             "invalid benchmark mode `fast`; expected eval, vm, vm-internal, run, release, or release-internal."
         );
+        assert_eq!(
+            super::parse_bench_args(&args(&["--vm", "fast", "bench.rss"]))
+                .expect_err("unknown vm should fail"),
+            "invalid benchmark VM `fast`; expected reg."
+        );
+    }
+
+    #[test]
+    fn parse_bench_args_defaults_to_reg_vm() {
+        let values = args(&["--mode", "vm-internal", "bench.rss"]);
+        let options = super::parse_bench_args(&values).expect("bench args should parse");
+
+        assert_eq!(options.mode, super::BenchMode::VmInternal);
+        assert_eq!(options.vm, super::BenchVm::Reg);
     }
 }

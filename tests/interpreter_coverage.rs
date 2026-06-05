@@ -37,14 +37,14 @@ fn interpreter_coverage_report_tracks_hir_surface() {
 fn interpreter_coverage_baseline_is_explicit() {
     let report = interpreter_coverage_report();
 
-    assert_bucket_counts(&report.runtime_intrinsics, 519, 519, 0);
+    assert_bucket_counts(&report.runtime_intrinsics, 526, 526, 0);
     assert_bucket_counts(&report.hir_statements, 12, 12, 0);
     assert_bucket_counts(&report.hir_expressions, 17, 17, 0);
     assert_bucket_counts(&report.hir_statement_recovery, 1, 0, 1);
     assert_bucket_counts(&report.hir_expression_recovery, 1, 0, 1);
     assert_bucket_counts(&report.value_types, 14, 14, 0);
     assert_bucket_counts(&report.function_kinds, 3, 3, 0);
-    assert_bucket_counts(&report.parity_features, 565, 565, 0);
+    assert_bucket_counts(&report.parity_features, 572, 572, 0);
 
     assert!(
         report
@@ -89,7 +89,7 @@ fn lower_coverage_report_tracks_ast_and_runtime_surface() {
         "update lower_coverage_report() when FunctionDecl execution-mode fields change"
     );
 
-    assert_bucket_counts(&report.runtime_intrinsics, 519, 519, 0);
+    assert_bucket_counts(&report.runtime_intrinsics, 526, 526, 0);
     assert_bucket_counts(&report.ast_statements, 20, 14, 6);
     assert_bucket_counts(&report.ast_expressions, 19, 17, 2);
     assert_bucket_counts(&report.function_kinds, 3, 3, 0);
@@ -108,12 +108,12 @@ fn vm_coverage_gap_is_explicit() {
     let interpreter = interpreter_coverage_report();
     let vm = vm_coverage_report();
 
-    assert_bucket_counts(&vm.runtime_intrinsics, 519, 19, 500);
-    assert_bucket_counts(&vm.hir_statements, 12, 7, 5);
-    assert_bucket_counts(&vm.hir_expressions, 17, 9, 8);
-    assert_bucket_counts(&vm.value_types, 14, 9, 5);
-    assert_bucket_counts(&vm.function_kinds, 3, 1, 2);
-    assert_bucket_counts(&vm.parity_features, 565, 45, 520);
+    assert_bucket_counts(&vm.runtime_intrinsics, 526, 526, 0);
+    assert_bucket_counts(&vm.hir_statements, 12, 12, 0);
+    assert_bucket_counts(&vm.hir_expressions, 17, 17, 0);
+    assert_bucket_counts(&vm.value_types, 14, 14, 0);
+    assert_bucket_counts(&vm.function_kinds, 3, 3, 0);
+    assert_bucket_counts(&vm.parity_features, 572, 572, 0);
 
     assert_vm_bucket_targets_interpreter(
         &vm.runtime_intrinsics,

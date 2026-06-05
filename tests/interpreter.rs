@@ -769,9 +769,10 @@ pub fn echo(message: &String) -> String {
 // parity: value:Char value:Closure value:Map value:Native value:String value:Struct value:Unit value:Variant
 // parity: runtime:Args.all runtime:Args.count runtime:Args.get runtime:Args.get_or_default
 // parity: runtime:Assert.equal runtime:Assert.equal_bool runtime:Assert.equal_int
+// parity: runtime:Base64.decode runtime:Base64.decode_string runtime:Base64.encode runtime:Base64.encode_bytes
 // parity: runtime:Char.compare runtime:Char.from_code runtime:Char.is_alpha
 // parity: runtime:Char.is_alphanumeric runtime:Char.is_digit runtime:Char.is_whitespace
-// parity: runtime:Char.to_code runtime:Char.to_string
+// parity: runtime:Char.to_code runtime:Char.to_string runtime:DecodeError.message
 // parity: runtime:Deque.clear runtime:Deque.is_empty runtime:Deque.len runtime:Deque.new
 // parity: runtime:Deque.pop_back runtime:Deque.pop_front runtime:Deque.push_back
 // parity: runtime:Deque.push_front runtime:Deque.to_list
@@ -833,6 +834,7 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Json.value runtime:Json.value_at runtime:Json.values runtime:JsonError.message
 // parity: runtime:Instant.elapsed
 // parity: runtime:Hash.sha256_bytes runtime:Hash.sha256_file runtime:Hash.sha256_string
+// parity: runtime:Hex.decode runtime:Hex.encode runtime:Hex.encode_string
 // parity: runtime:Http.get runtime:Http.get_async runtime:Http.get_retry_async
 // parity: runtime:Http.get_timeout_async runtime:Http.post_form runtime:Http.post_form_async
 // parity: runtime:Http.post_json runtime:Http.post_json_async runtime:Http.post_json_bearer_retry_async
@@ -843,8 +845,7 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:HttpResponse.is_success runtime:HttpResponse.lines
 // parity: runtime:HttpResponse.status runtime:HttpResponse.text
 // parity: runtime:Image.inspect runtime:Image.load runtime:Image.normalize runtime:Image.resize
-// parity: runtime:Image.save runtime:Image.sharpen runtime:ImageCache.len runtime:ImageCache.new
-// parity: runtime:ImageCache.store
+// parity: runtime:Image.save runtime:Image.sharpen
 // parity: runtime:List.all runtime:List.any runtime:List.append runtime:List.clear
 // parity: runtime:List.contains runtime:List.contains_value runtime:List.count_where
 // parity: runtime:List.consume runtime:List.filter runtime:List.find runtime:List.first
@@ -950,7 +951,7 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:TcpStream.read runtime:TcpStream.shutdown
 // parity: runtime:TcpStream.write runtime:TcpStream.write_all
 // parity: runtime:Toml.parse_file
-// parity: runtime:Url.from_string runtime:Url.to_string
+// parity: runtime:Url.decode_component runtime:Url.encode_component runtime:Url.from_string runtime:Url.to_string
 // parity: runtime:WebSocket.close runtime:WebSocket.connect runtime:WebSocket.recv_bytes
 // parity: runtime:WebSocket.recv_text runtime:WebSocket.send_bytes runtime:WebSocket.send_text
 // parity: runtime:WebSocketError.message
@@ -2270,6 +2271,61 @@ fn main() -> Unit {
 }
 "#;
     assert_interpreter_matches_backend("parity-url.rss", "rsscript_parity_url", source);
+}
+
+#[test]
+fn parity_encoding_intrinsics() {
+    let source = r#"
+features: native
+
+fn main() -> Unit {
+    let encoded = Base64.encode(value: read "rsscript")
+    Log.write(message: read encoded)
+
+    match Base64.decode_string(text: read encoded) {
+        Ok(value) => Log.write(message: read value)
+        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+    }
+
+    let bytes = String.to_bytes(value: read "hex")
+    Log.write(message: read Base64.encode_bytes(value: read bytes))
+
+    match Base64.decode(text: read "%%%") {
+        Ok(value) => Log.write(message: read String.from_int(value: Bytes.len(value: read value)))
+        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+    }
+
+    let hexed = Hex.encode_string(value: read "Az")
+    Log.write(message: read hexed)
+    Log.write(message: read Hex.encode(value: read bytes))
+
+    match Hex.decode(text: read hexed) {
+        Ok(value) => Log.write(message: read String.from_int(value: Bytes.len(value: read value)))
+        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+    }
+
+    match Hex.decode(text: read "not-hex") {
+        Ok(value) => Log.write(message: read String.from_int(value: Bytes.len(value: read value)))
+        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+    }
+
+    let component = Url.encode_component(value: read "a b/é?x=1")
+    Log.write(message: read component)
+
+    match Url.decode_component(value: read component) {
+        Ok(value) => Log.write(message: read value)
+        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+    }
+
+    match Url.decode_component(value: read "%FF") {
+        Ok(value) => Log.write(message: read value)
+        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+    }
+
+    return Unit
+}
+"#;
+    assert_interpreter_matches_backend("parity-encoding.rss", "rsscript_parity_encoding", source);
 }
 
 #[test]
@@ -4296,24 +4352,6 @@ async fn main() -> Result<Unit, ChannelError> {
 }
 
 #[test]
-fn parity_image_cache_intrinsics() {
-    let source = r#"
-fn main() -> Unit {
-    let cache = ImageCache.new(capacity: 2)
-    Log.write(message: read String.from_int(value: ImageCache.len(cache: read cache)))
-    let zero = ImageCache.new(capacity: 0 - 1)
-    Log.write(message: read String.from_int(value: ImageCache.len(cache: read zero)))
-    return Unit
-}
-"#;
-    assert_interpreter_matches_backend(
-        "parity-image-cache.rss",
-        "rsscript_parity_image_cache",
-        source,
-    );
-}
-
-#[test]
 fn parity_image_intrinsics() {
     let interpreter_root = common::unique_temp_dir("rsscript-parity-image-interpreter");
     let backend_root = common::unique_temp_dir("rsscript-parity-image-backend");
@@ -4344,11 +4382,7 @@ fn main() -> Result<Unit, ImageError> {
     Image.sharpen(image: mut image)
     Image.inspect(image: read image)
 
-    local image_cache = ImageCache.new(capacity: 1)
-    let shared = manage image
-    ImageCache.store(cache: mut image_cache, image: read shared)
-    Log.write(message: read String.from_int(value: ImageCache.len(cache: read image_cache)))
-    Image.save(image: read shared, path: read output)?
+    Image.save(image: read image, path: read output)?
 
     local text_cache = Cache.new()
     Cache.insert(cache: mut text_cache, key: read "image", value: read "cached-image")

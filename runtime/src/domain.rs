@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::fmt;
 
 use crate::async_runtime::{NativeAsyncPending, spawn_tokio_native};
@@ -231,12 +231,6 @@ pub struct Image {
     pub(crate) width: Option<i64>,
     pub(crate) height: Option<i64>,
     pub(crate) operations: Vec<&'static str>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ImageCache {
-    capacity: usize,
-    entries: VecDeque<Managed<Image>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1030,27 +1024,6 @@ pub fn image_inspect<I: RuntimeImageRef + ?Sized>(image: &I) {
         )
     });
     println!("{summary}");
-}
-
-pub fn image_cache_new(capacity: i64) -> ImageCache {
-    ImageCache {
-        capacity: capacity.max(0) as usize,
-        entries: VecDeque::new(),
-    }
-}
-
-pub fn image_cache_store(cache: &mut ImageCache, image: &Managed<Image>) {
-    if cache.capacity == 0 {
-        return;
-    }
-    while cache.entries.len() >= cache.capacity {
-        cache.entries.pop_front();
-    }
-    cache.entries.push_back(image.clone());
-}
-
-pub fn image_cache_len(cache: &ImageCache) -> i64 {
-    cache.entries.len() as i64
 }
 
 pub fn json_parse(text: &str) -> Result<JsonValue, JsonError> {
