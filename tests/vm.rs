@@ -158,6 +158,9 @@ fn main() -> Unit {
     Log.write(message: read String.from_float(value: 3.0 * 2.5))
     Log.write(message: read String.from_float(value: 7.5 / 2.5))
     Log.write(message: read String.from_float(value: float_mix(value: 1.5, salt: 0.5)))
+    if 1.0 < 2.0 {
+        Log.write(message: read "float-condition")
+    }
     if 5.5 > 5.0 && 5.0 <= 5.0 {
         Log.write(message: read "float-compare")
     }
@@ -1428,7 +1431,8 @@ fn main() -> Unit {
         }
     }
 
-    String.to_url(value: read "https://example.test/from-method")
+    let from_method: Url = String.to_url(value: read "https://example.test/from-method")
+    Log.write(message: read Url.to_string(url: read from_method))
     return Unit
 }
 "#;
@@ -2044,6 +2048,69 @@ fn main() -> Unit {
 }
 
 #[test]
+fn reg_vm_runs_weak_intrinsics_like_compiled_backend() {
+    let source = r#"
+features: local
+
+class User {
+    id: Int
+}
+
+struct Session {
+    owner: weak User
+}
+
+fn main() -> Unit {
+    let user = User(id: 7)
+    let session = Session(owner: Weak.from(value: read user))
+    let downgraded = Weak.downgrade(value: read user)
+    match Weak.upgrade(value: read session.owner) {
+        Some(owner) => Log.write(message: read String.from_int(value: owner.id))
+        None => Log.write(message: read "missing")
+    }
+    match Weak.upgrade(value: read downgraded) {
+        Some(owner) => Log.write(message: read String.from_int(value: owner.id))
+        None => Log.write(message: read "missing")
+    }
+    return Unit
+}
+"#;
+
+    assert_reg_vm_matches_compiled_backend("reg-vm-weak-intrinsics.rss", source, []);
+}
+
+#[test]
+fn reg_vm_runs_capability_from_construction_like_compiled_backend() {
+    let source = r#"
+features: local
+
+protocol Writer {
+    fn write(self: mut Self, message: read String) -> Unit
+}
+
+struct BufferWriter {
+    count: Int
+}
+
+fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit {
+    Log.write(message: read message)
+}
+
+impl Writer for BufferWriter {
+    write = BufferWriter.write
+}
+
+fn main() -> Unit {
+    local writer = BufferWriter(count: 1)
+    local cap: Capability<Writer> = Capability<Writer>.from(value: take writer)
+    return Unit
+}
+"#;
+
+    assert_reg_vm_matches_compiled_backend("reg-vm-capability-from.rss", source, []);
+}
+
+#[test]
 fn reg_vm_runs_native_host_bindings_like_interpreter() {
     fn host_open(args: Vec<NativeValue>) -> Result<NativeValue, String> {
         let [] = args.as_slice() else {
@@ -2209,6 +2276,53 @@ fn main() -> Unit {
 "#;
 
     assert_reg_vm_matches_compiled_backend("reg-vm-json-pure-intrinsics.rss", source, []);
+}
+
+#[test]
+fn reg_vm_runs_json_encode_decode_like_compiled_backend() {
+    let source = r#"
+struct AgentToolArgs derives(Clone, JsonDecode) {
+    path: Option<String>
+    max_results: Option<Int>
+    include_hidden: Option<Bool>
+}
+
+fn main() -> Result<Unit, JsonError> {
+    let encoded = Json.encode(value: read {
+        "path": "src",
+        "max_results": 20,
+        "include_hidden": true,
+    })
+    Log.write(message: read encoded)
+    let decoded = Json.decode_text<AgentToolArgs>(text: read encoded)?
+    match decoded.path {
+        Some(path) => Log.write(message: read path)
+        None => Log.write(message: read "missing")
+    }
+    match decoded.max_results {
+        Some(max_results) => Log.write(message: read String.from_int(value: max_results))
+        None => Log.write(message: read "missing")
+    }
+    match decoded.include_hidden {
+        Some(include_hidden) => Log.write(message: read String.from_bool(value: include_hidden))
+        None => Log.write(message: read "missing")
+    }
+
+    let value: JsonValue = {"path": "data"}
+    let decoded_value = Json.decode<AgentToolArgs>(value: read value)?
+    match decoded_value.path {
+        Some(path) => Log.write(message: read path)
+        None => Log.write(message: read "missing")
+    }
+    match decoded_value.max_results {
+        Some(max_results) => Log.write(message: read String.from_int(value: max_results))
+        None => Log.write(message: read "missing")
+    }
+    return Ok(Unit)
+}
+"#;
+
+    assert_reg_vm_matches_compiled_backend("reg-vm-json-encode-decode.rss", source, []);
 }
 
 #[test]
@@ -4463,6 +4577,30 @@ fn main() -> Unit {
 }
 
 #[test]
+fn reg_vm_runs_resource_pool_try_new_like_backend() {
+    let source = r#"
+features: local native
+
+fn main() -> Result<Unit, DbError> {
+    let url = Url.from_string(value: read "db://vm-resource-pool")
+    local eager = ResourcePool<DbConnection>.try_new(
+        create: || {
+            return DbConnection.try_open(url: read url)
+        },
+        max_size: 2,
+    )?
+    with ResourcePool.borrow(pool: mut eager) as session {
+        DbConnection.query(conn: mut session, sql: read "select eager")?
+    }
+
+    return Ok(Unit)
+}
+"#;
+
+    assert_reg_vm_matches_compiled_backend("reg-vm-resource-pool-try-new.rss", source, []);
+}
+
+#[test]
 fn reg_vm_runs_resource_drop_unwind_like_interpreter() {
     let source = r#"
 features: local
@@ -4625,7 +4763,62 @@ fn main() -> Unit {
 }
 
 #[test]
-fn reg_vm_runs_select_statement_like_interpreter() {
+fn reg_vm_rejects_guarded_match_until_full_match_lowering_exists() {
+    let source = r#"
+fn main() -> Unit {
+    let value = Some(3)
+    match value {
+        Some(item) if item > 0 => {
+            Log.write(message: read "positive")
+        }
+        Some(_) => {
+            Log.write(message: read "other")
+        }
+        None => {
+            Log.write(message: read "none")
+        }
+    }
+    return Unit
+}
+"#;
+
+    let error = reg_vm_eval_source_main_with_args(
+        "reg-vm-guarded-match.rss",
+        source,
+        std::iter::empty::<&str>(),
+    )
+    .expect_err("guarded match should be explicit unsupported until VM has full match lowering");
+    assert!(format!("{error:?}").contains("match pattern"), "{error:?}");
+}
+
+#[test]
+fn reg_vm_rejects_literal_match_until_full_match_lowering_exists() {
+    let source = r#"
+fn main() -> Unit {
+    let value = 1
+    match value {
+        1 => {
+            Log.write(message: read "one")
+        }
+        _ => {
+            Log.write(message: read "other")
+        }
+    }
+    return Unit
+}
+"#;
+
+    let error = reg_vm_eval_source_main_with_args(
+        "reg-vm-literal-match.rss",
+        source,
+        std::iter::empty::<&str>(),
+    )
+    .expect_err("literal match should be explicit unsupported until VM has full match lowering");
+    assert!(format!("{error:?}").contains("match pattern"), "{error:?}");
+}
+
+#[test]
+fn reg_vm_rejects_multi_arm_select_until_pending_model_exists() {
     let source = r#"
 features: async
 
@@ -4646,7 +4839,15 @@ fn main() -> Result<Unit, String> {
 }
 "#;
 
-    assert_reg_vm_matches_compiled_backend("reg-vm-select.rss", source, []);
+    let error =
+        reg_vm_eval_source_main_with_args("reg-vm-select.rss", source, std::iter::empty::<&str>())
+            .expect_err(
+                "multi-arm select should be explicit unsupported until VM has pending model",
+            );
+    assert!(
+        format!("{error:?}").contains("select with multiple arms"),
+        "{error:?}"
+    );
 }
 
 fn assert_reg_vm_matches_compiled_backend<'a>(

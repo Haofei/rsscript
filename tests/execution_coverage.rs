@@ -24,7 +24,7 @@ fn lower_coverage_report_tracks_ast_and_runtime_surface() {
         "update lower_coverage_report() when FunctionDecl execution-mode fields change"
     );
 
-    assert_bucket_counts(&report.runtime_intrinsics, 597, 597, 0);
+    assert_bucket_complete(&report.runtime_intrinsics);
     assert_bucket_counts(&report.ast_statements, 20, 14, 6);
     assert_bucket_counts(&report.ast_expressions, 19, 17, 2);
     assert_bucket_counts(&report.function_kinds, 3, 3, 0);
@@ -42,16 +42,24 @@ fn lower_coverage_report_tracks_ast_and_runtime_surface() {
 fn vm_coverage_gap_is_explicit() {
     let vm = vm_coverage_report();
 
-    assert_bucket_counts(&vm.runtime_intrinsics, 597, 597, 0);
-    assert_bucket_counts(&vm.hir_statements, 12, 12, 0);
-    assert_bucket_counts(&vm.hir_expressions, 17, 17, 0);
+    assert_bucket_complete(&vm.runtime_intrinsics);
+    assert_bucket_complete(&vm.special_forms);
+    assert_bucket_counts(&vm.hir_statements, 12, 10, 2);
+    assert_bucket_counts(&vm.hir_expressions, 17, 15, 2);
     assert_bucket_counts(&vm.value_types, 15, 15, 0);
     assert_bucket_counts(&vm.function_kinds, 3, 3, 0);
-    assert_bucket_counts(&vm.parity_features, 644, 644, 0);
+    assert_bucket_complete(&vm.parity_features);
 
     assert!(vm.runtime_intrinsics.missing.is_empty());
-    assert!(vm.hir_statements.missing.is_empty());
-    assert!(vm.hir_expressions.missing.is_empty());
+    assert!(vm.special_forms.missing.is_empty());
+    assert_eq!(
+        vm.hir_statements.missing,
+        vec!["Match".to_string(), "Select".to_string()]
+    );
+    assert_eq!(
+        vm.hir_expressions.missing,
+        vec!["Match".to_string(), "Spawn".to_string()]
+    );
     assert!(vm.value_types.missing.is_empty());
     assert!(vm.function_kinds.missing.is_empty());
     assert!(vm.parity_features.missing.is_empty());
@@ -65,7 +73,7 @@ fn parity_fixture_annotations_cover_supported_vm_features() {
     let annotated = parity_features_from_source(&source);
     let required = report
         .parity_features
-        .all
+        .supported
         .iter()
         .cloned()
         .collect::<BTreeSet<_>>();
@@ -103,6 +111,19 @@ fn assert_bucket_counts(
         bucket.missing_count(),
         missing,
         "missing count changed for bucket: {bucket:?}"
+    );
+}
+
+fn assert_bucket_complete(bucket: &rsscript::CoverageBucket) {
+    assert_eq!(
+        bucket.total(),
+        bucket.supported_count(),
+        "bucket should be fully supported: {bucket:?}"
+    );
+    assert_eq!(
+        bucket.missing_count(),
+        0,
+        "bucket should not have missing entries: {bucket:?}"
     );
 }
 

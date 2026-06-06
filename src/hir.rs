@@ -693,6 +693,10 @@ impl Hir {
         self.types.get(type_root_name(name))
     }
 
+    pub fn types(&self) -> impl Iterator<Item = &TypeInfo> {
+        self.types.values()
+    }
+
     pub fn type_kind(&self, name: &str) -> Option<HirTypeKind> {
         self.type_info(name).map(|info| info.kind)
     }

@@ -128,7 +128,9 @@ const RUST_LOWER_SUPPORTED_FUNCTION_KINDS: &[&str] = &["sync", "async", "native"
 
 pub fn lower_coverage_report() -> LowerCoverageReport {
     let runtime_all = runtime_abi::runtime_intrinsic_signatures();
-    let runtime_supported = runtime_all.iter().cloned().collect::<BTreeSet<_>>();
+    let runtime_supported = runtime_abi::runtime_intrinsic_supported_signatures()
+        .into_iter()
+        .collect::<BTreeSet<_>>();
 
     LowerCoverageReport {
         runtime_intrinsics: coverage_bucket_from_owned(runtime_all, runtime_supported),

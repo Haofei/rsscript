@@ -986,7 +986,7 @@ impl<'a> RustLowerer<'a> {
         for (index, arm) in stmt.arms.iter().enumerate() {
             let pending = async_await_inner(&arm.operation)
                 .map(|inner| self.lower_expr(inner))
-                .unwrap_or_else(|| "rsscript_runtime::pending_ready(())".to_string());
+                .unwrap_or_else(|| unreachable_lowering("select arm operation", &arm.span));
             out.push_str(&format!(
                 "{inner_pad}let mut {prefix}_pending_{index} = {pending};\n"
             ));
@@ -2471,6 +2471,11 @@ impl<'a> RustLowerer<'a> {
                     } else {
                         format!("{lowered_receiver}, {lowered_args}")
                     };
+                    let qualified_key =
+                        native_boundary_function_key(&format!("{namespace}.{method}"));
+                    if let Some(native_target) = self.native_bindings.get(&qualified_key).cloned() {
+                        return format!("{native_target}({all_args})");
+                    }
                     let callee_str = if is_protocol {
                         format!(
                             "<{} as {}>::{}",
@@ -2488,6 +2493,9 @@ impl<'a> RustLowerer<'a> {
                 }
                 if is_string_concat_callee(callee) {
                     return lower_string_concat_call(self, args);
+                }
+                if is_weak_from_callee(callee) {
+                    return lower_weak_from_call(self, args);
                 }
                 if is_weak_upgrade_callee(callee) {
                     return lower_weak_upgrade_call(self, args);
@@ -4346,7 +4354,7 @@ impl<'a> RustLowerer<'a> {
         self.lower_expr(expr)
     }
 
-    fn lower_runtime_weak_from_managed(&mut self, expr: &Expr) -> String {
+    pub(super) fn lower_runtime_weak_from_managed(&mut self, expr: &Expr) -> String {
         if let Expr::Effect {
             effect: DataEffect::Read,
             value,

@@ -2854,6 +2854,61 @@ pub fn run() -> Unit {
 }
 
 #[test]
+fn rust_lowering_maps_receiver_native_binding_with_receiver_argument() {
+    let source = r#"
+features: native
+
+opaque struct Alpha
+
+native fn Alpha.open() -> Alpha
+    effects(native)
+
+native fn Alpha.describe(self: read Alpha) -> String
+    effects(native)
+
+pub fn run() -> Unit {
+    let alpha = Alpha.open()
+    Log.write(message: read alpha.describe())
+}
+"#;
+    let package = lower_sources_to_rust_package_with_options(
+        &[("receiver-native.rss".to_string(), source.to_string())],
+        "Receiver Native Example.rss",
+        "/workspace/rsscript/runtime",
+        &[],
+        &[NativeRustDependency {
+            crate_name: "alpha_native".to_string(),
+            path: "/workspace/alpha-native".to_string(),
+            cargo_features: Vec::new(),
+            bindings: BTreeMap::from([
+                ("Alpha.open".to_string(), "alpha_native::open".to_string()),
+                (
+                    "Alpha.describe".to_string(),
+                    "alpha_native::describe".to_string(),
+                ),
+            ]),
+        }],
+    )
+    .expect("source should lower with receiver native binding");
+
+    assert!(
+        package.lib_rs.contains("alpha_native::open()"),
+        "qualified native call should use bound target, got:\n{}",
+        package.lib_rs
+    );
+    assert!(
+        package.lib_rs.contains("alpha_native::describe(&alpha)"),
+        "receiver native call should pass receiver as first argument to bound target, got:\n{}",
+        package.lib_rs
+    );
+    assert!(
+        !package.lib_rs.contains("Alpha::describe(&alpha)"),
+        "receiver native binding should not fall back to generated qualified call, got:\n{}",
+        package.lib_rs
+    );
+}
+
+#[test]
 fn rust_lowering_source_map_covers_match_patterns_closures_and_binary_exprs() {
     let source = r#"
 fn maybe() -> Option<Int> {

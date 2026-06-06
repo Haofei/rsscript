@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -138,13 +138,27 @@ fn write_core_package_index() -> Result<(), String> {
 
 fn write_reg_vm_runtime_intrinsics() -> Result<(), String> {
     println!("cargo:rerun-if-changed=src/reg_vm.rs");
+    println!("cargo:rerun-if-changed=src/runtime_abi.rs");
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
     let source_path = manifest_dir.join("src/reg_vm.rs");
     let source = fs::read_to_string(&source_path)
         .map_err(|error| format!("failed to read {}: {error}", source_path.display()))?;
-    let signatures = collect_reg_vm_runtime_intrinsics(&source)?;
-    let generated = format!(
+    let resolver_signatures = collect_reg_vm_resolver_signatures(&source)?;
+    let runtime_abi_path = manifest_dir.join("src/runtime_abi.rs");
+    let runtime_abi_source = fs::read_to_string(&runtime_abi_path)
+        .map_err(|error| format!("failed to read {}: {error}", runtime_abi_path.display()))?;
+    let runtime_abi_signatures = collect_runtime_abi_signatures(&runtime_abi_source);
+    let signatures = resolver_signatures
+        .iter()
+        .filter(|signature| runtime_abi_signatures.contains(*signature))
+        .cloned()
+        .collect::<Vec<_>>();
+    let special_forms = resolver_signatures
+        .into_iter()
+        .filter(|signature| !runtime_abi_signatures.contains(signature))
+        .collect::<Vec<_>>();
+    let generated_runtime = format!(
         "&[\n{}\n]\n",
         signatures
             .iter()
@@ -152,13 +166,29 @@ fn write_reg_vm_runtime_intrinsics() -> Result<(), String> {
             .collect::<Vec<_>>()
             .join("\n")
     );
+    let generated_special_forms = format!(
+        "&[\n{}\n]\n",
+        special_forms
+            .iter()
+            .map(|signature| format!("    {signature:?},"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("out dir"));
-    fs::write(out_dir.join("rss-reg-vm-runtime-intrinsics.rs"), generated)
-        .map_err(|error| format!("reg VM runtime intrinsic index should be written: {error}"))?;
+    fs::write(
+        out_dir.join("rss-reg-vm-runtime-intrinsics.rs"),
+        generated_runtime,
+    )
+    .map_err(|error| format!("reg VM runtime intrinsic index should be written: {error}"))?;
+    fs::write(
+        out_dir.join("rss-reg-vm-special-forms.rs"),
+        generated_special_forms,
+    )
+    .map_err(|error| format!("reg VM special form index should be written: {error}"))?;
     Ok(())
 }
 
-fn collect_reg_vm_runtime_intrinsics(source: &str) -> Result<Vec<String>, String> {
+fn collect_reg_vm_resolver_signatures(source: &str) -> Result<Vec<String>, String> {
     let start_marker = "let intrinsic = match (namespace_root, name_root) {";
     let start = source
         .find(start_marker)
@@ -203,6 +233,40 @@ fn collect_reg_vm_runtime_intrinsics(source: &str) -> Result<Vec<String>, String
     }
 
     Ok(signatures.into_keys().collect())
+}
+
+fn collect_runtime_abi_signatures(source: &str) -> BTreeSet<String> {
+    let mut signatures = BTreeSet::new();
+    let mut index = 0;
+    while let Some(relative) = source[index..].find("runtime_intrinsic") {
+        index += relative + "runtime_intrinsic".len();
+        let bytes = source.as_bytes();
+        let mut cursor = index;
+        if source[cursor..].starts_with("_with_handles") {
+            cursor += "_with_handles".len();
+        }
+        cursor = skip_ascii_whitespace(bytes, cursor);
+        if bytes.get(cursor) != Some(&b'(') {
+            continue;
+        }
+        cursor += 1;
+        cursor = skip_ascii_whitespace(bytes, cursor);
+        let Some((namespace, after_namespace)) = parse_quoted_ascii(source, cursor) else {
+            continue;
+        };
+        cursor = skip_ascii_whitespace(bytes, after_namespace);
+        if bytes.get(cursor) != Some(&b',') {
+            continue;
+        }
+        cursor += 1;
+        cursor = skip_ascii_whitespace(bytes, cursor);
+        let Some((name, after_name)) = parse_quoted_ascii(source, cursor) else {
+            continue;
+        };
+        signatures.insert(format!("{namespace}.{name}"));
+        index = after_name;
+    }
+    signatures
 }
 
 fn parse_quoted_ascii(source: &str, quote_index: usize) -> Option<(String, usize)> {

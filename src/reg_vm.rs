@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 
 use crate::diagnostic::Severity;
 use crate::eval_types::{EvalError, EvalOutput, NativeInterpreterFn, NativeValue};
-use crate::hir::{Hir, HirBlock, HirCallArg, HirCallReceiver, HirExpr, HirStmt};
+use crate::hir::{Hir, HirBlock, HirCallArg, HirCallReceiver, HirExpr, HirStmt, TypeInfo};
 use crate::interfaces::builtin_interfaces;
 use crate::package::package_lowering_input;
 use crate::syntax::ast::{BinaryOp, Callee, MatchPattern, merge_programs};
@@ -176,6 +176,7 @@ struct RegUnit {
     functions: Vec<Rc<RegFunction>>,
     function_ids: HashMap<String, usize>,
     resource_drop_functions: HashMap<String, usize>,
+    types: HashMap<String, TypeInfo>,
 }
 
 #[derive(Debug, Clone)]
@@ -617,6 +618,12 @@ enum RegInstr {
         intrinsic: RegIntrinsic,
         args: Vec<Reg>,
     },
+    CallTypedIntrinsic {
+        dst: Reg,
+        intrinsic: RegIntrinsic,
+        type_arg: String,
+        args: Vec<Reg>,
+    },
     TryResult {
         dst: Reg,
         src: Reg,
@@ -674,6 +681,7 @@ enum RegIntrinsic {
     ClockNow,
     ClockSystemUnixMs,
     ConfigLoad,
+    CapabilityFrom,
     ConfigName,
     ConfigNew,
     ConfigRuleCount,
@@ -877,6 +885,9 @@ enum RegIntrinsic {
     JsonBoolAtOr,
     JsonBoolField,
     JsonClone,
+    JsonDecode,
+    JsonDecodeText,
+    JsonEncode,
     JsonErrorMessage,
     JsonField,
     JsonFieldBool,
@@ -1061,6 +1072,8 @@ enum RegIntrinsic {
     ResourcePoolNew,
     ResourcePoolStats,
     ResourcePoolTryBorrow,
+    ResourcePoolTryLazy,
+    ResourcePoolTryNew,
     SetContains,
     SetDifference,
     SetIntersection,
@@ -1151,6 +1164,9 @@ enum RegIntrinsic {
     WebSocketSendText,
     YamlParse,
     YamlParseFile,
+    WeakDowngrade,
+    WeakFrom,
+    WeakUpgrade,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1264,6 +1280,10 @@ impl RegUnit {
             functions: functions.into_iter().map(Rc::new).collect(),
             function_ids,
             resource_drop_functions,
+            types: hir
+                .types()
+                .map(|type_info| (type_info.name.clone(), type_info.clone()))
+                .collect(),
         })
     }
 }
@@ -1637,6 +1657,11 @@ impl RegLowerer<'_> {
                 }
             }
             HirStmt::Select { arms, .. } => {
+                if arms.len() > 1 {
+                    return Err(EvalError::Runtime(
+                        "reg VM select with multiple arms requires pending first-ready semantics and is not supported yet.".to_string(),
+                    ));
+                }
                 if let Some(arm) = arms.first() {
                     let src = self.expr(&arm.operation)?;
                     if arm.binding != "_" {
@@ -1873,9 +1898,10 @@ impl RegLowerer<'_> {
                 self.emit(RegInstr::ListGet { dst, list, index });
                 Ok(dst)
             }
-            HirExpr::Await { value, .. }
-            | HirExpr::Effect { value, .. }
-            | HirExpr::Spawn { value, .. } => self.expr(value),
+            HirExpr::Await { value, .. } | HirExpr::Effect { value, .. } => self.expr(value),
+            HirExpr::Spawn { .. } => Err(EvalError::Runtime(
+                "reg VM does not support spawn expressions.".to_string(),
+            )),
             HirExpr::Manage { value, .. } => {
                 let src = self.expr(value)?;
                 let dst = self.temp();
@@ -2102,10 +2128,18 @@ impl RegLowerer<'_> {
                     });
                     return Ok(dst);
                 }
-                ("String", "to_path") | ("String", "to_url") => {
+                ("String", "to_path") => {
                     self.emit(RegInstr::CallIntrinsic {
                         dst,
                         intrinsic: RegIntrinsic::PathFromString,
+                        args: vec![receiver_reg],
+                    });
+                    return Ok(dst);
+                }
+                ("String", "to_url") => {
+                    self.emit(RegInstr::CallIntrinsic {
+                        dst,
+                        intrinsic: RegIntrinsic::UrlFromString,
                         args: vec![receiver_reg],
                     });
                     return Ok(dst);
@@ -2346,6 +2380,7 @@ impl RegLowerer<'_> {
                     ("Clock", "now") => RegIntrinsic::ClockNow,
                     ("Clock", "system_unix_ms") => RegIntrinsic::ClockSystemUnixMs,
                     ("Config", "load") => RegIntrinsic::ConfigLoad,
+                    ("Capability", "from") => RegIntrinsic::CapabilityFrom,
                     ("Config", "name") => RegIntrinsic::ConfigName,
                     ("Config", "new") => RegIntrinsic::ConfigNew,
                     ("Config", "rule_count") => RegIntrinsic::ConfigRuleCount,
@@ -2664,6 +2699,9 @@ impl RegLowerer<'_> {
                     }
                     ("Json", "bool_field") => RegIntrinsic::JsonBoolField,
                     ("Json", "clone") => RegIntrinsic::JsonClone,
+                    ("Json", "decode") => RegIntrinsic::JsonDecode,
+                    ("Json", "decode_text") => RegIntrinsic::JsonDecodeText,
+                    ("Json", "encode") => RegIntrinsic::JsonEncode,
                     ("Json", "field") => RegIntrinsic::JsonField,
                     ("Json", "field_bool") => RegIntrinsic::JsonFieldBool,
                     ("Json", "field_int") => RegIntrinsic::JsonFieldInt,
@@ -3166,6 +3204,8 @@ impl RegLowerer<'_> {
                     ("ResourcePool", "new") => RegIntrinsic::ResourcePoolNew,
                     ("ResourcePool", "stats") => RegIntrinsic::ResourcePoolStats,
                     ("ResourcePool", "try_borrow") => RegIntrinsic::ResourcePoolTryBorrow,
+                    ("ResourcePool", "try_lazy") => RegIntrinsic::ResourcePoolTryLazy,
+                    ("ResourcePool", "try_new") => RegIntrinsic::ResourcePoolTryNew,
                     ("Set", "clear") => {
                         if arg_regs.len() != 1 {
                             return Err(EvalError::Runtime(format!(
@@ -3358,7 +3398,7 @@ impl RegLowerer<'_> {
                     ("String", "strip_prefix") => RegIntrinsic::StringStripPrefix,
                     ("String", "safe_relative") => RegIntrinsic::PathSafeRelative,
                     ("String", "to_path") => RegIntrinsic::PathFromString,
-                    ("String", "to_url") => RegIntrinsic::PathFromString,
+                    ("String", "to_url") => RegIntrinsic::UrlFromString,
                     ("String", "to_bytes") => RegIntrinsic::BytesFromString,
                     ("String", "to_lowercase") => RegIntrinsic::StringToLowercase,
                     ("String", "to_uppercase") => RegIntrinsic::StringToUppercase,
@@ -3424,6 +3464,9 @@ impl RegLowerer<'_> {
                     ("WebSocketError", "message") => RegIntrinsic::WebSocketErrorMessage,
                     ("Yaml", "parse") => RegIntrinsic::YamlParse,
                     ("Yaml", "parse_file") => RegIntrinsic::YamlParseFile,
+                    ("Weak", "downgrade") => RegIntrinsic::WeakDowngrade,
+                    ("Weak", "from") => RegIntrinsic::WeakFrom,
+                    ("Weak", "upgrade") => RegIntrinsic::WeakUpgrade,
                     _ => {
                         if self.is_native_function(Some(namespace_root), name_root) {
                             self.emit(RegInstr::CallNative {
@@ -3438,11 +3481,30 @@ impl RegLowerer<'_> {
                         )));
                     }
                 };
-                self.emit(RegInstr::CallIntrinsic {
-                    dst,
-                    intrinsic,
-                    args: arg_regs,
-                });
+                match intrinsic {
+                    RegIntrinsic::JsonDecode | RegIntrinsic::JsonDecodeText => {
+                        let type_arg = type_arg_names(name)
+                            .and_then(|args| args.first().copied())
+                            .ok_or_else(|| {
+                                EvalError::Runtime(format!(
+                                    "reg VM {namespace}.{name} requires a concrete type argument."
+                                ))
+                            })?;
+                        self.emit(RegInstr::CallTypedIntrinsic {
+                            dst,
+                            intrinsic,
+                            type_arg: type_root_name(type_arg).to_string(),
+                            args: arg_regs,
+                        });
+                    }
+                    _ => {
+                        self.emit(RegInstr::CallIntrinsic {
+                            dst,
+                            intrinsic,
+                            args: arg_regs,
+                        });
+                    }
+                }
             }
             Callee::ReceiverCall { .. } => {
                 unreachable!("receiver calls return before arg lowering")
@@ -4033,6 +4095,7 @@ struct RegVm {
     stdout: String,
     stderr: String,
     stack: Vec<VmValue>,
+    written: Vec<bool>,
     next_cancellation_id: i64,
     cancellation_flags: HashMap<i64, bool>,
     next_channel_id: i64,
@@ -4073,6 +4136,7 @@ struct VmResourcePool {
     in_use: i64,
     idle: Vec<VmValue>,
     factory: Option<Rc<VmClosure>>,
+    factory_returns_result: bool,
 }
 
 struct VmResourcePoolLease {
@@ -4094,6 +4158,7 @@ impl RegVm {
             stdout: String::new(),
             stderr: String::new(),
             stack: Vec::new(),
+            written: Vec::new(),
             next_cancellation_id: 1,
             cancellation_flags: HashMap::new(),
             next_channel_id: 1,
@@ -4112,17 +4177,40 @@ impl RegVm {
     fn ensure_regs(&mut self, upto: usize) {
         if self.stack.len() < upto {
             self.stack.resize(upto, VmValue::Unit);
+            self.written.resize(upto, false);
+        }
+    }
+
+    fn prepare_frame(&mut self, base: usize, regs: usize) {
+        self.ensure_regs(base + regs);
+        for written in &mut self.written[base..base + regs] {
+            *written = false;
         }
     }
 
     #[inline(always)]
     fn reg(&self, index: usize) -> &VmValue {
+        debug_assert!(
+            self.written.get(index).copied().unwrap_or(false),
+            "reg VM read uninitialized register {index}"
+        );
         &self.stack[index]
     }
 
     #[inline(always)]
     fn set_reg(&mut self, index: usize, value: VmValue) {
         self.stack[index] = value;
+        self.written[index] = true;
+    }
+
+    #[inline(always)]
+    fn take_reg(&mut self, index: usize) -> VmValue {
+        debug_assert!(
+            self.written.get(index).copied().unwrap_or(false),
+            "reg VM take uninitialized register {index}"
+        );
+        self.written[index] = false;
+        std::mem::replace(&mut self.stack[index], VmValue::Unit)
     }
 
     fn call_function(&mut self, name: &str, args: Vec<VmValue>) -> Result<VmValue, EvalError> {
@@ -4141,9 +4229,9 @@ impl RegVm {
             )));
         }
         let base = self.stack.len();
-        self.ensure_regs(base + function.regs);
+        self.prepare_frame(base, function.regs);
         for (index, arg) in args.into_iter().enumerate() {
-            self.stack[base + index] = arg;
+            self.set_reg(base + index, arg);
         }
         self.run_frame(&unit, function, base)
     }
@@ -4151,10 +4239,8 @@ impl RegVm {
     // Shared register stack with frame windows. Each frame owns
     // `stack[base .. base + function.regs]`; a callee is placed immediately
     // above the caller at `base + function.regs`. The stack only grows
-    // (`ensure_regs`) so recursion is bounded only by memory, and frames are
-    // neither zero-filled on entry nor cleared on return: lowering guarantees
-    // every register is written before it is read, so stale slots are
-    // overwritten lazily by the next frame that reuses them.
+    // (`ensure_regs`) so recursion is bounded only by memory. Debug builds keep
+    // a written-register bitmap so stale slots cannot mask lowering bugs.
     fn run_frame(
         &mut self,
         unit: &RegUnit,
@@ -4369,9 +4455,9 @@ impl RegVm {
                     expected,
                     target,
                 } => {
-                    let l = expect_int_ref(self.reg(base + *lhs))?;
-                    let r = expect_int_ref(self.reg(base + *rhs))?;
-                    if eval_int_compare(*op, l, r) == *expected {
+                    let l = self.reg(base + *lhs);
+                    let r = self.reg(base + *rhs);
+                    if eval_numeric_compare(*op, l, r)? == *expected {
                         ip = *target;
                     }
                 }
@@ -4495,7 +4581,7 @@ impl RegVm {
                     args,
                 } => {
                     let callee = &unit.functions[*callee_id];
-                    self.ensure_regs(next_base + callee.regs);
+                    self.prepare_frame(next_base, callee.regs);
                     for (index, reg) in args.iter().enumerate() {
                         let value = self.reg(base + *reg).clone();
                         self.set_reg(next_base + index, value);
@@ -4895,6 +4981,16 @@ impl RegVm {
                     let value = self.call_intrinsic(unit, *intrinsic, args, base, next_base)?;
                     self.set_reg(base + *dst, value);
                 }
+                RegInstr::CallTypedIntrinsic {
+                    dst,
+                    intrinsic,
+                    type_arg,
+                    args,
+                } => {
+                    let value =
+                        self.call_typed_intrinsic(unit, *intrinsic, type_arg, args, base)?;
+                    self.set_reg(base + *dst, value);
+                }
                 RegInstr::TryResult { dst, src, cleanup } => {
                     let value = self.reg(base + *src);
                     let result = result_variant_payload(value)?;
@@ -4910,10 +5006,7 @@ impl RegVm {
                     }
                 }
                 RegInstr::Return { src } => {
-                    return Ok(std::mem::replace(
-                        &mut self.stack[base + *src],
-                        VmValue::Unit,
-                    ));
+                    return Ok(self.take_reg(base + *src));
                 }
             }
         }
@@ -4940,10 +5033,10 @@ impl RegVm {
             return Ok(());
         };
         let callee = &unit.functions[function_id];
-        self.ensure_regs(base + callee.regs);
+        self.prepare_frame(base, callee.regs);
         for (field, value) in &data.fields {
             if let Some(reg) = callee.local_regs.get(field) {
-                self.stack[base + *reg] = value.clone();
+                self.set_reg(base + *reg, value.clone());
             }
         }
         let result = self.run_frame(unit, callee, base)?;
@@ -5114,6 +5207,7 @@ impl RegVm {
         base: usize,
         next_base: usize,
         lazy: bool,
+        factory_returns_result: bool,
     ) -> Result<VmValue, EvalError> {
         let factory = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 0)?)?;
         let max_size = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
@@ -5122,7 +5216,15 @@ impl RegVm {
         if !lazy {
             idle.reserve(capacity as usize);
             for _ in 0..capacity {
-                idle.push(self.call_closure_zero(unit, &factory, next_base)?);
+                let value = self.call_closure_zero(unit, &factory, next_base)?;
+                if factory_returns_result {
+                    match result_variant_payload(&value)? {
+                        Ok(value) => idle.push(value),
+                        Err(error) => return Ok(value_err(error)),
+                    }
+                } else {
+                    idle.push(value);
+                }
             }
         }
         let id = self.next_pool_id;
@@ -5135,9 +5237,15 @@ impl RegVm {
                 in_use: 0,
                 idle,
                 factory: lazy.then_some(factory),
+                factory_returns_result,
             },
         );
-        Ok(resource_pool_value(id))
+        let pool = resource_pool_value(id);
+        if factory_returns_result && !lazy {
+            Ok(value_ok(pool))
+        } else {
+            Ok(pool)
+        }
     }
 
     fn resource_pool_borrow(
@@ -5196,6 +5304,24 @@ impl RegVm {
                 .map_err(|error| {
                     pool_error_value(format!("resource pool factory failed: {error:?}"))
                 })?;
+            let factory_returns_result = self
+                .pools
+                .get(&pool_id)
+                .map(|state| state.factory_returns_result)
+                .unwrap_or(false);
+            let value = if factory_returns_result {
+                match result_variant_payload(&value) {
+                    Ok(Ok(value)) => value,
+                    Ok(Err(error)) => return Err(error),
+                    Err(error) => {
+                        return Err(pool_error_value(format!(
+                            "resource pool factory returned non-Result value: {error:?}"
+                        )));
+                    }
+                }
+            } else {
+                value
+            };
             let state = self
                 .pools
                 .get_mut(&pool_id)
@@ -5251,14 +5377,14 @@ impl RegVm {
         base: usize,
     ) -> Result<VmValue, EvalError> {
         let callee = &unit.functions[closure.function];
-        self.ensure_regs(base + callee.regs);
+        self.prepare_frame(base, callee.regs);
         for (index, capture) in closure.captures.iter().enumerate() {
-            self.stack[base + index] = capture.clone();
+            self.set_reg(base + index, capture.clone());
         }
         let offset = closure.captures.len();
         for (index, reg) in arg_regs.iter().enumerate() {
-            let value = self.stack[caller_base + *reg].clone();
-            self.stack[base + offset + index] = value;
+            let value = self.reg(caller_base + *reg).clone();
+            self.set_reg(base + offset + index, value);
         }
         self.run_frame(unit, callee, base)
     }
@@ -5271,11 +5397,11 @@ impl RegVm {
         base: usize,
     ) -> Result<VmValue, EvalError> {
         let callee = &unit.functions[closure.function];
-        self.ensure_regs(base + callee.regs);
+        self.prepare_frame(base, callee.regs);
         for (index, capture) in closure.captures.iter().enumerate() {
-            self.stack[base + index] = capture.clone();
+            self.set_reg(base + index, capture.clone());
         }
-        self.stack[base + closure.captures.len()] = arg;
+        self.set_reg(base + closure.captures.len(), arg);
         self.run_frame(unit, callee, base)
     }
 
@@ -5288,13 +5414,13 @@ impl RegVm {
         base: usize,
     ) -> Result<VmValue, EvalError> {
         let callee = &unit.functions[closure.function];
-        self.ensure_regs(base + callee.regs);
+        self.prepare_frame(base, callee.regs);
         for (index, capture) in closure.captures.iter().enumerate() {
-            self.stack[base + index] = capture.clone();
+            self.set_reg(base + index, capture.clone());
         }
         let offset = closure.captures.len();
-        self.stack[base + offset] = first;
-        self.stack[base + offset + 1] = second;
+        self.set_reg(base + offset, first);
+        self.set_reg(base + offset + 1, second);
         self.run_frame(unit, callee, base)
     }
 
@@ -5308,14 +5434,14 @@ impl RegVm {
         base: usize,
     ) -> Result<VmValue, EvalError> {
         let callee = &unit.functions[closure.function];
-        self.ensure_regs(base + callee.regs);
+        self.prepare_frame(base, callee.regs);
         for (index, capture) in closure.captures.iter().enumerate() {
-            self.stack[base + index] = capture.clone();
+            self.set_reg(base + index, capture.clone());
         }
         let offset = closure.captures.len();
-        self.stack[base + offset] = first;
-        self.stack[base + offset + 1] = second;
-        self.stack[base + offset + 2] = third;
+        self.set_reg(base + offset, first);
+        self.set_reg(base + offset + 1, second);
+        self.set_reg(base + offset + 2, third);
         self.run_frame(unit, callee, base)
     }
 
@@ -5326,9 +5452,9 @@ impl RegVm {
         base: usize,
     ) -> Result<VmValue, EvalError> {
         let callee = &unit.functions[closure.function];
-        self.ensure_regs(base + callee.regs);
+        self.prepare_frame(base, callee.regs);
         for (index, capture) in closure.captures.iter().enumerate() {
-            self.stack[base + index] = capture.clone();
+            self.set_reg(base + index, capture.clone());
         }
         self.run_frame(unit, callee, base)
     }
@@ -5474,6 +5600,31 @@ impl RegVm {
             }
         }
         Ok(list)
+    }
+
+    fn call_typed_intrinsic(
+        &mut self,
+        unit: &RegUnit,
+        intrinsic: RegIntrinsic,
+        type_arg: &str,
+        args: &[Reg],
+        base: usize,
+    ) -> Result<VmValue, EvalError> {
+        match intrinsic {
+            RegIntrinsic::JsonDecode => {
+                let value = expect_json_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(json_result(json_decode_struct_value(unit, type_arg, value)))
+            }
+            RegIntrinsic::JsonDecodeText => {
+                let text = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(json_result(parse_json_text(text).and_then(|value| {
+                    json_decode_struct_value(unit, type_arg, &value)
+                })))
+            }
+            other => Err(EvalError::Runtime(format!(
+                "reg VM typed intrinsic `{other:?}` is not implemented."
+            ))),
+        }
     }
 
     fn call_intrinsic(
@@ -5645,6 +5796,7 @@ impl RegVm {
                     .cloned()
                     .unwrap_or_else(|| VmValue::string("")))
             }
+            RegIntrinsic::CapabilityFrom => Ok(intrinsic_arg(&self.stack, base, args, 0)?.clone()),
             RegIntrinsic::CancellationSourceCancel => {
                 let id = expect_cancellation_id_ref(
                     intrinsic_arg(&self.stack, base, args, 0)?,
@@ -7059,6 +7211,13 @@ impl RegVm {
                 let value = expect_json_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Json(Rc::new(value.clone())))
             }
+            RegIntrinsic::JsonDecode | RegIntrinsic::JsonDecodeText => Err(EvalError::Runtime(
+                "reg VM Json.decode requires typed intrinsic metadata.".to_string(),
+            )),
+            RegIntrinsic::JsonEncode => {
+                let value = vm_value_to_json_literal(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::string(value.to_string()))
+            }
             RegIntrinsic::JsonErrorMessage => {
                 read_field_ref(intrinsic_arg(&self.stack, base, args, 0)?, "message")
             }
@@ -8361,10 +8520,10 @@ impl RegVm {
                 Ok(VmValue::Unit)
             }
             RegIntrinsic::ResourcePoolLazy => {
-                self.resource_pool_new(unit, args, base, next_base, true)
+                self.resource_pool_new(unit, args, base, next_base, true, false)
             }
             RegIntrinsic::ResourcePoolNew => {
-                self.resource_pool_new(unit, args, base, next_base, false)
+                self.resource_pool_new(unit, args, base, next_base, false, false)
             }
             RegIntrinsic::ResourcePoolStats => {
                 let pool = expect_resource_pool_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -8374,6 +8533,7 @@ impl RegVm {
                     in_use: 0,
                     idle: Vec::new(),
                     factory: None,
+                    factory_returns_result: false,
                 });
                 Ok(pool_stats_value(
                     stats.capacity,
@@ -8384,6 +8544,12 @@ impl RegVm {
             }
             RegIntrinsic::ResourcePoolTryBorrow => {
                 self.resource_pool_borrow(unit, args, base, next_base, true)
+            }
+            RegIntrinsic::ResourcePoolTryLazy => {
+                self.resource_pool_new(unit, args, base, next_base, true, true)
+            }
+            RegIntrinsic::ResourcePoolTryNew => {
+                self.resource_pool_new(unit, args, base, next_base, false, true)
             }
             RegIntrinsic::RandomBool => {
                 let mut rng = rand::thread_rng();
@@ -9031,6 +9197,12 @@ impl RegVm {
                         .and_then(|text| yaml_parse_json_value(&text)),
                 ))
             }
+            RegIntrinsic::WeakDowngrade | RegIntrinsic::WeakFrom => {
+                Ok(intrinsic_arg(&self.stack, base, args, 0)?.clone())
+            }
+            RegIntrinsic::WeakUpgrade => Ok(VmValue::OptionSome(Box::new(
+                intrinsic_arg(&self.stack, base, args, 0)?.clone(),
+            ))),
         }
     }
 }
@@ -9819,6 +9991,130 @@ fn json_error_value(message: impl Into<String>) -> VmValue {
         name: Rc::from("JsonError"),
         fields,
     }))
+}
+
+fn json_decode_struct_value(
+    unit: &RegUnit,
+    type_name: &str,
+    value: &serde_json::Value,
+) -> Result<VmValue, VmValue> {
+    let info = unit
+        .types
+        .get(type_root_name(type_name))
+        .ok_or_else(|| json_error_value(format!("unknown JSON decode type `{type_name}`")))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| json_error_value("JSON decode expected an object"))?;
+    let mut fields = HashMap::with_capacity(info.fields_ordered.len());
+    for field in &info.fields_ordered {
+        let decoded = match object.get(&field.name) {
+            Some(value) => json_decode_field_value(unit, &field.type_name, value)?,
+            None if type_root_name(&field.type_name) == "Option" => value_none(),
+            None => {
+                return Err(json_error_value(format!(
+                    "missing JSON field `{}`",
+                    field.name
+                )));
+            }
+        };
+        fields.insert(field.name.clone(), decoded);
+    }
+    Ok(VmValue::Struct(Rc::new(VmStruct {
+        name: Rc::from(info.name.as_str()),
+        fields,
+    })))
+}
+
+fn json_decode_field_value(
+    unit: &RegUnit,
+    type_name: &str,
+    value: &serde_json::Value,
+) -> Result<VmValue, VmValue> {
+    match type_root_name(type_name) {
+        "Unit" => {
+            if value.is_null() {
+                Ok(VmValue::Unit)
+            } else {
+                Err(json_type_error(type_name, value))
+            }
+        }
+        "Int" => value
+            .as_i64()
+            .map(VmValue::Int)
+            .ok_or_else(|| json_type_error(type_name, value)),
+        "Float" => value
+            .as_f64()
+            .map(VmValue::Float)
+            .ok_or_else(|| json_type_error(type_name, value)),
+        "Bool" => value
+            .as_bool()
+            .map(VmValue::Bool)
+            .ok_or_else(|| json_type_error(type_name, value)),
+        "String" => value
+            .as_str()
+            .map(VmValue::string)
+            .ok_or_else(|| json_type_error(type_name, value)),
+        "JsonValue" | "JsonLiteral" => Ok(VmValue::Json(Rc::new(value.clone()))),
+        "Option" => {
+            if value.is_null() {
+                return Ok(value_none());
+            }
+            let Some(inner) = type_arg_names(type_name).and_then(|args| args.first().copied())
+            else {
+                return Err(json_error_value(format!(
+                    "Option field `{type_name}` is missing a type argument"
+                )));
+            };
+            json_decode_field_value(unit, inner, value).map(value_some)
+        }
+        "List" => {
+            let Some(inner) = type_arg_names(type_name).and_then(|args| args.first().copied())
+            else {
+                return Err(json_error_value(format!(
+                    "List field `{type_name}` is missing a type argument"
+                )));
+            };
+            let items = value
+                .as_array()
+                .ok_or_else(|| json_type_error(type_name, value))?;
+            let decoded = items
+                .iter()
+                .map(|item| json_decode_field_value(unit, inner, item))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(VmValue::List(Rc::new(RefCell::new(decoded))))
+        }
+        "Map" => {
+            let args = type_arg_names(type_name).unwrap_or_default();
+            if args.len() != 2 || type_root_name(args[0]) != "String" {
+                return Err(json_error_value(format!(
+                    "JSON decode only supports Map<String, T> fields in the VM, got `{type_name}`"
+                )));
+            }
+            let object = value
+                .as_object()
+                .ok_or_else(|| json_type_error(type_name, value))?;
+            let mut decoded = HashMap::with_capacity(object.len());
+            for (key, value) in object {
+                decoded.insert(
+                    VmMapKey::String(Rc::new(key.clone())),
+                    json_decode_field_value(unit, args[1], value)?,
+                );
+            }
+            Ok(VmValue::Map(Rc::new(RefCell::new(decoded))))
+        }
+        other if unit.types.contains_key(other) => json_decode_struct_value(unit, other, value),
+        _ => Err(json_error_value(format!(
+            "JSON decode does not support VM field type `{type_name}`"
+        ))),
+    }
+}
+
+fn json_type_error(expected: &str, value: &serde_json::Value) -> VmValue {
+    json_error_value(format!(
+        "JSON decode expected `{}` but found `{}`",
+        type_root_name(expected),
+        json_kind(value)
+    ))
 }
 
 fn decode_error_value(message: impl Into<String>) -> VmValue {
@@ -12227,4 +12523,32 @@ fn type_root_name(name: &str) -> &str {
     name.split_once('<')
         .map(|(root, _)| root.trim())
         .unwrap_or(name)
+}
+
+fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
+    let (_, rest) = type_name.split_once('<')?;
+    let args = rest.strip_suffix('>')?;
+    Some(split_type_args(args))
+}
+
+fn split_type_args(args: &str) -> Vec<&str> {
+    let mut result = Vec::new();
+    let mut depth = 0_i32;
+    let mut start = 0;
+    for (index, ch) in args.char_indices() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth -= 1,
+            ',' if depth == 0 => {
+                result.push(args[start..index].trim());
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    let last = args[start..].trim();
+    if !last.is_empty() {
+        result.push(last);
+    }
+    result
 }

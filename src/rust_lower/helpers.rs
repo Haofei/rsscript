@@ -274,6 +274,25 @@ pub(super) fn is_weak_upgrade_callee(callee: &Callee) -> bool {
     )
 }
 
+pub(super) fn is_weak_from_callee(callee: &Callee) -> bool {
+    matches!(
+        callee,
+        Callee::Qualified { namespace, name }
+            if namespace == "Weak" && matches!(type_root_name(name), "from" | "downgrade")
+    )
+}
+
+pub(super) fn lower_weak_from_call(lowerer: &mut RustLowerer<'_>, args: &[CallArg]) -> String {
+    let Some(arg) = args
+        .iter()
+        .find(|arg| arg.name.as_deref() == Some("value"))
+        .or_else(|| args.first())
+    else {
+        return "rsscript_runtime::weak(&/* missing value */)".to_string();
+    };
+    lowerer.lower_runtime_weak_from_managed(&arg.value)
+}
+
 pub(super) fn lower_weak_upgrade_call(lowerer: &mut RustLowerer<'_>, args: &[CallArg]) -> String {
     let Some(arg) = args
         .iter()
