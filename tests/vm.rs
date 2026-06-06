@@ -13,6 +13,187 @@ use rsscript::{
 mod common;
 
 #[test]
+fn reg_vm_runs_select_first_ready_like_backend() {
+    // `select` runs both arms concurrently; the shorter sleep (1ms) wins over the
+    // longer (50ms), so the scheduler's clock — not arm order — must decide.
+    let source = r#"
+features: async, native
+
+async fn after(value: Int, ms: Int) -> Result<Int, TimerError> {
+    await Timer.sleep(ms: ms)?
+    return Ok(value)
+}
+
+fn main() -> Result<Unit, TimerError> {
+    select {
+        value = await after(value: 7, ms: 1)? => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        other = await after(value: 9, ms: 50)? => {
+            Log.write(message: read String.from_int(value: other))
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+
+    assert_reg_vm_matches_compiled_backend("reg-vm-select.rss", source, []);
+}
+
+#[test]
+fn reg_vm_runs_spawned_producer_consumer_channel_like_backend() {
+    // A spawned producer fills a capacity-1 channel while the consumer drains it:
+    // exercises both recv-on-empty and send-on-full parking plus cross-task wakeups
+    // (the producer's second send blocks until the consumer's first recv frees a slot).
+    let source = r#"
+features: native, local, async
+
+async fn produce(sender: read Sender<Int>) -> Result<Unit, ChannelError> {
+    local a = 10
+    await Sender.send<Int>(sender: read sender, value: take a)?
+    local b = 20
+    await Sender.send<Int>(sender: read sender, value: take b)?
+    return Ok(Unit)
+}
+
+async fn drain(receiver: read Receiver<Int>) -> Result<Int, ChannelError> {
+    let first = await Receiver.recv<Int>(receiver: read receiver)?
+    let second = await Receiver.recv<Int>(receiver: read receiver)?
+    let a = match first {
+        Some(value) => value
+        None => 0
+    }
+    let b = match second {
+        Some(value) => value
+        None => 0
+    }
+    return Ok(a + b)
+}
+
+async fn main() -> Result<Unit, ChannelError> {
+    match Channel.bounded<Int>(capacity: 1) {
+        Ok(channel) => {
+            let sender = Channel.sender<Int>(channel: read channel)
+            local channel_value = channel
+            match Channel.receiver<Int>(channel: mut channel_value) {
+                Ok(receiver) => {
+                    task_group {
+                        async let producer = produce(sender: read sender)
+                        async let consumer = drain(receiver: read receiver)
+                        await producer?
+                        let total = await consumer?
+                        Log.write(message: read String.from_int(value: total))
+                    }
+                }
+                Err(error) => {
+                    Log.write(message: read ChannelError.message(error: read error))
+                }
+            }
+        }
+        Err(error) => {
+            Log.write(message: read ChannelError.message(error: read error))
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+
+    assert_reg_vm_matches_compiled_backend("reg-vm-producer-consumer.rss", source, []);
+}
+
+#[test]
+fn reg_vm_runs_task_group_async_let_like_backend() {
+    // `async let` spawns concurrent tasks; `await` joins them. The scheduler must
+    // run the spawned tasks and hand their results back to the joining task.
+    let source = r#"
+features: async
+
+async fn fetch_user() -> Result<String, String> {
+    return Ok("user")
+}
+
+async fn fetch_profile() -> Result<String, String> {
+    return Ok("profile")
+}
+
+fn main() -> Result<Unit, String> {
+    task_group {
+        async let user = fetch_user()
+        async let profile = fetch_profile()
+
+        let u = await user?
+        let p = await profile?
+        Log.write(message: read u)
+        Log.write(message: read p)
+    }
+    return Ok(Unit)
+}
+"#;
+
+    assert_reg_vm_matches_compiled_backend("reg-vm-task-group.rss", source, []);
+}
+
+#[test]
+fn reg_vm_propagates_all_list_mutators_through_mut_param_like_backend() {
+    // A `mut List` parameter aliases the caller's list (lowered to `&mut` by the
+    // backend), so every mutator — not just `push` — must propagate. This caught
+    // the divergence where `set`/`append`/`sort` cloned-and-wrote-back and so
+    // silently dropped mutations made through a `mut` param.
+    let source = r#"
+fn mutate(xs: mut List<Int>) -> Unit {
+    List.push<Int>(list: mut xs, value: read 4)
+    List.set<Int>(list: mut xs, index: 0, value: read 10)
+    List.append<Int>(list: mut xs, values: read List<Int>.new())
+    List.sort<Int>(list: mut xs)
+    return Unit
+}
+
+fn main() -> Unit {
+    let mut a = List<Int>.new()
+    List.push<Int>(list: mut a, value: read 3)
+    List.push<Int>(list: mut a, value: read 1)
+    mutate(xs: mut a)
+    Log.write(message: read String.from_int(value: List.get<Int>(list: read a, index: 0)))
+    Log.write(message: read String.from_int(value: List.get<Int>(list: read a, index: 2)))
+    Log.write(message: read String.from_int(value: List.len<Int>(list: read a)))
+    return Unit
+}
+"#;
+
+    assert_reg_vm_matches_compiled_backend("reg-vm-mut-list-param.rss", source, []);
+}
+
+#[test]
+fn reg_vm_isolates_by_value_list_params_like_backend() {
+    // A non-`mut` parameter is by value/`&` in the backend (with an inserted
+    // `.clone()`), so the callee owns an isolated copy. Stashing it in a struct,
+    // handing it back, and mutating it must not write into the caller's original
+    // list — which only holds once non-`mut` params are deep-copied on entry.
+    let source = r#"
+struct Box {
+    items: List<Int>
+}
+
+fn keep(xs: read List<Int>) -> Box {
+    return Box(items: read xs)
+}
+
+fn main() -> Unit {
+    let mut a = List<Int>.new()
+    List.push<Int>(list: mut a, value: read 1)
+    let boxed = keep(xs: read a)
+    let mut b = boxed.items
+    List.push<Int>(list: mut b, value: read 9)
+    Log.write(message: read String.from_int(value: List.len<Int>(list: read a)))
+    Log.write(message: read String.from_int(value: List.len<Int>(list: read b)))
+    return Unit
+}
+"#;
+
+    assert_reg_vm_matches_compiled_backend("reg-vm-by-value-list-param.rss", source, []);
+}
+
+#[test]
 fn vm_runs_pure_loop_sum_like_interpreter() {
     let source = r#"
 fn main() -> Unit {
@@ -4930,7 +5111,10 @@ fn main() -> Result<Unit, String> {
 }
 
 #[test]
-fn reg_vm_rejects_pending_multi_arm_select_until_pending_model_exists() {
+fn reg_vm_runs_select_winner_by_timing_not_arm_order_like_backend() {
+    // The shorter sleep is the *second* arm, so a correct first-ready select must
+    // pick it (value 9) — proving the winner is decided by the scheduler clock,
+    // not by arm declaration order.
     let source = r#"
 features: async, native
 
@@ -4941,7 +5125,7 @@ async fn after(value: Int, ms: Int) -> Result<Int, TimerError> {
 
 fn main() -> Result<Unit, TimerError> {
     select {
-        value = await after(value: 7, ms: 100)? => {
+        value = await after(value: 7, ms: 50)? => {
             Log.write(message: read String.from_int(value: value))
         }
         other = await after(value: 9, ms: 1)? => {
@@ -4952,18 +5136,7 @@ fn main() -> Result<Unit, TimerError> {
 }
 "#;
 
-    let error = reg_vm_eval_source_main_with_args(
-        "reg-vm-select.rss",
-        source,
-        std::iter::empty::<&str>(),
-    )
-    .expect_err(
-        "pending multi-arm select should be explicit unsupported until VM has pending model",
-    );
-    assert!(
-        format!("{error:?}").contains("pending multi-arm operations"),
-        "{error:?}"
-    );
+    assert_reg_vm_matches_compiled_backend("reg-vm-select-second-arm.rss", source, []);
 }
 
 fn assert_reg_vm_matches_compiled_backend<'a>(

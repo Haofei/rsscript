@@ -685,6 +685,10 @@ impl<'a> RustLowerer<'a> {
             self.lower_type_ref(&param.ty, ManagedPosition::Param)
         };
         let rust_ty = match param.effect {
+            // Copy primitives are passed `read` by value (call sites already lower
+            // `read <int>` by value via `read_effect_lowers_by_value`); the param
+            // type must match so the value is owned inside the body.
+            Some(DataEffect::Read) if Self::read_effect_lowers_by_value(&param.ty) => ty,
             Some(DataEffect::Read) => format!("&{ty}"),
             Some(DataEffect::Mut) if self.is_class_type(&param.ty) => format!("&{ty}"),
             Some(DataEffect::Mut) => format!("&mut {ty}"),
@@ -1076,7 +1080,7 @@ impl<'a> RustLowerer<'a> {
             return "rsscript_runtime::pending_ready(())".to_string();
         };
         match head {
-            // `return await op` (the function's pending IS op's pending).
+            // `return await op` / `return await op?`.
             Stmt::Return(stmt)
                 if stmt
                     .value
@@ -1085,13 +1089,27 @@ impl<'a> RustLowerer<'a> {
                     .is_some() =>
             {
                 let value = stmt.value.as_ref().expect("return value");
-                self.lower_expr(async_await_inner(value).expect("await inner"))
+                let pending = self.lower_expr(async_await_inner(value).expect("await inner"));
+                if async_await_is_try(value) {
+                    // `return await op?`: drive op (a `Result`-pending), short-circuit
+                    // on `Err`, and re-wrap the `Ok` value as the function's pending so
+                    // the `?` propagation is preserved.
+                    format!(
+                        "rsscript_runtime::pending_try({pending}, move |__rsscript_return_value| {{ rsscript_runtime::pending_ready(Ok(__rsscript_return_value)) }})"
+                    )
+                } else {
+                    // `return await op`: the function's pending IS op's pending.
+                    pending
+                }
             }
             Stmt::Return(stmt) => {
+                // Reuse the sync return machinery so a `read` Copy param is deref'd
+                // and a bare value is `Ok`-wrapped to match the declared return type
+                // (the pending must resolve to the function's return type, not `&T`).
                 let value = stmt
                     .value
                     .as_ref()
-                    .map(|value| self.lower_expr(value))
+                    .map(|value| self.lower_return_expr(value))
                     .unwrap_or_else(|| "()".to_string());
                 format!("rsscript_runtime::pending_ready({value})")
             }

@@ -16,7 +16,8 @@ use sha2::{Digest, Sha256};
 use crate::diagnostic::Severity;
 use crate::eval_types::{EvalError, EvalOutput, NativeInterpreterFn, NativeValue};
 use crate::hir::{
-    Hir, HirBlock, HirCallArg, HirCallReceiver, HirExpr, HirMatchArm, HirStmt, TypeInfo,
+    Hir, HirBlock, HirCallArg, HirCallReceiver, HirExpr, HirMatchArm, HirStmt, ParamEffect,
+    TypeInfo,
 };
 use crate::interfaces::builtin_interfaces;
 use crate::package::package_lowering_input;
@@ -162,7 +163,7 @@ impl RegVmExecutable {
                 .map(|(key, function)| (key.into(), function))
                 .collect(),
         );
-        let value = vm.call_function("main", Vec::new())?;
+        let value = vm.run_program("main")?;
         let display_value = value.display();
         let native_value = value.native_value();
         Ok(EvalOutput {
@@ -231,6 +232,15 @@ enum RegInstr {
         dst: Reg,
         src: Reg,
     },
+    /// Replace `reg` with a deep copy of its value (fresh `Rc` for every mutable
+    /// container in the tree, recursing through structs/variants/options; shared
+    /// reference values like `Managed` keep their handle). Emitted at the function
+    /// prologue for every non-`mut` parameter so the callee owns an isolated copy,
+    /// mirroring the Rust backend, which passes `mut` as `&mut` (mutations
+    /// propagate) and everything else by value/`&` + an inserted `.clone()`.
+    DeepCopy {
+        reg: Reg,
+    },
     Manage {
         dst: Reg,
         src: Reg,
@@ -239,6 +249,15 @@ enum RegInstr {
         dst: Reg,
         base: Reg,
         name: String,
+    },
+    /// Produce a copy of the struct in `base` with field `name` set to `value`.
+    /// Structs are value types, so this rebuilds the struct rather than mutating
+    /// in place; nested assignment targets compose these writes back up the path.
+    SetField {
+        dst: Reg,
+        base: Reg,
+        name: String,
+        value: Reg,
     },
     MakeStruct {
         dst: Reg,
@@ -411,6 +430,28 @@ enum RegInstr {
         dst: Reg,
         function: usize,
         args: Vec<Reg>,
+    },
+    /// `spawn f(args)` / `async let`: start `function` as a new concurrent task
+    /// and put a Task handle in `dst` (the spawning task keeps running).
+    SpawnTask {
+        dst: Reg,
+        function: usize,
+        args: Vec<Reg>,
+    },
+    /// `await x`: if `src` is a Task handle, join it (park until it finishes and
+    /// receive its value); otherwise it is an already-evaluated async result and
+    /// this is the identity move.
+    AwaitJoin {
+        dst: Reg,
+        src: Reg,
+    },
+    /// `select { ... }`: each `handles` reg holds a spawned arm task. Park until
+    /// the first arm finishes, then write its index to `winner` and its value to
+    /// `value`; a branch ladder afterwards dispatches to the winning arm's body.
+    SelectWait {
+        handles: Vec<Reg>,
+        winner: Reg,
+        value: Reg,
     },
     CallNative {
         dst: Reg,
@@ -1242,7 +1283,13 @@ impl RegUnit {
                 cleanup_stack: Vec::new(),
             };
             for param in &signature.params {
-                lowerer.local(&param.name);
+                let reg = lowerer.local(&param.name);
+                // `mut` params alias the caller's value (the backend lowers them to
+                // `&mut`), so mutations must propagate; every other effect is
+                // by-value/`&`, so the callee gets an isolated deep copy.
+                if param.effect != Some(ParamEffect::Mut) {
+                    lowerer.emit(RegInstr::DeepCopy { reg });
+                }
             }
             lowerer.block(body)?;
             let unit = lowerer.temp();
@@ -1421,6 +1468,87 @@ impl RegLowerer<'_> {
         Ok(())
     }
 
+    /// Assign `value` to an lvalue `target`. Locals are written directly; field
+    /// and index targets read the current container, produce an updated copy
+    /// (value semantics), and recurse to store that copy back into the enclosing
+    /// place, so arbitrarily nested targets like `a.b.items[i]` compose.
+    /// Lower `spawn f(args)` (and the call behind an `async let`): evaluate the
+    /// arguments in the spawning task, then emit a `SpawnTask` that starts `f`
+    /// as a new task and yields its handle. Only a direct call to a known
+    /// function is supported (matching how the backend desugars `spawn`).
+    fn lower_spawn(&mut self, value: &HirExpr) -> Result<Reg, EvalError> {
+        let HirExpr::Call { callee, args, .. } = value else {
+            return Err(EvalError::Runtime(
+                "reg VM spawn/async-let expects a direct function call.".to_string(),
+            ));
+        };
+        let Callee::Name(name) = callee else {
+            return Err(EvalError::Runtime(
+                "reg VM spawn/async-let supports only named function calls.".to_string(),
+            ));
+        };
+        let function = self
+            .function_ids
+            .get(type_root_name(name))
+            .copied()
+            .ok_or_else(|| {
+                EvalError::Runtime(format!(
+                    "reg VM cannot resolve spawned function `{}`.",
+                    type_root_name(name)
+                ))
+            })?;
+        let arg_regs = args
+            .iter()
+            .map(|arg| self.expr(&arg.value))
+            .collect::<Result<Vec<_>, _>>()?;
+        let dst = self.temp();
+        self.emit(RegInstr::SpawnTask {
+            dst,
+            function,
+            args: arg_regs,
+        });
+        Ok(dst)
+    }
+
+    fn lower_assign(&mut self, target: &HirExpr, value: Reg) -> Result<(), EvalError> {
+        match target {
+            HirExpr::Ident { name, .. } => {
+                let dst = self.lookup_local(name)?;
+                self.emit(RegInstr::Move { dst, src: value });
+                Ok(())
+            }
+            HirExpr::Field { base, name, .. } => {
+                // Read the current container, write an updated copy back into
+                // `base_value` in place, then store that copy into the enclosing
+                // place (value semantics, composes for nested paths).
+                let base_value = self.expr(base)?;
+                let dst = self.temp();
+                self.emit(RegInstr::SetField {
+                    dst,
+                    base: base_value,
+                    name: name.clone(),
+                    value,
+                });
+                self.lower_assign(base, base_value)
+            }
+            HirExpr::Index { base, index, .. } => {
+                let base_value = self.expr(base)?;
+                let index = self.expr(index)?;
+                let dst = self.temp();
+                self.emit(RegInstr::ListSet {
+                    dst,
+                    list: base_value,
+                    index,
+                    value,
+                });
+                self.lower_assign(base, base_value)
+            }
+            _ => Err(EvalError::Runtime(
+                "reg VM assignment target must be a local, field, or index path.".to_string(),
+            )),
+        }
+    }
+
     fn expr_block_value(&mut self, block: &HirBlock) -> Result<Reg, EvalError> {
         let Some((last, prefix)) = block.statements.split_last() else {
             return Err(EvalError::Runtime(
@@ -1482,45 +1610,30 @@ impl RegLowerer<'_> {
 
     fn statement(&mut self, statement: &HirStmt) -> Result<(), EvalError> {
         match statement {
-            HirStmt::Let { name, value, .. } => {
+            HirStmt::Let {
+                name,
+                value,
+                is_async,
+                ..
+            } => {
                 let dst = self.local(name);
                 if let Some(value) = value {
-                    let src = self.expr(value)?;
+                    // `async let x = f()` spawns `f` as a task and binds `x` to its
+                    // handle; a plain `let` evaluates eagerly in the current task.
+                    let src = if *is_async {
+                        self.lower_spawn(value)?
+                    } else {
+                        self.expr(value)?
+                    };
                     self.emit(RegInstr::Move { dst, src });
                 } else {
                     self.emit(RegInstr::LoadUnit { dst });
                 }
             }
-            HirStmt::Assign { target, value, .. } => match target {
-                HirExpr::Ident { name, .. } => {
-                    let dst = self.lookup_local(name)?;
-                    let src = self.expr(value)?;
-                    self.emit(RegInstr::Move { dst, src });
-                }
-                HirExpr::Index { base, index, .. } => {
-                    let HirExpr::Ident { name, .. } = base.as_ref() else {
-                        return Err(EvalError::Runtime(
-                            "reg VM only supports index assignment rooted at local variables."
-                                .to_string(),
-                        ));
-                    };
-                    let value = self.expr(value)?;
-                    let list = self.lookup_local(name)?;
-                    let index = self.expr(index)?;
-                    let dst = self.temp();
-                    self.emit(RegInstr::ListSet {
-                        dst,
-                        list,
-                        index,
-                        value,
-                    });
-                }
-                _ => {
-                    return Err(EvalError::Runtime(
-                        "reg VM only supports assignment to local variables.".to_string(),
-                    ));
-                }
-            },
+            HirStmt::Assign { target, value, .. } => {
+                let src = self.expr(value)?;
+                self.lower_assign(target, src)?;
+            }
             HirStmt::Return { value, .. } => {
                 let src = if let Some(value) = value {
                     self.expr(value)?
@@ -1691,22 +1804,70 @@ impl RegLowerer<'_> {
                 }
             }
             HirStmt::Select { arms, .. } => {
-                if arms.len() > 1
-                    && arms
-                        .iter()
-                        .any(|arm| self.select_operation_may_suspend(&arm.operation))
-                {
-                    return Err(EvalError::Runtime(
-                        "reg VM select with pending multi-arm operations requires first-ready semantics and is not supported yet.".to_string(),
-                    ));
+                // First-ready select: spawn each arm's operation as a concurrent
+                // task, park on whichever finishes first, then dispatch to that
+                // arm's body. The scheduler's clock makes timing (e.g. differing
+                // sleeps) decide the winner, matching the backend's executor.
+                if arms.is_empty() {
+                    return Ok(());
                 }
-                if let Some(arm) = arms.first() {
-                    let src = self.expr(&arm.operation)?;
+                let mut handles = Vec::with_capacity(arms.len());
+                let mut arm_has_try = Vec::with_capacity(arms.len());
+                for arm in arms {
+                    let (call, has_try) = peel_select_operation(&arm.operation);
+                    handles.push(self.lower_spawn(call)?);
+                    arm_has_try.push(has_try);
+                }
+                let winner = self.temp();
+                let value = self.temp();
+                self.emit(RegInstr::SelectWait {
+                    handles,
+                    winner,
+                    value,
+                });
+                let mut end_jumps = Vec::with_capacity(arms.len());
+                for (index, arm) in arms.iter().enumerate() {
+                    let index_const = self.temp();
+                    self.emit(RegInstr::LoadInt {
+                        dst: index_const,
+                        value: index as i64,
+                    });
+                    let is_winner = self.temp();
+                    self.emit(RegInstr::Equal {
+                        dst: is_winner,
+                        lhs: winner,
+                        rhs: index_const,
+                    });
+                    let skip = self.emit(RegInstr::JumpIfBool {
+                        cond: is_winner,
+                        expected: false,
+                        target: usize::MAX,
+                    });
+                    // The winning arm's value is the spawned task's result; apply
+                    // the arm operation's `?` (if any) before binding.
+                    let bound = if arm_has_try[index] {
+                        let dst = self.temp();
+                        self.emit(RegInstr::TryResult {
+                            dst,
+                            src: value,
+                            cleanup: self.all_cleanup_regs(),
+                        });
+                        dst
+                    } else {
+                        value
+                    };
                     if arm.binding != "_" {
-                        let dst = self.local(&arm.binding);
-                        self.emit(RegInstr::Move { dst, src });
+                        let binding = self.local(&arm.binding);
+                        self.emit(RegInstr::Move { dst: binding, src: bound });
                     }
                     self.block(&arm.body)?;
+                    end_jumps.push(self.emit(RegInstr::Jump { target: usize::MAX }));
+                    let next_arm = self.function.code.len();
+                    self.patch_jump(skip, next_arm);
+                }
+                let end = self.function.code.len();
+                for jump in end_jumps {
+                    self.patch_jump(jump, end);
                 }
             }
             HirStmt::Break(_) => {
@@ -2099,10 +2260,14 @@ impl RegLowerer<'_> {
                 self.emit(RegInstr::ListGet { dst, list, index });
                 Ok(dst)
             }
-            HirExpr::Await { value, .. } | HirExpr::Effect { value, .. } => self.expr(value),
-            HirExpr::Spawn { .. } => Err(EvalError::Runtime(
-                "reg VM does not support spawn expressions.".to_string(),
-            )),
+            HirExpr::Effect { value, .. } => self.expr(value),
+            HirExpr::Await { value, .. } => {
+                let src = self.expr(value)?;
+                let dst = self.temp();
+                self.emit(RegInstr::AwaitJoin { dst, src });
+                Ok(dst)
+            }
+            HirExpr::Spawn { value, .. } => self.lower_spawn(value),
             HirExpr::Manage { value, .. } => {
                 let src = self.expr(value)?;
                 let dst = self.temp();
@@ -2162,10 +2327,25 @@ impl RegLowerer<'_> {
                     for param in params {
                         lowerer.local(param);
                     }
-                    lowerer.block(body)?;
-                    let unit = lowerer.temp();
-                    lowerer.emit(RegInstr::LoadUnit { dst: unit });
-                    lowerer.emit(RegInstr::Return { src: unit });
+                    // A closure whose body ends in a bare expression yields that
+                    // expression's value (e.g. `|x| x > 10`), matching the Rust
+                    // backend's tail-expression closure rule. Bodies ending in any
+                    // other statement (including an explicit `return`) fall through
+                    // to an implicit `Unit` return.
+                    if let Some((HirStmt::Expr(value), prefix)) =
+                        body.statements.split_last()
+                    {
+                        for statement in prefix {
+                            lowerer.statement(statement)?;
+                        }
+                        let src = lowerer.expr(value)?;
+                        lowerer.emit(RegInstr::Return { src });
+                    } else {
+                        lowerer.block(body)?;
+                        let unit = lowerer.temp();
+                        lowerer.emit(RegInstr::LoadUnit { dst: unit });
+                        lowerer.emit(RegInstr::Return { src: unit });
+                    }
                     lowerer.function
                 };
                 self.functions[function_id] = closure_function;
@@ -4462,6 +4642,84 @@ fn collect_free_locals_expr(
     }
 }
 
+/// One activation record on the explicit call stack. The interpreter is
+/// stackless: instead of `run_frame` recursing into itself for each RSScript
+/// call, it pushes a `Frame` and keeps looping, so a task's whole call chain
+/// lives in `RegVm::frames` and can be suspended/resumed (the foundation for
+/// the cooperative async scheduler). Synchronous closure callbacks
+/// (`List.map`/`sort_with`/…) still nest via `run_frame`, which is fine because
+/// they can never `await`.
+struct Frame {
+    func: Rc<RegFunction>,
+    ip: usize,
+    base: usize,
+    /// Absolute register in the caller that receives this frame's return value.
+    /// `usize::MAX` marks a driver root (its value is returned out of `run_frame`).
+    ret_dst: usize,
+}
+
+/// Result of driving a task's call stack one slice at a time.
+enum Outcome {
+    /// The frame at `floor` returned this value (the task or sync call finished).
+    Completed(VmValue),
+    /// A blocking op parked the task; details are in `RegVm::suspension`.
+    Suspended,
+}
+
+type TaskId = usize;
+
+/// What a parked task is waiting for. When the condition is met the scheduler
+/// produces the operation's result, writes it into `Suspension::resume_dst`, and
+/// re-queues the task (the "completion" model — the parked instruction is not
+/// re-executed; the saved `ip` already points past it).
+enum Wait {
+    /// `Receiver.recv` on an empty-but-open channel: ready when a value is queued
+    /// or the channel closes.
+    Recv { channel: i64 },
+    /// `Sender.send` on a full bounded channel: ready when capacity frees up. The
+    /// sender + value are carried so the send can be retried on wake.
+    Send { sender: VmSender, value: VmValue },
+    /// `await`-ing a spawned task / `async let`: ready when that task finishes.
+    Join { task: TaskId },
+    /// `Timer.sleep*`: ready once the wall clock reaches `deadline`.
+    Sleep { deadline: std::time::Instant },
+    /// `select { ... }`: ready as soon as any arm task in `handles` finishes. The
+    /// winning arm index and its value are written to `winner_dst`/`value_dst`.
+    Select {
+        handles: Vec<TaskId>,
+        winner_dst: usize,
+        value_dst: usize,
+    },
+}
+
+struct Suspension {
+    wait: Wait,
+    /// Absolute register that receives the operation's result on wake.
+    resume_dst: usize,
+}
+
+/// A parked task's full execution state, swapped out of `RegVm` while another
+/// task runs and swapped back in on resume.
+struct SavedTask {
+    frames: Vec<Frame>,
+    stack: Vec<VmValue>,
+    written: Vec<bool>,
+}
+
+struct TaskSlot {
+    /// Parked execution state; `None` while the task is the one swapped into
+    /// `RegVm` and running.
+    saved: Option<SavedTask>,
+    /// `Some(value)` once the task has returned (value available to joiners).
+    done: Option<VmValue>,
+    /// `Some(wait)` while the task is parked on a blocking op.
+    wait: Option<Wait>,
+    /// Register (in the task's own stack) that receives the op result on wake.
+    resume_dst: usize,
+    /// Tasks parked in `Join` on this task, woken when it finishes.
+    joiners: Vec<TaskId>,
+}
+
 struct RegVm {
     unit: Rc<RegUnit>,
     args: Vec<String>,
@@ -4470,6 +4728,14 @@ struct RegVm {
     stderr: String,
     stack: Vec<VmValue>,
     written: Vec<bool>,
+    frames: Vec<Frame>,
+    /// Set by a blocking op during `drive`; consumed by the scheduler.
+    suspension: Option<Suspension>,
+    /// Cooperative single-threaded task table + ready queue.
+    tasks: HashMap<TaskId, TaskSlot>,
+    ready_queue: VecDeque<TaskId>,
+    next_task_id: TaskId,
+    current_task: TaskId,
     next_cancellation_id: i64,
     cancellation_flags: HashMap<i64, bool>,
     next_channel_id: i64,
@@ -4533,6 +4799,12 @@ impl RegVm {
             stderr: String::new(),
             stack: Vec::new(),
             written: Vec::new(),
+            frames: Vec::new(),
+            suspension: None,
+            tasks: HashMap::new(),
+            ready_queue: VecDeque::new(),
+            next_task_id: 0,
+            current_task: 0,
             next_cancellation_id: 1,
             cancellation_flags: HashMap::new(),
             next_channel_id: 1,
@@ -4564,9 +4836,13 @@ impl RegVm {
 
     #[inline(always)]
     fn reg(&self, index: usize) -> &VmValue {
-        debug_assert!(
+        // Reading an unwritten register is a lowering/codegen invariant violation,
+        // never a user-level runtime error. Assert in release too so we fail loudly
+        // instead of silently observing a stale value left in the reused frame
+        // window (the stack only grows and frames are reused in place).
+        assert!(
             self.written.get(index).copied().unwrap_or(false),
-            "reg VM read uninitialized register {index}"
+            "reg VM internal error: read uninitialized register {index}"
         );
         &self.stack[index]
     }
@@ -4579,9 +4855,9 @@ impl RegVm {
 
     #[inline(always)]
     fn take_reg(&mut self, index: usize) -> VmValue {
-        debug_assert!(
+        assert!(
             self.written.get(index).copied().unwrap_or(false),
-            "reg VM take uninitialized register {index}"
+            "reg VM internal error: take uninitialized register {index}"
         );
         self.written[index] = false;
         std::mem::replace(&mut self.stack[index], VmValue::Unit)
@@ -4607,6 +4883,7 @@ impl RegVm {
         for (index, arg) in args.into_iter().enumerate() {
             self.set_reg(base + index, arg);
         }
+        let function = Rc::clone(function);
         self.run_frame(&unit, function, base)
     }
 
@@ -4615,18 +4892,358 @@ impl RegVm {
     // above the caller at `base + function.regs`. The stack only grows
     // (`ensure_regs`) so recursion is bounded only by memory. Debug builds keep
     // a written-register bitmap so stale slots cannot mask lowering bugs.
+    /// Synchronous call entry used by contexts that cannot suspend (closure
+    /// callbacks, resource drops, the program root before the scheduler owns it).
+    /// Pushes `function`'s frame and drives to completion; a suspension here is a
+    /// lowering/runtime invariant violation (only `async` code awaits, and that
+    /// always runs under the task scheduler).
     fn run_frame(
         &mut self,
         unit: &RegUnit,
-        function: &RegFunction,
+        function: Rc<RegFunction>,
         base: usize,
     ) -> Result<VmValue, EvalError> {
         self.ensure_regs(base + function.regs);
-        let next_base = base + function.regs;
-        let mut ip = 0usize;
-        while let Some(instr) = function.code.get(ip) {
-            ip += 1;
-            match instr {
+        let floor = self.frames.len();
+        self.frames.push(Frame {
+            func: function,
+            ip: 0,
+            base,
+            ret_dst: usize::MAX,
+        });
+        match self.drive(unit, floor)? {
+            Outcome::Completed(value) => Ok(value),
+            Outcome::Suspended => Err(EvalError::Runtime(
+                "reg VM cannot suspend (await/blocking op) inside a synchronous context."
+                    .to_string(),
+            )),
+        }
+    }
+
+    /// Run `name` (the program entry, usually `main`) as the root task under the
+    /// cooperative scheduler and return its value. Other tasks created via
+    /// `spawn`/`async let` are interleaved at suspension points.
+    fn run_program(&mut self, name: &str) -> Result<VmValue, EvalError> {
+        let function_id = self.unit.function_ids.get(name).copied().ok_or_else(|| {
+            EvalError::Runtime(format!("reg VM cannot resolve function `{name}`."))
+        })?;
+        let unit = Rc::clone(&self.unit);
+        let func = Rc::clone(&unit.functions[function_id]);
+        let root = self.create_task(func, Vec::new());
+        self.run_scheduler(&unit, root)
+    }
+
+    /// Register a new ready task running `func` with `args` placed in its first
+    /// registers (its own private register stack, base 0).
+    fn create_task(&mut self, func: Rc<RegFunction>, args: Vec<VmValue>) -> TaskId {
+        let tid = self.next_task_id;
+        self.next_task_id += 1;
+        let regs = func.regs.max(args.len());
+        let mut stack = vec![VmValue::Unit; regs];
+        let mut written = vec![false; regs];
+        for (index, arg) in args.into_iter().enumerate() {
+            stack[index] = arg;
+            written[index] = true;
+        }
+        let frames = vec![Frame {
+            func,
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+        }];
+        self.tasks.insert(
+            tid,
+            TaskSlot {
+                saved: Some(SavedTask {
+                    frames,
+                    stack,
+                    written,
+                }),
+                done: None,
+                wait: None,
+                resume_dst: usize::MAX,
+                joiners: Vec::new(),
+            },
+        );
+        self.ready_queue.push_back(tid);
+        tid
+    }
+
+    /// Make `tid` the running task: move its parked register state into `self`.
+    fn swap_in(&mut self, tid: TaskId) {
+        let saved = self
+            .tasks
+            .get_mut(&tid)
+            .expect("task slot")
+            .saved
+            .take()
+            .expect("parked task state");
+        self.frames = saved.frames;
+        self.stack = saved.stack;
+        self.written = saved.written;
+        self.current_task = tid;
+    }
+
+    /// Park the running task: move its register state back into its slot.
+    fn swap_out(&mut self, tid: TaskId) {
+        let saved = SavedTask {
+            frames: std::mem::take(&mut self.frames),
+            stack: std::mem::take(&mut self.stack),
+            written: std::mem::take(&mut self.written),
+        };
+        self.tasks.get_mut(&tid).expect("task slot").saved = Some(saved);
+    }
+
+    fn run_scheduler(&mut self, unit: &RegUnit, root: TaskId) -> Result<VmValue, EvalError> {
+        loop {
+            let Some(tid) = self.ready_queue.pop_front() else {
+                // Nothing runnable: advance the clock to the earliest sleep
+                // deadline and wake those timers. If there are no sleepers either,
+                // every remaining task is blocked forever — a deadlock.
+                if self.wake_due_sleepers()? {
+                    continue;
+                }
+                return Err(EvalError::Runtime(
+                    "reg VM async scheduler stalled: every task is blocked (deadlock)."
+                        .to_string(),
+                ));
+            };
+            // Skip stale queue entries (finished, still parked, or running).
+            match self.tasks.get(&tid) {
+                Some(slot)
+                    if slot.done.is_none() && slot.wait.is_none() && slot.saved.is_some() => {}
+                _ => continue,
+            }
+            self.swap_in(tid);
+            match self.drive(unit, 0) {
+                Ok(Outcome::Completed(value)) => {
+                    // Drop the finished task's register state.
+                    self.frames = Vec::new();
+                    self.stack = Vec::new();
+                    self.written = Vec::new();
+                    if tid == root {
+                        return Ok(value);
+                    }
+                    self.tasks.get_mut(&tid).expect("task slot").done = Some(value);
+                }
+                Ok(Outcome::Suspended) => {
+                    let suspension = self.suspension.take().expect("suspension recorded");
+                    self.swap_out(tid);
+                    let slot = self.tasks.get_mut(&tid).expect("task slot");
+                    slot.resume_dst = suspension.resume_dst;
+                    slot.wait = Some(suspension.wait);
+                }
+                // A hard VM error in any task aborts the whole program.
+                Err(error) => return Err(error),
+            }
+            // A send/recv/finish may have unblocked parked tasks.
+            self.satisfy_waiters()?;
+        }
+    }
+
+    /// Idle step: with no ready task, find the earliest `Sleep` deadline, sleep
+    /// the host thread until then, and wake every timer that is now due. Returns
+    /// `false` when there are no sleeping tasks (so the caller can report a stall).
+    fn wake_due_sleepers(&mut self) -> Result<bool, EvalError> {
+        let earliest = self
+            .tasks
+            .values()
+            .filter_map(|slot| match &slot.wait {
+                Some(Wait::Sleep { deadline, .. }) => Some(*deadline),
+                _ => None,
+            })
+            .min();
+        let Some(deadline) = earliest else {
+            return Ok(false);
+        };
+        let now = std::time::Instant::now();
+        if deadline > now {
+            std::thread::sleep(deadline - now);
+        }
+        let now = std::time::Instant::now();
+        let due: Vec<TaskId> = self
+            .tasks
+            .iter()
+            .filter(|(_, slot)| {
+                matches!(&slot.wait, Some(Wait::Sleep { deadline, .. }) if *deadline <= now)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for tid in due {
+            self.resolve_wait(tid)?;
+        }
+        self.satisfy_waiters()?;
+        Ok(true)
+    }
+
+    /// Repeatedly wake any parked task whose wait is now satisfiable, until no
+    /// further progress (a fixpoint), so a single send can cascade-wake a chain.
+    fn satisfy_waiters(&mut self) -> Result<(), EvalError> {
+        loop {
+            let ready: Vec<TaskId> = self
+                .tasks
+                .iter()
+                .filter(|(_, slot)| slot.done.is_none())
+                .filter(|(_, slot)| match &slot.wait {
+                    Some(Wait::Recv { channel }) => self.channel_ready(*channel),
+                    Some(Wait::Send { sender, .. }) => self.channel_has_space(sender.channel_id),
+                    Some(Wait::Join { task }) => {
+                        self.tasks.get(task).is_some_and(|s| s.done.is_some())
+                    }
+                    // Sleeps are woken by the scheduler's clock step, not here.
+                    Some(Wait::Sleep { .. }) => false,
+                    Some(Wait::Select { handles, .. }) => {
+                        handles.iter().any(|h| self.tasks.get(h).is_some_and(|s| s.done.is_some()))
+                    }
+                    None => false,
+                })
+                .map(|(id, _)| *id)
+                .collect();
+            if ready.is_empty() {
+                return Ok(());
+            }
+            for tid in ready {
+                self.resolve_wait(tid)?;
+            }
+        }
+    }
+
+    /// Produce the result of `tid`'s satisfied wait and re-queue it.
+    fn resolve_wait(&mut self, tid: TaskId) -> Result<(), EvalError> {
+        let wait = self
+            .tasks
+            .get_mut(&tid)
+            .expect("task slot")
+            .wait
+            .take()
+            .expect("parked wait");
+        match wait {
+            Wait::Recv { channel } => {
+                let result = json_result(self.channel_recv(channel));
+                self.complete_wait(tid, result);
+            }
+            Wait::Send { sender, value } => {
+                let result = json_result(self.channel_send(sender, value));
+                self.complete_wait(tid, result);
+            }
+            Wait::Join { task } => {
+                let result = self
+                    .tasks
+                    .get(&task)
+                    .and_then(|slot| slot.done.clone())
+                    .expect("joined task finished");
+                self.complete_wait(tid, result);
+            }
+            Wait::Sleep { .. } => {
+                self.complete_wait(tid, value_ok(VmValue::Unit));
+            }
+            Wait::Select {
+                handles,
+                winner_dst,
+                value_dst,
+            } => {
+                // First finished arm wins; its value goes to `value_dst`, its arm
+                // index to `winner_dst`. Remaining arm tasks are abandoned.
+                let (index, task) = handles
+                    .iter()
+                    .enumerate()
+                    .find(|(_, h)| self.tasks.get(h).is_some_and(|s| s.done.is_some()))
+                    .map(|(i, h)| (i, *h))
+                    .expect("a select arm finished");
+                let value = self
+                    .tasks
+                    .get(&task)
+                    .and_then(|slot| slot.done.clone())
+                    .expect("winning arm value");
+                self.write_saved_reg(tid, winner_dst, VmValue::Int(index as i64));
+                self.complete_wait_at(tid, value_dst, value);
+            }
+        }
+        Ok(())
+    }
+
+    /// Write `value` into a parked task's saved register window (no re-queue).
+    fn write_saved_reg(&mut self, tid: TaskId, dst: usize, value: VmValue) {
+        let saved = self
+            .tasks
+            .get_mut(&tid)
+            .expect("task slot")
+            .saved
+            .as_mut()
+            .expect("parked task state");
+        if dst >= saved.stack.len() {
+            saved.stack.resize(dst + 1, VmValue::Unit);
+            saved.written.resize(dst + 1, false);
+        }
+        saved.stack[dst] = value;
+        saved.written[dst] = true;
+    }
+
+    /// Write a woken task's result into its recorded `resume_dst` and re-queue it.
+    fn complete_wait(&mut self, tid: TaskId, result: VmValue) {
+        let dst = self.tasks.get(&tid).expect("task slot").resume_dst;
+        self.complete_wait_at(tid, dst, result);
+    }
+
+    /// Write `result` into a parked task's register `dst` and re-queue it.
+    fn complete_wait_at(&mut self, tid: TaskId, dst: usize, result: VmValue) {
+        self.write_saved_reg(tid, dst, result);
+        self.ready_queue.push_back(tid);
+    }
+
+    fn channel_ready(&self, channel: i64) -> bool {
+        self.channels
+            .get(&channel)
+            .is_none_or(|state| !state.queue.is_empty() || state.senders == 0 || state.receiver_closed)
+    }
+
+    fn channel_has_space(&self, channel: i64) -> bool {
+        self.channels
+            .get(&channel)
+            .is_none_or(|state| state.receiver_closed || state.queue.len() < state.capacity)
+    }
+
+    /// Park the running task for `ms` milliseconds (clamped at 0). The scheduler's
+    /// clock step wakes it when the deadline passes; the `await` result is `Ok`.
+    fn park_sleep_ms(&mut self, ms: i64) {
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_millis(ms.max(0) as u64);
+        self.suspension = Some(Suspension {
+            wait: Wait::Sleep { deadline },
+            resume_dst: usize::MAX,
+        });
+    }
+
+    /// True when `Sender.send` on an open channel would block (buffer full).
+    fn channel_send_would_block(&self, sender: &VmSender) -> bool {
+        if sender.closed {
+            return false;
+        }
+        self.channels.get(&sender.channel_id).is_some_and(|state| {
+            !state.receiver_closed && state.queue.len() >= state.capacity
+        })
+    }
+
+    /// Drive the explicit call stack until the frame at depth `floor` returns
+    /// (`Completed`) or a blocking operation parks the current task
+    /// (`Suspended`, with the wait recorded in `self.suspension`). `floor` is
+    /// the stack depth below the frame we are running.
+    fn drive(&mut self, unit: &RegUnit, floor: usize) -> Result<Outcome, EvalError> {
+        'frames: loop {
+            // Hoist the current (top) frame into fast locals. The instruction
+            // body below only references `base`/`next_base`/`ip`/`unit`, so it is
+            // byte-for-byte the recursive interpreter; only `CallKnown`/`Return`
+            // (and falling off the end) manipulate the frame stack.
+            let func = {
+                let frame = self.frames.last().expect("active frame");
+                Rc::clone(&frame.func)
+            };
+            let base = self.frames.last().expect("active frame").base;
+            let next_base = base + func.regs;
+            let mut ip = self.frames.last().expect("active frame").ip;
+            while let Some(instr) = func.code.get(ip) {
+                ip += 1;
+                match instr {
                 RegInstr::LoadUnit { dst } => self.set_reg(base + *dst, VmValue::Unit),
                 RegInstr::LoadInt { dst, value } => self.set_reg(base + *dst, VmValue::Int(*value)),
                 RegInstr::LoadFloat { dst, value } => {
@@ -4642,6 +5259,10 @@ impl RegVm {
                     let value = self.reg(base + *src).clone();
                     self.set_reg(base + *dst, value);
                 }
+                RegInstr::DeepCopy { reg } => {
+                    let copied = deep_copy_value(self.reg(base + *reg));
+                    self.set_reg(base + *reg, copied);
+                }
                 RegInstr::Manage { dst, src } => {
                     let value = self.reg(base + *src).clone();
                     self.set_reg(base + *dst, VmValue::Managed(Rc::new(RefCell::new(value))));
@@ -4653,6 +5274,21 @@ impl RegVm {
                 } => {
                     let value = read_field_ref(self.reg(base + *obj), name)?;
                     self.set_reg(base + *dst, value);
+                }
+                RegInstr::SetField {
+                    dst,
+                    base: obj,
+                    name,
+                    value,
+                } => {
+                    let obj_reg = base + *obj;
+                    let new_value = self.reg(base + *value).clone();
+                    let updated = write_field_value(self.reg(obj_reg), name, new_value)?;
+                    // Mirror `ListSet`: write the updated container back into the
+                    // base register in place so nested assignment paths compose,
+                    // leaving `dst` as the (unused) `Unit` result of the statement.
+                    self.set_reg(obj_reg, updated);
+                    self.set_reg(base + *dst, VmValue::Unit);
                 }
                 RegInstr::MakeStruct { dst, name, fields } => {
                     let mut field_values = HashMap::with_capacity(fields.len());
@@ -4743,9 +5379,12 @@ impl RegVm {
                     self.set_reg(base + *dst, value);
                 }
                 RegInstr::ModInt { dst, lhs, rhs } => {
-                    let l = expect_int_ref(self.reg(base + *lhs))?;
-                    let r = expect_int_ref(self.reg(base + *rhs))?;
-                    self.set_reg(base + *dst, VmValue::Int(l % r));
+                    let value = eval_numeric_binary(
+                        BinaryOp::Modulo,
+                        self.reg(base + *lhs),
+                        self.reg(base + *rhs),
+                    )?;
+                    self.set_reg(base + *dst, value);
                 }
                 RegInstr::BitAndInt { dst, lhs, rhs } => {
                     let l = expect_int_ref(self.reg(base + *lhs))?;
@@ -4961,14 +5600,93 @@ impl RegVm {
                     function: callee_id,
                     args,
                 } => {
-                    let callee = &unit.functions[*callee_id];
+                    let callee = Rc::clone(&unit.functions[*callee_id]);
                     self.prepare_frame(next_base, callee.regs);
                     for (index, reg) in args.iter().enumerate() {
                         let value = self.reg(base + *reg).clone();
                         self.set_reg(next_base + index, value);
                     }
-                    let result = self.run_frame(unit, callee, next_base)?;
-                    self.set_reg(base + *dst, result);
+                    // Stackless call: save our resume point, push the callee, and
+                    // re-enter the driver loop instead of recursing on the host
+                    // stack — so an `await` deep in this chain can later suspend it.
+                    self.frames.last_mut().expect("active frame").ip = ip;
+                    self.frames.push(Frame {
+                        func: callee,
+                        ip: 0,
+                        base: next_base,
+                        ret_dst: base + *dst,
+                    });
+                    continue 'frames;
+                }
+                RegInstr::SpawnTask {
+                    dst,
+                    function: callee_id,
+                    args,
+                } => {
+                    let callee = Rc::clone(&unit.functions[*callee_id]);
+                    let arg_values = args
+                        .iter()
+                        .map(|reg| self.reg(base + *reg).clone())
+                        .collect::<Vec<_>>();
+                    let tid = self.create_task(callee, arg_values);
+                    self.set_reg(base + *dst, task_handle_value(tid));
+                }
+                RegInstr::AwaitJoin { dst, src } => {
+                    let value = self.reg(base + *src).clone();
+                    match as_task_handle(&value) {
+                        Some(task) => match self.tasks.get(&task).and_then(|s| s.done.clone()) {
+                            // Already finished: take its value, no park.
+                            Some(result) => self.set_reg(base + *dst, result),
+                            // Park until the joined task completes.
+                            None => {
+                                self.suspension = Some(Suspension {
+                                    wait: Wait::Join { task },
+                                    resume_dst: base + *dst,
+                                });
+                            }
+                        },
+                        // Not a handle: `await` of an already-evaluated value.
+                        None => self.set_reg(base + *dst, value),
+                    }
+                }
+                RegInstr::SelectWait {
+                    handles,
+                    winner,
+                    value,
+                } => {
+                    let tids = handles
+                        .iter()
+                        .map(|reg| {
+                            as_task_handle(self.reg(base + *reg)).ok_or_else(|| {
+                                EvalError::Runtime(
+                                    "reg VM select arm did not produce a task.".to_string(),
+                                )
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    // If an arm already finished, resolve immediately; else park.
+                    let ready = tids
+                        .iter()
+                        .enumerate()
+                        .find(|(_, tid)| self.tasks.get(tid).is_some_and(|s| s.done.is_some()))
+                        .map(|(index, tid)| (index, *tid));
+                    match ready {
+                        Some((index, tid)) => {
+                            let won = self.tasks.get(&tid).and_then(|s| s.done.clone()).expect("done");
+                            self.set_reg(base + *winner, VmValue::Int(index as i64));
+                            self.set_reg(base + *value, won);
+                        }
+                        None => {
+                            self.suspension = Some(Suspension {
+                                wait: Wait::Select {
+                                    handles: tids,
+                                    winner_dst: base + *winner,
+                                    value_dst: base + *value,
+                                },
+                                resume_dst: usize::MAX,
+                            });
+                        }
+                    }
                 }
                 RegInstr::CallNative { dst, key, args } => {
                     let result = self.call_native_key(key, args, base)?;
@@ -5035,39 +5753,37 @@ impl RegVm {
                     self.set_reg(base + *dst, VmValue::Unit);
                 }
                 RegInstr::ListAppend { dst, list, values } => {
-                    let list_reg = base + *list;
-                    let mut list_values = expect_list_ref(self.reg(list_reg))?.borrow().clone();
+                    // In-place to mirror `List.append(mut list, ...)`: clone the
+                    // source first (handles append-to-self), then extend the
+                    // receiver's existing buffer so a `mut` param propagates.
                     let append_values = expect_list_ref(self.reg(base + *values))?.borrow().clone();
-                    list_values.extend(append_values);
-                    self.set_reg(list_reg, VmValue::List(Rc::new(RefCell::new(list_values))));
+                    expect_list_ref(self.reg(base + *list))?
+                        .borrow_mut()
+                        .extend(append_values);
                     self.set_reg(base + *dst, VmValue::Unit);
                 }
                 RegInstr::ListClear { dst, list } => {
-                    let list_reg = base + *list;
-                    expect_list_ref(self.reg(list_reg))?;
-                    self.set_reg(list_reg, VmValue::List(Rc::new(RefCell::new(Vec::new()))));
+                    expect_list_ref(self.reg(base + *list))?.borrow_mut().clear();
                     self.set_reg(base + *dst, VmValue::Unit);
                 }
                 RegInstr::ListPop { dst, list } => {
-                    let list_reg = base + *list;
-                    let mut values = expect_list_ref(self.reg(list_reg))?.borrow().clone();
-                    let value = values
+                    let value = expect_list_ref(self.reg(base + *list))?
+                        .borrow_mut()
                         .pop()
                         .map(|value| VmValue::OptionSome(Box::new(value)))
                         .unwrap_or(VmValue::OptionNone);
-                    self.set_reg(list_reg, VmValue::List(Rc::new(RefCell::new(values))));
                     self.set_reg(base + *dst, value);
                 }
                 RegInstr::ListRemoveAt { dst, list, index } => {
-                    let list_reg = base + *list;
-                    let mut values = expect_list_ref(self.reg(list_reg))?.borrow().clone();
                     let index = expect_int_ref(self.reg(base + *index))?;
-                    let value = if index < 0 || index as usize >= values.len() {
+                    let list = expect_list_ref(self.reg(base + *list))?.clone();
+                    let mut borrowed = list.borrow_mut();
+                    let value = if index < 0 || index as usize >= borrowed.len() {
                         VmValue::OptionNone
                     } else {
-                        VmValue::OptionSome(Box::new(values.remove(index as usize)))
+                        VmValue::OptionSome(Box::new(borrowed.remove(index as usize)))
                     };
-                    self.set_reg(list_reg, VmValue::List(Rc::new(RefCell::new(values))));
+                    drop(borrowed);
                     self.set_reg(base + *dst, value);
                 }
                 RegInstr::ListSet {
@@ -5076,24 +5792,25 @@ impl RegVm {
                     index,
                     value,
                 } => {
-                    let list_reg = base + *list;
-                    let mut values = expect_list_ref(self.reg(list_reg))?.borrow().clone();
                     let index = expect_int_ref(self.reg(base + *index))?;
-                    if index < 0 || index as usize >= values.len() {
+                    let new_value = self.reg(base + *value).clone();
+                    let list = expect_list_ref(self.reg(base + *list))?.clone();
+                    let mut borrowed = list.borrow_mut();
+                    if index < 0 || index as usize >= borrowed.len() {
                         return Err(EvalError::Runtime(format!(
                             "reg VM List.set index {index} out of bounds for length {}.",
-                            values.len()
+                            borrowed.len()
                         )));
                     }
-                    values[index as usize] = self.reg(base + *value).clone();
-                    self.set_reg(list_reg, VmValue::List(Rc::new(RefCell::new(values))));
+                    borrowed[index as usize] = new_value;
+                    drop(borrowed);
                     self.set_reg(base + *dst, VmValue::Unit);
                 }
                 RegInstr::ListSort { dst, list } => {
-                    let list_reg = base + *list;
-                    let mut values = expect_list_ref(self.reg(list_reg))?.borrow().clone();
-                    sort_vm_values(&mut values)?;
-                    self.set_reg(list_reg, VmValue::List(Rc::new(RefCell::new(values))));
+                    let list = expect_list_ref(self.reg(base + *list))?.clone();
+                    let mut borrowed = list.borrow_mut();
+                    sort_vm_values(&mut borrowed)?;
+                    drop(borrowed);
                     self.set_reg(base + *dst, VmValue::Unit);
                 }
                 RegInstr::ListSortBy {
@@ -5110,60 +5827,52 @@ impl RegVm {
                     self.set_reg(base + *dst, VmValue::List(Rc::new(RefCell::new(sorted))));
                 }
                 RegInstr::ListSortWith { dst, list, compare } => {
-                    let list_reg = base + *list;
-                    let mut values = expect_list_ref(self.reg(list_reg))?.borrow().clone();
+                    // Sort a detached copy first so the comparator closure can read
+                    // the list without a RefCell double-borrow, then overwrite the
+                    // receiver's buffer in place so `mut list` propagates.
+                    let mut values = expect_list_ref(self.reg(base + *list))?.borrow().clone();
                     let compare = expect_closure_rc(self.reg(base + *compare))?;
                     self.sort_list_with_closure(unit, &mut values, &compare, next_base)?;
-                    self.set_reg(list_reg, VmValue::List(Rc::new(RefCell::new(values))));
+                    *expect_list_ref(self.reg(base + *list))?.borrow_mut() = values;
                     self.set_reg(base + *dst, VmValue::Unit);
                 }
                 RegInstr::DequeClear { dst, deque } => {
-                    let deque_reg = base + *deque;
-                    expect_list_ref(self.reg(deque_reg))?;
-                    self.set_reg(deque_reg, VmValue::List(Rc::new(RefCell::new(Vec::new()))));
+                    expect_list_ref(self.reg(base + *deque))?.borrow_mut().clear();
                     self.set_reg(base + *dst, VmValue::Unit);
                 }
                 RegInstr::DequePopBack { dst, deque } => {
-                    let deque_reg = base + *deque;
-                    let mut values = expect_list_ref(self.reg(deque_reg))?.borrow().clone();
-                    let value = values
+                    let value = expect_list_ref(self.reg(base + *deque))?
+                        .borrow_mut()
                         .pop()
                         .map(|value| VmValue::OptionSome(Box::new(value)))
                         .unwrap_or(VmValue::OptionNone);
-                    self.set_reg(deque_reg, VmValue::List(Rc::new(RefCell::new(values))));
                     self.set_reg(base + *dst, value);
                 }
                 RegInstr::DequePopFront { dst, deque } => {
-                    let deque_reg = base + *deque;
-                    let mut values = expect_list_ref(self.reg(deque_reg))?.borrow().clone();
-                    let value = if values.is_empty() {
+                    let deque = expect_list_ref(self.reg(base + *deque))?.clone();
+                    let mut borrowed = deque.borrow_mut();
+                    let value = if borrowed.is_empty() {
                         VmValue::OptionNone
                     } else {
-                        VmValue::OptionSome(Box::new(values.remove(0)))
+                        VmValue::OptionSome(Box::new(borrowed.remove(0)))
                     };
-                    self.set_reg(deque_reg, VmValue::List(Rc::new(RefCell::new(values))));
+                    drop(borrowed);
                     self.set_reg(base + *dst, value);
                 }
                 RegInstr::DequePushBack { dst, deque, value } => {
-                    let deque_reg = base + *deque;
-                    let mut values = expect_list_ref(self.reg(deque_reg))?.borrow().clone();
                     let value = self.reg(base + *value).clone();
-                    values.push(value);
-                    self.set_reg(deque_reg, VmValue::List(Rc::new(RefCell::new(values))));
+                    expect_list_ref(self.reg(base + *deque))?.borrow_mut().push(value);
                     self.set_reg(base + *dst, VmValue::Unit);
                 }
                 RegInstr::DequePushFront { dst, deque, value } => {
-                    let deque_reg = base + *deque;
-                    let mut values = expect_list_ref(self.reg(deque_reg))?.borrow().clone();
                     let value = self.reg(base + *value).clone();
-                    values.insert(0, value);
-                    self.set_reg(deque_reg, VmValue::List(Rc::new(RefCell::new(values))));
+                    expect_list_ref(self.reg(base + *deque))?
+                        .borrow_mut()
+                        .insert(0, value);
                     self.set_reg(base + *dst, VmValue::Unit);
                 }
                 RegInstr::SetClear { dst, set } => {
-                    let set_reg = base + *set;
-                    expect_list_ref(self.reg(set_reg))?;
-                    self.set_reg(set_reg, VmValue::List(Rc::new(RefCell::new(Vec::new()))));
+                    expect_list_ref(self.reg(base + *set))?.borrow_mut().clear();
                     self.set_reg(base + *dst, VmValue::Unit);
                 }
                 RegInstr::SetForEach { dst, set, callback } => {
@@ -5177,24 +5886,20 @@ impl RegVm {
                     self.set_reg(base + *dst, VmValue::Unit);
                 }
                 RegInstr::SetInsert { dst, set, value } => {
-                    let set_reg = base + *set;
-                    let mut values = expect_list_ref(self.reg(set_reg))?.borrow().clone();
+                    let mut values = expect_list_ref(self.reg(base + *set))?.borrow().clone();
                     let value = self.reg(base + *value).clone();
                     let inserted = set_insert_vm(&mut values, value);
-                    self.set_reg(set_reg, VmValue::List(Rc::new(RefCell::new(values))));
+                    *expect_list_ref(self.reg(base + *set))?.borrow_mut() = values;
                     self.set_reg(base + *dst, VmValue::Bool(inserted));
                 }
                 RegInstr::SetRemove { dst, set, value } => {
-                    let set_reg = base + *set;
-                    let mut values = expect_list_ref(self.reg(set_reg))?.borrow().clone();
+                    let mut values = expect_list_ref(self.reg(base + *set))?.borrow().clone();
                     let removed = set_remove_vm(&mut values, self.reg(base + *value));
-                    self.set_reg(set_reg, VmValue::List(Rc::new(RefCell::new(values))));
+                    *expect_list_ref(self.reg(base + *set))?.borrow_mut() = values;
                     self.set_reg(base + *dst, VmValue::Bool(removed));
                 }
                 RegInstr::SortedSetClear { dst, set } => {
-                    let set_reg = base + *set;
-                    expect_list_ref(self.reg(set_reg))?;
-                    self.set_reg(set_reg, VmValue::List(Rc::new(RefCell::new(Vec::new()))));
+                    expect_list_ref(self.reg(base + *set))?.borrow_mut().clear();
                     self.set_reg(base + *dst, VmValue::Unit);
                 }
                 RegInstr::SortedSetInsert { dst, set, value } => {
@@ -5203,20 +5908,18 @@ impl RegVm {
                     let value = self.reg(base + *value).clone();
                     let inserted = set_insert_vm(&mut values, value);
                     sort_vm_values(&mut values)?;
-                    self.set_reg(set_reg, VmValue::List(Rc::new(RefCell::new(values))));
+                    *expect_list_ref(self.reg(set_reg))?.borrow_mut() = values;
                     self.set_reg(base + *dst, VmValue::Bool(inserted));
                 }
                 RegInstr::SortedSetRemove { dst, set, value } => {
                     let set_reg = base + *set;
                     let mut values = expect_list_ref(self.reg(set_reg))?.borrow().clone();
                     let removed = set_remove_vm(&mut values, self.reg(base + *value));
-                    self.set_reg(set_reg, VmValue::List(Rc::new(RefCell::new(values))));
+                    *expect_list_ref(self.reg(set_reg))?.borrow_mut() = values;
                     self.set_reg(base + *dst, VmValue::Bool(removed));
                 }
                 RegInstr::SortedMapClear { dst, map } => {
-                    let map_reg = base + *map;
-                    expect_sorted_map_entries(self.reg(map_reg))?;
-                    self.set_reg(map_reg, sorted_map_value(Vec::new()));
+                    expect_list_ref(self.reg(base + *map))?.borrow_mut().clear();
                     self.set_reg(base + *dst, VmValue::Unit);
                 }
                 RegInstr::SortedMapInsert {
@@ -5233,14 +5936,14 @@ impl RegVm {
                         self.reg(base + *value).clone(),
                     );
                     sort_vm_map_entries(&mut entries)?;
-                    self.set_reg(map_reg, sorted_map_value(entries));
+                    write_sorted_map_entries_in_place(expect_list_ref(self.reg(map_reg))?, entries);
                     self.set_reg(base + *dst, VmValue::Unit);
                 }
                 RegInstr::SortedMapRemove { dst, map, key } => {
                     let map_reg = base + *map;
                     let mut entries = expect_sorted_map_entries(self.reg(map_reg))?;
                     let removed = sorted_map_remove(&mut entries, self.reg(base + *key));
-                    self.set_reg(map_reg, sorted_map_value(entries));
+                    write_sorted_map_entries_in_place(expect_list_ref(self.reg(map_reg))?, entries);
                     self.set_reg(
                         base + *dst,
                         removed
@@ -5260,9 +5963,7 @@ impl RegVm {
                     self.set_reg(base + *dst, value);
                 }
                 RegInstr::MapClear { dst, map } => {
-                    let map_reg = base + *map;
-                    expect_map_ref(self.reg(map_reg))?;
-                    self.set_reg(map_reg, VmValue::Map(Rc::new(RefCell::new(HashMap::new()))));
+                    expect_map_ref(self.reg(base + *map))?.borrow_mut().clear();
                     self.set_reg(base + *dst, VmValue::Unit);
                 }
                 RegInstr::BufferClear { dst, buffer } => {
@@ -5360,7 +6061,14 @@ impl RegVm {
                     args,
                 } => {
                     let value = self.call_intrinsic(unit, *intrinsic, args, base, next_base)?;
-                    self.set_reg(base + *dst, value);
+                    // A blocking intrinsic (channel/sleep) parked the task and left
+                    // `resume_dst` unfilled; record where its result must land. The
+                    // end-of-loop check then yields to the scheduler.
+                    if let Some(suspension) = self.suspension.as_mut() {
+                        suspension.resume_dst = base + *dst;
+                    } else {
+                        self.set_reg(base + *dst, value);
+                    }
                 }
                 RegInstr::CallTypedIntrinsic {
                     dst,
@@ -5382,16 +6090,46 @@ impl RegVm {
                                 let value = self.reg(base + *resource).clone();
                                 self.run_resource_drop(unit, value, next_base)?;
                             }
-                            return Ok(value_err(error));
+                            // `?` short-circuit: return the `Err` from the *current*
+                            // frame only (pop one frame like `Return`), not out of the
+                            // whole stackless driver.
+                            let err_value = value_err(error);
+                            let frame = self.frames.pop().expect("active frame");
+                            if self.frames.len() == floor {
+                                return Ok(Outcome::Completed(err_value));
+                            }
+                            self.set_reg(frame.ret_dst, err_value);
+                            continue 'frames;
                         }
                     }
                 }
                 RegInstr::Return { src } => {
-                    return Ok(self.take_reg(base + *src));
+                    let value = self.take_reg(base + *src);
+                    let frame = self.frames.pop().expect("active frame");
+                    if self.frames.len() == floor {
+                        return Ok(Outcome::Completed(value));
+                    }
+                    self.set_reg(frame.ret_dst, value);
+                    continue 'frames;
+                }
+                }
+                // A blocking op (channel/sleep/join) parked the task: save the
+                // resume point (`ip` already points past the instruction, so on
+                // wake the scheduler writes the result into `resume_dst` and we
+                // continue here) and hand control back to the scheduler.
+                if self.suspension.is_some() {
+                    self.frames.last_mut().expect("active frame").ip = ip;
+                    return Ok(Outcome::Suspended);
                 }
             }
+            // Fell off the end of the function body without an explicit `Return`.
+            // Lowering always appends one, so this is a defensive `Unit` return.
+            let frame = self.frames.pop().expect("active frame");
+            if self.frames.len() == floor {
+                return Ok(Outcome::Completed(VmValue::Unit));
+            }
+            self.set_reg(frame.ret_dst, VmValue::Unit);
         }
-        Ok(VmValue::Unit)
     }
 
     fn run_resource_drop(
@@ -5413,7 +6151,7 @@ impl RegVm {
         else {
             return Ok(());
         };
-        let callee = &unit.functions[function_id];
+        let callee = Rc::clone(&unit.functions[function_id]);
         self.prepare_frame(base, callee.regs);
         for (field, value) in &data.fields {
             if let Some(reg) = callee.local_regs.get(field) {
@@ -5757,7 +6495,7 @@ impl RegVm {
         caller_base: usize,
         base: usize,
     ) -> Result<VmValue, EvalError> {
-        let callee = &unit.functions[closure.function];
+        let callee = Rc::clone(&unit.functions[closure.function]);
         self.prepare_frame(base, callee.regs);
         for (index, capture) in closure.captures.iter().enumerate() {
             self.set_reg(base + index, capture.clone());
@@ -5777,7 +6515,7 @@ impl RegVm {
         arg: VmValue,
         base: usize,
     ) -> Result<VmValue, EvalError> {
-        let callee = &unit.functions[closure.function];
+        let callee = Rc::clone(&unit.functions[closure.function]);
         self.prepare_frame(base, callee.regs);
         for (index, capture) in closure.captures.iter().enumerate() {
             self.set_reg(base + index, capture.clone());
@@ -5794,7 +6532,7 @@ impl RegVm {
         second: VmValue,
         base: usize,
     ) -> Result<VmValue, EvalError> {
-        let callee = &unit.functions[closure.function];
+        let callee = Rc::clone(&unit.functions[closure.function]);
         self.prepare_frame(base, callee.regs);
         for (index, capture) in closure.captures.iter().enumerate() {
             self.set_reg(base + index, capture.clone());
@@ -5814,7 +6552,7 @@ impl RegVm {
         third: VmValue,
         base: usize,
     ) -> Result<VmValue, EvalError> {
-        let callee = &unit.functions[closure.function];
+        let callee = Rc::clone(&unit.functions[closure.function]);
         self.prepare_frame(base, callee.regs);
         for (index, capture) in closure.captures.iter().enumerate() {
             self.set_reg(base + index, capture.clone());
@@ -5832,7 +6570,7 @@ impl RegVm {
         closure: &VmClosure,
         base: usize,
     ) -> Result<VmValue, EvalError> {
-        let callee = &unit.functions[closure.function];
+        let callee = Rc::clone(&unit.functions[closure.function]);
         self.prepare_frame(base, callee.regs);
         for (index, capture) in closure.captures.iter().enumerate() {
             self.set_reg(base + index, capture.clone());
@@ -7282,12 +8020,22 @@ impl RegVm {
                 let value = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let min = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let max = expect_int_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
+                if min > max {
+                    return Err(EvalError::Runtime(format!(
+                        "Math.clamp requires min <= max, got min {min} and max {max}"
+                    )));
+                }
                 Ok(VmValue::Int(value.clamp(min, max)))
             }
             RegIntrinsic::MathClampFloat => {
                 let value = expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let min = expect_float_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let max = expect_float_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
+                if min > max {
+                    return Err(EvalError::Runtime(format!(
+                        "Math.clamp_float requires min <= max, got min {min} and max {max}"
+                    )));
+                }
                 Ok(VmValue::Float(value.clamp(min, max)))
             }
             RegIntrinsic::MathFloor => Ok(VmValue::Int(
@@ -7316,7 +8064,14 @@ impl RegVm {
             RegIntrinsic::MathPow => {
                 let base_value = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let exponent = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(VmValue::Int(base_value.pow(exponent.max(0) as u32)))
+                base_value
+                    .checked_pow(exponent.max(0) as u32)
+                    .map(VmValue::Int)
+                    .ok_or_else(|| {
+                        EvalError::Runtime(format!(
+                            "Math.pow overflow: {base_value} raised to {exponent} exceeds the Int range"
+                        ))
+                    })
             }
             RegIntrinsic::MathPowFloat => {
                 let base_value = expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -9050,6 +9805,16 @@ impl RegVm {
                 if receiver.closed {
                     return Ok(value_err(channel_error_value("channel receiver closed")));
                 }
+                if !self.channel_ready(receiver.channel_id) {
+                    // Empty open channel: park until a sender enqueues or closes.
+                    self.suspension = Some(Suspension {
+                        wait: Wait::Recv {
+                            channel: receiver.channel_id,
+                        },
+                        resume_dst: usize::MAX,
+                    });
+                    return Ok(VmValue::Unit);
+                }
                 Ok(json_result(self.channel_recv(receiver.channel_id)))
             }
             RegIntrinsic::ReceiverRecvCancellable => {
@@ -9063,6 +9828,15 @@ impl RegVm {
                 )?;
                 if self.cancellation_flags.get(&id).copied().unwrap_or(false) {
                     return Ok(value_err(channel_error_value("channel recv cancelled")));
+                }
+                if !self.channel_ready(receiver.channel_id) {
+                    self.suspension = Some(Suspension {
+                        wait: Wait::Recv {
+                            channel: receiver.channel_id,
+                        },
+                        resume_dst: usize::MAX,
+                    });
+                    return Ok(VmValue::Unit);
                 }
                 Ok(json_result(self.channel_recv(receiver.channel_id)))
             }
@@ -9418,6 +10192,14 @@ impl RegVm {
             RegIntrinsic::SenderSend => {
                 let sender = expect_sender_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let value = intrinsic_arg(&self.stack, base, args, 1)?.clone();
+                if self.channel_send_would_block(&sender) {
+                    // Full bounded channel: park until a receiver frees space.
+                    self.suspension = Some(Suspension {
+                        wait: Wait::Send { sender, value },
+                        resume_dst: usize::MAX,
+                    });
+                    return Ok(VmValue::Unit);
+                }
                 Ok(json_result(self.channel_send(sender, value)))
             }
             RegIntrinsic::SenderSendCancellable => {
@@ -9429,6 +10211,13 @@ impl RegVm {
                 )?;
                 if self.cancellation_flags.get(&id).copied().unwrap_or(false) {
                     return Ok(value_err(channel_error_value("channel send cancelled")));
+                }
+                if self.channel_send_would_block(&sender) {
+                    self.suspension = Some(Suspension {
+                        wait: Wait::Send { sender, value },
+                        resume_dst: usize::MAX,
+                    });
+                    return Ok(VmValue::Unit);
                 }
                 Ok(json_result(self.channel_send(sender, value)))
             }
@@ -9476,20 +10265,27 @@ impl RegVm {
                 Ok(json_result(tempdir_new_value(PathBuf::from(parent))))
             }
             RegIntrinsic::TimerSleep => {
-                let _ = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(value_ok(VmValue::Unit))
+                let ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                self.park_sleep_ms(ms);
+                Ok(VmValue::Unit)
             }
             RegIntrinsic::TimerSleepCancellable => {
-                let _ = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let _ = expect_cancellation_id_ref(
                     intrinsic_arg(&self.stack, base, args, 1)?,
                     "CancellationToken",
                 )?;
-                Ok(value_ok(VmValue::Unit))
+                self.park_sleep_ms(ms);
+                Ok(VmValue::Unit)
             }
             RegIntrinsic::TimerSleepUntil => {
-                let _ = expect_deadline_unix_ms(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(value_ok(VmValue::Unit))
+                let target_unix_ms = expect_deadline_unix_ms(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let now_unix_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
+                self.park_sleep_ms(target_unix_ms - now_unix_ms);
+                Ok(VmValue::Unit)
             }
             RegIntrinsic::TomlParseFile => {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -9618,14 +10414,46 @@ fn eval_int_compare(op: RegIntCompare, lhs: i64, rhs: i64) -> bool {
     }
 }
 
+fn int_overflow_error(operation: &str, lhs: i64, rhs: i64) -> EvalError {
+    EvalError::Runtime(format!(
+        "integer {operation} overflow: {lhs} and {rhs} exceed the Int range"
+    ))
+}
+
 fn eval_numeric_binary(op: BinaryOp, lhs: &VmValue, rhs: &VmValue) -> Result<VmValue, EvalError> {
     match (lhs, rhs) {
         (VmValue::Int(lhs), VmValue::Int(rhs)) => match op {
-            BinaryOp::Add => Ok(VmValue::Int(lhs + rhs)),
-            BinaryOp::Subtract => Ok(VmValue::Int(lhs - rhs)),
-            BinaryOp::Multiply => Ok(VmValue::Int(lhs * rhs)),
-            BinaryOp::Divide => Ok(VmValue::Int(lhs / rhs)),
-            BinaryOp::Modulo => Ok(VmValue::Int(lhs % rhs)),
+            // Integer arithmetic traps (overflow, divide/modulo by zero) are
+            // language-level runtime errors, never host panics, so the VM exits
+            // through `EvalError` exactly like the Rust backend's checked ops.
+            BinaryOp::Add => lhs
+                .checked_add(*rhs)
+                .map(VmValue::Int)
+                .ok_or_else(|| int_overflow_error("addition", *lhs, *rhs)),
+            BinaryOp::Subtract => lhs
+                .checked_sub(*rhs)
+                .map(VmValue::Int)
+                .ok_or_else(|| int_overflow_error("subtraction", *lhs, *rhs)),
+            BinaryOp::Multiply => lhs
+                .checked_mul(*rhs)
+                .map(VmValue::Int)
+                .ok_or_else(|| int_overflow_error("multiplication", *lhs, *rhs)),
+            BinaryOp::Divide => {
+                if *rhs == 0 {
+                    return Err(EvalError::Runtime("integer division by zero".to_string()));
+                }
+                lhs.checked_div(*rhs)
+                    .map(VmValue::Int)
+                    .ok_or_else(|| int_overflow_error("division", *lhs, *rhs))
+            }
+            BinaryOp::Modulo => {
+                if *rhs == 0 {
+                    return Err(EvalError::Runtime("integer modulo by zero".to_string()));
+                }
+                lhs.checked_rem(*rhs)
+                    .map(VmValue::Int)
+                    .ok_or_else(|| int_overflow_error("modulo", *lhs, *rhs))
+            }
             _ => unreachable!("numeric binary helper called with non-arithmetic op"),
         },
         (VmValue::Float(lhs), VmValue::Float(rhs)) => match op {
@@ -9857,12 +10685,24 @@ fn expect_sorted_map_entries(value: &VmValue) -> Result<Vec<(VmValue, VmValue)>,
 }
 
 fn sorted_map_value(entries: Vec<(VmValue, VmValue)>) -> VmValue {
-    VmValue::List(Rc::new(RefCell::new(
-        entries
-            .into_iter()
-            .map(|(key, value)| VmValue::List(Rc::new(RefCell::new(vec![key, value]))))
-            .collect(),
-    )))
+    VmValue::List(Rc::new(RefCell::new(sorted_map_entry_values(entries))))
+}
+
+fn sorted_map_entry_values(entries: Vec<(VmValue, VmValue)>) -> Vec<VmValue> {
+    entries
+        .into_iter()
+        .map(|(key, value)| VmValue::List(Rc::new(RefCell::new(vec![key, value]))))
+        .collect()
+}
+
+/// Overwrite a sorted-map's backing buffer in place so mutations through a `mut`
+/// parameter propagate to the caller (the map is stored as a `List` of `[k, v]`
+/// pair lists, so we replace the outer buffer's contents, not its `Rc`).
+fn write_sorted_map_entries_in_place(
+    backing: Rc<RefCell<Vec<VmValue>>>,
+    entries: Vec<(VmValue, VmValue)>,
+) {
+    *backing.borrow_mut() = sorted_map_entry_values(entries);
 }
 
 fn sorted_map_get(entries: &[(VmValue, VmValue)], key: &VmValue) -> Option<VmValue> {
@@ -10669,6 +11509,42 @@ fn channel_value(id: i64, capacity: i64, receiver_taken: bool) -> VmValue {
 struct VmSender {
     channel_id: i64,
     closed: bool,
+}
+
+/// A spawned-task handle (`Task<T>`), carried as a `Native` so it flows through
+/// bindings/structs like any value; `await` recognises it via [`as_task_handle`].
+fn task_handle_value(task: TaskId) -> VmValue {
+    VmValue::Native(Rc::new(VmNative {
+        type_name: Rc::from("Task"),
+        id: task as i64,
+    }))
+}
+
+fn as_task_handle(value: &VmValue) -> Option<TaskId> {
+    match value {
+        VmValue::Native(native) if native.type_name.as_ref() == "Task" => Some(native.id as TaskId),
+        _ => None,
+    }
+}
+
+/// Strip the `await`/`?`/effect wrappers off a `select` arm operation down to the
+/// underlying call to spawn, reporting whether a `?` was present (so the arm body
+/// can re-apply it to the winning result).
+fn peel_select_operation(operation: &HirExpr) -> (&HirExpr, bool) {
+    let mut current = operation;
+    let mut has_try = false;
+    loop {
+        match current {
+            HirExpr::Try { value, .. } => {
+                has_try = true;
+                current = value;
+            }
+            HirExpr::Await { value, .. } | HirExpr::Effect { value, .. } => {
+                current = value;
+            }
+            other => return (other, has_try),
+        }
+    }
 }
 
 fn sender_value(channel_id: i64, closed: bool) -> VmValue {
@@ -12019,11 +12895,88 @@ fn read_field_ref(value: &VmValue, field: &str) -> Result<VmValue, EvalError> {
     }
 }
 
+/// Return a copy of the struct/variant `value` with `field` set to `new_value`.
+/// Structs are value types, so this rebuilds the struct. A `Managed` wrapper is
+/// updated in place (its interior is shared and mutable by design).
+fn write_field_value(
+    value: &VmValue,
+    field: &str,
+    new_value: VmValue,
+) -> Result<VmValue, EvalError> {
+    match value {
+        VmValue::Struct(data) | VmValue::Variant(data) => {
+            if !data.fields.contains_key(field) {
+                return Err(EvalError::Runtime(format!(
+                    "reg VM struct value is missing field `{field}`."
+                )));
+            }
+            let mut fields = data.fields.clone();
+            fields.insert(field.to_string(), new_value);
+            let updated = Rc::new(VmStruct {
+                name: Rc::clone(&data.name),
+                fields,
+            });
+            Ok(match value {
+                VmValue::Variant(_) => VmValue::Variant(updated),
+                _ => VmValue::Struct(updated),
+            })
+        }
+        VmValue::Managed(inner) => {
+            let updated = write_field_value(&inner.borrow(), field, new_value)?;
+            *inner.borrow_mut() = updated;
+            Ok(VmValue::Managed(Rc::clone(inner)))
+        }
+        other => Err(EvalError::Runtime(format!(
+            "reg VM expected Struct for field `{field}`, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
 fn unmanage_vm_value(value: VmValue) -> VmValue {
     match value {
         VmValue::Managed(value) => unmanage_vm_value(value.borrow().clone()),
         other => other,
     }
+}
+
+/// Recursively copy a value so the result shares no mutable interior with the
+/// original: every `List`/`Map` gets a fresh `Rc<RefCell>` and structs/variants
+/// are rebuilt with copied fields. `Managed` is the language's explicit shared
+/// reference type, so it keeps its handle (mirroring the backend, which shares
+/// `Managed` and treats plain collections as value types). Immutable handles
+/// (`String`/`Bytes`/`Json`) and opaque values are cloned shallowly.
+fn deep_copy_value(value: &VmValue) -> VmValue {
+    match value {
+        VmValue::List(items) => {
+            let copied = items.borrow().iter().map(deep_copy_value).collect::<Vec<_>>();
+            VmValue::List(Rc::new(RefCell::new(copied)))
+        }
+        VmValue::Map(entries) => {
+            let copied = entries
+                .borrow()
+                .iter()
+                .map(|(key, value)| (key.clone(), deep_copy_value(value)))
+                .collect::<HashMap<_, _>>();
+            VmValue::Map(Rc::new(RefCell::new(copied)))
+        }
+        VmValue::Struct(data) => VmValue::Struct(deep_copy_struct(data)),
+        VmValue::Variant(data) => VmValue::Variant(deep_copy_struct(data)),
+        VmValue::OptionSome(inner) => VmValue::OptionSome(Box::new(deep_copy_value(inner))),
+        other => other.clone(),
+    }
+}
+
+fn deep_copy_struct(data: &Rc<VmStruct>) -> Rc<VmStruct> {
+    let fields = data
+        .fields
+        .iter()
+        .map(|(name, value)| (name.clone(), deep_copy_value(value)))
+        .collect::<HashMap<_, _>>();
+    Rc::new(VmStruct {
+        name: Rc::clone(&data.name),
+        fields,
+    })
 }
 
 fn native_value_from_vm_value(value: VmValue) -> Result<NativeValue, EvalError> {
