@@ -5,8 +5,8 @@ use std::path::Path;
 
 use crate::analyzer::{analyze_source_with_core, analyze_sources_with_interfaces_without_core};
 use crate::diagnostic::Diagnostic;
+use crate::eval_types::CoverageBucket;
 use crate::interfaces::{builtin_interfaces, default_interfaces, standard_package_interfaces};
-use crate::interpreter::CoverageBucket;
 use crate::runtime_abi;
 use crate::syntax::ast::{Program, merge_programs};
 use crate::syntax::parse_source;

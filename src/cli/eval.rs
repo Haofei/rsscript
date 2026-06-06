@@ -2,7 +2,7 @@ use std::fs;
 use std::process::ExitCode;
 
 use rsscript::{
-    EvalError, eval_source_main_with_args, format_diagnostics_human, format_diagnostics_json,
+    EvalError, format_diagnostics_human, format_diagnostics_json, reg_vm_eval_source_main_with_args,
 };
 
 use super::print_usage;
@@ -62,7 +62,7 @@ pub(crate) fn run_eval(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    match eval_source_main_with_args(path, &source, options.program_args.iter().copied()) {
+    match reg_vm_eval_source_main_with_args(path, &source, options.program_args.iter().copied()) {
         Ok(output) => {
             print!("{}", output.stdout);
             eprint!("{}", output.stderr);

@@ -5,15 +5,6 @@ pub(crate) struct RuntimeIntrinsic {
     name: &'static str,
 }
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/rss-interpreter-intrinsics-enum.rs"
-));
-include!(concat!(
-    env!("OUT_DIR"),
-    "/rss-interpreter-intrinsics-lookup.rs"
-));
-
 const fn runtime_intrinsic(
     namespace: &'static str,
     name: &'static str,
@@ -50,21 +41,11 @@ pub(crate) fn lookup_runtime_intrinsic(
         .find(|intrinsic| intrinsic.namespace == namespace && intrinsic.name == name)
 }
 
-impl RuntimeIntrinsic {
-    pub(crate) fn interpreter(&self) -> Option<InterpreterIntrinsic> {
-        generated_interpreter_intrinsic(self.namespace, self.name)
-    }
-}
-
 pub(crate) fn runtime_intrinsic_signatures() -> Vec<String> {
     RUNTIME_INTRINSICS
         .iter()
         .map(|intrinsic| format!("{}.{}", intrinsic.namespace, intrinsic.name))
         .collect()
-}
-
-pub(crate) fn runtime_intrinsic_signatures_with_interpreter() -> Vec<String> {
-    generated_interpreter_intrinsic_signatures()
 }
 
 const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
@@ -1367,9 +1348,7 @@ mod tests {
     use crate::syntax::ast::Item;
     use crate::syntax::parse_source;
 
-    use super::{
-        RUNTIME_INTRINSICS, generated_interpreter_intrinsic_signatures, lookup_runtime_intrinsic,
-    };
+    use super::RUNTIME_INTRINSICS;
 
     #[test]
     fn runtime_intrinsic_keys_are_unique() {
@@ -1385,53 +1364,7 @@ mod tests {
     }
 
     #[test]
-    fn interpreter_intrinsics_have_lowering_targets() {
-        let interpreter_intrinsics = RUNTIME_INTRINSICS
-            .iter()
-            .filter(|intrinsic| intrinsic.interpreter().is_some())
-            .collect::<Vec<_>>();
-
-        assert!(
-            !interpreter_intrinsics.is_empty(),
-            "interpreter intrinsic set should be declared in runtime ABI"
-        );
-        for intrinsic in interpreter_intrinsics {
-            assert!(
-                intrinsic.rust_target.starts_with("rsscript_runtime::"),
-                "interpreter intrinsic {}.{} has invalid Rust target `{}`",
-                intrinsic.namespace,
-                intrinsic.name,
-                intrinsic.rust_target
-            );
-        }
-    }
-
-    #[test]
-    fn generated_interpreter_intrinsics_are_declared_in_runtime_abi() {
-        let runtime_intrinsics = RUNTIME_INTRINSICS
-            .iter()
-            .map(|intrinsic| format!("{}.{}", intrinsic.namespace, intrinsic.name))
-            .collect::<HashSet<_>>();
-
-        for signature in generated_interpreter_intrinsic_signatures() {
-            assert!(
-                runtime_intrinsics.contains(&signature),
-                "generated interpreter intrinsic `{signature}` is missing from runtime ABI"
-            );
-            let (namespace, name) = signature
-                .split_once('.')
-                .expect("generated intrinsic signature should be qualified");
-            let intrinsic = lookup_runtime_intrinsic(namespace, name)
-                .expect("generated interpreter intrinsic should be declared");
-            assert!(
-                intrinsic.interpreter().is_some(),
-                "runtime ABI intrinsic `{signature}` did not resolve generated interpreter support"
-            );
-        }
-    }
-
-    #[test]
-    fn interpreter_intrinsics_have_core_interface_signatures() {
+    fn runtime_intrinsics_have_core_interface_signatures() {
         let mut public_functions = HashSet::new();
         for (path, source) in default_interfaces() {
             let program = parse_source(path, source);
@@ -1453,14 +1386,11 @@ mod tests {
             }
         }
 
-        for intrinsic in RUNTIME_INTRINSICS
-            .iter()
-            .filter(|intrinsic| intrinsic.interpreter().is_some())
-        {
+        for intrinsic in RUNTIME_INTRINSICS {
             let signature = format!("{}.{}", intrinsic.namespace, intrinsic.name);
             assert!(
                 public_functions.contains(&signature),
-                "interpreter intrinsic `{signature}` has no bundled public core interface signature"
+                "runtime intrinsic `{signature}` has no bundled public core interface signature"
             );
         }
     }

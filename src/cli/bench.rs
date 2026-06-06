@@ -3,8 +3,8 @@ use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rsscript::{
-    EvalError, eval_source_main_with_args, format_diagnostics_human, reg_vm_compile_source,
-    reg_vm_eval_source_main_with_args, write_generated_rust_package,
+    EvalError, format_diagnostics_human, reg_vm_compile_source, reg_vm_eval_source_main_with_args,
+    write_generated_rust_package,
 };
 
 use super::{
@@ -241,12 +241,12 @@ fn run_eval_bench(options: &BenchOptions<'_>) -> Result<BenchResult, String> {
 }
 
 fn eval_source_once(path: &str, source: &str, args: &[&str]) -> Result<(), String> {
-    eval_source_main_with_args(path, source, args.iter().copied()).map_err(
-        |error| match error {
+    reg_vm_eval_source_main_with_args(path, source, args.iter().copied()).map_err(|error| {
+        match error {
             EvalError::Diagnostics(diagnostics) => format_diagnostics_human(&diagnostics),
             EvalError::Runtime(error) => error,
-        },
-    )?;
+        }
+    })?;
     Ok(())
 }
 

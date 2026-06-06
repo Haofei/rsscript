@@ -314,14 +314,9 @@ pub fn stream_collect_list<T>(stream: &RssStream<T>) -> Result<Vec<T>, ChannelEr
             }
         }
         RssStreamBackend::External(receiver) => loop {
-            match receiver.try_recv() {
+            match receiver.recv() {
                 Ok(item) => values.push(item?),
-                Err(std_mpsc::TryRecvError::Empty) => {
-                    return Err(ChannelError::new(
-                        "stream collect_list would block on an open external stream",
-                    ));
-                }
-                Err(std_mpsc::TryRecvError::Disconnected) => return Ok(values),
+                Err(std_mpsc::RecvError) => return Ok(values),
             }
         },
     }

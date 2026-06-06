@@ -371,6 +371,22 @@ pub(super) fn collect_function_return_types(
     return_types
 }
 
+pub(super) fn collect_function_type_params(
+    program: &Program,
+    interface_programs: &[Program],
+) -> BTreeMap<String, Vec<String>> {
+    let mut type_params = BTreeMap::new();
+    for (file, source) in builtin_interfaces() {
+        let interface_program = parse_source(file, source);
+        collect_program_function_type_params(&interface_program, &mut type_params);
+    }
+    for interface_program in interface_programs {
+        collect_program_function_type_params(interface_program, &mut type_params);
+    }
+    collect_program_function_type_params(program, &mut type_params);
+    type_params
+}
+
 pub(super) fn collect_function_param_types(
     program: &Program,
     interface_programs: &[Program],
@@ -486,6 +502,24 @@ pub(super) fn collect_program_function_return_types(
             && let Some(return_ty) = &function.return_ty
         {
             return_types.insert(function.name.clone(), return_ty.clone());
+        }
+    }
+}
+
+fn collect_program_function_type_params(
+    program: &Program,
+    type_params: &mut BTreeMap<String, Vec<String>>,
+) {
+    for item in &program.items {
+        if let Item::Function(function) = item {
+            type_params.insert(
+                native_boundary_function_key(&function.name),
+                function
+                    .type_params
+                    .iter()
+                    .map(|param| param.name.clone())
+                    .collect(),
+            );
         }
     }
 }
@@ -1556,10 +1590,10 @@ pub(super) fn rust_path_segment(segment: &str) -> String {
 
 pub(super) fn rust_ident(name: &str) -> String {
     let keywords: BTreeSet<&'static str> = [
-        "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
-        "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move",
-        "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait",
-        "true", "type", "unsafe", "use", "where", "while",
+        "as", "async", "await", "box", "break", "const", "continue", "crate", "dyn", "else",
+        "enum", "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod",
+        "move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super",
+        "trait", "true", "type", "unsafe", "use", "where", "while",
     ]
     .into_iter()
     .collect();

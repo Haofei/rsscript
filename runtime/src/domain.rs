@@ -33,6 +33,19 @@ pub struct HttpRequest {
     backoff_ms: i64,
 }
 
+pub fn http_request_debug_summary(request: &HttpRequest) -> String {
+    format!(
+        "HttpRequest {{ attempts: {}, backoff_ms: {}, body: {}, header_count: {}, method: {}, timeout_ms: {}, url: {} }}",
+        request.attempts,
+        request.backoff_ms,
+        request.body.clone().unwrap_or_default(),
+        request.headers.len(),
+        request.method,
+        request.timeout_ms,
+        request.url
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigValue {
     name: String,
@@ -231,6 +244,22 @@ pub struct Image {
     pub(crate) width: Option<i64>,
     pub(crate) height: Option<i64>,
     pub(crate) operations: Vec<&'static str>,
+}
+
+pub fn image_debug_summary(image: &Image) -> String {
+    format!(
+        "Image {{ bytes: {:?}, height: {}, operations: [{}], width: {} }}",
+        image.bytes,
+        option_i64_debug_summary(image.height),
+        image.operations.join(", "),
+        option_i64_debug_summary(image.width)
+    )
+}
+
+fn option_i64_debug_summary(value: Option<i64>) -> String {
+    value
+        .map(|value| format!("Some({value})"))
+        .unwrap_or_else(|| "None".to_string())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

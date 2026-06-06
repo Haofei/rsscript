@@ -1,71 +1,6 @@
 use std::collections::BTreeSet;
 
-use rsscript::{interpreter_coverage_report, lower_coverage_report, vm_coverage_report};
-
-#[test]
-fn interpreter_coverage_report_tracks_hir_surface() {
-    let report = interpreter_coverage_report();
-    let hir_source = std::fs::read_to_string("src/hir.rs").expect("hir source should be readable");
-    let interpreter_source = std::fs::read_to_string("src/interpreter.rs")
-        .expect("interpreter source should be readable");
-    let ast_source =
-        std::fs::read_to_string("src/syntax/ast.rs").expect("ast source should be readable");
-
-    assert_eq!(
-        enum_variants(&hir_source, "HirStmt"),
-        combined_bucket_all(&report.hir_statements, &report.hir_statement_recovery),
-        "update interpreter_coverage_report() when HirStmt changes"
-    );
-    assert_eq!(
-        enum_variants(&hir_source, "HirExpr"),
-        combined_bucket_all(&report.hir_expressions, &report.hir_expression_recovery),
-        "update interpreter_coverage_report() when HirExpr changes"
-    );
-    assert_eq!(
-        enum_variants(&interpreter_source, "Value"),
-        report.value_types.supported,
-        "interpreter supported value types should track the executable Value enum"
-    );
-    assert_eq!(
-        function_kinds_from_ast(&ast_source),
-        report.function_kinds.all,
-        "update interpreter_coverage_report() when FunctionDecl execution-mode fields change"
-    );
-}
-
-#[test]
-fn interpreter_coverage_baseline_is_explicit() {
-    let report = interpreter_coverage_report();
-
-    assert_bucket_counts(&report.runtime_intrinsics, 526, 526, 0);
-    assert_bucket_counts(&report.hir_statements, 12, 12, 0);
-    assert_bucket_counts(&report.hir_expressions, 17, 17, 0);
-    assert_bucket_counts(&report.hir_statement_recovery, 1, 0, 1);
-    assert_bucket_counts(&report.hir_expression_recovery, 1, 0, 1);
-    assert_bucket_counts(&report.value_types, 14, 14, 0);
-    assert_bucket_counts(&report.function_kinds, 3, 3, 0);
-    assert_bucket_counts(&report.parity_features, 572, 572, 0);
-
-    assert!(
-        report
-            .hir_statement_recovery
-            .missing
-            .contains(&"Unknown".to_string()),
-        "statement recovery node should stay visible"
-    );
-    assert!(
-        report
-            .hir_expression_recovery
-            .missing
-            .contains(&"Unknown".to_string()),
-        "expression recovery node should stay visible"
-    );
-    assert!(
-        report.parity_features.missing.is_empty(),
-        "supported interpreter features without parity fixture registry entries: {:?}",
-        report.parity_features.missing
-    );
-}
+use rsscript::{lower_coverage_report, vm_coverage_report};
 
 #[test]
 fn lower_coverage_report_tracks_ast_and_runtime_surface() {
@@ -105,7 +40,6 @@ fn lower_coverage_report_tracks_ast_and_runtime_surface() {
 
 #[test]
 fn vm_coverage_gap_is_explicit() {
-    let interpreter = interpreter_coverage_report();
     let vm = vm_coverage_report();
 
     assert_bucket_counts(&vm.runtime_intrinsics, 526, 526, 0);
@@ -115,39 +49,19 @@ fn vm_coverage_gap_is_explicit() {
     assert_bucket_counts(&vm.function_kinds, 3, 3, 0);
     assert_bucket_counts(&vm.parity_features, 572, 572, 0);
 
-    assert_vm_bucket_targets_interpreter(
-        &vm.runtime_intrinsics,
-        &interpreter.runtime_intrinsics,
-        "runtime intrinsic",
-    );
-    assert_vm_bucket_targets_interpreter(
-        &vm.hir_statements,
-        &interpreter.hir_statements,
-        "HIR statement",
-    );
-    assert_vm_bucket_targets_interpreter(
-        &vm.hir_expressions,
-        &interpreter.hir_expressions,
-        "HIR expression",
-    );
-    assert_vm_bucket_targets_interpreter(&vm.value_types, &interpreter.value_types, "value type");
-    assert_vm_bucket_targets_interpreter(
-        &vm.function_kinds,
-        &interpreter.function_kinds,
-        "function kind",
-    );
-    assert_vm_bucket_targets_interpreter(
-        &vm.parity_features,
-        &interpreter.parity_features,
-        "parity feature",
-    );
+    assert!(vm.runtime_intrinsics.missing.is_empty());
+    assert!(vm.hir_statements.missing.is_empty());
+    assert!(vm.hir_expressions.missing.is_empty());
+    assert!(vm.value_types.missing.is_empty());
+    assert!(vm.function_kinds.missing.is_empty());
+    assert!(vm.parity_features.missing.is_empty());
 }
 
 #[test]
-fn parity_fixture_annotations_cover_supported_interpreter_features() {
-    let report = interpreter_coverage_report();
+fn parity_fixture_annotations_cover_supported_vm_features() {
+    let report = vm_coverage_report();
     let source = std::fs::read_to_string("tests/interpreter.rs")
-        .expect("interpreter parity test source should be readable");
+        .expect("VM parity test source should be readable");
     let annotated = parity_features_from_source(&source);
     let required = report
         .parity_features
@@ -161,7 +75,7 @@ fn parity_fixture_annotations_cover_supported_interpreter_features() {
 
     assert!(
         missing.is_empty(),
-        "supported interpreter features without parity fixture annotations: {missing:?}"
+        "supported VM features without parity fixture annotations: {missing:?}"
     );
     assert!(
         stale.is_empty(),
@@ -189,35 +103,6 @@ fn assert_bucket_counts(
         bucket.missing_count(),
         missing,
         "missing count changed for bucket: {bucket:?}"
-    );
-}
-
-fn combined_bucket_all(
-    left: &rsscript::CoverageBucket,
-    right: &rsscript::CoverageBucket,
-) -> Vec<String> {
-    left.all
-        .iter()
-        .chain(right.all.iter())
-        .cloned()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-fn assert_vm_bucket_targets_interpreter(
-    vm: &rsscript::CoverageBucket,
-    interpreter: &rsscript::CoverageBucket,
-    label: &str,
-) {
-    assert_eq!(
-        vm.all, interpreter.supported,
-        "VM {label} coverage target should be the interpreter-supported surface"
-    );
-    assert_eq!(
-        vm.supported.len() + vm.missing.len(),
-        interpreter.supported.len(),
-        "VM {label} coverage should partition the interpreter-supported surface"
     );
 }
 

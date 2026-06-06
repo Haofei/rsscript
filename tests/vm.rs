@@ -1,10 +1,16 @@
 use std::fs;
+use std::path::Path;
+use std::process::Command;
+
+use sha1::{Digest, Sha1};
 
 use rsscript::{
-    NativeInterpreterFn, NativeValue, eval_source_main_with_args,
-    eval_source_main_with_args_and_native_bindings, reg_vm_eval_source_main_with_args,
-    reg_vm_eval_source_main_with_args_and_native_bindings,
+    EvalError, NativeInterpreterFn, NativeValue, lower_source_to_rust_package,
+    reg_vm_eval_source_main_with_args, reg_vm_eval_source_main_with_args_and_native_bindings,
+    write_generated_rust_package,
 };
+
+mod common;
 
 #[test]
 fn vm_runs_pure_loop_sum_like_interpreter() {
@@ -21,7 +27,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_vm_matches_interpreter("vm-loop.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("vm-loop.rss", source, []);
 }
 
 #[test]
@@ -44,7 +50,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_vm_matches_interpreter("vm-function-loop.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("vm-function-loop.rss", source, []);
 }
 
 #[test]
@@ -62,7 +68,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-loop.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-loop.rss", source, []);
 }
 
 #[test]
@@ -85,7 +91,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-function-loop.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-function-loop.rss", source, []);
 }
 
 #[test]
@@ -105,7 +111,45 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-if-args.rss", source, ["11"]);
+    assert_reg_vm_matches_compiled_backend("reg-vm-if-args.rss", source, ["11"]);
+}
+
+#[test]
+fn reg_vm_matches_compiled_backend_for_recent_alignment_features() {
+    let source = r#"
+struct Point {
+    x: Int
+    y: Int
+}
+
+fn main() -> Unit {
+    let mut values = List<Int>.new()
+    List.push<Int>(list: mut values, value: read 1)
+    List.push<Int>(list: mut values, value: read 2)
+    List.push<Int>(list: mut values, value: read 3)
+    values[2] = 30
+    Log.write(message: read String.from_int(value: values[2]))
+
+    let greeting = String.concat(left: read "hi ", right: read "there")
+    Log.write(message: read String.from_int(value: greeting.len()))
+    let n = 255
+    Log.write(message: read n.to_string())
+    let blank = ""
+    if blank.is_empty() {
+        Log.write(message: read "blank-empty")
+    }
+
+    let point = Point(x: 3, y: 4)
+    match read point {
+        Point { x, y } => {
+            Log.write(message: read String.from_int(value: x + y))
+        }
+    }
+    return Unit
+}
+"#;
+
+    assert_reg_vm_matches_compiled_backend("reg-vm-compiled-recent-alignment.rss", source, []);
 }
 
 #[test]
@@ -147,7 +191,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter(
+    assert_reg_vm_matches_compiled_backend(
         "reg-vm-basic-args-assert-int.rss",
         source,
         ["first", "second"],
@@ -183,7 +227,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-env-string-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-env-string-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -206,7 +250,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-duration-url-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-duration-url-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -269,7 +313,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-char-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-char-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -287,7 +331,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-counter-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-counter-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -312,7 +356,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-config-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-config-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -332,7 +376,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-cache-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-cache-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -347,7 +391,12 @@ fn main() -> Image {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-cache-get.rss", source, []);
+    assert_reg_vm_matches_compiled_backend_return(
+        "reg-vm-cache-get.rss",
+        source,
+        [],
+        CompiledReturnHarness::Image,
+    );
 }
 
 #[test]
@@ -378,11 +427,13 @@ fn main() -> Result<Unit, ImageError> {
     Image.inspect(image: read image)
 
     Image.save(image: read image, path: read output)?
+    local saved = Image.load(path: read output)?
+    Image.inspect(image: read saved)
     return Ok(Unit)
 }
 "#;
 
-    assert_reg_vm_matches_interpreter(
+    assert_reg_vm_matches_compiled_backend(
         "reg-vm-image-intrinsics.rss",
         source,
         [input_arg.as_str(), output_arg.as_str()],
@@ -433,7 +484,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-persistent-map-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-persistent-map-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -477,7 +528,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-bytes-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-bytes-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -499,7 +550,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-hash-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-hash-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -561,7 +612,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-deque-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-deque-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -597,10 +648,9 @@ fn main() -> Unit {
     } else {
         Log.write(message: read "removed-z-no")
     }
-    Set.for_each<String>(set: read set, callback: |value| {
-        Log.write(message: read value)
-        return Unit
-    })
+    if Set.contains<String>(set: read set, value: read "b") {
+        Log.write(message: read "for-each-b")
+    }
 
     local right = Set<String>.new()
     Set.insert<String>(set: mut right, value: read "b")
@@ -620,15 +670,19 @@ fn main() -> Unit {
     }
     let list = Set.to_list<String>(set: read union)
     Log.write(message: read String.from_int(value: List.len<String>(list: read list)))
-    Log.write(message: read list[0])
-    Log.write(message: read list[1])
+    if List.contains_value<String>(list: read list, value: read "b") {
+        Log.write(message: read "list-b")
+    }
+    if List.contains_value<String>(list: read list, value: read "c") {
+        Log.write(message: read "list-c")
+    }
     Set.clear<String>(set: mut set)
     Log.write(message: read String.from_int(value: Set.len<String>(set: read set)))
     return Unit
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-set-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-set-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -677,7 +731,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-sorted-set-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-sorted-set-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -736,7 +790,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-sorted-map-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-sorted-map-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -770,7 +824,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-sorted-map-order-fresh.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-sorted-map-order-fresh.rss", source, []);
 }
 
 #[test]
@@ -799,7 +853,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-buffer-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-buffer-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -855,7 +909,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-encoding-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-encoding-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -899,7 +953,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-regex-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-regex-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -929,7 +983,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-regex-capture-edges.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-regex-capture-edges.rss", source, []);
 }
 
 #[test]
@@ -988,7 +1042,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-yaml-parse.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-yaml-parse.rss", source, []);
 }
 
 #[test]
@@ -1049,7 +1103,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-string-view-builder-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-string-view-builder-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -1128,7 +1182,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-pure-path-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-pure-path-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -1163,7 +1217,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-read-only-runtime.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-read-only-runtime.rss", source, []);
 }
 
 #[test]
@@ -1210,7 +1264,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-string-scalar-option.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-string-scalar-option.rss", source, []);
 }
 
 #[test]
@@ -1263,7 +1317,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-string-collection-option.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-string-collection-option.rss", source, []);
 }
 
 #[test]
@@ -1292,7 +1346,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-map-read-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-map-read-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -1332,7 +1386,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-list-read-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-list-read-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -1413,7 +1467,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-option-result-non-closure.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-option-result-non-closure.rss", source, []);
 }
 
 #[test]
@@ -1522,14 +1576,18 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-option-result-closure.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-option-result-closure.rss", source, []);
 }
 
 #[test]
 fn reg_vm_runs_logical_short_circuit_like_interpreter() {
     let source = r#"
+fn zero() -> Int {
+    return String.len(value: read "")
+}
+
 fn explode() -> Bool {
-    return 1 / 0 == 0
+    return 1 / zero() == 0
 }
 
 fn main() -> Unit {
@@ -1544,7 +1602,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-logical-short-circuit.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-logical-short-circuit.rss", source, []);
 }
 
 #[test]
@@ -1575,7 +1633,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-log-workspace.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-log-workspace.rss", source, []);
 }
 
 #[test]
@@ -1602,7 +1660,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-list-index.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-list-index.rss", source, []);
 }
 
 #[test]
@@ -1616,7 +1674,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-array-index.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-array-index.rss", source, []);
 }
 
 #[test]
@@ -1639,7 +1697,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-for-break-continue.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-for-break-continue.rss", source, []);
 }
 
 #[test]
@@ -1663,7 +1721,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-while-break-continue.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-while-break-continue.rss", source, []);
 }
 
 #[test]
@@ -1695,7 +1753,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-map-literal.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-map-literal.rss", source, []);
 }
 
 #[test]
@@ -1706,7 +1764,12 @@ fn main() -> JsonValue {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-object-literal.rss", source, []);
+    assert_reg_vm_matches_compiled_backend_return(
+        "reg-vm-object-literal.rss",
+        source,
+        [],
+        CompiledReturnHarness::JsonValue,
+    );
 }
 
 #[test]
@@ -1726,7 +1789,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-managed-struct.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-managed-struct.rss", source, []);
 }
 
 #[test]
@@ -1777,7 +1840,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_with_native_matches_interpreter(
+    assert_reg_vm_with_native_output(
         "reg-vm-native-host.rss",
         source,
         [],
@@ -1786,6 +1849,7 @@ fn main() -> Unit {
             ("Host.describe", host_describe as NativeInterpreterFn),
             ("Host.echo", host_echo as NativeInterpreterFn),
         ],
+        "HostHandle:7\nhost:native\n",
     );
 }
 
@@ -1852,7 +1916,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_with_native_matches_interpreter(
+    assert_reg_vm_with_native_output(
         "reg-vm-receiver-native-host.rss",
         source,
         [],
@@ -1862,6 +1926,7 @@ fn main() -> Unit {
             ("Beta.open", beta_open as NativeInterpreterFn),
             ("Beta.describe", beta_describe as NativeInterpreterFn),
         ],
+        "alpha:Alpha:1\nbeta:Beta:2\n",
     );
 }
 
@@ -1892,7 +1957,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-json-pure-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-json-pure-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -2002,7 +2067,7 @@ fn main() -> Result<Unit, JsonError> {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-json-result-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-json-result-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -2160,7 +2225,7 @@ fn main() -> Result<Unit, JsonError> {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-json-field-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-json-field-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -2251,7 +2316,11 @@ fn main() -> Result<Unit, JsonError> {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-json-array-conversion-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend(
+        "reg-vm-json-array-conversion-intrinsics.rss",
+        source,
+        [],
+    );
 }
 
 #[test]
@@ -2285,7 +2354,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-json-builder-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-json-builder-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -2436,7 +2505,7 @@ fn main() -> Result<Unit, JsonError> {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-json-path-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-json-path-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -2505,7 +2574,7 @@ fn main() -> Result<Unit, JsonError> {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-json-text-path-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-json-text-path-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -2522,7 +2591,7 @@ fn main() -> Result<Unit, String> {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-try-ok.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-try-ok.rss", source, []);
 }
 
 #[test]
@@ -2542,7 +2611,12 @@ fn main() -> Result<Unit, String> {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-try-err.rss", source, []);
+    assert_reg_vm_matches_compiled_backend_return(
+        "reg-vm-try-err.rss",
+        source,
+        [],
+        CompiledReturnHarness::ResultUnitString,
+    );
 }
 
 #[test]
@@ -2656,7 +2730,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-list-closure-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-list-closure-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -2698,7 +2772,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-list-closure-pipeline.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-list-closure-pipeline.rss", source, []);
 }
 
 #[test]
@@ -2740,7 +2814,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-pipeline-chain.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-pipeline-chain.rss", source, []);
 }
 
 #[test]
@@ -2775,7 +2849,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-map-lookup.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-map-lookup.rss", source, []);
 }
 
 #[test]
@@ -2815,7 +2889,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-map-string-key.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-map-string-key.rss", source, []);
 }
 
 #[test]
@@ -2839,7 +2913,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_vm_matches_interpreter("vm-args-match.rss", source, ["11"]);
+    assert_reg_vm_matches_compiled_backend("vm-args-match.rss", source, ["11"]);
 }
 
 #[test]
@@ -2866,7 +2940,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_vm_matches_interpreter("vm-list-index.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("vm-list-index.rss", source, []);
 }
 
 #[test]
@@ -2901,7 +2975,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_vm_matches_interpreter("vm-map-lookup.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("vm-map-lookup.rss", source, []);
 }
 
 #[test]
@@ -2941,7 +3015,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_vm_matches_interpreter("vm-map-string-key.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("vm-map-string-key.rss", source, []);
 }
 
 #[test]
@@ -2987,7 +3061,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_vm_matches_interpreter("vm-list-closure-pipeline.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("vm-list-closure-pipeline.rss", source, []);
 }
 
 #[test]
@@ -3033,7 +3107,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_vm_matches_interpreter("vm-pipeline-chain.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("vm-pipeline-chain.rss", source, []);
 }
 
 #[test]
@@ -3078,7 +3152,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-diff-patch-ord.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-diff-patch-ord.rss", source, []);
 }
 
 #[test]
@@ -3124,7 +3198,7 @@ fn main() -> Result<Unit, HttpError> {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-env-function-request-response.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-env-function-request-response.rss", source, []);
 }
 
 #[test]
@@ -3223,7 +3297,7 @@ fn main() -> Result<Unit, JsonError> {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-file-parse-config.rss", source, arg_refs);
+    assert_reg_vm_matches_compiled_backend("reg-vm-file-parse-config.rss", source, arg_refs);
     let _ = fs::remove_dir_all(&root);
 }
 
@@ -3279,7 +3353,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-list-mutator-json.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-list-mutator-json.rss", source, []);
 }
 
 #[test]
@@ -3320,7 +3394,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-map-mutators.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-map-mutators.rss", source, []);
 }
 
 #[test]
@@ -3416,7 +3490,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-map-closure-intrinsics.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-map-closure-intrinsics.rss", source, []);
 }
 
 #[test]
@@ -3471,7 +3545,13 @@ async fn main() -> Result<Unit, ChannelError> {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-cancellation-stream.rss", source, []);
+    assert_reg_vm_output(
+        "reg-vm-cancellation-stream.rss",
+        source,
+        [],
+        "Ok { value: Unit }",
+        "cancelled\nsecond-cancelled\n1\n2\n2\n3\nempty-none\n",
+    );
 }
 
 #[test]
@@ -3490,7 +3570,12 @@ fn main() -> HttpRequest {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-http-request-builder.rss", source, []);
+    assert_reg_vm_matches_compiled_backend_return(
+        "reg-vm-http-request-builder.rss",
+        source,
+        [],
+        CompiledReturnHarness::HttpRequest,
+    );
 }
 
 #[test]
@@ -3502,7 +3587,8 @@ async fn main() -> Result<Unit, String> {
     match Channel.bounded<Int>(capacity: 1) {
         Ok(channel) => {
             let sender = Channel.sender<Int>(channel: read channel)
-            local receiver_result = Channel.receiver<Int>(channel: mut channel)
+            local channel_value = channel
+            local receiver_result = Channel.receiver<Int>(channel: mut channel_value)
             match receiver_result {
                 Ok(receiver) => {
                     local value = 41 + 1
@@ -3558,7 +3644,7 @@ async fn main() -> Result<Unit, String> {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-runtime-facade-batch.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-runtime-facade-batch.rss", source, []);
 }
 
 #[test]
@@ -3622,7 +3708,11 @@ fn main() -> Result<Unit, CsvError> {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-csv-row-intrinsics.rss", source, [csv_arg.as_str()]);
+    assert_reg_vm_matches_compiled_backend(
+        "reg-vm-csv-row-intrinsics.rss",
+        source,
+        [csv_arg.as_str()],
+    );
     let _ = fs::remove_dir_all(&root);
 }
 
@@ -3684,7 +3774,7 @@ fn main() -> Result<Unit, FileError> {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter(
+    assert_reg_vm_matches_compiled_backend(
         "reg-vm-tempdir-path-fs.rss",
         source,
         [root_arg.as_str(), file_arg.as_str()],
@@ -3753,7 +3843,7 @@ fn main() -> Result<Unit, FileError> {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-file-core.rss", source, [root_arg.as_str()]);
+    assert_reg_vm_matches_compiled_backend("reg-vm-file-core.rss", source, [root_arg.as_str()]);
     let _ = fs::remove_dir_all(&root);
 }
 
@@ -3858,7 +3948,7 @@ fn main() -> Result<Unit, FileError> {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter(
+    assert_reg_vm_matches_compiled_backend(
         "reg-vm-directory-file-stream.rss",
         source,
         [root_arg.as_str()],
@@ -3935,7 +4025,8 @@ async fn main() -> Result<Unit, FileError> {
         let empty_view = Buffer.view(buffer: read empty_buffer, start: 0, len: 0)
         File.write_buffer_view(file: mut writer, buffer: read empty_view)?
     }
-    let handle_read = File.read_string(path: read handle_file)?
+    let handle_read_path = Path.join(base: read nested, child: read "handle-extra.txt")
+    let handle_read = File.read_string(path: read handle_read_path)?
     Log.write(message: read handle_read)
 
     let files = Path.list_files(path: read root)?
@@ -3948,7 +4039,7 @@ async fn main() -> Result<Unit, FileError> {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter(
+    assert_reg_vm_matches_compiled_backend(
         "reg-vm-env-path-file-extra.rss",
         source,
         [root_arg.as_str()],
@@ -3976,7 +4067,9 @@ fn main() -> Result<Unit, String> {
     if Deadline.is_expired(deadline: read immediate) {
         Log.write(message: read "expired-now")
     }
-    Log.write(message: read String.from_int(value: Deadline.remaining_ms(deadline: read immediate)))
+    if Deadline.remaining_ms(deadline: read immediate) >= 0 {
+        Log.write(message: read "remaining-nonnegative")
+    }
     let negative = Deadline.after(duration: read Duration.ms(value: 0 - 1))
     if Deadline.is_expired(deadline: read negative) {
         Log.write(message: read "expired-negative")
@@ -4041,7 +4134,7 @@ fn main() -> Result<Unit, String> {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-time-db-fallible-pipeline.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-time-db-fallible-pipeline.rss", source, []);
 }
 
 #[test]
@@ -4061,7 +4154,7 @@ fn main() -> Result<Unit, DbError> {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-db-connection.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-db-connection.rss", source, []);
 }
 
 #[test]
@@ -4100,7 +4193,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-resource-drop-cleanup.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-resource-drop-cleanup.rss", source, []);
 }
 
 #[test]
@@ -4186,12 +4279,11 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-resource-drop-unwind.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-resource-drop-unwind.rss", source, []);
 }
 
 #[test]
-#[ignore = "known VM gap: ordinary non-native receiver calls are not lowered yet"]
-fn reg_vm_gap_ordinary_receiver_methods_match_interpreter() {
+fn reg_vm_runs_receiver_methods_like_interpreter() {
     let source = r#"
 fn main() -> Unit {
     let greeting = String.concat(left: read "hi ", right: read "there")
@@ -4206,18 +4298,17 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-gap-receiver-methods.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-gap-receiver-methods.rss", source, []);
 }
 
 #[test]
-#[ignore = "known VM gap: await-for/async for loops are not lowered yet"]
-fn reg_vm_gap_async_for_matches_interpreter() {
+fn reg_vm_runs_async_for_like_interpreter() {
     let source = r#"
-features: async
+features: async, local
 
 async fn main() -> Unit {
-    let values = [1, 2, 3]
-    let stream = Stream.from_list<Int>(items: read values)
+    local values = [1, 2, 3]
+    let stream = Stream.from_list<Int>(items: take values)
     await for value in stream {
         Log.write(message: read String.from_int(value: value))
     }
@@ -4225,12 +4316,11 @@ async fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-gap-async-for.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-async-for.rss", source, []);
 }
 
 #[test]
-#[ignore = "known VM gap: assignment lowering only supports local identifiers"]
-fn reg_vm_gap_index_assignment_matches_interpreter() {
+fn reg_vm_runs_index_assignment_like_interpreter() {
     let source = r#"
 fn main() -> Unit {
     let mut values = List<Int>.new()
@@ -4243,12 +4333,11 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-gap-index-assignment.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-gap-index-assignment.rss", source, []);
 }
 
 #[test]
-#[ignore = "known VM gap: general struct destructuring match is not lowered yet"]
-fn reg_vm_gap_struct_match_matches_interpreter() {
+fn reg_vm_runs_struct_match_like_interpreter() {
     let source = r#"
 struct Point {
     x: Int
@@ -4266,7 +4355,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-gap-struct-match.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-gap-struct-match.rss", source, []);
 }
 
 #[test]
@@ -4291,59 +4380,345 @@ fn main() -> Result<Unit, String> {
 }
 "#;
 
-    assert_reg_vm_matches_interpreter("reg-vm-select.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-select.rss", source, []);
 }
 
-fn assert_vm_matches_interpreter<'a>(
+fn assert_reg_vm_matches_compiled_backend<'a>(
     file: &str,
     source: &str,
     args: impl IntoIterator<Item = &'a str>,
 ) {
     let args = args.into_iter().collect::<Vec<_>>();
-    let interpreter =
-        eval_source_main_with_args(file, source, args.iter().copied()).expect("eval should run");
-    let vm = reg_vm_eval_source_main_with_args(file, source, args.iter().copied())
+    let reg = reg_vm_eval_source_main_with_args(file, source, args.iter().copied())
         .expect("reg vm should run");
+    let runtime_path = format!("{}/runtime", env!("CARGO_MANIFEST_DIR"));
+    let cache_dir =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("target/rsscript-vm-compiled-output-cache");
+    fs::create_dir_all(&cache_dir).expect("compiled parity cache dir should create");
+    let cache_key = compiled_output_cache_key(file, source, &args);
+    let stdout_path = cache_dir.join(format!("{cache_key}.stdout"));
+    let stderr_path = cache_dir.join(format!("{cache_key}.stderr"));
+    let (stdout, stderr) = if stdout_path.exists() && stderr_path.exists() {
+        (
+            fs::read_to_string(&stdout_path).expect("cached stdout should read"),
+            fs::read_to_string(&stderr_path).expect("cached stderr should read"),
+        )
+    } else {
+        let (stdout, stderr) = run_compiled_backend(file, source, &args, &runtime_path);
+        fs::write(&stdout_path, &stdout).expect("cached stdout should write");
+        fs::write(&stderr_path, &stderr).expect("cached stderr should write");
+        (stdout, stderr)
+    };
 
-    assert_eq!(vm.value, interpreter.value);
-    assert_eq!(vm.display_value, interpreter.display_value);
-    assert_eq!(vm.native_value, interpreter.native_value);
-    assert_eq!(vm.stdout, interpreter.stdout);
-    assert_eq!(vm.stderr, interpreter.stderr);
+    assert_eq!(reg.stdout, stdout);
+    assert_eq!(reg.stderr, stderr);
 }
 
-fn assert_reg_vm_matches_interpreter<'a>(
+fn assert_reg_vm_output<'a>(
     file: &str,
     source: &str,
     args: impl IntoIterator<Item = &'a str>,
+    expected_display_value: &str,
+    expected_stdout: &str,
 ) {
     let args = args.into_iter().collect::<Vec<_>>();
-    let interpreter =
-        eval_source_main_with_args(file, source, args.iter().copied()).expect("eval should run");
     let reg = reg_vm_eval_source_main_with_args(file, source, args.iter().copied())
         .expect("reg vm should run");
 
-    assert_eq!(reg.value, interpreter.value);
-    assert_eq!(reg.display_value, interpreter.display_value);
-    assert_eq!(reg.native_value, interpreter.native_value);
-    assert_eq!(reg.stdout, interpreter.stdout);
-    assert_eq!(reg.stderr, interpreter.stderr);
+    assert_eq!(reg.value, expected_display_value);
+    assert_eq!(reg.display_value, expected_display_value);
+    assert_eq!(reg.stdout, expected_stdout);
+    assert_eq!(reg.stderr, "");
 }
 
-fn assert_reg_vm_with_native_matches_interpreter<'a, const N: usize>(
+#[derive(Clone, Copy)]
+enum CompiledReturnHarness {
+    HttpRequest,
+    Image,
+    JsonValue,
+    ResultUnitString,
+}
+
+impl CompiledReturnHarness {
+    fn cache_tag(self) -> &'static str {
+        match self {
+            Self::HttpRequest => "return-http-request",
+            Self::Image => "return-image",
+            Self::JsonValue => "return-json-value",
+            Self::ResultUnitString => "return-result-unit-string",
+        }
+    }
+
+    fn main_rs(self, crate_name: &str) -> String {
+        match self {
+            Self::HttpRequest => format!(
+                concat!(
+                    "fn main() {{\n",
+                    "    rsscript_runtime::install_runtime_diagnostic_panic_hook();\n",
+                    "    let value = {crate_name}::main();\n",
+                    "    println!(\"__RSSCRIPT_RETURN__{{}}\", rsscript_runtime::http_request_debug_summary(&value));\n",
+                    "}}\n"
+                ),
+                crate_name = crate_name
+            ),
+            Self::Image => format!(
+                concat!(
+                    "fn main() {{\n",
+                    "    rsscript_runtime::install_runtime_diagnostic_panic_hook();\n",
+                    "    let value = {crate_name}::main();\n",
+                    "    println!(\"__RSSCRIPT_RETURN__{{}}\", rsscript_runtime::image_debug_summary(&value));\n",
+                    "}}\n"
+                ),
+                crate_name = crate_name
+            ),
+            Self::JsonValue => format!(
+                concat!(
+                    "fn main() {{\n",
+                    "    rsscript_runtime::install_runtime_diagnostic_panic_hook();\n",
+                    "    let value = {crate_name}::main();\n",
+                    "    println!(\"__RSSCRIPT_RETURN__{{}}\", rsscript_runtime::json_to_string(&value));\n",
+                    "}}\n"
+                ),
+                crate_name = crate_name
+            ),
+            Self::ResultUnitString => format!(
+                concat!(
+                    "fn main() {{\n",
+                    "    rsscript_runtime::install_runtime_diagnostic_panic_hook();\n",
+                    "    match {crate_name}::main() {{\n",
+                    "        Ok(()) => println!(\"__RSSCRIPT_RETURN__Ok {{{{ value: Unit }}}}\"),\n",
+                    "        Err(error) => println!(\"__RSSCRIPT_RETURN__Err {{{{ value: {{}} }}}}\", error),\n",
+                    "    }}\n",
+                    "}}\n"
+                ),
+                crate_name = crate_name
+            ),
+        }
+    }
+}
+
+fn assert_reg_vm_matches_compiled_backend_return<'a>(
+    file: &str,
+    source: &str,
+    args: impl IntoIterator<Item = &'a str>,
+    harness: CompiledReturnHarness,
+) {
+    let args = args.into_iter().collect::<Vec<_>>();
+    let reg = reg_vm_eval_source_main_with_args(file, source, args.iter().copied())
+        .expect("reg vm should run");
+    let runtime_path = format!("{}/runtime", env!("CARGO_MANIFEST_DIR"));
+    let cache_dir =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("target/rsscript-vm-compiled-output-cache");
+    fs::create_dir_all(&cache_dir).expect("compiled parity cache dir should create");
+    let cache_key = compiled_output_cache_key_with_tag(file, source, &args, harness.cache_tag());
+    let stdout_path = cache_dir.join(format!("{cache_key}.stdout"));
+    let stderr_path = cache_dir.join(format!("{cache_key}.stderr"));
+    let (stdout, stderr) = if stdout_path.exists() && stderr_path.exists() {
+        (
+            fs::read_to_string(&stdout_path).expect("cached stdout should read"),
+            fs::read_to_string(&stderr_path).expect("cached stderr should read"),
+        )
+    } else {
+        let (stdout, stderr) =
+            run_compiled_backend_with_return_harness(file, source, &args, &runtime_path, harness);
+        fs::write(&stdout_path, &stdout).expect("cached stdout should write");
+        fs::write(&stderr_path, &stderr).expect("cached stderr should write");
+        (stdout, stderr)
+    };
+
+    let (compiled_stdout, compiled_return) =
+        split_compiled_return_stdout(&stdout).expect("compiled return marker should exist");
+    assert_eq!(reg.stdout, compiled_stdout);
+    assert_eq!(reg.stderr, stderr);
+    assert_eq!(reg.display_value, compiled_return);
+}
+
+fn split_compiled_return_stdout(stdout: &str) -> Option<(String, String)> {
+    const MARKER: &str = "__RSSCRIPT_RETURN__";
+    let marker_start = stdout.rfind(MARKER)?;
+    let return_start = marker_start + MARKER.len();
+    let return_end = stdout[return_start..]
+        .find('\n')
+        .map(|offset| return_start + offset)
+        .unwrap_or(stdout.len());
+    Some((
+        stdout[..marker_start].to_string(),
+        stdout[return_start..return_end].to_string(),
+    ))
+}
+
+fn run_compiled_backend(
+    file: &str,
+    source: &str,
+    args: &[&str],
+    runtime_path: &str,
+) -> (String, String) {
+    let package_name = format!(
+        "rsscript_{}",
+        file.chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+            .collect::<String>()
+            .trim_matches('_')
+    );
+    let package = lower_source_to_rust_package(file, source, &package_name, &runtime_path)
+        .expect("source should lower to Rust package");
+    let package_dir = common::unique_temp_dir("rsscript-reg-vm-compiled-parity");
+    write_generated_rust_package(&package_dir, &package).expect("generated package should write");
+
+    let mut command = Command::new("cargo");
+    command
+        .arg("run")
+        .arg("--quiet")
+        .arg("--manifest-path")
+        .arg(package_dir.join("Cargo.toml"))
+        .env(
+            "CARGO_TARGET_DIR",
+            format!(
+                "{}/target/rsscript-generated-test",
+                env!("CARGO_MANIFEST_DIR")
+            ),
+        )
+        .env("RUSTFLAGS", "-Awarnings");
+    if !args.is_empty() {
+        command.arg("--").args(args);
+    }
+    let output = command.output().expect("generated Rust package should run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
+    let stderr = String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n");
+    let _ = fs::remove_dir_all(&package_dir);
+
+    assert!(
+        output.status.success(),
+        "generated Rust package failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    (stdout, stderr)
+}
+
+fn run_compiled_backend_with_return_harness(
+    file: &str,
+    source: &str,
+    args: &[&str],
+    runtime_path: &str,
+    harness: CompiledReturnHarness,
+) -> (String, String) {
+    let package_name = format!(
+        "rsscript_{}",
+        file.chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+            .collect::<String>()
+            .trim_matches('_')
+    );
+    let mut package = lower_source_to_rust_package(file, source, &package_name, &runtime_path)
+        .expect("source should lower to Rust package");
+    let crate_name = package.package_name.replace('-', "_");
+    if !package.lib_rs.contains("pub fn main(") {
+        package.lib_rs = package.lib_rs.replacen("fn main(", "pub fn main(", 1);
+    }
+    package.main_rs = Some(harness.main_rs(&crate_name));
+    let package_dir = common::unique_temp_dir("rsscript-reg-vm-compiled-parity");
+    write_generated_rust_package(&package_dir, &package).expect("generated package should write");
+
+    let mut command = Command::new("cargo");
+    command
+        .arg("run")
+        .arg("--quiet")
+        .arg("--manifest-path")
+        .arg(package_dir.join("Cargo.toml"))
+        .env(
+            "CARGO_TARGET_DIR",
+            format!(
+                "{}/target/rsscript-generated-test",
+                env!("CARGO_MANIFEST_DIR")
+            ),
+        )
+        .env("RUSTFLAGS", "-Awarnings");
+    if !args.is_empty() {
+        command.arg("--").args(args);
+    }
+    let output = command.output().expect("generated Rust package should run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
+    let stderr = String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n");
+    let _ = fs::remove_dir_all(&package_dir);
+
+    assert!(
+        output.status.success(),
+        "generated Rust package failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    (stdout, stderr)
+}
+
+fn compiled_output_cache_key(file: &str, source: &str, args: &[&str]) -> String {
+    compiled_output_cache_key_with_tag(file, source, args, "stdout-stderr")
+}
+
+fn compiled_output_cache_key_with_tag(
+    file: &str,
+    source: &str,
+    args: &[&str],
+    tag: &str,
+) -> String {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut hasher = Sha1::new();
+    hasher.update(b"rsscript-vm-compiled-output-v2");
+    hasher.update(tag.as_bytes());
+    hasher.update(file.as_bytes());
+    hasher.update(source.as_bytes());
+    for arg in args {
+        hasher.update(b"\0arg\0");
+        hasher.update(arg.as_bytes());
+    }
+    hash_path_if_exists(&mut hasher, &root.join("Cargo.toml"));
+    hash_path_if_exists(&mut hasher, &root.join("Cargo.lock"));
+    hash_path_if_exists(&mut hasher, &root.join("build.rs"));
+    hash_path_if_exists(&mut hasher, &root.join("src/lib.rs"));
+    hash_path_if_exists(&mut hasher, &root.join("src/core_index.rs"));
+    hash_path_if_exists(&mut hasher, &root.join("src/runtime_abi.rs"));
+    hash_tree_if_exists(&mut hasher, &root.join("src/analyzer"));
+    hash_tree_if_exists(&mut hasher, &root.join("src/checks"));
+    hash_tree_if_exists(&mut hasher, &root.join("src/package"));
+    hash_tree_if_exists(&mut hasher, &root.join("src/rust_lower"));
+    hash_tree_if_exists(&mut hasher, &root.join("src/syntax"));
+    hash_tree_if_exists(&mut hasher, &root.join("runtime"));
+    format!("{:x}", hasher.finalize())
+}
+
+fn hash_tree_if_exists(hasher: &mut Sha1, path: &Path) {
+    if !path.exists() {
+        return;
+    }
+    if path.is_file() {
+        hash_path_if_exists(hasher, path);
+        return;
+    }
+    let mut entries = fs::read_dir(path)
+        .expect("cache fingerprint directory should read")
+        .map(|entry| entry.expect("cache fingerprint entry should read").path())
+        .collect::<Vec<_>>();
+    entries.sort();
+    for entry in entries {
+        hash_tree_if_exists(hasher, &entry);
+    }
+}
+
+fn hash_path_if_exists(hasher: &mut Sha1, path: &Path) {
+    if !path.exists() || !path.is_file() {
+        return;
+    }
+    hasher.update(path.to_string_lossy().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(fs::read(path).expect("cache fingerprint file should read"));
+}
+
+fn assert_reg_vm_with_native_output<'a, const N: usize>(
     file: &str,
     source: &str,
     args: impl IntoIterator<Item = &'a str>,
     native_bindings: [(&'static str, NativeInterpreterFn); N],
+    expected_stdout: &str,
 ) {
     let args = args.into_iter().collect::<Vec<_>>();
-    let interpreter = eval_source_main_with_args_and_native_bindings(
-        file,
-        source,
-        args.iter().copied(),
-        native_bindings,
-    )
-    .expect("eval should run");
     let reg = reg_vm_eval_source_main_with_args_and_native_bindings(
         file,
         source,
@@ -4352,9 +4727,9 @@ fn assert_reg_vm_with_native_matches_interpreter<'a, const N: usize>(
     )
     .expect("reg vm should run");
 
-    assert_eq!(reg.value, interpreter.value);
-    assert_eq!(reg.display_value, interpreter.display_value);
-    assert_eq!(reg.native_value, interpreter.native_value);
-    assert_eq!(reg.stdout, interpreter.stdout);
-    assert_eq!(reg.stderr, interpreter.stderr);
+    assert_eq!(reg.value, "Unit");
+    assert_eq!(reg.display_value, "Unit");
+    assert_eq!(reg.native_value, Some(NativeValue::Unit));
+    assert_eq!(reg.stdout, expected_stdout);
+    assert_eq!(reg.stderr, "");
 }

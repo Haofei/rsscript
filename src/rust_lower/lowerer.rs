@@ -19,6 +19,7 @@ pub(super) struct RustLowerer<'a> {
     async_native_boundary_callees: BTreeSet<String>,
     native_bindings: BTreeMap<String, String>,
     function_return_types: BTreeMap<String, TypeRef>,
+    function_type_params: BTreeMap<String, Vec<String>>,
     function_param_types: BTreeMap<String, Vec<(String, TypeRef)>>,
     function_param_effects: BTreeMap<String, Vec<(String, Option<DataEffect>)>>,
     retained_params_by_callee: BTreeMap<String, BTreeSet<String>>,
@@ -72,6 +73,7 @@ impl<'a> RustLowerer<'a> {
             .map(|protocol| protocol.name.clone())
             .collect();
         let function_return_types = collect_function_return_types(program, interface_programs);
+        let function_type_params = collect_function_type_params(program, interface_programs);
         let function_param_types = collect_function_param_types(program, interface_programs);
         let function_param_effects = collect_function_param_effects(program, interface_programs);
         let retained_params_by_callee =
@@ -85,6 +87,7 @@ impl<'a> RustLowerer<'a> {
             async_native_boundary_callees,
             native_bindings,
             function_return_types,
+            function_type_params,
             function_param_types,
             function_param_effects,
             retained_params_by_callee,
@@ -1106,7 +1109,7 @@ impl<'a> RustLowerer<'a> {
                     "pending_then"
                 };
                 let pending = self.lower_expr(async_await_inner(value).expect("await inner"));
-                let bind = rust_ident(&stmt.name);
+                let bind = closure_binding(&stmt.name, stmt.is_mut);
                 let binding_ty = awaited_binding_type(
                     self.infer_expr_type(async_await_inner(value).expect("await inner")),
                     async_await_is_try(value),
@@ -1134,6 +1137,65 @@ impl<'a> RustLowerer<'a> {
                 let rest = self.lower_async_chain(tail);
                 format!(
                     "rsscript_runtime::{combinator}({pending}, move |_rsscript_unit| {{ {rest} }})"
+                )
+            }
+            Stmt::Let(stmt)
+                if stmt.value.as_ref().is_some_and(|value| {
+                    !async_await_inner(value).is_some() && is_try_wrapped(value)
+                }) =>
+            {
+                let value = stmt.value.as_ref().expect("try let has a value");
+                let Expr::Try { value: inner, .. } = value else {
+                    unreachable!("is_try_wrapped matched a non-try expression")
+                };
+                let result_ty = self.infer_expr_type(inner);
+                let binding_ty = result_ty.as_ref().and_then(result_ok_type_ref);
+                let pending = if let (Some(ok_ty), Some(error_ty)) =
+                    (binding_ty.as_ref(), self.current_result_error_type_rust())
+                {
+                    let ok_ty = self.lower_type_ref(ok_ty, ManagedPosition::Return);
+                    let inner = self.lower_expr(inner);
+                    format!(
+                        "rsscript_runtime::pending_ready((|| -> Result<{ok_ty}, {error_ty}> {{ Ok({inner}?) }})())"
+                    )
+                } else {
+                    format!(
+                        "rsscript_runtime::pending_ready({})",
+                        self.lower_expr(inner)
+                    )
+                };
+                let bind = closure_binding(&stmt.name, stmt.is_mut);
+                let previous_binding_ty = binding_ty
+                    .clone()
+                    .and_then(|ty| self.value_types.insert(stmt.name.clone(), ty));
+                let rest = self.lower_async_chain(tail);
+                if binding_ty.is_some() {
+                    if let Some(previous) = previous_binding_ty {
+                        self.value_types.insert(stmt.name.clone(), previous);
+                    } else {
+                        self.value_types.remove(&stmt.name);
+                    }
+                }
+                format!("rsscript_runtime::pending_try({pending}, move |{bind}| {{ {rest} }})")
+            }
+            Stmt::Expr(expr) if is_try_wrapped(expr) => {
+                let Expr::Try { value: inner, .. } = expr else {
+                    unreachable!("is_try_wrapped matched a non-try expression")
+                };
+                let pending = if let Some(error_ty) = self.current_result_error_type_rust() {
+                    let inner = self.lower_expr(inner);
+                    format!(
+                        "rsscript_runtime::pending_ready((|| -> Result<(), {error_ty}> {{ {inner}?; Ok(()) }})())"
+                    )
+                } else {
+                    format!(
+                        "rsscript_runtime::pending_ready({})",
+                        self.lower_expr(inner)
+                    )
+                };
+                let rest = self.lower_async_chain(tail);
+                format!(
+                    "rsscript_runtime::pending_try({pending}, move |_rsscript_unit| {{ {rest} }})"
                 )
             }
             Stmt::TaskGroup(stmt) => {
@@ -1198,6 +1260,21 @@ impl<'a> RustLowerer<'a> {
             }
             Stmt::If(_) | Stmt::Match(_) | Stmt::With(_) if stmt_contains_await(head) => {
                 let boundary = self.lower_async_statement_boundary(head);
+                let rest = self.lower_async_chain(tail);
+                if boundary.returns_result {
+                    format!(
+                        "rsscript_runtime::pending_try({pending}, move |_rsscript_unit| {{ {rest} }})",
+                        pending = boundary.pending
+                    )
+                } else {
+                    format!(
+                        "rsscript_runtime::pending_then({pending}, move |_rsscript_unit| {{ {rest} }})",
+                        pending = boundary.pending
+                    )
+                }
+            }
+            other if stmt_contains_try(other) => {
+                let boundary = self.lower_async_statement_boundary(other);
                 let rest = self.lower_async_chain(tail);
                 if boundary.returns_result {
                     format!(
@@ -1434,7 +1511,7 @@ impl<'a> RustLowerer<'a> {
                     "pending_then"
                 };
                 let pending = self.lower_expr(async_await_inner(value).expect("await inner"));
-                let bind = rust_ident(&stmt.name);
+                let bind = closure_binding(&stmt.name, stmt.is_mut);
                 let binding_ty = awaited_binding_type(
                     self.infer_expr_type(async_await_inner(value).expect("await inner")),
                     async_await_is_try(value),
@@ -2120,6 +2197,7 @@ impl<'a> RustLowerer<'a> {
                 if self
                     .infer_expr_type(base)
                     .is_some_and(|ty| self.is_class_type(&ty))
+                    || self.expr_lowers_to_managed_non_class_handle(base)
                 {
                     format!(
                         "rsscript_runtime::unwrap_runtime({}.try_read_at({})).{}.clone()",
@@ -2926,7 +3004,9 @@ impl<'a> RustLowerer<'a> {
                 span,
                 ..
             } => {
-                if self.expr_lowers_to_managed_non_class_handle(value) {
+                if Self::read_effect_lowers_by_value(expected) {
+                    self.lower_expr_for_expected_type(value, expected)
+                } else if self.expr_lowers_to_managed_non_class_handle(value) {
                     format!(
                         "&*rsscript_runtime::unwrap_runtime({}.try_read_at({}))",
                         self.lower_expr(value),
@@ -3032,6 +3112,110 @@ impl<'a> RustLowerer<'a> {
             rust_ident(value_type_root),
             self.lower_expr(&value_arg.value)
         )
+    }
+
+    fn infer_call_return_type(
+        &self,
+        callee: &Callee,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Option<TypeRef> {
+        let key = native_boundary_callee_key(callee);
+        let return_ty = self.function_return_types.get(&key)?.clone();
+        let Some(type_params) = self.function_type_params.get(&key) else {
+            return Some(return_ty);
+        };
+        if type_params.is_empty() {
+            return Some(return_ty);
+        }
+
+        let mut substitutions = BTreeMap::new();
+        self.collect_explicit_call_type_substitutions(
+            callee,
+            type_params,
+            span,
+            &mut substitutions,
+        );
+        self.collect_arg_type_substitutions(callee, args, &mut substitutions);
+
+        if substitutions.is_empty() {
+            Some(return_ty)
+        } else {
+            Some(substitute_type_ref(&return_ty, &substitutions))
+        }
+    }
+
+    fn collect_explicit_call_type_substitutions(
+        &self,
+        callee: &Callee,
+        type_params: &[String],
+        span: &Span,
+        substitutions: &mut BTreeMap<String, TypeRef>,
+    ) {
+        let explicit = match callee {
+            Callee::Name(name) | Callee::Qualified { name, .. } => type_arg_names(name),
+            Callee::ReceiverCall { method, .. } => type_arg_names(method),
+        };
+        if let Some(explicit) = explicit {
+            for (param, actual) in type_params.iter().zip(explicit) {
+                substitutions
+                    .entry(param.clone())
+                    .or_insert_with(|| type_ref_from_display(actual, span));
+            }
+        }
+
+        let Callee::Qualified { namespace, .. } = callee else {
+            return;
+        };
+        let Some(namespace_args) = type_arg_names(namespace) else {
+            return;
+        };
+        let Some(namespace_params) = builtin_generic_type_params(type_root_name(namespace)) else {
+            return;
+        };
+        for (param, actual) in namespace_params.into_iter().zip(namespace_args) {
+            if type_params.iter().any(|type_param| type_param == param) {
+                substitutions
+                    .entry(param.to_string())
+                    .or_insert_with(|| type_ref_from_display(actual, span));
+            }
+        }
+    }
+
+    fn collect_arg_type_substitutions(
+        &self,
+        callee: &Callee,
+        args: &[CallArg],
+        substitutions: &mut BTreeMap<String, TypeRef>,
+    ) {
+        let key = native_boundary_callee_key(callee);
+        let Some(params) = self.function_param_types.get(&key) else {
+            return;
+        };
+        for (index, arg) in args.iter().enumerate() {
+            let Some((_, expected)) = arg
+                .name
+                .as_deref()
+                .and_then(|name| params.iter().find(|(param_name, _)| param_name == name))
+                .or_else(|| params.get(index))
+            else {
+                continue;
+            };
+            let Some(actual) = self.infer_call_arg_type(&arg.value) else {
+                continue;
+            };
+            collect_type_ref_substitutions(expected, &actual, substitutions);
+        }
+    }
+
+    fn infer_call_arg_type(&self, expr: &Expr) -> Option<TypeRef> {
+        match expr {
+            Expr::Effect { value, .. }
+            | Expr::Manage { value, .. }
+            | Expr::Await { value, .. }
+            | Expr::Try { value, .. } => self.infer_call_arg_type(value),
+            _ => self.infer_expr_type(expr),
+        }
     }
 
     fn call_arg_is_retained(&self, callee: &Callee, arg: &CallArg, _index: usize) -> bool {
@@ -3259,38 +3443,34 @@ impl<'a> RustLowerer<'a> {
                 })
             }
             Expr::Call {
-                callee: Callee::Name(name),
-                ..
-            } => self
+                callee, args, span, ..
+            } if let Callee::Name(name) = callee => self
                 .value_types
                 .get(name)
                 .and_then(fn_type_return)
                 .cloned()
-                .or_else(|| {
-                    self.function_return_types
-                        .get(&native_boundary_callee_key(&Callee::Name(name.clone())))
-                        .cloned()
-                }),
+                .or_else(|| self.infer_call_return_type(callee, args, span)),
             Expr::Call {
                 callee:
                     Callee::ReceiverCall {
                         receiver, method, ..
                     },
+                args,
+                span,
                 ..
             } => {
                 let receiver_type = self.infer_expr_type(receiver)?;
                 let namespace = self.receiver_call_namespace(&receiver_type, method);
-                self.function_return_types
-                    .get(&native_boundary_callee_key(&Callee::Qualified {
+                self.infer_call_return_type(
+                    &Callee::Qualified {
                         namespace,
                         name: method.clone(),
-                    }))
-                    .cloned()
+                    },
+                    args,
+                    span,
+                )
             }
-            Expr::Call { callee, .. } => self
-                .function_return_types
-                .get(&native_boundary_callee_key(callee))
-                .cloned(),
+            Expr::Call { callee, args, span } => self.infer_call_return_type(callee, args, span),
             Expr::ObjectLiteral { span, .. } => Some(TypeRef {
                 name: "JsonLiteral".to_string(),
                 args: Vec::new(),
@@ -3765,6 +3945,25 @@ impl<'a> RustLowerer<'a> {
             Expr::Ident(name, _) if self.param_effects.contains_key(name) => self.lower_expr(value),
             _ => format!("&{}", self.lower_expr(value)),
         }
+    }
+
+    fn read_effect_lowers_by_value(expected: &TypeRef) -> bool {
+        expected.args.is_empty()
+            && matches!(
+                expected.name.as_str(),
+                "Bool"
+                    | "Byte"
+                    | "Int"
+                    | "Int8"
+                    | "Int16"
+                    | "Int32"
+                    | "Int64"
+                    | "UInt"
+                    | "UInt8"
+                    | "UInt16"
+                    | "UInt32"
+                    | "UInt64"
+            )
     }
 
     /// The Rust type annotation to emit on a `let`, when it is needed for
@@ -4368,6 +4567,11 @@ fn type_ref_display_name(ty: &TypeRef) -> String {
     )
 }
 
+fn closure_binding(name: &str, is_mut: bool) -> String {
+    let name = rust_ident(name);
+    if is_mut { format!("mut {name}") } else { name }
+}
+
 fn awaited_binding_type(value_type: Option<TypeRef>, is_try: bool) -> Option<TypeRef> {
     let value_type = value_type?;
     if is_try {
@@ -4417,6 +4621,46 @@ fn stmt_contains_await(statement: &Stmt) -> bool {
 
 fn block_contains_await(block: &Block) -> bool {
     block.statements.iter().any(stmt_contains_await)
+}
+
+fn stmt_contains_try(statement: &Stmt) -> bool {
+    match statement {
+        Stmt::Let(stmt) => stmt.value.as_ref().is_some_and(expr_contains_try),
+        Stmt::Return(stmt) => stmt.value.as_ref().is_some_and(expr_contains_try),
+        Stmt::With(stmt) => expr_contains_try(&stmt.resource) || block_contains_try(&stmt.body),
+        Stmt::If(stmt) => {
+            expr_contains_try(&stmt.condition)
+                || block_contains_try(&stmt.then_body)
+                || stmt.else_body.as_ref().is_some_and(block_contains_try)
+        }
+        Stmt::Loop(stmt) => {
+            stmt.condition.as_ref().is_some_and(expr_contains_try) || block_contains_try(&stmt.body)
+        }
+        Stmt::For(stmt) => expr_contains_try(&stmt.iterable) || block_contains_try(&stmt.body),
+        Stmt::Match(stmt) => {
+            expr_contains_try(&stmt.value)
+                || stmt.arms.iter().any(|arm| block_contains_try(&arm.body))
+        }
+        Stmt::LetElse(stmt) => {
+            expr_contains_try(&stmt.value) || block_contains_try(&stmt.else_body)
+        }
+        Stmt::Assign(stmt) => expr_contains_try(&stmt.target) || expr_contains_try(&stmt.value),
+        Stmt::Expr(expr) => expr_contains_try(expr),
+        Stmt::TaskGroup(_)
+        | Stmt::Select(_)
+        | Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::MalformedWith(_)
+        | Stmt::MalformedIf(_)
+        | Stmt::MalformedLoop(_)
+        | Stmt::MalformedFor(_)
+        | Stmt::MalformedMatch(_)
+        | Stmt::Unknown(_) => false,
+    }
+}
+
+fn block_contains_try(block: &Block) -> bool {
+    block.statements.iter().any(stmt_contains_try)
 }
 
 fn match_binding_type_ref(
@@ -4501,7 +4745,41 @@ fn expr_contains_await(expr: &Expr) -> bool {
     }
 }
 
+fn expr_contains_try(expr: &Expr) -> bool {
+    match expr {
+        Expr::Try { .. } => true,
+        Expr::Await { value, .. }
+        | Expr::Effect { value, .. }
+        | Expr::Manage { value, .. }
+        | Expr::Spawn { value, .. } => expr_contains_try(value),
+        Expr::Binary { left, right, .. } => expr_contains_try(left) || expr_contains_try(right),
+        Expr::Call { args, .. } => args.iter().any(|arg| expr_contains_try(&arg.value)),
+        Expr::Field { base, .. } => expr_contains_try(base),
+        Expr::Index { base, index, .. } => expr_contains_try(base) || expr_contains_try(index),
+        Expr::Closure { body, .. } => block_contains_try(body),
+        Expr::Match { value, arms, .. } => {
+            expr_contains_try(value) || arms.iter().any(|arm| block_contains_try(&arm.body))
+        }
+        Expr::ObjectLiteral { fields, .. } => {
+            fields.iter().any(|field| expr_contains_try(&field.value))
+        }
+        Expr::MapLiteral { entries, .. } => entries
+            .iter()
+            .any(|entry| expr_contains_try(&entry.key) || expr_contains_try(&entry.value)),
+        Expr::ArrayLiteral { items, .. } => items.iter().any(expr_contains_try),
+        Expr::Ident(..)
+        | Expr::Number(..)
+        | Expr::String(..)
+        | Expr::MultilineString(..)
+        | Expr::Unknown(_) => false,
+    }
+}
+
 fn type_ref_from_display(name: &str, span: &Span) -> TypeRef {
+    let (name, is_fresh) = name
+        .trim()
+        .strip_prefix("fresh ")
+        .map_or((name.trim(), false), |name| (name.trim(), true));
     TypeRef {
         name: type_root_name(name).to_string(),
         args: type_arg_names(name)
@@ -4510,7 +4788,7 @@ fn type_ref_from_display(name: &str, span: &Span) -> TypeRef {
             .map(|arg| type_ref_from_display(arg, span))
             .collect(),
         malformed_arg_spans: Vec::new(),
-        is_fresh: false,
+        is_fresh,
         is_noescape: false,
         is_owned: false,
         fn_params: Vec::new(),
@@ -4530,6 +4808,81 @@ fn simple_type_ref(name: &str, span: &Span) -> TypeRef {
         fn_params: Vec::new(),
         fn_return: None,
         span: span.clone(),
+    }
+}
+
+fn substitute_type_ref(ty: &TypeRef, substitutions: &BTreeMap<String, TypeRef>) -> TypeRef {
+    if ty.args.is_empty()
+        && ty.fn_params.is_empty()
+        && ty.fn_return.is_none()
+        && let Some(replacement) = substitutions.get(&ty.name)
+    {
+        let mut replacement = replacement.clone();
+        replacement.is_fresh |= ty.is_fresh;
+        replacement.is_noescape |= ty.is_noescape;
+        replacement.is_owned |= ty.is_owned;
+        return replacement;
+    }
+
+    let mut replaced = ty.clone();
+    replaced.args = ty
+        .args
+        .iter()
+        .map(|arg| substitute_type_ref(arg, substitutions))
+        .collect();
+    replaced.fn_params = ty
+        .fn_params
+        .iter()
+        .map(|param| substitute_type_ref(param, substitutions))
+        .collect();
+    replaced.fn_return = ty
+        .fn_return
+        .as_ref()
+        .map(|return_ty| Box::new(substitute_type_ref(return_ty, substitutions)));
+    replaced
+}
+
+fn collect_type_ref_substitutions(
+    pattern: &TypeRef,
+    actual: &TypeRef,
+    substitutions: &mut BTreeMap<String, TypeRef>,
+) {
+    if pattern.args.is_empty() && pattern.fn_params.is_empty() && pattern.fn_return.is_none() {
+        match pattern.name.as_str() {
+            "T" | "K" | "V" | "E" | "P" => {
+                substitutions
+                    .entry(pattern.name.clone())
+                    .or_insert_with(|| actual.clone());
+                return;
+            }
+            _ => {}
+        }
+    }
+
+    if pattern.name != actual.name || pattern.args.len() != actual.args.len() {
+        return;
+    }
+    for (pattern_arg, actual_arg) in pattern.args.iter().zip(actual.args.iter()) {
+        collect_type_ref_substitutions(pattern_arg, actual_arg, substitutions);
+    }
+    for (pattern_param, actual_param) in pattern.fn_params.iter().zip(actual.fn_params.iter()) {
+        collect_type_ref_substitutions(pattern_param, actual_param, substitutions);
+    }
+    if let (Some(pattern_return), Some(actual_return)) =
+        (pattern.fn_return.as_ref(), actual.fn_return.as_ref())
+    {
+        collect_type_ref_substitutions(pattern_return, actual_return, substitutions);
+    }
+}
+
+fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str>> {
+    match root {
+        "List" | "Set" | "Option" | "ResourcePool" | "Channel" | "Sender" | "Receiver"
+        | "Stream" | "Pipeline" => Some(vec!["T"]),
+        "FalliblePipeline" => Some(vec!["T", "E"]),
+        "Capability" => Some(vec!["P"]),
+        "Map" | "Result" => Some(vec!["K", "V"]),
+        _ => None,
     }
 }
 

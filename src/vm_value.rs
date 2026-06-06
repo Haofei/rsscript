@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
-use crate::interpreter::NativeValue;
+use crate::eval_types::NativeValue;
 
 #[derive(Debug, Clone)]
 pub(crate) enum VmValue {
