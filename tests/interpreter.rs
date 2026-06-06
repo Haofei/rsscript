@@ -765,14 +765,16 @@ pub fn echo(message: &String) -> String {
 // parity: hir_expr:ArrayLiteral hir_expr:Await hir_expr:Binary hir_expr:Call hir_expr:Effect hir_expr:Field
 // parity: hir_expr:Closure hir_expr:Ident hir_expr:Index hir_expr:Manage hir_expr:MapLiteral hir_expr:Match
 // parity: hir_expr:Number hir_expr:ObjectLiteral hir_expr:Spawn hir_expr:String hir_expr:Try
-// parity: value:Bool value:Bytes value:Int value:Json value:List value:Managed
+// parity: value:Bool value:Bytes value:Float value:Int value:Json value:List value:Managed
 // parity: value:Char value:Closure value:Map value:Native value:String value:Struct value:Unit value:Variant
 // parity: runtime:Args.all runtime:Args.count runtime:Args.get runtime:Args.get_or_default
 // parity: runtime:Assert.equal runtime:Assert.equal_bool runtime:Assert.equal_int
 // parity: runtime:Base64.decode runtime:Base64.decode_string runtime:Base64.encode runtime:Base64.encode_bytes
 // parity: runtime:Char.compare runtime:Char.from_code runtime:Char.is_alpha
 // parity: runtime:Char.is_alphanumeric runtime:Char.is_digit runtime:Char.is_whitespace
-// parity: runtime:Char.to_code runtime:Char.to_string runtime:DecodeError.message
+// parity: runtime:Char.is_lower runtime:Char.is_upper
+// parity: runtime:Char.to_code runtime:Char.to_lower runtime:Char.to_string runtime:Char.to_upper
+// parity: runtime:DecodeError.message
 // parity: runtime:Deque.clear runtime:Deque.is_empty runtime:Deque.len runtime:Deque.new
 // parity: runtime:Deque.pop_back runtime:Deque.pop_front runtime:Deque.push_back
 // parity: runtime:Deque.push_front runtime:Deque.to_list
@@ -791,7 +793,9 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Bytes.concat runtime:Bytes.consume runtime:Bytes.from_string runtime:Bytes.is_empty
 // parity: runtime:Bytes.from_buffer runtime:Bytes.len runtime:Bytes.slice runtime:Bytes.view
 // parity: runtime:BytesView.is_empty runtime:BytesView.len runtime:BytesView.slice
-// parity: runtime:BytesView.starts_with runtime:BytesView.to_bytes runtime:Int.to_string
+// parity: runtime:BytesView.starts_with runtime:BytesView.to_bytes
+// parity: runtime:Int.bit_and runtime:Int.bit_not runtime:Int.bit_or runtime:Int.bit_xor
+// parity: runtime:Int.shift_left runtime:Int.shift_right runtime:Int.to_string
 // parity: runtime:Buffer.clear runtime:Buffer.consume runtime:Buffer.is_empty runtime:Buffer.len
 // parity: runtime:Buffer.new runtime:Buffer.view runtime:BufferView.is_empty
 // parity: runtime:BufferView.len runtime:BufferView.slice runtime:BufferView.to_bytes
@@ -805,6 +809,11 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:ConfigStore.name runtime:ConfigStore.new runtime:ConfigStore.replace
 // parity: runtime:Counter.add runtime:Counter.new runtime:Counter.value
 // parity: runtime:Csv.open_read runtime:Csv.parse_row runtime:Csv.read_into runtime:Csv.rows
+// parity: runtime:Date.add_days runtime:Date.add_ms runtime:Date.day runtime:Date.days_between
+// parity: runtime:Date.days_in_month runtime:Date.format_iso runtime:Date.format_ymd
+// parity: runtime:Date.hour runtime:Date.is_leap_year runtime:Date.minute
+// parity: runtime:Date.month runtime:Date.parse_iso runtime:Date.parse_ymd runtime:Date.second
+// parity: runtime:Date.start_of_day runtime:Date.weekday runtime:Date.year
 // parity: runtime:Deadline.after runtime:Deadline.after_ms
 // parity: runtime:Deadline.is_expired runtime:Deadline.remaining_ms
 // parity: runtime:Json.array runtime:Json.array_bools runtime:Json.array_contains_prefix
@@ -834,6 +843,7 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Json.value runtime:Json.value_at runtime:Json.values runtime:JsonError.message
 // parity: runtime:Instant.elapsed
 // parity: runtime:Hash.sha256_bytes runtime:Hash.sha256_file runtime:Hash.sha256_string
+// parity: runtime:Hmac.sha256_bytes runtime:Hmac.sha256_string
 // parity: runtime:Hex.decode runtime:Hex.encode runtime:Hex.encode_string
 // parity: runtime:Http.get runtime:Http.get_async runtime:Http.get_retry_async
 // parity: runtime:Http.get_timeout_async runtime:Http.post_form runtime:Http.post_form_async
@@ -848,14 +858,15 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Image.save runtime:Image.sharpen
 // parity: runtime:List.all runtime:List.any runtime:List.append runtime:List.clear
 // parity: runtime:List.contains runtime:List.contains_value runtime:List.count_where
-// parity: runtime:List.consume runtime:List.filter runtime:List.find runtime:List.first
-// parity: runtime:List.flat_map runtime:List.fold runtime:List.get runtime:List.group_by
+// parity: runtime:List.consume runtime:List.dedup runtime:List.enumerate runtime:List.filter runtime:List.find runtime:List.first
+// parity: runtime:List.flat_map runtime:List.flatten runtime:List.fold runtime:List.get runtime:List.group_by
 // parity: runtime:List.is_empty runtime:List.join
-// parity: runtime:List.last runtime:List.len runtime:List.map runtime:List.new runtime:List.partition
+// parity: runtime:List.last runtime:List.len runtime:List.map runtime:List.max runtime:List.min
+// parity: runtime:List.new runtime:List.partition
 // parity: runtime:List.pipeline runtime:List.pop runtime:List.push runtime:List.reverse runtime:List.remove_at runtime:List.set
 // parity: runtime:List.skip runtime:List.slice runtime:List.sort runtime:List.sort_by
-// parity: runtime:List.sort_with runtime:List.take
-// parity: runtime:List.to_json_strings runtime:List.to_json_values runtime:List.try_fold
+// parity: runtime:List.sort_with runtime:List.sum runtime:List.take
+// parity: runtime:List.to_json_strings runtime:List.to_json_values runtime:List.try_fold runtime:List.zip
 // parity: runtime:Log.error runtime:Log.error_json runtime:Log.trace runtime:Log.write
 // parity: runtime:Log.write_json
 // parity: runtime:Env.current_dir runtime:Env.get runtime:Env.get_or_default
@@ -899,10 +910,16 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Process.run_stdout runtime:Process.run_stdout_async runtime:Process.run_stdout_timeout
 // parity: runtime:Process.run_stdout_timeout_async runtime:Process.run_timeout runtime:Process.run_timeout_async
 // parity: runtime:Process.stream
+// parity: runtime:Random.bool runtime:Random.bytes runtime:Random.float runtime:Random.int runtime:Random.string
 // parity: runtime:Map.clear runtime:Map.contains_key runtime:Map.filter runtime:Map.fold runtime:Map.for_each
 // parity: runtime:Map.get runtime:Map.get_or_default runtime:Map.insert runtime:Map.insert_old
 // parity: runtime:Map.is_empty runtime:Map.keys runtime:Map.len runtime:Map.map_values
 // parity: runtime:Map.merge runtime:Map.new runtime:Map.remove runtime:Map.try_fold runtime:Map.values
+// parity: runtime:Float.is_finite runtime:Float.is_infinite runtime:Float.is_nan
+// parity: runtime:Float.to_string runtime:Math.abs runtime:Math.abs_float runtime:Math.ceil
+// parity: runtime:Math.clamp runtime:Math.clamp_float runtime:Math.floor runtime:Math.max
+// parity: runtime:Math.max_float runtime:Math.min runtime:Math.min_float runtime:Math.pow
+// parity: runtime:Math.pow_float runtime:Math.round runtime:Math.sqrt
 // parity: runtime:Option.and_then runtime:Option.filter runtime:Option.is_none
 // parity: runtime:Option.is_some runtime:Option.map runtime:Option.ok_or
 // parity: runtime:Option.or runtime:Option.unwrap_or runtime:Option.unwrap_or_else
@@ -929,16 +946,19 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:SortedMap.insert runtime:SortedMap.is_empty runtime:SortedMap.keys
 // parity: runtime:SortedMap.len runtime:SortedMap.new runtime:SortedMap.remove
 // parity: runtime:SortedMap.values
-// parity: runtime:String.after runtime:String.before runtime:String.concat
+// parity: runtime:String.after runtime:String.before runtime:String.char_at runtime:String.concat
 // parity: runtime:String.chars
-// parity: runtime:String.contains runtime:String.copy runtime:String.ends_with
+// parity: runtime:String.contains runtime:String.count runtime:String.copy runtime:String.ends_with
 // parity: runtime:String.env runtime:String.env_or
-// parity: runtime:String.from_bool runtime:String.from_int
+// parity: runtime:String.format runtime:String.from_bool runtime:String.from_float runtime:String.from_int
 // parity: runtime:String.index_of runtime:String.is_empty runtime:String.join runtime:String.len
-// parity: runtime:String.lines runtime:String.parse_int runtime:String.repeat
-// parity: runtime:String.replace runtime:String.slice runtime:String.split
+// parity: runtime:String.lines runtime:String.pad_left runtime:String.pad_right
+// parity: runtime:String.parse_float runtime:String.parse_int
+// parity: runtime:String.repeat runtime:String.replace runtime:String.replace_first runtime:String.reverse
+// parity: runtime:String.slice runtime:String.split
 // parity: runtime:String.starts_with runtime:String.strip_prefix runtime:String.to_bytes
 // parity: runtime:String.to_lowercase runtime:String.to_uppercase runtime:String.to_url runtime:String.trim
+// parity: runtime:String.trim_end runtime:String.trim_start
 // parity: runtime:String.view runtime:StringView.after runtime:StringView.before
 // parity: runtime:StringView.contains runtime:StringView.is_empty runtime:StringView.len
 // parity: runtime:StringView.slice runtime:StringView.starts_with runtime:StringView.to_string
@@ -952,6 +972,7 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:TcpStream.write runtime:TcpStream.write_all
 // parity: runtime:Toml.parse_file
 // parity: runtime:Url.decode_component runtime:Url.encode_component runtime:Url.from_string runtime:Url.to_string
+// parity: runtime:Uuid.new_v4
 // parity: runtime:WebSocket.close runtime:WebSocket.connect runtime:WebSocket.recv_bytes
 // parity: runtime:WebSocket.recv_text runtime:WebSocket.send_bytes runtime:WebSocket.send_text
 // parity: runtime:WebSocketError.message

@@ -5,7 +5,7 @@ use std::process::Command;
 use sha1::{Digest, Sha1};
 
 use rsscript::{
-    EvalError, NativeInterpreterFn, NativeValue, lower_source_to_rust_package,
+    NativeInterpreterFn, NativeValue, lower_source_to_rust_package,
     reg_vm_eval_source_main_with_args, reg_vm_eval_source_main_with_args_and_native_bindings,
     write_generated_rust_package,
 };
@@ -112,6 +112,248 @@ fn main() -> Unit {
 "#;
 
     assert_reg_vm_matches_compiled_backend("reg-vm-if-args.rss", source, ["11"]);
+}
+
+#[test]
+fn reg_vm_runs_math_random_uuid_and_modulo_like_interpreter() {
+    let source = r#"
+features: native
+
+fn float_mix(value: Float, salt: Float) -> Float {
+    return value * 2.0 + salt
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: 17 % 5))
+    Log.write(message: read String.from_int(value: Math.abs(value: -9)))
+    Log.write(message: read String.from_int(value: Math.min(left: 4, right: 7)))
+    Log.write(message: read String.from_int(value: Math.max(left: 4, right: 7)))
+    Log.write(message: read String.from_int(value: Math.clamp(value: 12, min: 0, max: 10)))
+    Log.write(message: read String.from_float(value: Math.abs_float(value: -2.5)))
+    Log.write(message: read String.from_float(value: Math.min_float(left: 4.5, right: 7.25)))
+    Log.write(message: read String.from_float(value: Math.max_float(left: 4.5, right: 7.25)))
+    Log.write(message: read String.from_float(value: Math.clamp_float(value: 12.5, min: 0.5, max: 10.5)))
+    Log.write(message: read String.from_float(value: Math.pow_float(base: 2.0, exponent: 3.0)))
+    Log.write(message: read String.from_float(value: Math.sqrt(value: 9.0)))
+    Log.write(message: read Float.to_string(value: read Math.sqrt(value: 16.0)))
+    let finite = 1.5
+    let infinite = 1.0 / 0.0
+    let nan = 0.0 / 0.0
+    Log.write(message: read String.from_bool(value: Float.is_finite(value: read finite)))
+    Log.write(message: read String.from_bool(value: Float.is_infinite(value: read infinite)))
+    Log.write(message: read String.from_bool(value: Float.is_nan(value: read nan)))
+    match String.parse_float(value: read "12.5") {
+        Some(value) => Log.write(message: read String.from_float(value: value))
+        None => Log.write(message: read "float-none")
+    }
+    match String.parse_float(value: read "not-float") {
+        Some(value) => Log.write(message: read String.from_float(value: value))
+        None => Log.write(message: read "invalid-float")
+    }
+    Log.write(message: read String.from_int(value: Math.floor(value: 3.9)))
+    Log.write(message: read String.from_int(value: Math.ceil(value: 3.1)))
+    Log.write(message: read String.from_int(value: Math.round(value: 3.5)))
+    Log.write(message: read String.from_float(value: 1.5 + 2.25))
+    Log.write(message: read String.from_float(value: 9.0 - 2.5))
+    Log.write(message: read String.from_float(value: 3.0 * 2.5))
+    Log.write(message: read String.from_float(value: 7.5 / 2.5))
+    Log.write(message: read String.from_float(value: float_mix(value: 1.5, salt: 0.5)))
+    if 5.5 > 5.0 && 5.0 <= 5.0 {
+        Log.write(message: read "float-compare")
+    }
+
+    let fixed = Random.int(min: 7, max: 7)
+    Log.write(message: read String.from_int(value: fixed))
+    Log.write(message: read String.from_int(value: Math.floor(value: Random.float())))
+    let bytes = Random.bytes(len: 4)
+    Log.write(message: read String.from_int(value: Bytes.len(value: read bytes)))
+    let token = Random.string(len: 8)
+    Log.write(message: read String.from_int(value: String.len(value: read token)))
+    let maybe = Random.bool()
+    if maybe {
+        Log.write(message: read "bool")
+    } else {
+        Log.write(message: read "bool")
+    }
+    let id = Uuid.new_v4()
+    Log.write(message: read String.from_int(value: String.len(value: read id)))
+    if String.contains(value: read id, needle: read "-") {
+        Log.write(message: read "uuid")
+    }
+    return Unit
+}
+"#;
+
+    assert_reg_vm_matches_compiled_backend("reg-vm-math-random-uuid.rss", source, []);
+}
+
+#[test]
+fn reg_vm_runs_common_math_string_char_and_list_helpers_like_backend() {
+    let source = r#"
+features: local
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: Math.pow(base: 3, exponent: 4)))
+
+    Log.write(message: read String.trim_start(value: read "  left"))
+    Log.write(message: read String.trim_end(value: read "right  "))
+    Log.write(message: read String.pad_left(value: read "7", width: 3, fill: read "0"))
+    Log.write(message: read String.pad_right(value: read "x", width: 3, fill: read "."))
+    Log.write(message: read String.reverse(value: read "abc"))
+    Log.write(message: read String.replace_first(value: read "one one", from: read "one", to: read "two"))
+    Log.write(message: read String.from_int(value: String.count(value: read "banana", needle: read "an")))
+    match String.char_at(value: read "abc", index: 1) {
+        Some(value) => Log.write(message: read Char.to_string(value: read value))
+        None => Log.write(message: read "missing-char")
+    }
+    match String.char_at(value: read "abc", index: 9) {
+        Some(value) => Log.write(message: read Char.to_string(value: read value))
+        None => Log.write(message: read "missing-char")
+    }
+
+    match String.char_at(value: read "a", index: 0) {
+        Some(value) => {
+            if Char.is_lower(value: read value) {
+                Log.write(message: read "lower")
+            }
+        }
+        None => Log.write(message: read "missing-lower")
+    }
+    match String.char_at(value: read "Z", index: 0) {
+        Some(value) => {
+            if Char.is_upper(value: read value) {
+                Log.write(message: read "upper")
+            }
+        }
+        None => Log.write(message: read "missing-upper")
+    }
+    match String.char_at(value: read "Q", index: 0) {
+        Some(value) => Log.write(message: read Char.to_string(value: read Char.to_lower(value: read value)))
+        None => Log.write(message: read "missing-to-lower")
+    }
+    match String.char_at(value: read "q", index: 0) {
+        Some(value) => Log.write(message: read Char.to_string(value: read Char.to_upper(value: read value)))
+        None => Log.write(message: read "missing-to-upper")
+    }
+
+    let values = [3, 1, 3, 2]
+    Log.write(message: read String.from_int(value: List.sum(list: read values)))
+    match List.min(list: read values) {
+        Some(value) => Log.write(message: read String.from_int(value: value))
+        None => Log.write(message: read "min-none")
+    }
+    match List.max(list: read values) {
+        Some(value) => Log.write(message: read String.from_int(value: value))
+        None => Log.write(message: read "max-none")
+    }
+    let deduped = List.dedup<Int>(list: read values)
+    Log.write(message: read String.from_int(value: List.len<Int>(list: read deduped)))
+    Log.write(message: read String.from_int(value: deduped[0]))
+    Log.write(message: read String.from_int(value: deduped[1]))
+    Log.write(message: read String.from_int(value: deduped[2]))
+
+    let nested = [[1, 2], [3], List<Int>.new()]
+    let flat = List.flatten<Int>(list: read nested)
+    Log.write(message: read String.from_int(value: List.len<Int>(list: read flat)))
+    Log.write(message: read String.from_int(value: flat[0]))
+    Log.write(message: read String.from_int(value: flat[2]))
+    return Unit
+}
+"#;
+
+    assert_reg_vm_matches_compiled_backend("reg-vm-common-helper-intrinsics.rss", source, []);
+}
+
+#[test]
+fn reg_vm_runs_format_date_and_int_bit_helpers_like_backend() {
+    let source = r#"
+features: native
+
+fn main() -> Unit {
+    Log.write(message: read String.format(template: read "hello {}, {{}} {}", args: read ["rss", "vm"]))
+    Log.write(message: read String.format(template: read "missing {}", args: read List<String>.new()))
+
+    Log.write(message: read String.from_int(value: Int.bit_and(left: 6, right: 3)))
+    Log.write(message: read String.from_int(value: Int.bit_or(left: 4, right: 1)))
+    Log.write(message: read String.from_int(value: Int.bit_xor(left: 6, right: 3)))
+    Log.write(message: read String.from_int(value: Int.bit_not(value: 0)))
+    Log.write(message: read String.from_int(value: Int.shift_left(value: 3, bits: 2)))
+    Log.write(message: read String.from_int(value: Int.shift_right(value: 16, bits: 2)))
+    Log.write(message: read String.from_int(value: 6 & 3))
+    Log.write(message: read String.from_int(value: 4 | 1))
+    Log.write(message: read String.from_int(value: 6 ^ 3))
+    Log.write(message: read String.from_int(value: 3 << 2))
+    Log.write(message: read String.from_int(value: 16 >> 2))
+    Log.write(message: read String.from_int(value: 1 | 2 & 3))
+    Log.write(message: read String.from_bool(value: !false))
+    Log.write(message: read String.from_bool(value: !(1 > 2)))
+    Log.write(message: read String.from_int(value: ~0))
+    Log.write(message: read String.from_int(value: ~5))
+
+    match Date.parse_ymd(value: read "2024-02-29") {
+        Some(value) => {
+            Log.write(message: read Date.format_ymd(unix_ms: value))
+            Log.write(message: read Date.format_iso(unix_ms: value))
+            Log.write(message: read String.from_int(value: Date.year(unix_ms: value)))
+            Log.write(message: read String.from_int(value: Date.month(unix_ms: value)))
+            Log.write(message: read String.from_int(value: Date.day(unix_ms: value)))
+            Log.write(message: read String.from_int(value: Date.hour(unix_ms: value)))
+            Log.write(message: read String.from_int(value: Date.minute(unix_ms: value)))
+            Log.write(message: read String.from_int(value: Date.second(unix_ms: value)))
+            Log.write(message: read Date.format_ymd(unix_ms: Date.add_days(unix_ms: value, days: 1)))
+            Log.write(message: read String.from_int(value: Date.days_between(start_unix_ms: value, end_unix_ms: Date.add_days(unix_ms: value, days: 3))))
+            Log.write(message: read String.from_int(value: Date.add_ms(unix_ms: value, ms: 250) - value))
+            Log.write(message: read Date.format_iso(unix_ms: Date.start_of_day(unix_ms: Date.add_ms(unix_ms: value, ms: 45678))))
+            Log.write(message: read String.from_int(value: Date.weekday(unix_ms: value)))
+            Log.write(message: read String.from_bool(value: Date.is_leap_year(year: 2024)))
+            Log.write(message: read String.from_int(value: Date.days_in_month(year: 2024, month: 2)))
+            Log.write(message: read String.from_bool(value: Date.is_leap_year(year: 2023)))
+            Log.write(message: read String.from_int(value: Date.days_in_month(year: 2023, month: 13)))
+        }
+        None => Log.write(message: read "date-none")
+    }
+    match Date.parse_iso(value: read "2024-02-29T12:34:56.789+02:00") {
+        Some(value) => {
+            Log.write(message: read Date.format_iso(unix_ms: value))
+            Log.write(message: read String.from_int(value: Date.hour(unix_ms: value)))
+            Log.write(message: read String.from_int(value: Date.minute(unix_ms: value)))
+            Log.write(message: read String.from_int(value: Date.second(unix_ms: value)))
+        }
+        None => Log.write(message: read "iso-none")
+    }
+    match Date.parse_iso(value: read "not-an-iso-date") {
+        Some(value) => Log.write(message: read Date.format_iso(unix_ms: value))
+        None => Log.write(message: read "invalid-iso-date")
+    }
+    match Date.parse_ymd(value: read "not-a-date") {
+        Some(value) => Log.write(message: read Date.format_ymd(unix_ms: value))
+        None => Log.write(message: read "invalid-date")
+    }
+    return Unit
+}
+"#;
+
+    assert_reg_vm_matches_compiled_backend("reg-vm-format-date-bit-intrinsics.rss", source, []);
+}
+
+#[test]
+fn reg_vm_runs_interpolated_strings_like_backend() {
+    let source = r#"
+features: native
+
+fn greeting(name: read String) -> fresh String {
+    return $"hello {name}"
+}
+
+fn main() -> Unit {
+    let name = "rss"
+    Log.write(message: read $"hello {name}")
+    Log.write(message: read $"literal {{}} and {greeting(name: read "vm")}")
+    return Unit
+}
+"#;
+
+    assert_reg_vm_matches_compiled_backend("reg-vm-interpolated-strings.rss", source, []);
 }
 
 #[test]
@@ -545,6 +787,15 @@ fn main() -> Unit {
     Assert.equal(
         left: read Hash.sha256_string(value: read "é"),
         right: read Hash.sha256_bytes(value: read Bytes.from_string(value: read "é"))
+    )
+    let hmac = Hmac.sha256_string(key: read "key", value: read "abc")
+    Log.write(message: read String.from_int(value: String.len(value: read hmac)))
+    Assert.equal(
+        left: read hmac,
+        right: read Hmac.sha256_bytes(
+            key: read Bytes.from_string(value: read "key"),
+            value: read Bytes.from_string(value: read "abc")
+        )
     )
     return Unit
 }
@@ -2726,6 +2977,21 @@ fn main() -> Unit {
     Log.write(message: read String.from_int(value: parts[0][0]))
     Log.write(message: read String.from_int(value: List.len<Int>(list: read parts[1])))
     Log.write(message: read String.from_int(value: parts[1][2]))
+
+    let zip_left = [1, 2, 3]
+    let zip_right = [4, 5]
+    let zipped = List.zip<Int>(left: read zip_left, right: read zip_right)
+    Log.write(message: read String.from_int(value: List.len(list: read zipped)))
+    Log.write(message: read String.from_int(value: zipped[0][0]))
+    Log.write(message: read String.from_int(value: zipped[0][1]))
+    Log.write(message: read String.from_int(value: zipped[1][1]))
+
+    let enumerate_values = [7, 8]
+    let indexed = List.enumerate(list: read enumerate_values)
+    Log.write(message: read String.from_int(value: indexed[0][0]))
+    Log.write(message: read String.from_int(value: indexed[0][1]))
+    Log.write(message: read String.from_int(value: indexed[1][0]))
+    Log.write(message: read String.from_int(value: indexed[1][1]))
     return Unit
 }
 "#;
@@ -3550,7 +3816,7 @@ async fn main() -> Result<Unit, ChannelError> {
         source,
         [],
         "Ok { value: Unit }",
-        "cancelled\nsecond-cancelled\n1\n2\n2\n3\nempty-none\n",
+        "not-cancelled\ncancelled\nsecond-cancelled\n1\n2\n2\n3\nempty-none\n",
     );
 }
 
@@ -4306,13 +4572,13 @@ fn reg_vm_runs_async_for_like_interpreter() {
     let source = r#"
 features: async, local
 
-async fn main() -> Unit {
+async fn main() -> Result<Unit, ChannelError> {
     local values = [1, 2, 3]
     let stream = Stream.from_list<Int>(items: take values)
     await for value in stream {
         Log.write(message: read String.from_int(value: value))
     }
-    return Unit
+    return Ok(Unit)
 }
 "#;
 

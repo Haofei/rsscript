@@ -1242,6 +1242,12 @@ fn binary_op_text(op: BinaryOp) -> &'static str {
         BinaryOp::Subtract => "-",
         BinaryOp::Multiply => "*",
         BinaryOp::Divide => "/",
+        BinaryOp::Modulo => "%",
+        BinaryOp::BitAnd => "&",
+        BinaryOp::BitOr => "|",
+        BinaryOp::BitXor => "^",
+        BinaryOp::ShiftLeft => "<<",
+        BinaryOp::ShiftRight => ">>",
         BinaryOp::Equal => "==",
         BinaryOp::NotEqual => "!=",
         BinaryOp::Less => "<",
@@ -1257,14 +1263,18 @@ fn binary_precedence(op: BinaryOp) -> u8 {
     match op {
         BinaryOp::LogicalOr => 1,
         BinaryOp::LogicalAnd => 2,
+        BinaryOp::BitOr => 3,
+        BinaryOp::BitXor => 4,
+        BinaryOp::BitAnd => 5,
         BinaryOp::Equal
         | BinaryOp::NotEqual
         | BinaryOp::Less
         | BinaryOp::LessEqual
         | BinaryOp::Greater
-        | BinaryOp::GreaterEqual => 3,
-        BinaryOp::Add | BinaryOp::Subtract => 4,
-        BinaryOp::Multiply | BinaryOp::Divide => 5,
+        | BinaryOp::GreaterEqual => 6,
+        BinaryOp::ShiftLeft | BinaryOp::ShiftRight => 7,
+        BinaryOp::Add | BinaryOp::Subtract => 8,
+        BinaryOp::Multiply | BinaryOp::Divide | BinaryOp::Modulo => 9,
     }
 }
 

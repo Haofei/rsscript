@@ -1,0 +1,27 @@
+pub fn Math.abs(value: Int) -> Int
+
+pub fn Math.min(left: Int, right: Int) -> Int
+
+pub fn Math.max(left: Int, right: Int) -> Int
+
+pub fn Math.clamp(value: Int, min: Int, max: Int) -> Int
+
+pub fn Math.pow(base: Int, exponent: Int) -> Int
+
+pub fn Math.abs_float(value: Float) -> Float
+
+pub fn Math.min_float(left: Float, right: Float) -> Float
+
+pub fn Math.max_float(left: Float, right: Float) -> Float
+
+pub fn Math.clamp_float(value: Float, min: Float, max: Float) -> Float
+
+pub fn Math.pow_float(base: Float, exponent: Float) -> Float
+
+pub fn Math.sqrt(value: Float) -> Float
+
+pub fn Math.floor(value: Float) -> Int
+
+pub fn Math.ceil(value: Float) -> Int
+
+pub fn Math.round(value: Float) -> Int

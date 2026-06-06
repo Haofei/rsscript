@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use crate::diagnostic::Span;
 use crate::lexer::{Token, TokenKind, lex};
 use crate::syntax::ast::{
     AssignStmt, BinaryOp, Block, CallArg, Callee, ConstDecl, DataEffect, DuplicateFileFeature,
@@ -2462,6 +2463,10 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
         return Some(closure);
     }
 
+    if let Some(unary) = parse_unary_expr(tokens, start, end) {
+        return Some(unary);
+    }
+
     if let Some(binary) = parse_binary_expr(tokens, start, end) {
         return Some(binary);
     }
@@ -2585,12 +2590,159 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
         )),
         TokenKind::Number(value) => Some(Expr::Number(value.clone(), tokens[start].span.clone())),
         TokenKind::String(value) => Some(Expr::String(value.clone(), tokens[start].span.clone())),
+        TokenKind::InterpolatedString(value) => {
+            Some(parse_interpolated_string_expr(value, &tokens[start].span))
+        }
         TokenKind::MultilineString(value) => Some(Expr::MultilineString(
             value.clone(),
             tokens[start].span.clone(),
         )),
         _ => Some(Expr::Unknown(tokens[start].span.clone())),
     }
+}
+
+fn parse_interpolated_string_expr(value: &str, span: &Span) -> Expr {
+    let (template, items, malformed) = parse_interpolated_string_parts(value, span);
+    let template_expr = Expr::Effect {
+        effect: DataEffect::Read,
+        value: Box::new(Expr::String(template, span.clone())),
+        span: span.clone(),
+    };
+    let args_expr = Expr::Effect {
+        effect: DataEffect::Read,
+        value: Box::new(Expr::ArrayLiteral {
+            items,
+            span: span.clone(),
+        }),
+        span: span.clone(),
+    };
+    Expr::Call {
+        callee: Callee::Qualified {
+            namespace: "String".to_string(),
+            name: "format".to_string(),
+        },
+        args: vec![
+            CallArg {
+                name: Some("template".to_string()),
+                value: template_expr,
+                malformed,
+                span: span.clone(),
+            },
+            CallArg {
+                name: Some("args".to_string()),
+                value: args_expr,
+                malformed,
+                span: span.clone(),
+            },
+        ],
+        span: span.clone(),
+    }
+}
+
+fn parse_interpolated_string_parts(value: &str, span: &Span) -> (String, Vec<Expr>, bool) {
+    let chars: Vec<char> = value.chars().collect();
+    let mut template = String::new();
+    let mut items = Vec::new();
+    let mut index = 0usize;
+    let mut malformed = false;
+
+    while index < chars.len() {
+        match chars[index] {
+            '\\' => {
+                template.push(chars[index]);
+                index += 1;
+                if let Some(ch) = chars.get(index) {
+                    template.push(*ch);
+                    index += 1;
+                }
+            }
+            '{' if chars.get(index + 1) == Some(&'{') => {
+                template.push('{');
+                template.push('{');
+                index += 2;
+            }
+            '}' if chars.get(index + 1) == Some(&'}') => {
+                template.push('}');
+                template.push('}');
+                index += 2;
+            }
+            '{' => {
+                let expr_start = index + 1;
+                let Some(expr_end) = find_interpolation_end(&chars, expr_start) else {
+                    malformed = true;
+                    template.push('{');
+                    index += 1;
+                    continue;
+                };
+                let expr_text = chars[expr_start..expr_end].iter().collect::<String>();
+                let expr_tokens = lex(&span.file, &expr_text);
+                let token_end = expr_tokens
+                    .iter()
+                    .position(|token| matches!(token.kind, TokenKind::Eof))
+                    .unwrap_or(expr_tokens.len());
+                if let Some(expr) = parse_expr(&expr_tokens, 0, token_end) {
+                    template.push('{');
+                    template.push('}');
+                    items.push(expr);
+                } else {
+                    malformed = true;
+                    template.push('{');
+                    template.push_str(&expr_text);
+                    template.push('}');
+                }
+                index = expr_end + 1;
+            }
+            '}' => {
+                template.push('}');
+                template.push('}');
+                index += 1;
+            }
+            ch => {
+                template.push(ch);
+                index += 1;
+            }
+        }
+    }
+
+    (template, items, malformed)
+}
+
+fn find_interpolation_end(chars: &[char], start: usize) -> Option<usize> {
+    let mut index = start;
+    let mut depth = 0usize;
+    while index < chars.len() {
+        match chars[index] {
+            '"' => {
+                index += 1;
+                while index < chars.len() {
+                    if chars[index] == '\\' {
+                        index += 2;
+                        continue;
+                    }
+                    if chars[index] == '"' {
+                        index += 1;
+                        break;
+                    }
+                    index += 1;
+                }
+            }
+            '(' | '[' | '{' => {
+                depth += 1;
+                index += 1;
+            }
+            ')' | ']' => {
+                depth = depth.saturating_sub(1);
+                index += 1;
+            }
+            '}' if depth == 0 => return Some(index),
+            '}' => {
+                depth -= 1;
+                index += 1;
+            }
+            _ => index += 1,
+        }
+    }
+    None
 }
 
 fn parse_negative_number_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
@@ -2707,12 +2859,17 @@ fn parse_binary_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr>
         .or_else(|| {
             find_top_level_operator(tokens, start, end, &[(&["&", "&"], BinaryOp::LogicalAnd)])
         })
+        .or_else(|| find_top_level_operator(tokens, start, end, &[(&["|"], BinaryOp::BitOr)]))
+        .or_else(|| find_top_level_operator(tokens, start, end, &[(&["^"], BinaryOp::BitXor)]))
+        .or_else(|| find_top_level_operator(tokens, start, end, &[(&["&"], BinaryOp::BitAnd)]))
         .or_else(|| {
             find_top_level_operator(
                 tokens,
                 start,
                 end,
                 &[
+                    (&["<", "<"], BinaryOp::ShiftLeft),
+                    (&[">", ">"], BinaryOp::ShiftRight),
                     (&["=", "="], BinaryOp::Equal),
                     (&["!", "="], BinaryOp::NotEqual),
                     (&["<", "="], BinaryOp::LessEqual),
@@ -2735,7 +2892,11 @@ fn parse_binary_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr>
                 tokens,
                 start,
                 end,
-                &[(&["*"], BinaryOp::Multiply), (&["/"], BinaryOp::Divide)],
+                &[
+                    (&["*"], BinaryOp::Multiply),
+                    (&["/"], BinaryOp::Divide),
+                    (&["%"], BinaryOp::Modulo),
+                ],
             )
         })
         .and_then(|(operator, op)| {
@@ -2751,10 +2912,54 @@ fn parse_binary_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr>
         })
 }
 
+fn parse_unary_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
+    if tokens.get(start)?.symbol("!") {
+        let (value_start, value_end) = unary_operand_range(tokens, start + 1, end);
+        let value = parse_expr(tokens, value_start, value_end)?;
+        return Some(Expr::Binary {
+            op: BinaryOp::Equal,
+            left: Box::new(value),
+            right: Box::new(Expr::Ident("false".to_string(), tokens[start].span.clone())),
+            span: tokens[start].span.clone(),
+        });
+    }
+    if tokens.get(start)?.symbol("~") {
+        let (value_start, value_end) = unary_operand_range(tokens, start + 1, end);
+        let value = parse_expr(tokens, value_start, value_end)?;
+        return Some(Expr::Call {
+            callee: Callee::Qualified {
+                namespace: "Int".to_string(),
+                name: "bit_not".to_string(),
+            },
+            args: vec![CallArg {
+                name: Some("value".to_string()),
+                value,
+                malformed: false,
+                span: tokens[start].span.clone(),
+            }],
+            span: tokens[start].span.clone(),
+        });
+    } else {
+        None
+    }
+}
+
+fn unary_operand_range(tokens: &[Token], start: usize, end: usize) -> (usize, usize) {
+    if tokens.get(start).is_some_and(|token| token.symbol("("))
+        && let Some(close) = find_matching(tokens, start, "(", ")")
+        && close + 1 == end
+    {
+        return (start + 1, close);
+    }
+    (start, end)
+}
+
 fn op_width(op: BinaryOp) -> usize {
     match op {
         BinaryOp::LogicalAnd
         | BinaryOp::LogicalOr
+        | BinaryOp::ShiftLeft
+        | BinaryOp::ShiftRight
         | BinaryOp::Equal
         | BinaryOp::NotEqual
         | BinaryOp::LessEqual
@@ -2763,6 +2968,10 @@ fn op_width(op: BinaryOp) -> usize {
         | BinaryOp::Subtract
         | BinaryOp::Multiply
         | BinaryOp::Divide
+        | BinaryOp::Modulo
+        | BinaryOp::BitAnd
+        | BinaryOp::BitOr
+        | BinaryOp::BitXor
         | BinaryOp::Less
         | BinaryOp::Greater => 1,
     }
@@ -2777,7 +2986,11 @@ fn find_top_level_operator(
     let mut depth = 0usize;
     let mut angle_depth = 0usize;
     let mut found = None;
+    let mut skip_until = start;
     for (index, token) in tokens.iter().enumerate().take(end).skip(start) {
+        if index < skip_until {
+            continue;
+        }
         if token.symbol("(") || token.symbol("{") || token.symbol("[") {
             depth += 1;
             continue;
@@ -2805,6 +3018,7 @@ fn find_top_level_operator(
                         continue;
                     }
                     found = Some((index, *op));
+                    skip_until = index + symbols.len();
                     break;
                 }
             }

@@ -88,6 +88,23 @@ pub fn List.contains_value<T>(
 
 pub fn List.is_empty<T>(list: read List<T>) -> Bool
 
+pub fn List.sum(list: read List<Int>) -> Int
+
+pub fn List.min(list: read List<Int>) -> Option<Int>
+
+pub fn List.max(list: read List<Int>) -> Option<Int>
+
+pub fn List.flatten<T>(list: read List<List<T>>) -> fresh List<T>
+
+pub fn List.dedup<T>(list: read List<T>) -> fresh List<T>
+
+pub fn List.zip<T>(
+    left: read List<T>,
+    right: read List<T>,
+) -> fresh List<List<T>>
+
+pub fn List.enumerate(list: read List<Int>) -> fresh List<List<Int>>
+
 pub fn List.reverse<T>(list: read List<T>) -> fresh List<T>
 
 pub fn List.sort<T: Ord>(

@@ -8,6 +8,7 @@ use crate::eval_types::NativeValue;
 pub(crate) enum VmValue {
     Unit,
     Int(i64),
+    Float(f64),
     Bool(bool),
     Char(char),
     Bytes(Rc<Vec<u8>>),
@@ -76,6 +77,7 @@ impl VmValue {
         match self {
             Self::Unit => "Unit".to_string(),
             Self::Int(value) => value.to_string(),
+            Self::Float(value) => value.to_string(),
             Self::Bool(value) => value.to_string(),
             Self::Char(value) => value.to_string(),
             Self::Bytes(value) => format!("{value:?}"),
@@ -127,6 +129,7 @@ impl VmValue {
         match self {
             Self::Unit => Some(NativeValue::Unit),
             Self::Int(value) => Some(NativeValue::Int(*value)),
+            Self::Float(value) => Some(NativeValue::Float(*value)),
             Self::Bool(value) => Some(NativeValue::Bool(*value)),
             Self::Char(value) => Some(NativeValue::Char(*value)),
             Self::Bytes(value) => Some(NativeValue::Bytes(value.as_ref().clone())),
@@ -174,6 +177,7 @@ impl PartialEq for VmValue {
         match (self, other) {
             (Self::Unit, Self::Unit) => true,
             (Self::Int(left), Self::Int(right)) => left == right,
+            (Self::Float(left), Self::Float(right)) => left.to_bits() == right.to_bits(),
             (Self::Bool(left), Self::Bool(right)) => left == right,
             (Self::Char(left), Self::Char(right)) => left == right,
             (Self::Bytes(left), Self::Bytes(right)) => left == right,

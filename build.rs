@@ -110,6 +110,9 @@ fn main() {
     if let Err(error) = write_core_package_index() {
         panic!("{error}");
     }
+    if let Err(error) = write_reg_vm_runtime_intrinsics() {
+        panic!("{error}");
+    }
 }
 
 fn write_core_package_index() -> Result<(), String> {
@@ -131,6 +134,90 @@ fn write_core_package_index() -> Result<(), String> {
     )
     .map_err(|error| format!("core package index should be written: {error}"))?;
     Ok(())
+}
+
+fn write_reg_vm_runtime_intrinsics() -> Result<(), String> {
+    println!("cargo:rerun-if-changed=src/reg_vm.rs");
+
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
+    let source_path = manifest_dir.join("src/reg_vm.rs");
+    let source = fs::read_to_string(&source_path)
+        .map_err(|error| format!("failed to read {}: {error}", source_path.display()))?;
+    let signatures = collect_reg_vm_runtime_intrinsics(&source)?;
+    let generated = format!(
+        "&[\n{}\n]\n",
+        signatures
+            .iter()
+            .map(|signature| format!("    {signature:?},"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("out dir"));
+    fs::write(out_dir.join("rss-reg-vm-runtime-intrinsics.rs"), generated)
+        .map_err(|error| format!("reg VM runtime intrinsic index should be written: {error}"))?;
+    Ok(())
+}
+
+fn collect_reg_vm_runtime_intrinsics(source: &str) -> Result<Vec<String>, String> {
+    let start_marker = "let intrinsic = match (namespace_root, name_root) {";
+    let start = source
+        .find(start_marker)
+        .ok_or_else(|| "reg VM intrinsic resolver match was not found".to_string())?;
+    let resolver = &source[start + start_marker.len()..];
+    let end_marker = "\n                    _ => {";
+    let end = resolver
+        .find(end_marker)
+        .ok_or_else(|| "reg VM intrinsic resolver fallback was not found".to_string())?;
+    let resolver = &resolver[..end];
+
+    let bytes = resolver.as_bytes();
+    let mut signatures = BTreeMap::<String, ()>::new();
+    let mut index = 0;
+    while index + 2 < bytes.len() {
+        if bytes[index] != b'(' || bytes[index + 1] != b'"' {
+            index += 1;
+            continue;
+        }
+        let Some((namespace, after_namespace)) = parse_quoted_ascii(resolver, index + 1) else {
+            index += 1;
+            continue;
+        };
+        let mut cursor = after_namespace;
+        cursor = skip_ascii_whitespace(bytes, cursor);
+        if bytes.get(cursor) != Some(&b',') {
+            index += 1;
+            continue;
+        }
+        cursor += 1;
+        cursor = skip_ascii_whitespace(bytes, cursor);
+        if bytes.get(cursor) != Some(&b'"') {
+            index += 1;
+            continue;
+        }
+        let Some((name, after_name)) = parse_quoted_ascii(resolver, cursor) else {
+            index += 1;
+            continue;
+        };
+        signatures.insert(format!("{namespace}.{name}"), ());
+        index = after_name;
+    }
+
+    Ok(signatures.into_keys().collect())
+}
+
+fn parse_quoted_ascii(source: &str, quote_index: usize) -> Option<(String, usize)> {
+    let bytes = source.as_bytes();
+    if bytes.get(quote_index) != Some(&b'"') {
+        return None;
+    }
+    let mut end = quote_index + 1;
+    while end < bytes.len() && bytes[end] != b'"' {
+        if bytes[end] == b'\\' {
+            return None;
+        }
+        end += 1;
+    }
+    (end < bytes.len()).then(|| (source[quote_index + 1..end].to_string(), end + 1))
 }
 
 fn default_core_entries(root: &Path) -> Result<Vec<CoreInterfaceEntry>, String> {

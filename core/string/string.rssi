@@ -16,6 +16,18 @@ pub fn Char.is_whitespace(value: read Char) -> Bool
 pub fn Char.is_alphanumeric(value: read Char) -> Bool
     effects(pure)
 
+pub fn Char.is_lower(value: read Char) -> Bool
+    effects(pure)
+
+pub fn Char.is_upper(value: read Char) -> Bool
+    effects(pure)
+
+pub fn Char.to_lower(value: read Char) -> Char
+    effects(pure)
+
+pub fn Char.to_upper(value: read Char) -> Char
+    effects(pure)
+
 pub fn Char.to_code(value: read Char) -> Int
     effects(pure)
 
@@ -37,10 +49,43 @@ pub fn String.copy(value: read String) -> fresh String
 pub fn String.from_int(value: Int) -> fresh String
     effects(pure)
 
+pub fn String.from_float(value: Float) -> fresh String
+    effects(pure)
+
 pub fn String.from_bool(value: Bool) -> fresh String
     effects(pure)
 
 pub fn Int.to_string(value: read Int) -> fresh String
+    effects(pure)
+
+pub fn Float.to_string(value: read Float) -> fresh String
+    effects(pure)
+
+pub fn Float.is_nan(value: read Float) -> Bool
+    effects(pure)
+
+pub fn Float.is_finite(value: read Float) -> Bool
+    effects(pure)
+
+pub fn Float.is_infinite(value: read Float) -> Bool
+    effects(pure)
+
+pub fn Int.bit_and(left: Int, right: Int) -> Int
+    effects(pure)
+
+pub fn Int.bit_or(left: Int, right: Int) -> Int
+    effects(pure)
+
+pub fn Int.bit_xor(left: Int, right: Int) -> Int
+    effects(pure)
+
+pub fn Int.bit_not(value: Int) -> Int
+    effects(pure)
+
+pub fn Int.shift_left(value: Int, bits: Int) -> Int
+    effects(pure)
+
+pub fn Int.shift_right(value: Int, bits: Int) -> Int
     effects(pure)
 
 pub fn String.to_path(value: read String) -> fresh Path
@@ -70,6 +115,12 @@ pub fn String.is_empty(value: read String) -> Bool
 pub fn String.trim(value: read String) -> fresh String
     effects(pure)
 
+pub fn String.trim_start(value: read String) -> fresh String
+    effects(pure)
+
+pub fn String.trim_end(value: read String) -> fresh String
+    effects(pure)
+
 pub fn String.to_lowercase(value: read String) -> fresh String
     effects(pure)
 
@@ -81,6 +132,42 @@ pub fn String.replace(
     from: read String,
     to: read String,
 ) -> fresh String
+    effects(pure)
+
+pub fn String.replace_first(
+    value: read String,
+    from: read String,
+    to: read String,
+) -> fresh String
+    effects(pure)
+
+pub fn String.count(
+    value: read String,
+    needle: read String,
+) -> Int
+    effects(pure)
+
+pub fn String.pad_left(
+    value: read String,
+    width: Int,
+    fill: read String,
+) -> fresh String
+    effects(pure)
+
+pub fn String.pad_right(
+    value: read String,
+    width: Int,
+    fill: read String,
+) -> fresh String
+    effects(pure)
+
+pub fn String.reverse(value: read String) -> fresh String
+    effects(pure)
+
+pub fn String.char_at(
+    value: read String,
+    index: Int,
+) -> Option<Char>
     effects(pure)
 
 pub fn String.starts_with(
@@ -110,6 +197,12 @@ pub fn String.chars(value: read String) -> fresh List<Char>
 pub fn String.join(
     parts: read List<String>,
     separator: read String,
+) -> fresh String
+    effects(pure)
+
+pub fn String.format(
+    template: read String,
+    args: read List<String>,
 ) -> fresh String
     effects(pure)
 
@@ -157,6 +250,9 @@ pub fn String.repeat(
     effects(pure)
 
 pub fn String.parse_int(value: read String) -> Option<Int>
+    effects(pure)
+
+pub fn String.parse_float(value: read String) -> Option<Float>
     effects(pure)
 
 pub fn String.view(

@@ -21,6 +21,7 @@ pub enum EvalError {
 pub enum NativeValue {
     Unit,
     Int(i64),
+    Float(f64),
     Bool(bool),
     String(String),
     Char(char),

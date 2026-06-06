@@ -2,6 +2,26 @@ pub fn string_from_int(value: i64) -> String {
     value.to_string()
 }
 
+pub fn string_from_float(value: f64) -> String {
+    value.to_string()
+}
+
+pub fn float_to_string(value: &f64) -> String {
+    value.to_string()
+}
+
+pub fn float_is_nan(value: &f64) -> bool {
+    value.is_nan()
+}
+
+pub fn float_is_finite(value: &f64) -> bool {
+    value.is_finite()
+}
+
+pub fn float_is_infinite(value: &f64) -> bool {
+    value.is_infinite()
+}
+
 pub fn string_copy(value: &str) -> String {
     value.to_string()
 }
@@ -12,6 +32,30 @@ pub fn string_concat(left: &str, right: &str) -> String {
 
 pub fn string_from_bool(value: bool) -> String {
     value.to_string()
+}
+
+pub fn int_bit_and(left: i64, right: i64) -> i64 {
+    left & right
+}
+
+pub fn int_bit_or(left: i64, right: i64) -> i64 {
+    left | right
+}
+
+pub fn int_bit_xor(left: i64, right: i64) -> i64 {
+    left ^ right
+}
+
+pub fn int_bit_not(value: i64) -> i64 {
+    !value
+}
+
+pub fn int_shift_left(value: i64, bits: i64) -> i64 {
+    value.wrapping_shl(bits.max(0) as u32)
+}
+
+pub fn int_shift_right(value: i64, bits: i64) -> i64 {
+    value.wrapping_shr(bits.max(0) as u32)
 }
 
 pub fn string_len(value: &str) -> i64 {
@@ -58,6 +102,22 @@ pub fn char_is_alphanumeric(value: &char) -> bool {
     value.is_ascii_alphanumeric()
 }
 
+pub fn char_is_lower(value: &char) -> bool {
+    value.is_lowercase()
+}
+
+pub fn char_is_upper(value: &char) -> bool {
+    value.is_uppercase()
+}
+
+pub fn char_to_lower(value: &char) -> char {
+    value.to_lowercase().next().unwrap_or(*value)
+}
+
+pub fn char_to_upper(value: &char) -> char {
+    value.to_uppercase().next().unwrap_or(*value)
+}
+
 pub fn char_to_code(value: &char) -> i64 {
     *value as u32 as i64
 }
@@ -82,6 +142,35 @@ pub fn string_join(parts: &[String], separator: &str) -> String {
     parts.join(separator)
 }
 
+pub fn string_format(template: &str, args: &[String]) -> String {
+    let mut output = String::new();
+    let mut chars = template.chars().peekable();
+    let mut arg_index = 0;
+    while let Some(ch) = chars.next() {
+        match (ch, chars.peek().copied()) {
+            ('{', Some('{')) => {
+                chars.next();
+                output.push('{');
+            }
+            ('}', Some('}')) => {
+                chars.next();
+                output.push('}');
+            }
+            ('{', Some('}')) => {
+                chars.next();
+                if let Some(value) = args.get(arg_index) {
+                    output.push_str(value);
+                    arg_index += 1;
+                } else {
+                    output.push_str("{}");
+                }
+            }
+            _ => output.push(ch),
+        }
+    }
+    output
+}
+
 pub fn string_strip_prefix(value: &str, prefix: &str) -> Option<String> {
     value.strip_prefix(prefix).map(str::to_string)
 }
@@ -100,6 +189,14 @@ pub fn string_trim(value: &str) -> String {
     value.trim().to_string()
 }
 
+pub fn string_trim_start(value: &str) -> String {
+    value.trim_start().to_string()
+}
+
+pub fn string_trim_end(value: &str) -> String {
+    value.trim_end().to_string()
+}
+
 pub fn string_to_lowercase(value: &str) -> String {
     value.to_lowercase()
 }
@@ -110,6 +207,32 @@ pub fn string_to_uppercase(value: &str) -> String {
 
 pub fn string_replace(value: &str, from: &str, to: &str) -> String {
     value.replace(from, to)
+}
+
+pub fn string_replace_first(value: &str, from: &str, to: &str) -> String {
+    value.replacen(from, to, 1)
+}
+
+pub fn string_count(value: &str, needle: &str) -> i64 {
+    value.matches(needle).count() as i64
+}
+
+pub fn string_pad_left(value: &str, width: i64, fill: &str) -> String {
+    string_pad(value, width, fill, true)
+}
+
+pub fn string_pad_right(value: &str, width: i64, fill: &str) -> String {
+    string_pad(value, width, fill, false)
+}
+
+pub fn string_reverse(value: &str) -> String {
+    value.chars().rev().collect()
+}
+
+pub fn string_char_at(value: &str, index: i64) -> Option<char> {
+    usize::try_from(index)
+        .ok()
+        .and_then(|index| value.chars().nth(index))
 }
 
 pub fn string_split(value: &str, delimiter: &str) -> Vec<String> {
@@ -130,6 +253,10 @@ pub fn string_repeat(value: &str, count: i64) -> String {
 
 pub fn string_parse_int(value: &str) -> Option<i64> {
     value.parse::<i64>().ok()
+}
+
+pub fn string_parse_float(value: &str) -> Option<f64> {
+    value.parse::<f64>().ok()
 }
 
 pub fn string_view(value: &str, start: i64, len: i64) -> &str {
@@ -183,6 +310,26 @@ fn clamp_to_char_boundary(value: &str, mut index: usize) -> usize {
         index -= 1;
     }
     index
+}
+
+fn string_pad(value: &str, width: i64, fill: &str, left: bool) -> String {
+    let target = width.max(0) as usize;
+    if value.len() >= target || fill.is_empty() {
+        return value.to_string();
+    }
+    let missing = target - value.len();
+    let mut padding = String::new();
+    while padding.len() < missing {
+        padding.push_str(fill);
+    }
+    while padding.len() > missing {
+        padding.pop();
+    }
+    if left {
+        format!("{padding}{value}")
+    } else {
+        format!("{value}{padding}")
+    }
 }
 
 pub fn string_builder_new() -> String {

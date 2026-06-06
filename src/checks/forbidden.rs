@@ -35,7 +35,10 @@ fn check_own_struct_attempts(analyzer: &mut Analyzer<'_>) {
 
 fn check_surface_reference_attempts(analyzer: &mut Analyzer<'_>) {
     for index in 0..analyzer.tokens.len() {
-        if !analyzer.tokens[index].symbol("&") || is_boolean_and(analyzer, index) {
+        if !analyzer.tokens[index].symbol("&")
+            || is_boolean_and(analyzer, index)
+            || is_bit_and(analyzer, index)
+        {
             continue;
         }
         analyzer.diagnostics.push(
@@ -64,6 +67,45 @@ fn is_boolean_and(analyzer: &Analyzer<'_>, index: usize) -> bool {
             .tokens
             .get(index + 1)
             .is_some_and(|token| token.symbol("&"))
+}
+
+fn is_bit_and(analyzer: &Analyzer<'_>, index: usize) -> bool {
+    analyzer
+        .tokens
+        .get(index.wrapping_sub(1))
+        .is_some_and(token_can_end_expr)
+        && analyzer
+            .tokens
+            .get(index + 1)
+            .is_some_and(token_can_start_expr)
+}
+
+fn token_can_end_expr(token: &crate::lexer::Token) -> bool {
+    matches!(
+        token.kind,
+        crate::lexer::TokenKind::Ident(_)
+            | crate::lexer::TokenKind::Keyword(_)
+            | crate::lexer::TokenKind::Number(_)
+            | crate::lexer::TokenKind::String(_)
+            | crate::lexer::TokenKind::InterpolatedString(_)
+            | crate::lexer::TokenKind::MultilineString(_)
+    ) || token.symbol(")")
+        || token.symbol("]")
+        || token.symbol("}")
+}
+
+fn token_can_start_expr(token: &crate::lexer::Token) -> bool {
+    matches!(
+        token.kind,
+        crate::lexer::TokenKind::Ident(_)
+            | crate::lexer::TokenKind::Keyword(_)
+            | crate::lexer::TokenKind::Number(_)
+            | crate::lexer::TokenKind::String(_)
+            | crate::lexer::TokenKind::InterpolatedString(_)
+            | crate::lexer::TokenKind::MultilineString(_)
+    ) || token.symbol("(")
+        || token.symbol("[")
+        || token.symbol("{")
 }
 
 fn check_implicit_conversion_attempts(analyzer: &mut Analyzer<'_>) {
@@ -331,7 +373,33 @@ fn check_builtin_operator_operand_types(
                 );
             }
         }
-        BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide => {}
+        BinaryOp::Add
+        | BinaryOp::Subtract
+        | BinaryOp::Multiply
+        | BinaryOp::Divide
+        | BinaryOp::Modulo => {}
+        BinaryOp::BitAnd
+        | BinaryOp::BitOr
+        | BinaryOp::BitXor
+        | BinaryOp::ShiftLeft
+        | BinaryOp::ShiftRight => {
+            let (Some(left_type), Some(right_type)) = (
+                inferred_operand_type(analyzer, left).map(str::to_string),
+                inferred_operand_type(analyzer, right).map(str::to_string),
+            ) else {
+                return;
+            };
+            if type_root_name(&left_type) != "Int" || type_root_name(&right_type) != "Int" {
+                operator_type_mismatch_diagnostic(
+                    analyzer,
+                    span.clone(),
+                    operator_label(op),
+                    &left_type,
+                    &right_type,
+                    "Int operands",
+                );
+            }
+        }
     }
 }
 
@@ -367,6 +435,12 @@ fn operator_label(op: BinaryOp) -> &'static str {
         BinaryOp::Subtract => "-",
         BinaryOp::Multiply => "*",
         BinaryOp::Divide => "/",
+        BinaryOp::Modulo => "%",
+        BinaryOp::BitAnd => "&",
+        BinaryOp::BitOr => "|",
+        BinaryOp::BitXor => "^",
+        BinaryOp::ShiftLeft => "<<",
+        BinaryOp::ShiftRight => ">>",
         BinaryOp::Equal => "==",
         BinaryOp::NotEqual => "!=",
         BinaryOp::Less => "<",
@@ -381,7 +455,16 @@ fn operator_label(op: BinaryOp) -> &'static str {
 fn arithmetic_operator(op: BinaryOp) -> bool {
     matches!(
         op,
-        BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide
+        BinaryOp::Add
+            | BinaryOp::Subtract
+            | BinaryOp::Multiply
+            | BinaryOp::Divide
+            | BinaryOp::Modulo
+            | BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::ShiftLeft
+            | BinaryOp::ShiftRight
     )
 }
 
@@ -402,7 +485,7 @@ fn inferred_operand_type<'a>(analyzer: &'a Analyzer<'_>, expr: &'a HirExpr) -> O
                     .type_info(name)
                     .map(|type_info| type_info.name.as_str())
             }),
-        HirExpr::Number { .. } => Some("Int"),
+        HirExpr::Number { value, .. } => Some(crate::hir::number_literal_type_name(value)),
         HirExpr::String { .. } => Some("String"),
         HirExpr::Call { type_name, .. }
         | HirExpr::Effect { type_name, .. }

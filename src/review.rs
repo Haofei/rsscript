@@ -1393,7 +1393,7 @@ fn review_map_expr_type_name(expr: &Expr, hir: &Hir) -> Option<String> {
         }
         Expr::Await { value, .. } => review_map_expr_type_name(value, hir),
         Expr::String(_, _) | Expr::MultilineString(_, _) => Some("String".to_string()),
-        Expr::Number(_, _) => Some("Int".to_string()),
+        Expr::Number(value, _) => Some(crate::hir::number_literal_type_name(value).to_string()),
         Expr::Ident(name, _) if matches!(name.as_str(), "true" | "false") => {
             Some("Bool".to_string())
         }

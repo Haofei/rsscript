@@ -8,3 +8,15 @@ pub native fn Hash.sha256_bytes(value: read Bytes) -> fresh String
 
 pub native fn Hash.sha256_file(path: read Path) -> Result<fresh String, FileError>
     effects(native)
+
+pub native fn Hmac.sha256_string(
+    key: read String,
+    value: read String,
+) -> fresh String
+    effects(native)
+
+pub native fn Hmac.sha256_bytes(
+    key: read Bytes,
+    value: read Bytes,
+) -> fresh String
+    effects(native)

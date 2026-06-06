@@ -2677,7 +2677,16 @@ fn callback_expr_type_name(
             | BinaryOp::GreaterEqual
             | BinaryOp::LogicalAnd
             | BinaryOp::LogicalOr => Some("Bool".to_string()),
-            BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide => None,
+            BinaryOp::Add
+            | BinaryOp::Subtract
+            | BinaryOp::Multiply
+            | BinaryOp::Divide
+            | BinaryOp::Modulo => None,
+            BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::ShiftLeft
+            | BinaryOp::ShiftRight => Some("Int".to_string()),
         };
     }
     hir_expr_type_name(expr).map(str::to_string)
@@ -2962,7 +2971,27 @@ fn check_callback_operator_operand_types(
                         );
                     }
                 }
-                BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide => {}
+                BinaryOp::Add
+                | BinaryOp::Subtract
+                | BinaryOp::Multiply
+                | BinaryOp::Divide
+                | BinaryOp::Modulo => {}
+                BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::ShiftLeft
+                | BinaryOp::ShiftRight => {
+                    if type_root_name(&left_type) != "Int" || type_root_name(&right_type) != "Int" {
+                        callback_operator_type_mismatch_diagnostic(
+                            analyzer,
+                            span,
+                            callback_operator_label(*op),
+                            &left_type,
+                            &right_type,
+                            "Int operands",
+                        );
+                    }
+                }
             }
         }
         HirExpr::Call { args, .. } => {
@@ -3106,6 +3135,12 @@ fn callback_operator_label(op: BinaryOp) -> &'static str {
         BinaryOp::Subtract => "-",
         BinaryOp::Multiply => "*",
         BinaryOp::Divide => "/",
+        BinaryOp::Modulo => "%",
+        BinaryOp::BitAnd => "&",
+        BinaryOp::BitOr => "|",
+        BinaryOp::BitXor => "^",
+        BinaryOp::ShiftLeft => "<<",
+        BinaryOp::ShiftRight => ">>",
         BinaryOp::Equal => "==",
         BinaryOp::NotEqual => "!=",
         BinaryOp::Less => "<",
@@ -4242,7 +4277,7 @@ fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
         } => type_name
             .as_deref()
             .or_else(|| builtin_value_type_name(name)),
-        HirExpr::Number { .. } => Some("Int"),
+        HirExpr::Number { value, .. } => Some(crate::hir::number_literal_type_name(value)),
         HirExpr::String { .. } => Some("String"),
         HirExpr::ObjectLiteral { type_name, .. } => type_name.as_deref(),
         HirExpr::ArrayLiteral { type_name, .. } => type_name.as_deref(),

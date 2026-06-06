@@ -119,6 +119,10 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../core/counter/counter.rssi"),
     ),
     ("core/csv/csv.rssi", include_str!("../core/csv/csv.rssi")),
+    (
+        "core/date/date.rssi",
+        include_str!("../core/date/date.rssi"),
+    ),
     ("core/db/db.rssi", include_str!("../core/db/db.rssi")),
     (
         "core/diff/diff.rssi",
@@ -159,6 +163,10 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../core/json/json.rssi"),
     ),
     ("core/log/log.rssi", include_str!("../core/log/log.rssi")),
+    (
+        "core/math/math.rssi",
+        include_str!("../core/math/math.rssi"),
+    ),
     (
         "core/option/option.rssi",
         include_str!("../core/option/option.rssi"),

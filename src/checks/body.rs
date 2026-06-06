@@ -4101,7 +4101,7 @@ fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
         | HirExpr::Match { type_name, .. }
         | HirExpr::MapLiteral { type_name, .. } => type_name.as_deref(),
         HirExpr::Field { access, .. } => access.type_name.as_deref(),
-        HirExpr::Number { .. } => Some("Int"),
+        HirExpr::Number { value, .. } => Some(crate::hir::number_literal_type_name(value)),
         HirExpr::String { .. } => Some("String"),
         HirExpr::Binary { .. } | HirExpr::Index { .. } => None,
         HirExpr::ObjectLiteral { .. }

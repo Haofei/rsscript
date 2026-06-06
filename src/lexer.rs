@@ -5,6 +5,7 @@ pub enum TokenKind {
     Ident(String),
     Number(String),
     String(String),
+    InterpolatedString(String),
     MultilineString(String),
     Keyword(&'static str),
     Symbol(&'static str),
@@ -23,6 +24,7 @@ impl Token {
             TokenKind::Ident(value)
             | TokenKind::Number(value)
             | TokenKind::String(value)
+            | TokenKind::InterpolatedString(value)
             | TokenKind::MultilineString(value) => value.clone(),
             TokenKind::Keyword(value) | TokenKind::Symbol(value) => (*value).to_string(),
             TokenKind::Eof => "<eof>".to_string(),
@@ -70,13 +72,14 @@ impl Lexer<'_> {
                 '"' if self.peek_n(1) == Some('"') && self.peek_n(2) == Some('"') => {
                     self.lex_multiline_string()
                 }
+                '$' if self.peek_next() == Some('"') => self.lex_interpolated_string(),
                 '"' => self.lex_string(),
                 ch if ch.is_ascii_digit() => self.lex_number(),
                 ch if is_ident_start(ch) => self.lex_ident_or_keyword(),
                 '-' if self.peek_next() == Some('>') => self.push_two("->"),
                 '=' if self.peek_next() == Some('>') => self.push_two("=>"),
                 ':' | ',' | '.' | '(' | ')' | '{' | '}' | '<' | '>' | '[' | ']' | '?' | '|'
-                | '&' | '+' | '-' | '*' | '/' | '=' | '!' | ';' | '#' => self.push_one(),
+                | '&' | '~' | '+' | '-' | '*' | '/' | '=' | '!' | ';' | '#' => self.push_one(),
                 _ => self.push_one(),
             }
         }
@@ -162,6 +165,76 @@ impl Lexer<'_> {
         });
     }
 
+    fn lex_interpolated_string(&mut self) {
+        let start_line = self.line;
+        let start_column = self.column;
+        let token_start = self.index;
+        self.bump();
+        self.bump();
+        let start_index = self.index;
+        let mut interpolation_depth = 0usize;
+        while let Some(ch) = self.peek() {
+            if ch == '"' && interpolation_depth == 0 {
+                break;
+            }
+            if ch == '\\' {
+                self.bump();
+                if self.peek().is_some() {
+                    self.bump();
+                }
+                continue;
+            }
+            if interpolation_depth > 0 && ch == '"' {
+                self.bump();
+                while let Some(string_ch) = self.peek() {
+                    if string_ch == '\\' {
+                        self.bump();
+                        if self.peek().is_some() {
+                            self.bump();
+                        }
+                        continue;
+                    }
+                    self.bump();
+                    if string_ch == '"' {
+                        break;
+                    }
+                }
+                continue;
+            }
+            if ch == '{' && interpolation_depth == 0 && self.peek_next() == Some('{') {
+                self.bump();
+                self.bump();
+                continue;
+            }
+            if ch == '}' && interpolation_depth == 0 && self.peek_next() == Some('}') {
+                self.bump();
+                self.bump();
+                continue;
+            }
+            if ch == '{' {
+                interpolation_depth += 1;
+            } else if ch == '}' {
+                interpolation_depth = interpolation_depth.saturating_sub(1);
+            }
+            self.bump();
+        }
+        let value = self.chars[start_index..self.index.min(self.chars.len())]
+            .iter()
+            .collect();
+        if self.peek() == Some('"') {
+            self.bump();
+        }
+        self.tokens.push(Token {
+            kind: TokenKind::InterpolatedString(value),
+            span: Span {
+                file: self.file.to_string(),
+                line: start_line,
+                column: start_column,
+                length: self.index.saturating_sub(token_start).max(1),
+            },
+        });
+    }
+
     fn lex_multiline_string(&mut self) {
         let start_line = self.line;
         let start_column = self.column;
@@ -230,10 +303,13 @@ impl Lexer<'_> {
             '?' => "?",
             '|' => "|",
             '&' => "&",
+            '~' => "~",
+            '^' => "^",
             '+' => "+",
             '-' => "-",
             '*' => "*",
             '/' => "/",
+            '%' => "%",
             '=' => "=",
             '!' => "!",
             ';' => ";",

@@ -29,8 +29,12 @@ regex = "1"
 toml = "0.8"
 serde_yaml_ng = "0.10"
 base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 hex = "0.4"
+hmac = "0.12"
 percent-encoding = "2"
+rand = "0.8"
+uuid = { version = "1", features = ["v4"] }
 
 [build-dependencies]
 serde = { version = "1", features = ["derive"] }

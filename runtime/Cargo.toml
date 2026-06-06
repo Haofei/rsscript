@@ -17,7 +17,9 @@ serde_yaml_ng = "0.10"
 sha2 = "0.10"
 regex = "1"
 base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 hex = "0.4"
+hmac = "0.12"
 uuid = { version = "1", features = ["v4"] }
 rand = "0.8"
 percent-encoding = "2"

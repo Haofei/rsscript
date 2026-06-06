@@ -2167,11 +2167,27 @@ impl<'a> RustLowerer<'a> {
             Expr::Binary {
                 op, left, right, ..
             } => {
+                let binary_op = *op;
+                if matches!(op, BinaryOp::ShiftLeft | BinaryOp::ShiftRight) {
+                    let method = if *op == BinaryOp::ShiftLeft {
+                        "wrapping_shl"
+                    } else {
+                        "wrapping_shr"
+                    };
+                    let left = self.lower_expr(left);
+                    let right = self.lower_expr(right);
+                    return format!("({left} as i64).{method}(({right} as i64).max(0) as u32)");
+                }
                 let op = match op {
                     BinaryOp::Add => "+",
                     BinaryOp::Subtract => "-",
                     BinaryOp::Multiply => "*",
                     BinaryOp::Divide => "/",
+                    BinaryOp::Modulo => "%",
+                    BinaryOp::BitAnd => "&",
+                    BinaryOp::BitOr => "|",
+                    BinaryOp::BitXor => "^",
+                    BinaryOp::ShiftLeft | BinaryOp::ShiftRight => unreachable!(),
                     BinaryOp::Equal => "==",
                     BinaryOp::NotEqual => "!=",
                     BinaryOp::Less => "<",
@@ -2191,7 +2207,11 @@ impl<'a> RustLowerer<'a> {
                         self.lower_string_comparison_operand(right)
                     );
                 }
-                format!("{} {op} {}", self.lower_expr(left), self.lower_expr(right))
+                format!(
+                    "{} {op} {}",
+                    self.lower_binary_operand(left, binary_op, false),
+                    self.lower_binary_operand(right, binary_op, true)
+                )
             }
             Expr::Field { base, name, span } => {
                 if self
@@ -2619,6 +2639,25 @@ impl<'a> RustLowerer<'a> {
                 out
             }
             Expr::Unknown(span) => unreachable_lowering("expression", span),
+        }
+    }
+
+    fn lower_binary_operand(&mut self, expr: &Expr, parent: BinaryOp, is_right: bool) -> String {
+        let lowered = self.lower_expr(expr);
+        let Expr::Binary { op: child, .. } = expr else {
+            return lowered;
+        };
+        let parent_precedence = rust_binary_precedence(parent);
+        let child_precedence = rust_binary_precedence(*child);
+        let chained_comparison =
+            rust_binary_is_comparison(parent) && rust_binary_is_comparison(*child);
+        if child_precedence < parent_precedence
+            || (is_right && child_precedence == parent_precedence)
+            || chained_comparison
+        {
+            format!("({lowered})")
+        } else {
+            lowered
         }
     }
 
@@ -3343,8 +3382,8 @@ impl<'a> RustLowerer<'a> {
                         span: span.clone(),
                     })
             }),
-            Expr::Number(_, span) => Some(TypeRef {
-                name: "Int".to_string(),
+            Expr::Number(value, span) => Some(TypeRef {
+                name: crate::hir::number_literal_type_name(value).to_string(),
                 args: Vec::new(),
                 malformed_arg_spans: Vec::new(),
                 is_fresh: false,
@@ -3367,9 +3406,16 @@ impl<'a> RustLowerer<'a> {
             }),
             Expr::Binary { op, span, .. } => Some(TypeRef {
                 name: match op {
-                    BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide => {
-                        "Int"
-                    }
+                    BinaryOp::Add
+                    | BinaryOp::Subtract
+                    | BinaryOp::Multiply
+                    | BinaryOp::Divide
+                    | BinaryOp::Modulo
+                    | BinaryOp::BitAnd
+                    | BinaryOp::BitOr
+                    | BinaryOp::BitXor
+                    | BinaryOp::ShiftLeft
+                    | BinaryOp::ShiftRight => "Int",
                     BinaryOp::Equal
                     | BinaryOp::NotEqual
                     | BinaryOp::Less
@@ -4773,6 +4819,37 @@ fn expr_contains_try(expr: &Expr) -> bool {
         | Expr::MultilineString(..)
         | Expr::Unknown(_) => false,
     }
+}
+
+fn rust_binary_precedence(op: BinaryOp) -> u8 {
+    match op {
+        BinaryOp::LogicalOr => 1,
+        BinaryOp::LogicalAnd => 2,
+        BinaryOp::BitOr => 3,
+        BinaryOp::BitXor => 4,
+        BinaryOp::BitAnd => 5,
+        BinaryOp::Equal
+        | BinaryOp::NotEqual
+        | BinaryOp::Less
+        | BinaryOp::LessEqual
+        | BinaryOp::Greater
+        | BinaryOp::GreaterEqual => 6,
+        BinaryOp::ShiftLeft | BinaryOp::ShiftRight => 7,
+        BinaryOp::Add | BinaryOp::Subtract => 8,
+        BinaryOp::Multiply | BinaryOp::Divide | BinaryOp::Modulo => 9,
+    }
+}
+
+fn rust_binary_is_comparison(op: BinaryOp) -> bool {
+    matches!(
+        op,
+        BinaryOp::Equal
+            | BinaryOp::NotEqual
+            | BinaryOp::Less
+            | BinaryOp::LessEqual
+            | BinaryOp::Greater
+            | BinaryOp::GreaterEqual
+    )
 }
 
 fn type_ref_from_display(name: &str, span: &Span) -> TypeRef {

@@ -289,6 +289,48 @@ pub fn list_is_empty<T>(list: &[T]) -> bool {
     list.is_empty()
 }
 
+pub fn list_sum(list: &[i64]) -> i64 {
+    list.iter().sum()
+}
+
+pub fn list_min(list: &[i64]) -> Option<i64> {
+    list.iter().copied().min()
+}
+
+pub fn list_max(list: &[i64]) -> Option<i64> {
+    list.iter().copied().max()
+}
+
+pub fn list_flatten<T: Clone>(list: &[Vec<T>]) -> Vec<T> {
+    list.iter()
+        .flat_map(|items| items.iter().cloned())
+        .collect()
+}
+
+pub fn list_dedup<T: Clone + PartialEq>(list: &[T]) -> Vec<T> {
+    let mut result = Vec::new();
+    for item in list {
+        if !result.contains(item) {
+            result.push(item.clone());
+        }
+    }
+    result
+}
+
+pub fn list_zip<T: Clone>(left: &[T], right: &[T]) -> Vec<Vec<T>> {
+    left.iter()
+        .zip(right.iter())
+        .map(|(left, right)| vec![left.clone(), right.clone()])
+        .collect()
+}
+
+pub fn list_enumerate(list: &[i64]) -> Vec<Vec<i64>> {
+    list.iter()
+        .enumerate()
+        .map(|(index, value)| vec![index as i64, *value])
+        .collect()
+}
+
 pub fn list_reverse<T: Clone>(list: &[T]) -> Vec<T> {
     let mut result: Vec<T> = list.to_vec();
     result.reverse();

@@ -24,7 +24,7 @@ fn lower_coverage_report_tracks_ast_and_runtime_surface() {
         "update lower_coverage_report() when FunctionDecl execution-mode fields change"
     );
 
-    assert_bucket_counts(&report.runtime_intrinsics, 526, 526, 0);
+    assert_bucket_counts(&report.runtime_intrinsics, 597, 597, 0);
     assert_bucket_counts(&report.ast_statements, 20, 14, 6);
     assert_bucket_counts(&report.ast_expressions, 19, 17, 2);
     assert_bucket_counts(&report.function_kinds, 3, 3, 0);
@@ -42,12 +42,12 @@ fn lower_coverage_report_tracks_ast_and_runtime_surface() {
 fn vm_coverage_gap_is_explicit() {
     let vm = vm_coverage_report();
 
-    assert_bucket_counts(&vm.runtime_intrinsics, 526, 526, 0);
+    assert_bucket_counts(&vm.runtime_intrinsics, 597, 597, 0);
     assert_bucket_counts(&vm.hir_statements, 12, 12, 0);
     assert_bucket_counts(&vm.hir_expressions, 17, 17, 0);
-    assert_bucket_counts(&vm.value_types, 14, 14, 0);
+    assert_bucket_counts(&vm.value_types, 15, 15, 0);
     assert_bucket_counts(&vm.function_kinds, 3, 3, 0);
-    assert_bucket_counts(&vm.parity_features, 572, 572, 0);
+    assert_bucket_counts(&vm.parity_features, 644, 644, 0);
 
     assert!(vm.runtime_intrinsics.missing.is_empty());
     assert!(vm.hir_statements.missing.is_empty());

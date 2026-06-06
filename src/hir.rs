@@ -413,6 +413,10 @@ pub enum HirExpr {
     Unknown(Span),
 }
 
+pub(crate) fn number_literal_type_name(value: &str) -> &'static str {
+    if value.contains('.') { "Float" } else { "Int" }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HirObjectLiteralField {
     pub name: String,
@@ -2253,7 +2257,7 @@ pub(crate) fn infer_hir_expr_type(
                 .map(|field| field.type_name.clone())
         }
         Expr::Index { .. } => None,
-        Expr::Number(_, _) => Some("Int".to_string()),
+        Expr::Number(value, _) => Some(number_literal_type_name(value).to_string()),
         Expr::String(_, _) | Expr::MultilineString(_, _) => Some("String".to_string()),
         Expr::ObjectLiteral { .. } => Some("JsonLiteral".to_string()),
         Expr::MapLiteral { .. } => Some("MapLiteral".to_string()),

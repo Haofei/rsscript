@@ -1,7 +1,10 @@
+use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use std::io::Read;
 
 use crate::fs::RuntimePath;
+
+type HmacSha256 = Hmac<Sha256>;
 
 pub fn hash_sha256_string(value: &str) -> String {
     let mut hasher = Sha256::new();
@@ -27,4 +30,18 @@ pub fn hash_sha256_file<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<St
         hasher.update(&buffer[..bytes_read]);
     }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+pub fn hmac_sha256_string(key: &str, value: &str) -> String {
+    hmac_sha256_digest(key.as_bytes(), value.as_bytes())
+}
+
+pub fn hmac_sha256_bytes(key: &[u8], value: &[u8]) -> String {
+    hmac_sha256_digest(key, value)
+}
+
+fn hmac_sha256_digest(key: &[u8], value: &[u8]) -> String {
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(value);
+    format!("{:x}", mac.finalize().into_bytes())
 }

@@ -7,7 +7,10 @@ use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 
 use base64::Engine;
+use chrono::{DateTime, Datelike, NaiveDate, SecondsFormat, TimeZone, Timelike, Utc};
+use hmac::{Hmac, Mac};
 use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
+use rand::Rng;
 use sha2::{Digest, Sha256};
 
 use crate::diagnostic::Severity;
@@ -18,6 +21,8 @@ use crate::package::package_lowering_input;
 use crate::syntax::ast::{BinaryOp, Callee, MatchPattern, merge_programs};
 use crate::syntax::parse_source;
 use crate::vm_value::{VmClosure, VmMapKey, VmNative, VmStruct, VmValue};
+
+const MS_PER_DAY: i64 = 86_400_000;
 
 const URL_COMPONENT_SET: &percent_encoding::AsciiSet = &NON_ALPHANUMERIC
     .remove(b'-')
@@ -205,6 +210,10 @@ enum RegInstr {
         dst: Reg,
         value: i64,
     },
+    LoadFloat {
+        dst: Reg,
+        value: f64,
+    },
     LoadBool {
         dst: Reg,
         value: bool,
@@ -267,6 +276,36 @@ enum RegInstr {
         rhs: Reg,
     },
     DivInt {
+        dst: Reg,
+        lhs: Reg,
+        rhs: Reg,
+    },
+    ModInt {
+        dst: Reg,
+        lhs: Reg,
+        rhs: Reg,
+    },
+    BitAndInt {
+        dst: Reg,
+        lhs: Reg,
+        rhs: Reg,
+    },
+    BitOrInt {
+        dst: Reg,
+        lhs: Reg,
+        rhs: Reg,
+    },
+    BitXorInt {
+        dst: Reg,
+        lhs: Reg,
+        rhs: Reg,
+    },
+    ShiftLeftInt {
+        dst: Reg,
+        lhs: Reg,
+        rhs: Reg,
+    },
+    ShiftRightInt {
         dst: Reg,
         lhs: Reg,
         rhs: Reg,
@@ -625,9 +664,13 @@ enum RegIntrinsic {
     CharIsAlphanumeric,
     CharIsAlpha,
     CharIsDigit,
+    CharIsLower,
+    CharIsUpper,
     CharIsWhitespace,
     CharToCode,
+    CharToLower,
     CharToString,
+    CharToUpper,
     ClockNow,
     ClockSystemUnixMs,
     ConfigLoad,
@@ -642,6 +685,23 @@ enum RegIntrinsic {
     CsvParseRow,
     CsvReadInto,
     CsvRows,
+    DateAddDays,
+    DateAddMs,
+    DateDay,
+    DateDaysBetween,
+    DateDaysInMonth,
+    DateFormatIso,
+    DateFormatYmd,
+    DateHour,
+    DateIsLeapYear,
+    DateMinute,
+    DateMonth,
+    DateParseIso,
+    DateParseYmd,
+    DateSecond,
+    DateStartOfDay,
+    DateWeekday,
+    DateYear,
     DecodeErrorMessage,
     DeadlineAfter,
     DeadlineAfterMs,
@@ -725,6 +785,8 @@ enum RegIntrinsic {
     HashSha256Bytes,
     HashSha256File,
     HashSha256String,
+    HmacSha256Bytes,
+    HmacSha256String,
     GlobalConfigNew,
     GlobalConfigRuleCount,
     HexDecode,
@@ -758,7 +820,31 @@ enum RegIntrinsic {
     ImageSave,
     ImageSharpen,
     InstantElapsed,
+    FloatToString,
+    FloatIsFinite,
+    FloatIsInfinite,
+    FloatIsNan,
     IntToString,
+    IntBitAnd,
+    IntBitNot,
+    IntBitOr,
+    IntBitXor,
+    IntShiftLeft,
+    IntShiftRight,
+    MathAbs,
+    MathAbsFloat,
+    MathCeil,
+    MathClamp,
+    MathClampFloat,
+    MathFloor,
+    MathMax,
+    MathMaxFloat,
+    MathMin,
+    MathMinFloat,
+    MathPow,
+    MathPowFloat,
+    MathRound,
+    MathSqrt,
     JsonArray,
     JsonArrayBools,
     JsonArrayContainsPrefix,
@@ -830,20 +916,27 @@ enum RegIntrinsic {
     ListContains,
     ListContainsValue,
     ListCountWhere,
+    ListEnumerate,
     ListFind,
     ListFlatMap,
+    ListFlatten,
     ListFirst,
     ListGroupBy,
     ListIsEmpty,
     ListJoin,
     ListLast,
+    ListDedup,
+    ListMax,
+    ListMin,
     ListNew,
     ListPartition,
     ListPipeline,
     ListReverse,
     ListSkip,
     ListSlice,
+    ListSum,
     ListTake,
+    ListZip,
     ListToJsonStrings,
     ListToJsonValues,
     ListTryFold,
@@ -928,6 +1021,11 @@ enum RegIntrinsic {
     ProcessRunTimeout,
     ProcessRunTimeoutAsync,
     ProcessStream,
+    RandomBool,
+    RandomBytes,
+    RandomFloat,
+    RandomInt,
+    RandomString,
     RegexCaptures,
     RegexCompile,
     RegexErrorMessage,
@@ -987,20 +1085,29 @@ enum RegIntrinsic {
     StringAfter,
     StringBefore,
     StringBuilderNew,
+    StringCharAt,
     StringChars,
     StringContains,
+    StringCount,
     StringCopy,
     StringEndsWith,
     StringFromBool,
+    StringFromFloat,
+    StringFormat,
     StringIndexOf,
     StringFromInt,
     StringIsEmpty,
     StringJoin,
     StringLines,
     StringLen,
+    StringPadLeft,
+    StringPadRight,
+    StringParseFloat,
     StringParseInt,
     StringRepeat,
     StringReplace,
+    StringReplaceFirst,
+    StringReverse,
     StringSlice,
     StringSplit,
     StringStartsWith,
@@ -1008,6 +1115,8 @@ enum RegIntrinsic {
     StringToLowercase,
     StringToUppercase,
     StringTrim,
+    StringTrimEnd,
+    StringTrimStart,
     StreamCollectList,
     StreamFromList,
     StreamNext,
@@ -1025,6 +1134,7 @@ enum RegIntrinsic {
     TempDirNewIn,
     TempDirPath,
     TomlParseFile,
+    UuidNewV4,
     UrlDecodeComponent,
     UrlEncodeComponent,
     UrlFromString,
@@ -1666,11 +1776,18 @@ impl RegLowerer<'_> {
             }
             HirExpr::Ident { name, .. } => self.lookup_local(name),
             HirExpr::Number { value, .. } => {
-                let value = value.parse::<i64>().map_err(|error| {
-                    EvalError::Runtime(format!("invalid reg VM integer `{value}`: {error}"))
-                })?;
                 let dst = self.temp();
-                self.emit(RegInstr::LoadInt { dst, value });
+                if value.contains('.') {
+                    let value = value.parse::<f64>().map_err(|error| {
+                        EvalError::Runtime(format!("invalid reg VM float `{value}`: {error}"))
+                    })?;
+                    self.emit(RegInstr::LoadFloat { dst, value });
+                } else {
+                    let value = value.parse::<i64>().map_err(|error| {
+                        EvalError::Runtime(format!("invalid reg VM integer `{value}`: {error}"))
+                    })?;
+                    self.emit(RegInstr::LoadInt { dst, value });
+                }
                 Ok(dst)
             }
             HirExpr::String { value, .. } => {
@@ -1722,6 +1839,12 @@ impl RegLowerer<'_> {
                     BinaryOp::Subtract => RegInstr::SubInt { dst, lhs, rhs },
                     BinaryOp::Multiply => RegInstr::MulInt { dst, lhs, rhs },
                     BinaryOp::Divide => RegInstr::DivInt { dst, lhs, rhs },
+                    BinaryOp::Modulo => RegInstr::ModInt { dst, lhs, rhs },
+                    BinaryOp::BitAnd => RegInstr::BitAndInt { dst, lhs, rhs },
+                    BinaryOp::BitOr => RegInstr::BitOrInt { dst, lhs, rhs },
+                    BinaryOp::BitXor => RegInstr::BitXorInt { dst, lhs, rhs },
+                    BinaryOp::ShiftLeft => RegInstr::ShiftLeftInt { dst, lhs, rhs },
+                    BinaryOp::ShiftRight => RegInstr::ShiftRightInt { dst, lhs, rhs },
                     BinaryOp::Less => RegInstr::LessInt { dst, lhs, rhs },
                     BinaryOp::LessEqual => RegInstr::LessEqualInt { dst, lhs, rhs },
                     BinaryOp::Greater => RegInstr::GreaterInt { dst, lhs, rhs },
@@ -1879,6 +2002,38 @@ impl RegLowerer<'_> {
                 .map(|arg| self.expr(&arg.value))
                 .collect::<Result<Vec<_>, _>>()?;
             match (type_root_name(namespace), type_root_name(method)) {
+                ("Float", "to_string") => {
+                    self.emit(RegInstr::CallIntrinsic {
+                        dst,
+                        intrinsic: RegIntrinsic::FloatToString,
+                        args: vec![receiver_reg],
+                    });
+                    return Ok(dst);
+                }
+                ("Float", "is_finite") => {
+                    self.emit(RegInstr::CallIntrinsic {
+                        dst,
+                        intrinsic: RegIntrinsic::FloatIsFinite,
+                        args: vec![receiver_reg],
+                    });
+                    return Ok(dst);
+                }
+                ("Float", "is_infinite") => {
+                    self.emit(RegInstr::CallIntrinsic {
+                        dst,
+                        intrinsic: RegIntrinsic::FloatIsInfinite,
+                        args: vec![receiver_reg],
+                    });
+                    return Ok(dst);
+                }
+                ("Float", "is_nan") => {
+                    self.emit(RegInstr::CallIntrinsic {
+                        dst,
+                        intrinsic: RegIntrinsic::FloatIsNan,
+                        args: vec![receiver_reg],
+                    });
+                    return Ok(dst);
+                }
                 ("Int", "to_string") => {
                     self.emit(RegInstr::CallIntrinsic {
                         dst,
@@ -2181,9 +2336,13 @@ impl RegLowerer<'_> {
                     ("Char", "is_alphanumeric") => RegIntrinsic::CharIsAlphanumeric,
                     ("Char", "is_alpha") => RegIntrinsic::CharIsAlpha,
                     ("Char", "is_digit") => RegIntrinsic::CharIsDigit,
+                    ("Char", "is_lower") => RegIntrinsic::CharIsLower,
+                    ("Char", "is_upper") => RegIntrinsic::CharIsUpper,
                     ("Char", "is_whitespace") => RegIntrinsic::CharIsWhitespace,
                     ("Char", "to_code") => RegIntrinsic::CharToCode,
+                    ("Char", "to_lower") => RegIntrinsic::CharToLower,
                     ("Char", "to_string") => RegIntrinsic::CharToString,
+                    ("Char", "to_upper") => RegIntrinsic::CharToUpper,
                     ("Clock", "now") => RegIntrinsic::ClockNow,
                     ("Clock", "system_unix_ms") => RegIntrinsic::ClockSystemUnixMs,
                     ("Config", "load") => RegIntrinsic::ConfigLoad,
@@ -2322,6 +2481,23 @@ impl RegLowerer<'_> {
                     ("DbConnection", "open") => RegIntrinsic::DbConnectionOpen,
                     ("DbConnection", "query") => RegIntrinsic::DbConnectionQuery,
                     ("DbConnection", "try_open") => RegIntrinsic::DbConnectionTryOpen,
+                    ("Date", "add_days") => RegIntrinsic::DateAddDays,
+                    ("Date", "add_ms") => RegIntrinsic::DateAddMs,
+                    ("Date", "day") => RegIntrinsic::DateDay,
+                    ("Date", "days_between") => RegIntrinsic::DateDaysBetween,
+                    ("Date", "days_in_month") => RegIntrinsic::DateDaysInMonth,
+                    ("Date", "format_iso") => RegIntrinsic::DateFormatIso,
+                    ("Date", "format_ymd") => RegIntrinsic::DateFormatYmd,
+                    ("Date", "hour") => RegIntrinsic::DateHour,
+                    ("Date", "is_leap_year") => RegIntrinsic::DateIsLeapYear,
+                    ("Date", "minute") => RegIntrinsic::DateMinute,
+                    ("Date", "month") => RegIntrinsic::DateMonth,
+                    ("Date", "parse_iso") => RegIntrinsic::DateParseIso,
+                    ("Date", "parse_ymd") => RegIntrinsic::DateParseYmd,
+                    ("Date", "second") => RegIntrinsic::DateSecond,
+                    ("Date", "start_of_day") => RegIntrinsic::DateStartOfDay,
+                    ("Date", "weekday") => RegIntrinsic::DateWeekday,
+                    ("Date", "year") => RegIntrinsic::DateYear,
                     ("Duration", "add") => RegIntrinsic::DurationAdd,
                     ("Duration", "as_ms") => RegIntrinsic::DurationAsMs,
                     ("Duration", "as_seconds") => RegIntrinsic::DurationAsSeconds,
@@ -2376,6 +2552,8 @@ impl RegLowerer<'_> {
                     ("Hash", "sha256_bytes") => RegIntrinsic::HashSha256Bytes,
                     ("Hash", "sha256_file") => RegIntrinsic::HashSha256File,
                     ("Hash", "sha256_string") => RegIntrinsic::HashSha256String,
+                    ("Hmac", "sha256_bytes") => RegIntrinsic::HmacSha256Bytes,
+                    ("Hmac", "sha256_string") => RegIntrinsic::HmacSha256String,
                     ("GlobalConfig", "new") => RegIntrinsic::GlobalConfigNew,
                     ("GlobalConfig", "replace") => {
                         if arg_regs.len() != 2 {
@@ -2425,7 +2603,31 @@ impl RegLowerer<'_> {
                     ("Image", "save") => RegIntrinsic::ImageSave,
                     ("Image", "sharpen") => RegIntrinsic::ImageSharpen,
                     ("Instant", "elapsed") => RegIntrinsic::InstantElapsed,
+                    ("Float", "is_finite") => RegIntrinsic::FloatIsFinite,
+                    ("Float", "is_infinite") => RegIntrinsic::FloatIsInfinite,
+                    ("Float", "is_nan") => RegIntrinsic::FloatIsNan,
+                    ("Float", "to_string") => RegIntrinsic::FloatToString,
+                    ("Int", "bit_and") => RegIntrinsic::IntBitAnd,
+                    ("Int", "bit_not") => RegIntrinsic::IntBitNot,
+                    ("Int", "bit_or") => RegIntrinsic::IntBitOr,
+                    ("Int", "bit_xor") => RegIntrinsic::IntBitXor,
+                    ("Int", "shift_left") => RegIntrinsic::IntShiftLeft,
+                    ("Int", "shift_right") => RegIntrinsic::IntShiftRight,
                     ("Int", "to_string") => RegIntrinsic::IntToString,
+                    ("Math", "abs") => RegIntrinsic::MathAbs,
+                    ("Math", "abs_float") => RegIntrinsic::MathAbsFloat,
+                    ("Math", "ceil") => RegIntrinsic::MathCeil,
+                    ("Math", "clamp") => RegIntrinsic::MathClamp,
+                    ("Math", "clamp_float") => RegIntrinsic::MathClampFloat,
+                    ("Math", "floor") => RegIntrinsic::MathFloor,
+                    ("Math", "max") => RegIntrinsic::MathMax,
+                    ("Math", "max_float") => RegIntrinsic::MathMaxFloat,
+                    ("Math", "min") => RegIntrinsic::MathMin,
+                    ("Math", "min_float") => RegIntrinsic::MathMinFloat,
+                    ("Math", "pow") => RegIntrinsic::MathPow,
+                    ("Math", "pow_float") => RegIntrinsic::MathPowFloat,
+                    ("Math", "round") => RegIntrinsic::MathRound,
+                    ("Math", "sqrt") => RegIntrinsic::MathSqrt,
                     ("Json", "array") => RegIntrinsic::JsonArray,
                     ("Json", "array_bools") => RegIntrinsic::JsonArrayBools,
                     ("Json", "array_contains_prefix") => RegIntrinsic::JsonArrayContainsPrefix,
@@ -2532,6 +2734,7 @@ impl RegLowerer<'_> {
                     ("List", "consume") => RegIntrinsic::ListConsume,
                     ("List", "find") => RegIntrinsic::ListFind,
                     ("List", "flat_map") => RegIntrinsic::ListFlatMap,
+                    ("List", "flatten") => RegIntrinsic::ListFlatten,
                     ("List", "first") => RegIntrinsic::ListFirst,
                     ("List", "filter") => {
                         if arg_regs.len() != 2 {
@@ -2607,6 +2810,10 @@ impl RegLowerer<'_> {
                     ("List", "join") => RegIntrinsic::ListJoin,
                     ("List", "group_by") => RegIntrinsic::ListGroupBy,
                     ("List", "last") => RegIntrinsic::ListLast,
+                    ("List", "dedup") => RegIntrinsic::ListDedup,
+                    ("List", "enumerate") => RegIntrinsic::ListEnumerate,
+                    ("List", "max") => RegIntrinsic::ListMax,
+                    ("List", "min") => RegIntrinsic::ListMin,
                     ("List", "new") => RegIntrinsic::ListNew,
                     ("List", "partition") => RegIntrinsic::ListPartition,
                     ("List", "pipeline") => RegIntrinsic::ListPipeline,
@@ -2655,6 +2862,8 @@ impl RegLowerer<'_> {
                     }
                     ("List", "skip") => RegIntrinsic::ListSkip,
                     ("List", "slice") => RegIntrinsic::ListSlice,
+                    ("List", "sum") => RegIntrinsic::ListSum,
+                    ("List", "zip") => RegIntrinsic::ListZip,
                     ("List", "sort") => {
                         if arg_regs.len() != 1 {
                             return Err(EvalError::Runtime(format!(
@@ -2875,6 +3084,11 @@ impl RegLowerer<'_> {
                     ("Process", "run_timeout") => RegIntrinsic::ProcessRunTimeout,
                     ("Process", "run_timeout_async") => RegIntrinsic::ProcessRunTimeoutAsync,
                     ("Process", "stream") => RegIntrinsic::ProcessStream,
+                    ("Random", "bool") => RegIntrinsic::RandomBool,
+                    ("Random", "bytes") => RegIntrinsic::RandomBytes,
+                    ("Random", "float") => RegIntrinsic::RandomFloat,
+                    ("Random", "int") => RegIntrinsic::RandomInt,
+                    ("Random", "string") => RegIntrinsic::RandomString,
                     ("Pipeline", "filter") => {
                         if arg_regs.len() != 2 {
                             return Err(EvalError::Runtime(format!(
@@ -3113,12 +3327,16 @@ impl RegLowerer<'_> {
                     ("SortedMap", "values") => RegIntrinsic::SortedMapValues,
                     ("String", "after") => RegIntrinsic::StringAfter,
                     ("String", "before") => RegIntrinsic::StringBefore,
+                    ("String", "char_at") => RegIntrinsic::StringCharAt,
                     ("String", "contains") => RegIntrinsic::StringContains,
+                    ("String", "count") => RegIntrinsic::StringCount,
                     ("String", "copy") => RegIntrinsic::StringCopy,
                     ("String", "ends_with") => RegIntrinsic::StringEndsWith,
                     ("String", "env") => RegIntrinsic::EnvGet,
                     ("String", "env_or") => RegIntrinsic::EnvGetOrDefault,
+                    ("String", "format") => RegIntrinsic::StringFormat,
                     ("String", "from_bool") => RegIntrinsic::StringFromBool,
+                    ("String", "from_float") => RegIntrinsic::StringFromFloat,
                     ("String", "from_int") => RegIntrinsic::StringFromInt,
                     ("String", "index_of") => RegIntrinsic::StringIndexOf,
                     ("String", "is_empty") => RegIntrinsic::StringIsEmpty,
@@ -3126,9 +3344,14 @@ impl RegLowerer<'_> {
                     ("String", "lines") => RegIntrinsic::StringLines,
                     ("String", "chars") => RegIntrinsic::StringChars,
                     ("String", "len") => RegIntrinsic::StringLen,
+                    ("String", "pad_left") => RegIntrinsic::StringPadLeft,
+                    ("String", "pad_right") => RegIntrinsic::StringPadRight,
+                    ("String", "parse_float") => RegIntrinsic::StringParseFloat,
                     ("String", "parse_int") => RegIntrinsic::StringParseInt,
                     ("String", "repeat") => RegIntrinsic::StringRepeat,
                     ("String", "replace") => RegIntrinsic::StringReplace,
+                    ("String", "replace_first") => RegIntrinsic::StringReplaceFirst,
+                    ("String", "reverse") => RegIntrinsic::StringReverse,
                     ("String", "slice") | ("String", "view") => RegIntrinsic::StringSlice,
                     ("String", "split") => RegIntrinsic::StringSplit,
                     ("String", "starts_with") => RegIntrinsic::StringStartsWith,
@@ -3140,6 +3363,8 @@ impl RegLowerer<'_> {
                     ("String", "to_lowercase") => RegIntrinsic::StringToLowercase,
                     ("String", "to_uppercase") => RegIntrinsic::StringToUppercase,
                     ("String", "trim") => RegIntrinsic::StringTrim,
+                    ("String", "trim_end") => RegIntrinsic::StringTrimEnd,
+                    ("String", "trim_start") => RegIntrinsic::StringTrimStart,
                     ("TcpError", "message") => RegIntrinsic::TcpErrorMessage,
                     ("Toml", "parse_file") => RegIntrinsic::TomlParseFile,
                     ("StringBuilder", "finish") => RegIntrinsic::StringCopy,
@@ -3188,6 +3413,7 @@ impl RegLowerer<'_> {
                     ("Url", "encode_component") => RegIntrinsic::UrlEncodeComponent,
                     ("Url", "from_string") => RegIntrinsic::UrlFromString,
                     ("Url", "to_string") => RegIntrinsic::UrlToString,
+                    ("Uuid", "new_v4") => RegIntrinsic::UuidNewV4,
                     ("Workspace", "resolve") => RegIntrinsic::PathResolveRelative,
                     ("WebSocket", "close") => RegIntrinsic::WebSocketClose,
                     ("WebSocket", "connect") => RegIntrinsic::WebSocketConnect,
@@ -3903,7 +4129,8 @@ impl RegVm {
         let function_id = self.unit.function_ids.get(name).copied().ok_or_else(|| {
             EvalError::Runtime(format!("reg VM cannot resolve function `{name}`."))
         })?;
-        let function = Rc::clone(&self.unit.functions[function_id]);
+        let unit = Rc::clone(&self.unit);
+        let function = &unit.functions[function_id];
         let expected_args = function.captures + function.params;
         if args.len() != expected_args {
             return Err(EvalError::Runtime(format!(
@@ -3918,7 +4145,7 @@ impl RegVm {
         for (index, arg) in args.into_iter().enumerate() {
             self.stack[base + index] = arg;
         }
-        self.run_frame(&function, base)
+        self.run_frame(&unit, function, base)
     }
 
     // Shared register stack with frame windows. Each frame owns
@@ -3928,7 +4155,12 @@ impl RegVm {
     // neither zero-filled on entry nor cleared on return: lowering guarantees
     // every register is written before it is read, so stale slots are
     // overwritten lazily by the next frame that reuses them.
-    fn run_frame(&mut self, function: &RegFunction, base: usize) -> Result<VmValue, EvalError> {
+    fn run_frame(
+        &mut self,
+        unit: &RegUnit,
+        function: &RegFunction,
+        base: usize,
+    ) -> Result<VmValue, EvalError> {
         self.ensure_regs(base + function.regs);
         let next_base = base + function.regs;
         let mut ip = 0usize;
@@ -3937,6 +4169,9 @@ impl RegVm {
             match instr {
                 RegInstr::LoadUnit { dst } => self.set_reg(base + *dst, VmValue::Unit),
                 RegInstr::LoadInt { dst, value } => self.set_reg(base + *dst, VmValue::Int(*value)),
+                RegInstr::LoadFloat { dst, value } => {
+                    self.set_reg(base + *dst, VmValue::Float(*value))
+                }
                 RegInstr::LoadBool { dst, value } => {
                     self.set_reg(base + *dst, VmValue::Bool(*value))
                 }
@@ -3974,7 +4209,7 @@ impl RegVm {
                 }
                 RegInstr::ResourceDrop { resource } => {
                     let value = self.reg(base + *resource).clone();
-                    self.run_resource_drop(value, next_base)?;
+                    self.run_resource_drop(unit, value, next_base)?;
                 }
                 RegInstr::MakeVariant { dst, name, value } => {
                     let mut fields = HashMap::new();
@@ -4016,44 +4251,98 @@ impl RegVm {
                     self.set_reg(base + *dst, VmValue::Map(Rc::new(RefCell::new(map))));
                 }
                 RegInstr::AddInt { dst, lhs, rhs } => {
-                    let l = expect_int_ref(self.reg(base + *lhs))?;
-                    let r = expect_int_ref(self.reg(base + *rhs))?;
-                    self.set_reg(base + *dst, VmValue::Int(l + r));
+                    let value = eval_numeric_binary(
+                        BinaryOp::Add,
+                        self.reg(base + *lhs),
+                        self.reg(base + *rhs),
+                    )?;
+                    self.set_reg(base + *dst, value);
                 }
                 RegInstr::SubInt { dst, lhs, rhs } => {
-                    let l = expect_int_ref(self.reg(base + *lhs))?;
-                    let r = expect_int_ref(self.reg(base + *rhs))?;
-                    self.set_reg(base + *dst, VmValue::Int(l - r));
+                    let value = eval_numeric_binary(
+                        BinaryOp::Subtract,
+                        self.reg(base + *lhs),
+                        self.reg(base + *rhs),
+                    )?;
+                    self.set_reg(base + *dst, value);
                 }
                 RegInstr::MulInt { dst, lhs, rhs } => {
-                    let l = expect_int_ref(self.reg(base + *lhs))?;
-                    let r = expect_int_ref(self.reg(base + *rhs))?;
-                    self.set_reg(base + *dst, VmValue::Int(l * r));
+                    let value = eval_numeric_binary(
+                        BinaryOp::Multiply,
+                        self.reg(base + *lhs),
+                        self.reg(base + *rhs),
+                    )?;
+                    self.set_reg(base + *dst, value);
                 }
                 RegInstr::DivInt { dst, lhs, rhs } => {
+                    let value = eval_numeric_binary(
+                        BinaryOp::Divide,
+                        self.reg(base + *lhs),
+                        self.reg(base + *rhs),
+                    )?;
+                    self.set_reg(base + *dst, value);
+                }
+                RegInstr::ModInt { dst, lhs, rhs } => {
                     let l = expect_int_ref(self.reg(base + *lhs))?;
                     let r = expect_int_ref(self.reg(base + *rhs))?;
-                    self.set_reg(base + *dst, VmValue::Int(l / r));
+                    self.set_reg(base + *dst, VmValue::Int(l % r));
+                }
+                RegInstr::BitAndInt { dst, lhs, rhs } => {
+                    let l = expect_int_ref(self.reg(base + *lhs))?;
+                    let r = expect_int_ref(self.reg(base + *rhs))?;
+                    self.set_reg(base + *dst, VmValue::Int(l & r));
+                }
+                RegInstr::BitOrInt { dst, lhs, rhs } => {
+                    let l = expect_int_ref(self.reg(base + *lhs))?;
+                    let r = expect_int_ref(self.reg(base + *rhs))?;
+                    self.set_reg(base + *dst, VmValue::Int(l | r));
+                }
+                RegInstr::BitXorInt { dst, lhs, rhs } => {
+                    let l = expect_int_ref(self.reg(base + *lhs))?;
+                    let r = expect_int_ref(self.reg(base + *rhs))?;
+                    self.set_reg(base + *dst, VmValue::Int(l ^ r));
+                }
+                RegInstr::ShiftLeftInt { dst, lhs, rhs } => {
+                    let l = expect_int_ref(self.reg(base + *lhs))?;
+                    let r = expect_int_ref(self.reg(base + *rhs))?;
+                    self.set_reg(base + *dst, VmValue::Int(l.wrapping_shl(r.max(0) as u32)));
+                }
+                RegInstr::ShiftRightInt { dst, lhs, rhs } => {
+                    let l = expect_int_ref(self.reg(base + *lhs))?;
+                    let r = expect_int_ref(self.reg(base + *rhs))?;
+                    self.set_reg(base + *dst, VmValue::Int(l.wrapping_shr(r.max(0) as u32)));
                 }
                 RegInstr::LessInt { dst, lhs, rhs } => {
-                    let l = expect_int_ref(self.reg(base + *lhs))?;
-                    let r = expect_int_ref(self.reg(base + *rhs))?;
-                    self.set_reg(base + *dst, VmValue::Bool(l < r));
+                    let value = eval_numeric_compare(
+                        RegIntCompare::Less,
+                        self.reg(base + *lhs),
+                        self.reg(base + *rhs),
+                    )?;
+                    self.set_reg(base + *dst, VmValue::Bool(value));
                 }
                 RegInstr::LessEqualInt { dst, lhs, rhs } => {
-                    let l = expect_int_ref(self.reg(base + *lhs))?;
-                    let r = expect_int_ref(self.reg(base + *rhs))?;
-                    self.set_reg(base + *dst, VmValue::Bool(l <= r));
+                    let value = eval_numeric_compare(
+                        RegIntCompare::LessEqual,
+                        self.reg(base + *lhs),
+                        self.reg(base + *rhs),
+                    )?;
+                    self.set_reg(base + *dst, VmValue::Bool(value));
                 }
                 RegInstr::GreaterInt { dst, lhs, rhs } => {
-                    let l = expect_int_ref(self.reg(base + *lhs))?;
-                    let r = expect_int_ref(self.reg(base + *rhs))?;
-                    self.set_reg(base + *dst, VmValue::Bool(l > r));
+                    let value = eval_numeric_compare(
+                        RegIntCompare::Greater,
+                        self.reg(base + *lhs),
+                        self.reg(base + *rhs),
+                    )?;
+                    self.set_reg(base + *dst, VmValue::Bool(value));
                 }
                 RegInstr::GreaterEqualInt { dst, lhs, rhs } => {
-                    let l = expect_int_ref(self.reg(base + *lhs))?;
-                    let r = expect_int_ref(self.reg(base + *rhs))?;
-                    self.set_reg(base + *dst, VmValue::Bool(l >= r));
+                    let value = eval_numeric_compare(
+                        RegIntCompare::GreaterEqual,
+                        self.reg(base + *lhs),
+                        self.reg(base + *rhs),
+                    )?;
+                    self.set_reg(base + *dst, VmValue::Bool(value));
                 }
                 RegInstr::Equal { dst, lhs, rhs } => {
                     let eq = self.reg(base + *lhs) == self.reg(base + *rhs);
@@ -4205,13 +4494,13 @@ impl RegVm {
                     function: callee_id,
                     args,
                 } => {
-                    let callee = Rc::clone(&self.unit.functions[*callee_id]);
+                    let callee = &unit.functions[*callee_id];
                     self.ensure_regs(next_base + callee.regs);
                     for (index, reg) in args.iter().enumerate() {
                         let value = self.reg(base + *reg).clone();
                         self.set_reg(next_base + index, value);
                     }
-                    let result = self.run_frame(&callee, next_base)?;
+                    let result = self.run_frame(unit, callee, next_base)?;
                     self.set_reg(base + *dst, result);
                 }
                 RegInstr::CallNative { dst, key, args } => {
@@ -4228,7 +4517,8 @@ impl RegVm {
                             )));
                         }
                     };
-                    let result = self.call_closure_from_regs(&closure, args, base, next_base)?;
+                    let result =
+                        self.call_closure_from_regs(unit, &closure, args, base, next_base)?;
                     self.set_reg(base + *dst, result);
                 }
                 RegInstr::ListFilter {
@@ -4238,7 +4528,7 @@ impl RegVm {
                 } => {
                     let list = expect_list_ref(self.reg(base + *list))?;
                     let predicate = expect_closure_rc(self.reg(base + *predicate))?;
-                    let result = self.filter_list(list, &predicate, next_base)?;
+                    let result = self.filter_list(unit, list, &predicate, next_base)?;
                     self.set_reg(base + *dst, result);
                 }
                 RegInstr::ListFold {
@@ -4250,7 +4540,7 @@ impl RegVm {
                     let list = expect_list_ref(self.reg(base + *list))?;
                     let state = self.reg(base + *state).clone();
                     let folder = expect_closure_rc(self.reg(base + *folder))?;
-                    let result = self.fold_list(list, state, &folder, next_base)?;
+                    let result = self.fold_list(unit, list, state, &folder, next_base)?;
                     self.set_reg(base + *dst, result);
                 }
                 RegInstr::ListGet { dst, list, index } => {
@@ -4268,7 +4558,7 @@ impl RegVm {
                 RegInstr::ListMap { dst, list, mapper } => {
                     let list = expect_list_ref(self.reg(base + *list))?;
                     let mapper = expect_closure_rc(self.reg(base + *mapper))?;
-                    let result = self.map_list(list, &mapper, next_base)?;
+                    let result = self.map_list(unit, list, &mapper, next_base)?;
                     self.set_reg(base + *dst, result);
                 }
                 RegInstr::ListPush { dst, list, value } => {
@@ -4348,14 +4638,15 @@ impl RegVm {
                     let values = expect_list_ref(self.reg(base + *list))?.borrow().clone();
                     let key = expect_closure_rc(self.reg(base + *key))?;
                     let compare = expect_closure_rc(self.reg(base + *compare))?;
-                    let sorted = self.sort_list_by_closure(values, &key, &compare, next_base)?;
+                    let sorted =
+                        self.sort_list_by_closure(unit, values, &key, &compare, next_base)?;
                     self.set_reg(base + *dst, VmValue::List(Rc::new(RefCell::new(sorted))));
                 }
                 RegInstr::ListSortWith { dst, list, compare } => {
                     let list_reg = base + *list;
                     let mut values = expect_list_ref(self.reg(list_reg))?.borrow().clone();
                     let compare = expect_closure_rc(self.reg(base + *compare))?;
-                    self.sort_list_with_closure(&mut values, &compare, next_base)?;
+                    self.sort_list_with_closure(unit, &mut values, &compare, next_base)?;
                     self.set_reg(list_reg, VmValue::List(Rc::new(RefCell::new(values))));
                     self.set_reg(base + *dst, VmValue::Unit);
                 }
@@ -4414,7 +4705,7 @@ impl RegVm {
                     let len = set.borrow().len();
                     for index in 0..len {
                         let value = set.borrow()[index].clone();
-                        let _ = self.call_closure_one(&callback, value, next_base)?;
+                        let _ = self.call_closure_one(unit, &callback, value, next_base)?;
                     }
                     self.set_reg(base + *dst, VmValue::Unit);
                 }
@@ -4601,7 +4892,7 @@ impl RegVm {
                     intrinsic,
                     args,
                 } => {
-                    let value = self.call_intrinsic(*intrinsic, args, base, next_base)?;
+                    let value = self.call_intrinsic(unit, *intrinsic, args, base, next_base)?;
                     self.set_reg(base + *dst, value);
                 }
                 RegInstr::TryResult { dst, src, cleanup } => {
@@ -4612,7 +4903,7 @@ impl RegVm {
                         Err(error) => {
                             for resource in cleanup {
                                 let value = self.reg(base + *resource).clone();
-                                self.run_resource_drop(value, next_base)?;
+                                self.run_resource_drop(unit, value, next_base)?;
                             }
                             return Ok(value_err(error));
                         }
@@ -4629,29 +4920,33 @@ impl RegVm {
         Ok(VmValue::Unit)
     }
 
-    fn run_resource_drop(&mut self, value: VmValue, base: usize) -> Result<(), EvalError> {
+    fn run_resource_drop(
+        &mut self,
+        unit: &RegUnit,
+        value: VmValue,
+        base: usize,
+    ) -> Result<(), EvalError> {
         if self.finish_resource_pool_lease(value.clone())? {
             return Ok(());
         }
         let VmValue::Struct(data) = value else {
             return Ok(());
         };
-        let Some(function_id) = self
-            .unit
+        let Some(function_id) = unit
             .resource_drop_functions
             .get(data.name.as_ref())
             .copied()
         else {
             return Ok(());
         };
-        let callee = Rc::clone(&self.unit.functions[function_id]);
+        let callee = &unit.functions[function_id];
         self.ensure_regs(base + callee.regs);
         for (field, value) in &data.fields {
             if let Some(reg) = callee.local_regs.get(field) {
                 self.stack[base + *reg] = value.clone();
             }
         }
-        let result = self.run_frame(&callee, base)?;
+        let result = self.run_frame(unit, callee, base)?;
         if matches!(result, VmValue::Unit) {
             Ok(())
         } else {
@@ -4814,6 +5109,7 @@ impl RegVm {
 
     fn resource_pool_new(
         &mut self,
+        unit: &RegUnit,
         args: &[Reg],
         base: usize,
         next_base: usize,
@@ -4826,7 +5122,7 @@ impl RegVm {
         if !lazy {
             idle.reserve(capacity as usize);
             for _ in 0..capacity {
-                idle.push(self.call_closure_zero(&factory, next_base)?);
+                idle.push(self.call_closure_zero(unit, &factory, next_base)?);
             }
         }
         let id = self.next_pool_id;
@@ -4846,13 +5142,14 @@ impl RegVm {
 
     fn resource_pool_borrow(
         &mut self,
+        unit: &RegUnit,
         args: &[Reg],
         base: usize,
         next_base: usize,
         fallible: bool,
     ) -> Result<VmValue, EvalError> {
         let pool = expect_resource_pool_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-        let borrowed = self.resource_pool_borrow_value(pool.id, next_base);
+        let borrowed = self.resource_pool_borrow_value(unit, pool.id, next_base);
         if fallible {
             return Ok(match borrowed {
                 Ok(value) => value_ok(value),
@@ -4869,6 +5166,7 @@ impl RegVm {
 
     fn resource_pool_borrow_value(
         &mut self,
+        unit: &RegUnit,
         pool_id: i64,
         next_base: usize,
     ) -> Result<VmValue, VmValue> {
@@ -4894,7 +5192,7 @@ impl RegVm {
                     .ok_or_else(|| pool_error_value("resource pool exhausted"))?
             };
             let value = self
-                .call_closure_zero(&factory, next_base)
+                .call_closure_zero(unit, &factory, next_base)
                 .map_err(|error| {
                     pool_error_value(format!("resource pool factory failed: {error:?}"))
                 })?;
@@ -4946,12 +5244,13 @@ impl RegVm {
 
     fn call_closure_from_regs(
         &mut self,
+        unit: &RegUnit,
         closure: &VmClosure,
         arg_regs: &[Reg],
         caller_base: usize,
         base: usize,
     ) -> Result<VmValue, EvalError> {
-        let callee = Rc::clone(&self.unit.functions[closure.function]);
+        let callee = &unit.functions[closure.function];
         self.ensure_regs(base + callee.regs);
         for (index, capture) in closure.captures.iter().enumerate() {
             self.stack[base + index] = capture.clone();
@@ -4961,32 +5260,34 @@ impl RegVm {
             let value = self.stack[caller_base + *reg].clone();
             self.stack[base + offset + index] = value;
         }
-        self.run_frame(&callee, base)
+        self.run_frame(unit, callee, base)
     }
 
     fn call_closure_one(
         &mut self,
+        unit: &RegUnit,
         closure: &VmClosure,
         arg: VmValue,
         base: usize,
     ) -> Result<VmValue, EvalError> {
-        let callee = Rc::clone(&self.unit.functions[closure.function]);
+        let callee = &unit.functions[closure.function];
         self.ensure_regs(base + callee.regs);
         for (index, capture) in closure.captures.iter().enumerate() {
             self.stack[base + index] = capture.clone();
         }
         self.stack[base + closure.captures.len()] = arg;
-        self.run_frame(&callee, base)
+        self.run_frame(unit, callee, base)
     }
 
     fn call_closure_two(
         &mut self,
+        unit: &RegUnit,
         closure: &VmClosure,
         first: VmValue,
         second: VmValue,
         base: usize,
     ) -> Result<VmValue, EvalError> {
-        let callee = Rc::clone(&self.unit.functions[closure.function]);
+        let callee = &unit.functions[closure.function];
         self.ensure_regs(base + callee.regs);
         for (index, capture) in closure.captures.iter().enumerate() {
             self.stack[base + index] = capture.clone();
@@ -4994,18 +5295,19 @@ impl RegVm {
         let offset = closure.captures.len();
         self.stack[base + offset] = first;
         self.stack[base + offset + 1] = second;
-        self.run_frame(&callee, base)
+        self.run_frame(unit, callee, base)
     }
 
     fn call_closure_three(
         &mut self,
+        unit: &RegUnit,
         closure: &VmClosure,
         first: VmValue,
         second: VmValue,
         third: VmValue,
         base: usize,
     ) -> Result<VmValue, EvalError> {
-        let callee = Rc::clone(&self.unit.functions[closure.function]);
+        let callee = &unit.functions[closure.function];
         self.ensure_regs(base + callee.regs);
         for (index, capture) in closure.captures.iter().enumerate() {
             self.stack[base + index] = capture.clone();
@@ -5014,20 +5316,21 @@ impl RegVm {
         self.stack[base + offset] = first;
         self.stack[base + offset + 1] = second;
         self.stack[base + offset + 2] = third;
-        self.run_frame(&callee, base)
+        self.run_frame(unit, callee, base)
     }
 
     fn call_closure_zero(
         &mut self,
+        unit: &RegUnit,
         closure: &VmClosure,
         base: usize,
     ) -> Result<VmValue, EvalError> {
-        let callee = Rc::clone(&self.unit.functions[closure.function]);
+        let callee = &unit.functions[closure.function];
         self.ensure_regs(base + callee.regs);
         for (index, capture) in closure.captures.iter().enumerate() {
             self.stack[base + index] = capture.clone();
         }
-        self.run_frame(&callee, base)
+        self.run_frame(unit, callee, base)
     }
 
     fn channel_state_mut(&mut self, id: i64) -> Result<&mut VmChannel, EvalError> {
@@ -5073,15 +5376,16 @@ impl RegVm {
 
     fn filter_list(
         &mut self,
+        unit: &RegUnit,
         list: Rc<RefCell<Vec<VmValue>>>,
         predicate: &VmClosure,
         base: usize,
     ) -> Result<VmValue, EvalError> {
         let len = list.borrow().len();
-        let mut filtered = Vec::new();
+        let mut filtered = Vec::with_capacity(len);
         for index in 0..len {
-            let item = list.borrow()[index].clone();
-            let keep = self.call_closure_one(predicate, item.clone(), base)?;
+            let item = list_item_at(&list, index, "List.filter")?;
+            let keep = self.call_closure_one(unit, predicate, item.clone(), base)?;
             if expect_bool_ref(&keep)? {
                 filtered.push(item);
             }
@@ -5091,6 +5395,7 @@ impl RegVm {
 
     fn fold_list(
         &mut self,
+        unit: &RegUnit,
         list: Rc<RefCell<Vec<VmValue>>>,
         mut state: VmValue,
         folder: &VmClosure,
@@ -5098,14 +5403,15 @@ impl RegVm {
     ) -> Result<VmValue, EvalError> {
         let len = list.borrow().len();
         for index in 0..len {
-            let item = list.borrow()[index].clone();
-            state = self.call_closure_two(folder, state, item, base)?;
+            let item = list_item_at(&list, index, "List.fold")?;
+            state = self.call_closure_two(unit, folder, state, item, base)?;
         }
         Ok(state)
     }
 
     fn map_list(
         &mut self,
+        unit: &RegUnit,
         list: Rc<RefCell<Vec<VmValue>>>,
         mapper: &VmClosure,
         base: usize,
@@ -5113,14 +5419,15 @@ impl RegVm {
         let len = list.borrow().len();
         let mut mapped = Vec::with_capacity(len);
         for index in 0..len {
-            let item = list.borrow()[index].clone();
-            mapped.push(self.call_closure_one(mapper, item, base)?);
+            let item = list_item_at(&list, index, "List.map")?;
+            mapped.push(self.call_closure_one(unit, mapper, item, base)?);
         }
         Ok(VmValue::List(Rc::new(RefCell::new(mapped))))
     }
 
     fn sort_list_with_closure(
         &mut self,
+        unit: &RegUnit,
         list: &mut [VmValue],
         compare: &VmClosure,
         base: usize,
@@ -5129,6 +5436,7 @@ impl RegVm {
             let mut index = right_index;
             while index > 0 {
                 let ordering = self.call_closure_two(
+                    unit,
                     compare,
                     list[index - 1].clone(),
                     list[index].clone(),
@@ -5146,6 +5454,7 @@ impl RegVm {
 
     fn sort_list_by_closure(
         &mut self,
+        unit: &RegUnit,
         mut list: Vec<VmValue>,
         key: &VmClosure,
         compare: &VmClosure,
@@ -5154,9 +5463,9 @@ impl RegVm {
         for right_index in 1..list.len() {
             let mut index = right_index;
             while index > 0 {
-                let left_key = self.call_closure_one(key, list[index - 1].clone(), base)?;
-                let right_key = self.call_closure_one(key, list[index].clone(), base)?;
-                let ordering = self.call_closure_two(compare, left_key, right_key, base)?;
+                let left_key = self.call_closure_one(unit, key, list[index - 1].clone(), base)?;
+                let right_key = self.call_closure_one(unit, key, list[index].clone(), base)?;
+                let ordering = self.call_closure_two(unit, compare, left_key, right_key, base)?;
                 if expect_int_ref(&ordering)? <= 0 {
                     break;
                 }
@@ -5169,6 +5478,7 @@ impl RegVm {
 
     fn call_intrinsic(
         &mut self,
+        unit: &RegUnit,
         intrinsic: RegIntrinsic,
         args: &[Reg],
         base: usize,
@@ -5441,6 +5751,14 @@ impl RegVm {
                 let value = expect_char_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Bool(value.is_ascii_digit()))
             }
+            RegIntrinsic::CharIsLower => {
+                let value = expect_char_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Bool(value.is_lowercase()))
+            }
+            RegIntrinsic::CharIsUpper => {
+                let value = expect_char_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Bool(value.is_uppercase()))
+            }
             RegIntrinsic::CharIsWhitespace => {
                 let value = expect_char_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Bool(value.is_whitespace()))
@@ -5449,9 +5767,17 @@ impl RegVm {
                 let value = expect_char_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Int(value as u32 as i64))
             }
+            RegIntrinsic::CharToLower => {
+                let value = expect_char_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Char(value.to_lowercase().next().unwrap_or(value)))
+            }
             RegIntrinsic::CharToString => {
                 let value = expect_char_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::string(value.to_string()))
+            }
+            RegIntrinsic::CharToUpper => {
+                let value = expect_char_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Char(value.to_uppercase().next().unwrap_or(value)))
             }
             RegIntrinsic::ClockNow => Ok(instant_value(clock_system_unix_ms())),
             RegIntrinsic::ClockSystemUnixMs => Ok(VmValue::Int(clock_system_unix_ms())),
@@ -5483,6 +5809,98 @@ impl RegVm {
             RegIntrinsic::ConfigStoreNew => {
                 let value = intrinsic_arg(&self.stack, base, args, 0)?;
                 Ok(config_store_value(expect_config_value_name(value)?))
+            }
+            RegIntrinsic::DateAddDays => {
+                let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let days = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(
+                    unix_ms.saturating_add(days.saturating_mul(MS_PER_DAY)),
+                ))
+            }
+            RegIntrinsic::DateAddMs => {
+                let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(unix_ms.saturating_add(ms)))
+            }
+            RegIntrinsic::DateDay => {
+                let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Int(utc_datetime(unix_ms).day() as i64))
+            }
+            RegIntrinsic::DateDaysBetween => {
+                let start_unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let end_unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(
+                    end_unix_ms.saturating_sub(start_unix_ms) / MS_PER_DAY,
+                ))
+            }
+            RegIntrinsic::DateDaysInMonth => {
+                let year = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let month = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(date_days_in_month(year, month)))
+            }
+            RegIntrinsic::DateFormatIso => {
+                let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::string(
+                    utc_datetime(unix_ms).to_rfc3339_opts(SecondsFormat::Millis, true),
+                ))
+            }
+            RegIntrinsic::DateFormatYmd => {
+                let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::string(
+                    utc_datetime(unix_ms).format("%Y-%m-%d").to_string(),
+                ))
+            }
+            RegIntrinsic::DateHour => {
+                let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Int(utc_datetime(unix_ms).hour() as i64))
+            }
+            RegIntrinsic::DateIsLeapYear => {
+                let year = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Bool(date_is_leap_year(year)))
+            }
+            RegIntrinsic::DateMinute => {
+                let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Int(utc_datetime(unix_ms).minute() as i64))
+            }
+            RegIntrinsic::DateMonth => {
+                let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Int(utc_datetime(unix_ms).month() as i64))
+            }
+            RegIntrinsic::DateParseIso => {
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(date_parse_iso(value)
+                    .map(|value| VmValue::OptionSome(Box::new(VmValue::Int(value))))
+                    .unwrap_or(VmValue::OptionNone))
+            }
+            RegIntrinsic::DateParseYmd => {
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(date_parse_ymd(value)
+                    .map(|value| VmValue::OptionSome(Box::new(VmValue::Int(value))))
+                    .unwrap_or(VmValue::OptionNone))
+            }
+            RegIntrinsic::DateSecond => {
+                let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Int(utc_datetime(unix_ms).second() as i64))
+            }
+            RegIntrinsic::DateStartOfDay => {
+                let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let start = utc_datetime(unix_ms)
+                    .date_naive()
+                    .and_hms_opt(0, 0, 0)
+                    .expect("midnight is valid");
+                Ok(VmValue::Int(
+                    Utc.from_utc_datetime(&start).timestamp_millis(),
+                ))
+            }
+            RegIntrinsic::DateWeekday => {
+                let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Int(
+                    utc_datetime(unix_ms).weekday().number_from_monday() as i64,
+                ))
+            }
+            RegIntrinsic::DateYear => {
+                let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Int(utc_datetime(unix_ms).year() as i64))
             }
             RegIntrinsic::CounterNew => {
                 let value = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -5958,7 +6376,7 @@ impl RegVm {
                         let mut mapped = Vec::with_capacity(len);
                         for index in 0..len {
                             let value = items.borrow()[index].clone();
-                            mapped.push(self.call_closure_one(&mapper, value, next_base)?);
+                            mapped.push(self.call_closure_one(unit, &mapper, value, next_base)?);
                         }
                         value_ok(VmValue::List(Rc::new(RefCell::new(mapped))))
                     }
@@ -5976,7 +6394,7 @@ impl RegVm {
                         for index in 0..len {
                             let value = items.borrow()[index].clone();
                             let keep =
-                                self.call_closure_one(&predicate, value.clone(), next_base)?;
+                                self.call_closure_one(unit, &predicate, value.clone(), next_base)?;
                             if expect_bool_ref(&keep)? {
                                 filtered.push(value);
                             }
@@ -5994,7 +6412,7 @@ impl RegVm {
                         let items = expect_list_ref(&items)?;
                         let values = items.borrow().clone();
                         for value in values.iter().cloned() {
-                            let _ = self.call_closure_one(&action, value, next_base)?;
+                            let _ = self.call_closure_one(unit, &action, value, next_base)?;
                         }
                         value_ok(VmValue::List(Rc::new(RefCell::new(values))))
                     }
@@ -6012,7 +6430,7 @@ impl RegVm {
                         for index in 0..len {
                             let value = items.borrow()[index].clone();
                             match result_variant_payload(
-                                &self.call_closure_one(&mapper, value, next_base)?,
+                                &self.call_closure_one(unit, &mapper, value, next_base)?,
                             )? {
                                 Ok(value) => mapped.push(value),
                                 Err(error) => return Ok(value_err(error)),
@@ -6047,6 +6465,19 @@ impl RegVm {
             RegIntrinsic::HashSha256String => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::string(sha256_digest(value.as_bytes())))
+            }
+            RegIntrinsic::HmacSha256Bytes => {
+                let key = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::string(hmac_sha256_digest(key, value)))
+            }
+            RegIntrinsic::HmacSha256String => {
+                let key = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::string(hmac_sha256_digest(
+                    key.as_bytes(),
+                    value.as_bytes(),
+                )))
             }
             RegIntrinsic::GlobalConfigNew => {
                 let value = intrinsic_arg(&self.stack, base, args, 0)?;
@@ -6261,8 +6692,109 @@ impl RegVm {
                     clock_system_unix_ms().saturating_sub(start).max(0),
                 ))
             }
+            RegIntrinsic::IntBitAnd => {
+                let left = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(left & right))
+            }
+            RegIntrinsic::IntBitNot => {
+                let value = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::Int(!value))
+            }
+            RegIntrinsic::IntBitOr => {
+                let left = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(left | right))
+            }
+            RegIntrinsic::IntBitXor => {
+                let left = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(left ^ right))
+            }
+            RegIntrinsic::IntShiftLeft => {
+                let value = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let bits = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(value.wrapping_shl(bits.max(0) as u32)))
+            }
+            RegIntrinsic::IntShiftRight => {
+                let value = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let bits = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(value.wrapping_shr(bits.max(0) as u32)))
+            }
             RegIntrinsic::IntToString => Ok(VmValue::string(
                 expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string(),
+            )),
+            RegIntrinsic::FloatToString => Ok(VmValue::string(
+                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string(),
+            )),
+            RegIntrinsic::FloatIsFinite => Ok(VmValue::Bool(
+                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.is_finite(),
+            )),
+            RegIntrinsic::FloatIsInfinite => Ok(VmValue::Bool(
+                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.is_infinite(),
+            )),
+            RegIntrinsic::FloatIsNan => Ok(VmValue::Bool(
+                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.is_nan(),
+            )),
+            RegIntrinsic::MathAbs => Ok(VmValue::Int(
+                expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.abs(),
+            )),
+            RegIntrinsic::MathAbsFloat => Ok(VmValue::Float(
+                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.abs(),
+            )),
+            RegIntrinsic::MathCeil => Ok(VmValue::Int(
+                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.ceil() as i64,
+            )),
+            RegIntrinsic::MathClamp => {
+                let value = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let min = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let max = expect_int_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
+                Ok(VmValue::Int(value.clamp(min, max)))
+            }
+            RegIntrinsic::MathClampFloat => {
+                let value = expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let min = expect_float_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let max = expect_float_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
+                Ok(VmValue::Float(value.clamp(min, max)))
+            }
+            RegIntrinsic::MathFloor => Ok(VmValue::Int(
+                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.floor() as i64,
+            )),
+            RegIntrinsic::MathMax => {
+                let left = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(left.max(right)))
+            }
+            RegIntrinsic::MathMaxFloat => {
+                let left = expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_float_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Float(left.max(right)))
+            }
+            RegIntrinsic::MathMin => {
+                let left = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(left.min(right)))
+            }
+            RegIntrinsic::MathMinFloat => {
+                let left = expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_float_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Float(left.min(right)))
+            }
+            RegIntrinsic::MathPow => {
+                let base_value = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let exponent = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(base_value.pow(exponent.max(0) as u32)))
+            }
+            RegIntrinsic::MathPowFloat => {
+                let base_value = expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let exponent = expect_float_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Float(base_value.powf(exponent)))
+            }
+            RegIntrinsic::MathRound => Ok(VmValue::Int(
+                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.round() as i64,
+            )),
+            RegIntrinsic::MathSqrt => Ok(VmValue::Float(
+                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.sqrt(),
             )),
             RegIntrinsic::JsonArray => {
                 let items = expect_string_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -6308,8 +6840,12 @@ impl RegVm {
                 };
                 let mut count = 0_i64;
                 for item in items {
-                    let result =
-                        self.call_closure_one(&predicate, VmValue::Json(Rc::new(item)), next_base)?;
+                    let result = self.call_closure_one(
+                        unit,
+                        &predicate,
+                        VmValue::Json(Rc::new(item)),
+                        next_base,
+                    )?;
                     match result_variant_payload(&result)? {
                         Ok(value) => {
                             if expect_bool_ref(&value)? {
@@ -6331,6 +6867,7 @@ impl RegVm {
                 };
                 for item in items {
                     let result = self.call_closure_two(
+                        unit,
                         &folder,
                         state,
                         VmValue::Json(Rc::new(item)),
@@ -6778,7 +7315,7 @@ impl RegVm {
                 let predicate = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let values = list.borrow().clone();
                 for value in values {
-                    let keep = self.call_closure_one(&predicate, value, next_base)?;
+                    let keep = self.call_closure_one(unit, &predicate, value, next_base)?;
                     if !expect_bool_ref(&keep)? {
                         return Ok(VmValue::Bool(false));
                     }
@@ -6790,7 +7327,7 @@ impl RegVm {
                 let predicate = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let values = list.borrow().clone();
                 for value in values {
-                    let matched = self.call_closure_one(&predicate, value, next_base)?;
+                    let matched = self.call_closure_one(unit, &predicate, value, next_base)?;
                     if expect_bool_ref(&matched)? {
                         return Ok(VmValue::Bool(true));
                     }
@@ -6810,7 +7347,7 @@ impl RegVm {
                 let values = list.borrow().clone();
                 let mut count = 0;
                 for value in values {
-                    let matched = self.call_closure_one(&predicate, value, next_base)?;
+                    let matched = self.call_closure_one(unit, &predicate, value, next_base)?;
                     if expect_bool_ref(&matched)? {
                         count += 1;
                     }
@@ -6826,7 +7363,8 @@ impl RegVm {
                 let predicate = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let values = list.borrow().clone();
                 for value in values {
-                    let matched = self.call_closure_one(&predicate, value.clone(), next_base)?;
+                    let matched =
+                        self.call_closure_one(unit, &predicate, value.clone(), next_base)?;
                     if expect_bool_ref(&matched)? {
                         return Ok(VmValue::OptionSome(Box::new(value)));
                     }
@@ -6848,9 +7386,18 @@ impl RegVm {
                 let values = list.borrow().clone();
                 let mut flattened = Vec::new();
                 for value in values {
-                    let mapped = self.call_closure_one(&mapper, value, next_base)?;
+                    let mapped = self.call_closure_one(unit, &mapper, value, next_base)?;
                     let mapped = expect_list_ref(&mapped)?;
                     flattened.extend(mapped.borrow().iter().cloned());
+                }
+                Ok(VmValue::List(Rc::new(RefCell::new(flattened))))
+            }
+            RegIntrinsic::ListFlatten => {
+                let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let mut flattened = Vec::new();
+                for value in list.borrow().iter() {
+                    let nested = expect_list_ref(value)?;
+                    flattened.extend(nested.borrow().iter().cloned());
                 }
                 Ok(VmValue::List(Rc::new(RefCell::new(flattened))))
             }
@@ -6860,7 +7407,8 @@ impl RegVm {
                 let values = list.borrow().clone();
                 let mut groups: HashMap<VmMapKey, VmValue> = HashMap::new();
                 for value in values {
-                    let key_value = self.call_closure_one(&key_fn, value.clone(), next_base)?;
+                    let key_value =
+                        self.call_closure_one(unit, &key_fn, value.clone(), next_base)?;
                     let key = map_key_from_value(&key_value)?;
                     match groups.get(&key) {
                         Some(VmValue::List(items)) => {
@@ -6901,6 +7449,53 @@ impl RegVm {
                     .map(|value| VmValue::OptionSome(Box::new(value)))
                     .unwrap_or(VmValue::OptionNone))
             }
+            RegIntrinsic::ListDedup => {
+                let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let mut values = Vec::new();
+                for value in list.borrow().iter() {
+                    if !values.contains(value) {
+                        values.push(value.clone());
+                    }
+                }
+                Ok(VmValue::List(Rc::new(RefCell::new(values))))
+            }
+            RegIntrinsic::ListEnumerate => {
+                let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let mut values = Vec::new();
+                for (index, value) in list.borrow().iter().enumerate() {
+                    values.push(VmValue::List(Rc::new(RefCell::new(vec![
+                        VmValue::Int(index as i64),
+                        VmValue::Int(expect_int_ref(value)?),
+                    ]))));
+                }
+                Ok(VmValue::List(Rc::new(RefCell::new(values))))
+            }
+            RegIntrinsic::ListMax => {
+                let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let max = list
+                    .borrow()
+                    .iter()
+                    .map(expect_int_ref)
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .max();
+                Ok(max
+                    .map(|value| VmValue::OptionSome(Box::new(VmValue::Int(value))))
+                    .unwrap_or(VmValue::OptionNone))
+            }
+            RegIntrinsic::ListMin => {
+                let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let min = list
+                    .borrow()
+                    .iter()
+                    .map(expect_int_ref)
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .min();
+                Ok(min
+                    .map(|value| VmValue::OptionSome(Box::new(VmValue::Int(value))))
+                    .unwrap_or(VmValue::OptionNone))
+            }
             RegIntrinsic::ListNew => Ok(VmValue::List(Rc::new(RefCell::new(Vec::new())))),
             RegIntrinsic::ListPipeline | RegIntrinsic::PipelineCollect => {
                 Ok(intrinsic_arg(&self.stack, base, args, 0)?.clone())
@@ -6912,7 +7507,7 @@ impl RegVm {
                 let mut matched = Vec::new();
                 let mut unmatched = Vec::new();
                 for value in values {
-                    let keep = self.call_closure_one(&predicate, value.clone(), next_base)?;
+                    let keep = self.call_closure_one(unit, &predicate, value.clone(), next_base)?;
                     if expect_bool_ref(&keep)? {
                         matched.push(value);
                     } else {
@@ -6929,7 +7524,7 @@ impl RegVm {
                 let action = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let values = list.borrow().clone();
                 for value in values.iter().cloned() {
-                    let _ = self.call_closure_one(&action, value, next_base)?;
+                    let _ = self.call_closure_one(unit, &action, value, next_base)?;
                 }
                 Ok(VmValue::List(Rc::new(RefCell::new(values))))
             }
@@ -6941,7 +7536,7 @@ impl RegVm {
                 for index in 0..len {
                     let value = list.borrow()[index].clone();
                     match result_variant_payload(
-                        &self.call_closure_one(&mapper, value, next_base)?,
+                        &self.call_closure_one(unit, &mapper, value, next_base)?,
                     )? {
                         Ok(value) => mapped.push(value),
                         Err(error) => return Ok(value_err(error)),
@@ -6974,13 +7569,36 @@ impl RegVm {
                     borrowed[start..end].to_vec(),
                 ))))
             }
+            RegIntrinsic::ListSum => {
+                let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let total = list
+                    .borrow()
+                    .iter()
+                    .map(expect_int_ref)
+                    .try_fold(0_i64, |total, value| value.map(|value| total + value))?;
+                Ok(VmValue::Int(total))
+            }
+            RegIntrinsic::ListZip => {
+                let left = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let right = expect_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let left = left.borrow();
+                let right = right.borrow();
+                let values = left
+                    .iter()
+                    .zip(right.iter())
+                    .map(|(left, right)| {
+                        VmValue::List(Rc::new(RefCell::new(vec![left.clone(), right.clone()])))
+                    })
+                    .collect();
+                Ok(VmValue::List(Rc::new(RefCell::new(values))))
+            }
             RegIntrinsic::ListTryFold => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let mut state = intrinsic_arg(&self.stack, base, args, 1)?.clone();
                 let folder = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 2)?)?;
                 let values = list.borrow().clone();
                 for value in values {
-                    let folded = self.call_closure_two(&folder, state, value, next_base)?;
+                    let folded = self.call_closure_two(unit, &folder, state, value, next_base)?;
                     match result_variant_payload(&folded)? {
                         Ok(value) => state = value,
                         Err(error) => return Ok(value_err(error)),
@@ -7067,6 +7685,7 @@ impl RegVm {
                 let mut filtered = HashMap::new();
                 for (key, value) in entries {
                     let keep = self.call_closure_two(
+                        unit,
                         &predicate,
                         vm_value_from_map_key(&key),
                         value.clone(),
@@ -7089,6 +7708,7 @@ impl RegVm {
                     .collect::<Vec<_>>();
                 for (key, value) in entries {
                     state = self.call_closure_three(
+                        unit,
                         &folder,
                         state,
                         vm_value_from_map_key(&key),
@@ -7108,6 +7728,7 @@ impl RegVm {
                     .collect::<Vec<_>>();
                 for (key, value) in entries {
                     let _ = self.call_closure_two(
+                        unit,
                         &callback,
                         vm_value_from_map_key(&key),
                         value,
@@ -7149,7 +7770,7 @@ impl RegVm {
                     .collect::<Vec<_>>();
                 let mut mapped = HashMap::new();
                 for (key, value) in entries {
-                    mapped.insert(key, self.call_closure_one(&mapper, value, next_base)?);
+                    mapped.insert(key, self.call_closure_one(unit, &mapper, value, next_base)?);
                 }
                 Ok(VmValue::Map(Rc::new(RefCell::new(mapped))))
             }
@@ -7165,8 +7786,13 @@ impl RegVm {
                     .collect::<Vec<_>>();
                 for (key, right_value) in right_entries {
                     if let Some(left_value) = merged.get(&key).cloned() {
-                        let resolved =
-                            self.call_closure_two(&resolver, left_value, right_value, next_base)?;
+                        let resolved = self.call_closure_two(
+                            unit,
+                            &resolver,
+                            left_value,
+                            right_value,
+                            next_base,
+                        )?;
                         merged.insert(key, resolved);
                     } else {
                         merged.insert(key, right_value);
@@ -7186,6 +7812,7 @@ impl RegVm {
                     .collect::<Vec<_>>();
                 for (key, value) in entries {
                     let folded = self.call_closure_three(
+                        unit,
                         &folder,
                         state,
                         vm_value_from_map_key(&key),
@@ -7209,6 +7836,7 @@ impl RegVm {
                 let mapper = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 match option {
                     VmValue::OptionSome(value) => ensure_option_value(self.call_closure_one(
+                        unit,
                         &mapper,
                         (**value).clone(),
                         next_base,
@@ -7226,7 +7854,8 @@ impl RegVm {
                 match option {
                     VmValue::OptionSome(value) => {
                         let value = (**value).clone();
-                        let keep = self.call_closure_one(&predicate, value.clone(), next_base)?;
+                        let keep =
+                            self.call_closure_one(unit, &predicate, value.clone(), next_base)?;
                         if expect_bool_ref(&keep)? {
                             Ok(VmValue::OptionSome(Box::new(value)))
                         } else {
@@ -7253,7 +7882,7 @@ impl RegVm {
                 let mapper = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 match option {
                     VmValue::OptionSome(value) => Ok(VmValue::OptionSome(Box::new(
-                        self.call_closure_one(&mapper, (**value).clone(), next_base)?,
+                        self.call_closure_one(unit, &mapper, (**value).clone(), next_base)?,
                     ))),
                     VmValue::OptionNone => Ok(VmValue::OptionNone),
                     other => Err(EvalError::Runtime(format!(
@@ -7303,7 +7932,7 @@ impl RegVm {
                 let fallback = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 match option {
                     VmValue::OptionSome(value) => Ok((**value).clone()),
-                    VmValue::OptionNone => self.call_closure_zero(&fallback, next_base),
+                    VmValue::OptionNone => self.call_closure_zero(unit, &fallback, next_base),
                     other => Err(EvalError::Runtime(format!(
                         "reg VM Option.unwrap_or_else expected Option, got `{}`.",
                         other.display()
@@ -7721,7 +8350,7 @@ impl RegVm {
                 read_field_ref(intrinsic_arg(&self.stack, base, args, 0)?, "in_use")
             }
             RegIntrinsic::ResourcePoolBorrow => {
-                self.resource_pool_borrow(args, base, next_base, false)
+                self.resource_pool_borrow(unit, args, base, next_base, false)
             }
             RegIntrinsic::ResourcePoolDiscard => {
                 let lease_reg = *args.first().ok_or_else(|| {
@@ -7731,8 +8360,12 @@ impl RegVm {
                 self.set_reg(base + lease_reg, mark_pool_lease_discarded(lease)?);
                 Ok(VmValue::Unit)
             }
-            RegIntrinsic::ResourcePoolLazy => self.resource_pool_new(args, base, next_base, true),
-            RegIntrinsic::ResourcePoolNew => self.resource_pool_new(args, base, next_base, false),
+            RegIntrinsic::ResourcePoolLazy => {
+                self.resource_pool_new(unit, args, base, next_base, true)
+            }
+            RegIntrinsic::ResourcePoolNew => {
+                self.resource_pool_new(unit, args, base, next_base, false)
+            }
             RegIntrinsic::ResourcePoolStats => {
                 let pool = expect_resource_pool_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let stats = self.pools.get(&pool.id).cloned().unwrap_or(VmResourcePool {
@@ -7750,7 +8383,41 @@ impl RegVm {
                 ))
             }
             RegIntrinsic::ResourcePoolTryBorrow => {
-                self.resource_pool_borrow(args, base, next_base, true)
+                self.resource_pool_borrow(unit, args, base, next_base, true)
+            }
+            RegIntrinsic::RandomBool => {
+                let mut rng = rand::thread_rng();
+                Ok(VmValue::Bool(rng.r#gen()))
+            }
+            RegIntrinsic::RandomBytes => {
+                let len = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let mut rng = rand::thread_rng();
+                let mut bytes = vec![0u8; len.max(0) as usize];
+                rng.fill(bytes.as_mut_slice());
+                Ok(VmValue::Bytes(Rc::new(bytes)))
+            }
+            RegIntrinsic::RandomFloat => {
+                let mut rng = rand::thread_rng();
+                Ok(VmValue::Float(rng.r#gen()))
+            }
+            RegIntrinsic::RandomInt => {
+                let min = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let max = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let mut rng = rand::thread_rng();
+                Ok(VmValue::Int(rng.gen_range(min..=max)))
+            }
+            RegIntrinsic::RandomString => {
+                const CHARSET: &[u8] =
+                    b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+                let len = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let mut rng = rand::thread_rng();
+                let value = (0..len.max(0))
+                    .map(|_| {
+                        let idx = rng.gen_range(0..CHARSET.len());
+                        CHARSET[idx] as char
+                    })
+                    .collect::<String>();
+                Ok(VmValue::string(value))
             }
             RegIntrinsic::RegexCaptures => {
                 let regex = expect_regex_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -7908,7 +8575,7 @@ impl RegVm {
                 let mapper = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 match result {
                     Ok(value) => {
-                        let mapped = self.call_closure_one(&mapper, value, next_base)?;
+                        let mapped = self.call_closure_one(unit, &mapper, value, next_base)?;
                         let _ = result_variant_payload(&mapped)?;
                         Ok(mapped)
                     }
@@ -7919,7 +8586,9 @@ impl RegVm {
                 let result = result_variant_payload(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let mapper = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 match result {
-                    Ok(value) => Ok(value_ok(self.call_closure_one(&mapper, value, next_base)?)),
+                    Ok(value) => Ok(value_ok(
+                        self.call_closure_one(unit, &mapper, value, next_base)?,
+                    )),
                     Err(error) => Ok(value_err(error)),
                 }
             }
@@ -7928,7 +8597,9 @@ impl RegVm {
                 let mapper = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 match result {
                     Ok(value) => Ok(value_ok(value)),
-                    Err(error) => Ok(value_err(self.call_closure_one(&mapper, error, next_base)?)),
+                    Err(error) => Ok(value_err(
+                        self.call_closure_one(unit, &mapper, error, next_base)?,
+                    )),
                 }
             }
             RegIntrinsic::ResultUnwrapOr => {
@@ -7944,7 +8615,7 @@ impl RegVm {
                 let fallback = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 match result {
                     Ok(value) => Ok(value),
-                    Err(error) => self.call_closure_one(&fallback, error, next_base),
+                    Err(error) => self.call_closure_one(unit, &fallback, error, next_base),
                 }
             }
             RegIntrinsic::RuleLoaderLoadRules => {
@@ -7972,6 +8643,15 @@ impl RegVm {
                     .unwrap_or(VmValue::OptionNone))
             }
             RegIntrinsic::StringBuilderNew => Ok(VmValue::string("")),
+            RegIntrinsic::StringCharAt => {
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let index = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(usize::try_from(index)
+                    .ok()
+                    .and_then(|index| value.chars().nth(index))
+                    .map(|value| VmValue::OptionSome(Box::new(VmValue::Char(value))))
+                    .unwrap_or(VmValue::OptionNone))
+            }
             RegIntrinsic::StringChars => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::List(Rc::new(RefCell::new(
@@ -7983,6 +8663,11 @@ impl RegVm {
                 let needle = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 Ok(VmValue::Bool(value.contains(needle)))
             }
+            RegIntrinsic::StringCount => {
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let needle = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::Int(value.matches(needle).count() as i64))
+            }
             RegIntrinsic::StringCopy => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::string(value))
@@ -7992,10 +8677,18 @@ impl RegVm {
                 let suffix = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 Ok(VmValue::Bool(value.ends_with(suffix)))
             }
+            RegIntrinsic::StringFormat => {
+                let template = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let args = expect_string_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                Ok(VmValue::string(string_format(template, &args)))
+            }
             RegIntrinsic::StringFromBool => {
                 let value = expect_bool_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::string(value.to_string()))
             }
+            RegIntrinsic::StringFromFloat => Ok(VmValue::string(
+                expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string(),
+            )),
             RegIntrinsic::StringFromInt => Ok(VmValue::string(
                 expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string(),
             )),
@@ -8029,6 +8722,25 @@ impl RegVm {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Int(value.len() as i64))
             }
+            RegIntrinsic::StringPadLeft => {
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let width = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let fill = expect_string_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
+                Ok(VmValue::string(string_pad(value, width, fill, true)))
+            }
+            RegIntrinsic::StringPadRight => {
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let width = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let fill = expect_string_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
+                Ok(VmValue::string(string_pad(value, width, fill, false)))
+            }
+            RegIntrinsic::StringParseFloat => {
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(match value.parse::<f64>() {
+                    Ok(value) => VmValue::OptionSome(Box::new(VmValue::Float(value))),
+                    Err(_) => VmValue::OptionNone,
+                })
+            }
             RegIntrinsic::StringParseInt => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(match value.parse::<i64>() {
@@ -8046,6 +8758,16 @@ impl RegVm {
                 let from = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let to = expect_string_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
                 Ok(VmValue::string(value.replace(from, to)))
+            }
+            RegIntrinsic::StringReplaceFirst => {
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let from = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let to = expect_string_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
+                Ok(VmValue::string(value.replacen(from, to, 1)))
+            }
+            RegIntrinsic::StringReverse => {
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::string(value.chars().rev().collect::<String>()))
             }
             RegIntrinsic::StringSlice => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -8086,6 +8808,14 @@ impl RegVm {
             RegIntrinsic::StringTrim => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::string(value.trim()))
+            }
+            RegIntrinsic::StringTrimEnd => {
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::string(value.trim_end()))
+            }
+            RegIntrinsic::StringTrimStart => {
+                let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::string(value.trim_start()))
             }
             RegIntrinsic::StreamCollectList => {
                 let stream = expect_stream_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -8237,6 +8967,7 @@ impl RegVm {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::string(value))
             }
+            RegIntrinsic::UuidNewV4 => Ok(VmValue::string(uuid::Uuid::new_v4().to_string())),
             RegIntrinsic::WebSocketConnect => {
                 let url =
                     expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string();
@@ -8334,11 +9065,70 @@ fn eval_int_compare(op: RegIntCompare, lhs: i64, rhs: i64) -> bool {
     }
 }
 
+fn eval_numeric_binary(op: BinaryOp, lhs: &VmValue, rhs: &VmValue) -> Result<VmValue, EvalError> {
+    match (lhs, rhs) {
+        (VmValue::Int(lhs), VmValue::Int(rhs)) => match op {
+            BinaryOp::Add => Ok(VmValue::Int(lhs + rhs)),
+            BinaryOp::Subtract => Ok(VmValue::Int(lhs - rhs)),
+            BinaryOp::Multiply => Ok(VmValue::Int(lhs * rhs)),
+            BinaryOp::Divide => Ok(VmValue::Int(lhs / rhs)),
+            BinaryOp::Modulo => Ok(VmValue::Int(lhs % rhs)),
+            _ => unreachable!("numeric binary helper called with non-arithmetic op"),
+        },
+        (VmValue::Float(lhs), VmValue::Float(rhs)) => match op {
+            BinaryOp::Add => Ok(VmValue::Float(lhs + rhs)),
+            BinaryOp::Subtract => Ok(VmValue::Float(lhs - rhs)),
+            BinaryOp::Multiply => Ok(VmValue::Float(lhs * rhs)),
+            BinaryOp::Divide => Ok(VmValue::Float(lhs / rhs)),
+            BinaryOp::Modulo => Err(EvalError::Runtime(
+                "reg VM modulo expects Int operands.".to_string(),
+            )),
+            _ => unreachable!("numeric binary helper called with non-arithmetic op"),
+        },
+        _ => Err(EvalError::Runtime(format!(
+            "reg VM numeric operator expected matching Int or Float operands, got `{}` and `{}`.",
+            lhs.display(),
+            rhs.display()
+        ))),
+    }
+}
+
+fn eval_numeric_compare(
+    op: RegIntCompare,
+    lhs: &VmValue,
+    rhs: &VmValue,
+) -> Result<bool, EvalError> {
+    match (lhs, rhs) {
+        (VmValue::Int(lhs), VmValue::Int(rhs)) => Ok(eval_int_compare(op, *lhs, *rhs)),
+        (VmValue::Float(lhs), VmValue::Float(rhs)) => Ok(match op {
+            RegIntCompare::Less => lhs < rhs,
+            RegIntCompare::LessEqual => lhs <= rhs,
+            RegIntCompare::Greater => lhs > rhs,
+            RegIntCompare::GreaterEqual => lhs >= rhs,
+        }),
+        _ => Err(EvalError::Runtime(format!(
+            "reg VM numeric comparison expected matching Int or Float operands, got `{}` and `{}`.",
+            lhs.display(),
+            rhs.display()
+        ))),
+    }
+}
+
 fn expect_int_ref(value: &VmValue) -> Result<i64, EvalError> {
     match value {
         VmValue::Int(value) => Ok(*value),
         other => Err(EvalError::Runtime(format!(
             "reg VM expected Int, got `{}`.",
+            other.display()
+        ))),
+    }
+}
+
+fn expect_float_ref(value: &VmValue) -> Result<f64, EvalError> {
+    match value {
+        VmValue::Float(value) => Ok(*value),
+        other => Err(EvalError::Runtime(format!(
+            "reg VM expected Float, got `{}`.",
             other.display()
         ))),
     }
@@ -8391,6 +9181,64 @@ fn sha256_digest(value: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(value);
     format!("{:x}", hasher.finalize())
+}
+
+fn hmac_sha256_digest(key: &[u8], value: &[u8]) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(value);
+    format!("{:x}", mac.finalize().into_bytes())
+}
+
+fn utc_datetime(unix_ms: i64) -> chrono::DateTime<Utc> {
+    Utc.timestamp_millis_opt(unix_ms)
+        .single()
+        .unwrap_or_else(|| {
+            Utc.timestamp_millis_opt(0)
+                .single()
+                .expect("epoch is valid")
+        })
+}
+
+fn date_parse_ymd(value: &str) -> Option<i64> {
+    let date = NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()?;
+    let datetime = date.and_hms_opt(0, 0, 0)?;
+    Some(Utc.from_utc_datetime(&datetime).timestamp_millis())
+}
+
+fn date_parse_iso(value: &str) -> Option<i64> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|datetime| datetime.with_timezone(&Utc).timestamp_millis())
+}
+
+fn date_is_leap_year(year: i64) -> bool {
+    let Ok(year) = i32::try_from(year) else {
+        return false;
+    };
+    NaiveDate::from_ymd_opt(year, 2, 29).is_some()
+}
+
+fn date_days_in_month(year: i64, month: i64) -> i64 {
+    let Ok(year) = i32::try_from(year) else {
+        return 0;
+    };
+    let Ok(month) = u32::try_from(month) else {
+        return 0;
+    };
+    let Some(first) = NaiveDate::from_ymd_opt(year, month, 1) else {
+        return 0;
+    };
+    let Some(next_month) = (if month == 12 {
+        year.checked_add(1)
+            .and_then(|year| NaiveDate::from_ymd_opt(year, 1, 1))
+    } else {
+        month
+            .checked_add(1)
+            .and_then(|month| NaiveDate::from_ymd_opt(year, month, 1))
+    }) else {
+        return 0;
+    };
+    (next_month - first).num_days()
 }
 
 fn set_insert_vm(items: &mut Vec<VmValue>, value: VmValue) -> bool {
@@ -8586,6 +9434,19 @@ fn expect_list_ref(value: &VmValue) -> Result<Rc<RefCell<Vec<VmValue>>>, EvalErr
             other.display()
         ))),
     }
+}
+
+fn list_item_at(
+    list: &Rc<RefCell<Vec<VmValue>>>,
+    index: usize,
+    operation: &str,
+) -> Result<VmValue, EvalError> {
+    let values = list.borrow();
+    values.get(index).cloned().ok_or_else(|| {
+        EvalError::Runtime(format!(
+            "reg VM {operation} observed list length change at index {index}."
+        ))
+    })
 }
 
 fn expect_map_ref(value: &VmValue) -> Result<Rc<RefCell<HashMap<VmMapKey, VmValue>>>, EvalError> {
@@ -10492,6 +11353,7 @@ fn native_value_from_vm_value(value: VmValue) -> Result<NativeValue, EvalError> 
     match unmanage_vm_value(value) {
         VmValue::Unit => Ok(NativeValue::Unit),
         VmValue::Int(value) => Ok(NativeValue::Int(value)),
+        VmValue::Float(value) => Ok(NativeValue::Float(value)),
         VmValue::Bool(value) => Ok(NativeValue::Bool(value)),
         VmValue::Char(value) => Ok(NativeValue::Char(value)),
         VmValue::Bytes(value) => Ok(NativeValue::Bytes(value.as_ref().clone())),
@@ -10552,6 +11414,7 @@ fn vm_value_from_native_value(value: NativeValue) -> VmValue {
     match value {
         NativeValue::Unit => VmValue::Unit,
         NativeValue::Int(value) => VmValue::Int(value),
+        NativeValue::Float(value) => VmValue::Float(value),
         NativeValue::Bool(value) => VmValue::Bool(value),
         NativeValue::String(value) => VmValue::string(value),
         NativeValue::Char(value) => VmValue::Char(value),
@@ -11301,6 +12164,55 @@ fn string_slice_range(value: &str, start: i64, len: i64) -> &str {
     let requested_end = byte_start.saturating_add(len.max(0) as usize);
     let byte_end = clamp_to_char_boundary(value, requested_end.min(value.len()));
     &value[byte_start..byte_end]
+}
+
+fn string_pad(value: &str, width: i64, fill: &str, left: bool) -> String {
+    let target = width.max(0) as usize;
+    if value.len() >= target || fill.is_empty() {
+        return value.to_string();
+    }
+    let missing = target - value.len();
+    let mut padding = String::new();
+    while padding.len() < missing {
+        padding.push_str(fill);
+    }
+    while padding.len() > missing {
+        padding.pop();
+    }
+    if left {
+        format!("{padding}{value}")
+    } else {
+        format!("{value}{padding}")
+    }
+}
+
+fn string_format(template: &str, args: &[String]) -> String {
+    let mut output = String::new();
+    let mut chars = template.chars().peekable();
+    let mut arg_index = 0;
+    while let Some(ch) = chars.next() {
+        match (ch, chars.peek().copied()) {
+            ('{', Some('{')) => {
+                chars.next();
+                output.push('{');
+            }
+            ('}', Some('}')) => {
+                chars.next();
+                output.push('}');
+            }
+            ('{', Some('}')) => {
+                chars.next();
+                if let Some(value) = args.get(arg_index) {
+                    output.push_str(value);
+                    arg_index += 1;
+                } else {
+                    output.push_str("{}");
+                }
+            }
+            _ => output.push(ch),
+        }
+    }
+    output
 }
 
 fn clamp_to_char_boundary(value: &str, mut index: usize) -> usize {
