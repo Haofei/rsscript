@@ -1918,169 +1918,6 @@ impl RegLowerer<'_> {
         Ok(())
     }
 
-    fn select_operation_may_suspend(&self, operation: &HirExpr) -> bool {
-        let mut seen = HashSet::new();
-        self.expr_may_suspend(operation, &mut seen)
-    }
-
-    fn block_may_suspend(&self, block: &HirBlock, seen: &mut HashSet<String>) -> bool {
-        block
-            .statements
-            .iter()
-            .any(|statement| self.stmt_may_suspend(statement, seen))
-    }
-
-    fn stmt_may_suspend(&self, statement: &HirStmt, seen: &mut HashSet<String>) -> bool {
-        match statement {
-            HirStmt::Let {
-                value, is_async, ..
-            } => {
-                *is_async
-                    || value
-                        .as_ref()
-                        .is_some_and(|value| self.expr_may_suspend(value, seen))
-            }
-            HirStmt::Return { value, .. } => value
-                .as_ref()
-                .is_some_and(|value| self.expr_may_suspend(value, seen)),
-            HirStmt::Expr(value) => self.expr_may_suspend(value, seen),
-            HirStmt::With { resource, body, .. } => {
-                self.expr_may_suspend(resource, seen) || self.block_may_suspend(body, seen)
-            }
-            HirStmt::If {
-                condition,
-                then_body,
-                else_body,
-                ..
-            } => {
-                self.expr_may_suspend(condition, seen)
-                    || self.block_may_suspend(then_body, seen)
-                    || else_body
-                        .as_ref()
-                        .is_some_and(|body| self.block_may_suspend(body, seen))
-            }
-            HirStmt::Loop {
-                condition, body, ..
-            } => {
-                condition
-                    .as_ref()
-                    .is_some_and(|condition| self.expr_may_suspend(condition, seen))
-                    || self.block_may_suspend(body, seen)
-            }
-            HirStmt::For {
-                iterable,
-                is_async,
-                body,
-                ..
-            } => {
-                *is_async
-                    || self.expr_may_suspend(iterable, seen)
-                    || self.block_may_suspend(body, seen)
-            }
-            HirStmt::Match { value, arms, .. } => {
-                self.expr_may_suspend(value, seen)
-                    || arms.iter().any(|arm| {
-                        arm.guard
-                            .as_ref()
-                            .is_some_and(|guard| self.expr_may_suspend(guard, seen))
-                            || self.block_may_suspend(&arm.body, seen)
-                    })
-            }
-            HirStmt::Select { .. } => true,
-            HirStmt::Assign { target, value, .. } => {
-                self.expr_may_suspend(target, seen) || self.expr_may_suspend(value, seen)
-            }
-            HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => false,
-        }
-    }
-
-    fn expr_may_suspend(&self, expr: &HirExpr, seen: &mut HashSet<String>) -> bool {
-        match expr {
-            HirExpr::Await { value, .. }
-            | HirExpr::Effect { value, .. }
-            | HirExpr::Manage { value, .. }
-            | HirExpr::Try { value, .. } => self.expr_may_suspend(value, seen),
-            HirExpr::Spawn { .. } => true,
-            HirExpr::Call {
-                callee,
-                receiver,
-                args,
-                ..
-            } => {
-                if receiver
-                    .as_ref()
-                    .is_some_and(|receiver| self.expr_may_suspend(&receiver.value, seen))
-                    || args
-                        .iter()
-                        .any(|arg| self.expr_may_suspend(&arg.value, seen))
-                {
-                    return true;
-                }
-                let (namespace, name) = match callee {
-                    Callee::Name(name) => (None, type_root_name(name)),
-                    Callee::Qualified { namespace, name } => {
-                        (Some(type_root_name(namespace)), type_root_name(name))
-                    }
-                    Callee::ReceiverCall { method, .. } => (None, type_root_name(method)),
-                };
-                let Some(signature) = self.hir.resolve_function(namespace, name) else {
-                    return false;
-                };
-                if !signature.is_async {
-                    return false;
-                }
-                if signature.is_native || signature.is_builtin {
-                    return true;
-                }
-                let body_name = signature
-                    .namespace
-                    .as_ref()
-                    .map(|namespace| format!("{namespace}.{}", signature.name))
-                    .unwrap_or_else(|| signature.name.clone());
-                if !seen.insert(body_name.clone()) {
-                    return true;
-                }
-                let may_suspend = self
-                    .hir
-                    .function_body(&body_name)
-                    .and_then(|body| body.block.as_ref())
-                    .is_none_or(|block| self.block_may_suspend(block, seen));
-                seen.remove(&body_name);
-                may_suspend
-            }
-            HirExpr::Binary { left, right, .. }
-            | HirExpr::Index {
-                base: left,
-                index: right,
-                ..
-            } => self.expr_may_suspend(left, seen) || self.expr_may_suspend(right, seen),
-            HirExpr::Field { base, .. } => self.expr_may_suspend(base, seen),
-            HirExpr::ObjectLiteral { fields, .. } => fields
-                .iter()
-                .any(|field| self.expr_may_suspend(&field.value, seen)),
-            HirExpr::MapLiteral { entries, .. } => entries.iter().any(|entry| {
-                self.expr_may_suspend(&entry.key, seen) || self.expr_may_suspend(&entry.value, seen)
-            }),
-            HirExpr::ArrayLiteral { items, .. } => {
-                items.iter().any(|item| self.expr_may_suspend(item, seen))
-            }
-            HirExpr::Closure { .. } => false,
-            HirExpr::Match { value, arms, .. } => {
-                self.expr_may_suspend(value, seen)
-                    || arms.iter().any(|arm| {
-                        arm.guard
-                            .as_ref()
-                            .is_some_and(|guard| self.expr_may_suspend(guard, seen))
-                            || self.block_may_suspend(&arm.body, seen)
-                    })
-            }
-            HirExpr::Ident { .. }
-            | HirExpr::Number { .. }
-            | HirExpr::String { .. }
-            | HirExpr::Unknown(_) => false,
-        }
-    }
-
     fn logical_binary(
         &mut self,
         op: BinaryOp,
@@ -4716,8 +4553,6 @@ struct TaskSlot {
     wait: Option<Wait>,
     /// Register (in the task's own stack) that receives the op result on wake.
     resume_dst: usize,
-    /// Tasks parked in `Join` on this task, woken when it finishes.
-    joiners: Vec<TaskId>,
 }
 
 struct RegVm {
@@ -4863,30 +4698,6 @@ impl RegVm {
         std::mem::replace(&mut self.stack[index], VmValue::Unit)
     }
 
-    fn call_function(&mut self, name: &str, args: Vec<VmValue>) -> Result<VmValue, EvalError> {
-        let function_id = self.unit.function_ids.get(name).copied().ok_or_else(|| {
-            EvalError::Runtime(format!("reg VM cannot resolve function `{name}`."))
-        })?;
-        let unit = Rc::clone(&self.unit);
-        let function = &unit.functions[function_id];
-        let expected_args = function.captures + function.params;
-        if args.len() != expected_args {
-            return Err(EvalError::Runtime(format!(
-                "reg VM function `{}` expected {} args, got {}.",
-                function.name,
-                expected_args,
-                args.len()
-            )));
-        }
-        let base = self.stack.len();
-        self.prepare_frame(base, function.regs);
-        for (index, arg) in args.into_iter().enumerate() {
-            self.set_reg(base + index, arg);
-        }
-        let function = Rc::clone(function);
-        self.run_frame(&unit, function, base)
-    }
-
     // Shared register stack with frame windows. Each frame owns
     // `stack[base .. base + function.regs]`; a callee is placed immediately
     // above the caller at `base + function.regs`. The stack only grows
@@ -4962,7 +4773,6 @@ impl RegVm {
                 done: None,
                 wait: None,
                 resume_dst: usize::MAX,
-                joiners: Vec::new(),
             },
         );
         self.ready_queue.push_back(tid);
