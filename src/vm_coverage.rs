@@ -75,7 +75,6 @@ pub fn vm_coverage_report() -> VmCoverageReport {
             ],
             vec![
                 "ArrayLiteral".to_string(),
-                "Await".to_string(),
                 "Binary".to_string(),
                 "Call".to_string(),
                 "Closure".to_string(),
@@ -95,17 +94,22 @@ pub fn vm_coverage_report() -> VmCoverageReport {
             "Bool", "Bytes", "Char", "Closure", "Float", "Int", "Json", "List", "Map", "String",
             "Managed", "Native", "Struct", "Unit", "Variant",
         ]),
-        function_kinds: coverage_bucket_from_supported(&["async", "native", "sync"]),
+        function_kinds: coverage_bucket_from_all_supported(
+            vec![
+                "async".to_string(),
+                "native".to_string(),
+                "sync".to_string(),
+            ],
+            vec!["native".to_string(), "sync".to_string()],
+        ),
         parity_features: vm_parity_feature_coverage(),
     }
 }
 
 const NON_RUNTIME_PARITY_FEATURES: &[&str] = &[
-    "function:async",
     "function:native",
     "function:sync",
     "hir_expr:ArrayLiteral",
-    "hir_expr:Await",
     "hir_expr:Binary",
     "hir_expr:Call",
     "hir_expr:Closure",

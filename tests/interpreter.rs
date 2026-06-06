@@ -759,10 +759,10 @@ pub fn echo(message: &String) -> String {
 /// through the lowered-Rust backend, then assert their observable output agrees.
 /// This is the mechanism (not docs) that keeps the interpreter from diverging
 /// from the authoritative backend — one fixture per supported construct.
-// parity: function:async function:native function:sync
+// parity: function:native function:sync
 // parity: hir_stmt:Assign hir_stmt:Break hir_stmt:Continue hir_stmt:Expr hir_stmt:For
 // parity: hir_stmt:If hir_stmt:Let hir_stmt:Loop hir_stmt:Return hir_stmt:With
-// parity: hir_expr:ArrayLiteral hir_expr:Await hir_expr:Binary hir_expr:Call hir_expr:Effect hir_expr:Field
+// parity: hir_expr:ArrayLiteral hir_expr:Binary hir_expr:Call hir_expr:Effect hir_expr:Field
 // parity: hir_expr:Closure hir_expr:Ident hir_expr:Index hir_expr:Manage hir_expr:MapLiteral
 // parity: hir_expr:Number hir_expr:ObjectLiteral hir_expr:String hir_expr:Try
 // parity: value:Bool value:Bytes value:Float value:Int value:Json value:List value:Managed

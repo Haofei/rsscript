@@ -5,7 +5,7 @@ use std::process::Command;
 use sha1::{Digest, Sha1};
 
 use rsscript::{
-    NativeInterpreterFn, NativeValue, lower_source_to_rust_package,
+    NativeInterpreterFn, NativeValue, lower_source_to_rust_package, reg_vm_compile_source,
     reg_vm_eval_source_main_with_args, reg_vm_eval_source_main_with_args_and_native_bindings,
     write_generated_rust_package,
 };
@@ -4763,7 +4763,7 @@ fn main() -> Unit {
 }
 
 #[test]
-fn reg_vm_rejects_guarded_match_until_full_match_lowering_exists() {
+fn reg_vm_runs_guarded_match_like_compiled_backend() {
     let source = r#"
 fn main() -> Unit {
     let value = Some(3)
@@ -4782,17 +4782,11 @@ fn main() -> Unit {
 }
 "#;
 
-    let error = reg_vm_eval_source_main_with_args(
-        "reg-vm-guarded-match.rss",
-        source,
-        std::iter::empty::<&str>(),
-    )
-    .expect_err("guarded match should be explicit unsupported until VM has full match lowering");
-    assert!(format!("{error:?}").contains("match pattern"), "{error:?}");
+    assert_reg_vm_matches_compiled_backend("reg-vm-guarded-match.rss", source, []);
 }
 
 #[test]
-fn reg_vm_rejects_literal_match_until_full_match_lowering_exists() {
+fn reg_vm_runs_literal_match_like_compiled_backend() {
     let source = r#"
 fn main() -> Unit {
     let value = 1
@@ -4808,17 +4802,110 @@ fn main() -> Unit {
 }
 "#;
 
-    let error = reg_vm_eval_source_main_with_args(
-        "reg-vm-literal-match.rss",
-        source,
-        std::iter::empty::<&str>(),
-    )
-    .expect_err("literal match should be explicit unsupported until VM has full match lowering");
-    assert!(format!("{error:?}").contains("match pattern"), "{error:?}");
+    assert_reg_vm_matches_compiled_backend("reg-vm-literal-match.rss", source, []);
 }
 
 #[test]
-fn reg_vm_rejects_multi_arm_select_until_pending_model_exists() {
+fn reg_vm_lowers_structured_sum_variant_match_like_compiled_backend() {
+    let source = r#"
+sum Expr {
+    Call(callee: String, arg_count: Int)
+    Literal(value: String)
+}
+
+fn describe(expr: read Expr) -> Unit {
+    match read expr {
+        Call { callee, arg_count } if arg_count == 0 => {
+            Log.write(message: read callee)
+        }
+        Call { callee, .. } => {
+            Log.write(message: read String.concat(left: read callee, right: read ":args"))
+        }
+        Literal { value } => {
+            Log.write(message: read value)
+        }
+    }
+    return Unit
+}
+
+fn main() -> Unit {
+    return Unit
+}
+"#;
+
+    reg_vm_compile_source("reg-vm-structured-match.rss", source)
+        .expect("reg VM should lower structured sum variant match");
+}
+
+#[test]
+fn reg_vm_runs_match_expression_like_compiled_backend() {
+    let source = r#"
+sum Direction {
+    North
+    South
+    East
+    West
+}
+
+fn direction_name(d: read Direction) -> String {
+    return match d {
+        North => { "north" }
+        South => { "south" }
+        East => { "east" }
+        West => { "west" }
+    }
+}
+
+fn int_label(value: Int) -> String {
+    return match value {
+        0 => { "zero" }
+        1 => { "one" }
+        _ => { "many" }
+    }
+}
+
+fn main() -> Unit {
+    let d = North
+    Log.write(message: read direction_name(d: read d))
+    Log.write(message: read int_label(value: 1))
+    return Unit
+}
+"#;
+
+    assert_reg_vm_matches_compiled_backend("reg-vm-match-expression.rss", source, []);
+}
+
+#[test]
+fn reg_vm_runs_guarded_match_expression_like_compiled_backend() {
+    let source = r#"
+sum Direction {
+    North
+    South
+}
+
+fn describe(value: read Direction, enabled: Bool) -> String {
+    return match value {
+        North if enabled => { "enabled north" }
+        North => { "north" }
+        South => { "south" }
+    }
+}
+
+fn main() -> Unit {
+    let north = North
+    let south = South
+    Log.write(message: read describe(value: read north, enabled: true))
+    Log.write(message: read describe(value: read north, enabled: false))
+    Log.write(message: read describe(value: read south, enabled: true))
+    return Unit
+}
+"#;
+
+    assert_reg_vm_matches_compiled_backend("reg-vm-guarded-match-expression.rss", source, []);
+}
+
+#[test]
+fn reg_vm_runs_immediate_multi_arm_select_like_compiled_backend() {
     let source = r#"
 features: async
 
@@ -4839,13 +4926,42 @@ fn main() -> Result<Unit, String> {
 }
 "#;
 
-    let error =
-        reg_vm_eval_source_main_with_args("reg-vm-select.rss", source, std::iter::empty::<&str>())
-            .expect_err(
-                "multi-arm select should be explicit unsupported until VM has pending model",
-            );
+    assert_reg_vm_matches_compiled_backend("reg-vm-immediate-select.rss", source, []);
+}
+
+#[test]
+fn reg_vm_rejects_pending_multi_arm_select_until_pending_model_exists() {
+    let source = r#"
+features: async, native
+
+async fn after(value: Int, ms: Int) -> Result<Int, TimerError> {
+    await Timer.sleep(ms: ms)?
+    return Ok(value)
+}
+
+fn main() -> Result<Unit, TimerError> {
+    select {
+        value = await after(value: 7, ms: 100)? => {
+            Log.write(message: read String.from_int(value: value))
+        }
+        other = await after(value: 9, ms: 1)? => {
+            Log.write(message: read String.from_int(value: other))
+        }
+    }
+    return Ok(Unit)
+}
+"#;
+
+    let error = reg_vm_eval_source_main_with_args(
+        "reg-vm-select.rss",
+        source,
+        std::iter::empty::<&str>(),
+    )
+    .expect_err(
+        "pending multi-arm select should be explicit unsupported until VM has pending model",
+    );
     assert!(
-        format!("{error:?}").contains("select with multiple arms"),
+        format!("{error:?}").contains("pending multi-arm operations"),
         "{error:?}"
     );
 }

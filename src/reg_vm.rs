@@ -15,10 +15,14 @@ use sha2::{Digest, Sha256};
 
 use crate::diagnostic::Severity;
 use crate::eval_types::{EvalError, EvalOutput, NativeInterpreterFn, NativeValue};
-use crate::hir::{Hir, HirBlock, HirCallArg, HirCallReceiver, HirExpr, HirStmt, TypeInfo};
+use crate::hir::{
+    Hir, HirBlock, HirCallArg, HirCallReceiver, HirExpr, HirMatchArm, HirStmt, TypeInfo,
+};
 use crate::interfaces::builtin_interfaces;
 use crate::package::package_lowering_input;
-use crate::syntax::ast::{BinaryOp, Callee, MatchPattern, merge_programs};
+use crate::syntax::ast::{
+    BinaryOp, Callee, MatchFieldPattern, MatchLiteral, MatchPattern, merge_programs,
+};
 use crate::syntax::parse_source;
 use crate::vm_value::{VmClosure, VmMapKey, VmNative, VmStruct, VmValue};
 
@@ -247,7 +251,7 @@ enum RegInstr {
     MakeVariant {
         dst: Reg,
         name: String,
-        value: Option<Reg>,
+        fields: Vec<(String, Reg)>,
     },
     MakeList {
         dst: Reg,
@@ -1188,6 +1192,7 @@ struct LoopPatch {
 
 #[derive(Debug, Clone, Copy)]
 enum MatchFailurePatch {
+    Jump(usize),
     OptionSome(usize),
     OptionNone(usize),
     ResultOk(usize),
@@ -1414,6 +1419,35 @@ impl RegLowerer<'_> {
             self.statement(statement)?;
         }
         Ok(())
+    }
+
+    fn expr_block_value(&mut self, block: &HirBlock) -> Result<Reg, EvalError> {
+        let Some((last, prefix)) = block.statements.split_last() else {
+            return Err(EvalError::Runtime(
+                "reg VM match expression arm cannot be empty.".to_string(),
+            ));
+        };
+        for statement in prefix {
+            self.statement(statement)?;
+        }
+        match last {
+            HirStmt::Expr(value) => self.expr(value),
+            HirStmt::Return { value, .. } => {
+                let src = if let Some(value) = value {
+                    self.expr(value)?
+                } else {
+                    let src = self.temp();
+                    self.emit(RegInstr::LoadUnit { dst: src });
+                    src
+                };
+                self.emit_all_cleanup();
+                self.emit(RegInstr::Return { src });
+                Ok(src)
+            }
+            other => Err(EvalError::Runtime(format!(
+                "reg VM match expression arm must end with an expression, got `{other:?}`."
+            ))),
+        }
     }
 
     fn condition_jump(
@@ -1657,9 +1691,13 @@ impl RegLowerer<'_> {
                 }
             }
             HirStmt::Select { arms, .. } => {
-                if arms.len() > 1 {
+                if arms.len() > 1
+                    && arms
+                        .iter()
+                        .any(|arm| self.select_operation_may_suspend(&arm.operation))
+                {
                     return Err(EvalError::Runtime(
-                        "reg VM select with multiple arms requires pending first-ready semantics and is not supported yet.".to_string(),
+                        "reg VM select with pending multi-arm operations requires first-ready semantics and is not supported yet.".to_string(),
                     ));
                 }
                 if let Some(arm) = arms.first() {
@@ -1717,6 +1755,169 @@ impl RegLowerer<'_> {
             )))?,
         }
         Ok(())
+    }
+
+    fn select_operation_may_suspend(&self, operation: &HirExpr) -> bool {
+        let mut seen = HashSet::new();
+        self.expr_may_suspend(operation, &mut seen)
+    }
+
+    fn block_may_suspend(&self, block: &HirBlock, seen: &mut HashSet<String>) -> bool {
+        block
+            .statements
+            .iter()
+            .any(|statement| self.stmt_may_suspend(statement, seen))
+    }
+
+    fn stmt_may_suspend(&self, statement: &HirStmt, seen: &mut HashSet<String>) -> bool {
+        match statement {
+            HirStmt::Let {
+                value, is_async, ..
+            } => {
+                *is_async
+                    || value
+                        .as_ref()
+                        .is_some_and(|value| self.expr_may_suspend(value, seen))
+            }
+            HirStmt::Return { value, .. } => value
+                .as_ref()
+                .is_some_and(|value| self.expr_may_suspend(value, seen)),
+            HirStmt::Expr(value) => self.expr_may_suspend(value, seen),
+            HirStmt::With { resource, body, .. } => {
+                self.expr_may_suspend(resource, seen) || self.block_may_suspend(body, seen)
+            }
+            HirStmt::If {
+                condition,
+                then_body,
+                else_body,
+                ..
+            } => {
+                self.expr_may_suspend(condition, seen)
+                    || self.block_may_suspend(then_body, seen)
+                    || else_body
+                        .as_ref()
+                        .is_some_and(|body| self.block_may_suspend(body, seen))
+            }
+            HirStmt::Loop {
+                condition, body, ..
+            } => {
+                condition
+                    .as_ref()
+                    .is_some_and(|condition| self.expr_may_suspend(condition, seen))
+                    || self.block_may_suspend(body, seen)
+            }
+            HirStmt::For {
+                iterable,
+                is_async,
+                body,
+                ..
+            } => {
+                *is_async
+                    || self.expr_may_suspend(iterable, seen)
+                    || self.block_may_suspend(body, seen)
+            }
+            HirStmt::Match { value, arms, .. } => {
+                self.expr_may_suspend(value, seen)
+                    || arms.iter().any(|arm| {
+                        arm.guard
+                            .as_ref()
+                            .is_some_and(|guard| self.expr_may_suspend(guard, seen))
+                            || self.block_may_suspend(&arm.body, seen)
+                    })
+            }
+            HirStmt::Select { .. } => true,
+            HirStmt::Assign { target, value, .. } => {
+                self.expr_may_suspend(target, seen) || self.expr_may_suspend(value, seen)
+            }
+            HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => false,
+        }
+    }
+
+    fn expr_may_suspend(&self, expr: &HirExpr, seen: &mut HashSet<String>) -> bool {
+        match expr {
+            HirExpr::Await { value, .. }
+            | HirExpr::Effect { value, .. }
+            | HirExpr::Manage { value, .. }
+            | HirExpr::Try { value, .. } => self.expr_may_suspend(value, seen),
+            HirExpr::Spawn { .. } => true,
+            HirExpr::Call {
+                callee,
+                receiver,
+                args,
+                ..
+            } => {
+                if receiver
+                    .as_ref()
+                    .is_some_and(|receiver| self.expr_may_suspend(&receiver.value, seen))
+                    || args
+                        .iter()
+                        .any(|arg| self.expr_may_suspend(&arg.value, seen))
+                {
+                    return true;
+                }
+                let (namespace, name) = match callee {
+                    Callee::Name(name) => (None, type_root_name(name)),
+                    Callee::Qualified { namespace, name } => {
+                        (Some(type_root_name(namespace)), type_root_name(name))
+                    }
+                    Callee::ReceiverCall { method, .. } => (None, type_root_name(method)),
+                };
+                let Some(signature) = self.hir.resolve_function(namespace, name) else {
+                    return false;
+                };
+                if !signature.is_async {
+                    return false;
+                }
+                if signature.is_native || signature.is_builtin {
+                    return true;
+                }
+                let body_name = signature
+                    .namespace
+                    .as_ref()
+                    .map(|namespace| format!("{namespace}.{}", signature.name))
+                    .unwrap_or_else(|| signature.name.clone());
+                if !seen.insert(body_name.clone()) {
+                    return true;
+                }
+                let may_suspend = self
+                    .hir
+                    .function_body(&body_name)
+                    .and_then(|body| body.block.as_ref())
+                    .is_none_or(|block| self.block_may_suspend(block, seen));
+                seen.remove(&body_name);
+                may_suspend
+            }
+            HirExpr::Binary { left, right, .. }
+            | HirExpr::Index {
+                base: left,
+                index: right,
+                ..
+            } => self.expr_may_suspend(left, seen) || self.expr_may_suspend(right, seen),
+            HirExpr::Field { base, .. } => self.expr_may_suspend(base, seen),
+            HirExpr::ObjectLiteral { fields, .. } => fields
+                .iter()
+                .any(|field| self.expr_may_suspend(&field.value, seen)),
+            HirExpr::MapLiteral { entries, .. } => entries.iter().any(|entry| {
+                self.expr_may_suspend(&entry.key, seen) || self.expr_may_suspend(&entry.value, seen)
+            }),
+            HirExpr::ArrayLiteral { items, .. } => {
+                items.iter().any(|item| self.expr_may_suspend(item, seen))
+            }
+            HirExpr::Closure { .. } => false,
+            HirExpr::Match { value, arms, .. } => {
+                self.expr_may_suspend(value, seen)
+                    || arms.iter().any(|arm| {
+                        arm.guard
+                            .as_ref()
+                            .is_some_and(|guard| self.expr_may_suspend(guard, seen))
+                            || self.block_may_suspend(&arm.body, seen)
+                    })
+            }
+            HirExpr::Ident { .. }
+            | HirExpr::Number { .. }
+            | HirExpr::String { .. }
+            | HirExpr::Unknown(_) => false,
+        }
     }
 
     fn logical_binary(
@@ -1795,7 +1996,7 @@ impl RegLowerer<'_> {
                 self.emit(RegInstr::MakeVariant {
                     dst,
                     name: name.clone(),
-                    value: None,
+                    fields: Vec::new(),
                 });
                 Ok(dst)
             }
@@ -1976,6 +2177,7 @@ impl RegLowerer<'_> {
                 });
                 Ok(dst)
             }
+            HirExpr::Match { value, arms, .. } => self.match_expr(value, arms),
             unsupported => Err(EvalError::Runtime(format!(
                 "reg VM v0 does not support expression `{unsupported:?}`."
             )))?,
@@ -2237,7 +2439,7 @@ impl RegLowerer<'_> {
                     self.emit(RegInstr::MakeVariant {
                         dst,
                         name: type_root_name(name).to_string(),
-                        value: Some(arg_regs[0]),
+                        fields: vec![("value".to_string(), arg_regs[0])],
                     });
                 } else if self
                     .hir
@@ -2251,14 +2453,33 @@ impl RegLowerer<'_> {
                             self.emit(RegInstr::MakeVariant {
                                 dst,
                                 name: variant_name.to_string(),
-                                value: None,
+                                fields: Vec::new(),
                             });
                         }
                         1 if arg_regs.len() == 1 => {
                             self.emit(RegInstr::MakeVariant {
                                 dst,
                                 name: variant_name.to_string(),
-                                value: Some(arg_regs[0]),
+                                fields: vec![(fields[0].name.clone(), arg_regs[0])],
+                            });
+                        }
+                        field_count if field_count == arg_regs.len() => {
+                            let fields = args
+                                .iter()
+                                .zip(arg_regs.into_iter())
+                                .enumerate()
+                                .map(|(index, (arg, reg))| {
+                                    let name = arg
+                                        .name
+                                        .clone()
+                                        .unwrap_or_else(|| fields[index].name.clone());
+                                    (name, reg)
+                                })
+                                .collect::<Vec<_>>();
+                            self.emit(RegInstr::MakeVariant {
+                                dst,
+                                name: variant_name.to_string(),
+                                fields,
                             });
                         }
                         field_count => {
@@ -3519,16 +3740,11 @@ impl RegLowerer<'_> {
             .is_some_and(|signature| signature.is_native && !signature.is_builtin)
     }
 
-    fn variant_match(
-        &mut self,
-        value: &HirExpr,
-        arms: &[crate::hir::HirMatchArm],
-    ) -> Result<bool, EvalError> {
+    fn variant_match(&mut self, value: &HirExpr, arms: &[HirMatchArm]) -> Result<bool, EvalError> {
         if arms.is_empty()
-            || arms.iter().any(|arm| arm.guard.is_some())
             || !arms
                 .iter()
-                .all(|arm| is_supported_variant_pattern(&arm.pattern))
+                .all(|arm| self.is_supported_match_pattern(&arm.pattern))
         {
             return Ok(false);
         }
@@ -3540,6 +3756,10 @@ impl RegLowerer<'_> {
             let arm_ip = self.function.code.len();
             self.patch_match_failures(failure_patches, arm_ip);
             failure_patches = self.lower_match_pattern(&arm.pattern, src)?;
+            if let Some(guard) = &arm.guard {
+                let guard_failure = self.condition_jump(guard, false, usize::MAX)?;
+                failure_patches.push(MatchFailurePatch::Jump(guard_failure));
+            }
             self.block(&arm.body)?;
             end_jumps.push(self.emit(RegInstr::Jump { target: usize::MAX }));
         }
@@ -3554,6 +3774,46 @@ impl RegLowerer<'_> {
             self.patch_jump(jump, end_ip);
         }
         Ok(true)
+    }
+
+    fn match_expr(&mut self, value: &HirExpr, arms: &[HirMatchArm]) -> Result<Reg, EvalError> {
+        if arms.is_empty()
+            || !arms
+                .iter()
+                .all(|arm| self.is_supported_match_pattern(&arm.pattern))
+        {
+            return Err(EvalError::Runtime(
+                "reg VM v0 does not support this match expression pattern.".to_string(),
+            ));
+        }
+
+        let src = self.expr(value)?;
+        let dst = self.temp();
+        let mut failure_patches = Vec::new();
+        let mut end_jumps = Vec::new();
+        for arm in arms {
+            let arm_ip = self.function.code.len();
+            self.patch_match_failures(failure_patches, arm_ip);
+            failure_patches = self.lower_match_pattern(&arm.pattern, src)?;
+            if let Some(guard) = &arm.guard {
+                let guard_failure = self.condition_jump(guard, false, usize::MAX)?;
+                failure_patches.push(MatchFailurePatch::Jump(guard_failure));
+            }
+            let value = self.expr_block_value(&arm.body)?;
+            self.emit(RegInstr::Move { dst, src: value });
+            end_jumps.push(self.emit(RegInstr::Jump { target: usize::MAX }));
+        }
+
+        let no_match_ip = self.function.code.len();
+        self.patch_match_failures(failure_patches, no_match_ip);
+        self.emit(RegInstr::RuntimeError {
+            message: "reg VM match expression did not match any arm.".to_string(),
+        });
+        let end_ip = self.function.code.len();
+        for jump in end_jumps {
+            self.patch_jump(jump, end_ip);
+        }
+        Ok(dst)
     }
 
     fn lower_match_pattern(
@@ -3589,10 +3849,92 @@ impl RegLowerer<'_> {
             {
                 self.lower_user_variant_pattern(src, name, binding.as_deref())
             }
+            MatchPattern::Struct { name, fields, .. }
+                if self.hir.sum_type_for_variant(name).is_some() =>
+            {
+                self.lower_user_struct_variant_pattern(src, name, fields)
+            }
+            MatchPattern::Literal { value, .. } => self.lower_literal_pattern(src, value),
             _ => Err(EvalError::Runtime(
                 "reg VM v0 does not support this match pattern.".to_string(),
             )),
         }
+    }
+
+    fn is_supported_match_pattern(&self, pattern: &MatchPattern) -> bool {
+        match pattern {
+            MatchPattern::Binding { .. }
+            | MatchPattern::Literal { .. }
+            | MatchPattern::Wildcard(_) => true,
+            MatchPattern::Variant { name, binding, .. }
+                if matches!(name.as_str(), "Some" | "None" | "Ok" | "Err") =>
+            {
+                binding
+                    .as_deref()
+                    .is_none_or(|binding| self.is_supported_match_pattern(binding))
+            }
+            MatchPattern::Variant { name, binding, .. } => {
+                self.hir.sum_type_for_variant(name).is_some()
+                    && binding
+                        .as_deref()
+                        .is_none_or(|binding| self.is_supported_match_pattern(binding))
+            }
+            MatchPattern::Struct { name, fields, .. } => {
+                self.hir.sum_type_for_variant(name).is_some()
+                    && fields.iter().all(|field| {
+                        field.ignored
+                            || field
+                                .pattern
+                                .as_deref()
+                                .is_none_or(|pattern| self.is_supported_match_pattern(pattern))
+                    })
+            }
+        }
+    }
+
+    fn lower_literal_pattern(
+        &mut self,
+        src: Reg,
+        literal: &MatchLiteral,
+    ) -> Result<Vec<MatchFailurePatch>, EvalError> {
+        let expected = self.temp();
+        match literal {
+            MatchLiteral::Int(value) => {
+                let value = value.parse::<i64>().map_err(|error| {
+                    EvalError::Runtime(format!(
+                        "reg VM could not parse match int literal `{value}`: {error}"
+                    ))
+                })?;
+                self.emit(RegInstr::LoadInt {
+                    dst: expected,
+                    value,
+                });
+            }
+            MatchLiteral::String(value) => {
+                self.emit(RegInstr::LoadString {
+                    dst: expected,
+                    value: Rc::new(decode_string_token(value)),
+                });
+            }
+            MatchLiteral::Bool(value) => {
+                self.emit(RegInstr::LoadBool {
+                    dst: expected,
+                    value: *value,
+                });
+            }
+        }
+        let matches = self.temp();
+        self.emit(RegInstr::Equal {
+            dst: matches,
+            lhs: src,
+            rhs: expected,
+        });
+        let failure = self.emit(RegInstr::JumpIfBool {
+            cond: matches,
+            expected: false,
+            target: usize::MAX,
+        });
+        Ok(vec![MatchFailurePatch::Jump(failure)])
     }
 
     fn lower_option_some_pattern(
@@ -3724,9 +4066,53 @@ impl RegLowerer<'_> {
         Ok(failures)
     }
 
+    fn lower_user_struct_variant_pattern(
+        &mut self,
+        src: Reg,
+        variant: &str,
+        fields: &[MatchFieldPattern],
+    ) -> Result<Vec<MatchFailurePatch>, EvalError> {
+        let match_ip = self.emit(RegInstr::MatchVariant {
+            src,
+            expected: variant.to_string(),
+            match_ip: usize::MAX,
+            else_ip: usize::MAX,
+        });
+        let pass_ip = self.function.code.len();
+        self.patch_jump(match_ip, pass_ip);
+        let mut failures = vec![MatchFailurePatch::VariantOther(match_ip)];
+        for field in fields {
+            if field.ignored {
+                continue;
+            }
+            let field_reg = self.temp();
+            self.emit(RegInstr::GetField {
+                dst: field_reg,
+                base: src,
+                name: field.name.clone(),
+            });
+            if let Some(pattern) = field.pattern.as_deref() {
+                failures.extend(self.lower_match_pattern(pattern, field_reg)?);
+            } else if let Some(binding) = field.binding.as_ref() {
+                let dst = self.local(binding);
+                self.emit(RegInstr::Move {
+                    dst,
+                    src: field_reg,
+                });
+            } else {
+                return Err(EvalError::Runtime(format!(
+                    "reg VM struct variant pattern field `{}` has no binding or nested pattern.",
+                    field.name
+                )));
+            }
+        }
+        Ok(failures)
+    }
+
     fn patch_match_failures(&mut self, patches: Vec<MatchFailurePatch>, target: usize) {
         for patch in patches {
             match patch {
+                MatchFailurePatch::Jump(ip) => self.patch_jump(ip, target),
                 MatchFailurePatch::OptionSome(ip) | MatchFailurePatch::ResultOk(ip) => {
                     self.patch_jump(ip, target)
                 }
@@ -3755,6 +4141,9 @@ impl RegLowerer<'_> {
             return Ok(false);
         }
         if arms.len() != 2 {
+            return Ok(false);
+        }
+        if arms.iter().any(|arm| arm.guard.is_some()) {
             return Ok(false);
         }
 
@@ -4073,21 +4462,6 @@ fn collect_free_locals_expr(
     }
 }
 
-fn is_supported_variant_pattern(pattern: &MatchPattern) -> bool {
-    match pattern {
-        MatchPattern::Binding { .. } | MatchPattern::Wildcard(_) => true,
-        MatchPattern::Variant { name, binding, .. }
-            if matches!(name.as_str(), "Some" | "None" | "Ok" | "Err") =>
-        {
-            binding.as_deref().is_none_or(is_supported_variant_pattern)
-        }
-        MatchPattern::Variant { binding, .. } => {
-            binding.as_deref().is_none_or(is_supported_variant_pattern)
-        }
-        MatchPattern::Struct { .. } | MatchPattern::Literal { .. } => false,
-    }
-}
-
 struct RegVm {
     unit: Rc<RegUnit>,
     args: Vec<String>,
@@ -4297,16 +4671,16 @@ impl RegVm {
                     let value = self.reg(base + *resource).clone();
                     self.run_resource_drop(unit, value, next_base)?;
                 }
-                RegInstr::MakeVariant { dst, name, value } => {
-                    let mut fields = HashMap::new();
-                    if let Some(value) = value {
-                        fields.insert("value".to_string(), self.reg(base + *value).clone());
+                RegInstr::MakeVariant { dst, name, fields } => {
+                    let mut field_values = HashMap::with_capacity(fields.len());
+                    for (field, reg) in fields {
+                        field_values.insert(field.clone(), self.reg(base + *reg).clone());
                     }
                     self.set_reg(
                         base + *dst,
                         VmValue::Variant(Rc::new(VmStruct {
                             name: Rc::from(name.as_str()),
-                            fields,
+                            fields: field_values,
                         })),
                     );
                 }
@@ -4535,13 +4909,20 @@ impl RegVm {
                 }
                 RegInstr::UnwrapVariantValue { dst, src, expected } => {
                     let value = match self.reg(base + *src) {
-                        VmValue::Variant(data) if data.name.as_ref() == expected.as_str() => {
-                            data.fields.get("value").cloned().ok_or_else(|| {
+                        VmValue::Variant(data) if data.name.as_ref() == expected.as_str() => data
+                            .fields
+                            .get("value")
+                            .cloned()
+                            .or_else(|| {
+                                (data.fields.len() == 1)
+                                    .then(|| data.fields.values().next().cloned())
+                                    .flatten()
+                            })
+                            .ok_or_else(|| {
                                 EvalError::Runtime(format!(
                                     "reg VM `{expected}` variant is missing value."
                                 ))
-                            })?
-                        }
+                            })?,
                         other => {
                             return Err(EvalError::Runtime(format!(
                                 "reg VM expected `{expected}` variant, got `{}`.",

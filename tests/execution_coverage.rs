@@ -45,9 +45,9 @@ fn vm_coverage_gap_is_explicit() {
     assert_bucket_complete(&vm.runtime_intrinsics);
     assert_bucket_complete(&vm.special_forms);
     assert_bucket_counts(&vm.hir_statements, 12, 10, 2);
-    assert_bucket_counts(&vm.hir_expressions, 17, 15, 2);
+    assert_bucket_counts(&vm.hir_expressions, 17, 14, 3);
     assert_bucket_counts(&vm.value_types, 15, 15, 0);
-    assert_bucket_counts(&vm.function_kinds, 3, 3, 0);
+    assert_bucket_counts(&vm.function_kinds, 3, 2, 1);
     assert_bucket_complete(&vm.parity_features);
 
     assert!(vm.runtime_intrinsics.missing.is_empty());
@@ -58,10 +58,14 @@ fn vm_coverage_gap_is_explicit() {
     );
     assert_eq!(
         vm.hir_expressions.missing,
-        vec!["Match".to_string(), "Spawn".to_string()]
+        vec![
+            "Await".to_string(),
+            "Match".to_string(),
+            "Spawn".to_string()
+        ]
     );
     assert!(vm.value_types.missing.is_empty());
-    assert!(vm.function_kinds.missing.is_empty());
+    assert_eq!(vm.function_kinds.missing, vec!["async".to_string()]);
     assert!(vm.parity_features.missing.is_empty());
 }
 
