@@ -2467,6 +2467,21 @@ fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
         return Some(unary);
     }
 
+    // An effect keyword immediately followed by a closure (e.g. `read || { ... }`)
+    // is an effect-annotated closure argument. Handle it before binary parsing so
+    // the `||` isn't mistaken for a logical-or operator.
+    if let Some(effect) = parse_data_effect(tokens.get(start))
+        && tokens.get(start + 1).is_some_and(|token| token.symbol("|"))
+        && let Some(closure) = parse_closure_expr(tokens, start + 1, end)
+        && !matches!(closure, Expr::Unknown(_))
+    {
+        return Some(Expr::Effect {
+            effect,
+            value: Box::new(closure),
+            span: tokens[start].span.clone(),
+        });
+    }
+
     if let Some(binary) = parse_binary_expr(tokens, start, end) {
         return Some(binary);
     }

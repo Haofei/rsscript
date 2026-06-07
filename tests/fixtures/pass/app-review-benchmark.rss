@@ -33,7 +33,7 @@ struct RenderResult {
 class RetainedImageStore {
 }
 
-fn RetainedImageStore.new(capacity: Int) -> fresh RetainedImageStore
+fn RetainedImageStore.new(capacity: Int) -> RetainedImageStore
 
 fn RetainedImageStore.store(cache: mut RetainedImageStore, image: read Image) -> Unit
     effects(retains(image))
@@ -138,7 +138,7 @@ fn process_image(plan: read UploadPlan, cache: mut RetainedImageStore) -> Result
     return Ok(Unit)
 }
 
-fn build_image_store() -> fresh RetainedImageStore {
+fn build_image_store() -> RetainedImageStore {
     return RetainedImageStore.new(capacity: 64)
 }
 
