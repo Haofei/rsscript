@@ -1,5 +1,7 @@
 features: local
 
+struct Deque<T>
+
 pub fn Deque.new<T>() -> fresh Deque<T>
 
 pub fn Deque.push_back<T>(

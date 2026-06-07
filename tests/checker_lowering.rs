@@ -6143,11 +6143,11 @@ fn review_map_complex_supported_script_has_no_unknown_regions() {
     let source = common::read_fixture(path);
     let map = review_map_sources(vec![(path.to_str().unwrap(), source.as_str())]);
 
-    assert_eq!(map.summary.total_functions, 14);
+    assert_eq!(map.summary.total_functions, 15);
     assert!(map.summary.total_lines >= 70);
     assert_eq!(map.summary.unknown.functions, 0, "{map:?}");
     assert_eq!(map.summary.unknown.lines, 0, "{map:?}");
-    assert_eq!(map.summary.review_required.functions, 10);
+    assert_eq!(map.summary.review_required.functions, 11);
     assert_eq!(map.summary.foldable.functions, 4);
     let json: Value =
         serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
@@ -6161,7 +6161,7 @@ fn review_map_realistic_supported_corpus_has_no_unknown_regions() {
     let source = common::read_fixture(path);
     let map = review_map_sources(vec![(path.to_str().unwrap(), source.as_str())]);
 
-    assert_eq!(map.summary.total_functions, 21);
+    assert_eq!(map.summary.total_functions, 22);
     assert!(map.summary.total_lines >= 120);
     assert_eq!(map.summary.unknown.functions, 0, "{map:?}");
     assert_eq!(map.summary.unknown.lines, 0, "{map:?}");
@@ -6178,7 +6178,7 @@ fn review_map_app_benchmark_has_no_unknown_regions() {
     let source = common::read_fixture(path);
     let map = review_map_sources(vec![(path.to_str().unwrap(), source.as_str())]);
 
-    assert_eq!(map.summary.total_functions, 42);
+    assert_eq!(map.summary.total_functions, 44);
     assert!(map.summary.total_lines >= 300, "{map:?}");
     assert_eq!(map.files[0].risk, ReviewMapFileRisk::High);
     assert_eq!(map.summary.unknown.functions, 0, "{map:?}");
@@ -6190,7 +6190,7 @@ fn review_map_app_benchmark_has_no_unknown_regions() {
         serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
     assert_eq!(json["summary"]["unknown_ratio"], 0.0);
     assert_eq!(json["summary"]["unknown_function_ratio"], 0.0);
-    assert_eq!(json["summary"]["must_review"]["functions"], 33);
+    assert_eq!(json["summary"]["must_review"]["functions"], 35);
     assert_eq!(json["summary"]["low_semantic_risk"]["functions"], 9);
 }
 

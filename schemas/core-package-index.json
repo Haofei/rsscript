@@ -93,6 +93,24 @@
       ]
     },
     {
+      "path": "core/collections/deque.rssi",
+      "module": "collections.deque",
+      "functions": [
+        "Deque.clear",
+        "Deque.is_empty",
+        "Deque.len",
+        "Deque.new",
+        "Deque.pop_back",
+        "Deque.pop_front",
+        "Deque.push_back",
+        "Deque.push_front",
+        "Deque.to_list"
+      ],
+      "types": [
+        "Deque"
+      ]
+    },
+    {
       "path": "core/collections/list.rssi",
       "module": "collections.list",
       "functions": [
@@ -104,10 +122,13 @@
         "List.contains",
         "List.contains_value",
         "List.count_where",
+        "List.dedup",
+        "List.enumerate",
         "List.filter",
         "List.find",
         "List.first",
         "List.flat_map",
+        "List.flatten",
         "List.fold",
         "List.get",
         "List.group_by",
@@ -116,6 +137,8 @@
         "List.last",
         "List.len",
         "List.map",
+        "List.max",
+        "List.min",
         "List.new",
         "List.partition",
         "List.pop",
@@ -128,10 +151,12 @@
         "List.sort",
         "List.sort_by",
         "List.sort_with",
+        "List.sum",
         "List.take",
         "List.to_json_strings",
         "List.to_json_values",
-        "List.try_fold"
+        "List.try_fold",
+        "List.zip"
       ],
       "types": []
     },
@@ -163,6 +188,23 @@
       ]
     },
     {
+      "path": "core/collections/persistent_map.rssi",
+      "module": "collections.persistent_map",
+      "functions": [
+        "PersistentMap.clear",
+        "PersistentMap.contains_key",
+        "PersistentMap.get",
+        "PersistentMap.insert",
+        "PersistentMap.is_empty",
+        "PersistentMap.len",
+        "PersistentMap.new",
+        "PersistentMap.remove"
+      ],
+      "types": [
+        "PersistentMap"
+      ]
+    },
+    {
       "path": "core/collections/pipeline.rssi",
       "module": "collections.pipeline",
       "functions": [
@@ -175,7 +217,6 @@
         "Pipeline.collect",
         "Pipeline.each",
         "Pipeline.filter",
-        "Pipeline.from_list",
         "Pipeline.map",
         "Pipeline.try_map"
       ],
@@ -204,6 +245,42 @@
       ],
       "types": [
         "Set"
+      ]
+    },
+    {
+      "path": "core/collections/sorted_map.rssi",
+      "module": "collections.sorted_map",
+      "functions": [
+        "SortedMap.clear",
+        "SortedMap.contains_key",
+        "SortedMap.get",
+        "SortedMap.insert",
+        "SortedMap.is_empty",
+        "SortedMap.keys",
+        "SortedMap.len",
+        "SortedMap.new",
+        "SortedMap.remove",
+        "SortedMap.values"
+      ],
+      "types": [
+        "SortedMap"
+      ]
+    },
+    {
+      "path": "core/collections/sorted_set.rssi",
+      "module": "collections.sorted_set",
+      "functions": [
+        "SortedSet.clear",
+        "SortedSet.contains",
+        "SortedSet.insert",
+        "SortedSet.is_empty",
+        "SortedSet.len",
+        "SortedSet.new",
+        "SortedSet.remove",
+        "SortedSet.to_list"
+      ],
+      "types": [
+        "SortedSet"
       ]
     },
     {
@@ -264,6 +341,30 @@
         "Row",
         "RowBuffer"
       ]
+    },
+    {
+      "path": "core/date/date.rssi",
+      "module": "date.date",
+      "functions": [
+        "Date.add_days",
+        "Date.add_ms",
+        "Date.day",
+        "Date.days_between",
+        "Date.days_in_month",
+        "Date.format_iso",
+        "Date.format_ymd",
+        "Date.hour",
+        "Date.is_leap_year",
+        "Date.minute",
+        "Date.month",
+        "Date.parse_iso",
+        "Date.parse_ymd",
+        "Date.second",
+        "Date.start_of_day",
+        "Date.weekday",
+        "Date.year"
+      ],
+      "types": []
     },
     {
       "path": "core/db/db.rssi",
@@ -380,7 +481,9 @@
       "functions": [
         "Hash.sha256_bytes",
         "Hash.sha256_file",
-        "Hash.sha256_string"
+        "Hash.sha256_string",
+        "Hmac.sha256_bytes",
+        "Hmac.sha256_string"
       ],
       "types": []
     },
@@ -550,6 +653,27 @@
       "types": []
     },
     {
+      "path": "core/math/math.rssi",
+      "module": "math.math",
+      "functions": [
+        "Math.abs",
+        "Math.abs_float",
+        "Math.ceil",
+        "Math.clamp",
+        "Math.clamp_float",
+        "Math.floor",
+        "Math.max",
+        "Math.max_float",
+        "Math.min",
+        "Math.min_float",
+        "Math.pow",
+        "Math.pow_float",
+        "Math.round",
+        "Math.sqrt"
+      ],
+      "types": []
+    },
+    {
       "path": "core/option/option.rssi",
       "module": "option.option",
       "functions": [
@@ -705,25 +829,57 @@
       "path": "core/string/string.rssi",
       "module": "string.string",
       "functions": [
+        "Char.compare",
+        "Char.from_code",
+        "Char.is_alpha",
+        "Char.is_alphanumeric",
+        "Char.is_digit",
+        "Char.is_lower",
+        "Char.is_upper",
+        "Char.is_whitespace",
+        "Char.to_code",
+        "Char.to_lower",
+        "Char.to_string",
+        "Char.to_upper",
+        "Float.is_finite",
+        "Float.is_infinite",
+        "Float.is_nan",
+        "Float.to_string",
+        "Int.bit_and",
+        "Int.bit_not",
+        "Int.bit_or",
+        "Int.bit_xor",
+        "Int.shift_left",
+        "Int.shift_right",
         "Int.to_string",
         "String.after",
         "String.before",
+        "String.char_at",
+        "String.chars",
         "String.concat",
         "String.contains",
         "String.copy",
+        "String.count",
         "String.ends_with",
         "String.env",
         "String.env_or",
+        "String.format",
         "String.from_bool",
+        "String.from_float",
         "String.from_int",
         "String.index_of",
         "String.is_empty",
         "String.join",
         "String.len",
         "String.lines",
+        "String.pad_left",
+        "String.pad_right",
+        "String.parse_float",
         "String.parse_int",
         "String.repeat",
         "String.replace",
+        "String.replace_first",
+        "String.reverse",
         "String.safe_relative",
         "String.slice",
         "String.split",
@@ -735,6 +891,8 @@
         "String.to_uppercase",
         "String.to_url",
         "String.trim",
+        "String.trim_end",
+        "String.trim_start",
         "String.view",
         "StringBuilder.finish",
         "StringBuilder.new",
@@ -833,6 +991,73 @@
       "source_files": [],
       "native_rust": {
         "crate_name": "rss_sqlite_native",
+        "path": "native/rust"
+      },
+      "virtual_package": null,
+      "dependencies": [],
+      "dev_dependencies": []
+    },
+    {
+      "kind": "adapter",
+      "name": "rss-sqlite-smoke",
+      "version": "0.1.0",
+      "path": "rss/adapters/sqlite/tests/sqlite-smoke",
+      "interface_files": [],
+      "source_files": [
+        "src/main.rss"
+      ],
+      "native_rust": null,
+      "virtual_package": null,
+      "dependencies": [
+        "rss-sqlite"
+      ],
+      "dev_dependencies": []
+    },
+    {
+      "kind": "adapter",
+      "name": "rss-sqlx",
+      "version": "0.1.0",
+      "path": "rss/adapters/sqlx",
+      "interface_files": [
+        "interface/lib.rssi"
+      ],
+      "source_files": [
+        "src/lib.rss"
+      ],
+      "native_rust": null,
+      "virtual_package": null,
+      "dependencies": [
+        "rss-sqlx-ffi"
+      ],
+      "dev_dependencies": []
+    },
+    {
+      "kind": "adapter",
+      "name": "rss-sqlx-smoke",
+      "version": "0.1.0",
+      "path": "rss/adapters/sqlx/tests/sqlx-smoke",
+      "interface_files": [],
+      "source_files": [
+        "src/main.rss"
+      ],
+      "native_rust": null,
+      "virtual_package": null,
+      "dependencies": [
+        "rss-sqlx"
+      ],
+      "dev_dependencies": []
+    },
+    {
+      "kind": "adapter",
+      "name": "rss-sqlx-ffi",
+      "version": "0.1.0",
+      "path": "rss/adapters/sqlx-ffi",
+      "interface_files": [
+        "interface/lib.rssi"
+      ],
+      "source_files": [],
+      "native_rust": {
+        "crate_name": "rss_sqlx_native",
         "path": "native/rust"
       },
       "virtual_package": null,
@@ -968,6 +1193,22 @@
     },
     {
       "kind": "core",
+      "name": "rss-core-http-server-serve-hello",
+      "version": "0.1.0",
+      "path": "rss/core/http-server/examples/serve-hello",
+      "interface_files": [],
+      "source_files": [
+        "src/main.rss"
+      ],
+      "native_rust": null,
+      "virtual_package": null,
+      "dependencies": [
+        "rss-core-http-server"
+      ],
+      "dev_dependencies": []
+    },
+    {
+      "kind": "core",
       "name": "rss-core-http-server",
       "version": "0.1.0",
       "path": "rss/core/http-server",
@@ -975,11 +1216,11 @@
         "interface/lib.rssi"
       ],
       "source_files": [],
-      "native_rust": null,
-      "virtual_package": {
-        "has_default": false,
-        "provider": "http"
+      "native_rust": {
+        "crate_name": "rss_http_server_native",
+        "path": "native/rust"
       },
+      "virtual_package": null,
       "dependencies": [],
       "dev_dependencies": []
     },
@@ -1076,6 +1317,22 @@
     },
     {
       "kind": "package",
+      "name": "rss-rayon-sort-smoke",
+      "version": "0.1.0",
+      "path": "rss/rayon/tests/sort-smoke",
+      "interface_files": [],
+      "source_files": [
+        "src/main.rss"
+      ],
+      "native_rust": null,
+      "virtual_package": null,
+      "dependencies": [
+        "rss-rayon"
+      ],
+      "dev_dependencies": []
+    },
+    {
+      "kind": "package",
       "name": "rss-rayon-sort-speed",
       "version": "0.1.0",
       "path": "rss/rayon/tests/sort-speed",
@@ -1088,6 +1345,22 @@
       "dependencies": [
         "rss-rayon",
         "rss-rayon-sort-fixture"
+      ],
+      "dev_dependencies": []
+    },
+    {
+      "kind": "package",
+      "name": "rss-rayon-sum-smoke",
+      "version": "0.1.0",
+      "path": "rss/rayon/tests/sum-smoke",
+      "interface_files": [],
+      "source_files": [
+        "src/main.rss"
+      ],
+      "native_rust": null,
+      "virtual_package": null,
+      "dependencies": [
+        "rss-rayon"
       ],
       "dev_dependencies": []
     },
