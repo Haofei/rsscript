@@ -1,0 +1,10 @@
+features: local
+
+fn main() -> Unit {
+    local xs = List<Int>.new()
+    List.push<Int>(list: mut xs, value: read 10)
+    List.push<Int>(list: mut xs, value: read 20)
+    List.push<Int>(list: mut xs, value: read 12)
+    Log.write(message: read String.from_int(value: List.sum(list: read xs)))
+    return Unit
+}

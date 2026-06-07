@@ -1,0 +1,4 @@
+kind = "execution"
+backends = ["vm", "compiled"]
+stdout = "ada\n"
+tags = ["option", "match"]

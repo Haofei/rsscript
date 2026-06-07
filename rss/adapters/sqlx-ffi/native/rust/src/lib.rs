@@ -126,8 +126,11 @@ mod tests {
     fn reuses_a_single_pool_per_url() {
         let (path, url) = sqlite_url("pool");
 
-        super::execute(&url, "create table t(name text); insert into t values ('x');")
-            .expect("sqlite setup should work");
+        super::execute(
+            &url,
+            "create table t(name text); insert into t values ('x');",
+        )
+        .expect("sqlite setup should work");
 
         // Many calls against the same URL must reuse one cached pool rather than
         // creating a new connection per call.
@@ -166,8 +169,7 @@ mod tests {
             return;
         };
 
-        super::execute(&url, "drop table if exists rss_sqlx_item")
-            .expect("drop table should work");
+        super::execute(&url, "drop table if exists rss_sqlx_item").expect("drop table should work");
         super::execute(
             &url,
             "create table rss_sqlx_item(name text); insert into rss_sqlx_item values ('a'), ('b');",

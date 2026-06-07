@@ -45,7 +45,6 @@ pub use diagnostic::{
 };
 pub use editor_grammar::{VSCODE_GRAMMAR_PATH, vscode_tmlanguage_json};
 pub use eval_types::{CoverageBucket, EvalError, EvalOutput, NativeInterpreterFn, NativeValue};
-pub use native_plugin::load_package_native_bindings;
 pub use formatter::{format_program, format_source};
 pub use generate::{
     CommitBehavior, Completion, CompletionKind, ContinuationOptions, Continuations, Effect,
@@ -53,6 +52,7 @@ pub use generate::{
     TypeRef, prefix_status, valid_continuations,
 };
 pub use lint::lint_source;
+pub use native_plugin::load_package_native_bindings;
 pub use package::{
     PackageArchiveFile, PackageCheck, PackageCheckLock, PackageDependencyKind, PackageDiff,
     PackageGraphCheck, PackageIdentity, PackageInterfaceChange, PackageInterfaceChangeKind,
@@ -82,8 +82,8 @@ pub use package::{
 };
 pub use reg_vm::{
     RegVmExecutable, RegVmExecutable as VmExecutable, reg_vm_compile_package,
-    reg_vm_compile_source as vm_compile_source,
-    reg_vm_compile_source, reg_vm_eval_package_main_with_args as eval_package_main_with_args,
+    reg_vm_compile_source as vm_compile_source, reg_vm_compile_source,
+    reg_vm_eval_package_main_with_args as eval_package_main_with_args,
     reg_vm_eval_package_main_with_args_and_native_bindings as eval_package_main_with_args_and_native_bindings,
     reg_vm_eval_source_main as eval_source_main, reg_vm_eval_source_main_with_args,
     reg_vm_eval_source_main_with_args as eval_source_main_with_args,

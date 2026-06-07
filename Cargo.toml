@@ -47,3 +47,11 @@ toml = "0.8"
 
 [dev-dependencies]
 sha1 = "0.10"
+libtest-mimic = "0.8"
+proptest = "1"
+
+# The differential corpus runner uses a custom (libtest-mimic) harness so each
+# fixture is an individually named, filterable test case.
+[[test]]
+name = "corpus"
+harness = false

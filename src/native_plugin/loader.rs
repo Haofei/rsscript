@@ -41,7 +41,10 @@ pub fn load_package_native_bindings(
         let program = parse_source(path, contents);
         for item in &program.items {
             if let Item::Function(decl) = item {
-                signatures.insert(decl.name.clone(), (decl.params.clone(), decl.return_ty.clone()));
+                signatures.insert(
+                    decl.name.clone(),
+                    (decl.params.clone(), decl.return_ty.clone()),
+                );
             }
         }
     }
@@ -195,7 +198,8 @@ fn write_if_changed(path: &Path, contents: &str) -> Result<(), String> {
     if fs::read_to_string(path).is_ok_and(|existing| existing == contents) {
         return Ok(());
     }
-    fs::write(path, contents).map_err(|error| format!("failed to write {}: {error}", path.display()))
+    fs::write(path, contents)
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))
 }
 
 fn library_file_name(crate_name: &str) -> String {

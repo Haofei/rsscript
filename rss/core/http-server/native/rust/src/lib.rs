@@ -8,11 +8,7 @@ use tiny_http::{Header, Method, Request, Response, Server};
 /// path returns 404, and a non-GET request to a known path returns 405. `paths`
 /// and `bodies` must have equal length, and paths must be unique. A successful
 /// bind serves forever, so this only returns on a bind/setup error.
-pub fn serve_static(
-    address: &str,
-    paths: &Vec<String>,
-    bodies: &Vec<String>,
-) -> Result<(), String> {
+pub fn serve_static(address: &str, paths: &[String], bodies: &[String]) -> Result<(), String> {
     let routes = build_routes(paths, bodies)?;
     let server = Server::http(address).map_err(|error| error.to_string())?;
     for request in server.incoming_requests() {

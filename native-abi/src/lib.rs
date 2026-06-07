@@ -64,6 +64,35 @@ pub struct NativeRegistry {
 /// signature `unsafe extern "C" fn() -> NativeRegistry`.
 pub const REGISTRY_SYMBOL: &str = "rss_native_registry";
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn registry_symbol_is_stable() {
+        // The generated shim exports exactly this symbol; keep them in lockstep.
+        assert_eq!(REGISTRY_SYMBOL, "rss_native_registry");
+    }
+
+    #[test]
+    fn native_values_clone_and_compare_structurally() {
+        let list = NativeValue::List(vec![
+            NativeValue::Int(1),
+            NativeValue::String("a".to_string()),
+        ]);
+        assert_eq!(list.clone(), list);
+
+        let mut fields = BTreeMap::new();
+        fields.insert("value".to_string(), NativeValue::Int(7));
+        let some = NativeValue::Variant {
+            name: "Some".to_string(),
+            fields,
+        };
+        assert_eq!(some.clone(), some);
+        assert_ne!(some, NativeValue::Unit);
+    }
+}
+
 /// Host-side loader for plugin cdylibs. Lives here (rather than in the host crate)
 /// because the `dlopen` boundary is inherently `unsafe`, which the host crate
 /// forbids. Gated behind the `host` feature so plugins don't compile libloading.

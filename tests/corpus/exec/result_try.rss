@@ -1,0 +1,28 @@
+fn parse(value: read String) -> Result<Int, String> {
+    match String.parse_int(value: read value) {
+        Some(number) => {
+            return Ok(number)
+        }
+        None => {
+            return Err("not a number")
+        }
+    }
+}
+
+fn run() -> Result<Unit, String> {
+    let number = parse(value: read "41")?
+    Log.write(message: read String.from_int(value: number + 1))
+    return Ok(Unit)
+}
+
+fn main() -> Unit {
+    match run() {
+        Ok(_) => {
+            return Unit
+        }
+        Err(message) => {
+            Log.write(message: read message)
+        }
+    }
+    return Unit
+}

@@ -69,36 +69,54 @@ impl ShimType {
 
     /// A Rust expression of type `Result<Owned, String>` converting the
     /// `NativeValue` expression `src` into the owned Rust type.
-    fn from_native_expr(&self, src: &str) -> String {
+    fn decode_expr(&self, src: &str) -> String {
         match self {
             ShimType::Unit => {
-                format!("match {src} {{ NativeValue::Unit => Ok(()), other => Err(format!(\"expected Unit, got {{other:?}}\")) }}")
+                format!(
+                    "match {src} {{ NativeValue::Unit => Ok(()), other => Err(format!(\"expected Unit, got {{other:?}}\")) }}"
+                )
             }
             ShimType::String => {
-                format!("match {src} {{ NativeValue::String(v) => Ok(v), other => Err(format!(\"expected String, got {{other:?}}\")) }}")
+                format!(
+                    "match {src} {{ NativeValue::String(v) => Ok(v), other => Err(format!(\"expected String, got {{other:?}}\")) }}"
+                )
             }
             ShimType::Int => {
-                format!("match {src} {{ NativeValue::Int(v) => Ok(v), other => Err(format!(\"expected Int, got {{other:?}}\")) }}")
+                format!(
+                    "match {src} {{ NativeValue::Int(v) => Ok(v), other => Err(format!(\"expected Int, got {{other:?}}\")) }}"
+                )
             }
             ShimType::Float => {
-                format!("match {src} {{ NativeValue::Float(v) => Ok(v), other => Err(format!(\"expected Float, got {{other:?}}\")) }}")
+                format!(
+                    "match {src} {{ NativeValue::Float(v) => Ok(v), other => Err(format!(\"expected Float, got {{other:?}}\")) }}"
+                )
             }
             ShimType::Bool => {
-                format!("match {src} {{ NativeValue::Bool(v) => Ok(v), other => Err(format!(\"expected Bool, got {{other:?}}\")) }}")
+                format!(
+                    "match {src} {{ NativeValue::Bool(v) => Ok(v), other => Err(format!(\"expected Bool, got {{other:?}}\")) }}"
+                )
             }
             ShimType::Bytes => {
-                format!("match {src} {{ NativeValue::Bytes(v) => Ok(v), other => Err(format!(\"expected Bytes, got {{other:?}}\")) }}")
+                format!(
+                    "match {src} {{ NativeValue::Bytes(v) => Ok(v), other => Err(format!(\"expected Bytes, got {{other:?}}\")) }}"
+                )
             }
             ShimType::Path => {
-                format!("match {src} {{ NativeValue::String(v) => Ok(std::path::PathBuf::from(v)), other => Err(format!(\"expected Path, got {{other:?}}\")) }}")
+                format!(
+                    "match {src} {{ NativeValue::String(v) => Ok(std::path::PathBuf::from(v)), other => Err(format!(\"expected Path, got {{other:?}}\")) }}"
+                )
             }
             ShimType::List(inner) => {
-                let inner_conv = inner.from_native_expr("__item");
-                format!("match {src} {{ NativeValue::List(__items) => __items.into_iter().map(|__item| {inner_conv}).collect::<Result<Vec<_>, String>>(), other => Err(format!(\"expected List, got {{other:?}}\")) }}")
+                let inner_conv = inner.decode_expr("__item");
+                format!(
+                    "match {src} {{ NativeValue::List(__items) => __items.into_iter().map(|__item| {inner_conv}).collect::<Result<Vec<_>, String>>(), other => Err(format!(\"expected List, got {{other:?}}\")) }}"
+                )
             }
             ShimType::Option(inner) => {
-                let inner_conv = inner.from_native_expr("__inner");
-                format!("match {src} {{ NativeValue::Variant {{ name, mut fields }} if name == \"Some\" => match fields.remove(\"value\") {{ Some(__inner) => ({inner_conv}).map(Some), None => Err(\"Some payload missing value\".to_string()) }}, NativeValue::Variant {{ name, .. }} if name == \"None\" => Ok(None), other => Err(format!(\"expected Option, got {{other:?}}\")) }}")
+                let inner_conv = inner.decode_expr("__inner");
+                format!(
+                    "match {src} {{ NativeValue::Variant {{ name, mut fields }} if name == \"Some\" => match fields.remove(\"value\") {{ Some(__inner) => ({inner_conv}).map(Some), None => Err(\"Some payload missing value\".to_string()) }}, NativeValue::Variant {{ name, .. }} if name == \"None\" => Ok(None), other => Err(format!(\"expected Option, got {{other:?}}\")) }}"
+                )
             }
         }
     }
@@ -107,10 +125,9 @@ impl ShimType {
     /// reference for borrowing types).
     fn call_arg(&self, name: &str) -> String {
         match self {
-            ShimType::String
-            | ShimType::Bytes
-            | ShimType::Path
-            | ShimType::List(_) => format!("&{name}"),
+            ShimType::String | ShimType::Bytes | ShimType::Path | ShimType::List(_) => {
+                format!("&{name}")
+            }
             _ => name.to_string(),
         }
     }
@@ -129,11 +146,15 @@ impl ShimType {
             }
             ShimType::List(inner) => {
                 let inner_conv = inner.to_native_expr("__elem");
-                format!("NativeValue::List({expr}.into_iter().map(|__elem| {inner_conv}).collect())")
+                format!(
+                    "NativeValue::List({expr}.into_iter().map(|__elem| {inner_conv}).collect())"
+                )
             }
             ShimType::Option(inner) => {
                 let inner_conv = inner.to_native_expr("__payload");
-                format!("match {expr} {{ Some(__payload) => __some({inner_conv}), None => __none() }}")
+                format!(
+                    "match {expr} {{ Some(__payload) => __some({inner_conv}), None => __none() }}"
+                )
             }
         }
     }
@@ -183,10 +204,7 @@ fn __none() -> NativeValue {{\n    NativeValue::Variant {{ name: \"None\".to_str
 #[unsafe(no_mangle)]\npub extern \"C\" fn rss_native_registry() -> NativeRegistry {{\n    let entries: Vec<NativeBindingEntry> = vec![\n{entries}    ];\n    let boxed = entries.into_boxed_slice();\n    let len = boxed.len();\n    let ptr = Box::leak(boxed).as_ptr();\n    NativeRegistry {{ entries: ptr, len }}\n}}\n",
     );
 
-    ShimCrate {
-        cargo_toml,
-        lib_rs,
-    }
+    ShimCrate { cargo_toml, lib_rs }
 }
 
 fn render_shim_function(fn_name: &str, binding: &ShimBinding) -> String {
@@ -197,7 +215,7 @@ fn render_shim_function(fn_name: &str, binding: &ShimBinding) -> String {
     for (index, param) in binding.params.iter().enumerate() {
         let name = format!("__p{index}");
         let owned = param.owned_rust_ty();
-        let conv = param.from_native_expr(&format!("__raw{index}"));
+        let conv = param.decode_expr(&format!("__raw{index}"));
         let is_mut = binding.mut_indices.contains(&index);
         let mut_kw = if is_mut { "mut " } else { "" };
         body.push_str(&format!(
@@ -224,7 +242,9 @@ fn render_shim_function(fn_name: &str, binding: &ShimBinding) -> String {
         }
         ShimReturn::Plain(ty) => {
             let conv = ty.to_native_expr("__value");
-            body.push_str(&format!("    let __value = {call};\n    let __result = {conv};\n"));
+            body.push_str(&format!(
+                "    let __value = {call};\n    let __result = {conv};\n"
+            ));
         }
     }
 
@@ -243,4 +263,89 @@ fn render_shim_function(fn_name: &str, binding: &ShimBinding) -> String {
         ));
     }
     format!("fn {fn_name}(args: Vec<NativeValue>) -> Result<NativeValue, String> {{\n{body}}}\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn binding(params: Vec<ShimType>, ret: ShimReturn, mut_indices: Vec<usize>) -> ShimBinding {
+        ShimBinding {
+            symbol: "Demo.run".to_string(),
+            rust_path: "demo_native::run".to_string(),
+            params,
+            ret,
+            mut_indices,
+        }
+    }
+
+    #[test]
+    fn owned_rust_types_compose() {
+        assert_eq!(ShimType::Int.owned_rust_ty(), "i64");
+        assert_eq!(ShimType::Path.owned_rust_ty(), "std::path::PathBuf");
+        assert_eq!(
+            ShimType::List(Box::new(ShimType::Int)).owned_rust_ty(),
+            "Vec<i64>"
+        );
+        assert_eq!(
+            ShimType::Option(Box::new(ShimType::String)).owned_rust_ty(),
+            "Option<String>"
+        );
+    }
+
+    #[test]
+    fn borrowing_types_pass_by_reference() {
+        assert_eq!(ShimType::String.call_arg("x"), "&x");
+        assert_eq!(ShimType::Path.call_arg("x"), "&x");
+        assert_eq!(ShimType::List(Box::new(ShimType::Int)).call_arg("x"), "&x");
+        assert_eq!(ShimType::Int.call_arg("x"), "x");
+    }
+
+    #[test]
+    fn read_only_result_binding_calls_native_and_registers() {
+        let crate_ = generate_shim_crate(
+            "rss_shim_demo",
+            &[("demo_native".to_string(), "/tmp/demo".to_string())],
+            "/abs/native-abi",
+            &[binding(
+                vec![ShimType::String],
+                ShimReturn::Result(ShimType::Unit),
+                vec![],
+            )],
+        );
+        assert!(crate_.cargo_toml.contains("crate-type = [\"cdylib\"]"));
+        assert!(
+            crate_
+                .cargo_toml
+                .contains("demo_native = { path = \"/tmp/demo\" }")
+        );
+        assert!(crate_.lib_rs.contains("demo_native::run(&__p0)"));
+        assert!(crate_.lib_rs.contains("Ok(__value) => __ok"));
+        assert!(crate_.lib_rs.contains("c\"Demo.run\".as_ptr()"));
+        assert!(
+            crate_
+                .lib_rs
+                .contains("pub extern \"C\" fn rss_native_registry")
+        );
+        // No mut params -> no envelope.
+        assert!(!crate_.lib_rs.contains("NativeValue::List(vec![__result"));
+    }
+
+    #[test]
+    fn mut_binding_passes_mut_ref_and_returns_envelope() {
+        let crate_ = generate_shim_crate(
+            "rss_shim_demo",
+            &[("demo_native".to_string(), "/tmp/demo".to_string())],
+            "/abs/native-abi",
+            &[binding(
+                vec![ShimType::List(Box::new(ShimType::Int))],
+                ShimReturn::Plain(ShimType::Unit),
+                vec![0],
+            )],
+        );
+        assert!(crate_.lib_rs.contains("let mut __p0"));
+        assert!(crate_.lib_rs.contains("demo_native::run(&mut __p0)"));
+        // Envelope: result followed by the mutated param.
+        assert!(crate_.lib_rs.contains("NativeValue::List(vec![__result,"));
+    }
 }

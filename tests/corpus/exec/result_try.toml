@@ -1,0 +1,4 @@
+kind = "execution"
+backends = ["vm", "compiled"]
+stdout = "42\n"
+tags = ["result", "try"]

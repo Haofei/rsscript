@@ -1,0 +1,3 @@
+kind = "diagnostics"
+codes = ["RS0206"]
+tags = ["diagnostics", "resolution"]

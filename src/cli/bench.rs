@@ -332,8 +332,7 @@ fn compile_vm_internal_target(
     } else {
         let source = std::fs::read_to_string(options.path)
             .map_err(|error| format!("failed to read {}: {error}", options.path))?;
-        let executable =
-            reg_vm_compile_source(options.path, &source).map_err(format_eval_error)?;
+        let executable = reg_vm_compile_source(options.path, &source).map_err(format_eval_error)?;
         Ok((executable, Vec::new()))
     }
 }

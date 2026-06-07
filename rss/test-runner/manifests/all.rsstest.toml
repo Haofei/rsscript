@@ -31,7 +31,9 @@ paths = [
 name = "rsscript tests pass"
 kind = "command_success"
 command = "cargo"
-timeout_ms = 180000
+# Includes the differential corpus + property suites, which build the compiled
+# backend for parity fixtures, so allow extra time.
+timeout_ms = 300000
 args = ["test", "-q", "-p", "rsscript"]
 
 [[tests]]
@@ -40,6 +42,13 @@ kind = "command_success"
 command = "cargo"
 timeout_ms = 60000
 args = ["test", "-q", "-p", "rsscript-runtime"]
+
+[[tests]]
+name = "native-abi crate tests pass"
+kind = "command_success"
+command = "cargo"
+timeout_ms = 60000
+args = ["test", "-q", "-p", "rss-native-abi"]
 
 [[tests]]
 name = "rss binary builds"

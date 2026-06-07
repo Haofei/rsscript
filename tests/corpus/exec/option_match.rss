@@ -1,0 +1,15 @@
+fn first_name() -> Option<fresh String> {
+    return Some("ada")
+}
+
+fn main() -> Unit {
+    match first_name() {
+        Some(name) => {
+            Log.write(message: read name)
+        }
+        None => {
+            Log.write(message: read "none")
+        }
+    }
+    return Unit
+}

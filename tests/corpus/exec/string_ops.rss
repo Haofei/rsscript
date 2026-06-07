@@ -1,0 +1,5 @@
+fn main() -> Unit {
+    let greeting = String.concat(left: read "hello, ", right: read "world")
+    Log.write(message: read greeting)
+    return Unit
+}
